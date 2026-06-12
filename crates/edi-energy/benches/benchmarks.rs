@@ -55,7 +55,7 @@ UNZ+1+1'";
 #[cfg(feature = "aperak")]
 const APERAK_MINIMAL: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
-UNH+1+APERAK:D:07B:UN:2.0a'\
+UNH+1+APERAK:D:07B:UN:2.1i'\
 BGM+1000+29001+9'\
 DTM+137:20230101:102'\
 RFF+ACW:REF001'\
@@ -171,7 +171,7 @@ fn bench_build(c: &mut Criterion) {
     group.bench_function("aperak_builder", |b| {
         use edi_energy::builders::AperakBuilder;
         b.iter(|| {
-            AperakBuilder::new(Release::new(black_box("2.0a")))
+            AperakBuilder::new(Release::new(black_box("2.1i")))
                 .pruefidentifikator(Pruefidentifikator::new(black_box(29001)).unwrap())
                 .sender(black_box("4012345000023"))
                 .receiver(black_box("9900357000004"))
