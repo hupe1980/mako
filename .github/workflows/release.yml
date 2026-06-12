@@ -93,7 +93,7 @@ jobs:
         run: |
           out=$(cargo publish -p edi-energy 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -q "already uploaded"; then exit $rc; fi
+          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
 
       - name: Publish energy-api
         env:
@@ -101,4 +101,4 @@ jobs:
         run: |
           out=$(cargo publish -p energy-api 2>&1) && rc=0 || rc=$?
           echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -q "already uploaded"; then exit $rc; fi
+          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
