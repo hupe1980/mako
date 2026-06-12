@@ -90,30 +90,15 @@ jobs:
       - name: Publish edi-energy
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p edi-energy
-
-  # ── Create GitHub Release ────────────────────────────────────────────────────
-  github-release:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    needs: publish
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Extract changelog section for this tag
-        id: changelog
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
-          # Extract the section between this version header and the next
-          NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## \[/{exit} found" CHANGELOG.md)
-          echo "notes<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$NOTES" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          out=$(cargo publish -p edi-energy 2>&1); rc=$?
+          echo "$out"
+          if [ $rc -ne 0 ] && ! echo "$out" | grep -q "already uploaded"; then exit $rc; fi
 
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          body: ${{ steps.changelog.outputs.notes }}
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+      - name: Publish energy-api
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish -p energy-api 2>&1); rc=$?
+          echo "$out"
+          if [ $rc -ne 0 ] && ! echo "$out" | grep -q "already uploaded"; then exit $rc; fi
