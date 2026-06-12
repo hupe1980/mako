@@ -91,7 +91,7 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          out=$(cargo publish -p edi-energy 2>&1); rc=$?
+          out=$(cargo publish -p edi-energy 2>&1) && rc=0 || rc=$?
           echo "$out"
           if [ $rc -ne 0 ] && ! echo "$out" | grep -q "already uploaded"; then exit $rc; fi
 
@@ -99,6 +99,6 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          out=$(cargo publish -p energy-api 2>&1); rc=$?
+          out=$(cargo publish -p energy-api 2>&1) && rc=0 || rc=$?
           echo "$out"
           if [ $rc -ne 0 ] && ! echo "$out" | grep -q "already uploaded"; then exit $rc; fi
