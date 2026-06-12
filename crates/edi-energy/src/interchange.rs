@@ -71,7 +71,7 @@ pub struct ReceiptContext<'m> {
 /// A single parsed message together with its enclosing interchange envelope header.
 ///
 /// When an interchange contains multiple messages, each yields a separate
-/// `MessageEnvelope` from [`Interchange::messages`].
+/// `MessageEnvelope` from `ParsedInterchange::messages`.
 #[derive(Debug)]
 pub struct MessageEnvelope {
     /// The parsed message.
@@ -183,7 +183,7 @@ impl MessageEnvelope {
 
 /// A fully parsed EDIFACT interchange with envelope metadata preserved.
 ///
-/// Produced by [`crate::parse_interchange_full`].  Contains the interchange
+/// Produced by `Parser::parse_interchange_full`.  Contains the interchange
 /// header (UNB fields) and all contained messages with their shared header
 /// attached to each envelope.
 #[derive(Debug)]

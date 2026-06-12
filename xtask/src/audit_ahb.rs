@@ -14,7 +14,7 @@
 //!
 //! # Output
 //!
-//! Human-readable table to stderr + optional JSON report (--output-json <PATH>).
+//! Human-readable table to stderr + optional JSON report (--output-json `<PATH>`).
 //!
 //! # Exit codes
 //!

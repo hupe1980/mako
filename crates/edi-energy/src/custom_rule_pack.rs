@@ -7,7 +7,7 @@ use std::sync::Arc;
 use edifact_rs::{ProfileRulePack, ValidationIssue, ValidationSeverity};
 
 /// A caller-supplied validation rule pack that can be merged on top of all
-/// built-in validation layers when calling [`EdiEnergyMessage::validate_with_pack`].
+/// built-in validation layers when calling `EdiEnergyMessage::validate_with_pack`.
 ///
 /// `CustomRulePack` insulates callers from the internal `edifact-rs`
 /// `ProfileRulePack` type: no direct dependency on `edifact-rs` is required
@@ -123,6 +123,7 @@ impl CustomRulePack {
     /// Convert into the internal `ProfileRulePack`.
     ///
     /// This is `pub(crate)` to keep the `edifact-rs` dependency internal.
+    #[allow(dead_code)]
     pub(crate) fn into_inner(self) -> ProfileRulePack {
         self.0
     }

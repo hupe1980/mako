@@ -335,7 +335,6 @@ pub mod releases {
 
     /// Release `2.1i` — valid from profile directory `fv20251001`.
     #[cfg(feature = "aperak")]
-    #[must_use]
     pub fn aperak_fv20251001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.1i"));
         &R
@@ -343,7 +342,6 @@ pub mod releases {
 
     /// Release `2.2` — valid from profile directory `fv20261001`.
     #[cfg(feature = "aperak")]
-    #[must_use]
     pub fn aperak_fv20261001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.2"));
         &R
@@ -351,7 +349,6 @@ pub mod releases {
 
     /// Release `1.0g` — valid from profile directory `fv20251001`.
     #[cfg(feature = "comdis")]
-    #[must_use]
     pub fn comdis_fv20251001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.0g"));
         &R
@@ -359,7 +356,6 @@ pub mod releases {
 
     /// Release `1.0g` — valid from profile directory `fv20261001`.
     #[cfg(feature = "comdis")]
-    #[must_use]
     pub fn comdis_fv20261001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.0g"));
         &R
@@ -368,7 +364,6 @@ pub mod releases {
     /// Release `2.0b` — valid from profile directory `fv20251001`.
     /// This profile is archived. Enable `contrl-archive` or `archive` to use it.
     #[cfg(any(feature = "contrl-archive", feature = "archive"))]
-    #[must_use]
     pub fn contrl_fv20251001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.0b"));
         &R
@@ -376,7 +371,6 @@ pub mod releases {
 
     /// Release `2.0b` — valid from profile directory `fv20260101`.
     #[cfg(feature = "contrl")]
-    #[must_use]
     pub fn contrl_fv20260101() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.0b"));
         &R
@@ -384,7 +378,6 @@ pub mod releases {
 
     /// Release `2.0g` — valid from profile directory `fv20251001`.
     #[cfg(feature = "iftsta")]
-    #[must_use]
     pub fn iftsta_fv20251001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.0g"));
         &R
@@ -392,7 +385,6 @@ pub mod releases {
 
     /// Release `2.1` — valid from profile directory `fv20261001`.
     #[cfg(feature = "iftsta")]
-    #[must_use]
     pub fn iftsta_fv20261001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.1"));
         &R
@@ -401,7 +393,6 @@ pub mod releases {
     /// Release `1.1a` — valid from profile directory `fv20211001`.
     /// This profile is archived. Enable `insrpt-archive` or `archive` to use it.
     #[cfg(any(feature = "insrpt-archive", feature = "archive"))]
-    #[must_use]
     pub fn insrpt_fv20211001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.1a"));
         &R
@@ -409,7 +400,6 @@ pub mod releases {
 
     /// Release `1.1a` — valid from profile directory `fv20260101`.
     #[cfg(feature = "insrpt")]
-    #[must_use]
     pub fn insrpt_fv20260101() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.1a"));
         &R
@@ -417,7 +407,6 @@ pub mod releases {
 
     /// Release `2.8e` — valid from profile directory `fv20251001`.
     #[cfg(feature = "invoic")]
-    #[must_use]
     pub fn invoic_fv20251001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.8e"));
         &R
@@ -425,7 +414,6 @@ pub mod releases {
 
     /// Release `2.8e` — valid from profile directory `fv20260401`.
     #[cfg(feature = "invoic")]
-    #[must_use]
     pub fn invoic_fv20260401() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.8e"));
         &R
@@ -434,7 +422,6 @@ pub mod releases {
     /// Release `2.4c` — valid from profile directory `fv20240401`.
     /// This profile is archived. Enable `mscons-archive` or `archive` to use it.
     #[cfg(any(feature = "mscons-archive", feature = "archive"))]
-    #[must_use]
     pub fn mscons_fv20240401() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.4c"));
         &R
@@ -442,7 +429,6 @@ pub mod releases {
 
     /// Release `2.4c` — valid from profile directory `fv20251001`.
     #[cfg(feature = "mscons")]
-    #[must_use]
     pub fn mscons_fv20251001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.4c"));
         &R
@@ -450,7 +436,6 @@ pub mod releases {
 
     /// Release `2.5` — valid from profile directory `fv20261001`.
     #[cfg(feature = "mscons")]
-    #[must_use]
     pub fn mscons_fv20261001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.5"));
         &R
@@ -458,7 +443,6 @@ pub mod releases {
 
     /// Release `1.1` — valid from profile directory `fv20241001`.
     #[cfg(feature = "ordchg")]
-    #[must_use]
     pub fn ordchg_fv20241001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.1"));
         &R
@@ -466,7 +450,6 @@ pub mod releases {
 
     /// Release `1.2` — valid from profile directory `fv20260401`.
     #[cfg(feature = "ordchg")]
-    #[must_use]
     pub fn ordchg_fv20260401() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.2"));
         &R
@@ -474,7 +457,6 @@ pub mod releases {
 
     /// Release `1.4b` — valid from profile directory `fv20251001`.
     #[cfg(feature = "orders")]
-    #[must_use]
     pub fn orders_fv20251001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.4b"));
         &R
@@ -482,7 +464,6 @@ pub mod releases {
 
     /// Release `1.4c` — valid from profile directory `fv20260401`.
     #[cfg(feature = "orders")]
-    #[must_use]
     pub fn orders_fv20260401() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.4c"));
         &R
@@ -490,7 +471,6 @@ pub mod releases {
 
     /// Release `1.4b` — valid from profile directory `fv20251001`.
     #[cfg(feature = "ordrsp")]
-    #[must_use]
     pub fn ordrsp_fv20251001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.4b"));
         &R
@@ -498,7 +478,6 @@ pub mod releases {
 
     /// Release `1.4c` — valid from profile directory `fv20260401`.
     #[cfg(feature = "ordrsp")]
-    #[must_use]
     pub fn ordrsp_fv20260401() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.4c"));
         &R
@@ -506,7 +485,6 @@ pub mod releases {
 
     /// Release `1.0f` — valid from profile directory `fv20251001`.
     #[cfg(feature = "partin")]
-    #[must_use]
     pub fn partin_fv20251001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.0f"));
         &R
@@ -514,7 +492,6 @@ pub mod releases {
 
     /// Release `1.1` — valid from profile directory `fv20260401`.
     #[cfg(feature = "partin")]
-    #[must_use]
     pub fn partin_fv20260401() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.1"));
         &R
@@ -522,7 +499,6 @@ pub mod releases {
 
     /// Release `2.0e` — valid from profile directory `fv20250401`.
     #[cfg(feature = "pricat")]
-    #[must_use]
     pub fn pricat_fv20250401() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.0e"));
         &R
@@ -530,7 +506,6 @@ pub mod releases {
 
     /// Release `2.1` — valid from profile directory `fv20260401`.
     #[cfg(feature = "pricat")]
-    #[must_use]
     pub fn pricat_fv20260401() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.1"));
         &R
@@ -538,7 +513,6 @@ pub mod releases {
 
     /// Release `1.3b` — valid from profile directory `fv20250401`.
     #[cfg(feature = "quotes")]
-    #[must_use]
     pub fn quotes_fv20250401() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.3b"));
         &R
@@ -546,7 +520,6 @@ pub mod releases {
 
     /// Release `1.3c` — valid from profile directory `fv20260401`.
     #[cfg(feature = "quotes")]
-    #[must_use]
     pub fn quotes_fv20260401() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.3c"));
         &R
@@ -554,7 +527,6 @@ pub mod releases {
 
     /// Release `2.9e` — valid from profile directory `fv20251001`.
     #[cfg(feature = "remadv")]
-    #[must_use]
     pub fn remadv_fv20251001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.9e"));
         &R
@@ -562,7 +534,6 @@ pub mod releases {
 
     /// Release `1.3c` — valid from profile directory `fv20250401`.
     #[cfg(feature = "reqote")]
-    #[must_use]
     pub fn reqote_fv20250401() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.3c"));
         &R
@@ -570,7 +541,6 @@ pub mod releases {
 
     /// Release `1.3c` — valid from profile directory `fv20260401`.
     #[cfg(feature = "reqote")]
-    #[must_use]
     pub fn reqote_fv20260401() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.3c"));
         &R
@@ -578,7 +548,6 @@ pub mod releases {
 
     /// Release `S2.1` — valid from profile directory `fv20241001`.
     #[cfg(feature = "utilmd")]
-    #[must_use]
     pub fn utilmd_fv20241001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("S2.1"));
         &R
@@ -586,7 +555,6 @@ pub mod releases {
 
     /// Release `G1.1` — valid from profile directory `fv20241001_gas`.
     #[cfg(feature = "utilmd")]
-    #[must_use]
     pub fn utilmd_fv20241001_gas() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("G1.1"));
         &R
@@ -594,7 +562,6 @@ pub mod releases {
 
     /// Release `S2.2` — valid from profile directory `fv20261001`.
     #[cfg(feature = "utilmd")]
-    #[must_use]
     pub fn utilmd_fv20261001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("S2.2"));
         &R
@@ -602,7 +569,6 @@ pub mod releases {
 
     /// Release `G1.2` — valid from profile directory `fv20261001_gas`.
     #[cfg(feature = "utilmd")]
-    #[must_use]
     pub fn utilmd_fv20261001_gas() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("G1.2"));
         &R
@@ -610,7 +576,6 @@ pub mod releases {
 
     /// Release `1.1e` — valid from profile directory `fv20241001`.
     #[cfg(feature = "utilts")]
-    #[must_use]
     pub fn utilts_fv20241001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.1e"));
         &R
@@ -618,7 +583,6 @@ pub mod releases {
 
     /// Release `1.1e` — valid from profile directory `fv20260401`.
     #[cfg(feature = "utilts")]
-    #[must_use]
     pub fn utilts_fv20260401() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("1.1e"));
         &R

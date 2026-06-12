@@ -17,7 +17,7 @@
 //! ## Wire encoding
 //!
 //! REST: `X-BDEW-CERT` / `X-BDEW-SIGNATURE` HTTP headers.  
-//! WebSocket: [`SignedApiRecord::signing_cert`] / [`SignedApiRecord::signature`] fields.
+//! WebSocket: `SignedApiRecord::signing_cert` / `SignedApiRecord::signature` fields.
 //!
 //! Feature gate: `crypto`.
 

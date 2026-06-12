@@ -25,7 +25,7 @@ use crate::{
 /// SG2 was removed in MIG 2.1 (fv20260401) compared to MIG 2.0e (fv20250401).
 /// Both profile versions are supported via the profile registry.
 ///
-/// **Builder**: Use [`crate::PricatBuilder`] to create PRICAT messages
+/// **Builder**: Use `crate::PricatBuilder` to create PRICAT messages
 /// programmatically. The builder covers the header (UNH, BGM, RFF+Z13,
 /// DTM+137, NAD+MR/MS, UNT); SG17/SG36/SG40 price body segments are not
 /// yet supported (see REFACTOR.md F-030).

@@ -214,6 +214,7 @@ impl EdiEnergyReport {
     /// can identify exactly which BDEW specification version governed the validation,
     /// including AHB correction revisions that share a wire code (see F-018).
     #[must_use]
+    #[allow(dead_code)]
     pub(crate) fn with_profile_meta(
         mut self,
         release: crate::release::Release,

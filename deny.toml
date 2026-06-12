@@ -17,6 +17,9 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Unicode-DFS-2016",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+    "MIT-0",
 ]
 confidence-threshold = 0.9
 

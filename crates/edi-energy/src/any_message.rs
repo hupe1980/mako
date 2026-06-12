@@ -167,7 +167,7 @@ impl AnyMessage {
     /// Returns the message type discriminant, or `None` for the
     /// [`Unknown`][AnyMessage::Unknown] variant.
     ///
-    /// Prefer this over the [`EdiEnergyMessage::message_type`] trait method when
+    /// Prefer this over the [`EdiEnergyMessage::try_message_type`] trait method when
     /// working with an `AnyMessage` value that may be `Unknown`.
     #[must_use]
     pub fn try_message_type(&self) -> Option<MessageType> {

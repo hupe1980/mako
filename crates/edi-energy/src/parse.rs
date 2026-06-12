@@ -177,10 +177,10 @@ pub fn parse(input: &[u8]) -> Result<AnyMessage, Error> {
 /// Parse only the UNH/BGM envelope fields from a byte slice, **without**
 /// constructing typed message structs.
 ///
-/// Returns a [`LightMessage`] that exposes message type, release, message
+/// Returns a `LightMessage` that exposes message type, release, message
 /// reference, and Prüfidentifikator at minimal cost.  Typed field extraction
 /// (the `Vec<Dtm>`, `Vec<Nad>`, etc. on concrete message structs) is deferred
-/// to [`LightMessage::into_message`].
+/// to `LightMessage::into_message`.
 ///
 /// Use this for routing/forwarding paths that must inspect envelope fields
 /// before deciding whether to run full validation or typed access.
@@ -476,12 +476,12 @@ impl Parser {
     /// Parse only the UNH/BGM envelope fields from a byte slice, without
     /// constructing typed message structs.
     ///
-    /// Returns a [`LightMessage`] that exposes message type, release, message
+    /// Returns a `LightMessage` that exposes message type, release, message
     /// reference, and Prüfidentifikator at minimal cost (~zero allocation beyond
     /// the raw segment buffer).  Useful for routing and forwarding paths that
     /// must inspect envelope fields before deciding whether to run full validation.
     ///
-    /// Call [`LightMessage::into_message`] when full typed access is needed.
+    /// Call `LightMessage::into_message` when full typed access is needed.
     ///
     /// # Errors
     ///
@@ -523,7 +523,7 @@ impl Parser {
         parse_interchange_with_registry(reader, self.config)
     }
 
-    /// Parse an EDIFACT interchange, returning the [`InterchangeHeader`] eagerly
+    /// Parse an EDIFACT interchange, returning the `InterchangeHeader` eagerly
     /// and messages lazily via [`InterchangeIter`].
     ///
     /// **Segment tokenization is eager** — the entire input is tokenized into a
@@ -553,7 +553,7 @@ impl Parser {
         )
     }
 
-    /// Fully parse an EDIFACT interchange into a [`ParsedInterchange`], materialising
+    /// Fully parse an EDIFACT interchange into a `ParsedInterchange`, materialising
     /// all messages eagerly.
     ///
     /// Use this when you need all messages and the UNB/UNZ envelope together.  For

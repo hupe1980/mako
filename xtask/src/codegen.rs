@@ -439,7 +439,7 @@ struct AhbConditionalRule {
     then_qualifier_index: usize,
     #[serde(default)]
     then_qualifier_value: Option<String>,
-    /// Human-readable BDEW condition text, e.g. "[92] Wenn QTY DE6063 mit Wert 67 vorhanden".
+    /// Human-readable BDEW condition text, e.g. "\[92\] Wenn QTY DE6063 mit Wert 67 vorhanden".
     #[serde(default, rename = "_description")]
     description: String,
 }

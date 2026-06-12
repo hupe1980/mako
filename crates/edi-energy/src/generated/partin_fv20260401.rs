@@ -134,8 +134,10 @@ pub(crate) fn suggest_code(de_id: &str, code: &str) -> Option<&'static str> {
     codes.get(idx).or_else(|| codes.last()).copied()
 }
 
-fn expected_components(_tag: &str, _idx: usize) -> Option<u8> {
-    None
+fn expected_components(tag: &str, idx: usize) -> Option<u8> {
+    match (tag, idx) {
+        _ => None,
+    }
 }
 
 pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {

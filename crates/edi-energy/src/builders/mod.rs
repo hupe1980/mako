@@ -8,10 +8,10 @@
 //!
 //! # Type-state safety
 //!
-//! All builders enforce that [`sender`] and [`receiver`] are set before
-//! [`build`] can be called — at **compile time**. The phantom type parameters
+//! All builders enforce that `sender` and `receiver` are set before
+//! `build` can be called — at **compile time**. The phantom type parameters
 //! `S` (sender state) and `R` (receiver state) track whether each required
-//! field has been provided. Calling [`build`] or [`serialize`] on a builder
+//! field has been provided. Calling `build` or `serialize` on a builder
 //! where either field is missing produces a **compile error**, not a runtime
 //! panic.
 //!
@@ -22,7 +22,7 @@
 //!     .build()                         // ✓  only available here
 //! ```
 //!
-//! The [`Set`] and [`Unset`] types are exported so callers can write generic
+//! The `Set` and `Unset` types are exported so callers can write generic
 //! code over builder states when needed.
 //!
 //! # Example — UTILMD

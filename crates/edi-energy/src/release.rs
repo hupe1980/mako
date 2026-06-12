@@ -4,7 +4,7 @@ use crate::Error;
 
 /// Coarse track classification for a BDEW EDI@Energy release code.
 ///
-/// Used for unambiguous multi-track dispatch in [`ReleaseRegistry`] without
+/// Used for unambiguous multi-track dispatch in `ReleaseRegistry` without
 /// relying on fragile string-prefix matching (resolves F-027).
 ///
 /// # Example

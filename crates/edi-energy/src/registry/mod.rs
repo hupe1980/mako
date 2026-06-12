@@ -463,7 +463,7 @@ impl ReleaseRegistry {
     ///
     /// Only profiles whose release kind matches `reference.kind()` are
     /// considered, avoiding the undefined cross-track ordering that
-    /// [`latest`][Self::latest] can produce.
+    /// [`latest_for_track`][Self::latest_for_track] can produce.
     ///
     /// Returns `None` when no profiles on the same track are registered.
     #[must_use]
@@ -489,7 +489,7 @@ impl ReleaseRegistry {
     /// for example UTILMD Strom (`ReleaseTrack::Strom`) and UTILMD Gas
     /// (`ReleaseTrack::Gas`).
     ///
-    /// Resolves F-027: uses the explicit [`ReleaseTrack`] enum for dispatch
+    /// Resolves F-027: uses the explicit `ReleaseTrack` enum for dispatch
     /// instead of string-prefix matching, ensuring forward-compatibility when
     /// BDEW introduces new tracks with codes that share prefixes.
     ///

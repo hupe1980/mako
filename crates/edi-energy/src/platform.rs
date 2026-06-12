@@ -67,7 +67,7 @@ use crate::{EdiEnergyReport, Release};
 
 /// An explicit EDI@Energy processing context.
 ///
-/// See [module-level docs](self) for a full explanation of when to use this
+/// See module-level docs for a full explanation of when to use this
 /// instead of the top-level free functions.
 #[derive(Clone)]
 pub struct Platform {
@@ -374,7 +374,7 @@ impl Platform {
     /// acceptable on `date`, using this platform's registry.
     ///
     /// This is the platform-aware alternative to
-    /// [`MessageEnvelope::is_wire_code_acceptable_on_global`]: it uses the
+    /// `MessageEnvelope::is_wire_code_acceptable_on_global`: it uses the
     /// platform's own [`ReleaseRegistry`] so that test registries and
     /// multi-tenant configurations are respected (F-007 fix).
     #[must_use]

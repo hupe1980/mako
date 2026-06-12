@@ -35,7 +35,7 @@ use crate::{AnyMessage, Error, MessageType, Pruefidentifikator, Release};
 
 /// Envelope-only view of a parsed EDIFACT/EDI@Energy message.
 ///
-/// See the [module-level docs](self) for a full description and the routing
+/// See the module-level docs for a full description and the routing
 /// pattern.
 #[derive(Debug)]
 pub struct LightMessage {

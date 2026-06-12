@@ -9,6 +9,7 @@ use crate::report::EdiEnergyReport;
 /// `.`.  Characters outside that set are replaced with `?` to neutralize
 /// ANSI escape sequences and other log-injection payloads while keeping the
 /// value informative.
+#[allow(dead_code)]
 pub(crate) fn sanitize_code(s: &str) -> String {
     const MAX_LEN: usize = 16;
     let truncated = if s.len() > MAX_LEN { &s[..MAX_LEN] } else { s };

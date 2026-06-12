@@ -468,7 +468,7 @@ use super::ahb_helpers::{
     ahb_check_qualifier, ahb_check_required_qualifier, ahb_check_soll,
 };
 
-/// Bedingungsoperator I — I: when RFF DE[0]="Z41" is present // [17] Wenn SG1 RFF+Z41 (Referenznummer des Vorgangs der Anmeldung nach `WiM`) vorhanden, ist SG11 NAD (NB) Pflicht
+/// Bedingungsoperator I — I: when RFF DE[0]="Z41" is present // [17] Wenn SG1 RFF+Z41 (Referenznummer des Vorgangs der Anmeldung nach WiM) vorhanden, ist SG11 NAD (NB) Pflicht
 fn rule_ahb_35004_nad_cond_0(
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,

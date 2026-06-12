@@ -74,7 +74,7 @@ impl DirectoryServiceClient {
     /// - `signing_cert` is the RFC 9440-encoded `X-BDEW-CERT` header value.
     /// - `signature` is the base64url-encoded `X-BDEW-SIGNATURE` header value.
     ///
-    /// Use [`crate::jws`] (feature `crypto`) to verify the signature.
+    /// Use `crate::jws` (feature `crypto`) to verify the signature.
     ///
     /// # Errors
     /// - [`Error::NotFound`] if the entry does not exist (404).
@@ -111,7 +111,7 @@ impl DirectoryServiceClient {
     /// a directory entry (optional selfservice endpoint).
     ///
     /// The caller must supply the `signing_cert` (RFC 9440) and `signature`
-    /// (base64url JWS signature from [`crate::jws::sign`]) that were produced
+    /// (base64url JWS signature from `crate::jws::sign`) that were produced
     /// for `record`.
     ///
     /// Returns `true` if a new record was **created** (201) or `false` if an

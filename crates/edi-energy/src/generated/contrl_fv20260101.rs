@@ -104,11 +104,20 @@ pub(crate) fn suggest_code(de_id: &str, code: &str) -> Option<&'static str> {
 
 fn expected_components(tag: &str, idx: usize) -> Option<u8> {
     match (tag, idx) {
-        ("UNH" | "UCI" | "UNT" | "UCM" | "UCS" | "UCD", 0)
-        | ("UCI" | "UCM", 3 | 4)
+        ("UNH", 0)
+        | ("UCI", 0)
+        | ("UCI", 3)
+        | ("UCI", 4)
         | ("UCI", 5)
-        | ("UNT" | "UCS", 1)
-        | ("UCM", 2) => Some(1),
+        | ("UNT", 0)
+        | ("UNT", 1)
+        | ("UCM", 0)
+        | ("UCM", 2)
+        | ("UCM", 3)
+        | ("UCM", 4)
+        | ("UCS", 0)
+        | ("UCS", 1)
+        | ("UCD", 0) => Some(1),
         _ => None,
     }
 }
