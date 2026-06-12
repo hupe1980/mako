@@ -1,4 +1,5 @@
 // @generated — do not edit by hand; run `cargo xtask codegen` to regenerate
+#![allow(clippy::doc_markdown)]
 
 /// Codegen schema version this module was generated from.
 /// Compared against `mig.json` `schema_version` in CI to detect drift.

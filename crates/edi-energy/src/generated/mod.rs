@@ -165,6 +165,7 @@ pub(crate) fn register_profiles(_profiles: &mut Vec<&'static dyn Profile>) {
 /// Compile-time guard: every generated profile module must declare
 /// `CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION`.
 /// Regenerate with `cargo xtask codegen` if this fails.
+#[allow(dead_code)]
 pub(crate) const CURRENT_CODEGEN_SCHEMA_VERSION: u32 = 1;
 #[cfg(feature = "aperak")]
 const _: () = assert!(aperak_fv20251001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
