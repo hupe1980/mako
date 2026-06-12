@@ -1,0 +1,145 @@
+[package]
+name         = "edi-energy"
+version.workspace     = true
+description  = "EDI@Energy EDIFACT parser and validator for the German energy market"
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+keywords     = ["edifact", "edi", "energy", "german", "bdew"]
+categories   = ["parser-implementations", "encoding"]
+
+[dependencies]
+edifact-rs = { workspace = true }
+miette     = { workspace = true, optional = true }
+serde      = { version = "1", features = ["derive"], optional = true }
+thiserror  = { workspace = true }
+time       = { workspace = true }
+tracing    = { version = "0.1", optional = true }
+
+[features]
+## Default message types – enabled unless `default-features = false` is set.
+default      = ["utilmd", "mscons", "aperak", "contrl"]
+## Enables UTILMD (Netznutzung / Market Communication) message support.
+utilmd       = []
+## Enables MSCONS (Measured Services Consumption) message support.
+mscons       = []
+## Enables APERAK (Application Error Acknowledgement) message support.
+aperak       = []
+## Enables CONTRL (Functional Acknowledgement) message support.
+contrl       = []
+## Opt-in: enables INVOIC (Invoice) message support.
+invoic       = []
+## Opt-in: enables REMADV (Remittance Advice) message support.
+remadv       = []
+## Opt-in: enables ORDERS (Purchase Order) message support.
+orders       = []
+## Opt-in: enables IFTSTA (International Multimodal Status Report) message support.
+iftsta       = []
+## Opt-in: enables INSRPT (Inspection Report) message support.
+insrpt       = []
+## Opt-in: enables REQOTE (Request for Quotation) message support.
+reqote       = []
+## Opt-in: enables PARTIN (Party Information) message support.
+partin       = []
+## Opt-in: enables ORDCHG (Purchase Order Change) message support.
+ordchg       = []
+## Opt-in: enables ORDRSP (Purchase Order Response) message support.
+ordrsp       = []
+## Opt-in: enables QUOTES (Quotation) message support.
+quotes       = []
+## Opt-in: enables COMDIS (Commercial Dispute / Handelsunstimmigkeit) message support.
+comdis       = []
+## Opt-in: enables PRICAT (Price/Sales Catalogue) message support.
+pricat       = []
+## Opt-in: enables UTILTS (Übertragung technischer Stammdaten) message support.
+utilts       = []
+
+## ── Archive features ─────────────────────────────────────────────────────────
+## Expired release-window profiles for historical validation.
+##
+## Active profiles are included by their plain feature flag (e.g. `mscons`).
+## When `cargo xtask codegen --prune-expired` marks a profile as archived, it is
+## excluded from the default build and only compiled under the corresponding
+## `{type}-archive` feature (or the `archive` meta-feature).
+##
+## Use cases for archive features:
+##   • Auditing / replay of messages from previous BDEW release cycles
+##   • Integration tests with legacy fixtures that pre-date the current release
+##   • Migration tooling that must accept both old and new message formats
+##
+## Note: archive features significantly increase compile time and binary size;
+## not recommended for new production deployments.
+
+## Convenience meta-feature: enables all per-type archive features.
+archive = [
+  "utilmd-archive", "mscons-archive", "aperak-archive", "contrl-archive",
+  "invoic-archive", "remadv-archive", "orders-archive", "iftsta-archive",
+  "insrpt-archive", "reqote-archive", "partin-archive", "ordchg-archive",
+  "ordrsp-archive", "quotes-archive", "comdis-archive", "pricat-archive",
+  "utilts-archive",
+]
+
+## Per-type archive features — each depends on the base message-type feature
+## so that archived profiles are only compiled when the type is also enabled.
+utilmd-archive  = ["utilmd"]
+mscons-archive  = ["mscons"]
+aperak-archive  = ["aperak"]
+contrl-archive  = ["contrl"]
+invoic-archive  = ["invoic"]
+remadv-archive  = ["remadv"]
+orders-archive  = ["orders"]
+iftsta-archive  = ["iftsta"]
+insrpt-archive  = ["insrpt"]
+reqote-archive  = ["reqote"]
+partin-archive  = ["partin"]
+ordchg-archive  = ["ordchg"]
+ordrsp-archive  = ["ordrsp"]
+quotes-archive  = ["quotes"]
+comdis-archive  = ["comdis"]
+pricat-archive  = ["pricat"]
+utilts-archive  = ["utilts"]
+## Enables structured tracing spans via the `tracing` crate.
+tracing      = ["dep:tracing"]
+## Enables `serde::Serialize` for [`EdiEnergyReport`] and related types, and
+## activates `edifact-rs/serde` so `ValidationIssue` is serializable upstream.
+serde        = ["dep:serde", "edifact-rs/serde"]
+## Enables rich diagnostic output via `miette` (`EdiEnergyReport` implements
+## `miette::Diagnostic`).
+diagnostics  = ["dep:miette", "edifact-rs/diagnostics"]
+
+[dev-dependencies]
+miette     = { workspace = true }
+serde_json = { workspace = true }
+proptest   = "1"
+criterion  = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name    = "benchmarks"
+harness = false
+required-features = ["utilmd", "mscons", "aperak", "contrl"]
+
+[[example]]
+name = "01_parse_utilmd"
+required-features = ["utilmd"]
+
+[[example]]
+name = "02_parse_mscons"
+required-features = ["mscons"]
+
+[[example]]
+name = "03_build_messages"
+required-features = ["utilmd", "mscons", "aperak", "contrl"]
+
+[[example]]
+name = "04_interchange_dispatch"
+required-features = ["utilmd", "mscons", "aperak", "contrl"]
+
+[[example]]
+name = "05_validate"
+required-features = ["utilmd"]
+
+[[example]]
+name = "06_parse_reader"
+required-features = ["utilmd"]

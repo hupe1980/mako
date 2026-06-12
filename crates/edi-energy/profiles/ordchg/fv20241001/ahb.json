@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "message_type": "ORDCHG",
+  "release": "1.1",
+  "source_document": "ORDCHG AHB 1.1 vom 01.10.2024",
+  "pruefidentifikatoren": [
+    {
+      "code": 39000,
+      "name": "Stornierung Sperr-/Entsperrauftrag",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z52",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "TN",
+              "_description": "[3] Wenn BGM+Z52 (Entsperrung) vorhanden, ist RFF+TN (Transaktions-Referenznummer) Pflicht"
+            }
+          ]
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.1 (no AHB constraint for PID 39000)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.1 (no AHB constraint for PID 39000)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 39001,
+      "name": "Weiterleitung der Stornierung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z52",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "TN",
+              "_description": "[3] Wenn BGM+Z52 (Entsperrung) vorhanden, ist RFF+TN (Transaktions-Referenznummer) Pflicht"
+            }
+          ]
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.1 (no AHB constraint for PID 39001)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.1 (no AHB constraint for PID 39001)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 39002,
+      "name": "Stornierung der Bestellung von Werten",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z52",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "TN",
+              "_description": "[3] Wenn BGM+Z52 (Entsperrung) vorhanden, ist RFF+TN (Transaktions-Referenznummer) Pflicht"
+            }
+          ]
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.1 (no AHB constraint for PID 39002)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.1 (no AHB constraint for PID 39002)"
+        }
+      ],
+      "group_rules": []
+    }
+  ]
+}

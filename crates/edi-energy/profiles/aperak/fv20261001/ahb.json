@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "message_type": "APERAK",
+  "release": "2.2",
+  "source_document": "APERAK AHB 2.2 vom 01.10.2026",
+  "pruefidentifikatoren": [
+    {
+      "code": 29001,
+      "name": "Verarbeitbarkeitsfehler (Fehler bei der Anwendung)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "313"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "C106",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "C082",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "ACW"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1154",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "ERC",
+          "requirement": "M",
+          "qualifier_restrictions": {},
+          "field_rules": [
+            {
+              "element": "9321",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.2 (no AHB constraint for PID 29001)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG2 marked mandatory per MIG 2.1i; actual AHB req is O (valid APERAK can omit DTM in SG2)"
+        }
+      ]
+    },
+    {
+      "code": 29002,
+      "name": "Anerkennungsmeldung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "312"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "C106",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "C082",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "ACW"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1154",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "ERC",
+          "requirement": "O",
+          "_description": "ERC is optional per MIG 2.2 (no AHB constraint for PID 29002)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.2 (no AHB constraint for PID 29002)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG2 marked mandatory per MIG 2.1i; actual AHB req is O (valid APERAK can omit DTM in SG2)"
+        }
+      ]
+    }
+  ]
+}

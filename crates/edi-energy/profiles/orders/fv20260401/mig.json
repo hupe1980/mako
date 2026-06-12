@@ -1,0 +1,529 @@
+{
+  "schema_version": 1,
+  "message_type": "ORDERS",
+  "release": "1.4c",
+  "valid_from": "2026-04-01",
+  "ordering_hint": [
+    "UNH",
+    "BGM",
+    "DTM",
+    "IMD",
+    "FTX",
+    "RFF",
+    "NAD",
+    "CTA",
+    "COM",
+    "LOC",
+    "LIN",
+    "PIA",
+    "QTY",
+    "UNS",
+    "UNT"
+  ],
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Nachrichten-Kopfsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "S009",
+          "status": "M",
+          "components": 6
+        }
+      ]
+    },
+    {
+      "tag": "BGM",
+      "name": "Beginn der Nachricht",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "M",
+          "components": 4
+        },
+        {
+          "id": "C106",
+          "status": "C",
+          "components": 3
+        },
+        {
+          "id": "1225",
+          "status": "C",
+          "components": 1
+        }
+      ],
+      "qualifier_restrictions": {
+        "1001": [
+          "Z55",
+          "Z56",
+          "Z57",
+          "Z58",
+          "Z59",
+          "Z60",
+          "Z61",
+          "Z62",
+          "Z63",
+          "Z64"
+        ]
+      }
+    },
+    {
+      "tag": "DTM",
+      "name": "Nachrichtendatum",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C507",
+          "status": "M",
+          "components": 3
+        }
+      ],
+      "qualifier_restrictions": {
+        "2005": [
+          "137"
+        ]
+      }
+    },
+    {
+      "tag": "IMD",
+      "name": "Abonnement / Abonnementtyp",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "7077",
+          "status": "C",
+          "components": 1
+        },
+        {
+          "id": "C272",
+          "status": "C",
+          "components": 1
+        },
+        {
+          "id": "C273",
+          "status": "C",
+          "components": 6
+        }
+      ]
+    },
+    {
+      "tag": "FTX",
+      "name": "Allgemeine Information",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "4451",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "4453",
+          "status": "C",
+          "components": 1
+        },
+        {
+          "id": "C107",
+          "status": "C",
+          "components": 3
+        },
+        {
+          "id": "C108",
+          "status": "C",
+          "components": 5
+        }
+      ],
+      "qualifier_restrictions": {
+        "4451": [
+          "ZZZ"
+        ]
+      }
+    },
+    {
+      "tag": "UNS",
+      "name": "Abschnitts-Kontrollsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0081",
+          "status": "M",
+          "components": 1
+        }
+      ]
+    },
+    {
+      "tag": "UNT",
+      "name": "Nachrichten-Endesegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        }
+      ]
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG1",
+      "trigger_segment": "RFF",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "segments": [
+        {
+          "tag": "RFF",
+          "name": "Referenz Nachrichtennummer",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C506",
+              "status": "M",
+              "components": 4
+            }
+          ],
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG2",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 3,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "MP-ID Absender/Empfänger",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C082",
+              "status": "C",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "tag": "LOC",
+          "name": "Bilanzierungsgebiet/Regelzone",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3227",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C517",
+              "status": "C",
+              "components": 4
+            }
+          ],
+          "qualifier_restrictions": {
+            "3227": [
+              "172",
+              "237",
+              "Z01"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG3",
+          "trigger_segment": "CTA",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "segments": [
+            {
+              "tag": "CTA",
+              "name": "Ansprechpartner",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "3139",
+                  "status": "C",
+                  "components": 1
+                },
+                {
+                  "id": "C056",
+                  "status": "C",
+                  "components": 2
+                }
+              ]
+            },
+            {
+              "tag": "COM",
+              "name": "Kommunikationsverbindung",
+              "mandatory": true,
+              "max_occurrences": 5,
+              "elements": [
+                {
+                  "id": "C076",
+                  "status": "M",
+                  "components": 2
+                }
+              ]
+            }
+          ],
+          "groups": []
+        },
+        {
+          "id": "SG4",
+          "trigger_segment": "RFF",
+          "mandatory": false,
+          "max_occurrences": 99,
+          "segments": [
+            {
+              "tag": "RFF",
+              "name": "Referenz auf ID der Marktlokation",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C506",
+                  "status": "M",
+                  "components": 4
+                }
+              ],
+              "qualifier_restrictions": {
+                "1153": [
+                  "Z18",
+                  "Z19",
+                  "AGI"
+                ]
+              }
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    {
+      "id": "SG29",
+      "trigger_segment": "LIN",
+      "mandatory": false,
+      "max_occurrences": 200000,
+      "segments": [
+        {
+          "tag": "LIN",
+          "name": "Positionsdaten",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "1082",
+              "status": "C",
+              "components": 1
+            },
+            {
+              "id": "1229",
+              "status": "C",
+              "components": 1
+            }
+          ]
+        },
+        {
+          "tag": "PIA",
+          "name": "OBIS-Kennzahl / Messprodukt",
+          "mandatory": false,
+          "max_occurrences": 25,
+          "elements": [
+            {
+              "id": "4347",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C212",
+              "status": "M",
+              "components": 4
+            }
+          ],
+          "qualifier_restrictions": {
+            "4347": [
+              "5"
+            ]
+          }
+        },
+        {
+          "tag": "IMD",
+          "name": "Grund der Anforderung",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "7077",
+              "status": "C",
+              "components": 1
+            },
+            {
+              "id": "C272",
+              "status": "C",
+              "components": 1
+            },
+            {
+              "id": "C273",
+              "status": "C",
+              "components": 6
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "name": "Zeitpunkt für Wertanfrage",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "elements": [
+            {
+              "id": "C507",
+              "status": "M",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "2005": [
+              "163",
+              "164",
+              "293"
+            ]
+          }
+        },
+        {
+          "tag": "FTX",
+          "name": "Allgemeine Information (Position)",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "4451",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "4453",
+              "status": "C",
+              "components": 1
+            },
+            {
+              "id": "C107",
+              "status": "C",
+              "components": 3
+            },
+            {
+              "id": "C108",
+              "status": "C",
+              "components": 5
+            }
+          ],
+          "qualifier_restrictions": {
+            "4451": [
+              "ZZZ"
+            ]
+          }
+        },
+        {
+          "tag": "QTY",
+          "name": "Prozentualer Anteil der Tranche",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C186",
+              "status": "M",
+              "components": 3
+            }
+          ]
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG30",
+          "trigger_segment": "CCI",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "segments": [
+            {
+              "tag": "CCI",
+              "name": "Profilgruppe",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "7059",
+                  "status": "C",
+                  "components": 1
+                },
+                {
+                  "id": "C240",
+                  "status": "C",
+                  "components": 3
+                },
+                {
+                  "id": "C889",
+                  "status": "C",
+                  "components": 3
+                }
+              ]
+            },
+            {
+              "tag": "CAV",
+              "name": "Prognosegrundlage",
+              "mandatory": false,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C889",
+                  "status": "M",
+                  "components": 3
+                }
+              ]
+            }
+          ],
+          "groups": []
+        }
+      ]
+    }
+  ],
+  "ahb_revision": "1.4c",
+  "source_document": "ORDERS AHB 1.4c, Stand 01.04.2026"
+}

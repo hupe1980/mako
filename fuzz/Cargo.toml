@@ -1,0 +1,29 @@
+[package]
+name = "edi-energy-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.edi-energy]
+path = "../crates/edi-energy"
+features = ["utilmd", "mscons", "aperak", "contrl", "invoic", "remadv", "orders", "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp", "quotes", "comdis", "pricat", "utilts"]
+
+[[bin]]
+name = "fuzz_parse_validate"
+path = "fuzz_targets/fuzz_parse_validate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_interchange"
+path = "fuzz_targets/fuzz_interchange.rs"
+test = false
+doc = false
+bench = false

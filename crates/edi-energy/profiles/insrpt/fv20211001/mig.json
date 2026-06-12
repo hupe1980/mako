@@ -1,0 +1,462 @@
+{
+  "archived": true,
+  "schema_version": 1,
+  "message_type": "INSRPT",
+  "release": "1.1a",
+  "valid_from": "2021-10-01",
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Nachrichten-Kopfsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "S009",
+          "status": "M",
+          "components": 6
+        }
+      ]
+    },
+    {
+      "tag": "BGM",
+      "name": "Beginn der Nachricht",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "M",
+          "components": 4
+        },
+        {
+          "id": "C106",
+          "status": "C",
+          "components": 3
+        }
+      ],
+      "qualifier_restrictions": {
+        "1001": [
+          "4"
+        ]
+      }
+    },
+    {
+      "tag": "DTM",
+      "name": "Dokumentendatum",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C507",
+          "status": "M",
+          "components": 3
+        }
+      ],
+      "qualifier_restrictions": {
+        "2005": [
+          "137"
+        ]
+      }
+    },
+    {
+      "tag": "UNT",
+      "name": "Nachrichten-Endesegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        }
+      ]
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG2",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 2,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "MP-ID Absender/Empfänger",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C082",
+              "status": "C",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG3",
+      "trigger_segment": "DOC",
+      "mandatory": true,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "DOC",
+          "name": "Dokument-/Nachricht-Einzelheiten",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C002",
+              "status": "M",
+              "components": 4
+            },
+            {
+              "id": "C503",
+              "status": "C",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "1001": [
+              "21",
+              "22",
+              "23",
+              "293"
+            ]
+          }
+        },
+        {
+          "tag": "RFF",
+          "name": "Bezugsnummer des Dokuments",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C506",
+              "status": "M",
+              "components": 5
+            }
+          ],
+          "qualifier_restrictions": {
+            "1153": [
+              "AAV"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG4",
+          "trigger_segment": "RFF",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "segments": [
+            {
+              "tag": "RFF",
+              "name": "Prüfidentifikator",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C506",
+                  "status": "M",
+                  "components": 5
+                }
+              ],
+              "qualifier_restrictions": {
+                "1153": [
+                  "Z13"
+                ]
+              }
+            }
+          ],
+          "groups": []
+        },
+        {
+          "id": "SG5",
+          "trigger_segment": "NAD",
+          "mandatory": false,
+          "max_occurrences": 2,
+          "segments": [
+            {
+              "tag": "NAD",
+              "name": "Ansprechpartner",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "3035",
+                  "status": "M",
+                  "components": 1
+                },
+                {
+                  "id": "C082",
+                  "status": "C",
+                  "components": 3
+                }
+              ],
+              "qualifier_restrictions": {
+                "3035": [
+                  "MS",
+                  "CC"
+                ]
+              }
+            }
+          ],
+          "groups": [
+            {
+              "id": "SG6",
+              "trigger_segment": "CTA",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "segments": [
+                {
+                  "tag": "CTA",
+                  "name": "Ansprechpartner",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "3139",
+                      "status": "C",
+                      "components": 1
+                    },
+                    {
+                      "id": "C056",
+                      "status": "C",
+                      "components": 2
+                    }
+                  ],
+                  "qualifier_restrictions": {
+                    "3139": [
+                      "IC"
+                    ]
+                  }
+                },
+                {
+                  "tag": "COM",
+                  "name": "Kommunikationsverbindung",
+                  "mandatory": true,
+                  "max_occurrences": 5,
+                  "elements": [
+                    {
+                      "id": "C076",
+                      "status": "M",
+                      "components": 2
+                    }
+                  ],
+                  "qualifier_restrictions": {
+                    "3155": [
+                      "EM",
+                      "FX",
+                      "TE",
+                      "AJ",
+                      "AL"
+                    ]
+                  }
+                }
+              ],
+              "groups": []
+            }
+          ]
+        },
+        {
+          "id": "SG7",
+          "trigger_segment": "LIN",
+          "mandatory": true,
+          "max_occurrences": 999,
+          "segments": [
+            {
+              "tag": "LIN",
+              "name": "Positionsdaten",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "1082",
+                  "status": "C",
+                  "components": 1
+                }
+              ]
+            },
+            {
+              "tag": "DTM",
+              "name": "Datum/Uhrzeit des Geräte-Status",
+              "mandatory": false,
+              "max_occurrences": 4,
+              "elements": [
+                {
+                  "id": "C507",
+                  "status": "M",
+                  "components": 3
+                }
+              ],
+              "qualifier_restrictions": {
+                "2005": [
+                  "9",
+                  "163",
+                  "164",
+                  "292"
+                ]
+              }
+            },
+            {
+              "tag": "STS",
+              "name": "Gerätestatus",
+              "mandatory": false,
+              "max_occurrences": 2,
+              "elements": [
+                {
+                  "id": "C601",
+                  "status": "C",
+                  "components": 2
+                },
+                {
+                  "id": "C555",
+                  "status": "C",
+                  "components": 2
+                },
+                {
+                  "id": "C556",
+                  "status": "C",
+                  "components": 2
+                }
+              ]
+            },
+            {
+              "tag": "FTX",
+              "name": "Freier Text",
+              "mandatory": false,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "4451",
+                  "status": "M",
+                  "components": 1
+                },
+                {
+                  "id": "4453",
+                  "status": "C",
+                  "components": 1
+                },
+                {
+                  "id": "C107",
+                  "status": "C",
+                  "components": 3
+                },
+                {
+                  "id": "C108",
+                  "status": "C",
+                  "components": 5
+                }
+              ],
+              "qualifier_restrictions": {
+                "4451": [
+                  "AAO",
+                  "ACD"
+                ]
+              }
+            }
+          ],
+          "groups": [
+            {
+              "id": "SG8",
+              "trigger_segment": "NAD",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "segments": [
+                {
+                  "tag": "NAD",
+                  "name": "Messlokation",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "3035",
+                      "status": "M",
+                      "components": 1
+                    }
+                  ],
+                  "qualifier_restrictions": {
+                    "3035": [
+                      "DP"
+                    ]
+                  }
+                },
+                {
+                  "tag": "LOC",
+                  "name": "Meldepunkt",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "3227",
+                      "status": "M",
+                      "components": 1
+                    },
+                    {
+                      "id": "C517",
+                      "status": "C",
+                      "components": 2
+                    }
+                  ],
+                  "qualifier_restrictions": {
+                    "3227": [
+                      "172"
+                    ]
+                  }
+                },
+                {
+                  "tag": "RFF",
+                  "name": "Gestörte Messlokation",
+                  "mandatory": false,
+                  "max_occurrences": 99,
+                  "elements": [
+                    {
+                      "id": "C506",
+                      "status": "M",
+                      "components": 5
+                    }
+                  ],
+                  "qualifier_restrictions": {
+                    "1153": [
+                      "Z21"
+                    ]
+                  }
+                }
+              ],
+              "groups": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "valid_until": "2025-12-31",
+  "ahb_revision": "1.1a",
+  "source_document": "INSRPT AHB 1.1a, Stand 01.10.2021"
+}

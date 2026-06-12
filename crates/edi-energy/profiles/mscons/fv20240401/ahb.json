@@ -1,0 +1,2203 @@
+{
+  "schema_version": 1,
+  "message_type": "MSCONS",
+  "release": "2.4c",
+  "source_document": "MSCONS AHB 2.4c vom 01.04.2024",
+  "pruefidentifikatoren": [
+    {
+      "code": 13002,
+      "name": "Messwerte Zählerstand Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z27"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M",
+          "field_rules": []
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "4347": [
+              "5"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "conditional_rules": [],
+          "field_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG10",
+          "tag": "STS",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "67",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z32",
+              "_description": "[92] Wenn QTY DE6063 mit Wert 67 vorhanden, muss STS Ersatzwertbildungsverfahren (Z32) vorhanden sein"
+            },
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "201",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z32",
+              "_description": "[94] Wenn QTY DE6063 mit Wert 201 vorhanden, muss STS Ersatzwertbildungsverfahren (Z32) vorhanden sein"
+            },
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "67",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z40",
+              "_description": "[92] Wenn QTY DE6063 mit Wert 67 vorhanden, muss STS Grund der Ersatzwertbildung (Z40) vorhanden sein"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG10 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 13003,
+      "name": "Summenzeitreihen und Ausfallarbeitssummen",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13005,
+      "name": "EEG-Überführungszeitreihe",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z15"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "237"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13006,
+      "name": "Stornierung von Messwerten",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "270",
+              "Z27",
+              "Z28",
+              "Z41",
+              "Z42",
+              "Z85"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "1"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "1153",
+              "requirement": "M",
+              "allowed_values": [
+                "ACW"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13007,
+      "name": "Gasbeschaffenheitsdaten",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z21"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13008,
+      "name": "Messwert Lastgang Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13009,
+      "name": "Messwert Energiemenge Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z27"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "conditional_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG10",
+          "tag": "STS",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "67",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z32",
+              "_description": "[92] Wenn QTY DE6063 mit Wert 67 vorhanden, muss STS Ersatzwertbildungsverfahren (Z32) vorhanden sein"
+            },
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "201",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z32",
+              "_description": "[94] Wenn QTY DE6063 mit Wert 201 vorhanden, muss STS Ersatzwertbildungsverfahren (Z32) vorhanden sein"
+            },
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "67",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z40",
+              "_description": "[92] Wenn QTY DE6063 mit Wert 67 vorhanden, muss STS Grund der Ersatzwertbildung (Z40) vorhanden sein"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG10 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 13010,
+      "name": "Normiertes Profil",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z06",
+              "Z16"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z04",
+              "Z06"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13011,
+      "name": "Profilschar",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z06",
+              "Z16"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z04",
+              "Z06"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13012,
+      "name": "Vergangenheitswerte TEP mit Referenzmessung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z06",
+              "Z16"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z04",
+              "Z06"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13013,
+      "name": "Marktlokationsscharfe Allokationsliste Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z23"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "Z10"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13014,
+      "name": "Marktlokationsscharfe bilanzierte Menge Gas/Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z23"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "Z10"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13015,
+      "name": "Bewegungsdaten im Kalenderjahr vor Lieferbeginn Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z27"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13016,
+      "name": "Energiemenge und Leistungsmaximum Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z27",
+              "Z28"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13017,
+      "name": "Messwerte Zählerstand Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M",
+          "field_rules": []
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "4347": [
+              "5"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67",
+                "Z18"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "conditional_rules": [],
+          "field_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG10",
+          "tag": "STS",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "67",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z32",
+              "_description": "[92] Wenn QTY DE6063 mit Wert 67 vorhanden, muss STS Ersatzwertbildungsverfahren (Z32) vorhanden sein"
+            },
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "67",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z40",
+              "_description": "[92] Wenn QTY DE6063 mit Wert 67 vorhanden, muss STS Grund der Ersatzwertbildung (Z40) vorhanden sein"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG10 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 13018,
+      "name": "Lastgang Messlokation / Netzgang / Netzkoppelpunkt Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z48"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13019,
+      "name": "Messwert Energiemenge Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z27"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13020,
+      "name": "Redispatch Ausfallarbeitsüberführungszeitreihe",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z43"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13021,
+      "name": "Redispatch meteorologische Daten",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z44"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13022,
+      "name": "Redispatch Einzelzeitreihe Ausfallarbeit",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z45"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13023,
+      "name": "Redispatch Ausfallarbeitssummen",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13025,
+      "name": "Lastgang Marktlokation / Tranche Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z48"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13026,
+      "name": "Redispatch EEG-Überführungszeitreihe aufgrund Ausfallarbeit",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z15"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "237"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13027,
+      "name": "Werte nach Typ 2 Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z83"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67",
+                "Z18"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": 13028,
+      "name": "Grundlage POG-Ermittlung Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z85"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "Z47"
+              ],
+              "element_index": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

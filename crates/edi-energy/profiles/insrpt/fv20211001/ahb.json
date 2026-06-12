@@ -1,0 +1,780 @@
+{
+  "schema_version": 1,
+  "message_type": "INSRPT",
+  "release": "1.1a",
+  "source_document": "INSRPT AHB 1.1a vom 01.10.2021",
+  "pruefidentifikatoren": [
+    {
+      "code": 23001,
+      "name": "WiM / Störungsmeldung vom LF/NB/MSB an MSB",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG7",
+          "tag": "DTM",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                }
+              ],
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "164",
+              "_description": "[8] Wenn SG7 STS+Z06+Z10 vorhanden, DTM 164 (Verarbeitung Endedatum) ist Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        },
+        {
+          "group_id": "SG7",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                },
+                {
+                  "element_index": 2,
+                  "value": "ZC1"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 23003,
+      "name": "WiM / Ablehnung vom MSB an LF/NB/MSB",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG7",
+          "tag": "DTM",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                }
+              ],
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "164",
+              "_description": "[8] Wenn SG7 STS+Z06+Z10 vorhanden, DTM 164 (Verarbeitung Endedatum) ist Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        },
+        {
+          "group_id": "SG7",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                },
+                {
+                  "element_index": 2,
+                  "value": "ZC1"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 23004,
+      "name": "WiM / Bestätigung vom MSB an LF/NB/MSB",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG7",
+          "tag": "DTM",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                }
+              ],
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "164",
+              "_description": "[8] Wenn SG7 STS+Z06+Z10 vorhanden, DTM 164 (Verarbeitung Endedatum) ist Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        },
+        {
+          "group_id": "SG7",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                },
+                {
+                  "element_index": 2,
+                  "value": "ZC1"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 23005,
+      "name": "WiM / Informationsmeldung (Störungsmeldung) vom MSB an NB/MSB",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG7",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                },
+                {
+                  "element_index": 2,
+                  "value": "ZC1"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 23008,
+      "name": "WiM / Ergebnisbericht vom MSB an LF/NB/MSB",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "COM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG7",
+          "tag": "DTM",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                }
+              ],
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "164",
+              "_description": "[8] Wenn SG7 STS+Z06+Z10 vorhanden, DTM 164 (Verarbeitung Endedatum) ist Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        },
+        {
+          "group_id": "SG7",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                },
+                {
+                  "element_index": 2,
+                  "value": "ZC1"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 23009,
+      "name": "WiM / Informationsmeldung (Störungsbehebung) vom MSB an NB/MSB",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG7",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                },
+                {
+                  "element_index": 2,
+                  "value": "ZC1"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 23011,
+      "name": "WiM / Informationsmeldung (Störungsmeldung) vom MSB der MaLo",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG7",
+          "tag": "DTM",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                }
+              ],
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "164",
+              "_description": "[8] Wenn SG7 STS+Z06+Z10 vorhanden, DTM 164 (Verarbeitung Endedatum) ist Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        },
+        {
+          "group_id": "SG7",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                },
+                {
+                  "element_index": 2,
+                  "value": "ZC1"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 23012,
+      "name": "WiM / Informationsmeldung (Störungsbehebung) vom MSB der MaLo",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "conditional_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG7",
+          "tag": "DTM",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                }
+              ],
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "164",
+              "_description": "[8] Wenn SG7 STS+Z06+Z10 vorhanden, DTM 164 (Verarbeitung Endedatum) ist Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        },
+        {
+          "group_id": "SG7",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "Z06",
+              "when_additional_elements": [
+                {
+                  "element_index": 1,
+                  "value": "Z10"
+                },
+                {
+                  "element_index": 2,
+                  "value": "ZC1"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[2] Wenn SG7 STS+Z06+Z10+ZC1 (Ablehnung wegen bestimmter Ursache) vorhanden, ist FTX (AAO Fehlerbeschreibung) Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG7 conditional (F-001 fix)"
+        }
+      ]
+    }
+  ]
+}

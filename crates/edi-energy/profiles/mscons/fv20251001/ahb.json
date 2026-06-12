@@ -1,0 +1,3080 @@
+{
+  "schema_version": 1,
+  "message_type": "MSCONS",
+  "release": "2.4c",
+  "source_document": "MSCONS AHB 2.4c vom 01.10.2025",
+  "pruefidentifikatoren": [
+    {
+      "code": 13002,
+      "name": "Messwerte Zählerstand Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z27"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M",
+          "field_rules": []
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "4347": [
+              "5"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "conditional_rules": [],
+          "field_rules": []
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13002)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13002)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13002)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13002)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG10",
+          "tag": "STS",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "67",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z32",
+              "_description": "[92] Wenn QTY DE6063 mit Wert 67 vorhanden, muss STS Ersatzwertbildungsverfahren (Z32) vorhanden sein"
+            },
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "201",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z32",
+              "_description": "[94] Wenn QTY DE6063 mit Wert 201 vorhanden, muss STS Ersatzwertbildungsverfahren (Z32) vorhanden sein"
+            },
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "67",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z40",
+              "_description": "[92] Wenn QTY DE6063 mit Wert 67 vorhanden, muss STS Grund der Ersatzwertbildung (Z40) vorhanden sein"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG10 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 13003,
+      "name": "Summenzeitreihen und Ausfallarbeitssummen",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13003)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13003)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13003)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13003)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13003)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13003)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13003)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13005,
+      "name": "EEG-Überführungszeitreihe",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z15"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "237"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13005)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13005)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13005)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13005)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13005)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13005)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13005)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13006,
+      "name": "Stornierung von Messwerten",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "270",
+              "Z27",
+              "Z28",
+              "Z41",
+              "Z42",
+              "Z85"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "1"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "1153",
+              "requirement": "M",
+              "allowed_values": [
+                "ACW"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13006)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13006)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13006)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13006)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13006)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.4c (no AHB constraint for PID 13006)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13006)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13007,
+      "name": "Gasbeschaffenheitsdaten",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z21"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13007)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13007)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13007)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13007)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13007)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13007)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13007)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13008,
+      "name": "Messwert Lastgang Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13008)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13008)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13008)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13008)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13008)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13008)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13008)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13009,
+      "name": "Messwert Energiemenge Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z27"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13009)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13009)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13009)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13009)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13009)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13009)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG10",
+          "tag": "STS",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "67",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z32",
+              "_description": "[92] Wenn QTY DE6063 mit Wert 67 vorhanden, muss STS Ersatzwertbildungsverfahren (Z32) vorhanden sein"
+            },
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "201",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z32",
+              "_description": "[94] Wenn QTY DE6063 mit Wert 201 vorhanden, muss STS Ersatzwertbildungsverfahren (Z32) vorhanden sein"
+            },
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "67",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z40",
+              "_description": "[92] Wenn QTY DE6063 mit Wert 67 vorhanden, muss STS Grund der Ersatzwertbildung (Z40) vorhanden sein"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG10 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 13010,
+      "name": "Normiertes Profil",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z06",
+              "Z16"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z04",
+              "Z06"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13010)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13010)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13010)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13010)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13010)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.4c (no AHB constraint for PID 13010)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13010)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13010)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13011,
+      "name": "Profilschar",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z06",
+              "Z16"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z04",
+              "Z06"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13011)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13011)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13011)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13011)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13011)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.4c (no AHB constraint for PID 13011)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13011)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13011)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13012,
+      "name": "Vergangenheitswerte TEP mit Referenzmessung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z06",
+              "Z16"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z04",
+              "Z06"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13012)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13012)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13012)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13012)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13012)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.4c (no AHB constraint for PID 13012)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13012)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13012)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13013,
+      "name": "Marktlokationsscharfe Allokationsliste Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z23"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "Z10"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13013)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13013)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13013)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13013)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13013)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13013)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13013)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13014,
+      "name": "Marktlokationsscharfe bilanzierte Menge Gas/Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z23"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "Z10"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13014)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13014)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13014)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13014)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13014)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13014)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13014)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13015,
+      "name": "Bewegungsdaten im Kalenderjahr vor Lieferbeginn Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z27"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13015)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13015)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13015)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13015)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13015)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13015)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13015)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13016,
+      "name": "Energiemenge und Leistungsmaximum Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z27",
+              "Z28"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13016)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13016)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13016)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13016)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13016)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13016)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13016)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13017,
+      "name": "Messwerte Zählerstand Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M",
+          "field_rules": []
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "4347": [
+              "5"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67",
+                "Z18"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "conditional_rules": [],
+          "field_rules": []
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13017)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13017)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13017)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13017)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG10",
+          "tag": "STS",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "67",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z32",
+              "_description": "[92] Wenn QTY DE6063 mit Wert 67 vorhanden, muss STS Ersatzwertbildungsverfahren (Z32) vorhanden sein"
+            },
+            {
+              "when_tag": "QTY",
+              "when_element_index": 0,
+              "when_value": "67",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "Z40",
+              "_description": "[92] Wenn QTY DE6063 mit Wert 67 vorhanden, muss STS Grund der Ersatzwertbildung (Z40) vorhanden sein"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG10 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 13018,
+      "name": "Lastgang Messlokation / Netzgang / Netzkoppelpunkt Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z48"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13018)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13018)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13018)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13018)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13018)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13018)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13018)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13019,
+      "name": "Messwert Energiemenge Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z27"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13019)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13019)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13019)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13019)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13019)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13019)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13019)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13020,
+      "name": "Redispatch Ausfallarbeitsüberführungszeitreihe",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z43"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13020)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13020)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13020)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13020)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13020)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13020)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13020)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13021,
+      "name": "Redispatch meteorologische Daten",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z44"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13021)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13021)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13021)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13021)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13021)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13021)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13021)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13022,
+      "name": "Redispatch Einzelzeitreihe Ausfallarbeit",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z45"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13022)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13022)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13022)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13022)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13022)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13022)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13022)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13023,
+      "name": "Redispatch Ausfallarbeitssummen",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13023)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13023)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13023)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13023)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13023)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13023)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13023)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13025,
+      "name": "Lastgang Marktlokation / Tranche Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "7",
+              "Z48"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13025)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13025)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13025)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13025)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13025)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13025)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13025)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13026,
+      "name": "Redispatch EEG-Überführungszeitreihe aufgrund Ausfallarbeit",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z15"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "237"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13026)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13026)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13026)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13026)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13026)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13026)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13026)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13027,
+      "name": "Werte nach Typ 2 Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z83"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "220",
+                "67",
+                "Z18"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13027)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13027)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13027)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13027)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13027)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13027)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13027)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 13028,
+      "name": "Grundlage POG-Ermittlung Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z85"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "1225",
+              "element_index": 2,
+              "requirement": "M",
+              "allowed_values": [
+                "9"
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "3225",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M",
+          "field_rules": [
+            {
+              "element": "6063",
+              "requirement": "M",
+              "allowed_values": [
+                "Z47"
+              ],
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 2.4c (no AHB constraint for PID 13028)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.4c (no AHB constraint for PID 13028)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.4c (no AHB constraint for PID 13028)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.4c (no AHB constraint for PID 13028)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.4c (no AHB constraint for PID 13028)"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O",
+          "_description": "RFF is optional per MIG 2.4c (no AHB constraint for PID 13028)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 2.4c (no AHB constraint for PID 13028)"
+        }
+      ],
+      "group_rules": []
+    }
+  ]
+}

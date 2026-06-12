@@ -1,0 +1,2263 @@
+{
+  "schema_version": 1,
+  "message_type": "ORDERS",
+  "release": "1.4c",
+  "source_document": "ORDERS AHB 1.4c vom 01.04.2026",
+  "pruefidentifikatoren": [
+    {
+      "code": 17001,
+      "name": "Bestellung Geräteübernahmeangebot",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17001)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17001)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17001)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 1.4c (no AHB constraint for PID 17001)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17001)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17001)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17002,
+      "name": "Weiterverpflichtung MSBA bei Ende Messstellenbetrieb",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17002)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17002)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17002)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17002)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17002)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17002)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4c (no AHB constraint for PID 17002)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17002)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17002)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17004,
+      "name": "Anforderung von Werten",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17004)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17004)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17004)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17004)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17004)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17004)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17004)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17005,
+      "name": "Bestellung Angebot Rechnungsabwicklung Messstellenbetrieb",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17005)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17005)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17005)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17005)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17005)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4c (no AHB constraint for PID 17005)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17005)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17005)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17006,
+      "name": "Beendigung Rechnungsabwicklung Messstellenbetrieb",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17006)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17006)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17006)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17006)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17006)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17006)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17006)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17007,
+      "name": "Bestellung und Abbestellung von Werten ESA",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17009,
+      "name": "Ankündigung Gerätewechselabsicht",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17009)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17009)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17009)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17009)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17009)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17009)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17011,
+      "name": "Beauftragung zur Änderung der Technik (Messlokationsänderung - Strom)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17011)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17011)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17011)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17011)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17011)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17101,
+      "name": "Anfrage zur Übermittlung von Stammdaten Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17101)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17101)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17101)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17101)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17101)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17101)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17101)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17101)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17102,
+      "name": "Anfrage von Werten",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "7",
+              "when_value_alternatives": [],
+              "when_additional_elements": [],
+              "then_requirement": "M",
+              "_description": "[2] Wenn BGM+7 (Lieferschein) vorhanden, ist IMD Pflicht"
+            }
+          ]
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17102)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17102)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17102)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17102)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17102)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17102)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17102)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17103,
+      "name": "Anfrage zur Übermittlung von Abrechnungsbrennwert und Zustandszahl",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17103)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17103)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17103)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17103)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17103)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17103)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17103)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17104,
+      "name": "Anfrage des MSB Gas an den NB Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17104)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17104)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17104)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17104)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4c (no AHB constraint for PID 17104)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17104)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17104)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17110,
+      "name": "Anforderung Allokationsliste",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17110)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17110)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17110)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17110)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17110)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4c (no AHB constraint for PID 17110)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 1.4c (no AHB constraint for PID 17110)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17110)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17110)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17113,
+      "name": "Reklamation von Werten/Lastgängen",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17113)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17113)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17113)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17115,
+      "name": "Auftrag zur Sperrung/Entsperrung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17115)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17115)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17115)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17115)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17115)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17118,
+      "name": "Bestellung einer Konfigurationsänderung (MSB an MSB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17118)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17118)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17118)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17118)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17118)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17120,
+      "name": "Bestellung Änderung Prognosegrundlage",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17120)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17120)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17120)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17120)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17120)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17120)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17121,
+      "name": "Bestellung Änderung (NB an MSB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17121)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17121)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17121)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17121)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17122,
+      "name": "Reklamation einer Definition",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17122)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17122)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17122)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17122)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 1.4c (no AHB constraint for PID 17122)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17122)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17122)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17123,
+      "name": "Bestellung Änderung Zählzeitdefinition (LF an NB/MSB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17123)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17123)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17123)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17123)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17123)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17128,
+      "name": "Reklamation einer Konfiguration",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17128)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17128)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17128)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17128)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 1.4c (no AHB constraint for PID 17128)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17128)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17129,
+      "name": "Bestellung Beendigung einer Konfiguration",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17129)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17129)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17129)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17129)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17129)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17129)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4c (no AHB constraint for PID 17129)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 1.4c (no AHB constraint for PID 17129)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17129)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17129)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17130,
+      "name": "Bestellung einer Konfiguration (ohne Angebot)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17130)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17130)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17130)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17130)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17130)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17131,
+      "name": "Bestellung Angebot einer Konfiguration",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17131)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17131)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17131)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17131)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17131)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17131)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4c (no AHB constraint for PID 17131)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 1.4c (no AHB constraint for PID 17131)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17131)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17131)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17132,
+      "name": "Anfrage zur Übermittlung von Stammdaten Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17132)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17132)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17132)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17132)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17132)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17132)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4c (no AHB constraint for PID 17132)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17132)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17132)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17133,
+      "name": "Bestellung einer Änderung von Abrechnungsdaten",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17133)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17133)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17133)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17133)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17133)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17134,
+      "name": "Einrichtung Konfiguration aufgrund Zuordnung LF (NB an MSB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17134)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17134)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17134)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17134)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17135,
+      "name": "Einrichtung Konfiguration aufgrund Zuordnung LF (MSB an MSB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17135)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17135)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17135)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17135)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17135)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17135)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17209,
+      "name": "Redispatch: Anforderung der Ausfallarbeit durch den anfNB",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17209)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17209)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17209)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17209)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17209)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17209)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17209)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17209)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17210,
+      "name": "Anforderung der Lieferantenausfallarbeitsclearingliste und Beendigung Abonnement",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17210)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17210)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17210)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17210)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17210)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17210)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17210)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17211,
+      "name": "Reklamation von Profilen bzw. Profilscharen",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17211)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17211)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17211)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17211)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4c (no AHB constraint for PID 17211)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4c (no AHB constraint for PID 17211)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 1.4c (no AHB constraint for PID 17211)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17211)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17211)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17301,
+      "name": "Anforderung von Stammdaten bzw. Messwerten (HKN-R)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "7",
+              "when_value_alternatives": [],
+              "when_additional_elements": [],
+              "then_requirement": "M",
+              "_description": "[2] Wenn BGM+7 (Lieferschein) vorhanden, ist IMD Pflicht"
+            }
+          ]
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17301)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17301)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4c (no AHB constraint for PID 17301)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4c (no AHB constraint for PID 17301)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4c (no AHB constraint for PID 17301)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4c (no AHB constraint for PID 17301)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17301)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17301)"
+        }
+      ],
+      "group_rules": []
+    }
+  ]
+}

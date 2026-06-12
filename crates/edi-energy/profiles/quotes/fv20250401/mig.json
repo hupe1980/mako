@@ -1,0 +1,707 @@
+{
+  "schema_version": 1,
+  "message_type": "QUOTES",
+  "release": "1.3b",
+  "valid_from": "2025-04-01",
+  "ordering_hint": [
+    "UNH",
+    "BGM",
+    "DTM",
+    "IMD",
+    "FTX",
+    "RFF",
+    "CUX",
+    "NAD",
+    "CTA",
+    "COM",
+    "LOC",
+    "LIN",
+    "PIA",
+    "GIN",
+    "CCI",
+    "CAV",
+    "PRI",
+    "UNT"
+  ],
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Nachrichten-Kopfsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M"
+        },
+        {
+          "id": "S009",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "BGM",
+      "name": "Beginn der Nachricht",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "M"
+        },
+        {
+          "id": "C106",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {
+        "1001": [
+          "310"
+        ]
+      }
+    },
+    {
+      "tag": "DTM",
+      "name": "Datum/Uhrzeit/Zeitspanne",
+      "mandatory": true,
+      "max_occurrences": 7,
+      "elements": [
+        {
+          "id": "C507",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {
+        "2005": [
+          "137",
+          "76",
+          "203",
+          "469",
+          "472",
+          "279",
+          "273"
+        ]
+      }
+    },
+    {
+      "tag": "IMD",
+      "name": "Produkt-/Leistungsbeschreibung",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "7077",
+          "status": "C"
+        },
+        {
+          "id": "C273",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "FTX",
+      "name": "Allgemeine Information",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "4451",
+          "status": "M"
+        },
+        {
+          "id": "C108",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {
+        "4451": [
+          "ACB"
+        ]
+      }
+    },
+    {
+      "tag": "NAD",
+      "name": "Beteiligter",
+      "mandatory": true,
+      "max_occurrences": 3,
+      "elements": [
+        {
+          "id": "3035",
+          "status": "M"
+        },
+        {
+          "id": "C082",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {
+        "3035": [
+          "MS",
+          "MR",
+          "DP"
+        ]
+      }
+    },
+    {
+      "tag": "CTA",
+      "name": "Ansprechpartner",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "3139",
+          "status": "C"
+        },
+        {
+          "id": "C056",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "COM",
+      "name": "Kommunikationsverbindung",
+      "mandatory": false,
+      "max_occurrences": 5,
+      "elements": [
+        {
+          "id": "C076",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "LOC",
+      "name": "Meldepunkt",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "3227",
+          "status": "M"
+        },
+        {
+          "id": "C517",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {
+        "3227": [
+          "172"
+        ]
+      }
+    },
+    {
+      "tag": "LIN",
+      "name": "Positionsdaten",
+      "mandatory": false,
+      "max_occurrences": 200000,
+      "elements": [
+        {
+          "id": "1082",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "PIA",
+      "name": "Zusätzliche Produktidentifikation",
+      "mandatory": false,
+      "max_occurrences": 25,
+      "elements": [
+        {
+          "id": "4347",
+          "status": "M"
+        },
+        {
+          "id": "C212",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "GIN",
+      "name": "Herstellernummer",
+      "mandatory": false,
+      "max_occurrences": 3,
+      "elements": [
+        {
+          "id": "7405",
+          "status": "M"
+        },
+        {
+          "id": "C208",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "CCI",
+      "name": "Merkmal/Eigenschaft",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "7059",
+          "status": "C"
+        },
+        {
+          "id": "C240",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "CAV",
+      "name": "Merkmalswert",
+      "mandatory": false,
+      "max_occurrences": 10,
+      "elements": [
+        {
+          "id": "C889",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "PRI",
+      "name": "Preisangaben",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C509",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "UNT",
+      "name": "Nachrichten-Endesegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M"
+        },
+        {
+          "id": "0062",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG1",
+      "trigger_segment": "RFF",
+      "mandatory": true,
+      "max_occurrences": 9999,
+      "segments": [
+        {
+          "tag": "RFF",
+          "name": "Referenz",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C506",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {
+            "1153": [
+              "AAV",
+              "ACW",
+              "Z13"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG4",
+      "trigger_segment": "CUX",
+      "mandatory": false,
+      "max_occurrences": 5,
+      "segments": [
+        {
+          "tag": "CUX",
+          "name": "Währungsangaben",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C504",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {
+            "6343": [
+              "4"
+            ],
+            "6347": [
+              "2"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG11",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "Beteiligter (MP-ID)",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M"
+            },
+            {
+              "id": "C082",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR",
+              "DP"
+            ]
+          }
+        },
+        {
+          "tag": "LOC",
+          "name": "Meldepunkt",
+          "mandatory": false,
+          "max_occurrences": 99,
+          "elements": [
+            {
+              "id": "3227",
+              "status": "M"
+            },
+            {
+              "id": "C517",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG14",
+          "trigger_segment": "CTA",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "segments": [
+            {
+              "tag": "CTA",
+              "name": "Ansprechpartner",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "3139",
+                  "status": "C"
+                },
+                {
+                  "id": "C056",
+                  "status": "C"
+                }
+              ],
+              "qualifier_restrictions": {}
+            },
+            {
+              "tag": "COM",
+              "name": "Kommunikationsverbindung",
+              "mandatory": false,
+              "max_occurrences": 5,
+              "elements": [
+                {
+                  "id": "C076",
+                  "status": "M"
+                }
+              ],
+              "qualifier_restrictions": {}
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    {
+      "id": "SG27",
+      "trigger_segment": "LIN",
+      "mandatory": false,
+      "max_occurrences": 200000,
+      "segments": [
+        {
+          "tag": "LIN",
+          "name": "Positionsdaten",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "1082",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {}
+        },
+        {
+          "tag": "PIA",
+          "name": "Zusätzliche Produktidentifikation",
+          "mandatory": false,
+          "max_occurrences": 25,
+          "elements": [
+            {
+              "id": "4347",
+              "status": "M"
+            },
+            {
+              "id": "C212",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {}
+        },
+        {
+          "tag": "IMD",
+          "name": "Produkt-/Leistungsbeschreibung",
+          "mandatory": false,
+          "max_occurrences": 99,
+          "elements": [
+            {
+              "id": "7077",
+              "status": "C"
+            },
+            {
+              "id": "C273",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {}
+        },
+        {
+          "tag": "DTM",
+          "name": "Datum/Uhrzeit/Zeitspanne",
+          "mandatory": false,
+          "max_occurrences": 2,
+          "elements": [
+            {
+              "id": "C507",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {}
+        },
+        {
+          "tag": "GIN",
+          "name": "Herstellernummer",
+          "mandatory": false,
+          "max_occurrences": 3,
+          "elements": [
+            {
+              "id": "7405",
+              "status": "M"
+            },
+            {
+              "id": "C208",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {}
+        },
+        {
+          "tag": "FTX",
+          "name": "Allgemeine Information",
+          "mandatory": false,
+          "max_occurrences": 99,
+          "elements": [
+            {
+              "id": "4451",
+              "status": "M"
+            },
+            {
+              "id": "C108",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {}
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG28",
+          "trigger_segment": "CCI",
+          "mandatory": false,
+          "max_occurrences": 999,
+          "segments": [
+            {
+              "tag": "CCI",
+              "name": "Merkmal/Eigenschaft",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "7059",
+                  "status": "C"
+                },
+                {
+                  "id": "C240",
+                  "status": "C"
+                }
+              ],
+              "qualifier_restrictions": {}
+            },
+            {
+              "tag": "CAV",
+              "name": "Merkmalswert",
+              "mandatory": false,
+              "max_occurrences": 10,
+              "elements": [
+                {
+                  "id": "C889",
+                  "status": "M"
+                }
+              ],
+              "qualifier_restrictions": {}
+            }
+          ],
+          "groups": []
+        },
+        {
+          "id": "SG31",
+          "trigger_segment": "PRI",
+          "mandatory": false,
+          "max_occurrences": 99,
+          "segments": [
+            {
+              "tag": "PRI",
+              "name": "Preisangaben",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C509",
+                  "status": "C"
+                }
+              ],
+              "qualifier_restrictions": {}
+            },
+            {
+              "tag": "RNG",
+              "name": "Angaben zum Wertebereich",
+              "mandatory": false,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "6167",
+                  "status": "M"
+                },
+                {
+                  "id": "C280",
+                  "status": "R"
+                }
+              ],
+              "qualifier_restrictions": {
+                "6167": [
+                  "10"
+                ]
+              }
+            }
+          ],
+          "groups": []
+        },
+        {
+          "id": "SG32",
+          "trigger_segment": "RFF",
+          "mandatory": false,
+          "max_occurrences": 9999,
+          "segments": [
+            {
+              "tag": "RFF",
+              "name": "Referenz",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C506",
+                  "status": "M"
+                }
+              ],
+              "qualifier_restrictions": {
+                "1153": [
+                  "Z09",
+                  "Z18",
+                  "APF"
+                ]
+              }
+            }
+          ],
+          "groups": []
+        },
+        {
+          "id": "SG42",
+          "trigger_segment": "NAD",
+          "mandatory": false,
+          "max_occurrences": 999,
+          "segments": [
+            {
+              "tag": "NAD",
+              "name": "Beteiligter Marktpartner MP-ID",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "3035",
+                  "status": "M"
+                },
+                {
+                  "id": "C082",
+                  "status": "C"
+                }
+              ],
+              "qualifier_restrictions": {
+                "3035": [
+                  "VY"
+                ]
+              }
+            }
+          ],
+          "groups": []
+        }
+      ]
+    }
+  ],
+  "valid_until": "2026-03-31",
+  "ahb_revision": "1.3b",
+  "source_document": "QUOTES AHB 1.3b, Stand 01.04.2025"
+}

@@ -1,0 +1,364 @@
+{
+  "schema_version": 1,
+  "message_type": "PRICAT",
+  "release": "2.1",
+  "valid_from": "2026-04-01",
+  "pid_source": "rff_z13",
+  "ordering_hint": [
+    "UNH",
+    "BGM",
+    "DTM",
+    "RFF",
+    "NAD",
+    "LOC",
+    "CUX",
+    "PGI",
+    "LIN",
+    "PIA",
+    "IMD",
+    "PRI",
+    "RNG",
+    "UNT"
+  ],
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Nachrichten-Kopfsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M"
+        },
+        {
+          "id": "S009",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "BGM",
+      "name": "Beginn der Nachricht",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "R"
+        },
+        {
+          "id": "C106",
+          "status": "R"
+        }
+      ],
+      "qualifier_restrictions": {
+        "1001": [
+          "Z04",
+          "Z32",
+          "Z54",
+          "Z64",
+          "Z67",
+          "Z70",
+          "Z77",
+          "Z94"
+        ]
+      }
+    },
+    {
+      "tag": "DTM",
+      "name": "Datum/Uhrzeit",
+      "mandatory": true,
+      "max_occurrences": 35,
+      "elements": [
+        {
+          "id": "C507",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {
+        "2005": [
+          "492",
+          "137",
+          "157"
+        ]
+      }
+    },
+    {
+      "tag": "UNT",
+      "name": "Nachrichten-Endesegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M"
+        },
+        {
+          "id": "0062",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG1",
+      "trigger_segment": "RFF",
+      "mandatory": false,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "RFF",
+          "name": "Referenz/Prüfidentifikator",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C506",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {
+            "1153": [
+              "ACW",
+              "Z56",
+              "Z13"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG2",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "MP-ID Empfänger/Absender",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M"
+            },
+            {
+              "id": "C082",
+              "status": "R"
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "MR",
+              "MS"
+            ]
+          }
+        },
+        {
+          "tag": "LOC",
+          "name": "Regelzone",
+          "mandatory": false,
+          "max_occurrences": 25,
+          "elements": [
+            {
+              "id": "3227",
+              "status": "M"
+            },
+            {
+              "id": "C517",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {}
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG6",
+      "trigger_segment": "CUX",
+      "mandatory": false,
+      "max_occurrences": 20,
+      "segments": [
+        {
+          "tag": "CUX",
+          "name": "Währungsangaben",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C504",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {
+            "6343": [
+              "4"
+            ],
+            "6347": [
+              "2"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG17",
+      "trigger_segment": "PGI",
+      "mandatory": false,
+      "max_occurrences": 1000,
+      "segments": [
+        {
+          "tag": "PGI",
+          "name": "Produktgruppen-Information",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "5379",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {}
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG36",
+          "trigger_segment": "LIN",
+          "mandatory": true,
+          "max_occurrences": 999999,
+          "segments": [
+            {
+              "tag": "LIN",
+              "name": "Positionsdaten",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "1082",
+                  "status": "C"
+                }
+              ],
+              "qualifier_restrictions": {}
+            },
+            {
+              "tag": "PIA",
+              "name": "Preisschlüsselstamm",
+              "mandatory": false,
+              "max_occurrences": 99,
+              "elements": [
+                {
+                  "id": "4347",
+                  "status": "M"
+                },
+                {
+                  "id": "C212",
+                  "status": "M"
+                }
+              ],
+              "qualifier_restrictions": {}
+            },
+            {
+              "tag": "IMD",
+              "name": "Produktbeschreibung",
+              "mandatory": false,
+              "max_occurrences": 999,
+              "elements": [
+                {
+                  "id": "7077",
+                  "status": "C"
+                },
+                {
+                  "id": "C272",
+                  "status": "C"
+                },
+                {
+                  "id": "C273",
+                  "status": "C"
+                }
+              ],
+              "qualifier_restrictions": {}
+            }
+          ],
+          "groups": [
+            {
+              "id": "SG40",
+              "trigger_segment": "PRI",
+              "mandatory": false,
+              "max_occurrences": 100,
+              "segments": [
+                {
+                  "tag": "PRI",
+                  "name": "Preisangaben",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "C509",
+                      "status": "R"
+                    }
+                  ],
+                  "qualifier_restrictions": {
+                    "5125": [
+                      "CAL"
+                    ]
+                  }
+                },
+                {
+                  "tag": "RNG",
+                  "name": "Angaben zum Wertebereich",
+                  "mandatory": false,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "6167",
+                      "status": "M"
+                    },
+                    {
+                      "id": "C280",
+                      "status": "R"
+                    }
+                  ],
+                  "qualifier_restrictions": {
+                    "6167": [
+                      "10"
+                    ]
+                  }
+                },
+                {
+                  "tag": "DTM",
+                  "name": "Gültigkeitszeitraum des Preises",
+                  "mandatory": false,
+                  "max_occurrences": 5,
+                  "elements": [
+                    {
+                      "id": "C507",
+                      "status": "M"
+                    }
+                  ],
+                  "qualifier_restrictions": {
+                    "2005": [
+                      "163",
+                      "164"
+                    ]
+                  }
+                }
+              ],
+              "groups": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "ahb_revision": "2.1",
+  "source_document": "PRICAT AHB 2.1, Stand 01.04.2026"
+}

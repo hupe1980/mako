@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hupe1980/edi-energy-rs/profiles/schemas/mig.schema.json",
+  "title": "EDI@Energy MIG Profile",
+  "description": "Message Implementation Guide profile for one (message_type, release) pair.",
+  "type": "object",
+  "required": ["message_type", "release", "segments", "segment_groups"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "description": "Schema version number. Current maximum supported version is 1. Versions higher than the codegen constant MAX_SCHEMA_VERSION in xtask/src/codegen.rs are rejected with a helpful error. Bump this field when structural (breaking) schema changes are introduced; additive-only changes (new optional fields with defaults) do not require a version bump.",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "message_type": {
+      "type": "string",
+      "description": "EDIFACT message type identifier, e.g. \"UTILMD\".",
+      "pattern": "^[A-Z]{6}$"
+    },
+    "release": {
+      "type": "string",
+      "description": "EDI@Energy release identifier, e.g. \"5.5.3a\".",
+      "pattern": "^[A-Za-z0-9.]+$"
+    },
+    "pid_source": {
+      "type": "string",
+      "description": "Where the Prüfidentifikator is located in this message type. 'bgm_de1004' (default): BGM element 1 (DE 1004). 'rff_z13': top-level RFF segment with qualifier Z13.",
+      "enum": ["bgm_de1004", "rff_z13"],
+      "default": "bgm_de1004"
+    },
+    "valid_from": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "First date on which this profile is normatively valid (BDEW 'Gültig ab'). Should match the fvYYYYMMDD component of the profile directory name. Added in F-020 to make the date self-describing and independently verifiable.",
+      "examples": ["2025-10-01"]
+    },
+    "valid_until": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Last date on which this profile is normatively valid (BDEW 'Gültig bis'). Absent means open-ended.",
+      "examples": ["2026-09-30"]
+    },
+    "ahb_revision": {
+      "type": "string",
+      "description": "AHB revision letter for same-wire-code correction tracking. May differ from the wire release code when BDEW issues an AHB correction without a MIG change.",
+      "examples": ["3.2", "2.0h"]
+    },
+    "source_document": {
+      "type": "string",
+      "description": "BDEW document title this profile was derived from, including revision date.",
+      "examples": ["MSCONS AHB 3.2, Stand 01.10.2025"]
+    },
+    "supersedes_directory": {
+      "type": "string",
+      "description": "Directory name of the earlier same-wire-code profile that this profile supersedes. Required when two directories share the same wire release code (AHB correction cycle).",
+      "examples": ["fv20240401"]
+    },
+    "ordering_hint": {
+      "type": "array",
+      "description": "Optional explicit segment-tag ordering for segment-order validation. When absent, ordering is derived automatically.",
+      "items": { "type": "string" }
+    },
+    "archived": {
+      "type": "boolean",
+      "description": "When true, this profile is excluded from the default build and requires the `{message_type}-archive` or `archive` Cargo feature to compile. Set by `cargo xtask codegen --prune-expired` when the profile's valid_until date is more than GRACE_DAYS in the past. This is an explicit, deterministic marker that persists in the JSON file so codegen output is reproducible regardless of when it is run.",
+      "default": false
+    },
+    "pid_exempt": {
+      "type": "boolean",
+      "description": "When true, this profile intentionally has no Prüfidentifikatoren and AHB rule-coverage warnings are suppressed. Use for message types whose BDEW AHB does not assign business-level PIDs (e.g. CONTRL — a pure EDIFACT functional acknowledgment without BDEW process codes).",
+      "default": false
+    },
+    "segments": {
+      "type": "array",
+      "description": "Flat list of segment definitions at the message level.",
+      "items": { "$ref": "#/$defs/SegmentDef" }
+    },
+    "segment_groups": {
+      "type": "array",
+      "description": "Top-level segment groups; groups may be nested via 'groups'.",
+      "items": { "$ref": "#/$defs/GroupDef" }
+    }
+  },
+  "$defs": {
+    "Status": {
+      "type": "string",
+      "enum": ["M", "C", "R"],
+      "description": "M = mandatory, C = conditional, R = recommended (used in some BDEW profiles)."
+    },
+    "Requirement": {
+      "type": "string",
+      "enum": ["M", "C", "O", "N"],
+      "description": "M = mandatory, C = conditional, O = optional, N = not used."
+    },
+    "ElementRef": {
+      "type": "object",
+      "required": ["id", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id":         { "type": "string", "description": "Composite/element identifier, e.g. \"C002\"." },
+        "status":     { "$ref": "#/$defs/Status" },
+        "components": { "type": "integer", "minimum": 1, "description": "Number of expected sub-components." }
+      }
+    },
+    "QualifierMap": {
+      "type": "object",
+      "description": "Map from DE identifier to list of allowed qualifier values.",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "SegmentDef": {
+      "type": "object",
+      "required": ["tag", "name", "mandatory", "max_occurrences", "elements"],
+      "additionalProperties": false,
+      "properties": {
+        "tag":                    { "type": "string", "pattern": "^[A-Z]{2,3}$" },
+        "name":                   { "type": "string" },
+        "mandatory":              { "type": "boolean" },
+        "max_occurrences":        { "type": "integer", "minimum": 1 },
+        "elements":               { "type": "array", "items": { "$ref": "#/$defs/ElementRef" } },
+        "qualifier_restrictions": { "$ref": "#/$defs/QualifierMap" }
+      }
+    },
+    "GroupDef": {
+      "type": "object",
+      "required": ["id", "trigger_segment", "mandatory", "max_occurrences", "segments", "groups"],
+      "additionalProperties": false,
+      "properties": {
+        "id":              { "type": "string", "pattern": "^SG[0-9]+$" },
+        "trigger_segment": { "type": "string", "pattern": "^[A-Z]{2,3}$" },
+        "mandatory":       { "type": "boolean" },
+        "max_occurrences": { "type": "integer", "minimum": 1 },
+        "min_occurrences": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Minimum number of times this group must appear. When absent, defaults to 1 for mandatory groups and 0 for optional groups (F-006)."
+        },
+        "segments": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SegmentDef" }
+        },
+        "groups": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/GroupDef" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,665 @@
+{
+  "schema_version": 1,
+  "message_type": "PARTIN",
+  "release": "1.0f",
+  "source_document": "PARTIN AHB 1.0f vom 01.10.2025",
+  "pruefidentifikatoren": [
+    {
+      "code": 37000,
+      "name": "Kommunikationsdaten des LF Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        }
+      ]
+    },
+    {
+      "code": 37001,
+      "name": "Kommunikationsdaten des NB Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37001)"
+        }
+      ]
+    },
+    {
+      "code": 37002,
+      "name": "Kommunikationsdaten des MSB Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37002)"
+        }
+      ]
+    },
+    {
+      "code": 37003,
+      "name": "Kommunikationsdaten des BKV Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37003)"
+        }
+      ]
+    },
+    {
+      "code": 37004,
+      "name": "Kommunikationsdaten des BIKO Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37004)"
+        }
+      ]
+    },
+    {
+      "code": 37005,
+      "name": "Kommunikationsdaten des ÜNB Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37005)"
+        }
+      ]
+    },
+    {
+      "code": 37006,
+      "name": "Kommunikationsdaten des ESA Strom",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37006)"
+        }
+      ]
+    },
+    {
+      "code": 37008,
+      "name": "Kommunikationsdaten des LF Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37008)"
+        }
+      ]
+    },
+    {
+      "code": 37009,
+      "name": "Kommunikationsdaten des NB Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37009)"
+        }
+      ]
+    },
+    {
+      "code": 37010,
+      "name": "Kommunikationsdaten des MSB Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37010)"
+        }
+      ]
+    },
+    {
+      "code": 37011,
+      "name": "Kommunikationsdaten des MGV Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37011)"
+        }
+      ]
+    },
+    {
+      "code": 37012,
+      "name": "Spartenübergreifende Kommunikationsdaten des NB Gas, MSB Gas und MSB Strom (NB an andere)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37012)"
+        }
+      ]
+    },
+    {
+      "code": 37013,
+      "name": "Spartenübergreifende Kommunikationsdaten des NB Gas, MSB Gas und MSB Strom (MSB Gas an andere)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37013)"
+        }
+      ]
+    },
+    {
+      "code": 37014,
+      "name": "Spartenübergreifende Kommunikationsdaten des NB Gas, MSB Gas und MSB Strom (MSB Strom an andere)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FII",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37014)"
+        }
+      ]
+    }
+  ]
+}

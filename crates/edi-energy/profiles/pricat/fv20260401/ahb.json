@@ -1,0 +1,245 @@
+{
+  "schema_version": 1,
+  "message_type": "PRICAT",
+  "release": "2.1",
+  "source_document": "PRICAT AHB 2.1 vom 01.04.2026",
+  "pruefidentifikatoren": [
+    {
+      "code": 27001,
+      "name": "Übermittlung der Ausgleichsenergiepreise",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z94",
+              "then_requirement": "M",
+              "_description": "[57] wenn BGM DE1001=Z94 (Preisblatt Technik) vorhanden, ist IMD Pflicht"
+            }
+          ]
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PGI",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z32",
+              "then_requirement": "M",
+              "_description": "[31] wenn BGM DE1001=Z32 (Preisblatt Messstellenbetrieb) vorhanden, ist PIA Pflicht"
+            }
+          ]
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "RNG",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z77",
+              "then_requirement": "M",
+              "_description": "[34] wenn BGM DE1001=Z77 (Preisblatt Konfigurationen) vorhanden, ist RNG Pflicht"
+            },
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z94",
+              "then_requirement": "M",
+              "_description": "[57] wenn BGM DE1001=Z94 (Preisblatt Technik) vorhanden, ist RNG Pflicht"
+            }
+          ]
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 27002,
+      "name": "Preisblatt MSB-Leistungen",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PGI",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z32",
+              "then_requirement": "M",
+              "_description": "[31] wenn BGM DE1001=Z32 (Preisblatt Messstellenbetrieb) vorhanden, ist PIA Pflicht"
+            }
+          ]
+        },
+        {
+          "tag": "IMD",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z94",
+              "then_requirement": "M",
+              "_description": "[57] wenn BGM DE1001=Z94 (Preisblatt Technik) vorhanden, ist IMD Pflicht"
+            }
+          ]
+        },
+        {
+          "tag": "RNG",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z77",
+              "then_requirement": "M",
+              "_description": "[34] wenn BGM DE1001=Z77 (Preisblatt Konfigurationen) vorhanden, ist RNG Pflicht"
+            },
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z94",
+              "then_requirement": "M",
+              "_description": "[57] wenn BGM DE1001=Z94 (Preisblatt Technik) vorhanden, ist RNG Pflicht"
+            }
+          ]
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.1 (no AHB constraint for PID 27002)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 27003,
+      "name": "Preisblatt NB-Leistungen",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PGI",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "RNG",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 2.1 (no AHB constraint for PID 27003)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.1 (no AHB constraint for PID 27003)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 2.1 (no AHB constraint for PID 27003)"
+        }
+      ],
+      "group_rules": []
+    }
+  ]
+}

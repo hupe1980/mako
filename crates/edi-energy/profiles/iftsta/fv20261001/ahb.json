@@ -1,0 +1,2674 @@
+{
+  "schema_version": 1,
+  "message_type": "IFTSTA",
+  "release": "2.1",
+  "source_document": "IFTSTA AHB 2.1 vom 01.10.2026",
+  "pruefidentifikatoren": [
+    {
+      "code": 21000,
+      "name": "MaBiS / Statusmeldung vom LF an NB/ÜNB",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "O",
+          "_description": "CNI is optional per MIG 2.1 (no AHB constraint for PID 21000)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21000)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21000)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21000)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21000)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21000)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21000)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21001,
+      "name": "MaBiS / Statusmeldung vom NB an NB",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "O",
+          "_description": "CNI is optional per MIG 2.1 (no AHB constraint for PID 21001)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21001)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21001)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21001)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21001)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21001)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21001)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21002,
+      "name": "MaBiS / Abweisung vom BIKO an NB/ÜNB",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "O",
+          "_description": "CNI is optional per MIG 2.1 (no AHB constraint for PID 21002)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21002)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21002)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21002)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21002)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21002)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21002)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21003,
+      "name": "MaBiS / Statusmeldung vom BIKO an NB/ÜNB",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "O",
+          "_description": "CNI is optional per MIG 2.1 (no AHB constraint for PID 21003)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21003)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21003)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21003)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21003)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21003)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21003)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21004,
+      "name": "MaBiS / Statusmeldung vom BIKO an BKV/NB",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "O",
+          "_description": "CNI is optional per MIG 2.1 (no AHB constraint for PID 21004)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21004)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21004)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21004)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21004)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21004)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21004)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21005,
+      "name": "MaBiS / Statusmeldung vom BKV/NB an BIKO",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "O",
+          "_description": "CNI is optional per MIG 2.1 (no AHB constraint for PID 21005)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21005)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21005)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21005)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21005)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21005)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21005)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21007,
+      "name": "MaBiS / Abweisung vom NB/ÜNB an LF",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21007)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21007)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21007)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21007)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21007)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21007)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21007)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21009,
+      "name": "WiM / Statusmeldung MSB-Wechsel nach MsbG an LF (NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21009)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21009)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21009)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21009)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21009)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21009)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21009)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21010,
+      "name": "WiM / Statusmeldung MSB-Wechsel nach MsbG an NB (MSB alt)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21010)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21010)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21010)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21010)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21010)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21010)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21010)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21011,
+      "name": "WiM / Statusmeldung MSB-Wechsel nach MsbG an NB (MSB neu)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21011)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21011)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21011)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21011)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21011)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21011)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21011)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21012,
+      "name": "WiM / Statusmeldung MSB-Wechsel nach MsbG an BKV",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21012)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21012)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21012)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21012)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21012)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21012)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21012)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21013,
+      "name": "WiM / Statusmeldung MSB-Wechsel nach MsbG an ÜNB",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21013)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21013)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21013)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21013)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21013)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21013)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21013)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21015,
+      "name": "WiM / Statusmeldung Einbau iMS",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21015)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21015)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21015)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21015)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21015)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21018,
+      "name": "WiM / Statusmeldung Anforderung Datenzugang",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21018)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21018)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21018)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21018)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21018)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21018)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21018)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21024,
+      "name": "GPKE / Vollzugsmeldung Lieferantenwechsel",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21024)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21024)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21024)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21024)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21024)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21025,
+      "name": "GPKE / Vollzugsmeldung Einzug",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "GID",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21025)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21025)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21025)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21026,
+      "name": "GPKE / Vollzugsmeldung Auszug",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21026)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21026)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21026)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21026)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21026)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21027,
+      "name": "GPKE / Vollzugsmeldung Netznutzung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "GID",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21027)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21027)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21027)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21028,
+      "name": "GPKE / Vollzugsmeldung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21028)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21028)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21028)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21028)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21028)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21028)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21028)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21029,
+      "name": "GPKE / Abweisung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21029)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21029)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21029)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21029)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21029)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21029)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21029)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21030,
+      "name": "GPKE / Vollzugsmeldung MSB-Wechsel",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21030)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21030)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21030)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21030)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21030)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21030)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21030)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21031,
+      "name": "GPKE / Statusmeldung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21031)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21031)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21031)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21031)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21031)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21031)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21031)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21032,
+      "name": "GPKE / Statusmeldung iMS-Beauftragung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "GID",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21032)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21032)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21032)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21032)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.1 (no AHB constraint for PID 21032)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21032)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21033,
+      "name": "GPKE / Statusmeldung Kündigung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "GID",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21033)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21033)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21033)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21033)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.1 (no AHB constraint for PID 21033)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21033)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21035,
+      "name": "Redispatch / Statusmeldung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21035)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21035)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21035)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21035)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21035)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.1 (no AHB constraint for PID 21035)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21036,
+      "name": "Redispatch / Statusmeldung Aktivierungsauftrag",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21036)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21036)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21036)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21036)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21036)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21036)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21036)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21037,
+      "name": "Redispatch / Statusmeldung Einspeisemanagement",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "GID",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21037)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21037)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.1 (no AHB constraint for PID 21037)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21037)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21038,
+      "name": "Redispatch / Statusmeldung Abrechnungsinformation",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "GID",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21038)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21038)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.1 (no AHB constraint for PID 21038)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21038)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21039,
+      "name": "Redispatch / Statusmeldung Messlokation",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "GID",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21039)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21039)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21039)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21039)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21039)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21040,
+      "name": "Redispatch / Statusmeldung Bilanzkreiszuordnung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21040)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21040)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21040)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21040)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21040)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21040)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21040)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21042,
+      "name": "EnFG / Statusmeldung Privilegierungsinformation",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21042)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21042)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21042)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21042)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21042)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21042)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.1 (no AHB constraint for PID 21042)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21042)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21043,
+      "name": "EnFG / Statusmeldung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "GID",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21043)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21043)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21043)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21043)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.1 (no AHB constraint for PID 21043)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21043)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21044,
+      "name": "EnFG / Statusmeldung Stammdaten",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21044)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21044)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21044)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21044)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.1 (no AHB constraint for PID 21044)"
+        },
+        {
+          "tag": "GID",
+          "requirement": "O",
+          "_description": "GID is optional per MIG 2.1 (no AHB constraint for PID 21044)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.1 (no AHB constraint for PID 21044)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21044)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21045,
+      "name": "EnFG / Statusmeldung Abrechnung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "GID",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21045)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21045)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21045)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    },
+    {
+      "code": 21047,
+      "name": "EnFG / Statusmeldung Messwerte",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CNI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "GID",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 2.1 (no AHB constraint for PID 21047)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 2.1 (no AHB constraint for PID 21047)"
+        },
+        {
+          "tag": "EFI",
+          "requirement": "O",
+          "_description": "EFI is optional per MIG 2.1 (no AHB constraint for PID 21047)"
+        },
+        {
+          "tag": "EQD",
+          "requirement": "O",
+          "_description": "EQD is optional per MIG 2.1 (no AHB constraint for PID 21047)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.1 (no AHB constraint for PID 21047)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.1 (no AHB constraint for PID 21047)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG6",
+          "tag": "DTM",
+          "requirement": "O",
+          "_description": "MIG: DTM in SG6 marked mandatory; AHB req unverified - O for safety"
+        }
+      ]
+    }
+  ]
+}

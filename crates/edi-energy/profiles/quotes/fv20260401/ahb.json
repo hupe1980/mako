@@ -1,0 +1,412 @@
+{
+  "schema_version": 1,
+  "message_type": "QUOTES",
+  "release": "1.3c",
+  "source_document": "QUOTES AHB 1.3c vom 01.04.2026",
+  "pruefidentifikatoren": [
+    {
+      "code": 15001,
+      "name": "Angebot Geräteübernahme",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.3c (no AHB constraint for PID 15001)"
+        },
+        {
+          "tag": "GIN",
+          "requirement": "O",
+          "_description": "GIN is optional per MIG 1.3c (no AHB constraint for PID 15001)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.3c (no AHB constraint for PID 15001)"
+        },
+        {
+          "tag": "RNG",
+          "requirement": "O",
+          "_description": "RNG is optional per MIG 1.3c (no AHB constraint for PID 15001)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 15002,
+      "name": "Angebot",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.3c (no AHB constraint for PID 15002)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.3c (no AHB constraint for PID 15002)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.3c (no AHB constraint for PID 15002)"
+        },
+        {
+          "tag": "GIN",
+          "requirement": "O",
+          "_description": "GIN is optional per MIG 1.3c (no AHB constraint for PID 15002)"
+        },
+        {
+          "tag": "RNG",
+          "requirement": "O",
+          "_description": "RNG is optional per MIG 1.3c (no AHB constraint for PID 15002)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 15003,
+      "name": "Angebot zur Anfrage von Werten für ESA",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.3c (no AHB constraint for PID 15003)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.3c (no AHB constraint for PID 15003)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.3c (no AHB constraint for PID 15003)"
+        },
+        {
+          "tag": "GIN",
+          "requirement": "O",
+          "_description": "GIN is optional per MIG 1.3c (no AHB constraint for PID 15003)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.3c (no AHB constraint for PID 15003)"
+        },
+        {
+          "tag": "RNG",
+          "requirement": "O",
+          "_description": "RNG is optional per MIG 1.3c (no AHB constraint for PID 15003)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 15004,
+      "name": "Angebot zur Anfrage einer Konfiguration",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.3c (no AHB constraint for PID 15004)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.3c (no AHB constraint for PID 15004)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.3c (no AHB constraint for PID 15004)"
+        },
+        {
+          "tag": "GIN",
+          "requirement": "O",
+          "_description": "GIN is optional per MIG 1.3c (no AHB constraint for PID 15004)"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "O",
+          "_description": "PRI is optional per MIG 1.3c (no AHB constraint for PID 15004)"
+        },
+        {
+          "tag": "RNG",
+          "requirement": "O",
+          "_description": "RNG is optional per MIG 1.3c (no AHB constraint for PID 15004)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 15005,
+      "name": "Angebot zur Anfrage Änderung Technik",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "RNG",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.3c (no AHB constraint for PID 15005)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.3c (no AHB constraint for PID 15005)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.3c (no AHB constraint for PID 15005)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.3c (no AHB constraint for PID 15005)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.3c (no AHB constraint for PID 15005)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.3c (no AHB constraint for PID 15005)"
+        },
+        {
+          "tag": "GIN",
+          "requirement": "O",
+          "_description": "GIN is optional per MIG 1.3c (no AHB constraint for PID 15005)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.3c (no AHB constraint for PID 15005)"
+        }
+      ],
+      "group_rules": []
+    }
+  ]
+}

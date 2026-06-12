@@ -1,0 +1,1264 @@
+{
+  "schema_version": 1,
+  "message_type": "UTILMD",
+  "release": "G1.1",
+  "source_document": "UTILMD AHB G1.1 vom 01.10.2024",
+  "pruefidentifikatoren": [
+    {
+      "code": 44001,
+      "name": "Lieferbeginn Gas (Anfrage LFN an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "Z19"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O",
+          "_description": "AGR is optional per MIG G1.1 (no AHB constraint for PID 44001)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG G1.1 (no AHB constraint for PID 44001)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG G1.1 (no AHB constraint for PID 44001)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG G1.1 (no AHB constraint for PID 44001)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG G1.1 (no AHB constraint for PID 44001)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG4",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "E01",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value": "E14"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht"
+            },
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "E01",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value": "Z35"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[84] Wenn STS+E01++Z35 (Ablehnung Abmeldeanfrage) vorhanden, ist FTX Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 44002,
+      "name": "Lieferende Gas (Anfrage LFN an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "Z19"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O",
+          "_description": "AGR is optional per MIG G1.1 (no AHB constraint for PID 44002)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG G1.1 (no AHB constraint for PID 44002)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG G1.1 (no AHB constraint for PID 44002)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG G1.1 (no AHB constraint for PID 44002)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG G1.1 (no AHB constraint for PID 44002)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG4",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "E01",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value": "E14"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht"
+            },
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "E01",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value": "Z35"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[84] Wenn STS+E01++Z35 (Ablehnung Abmeldeanfrage) vorhanden, ist FTX Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 44003,
+      "name": "Bestätigung Lieferbeginn Gas (NB an LFN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "Z19"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O",
+          "_description": "AGR is optional per MIG G1.1 (no AHB constraint for PID 44003)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG G1.1 (no AHB constraint for PID 44003)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG G1.1 (no AHB constraint for PID 44003)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG G1.1 (no AHB constraint for PID 44003)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG G1.1 (no AHB constraint for PID 44003)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG4",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "E01",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value": "E14"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht"
+            },
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "E01",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value": "Z35"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[84] Wenn STS+E01++Z35 (Ablehnung Abmeldeanfrage) vorhanden, ist FTX Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 44004,
+      "name": "Ablehnung Lieferbeginn Gas (NB an LFN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E0F"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "Z19"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O",
+          "_description": "AGR is optional per MIG G1.1 (no AHB constraint for PID 44004)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG G1.1 (no AHB constraint for PID 44004)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG G1.1 (no AHB constraint for PID 44004)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG G1.1 (no AHB constraint for PID 44004)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG G1.1 (no AHB constraint for PID 44004)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG4",
+          "tag": "DTM",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "7",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value_alternatives": [
+                    "ZG9",
+                    "ZH1",
+                    "ZH2"
+                  ]
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht"
+            },
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "7",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value_alternatives": [
+                    "ZG9",
+                    "ZH1",
+                    "ZH2"
+                  ]
+                }
+              ],
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "36",
+              "_description": "[11] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+36 (Ende) Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+        },
+        {
+          "group_id": "SG4",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "E01",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value": "E14"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 44005,
+      "name": "Bestätigung Lieferende Gas (NB an LFN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "Z19"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O",
+          "_description": "AGR is optional per MIG G1.1 (no AHB constraint for PID 44005)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG G1.1 (no AHB constraint for PID 44005)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG G1.1 (no AHB constraint for PID 44005)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG G1.1 (no AHB constraint for PID 44005)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG G1.1 (no AHB constraint for PID 44005)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG4",
+          "tag": "DTM",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "7",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value_alternatives": [
+                    "ZG9",
+                    "ZH1",
+                    "ZH2"
+                  ]
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht"
+            },
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "7",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value_alternatives": [
+                    "ZG9",
+                    "ZH1",
+                    "ZH2"
+                  ]
+                }
+              ],
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "36",
+              "_description": "[11] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+36 (Ende) Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+        },
+        {
+          "group_id": "SG4",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "E01",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value": "E14"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 44006,
+      "name": "Ablehnung Lieferende Gas (NB an LFN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E0F"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "Z19"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O",
+          "_description": "AGR is optional per MIG G1.1 (no AHB constraint for PID 44006)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG G1.1 (no AHB constraint for PID 44006)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG G1.1 (no AHB constraint for PID 44006)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG G1.1 (no AHB constraint for PID 44006)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG G1.1 (no AHB constraint for PID 44006)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG4",
+          "tag": "DTM",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "7",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value_alternatives": [
+                    "ZG9",
+                    "ZH1",
+                    "ZH2"
+                  ]
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht"
+            },
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "7",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value_alternatives": [
+                    "ZG9",
+                    "ZH1",
+                    "ZH2"
+                  ]
+                }
+              ],
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "36",
+              "_description": "[11] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+36 (Ende) Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+        },
+        {
+          "group_id": "SG4",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "E01",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value": "E14"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 44017,
+      "name": "Kündigung Lieferbeginn Gas (LFN an LFA)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "Z19"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O",
+          "_description": "AGR is optional per MIG G1.1 (no AHB constraint for PID 44017)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG G1.1 (no AHB constraint for PID 44017)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG G1.1 (no AHB constraint for PID 44017)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG G1.1 (no AHB constraint for PID 44017)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG G1.1 (no AHB constraint for PID 44017)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG4",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "E01",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value": "E14"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 44018,
+      "name": "Bestätigung Kündigung Lieferbeginn Gas (LFA an LFN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "Z19"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O",
+          "_description": "AGR is optional per MIG G1.1 (no AHB constraint for PID 44018)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG G1.1 (no AHB constraint for PID 44018)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG G1.1 (no AHB constraint for PID 44018)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG G1.1 (no AHB constraint for PID 44018)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG G1.1 (no AHB constraint for PID 44018)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG4",
+          "tag": "FTX",
+          "requirement": "C",
+          "conditional_rules": [
+            {
+              "when_tag": "STS",
+              "when_element_index": 0,
+              "when_value": "E01",
+              "when_additional_elements": [
+                {
+                  "element_index": 2,
+                  "value": "E14"
+                }
+              ],
+              "then_requirement": "M",
+              "_description": "[48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht"
+            }
+          ],
+          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 44555,
+      "name": "Anweisung Sperrung Gas",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E03"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "Z19"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "E07",
+              "E08"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O",
+          "_description": "AGR is optional per MIG G1.1 (no AHB constraint for PID 44555)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG G1.1 (no AHB constraint for PID 44555)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG G1.1 (no AHB constraint for PID 44555)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG G1.1 (no AHB constraint for PID 44555)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG G1.1 (no AHB constraint for PID 44555)"
+        }
+      ],
+      "group_rules": []
+    }
+  ]
+}

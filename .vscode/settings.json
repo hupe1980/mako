@@ -1,0 +1,16 @@
+{
+  "json.schemas": [
+    {
+      "fileMatch": ["**/profiles/*/fv*/mig.json"],
+      "url": "./crates/edi-energy/profiles/schemas/mig.schema.json"
+    },
+    {
+      "fileMatch": ["**/profiles/*/fv*/ahb.json"],
+      "url": "./crates/edi-energy/profiles/schemas/ahb.schema.json"
+    },
+    {
+      "fileMatch": ["**/profiles/*/fv*/codelists.json"],
+      "url": "./crates/edi-energy/profiles/schemas/codelists.schema.json"
+    }
+  ]
+}

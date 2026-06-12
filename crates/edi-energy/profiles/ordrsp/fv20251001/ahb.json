@@ -1,0 +1,2481 @@
+{
+  "schema_version": 1,
+  "message_type": "ORDRSP",
+  "release": "1.4b",
+  "source_document": "ORDRSP AHB 1.4b vom 01.10.2025",
+  "pruefidentifikatoren": [
+    {
+      "code": 19001,
+      "name": "Bestellbestätigung",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19001)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19001)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19001)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19002,
+      "name": "Ablehnung der Bestellung",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19002)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19002)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19002)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19002)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19002)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19003,
+      "name": "Fortführungsbestätigung",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19003)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19003)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19003)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19003)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19003)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19003)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19003)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19004,
+      "name": "Ablehnung Fortführung",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19004)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19004)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19004)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19004)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19004)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19004)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19004)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19005,
+      "name": "Auftragsbestätigung der Änderung der Technik",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z12",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "203",
+              "_description": "[83] Wenn BGM+Z12 (Änderung der Technik der Lokation) vorhanden, ist DTM+203 (Ausführungsdatum) Pflicht"
+            },
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z93",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "469",
+              "_description": "[82] Wenn BGM+Z93 (Bestellung eines Angebots Änderung der Technik) vorhanden, ist DTM+469 (Startdatum) Pflicht"
+            }
+          ]
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19005)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19005)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19005)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19005)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19006,
+      "name": "Ablehnung der Änderung der Technik",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z12",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "203",
+              "_description": "[83] Wenn BGM+Z12 (Änderung der Technik der Lokation) vorhanden, ist DTM+203 (Ausführungsdatum) Pflicht"
+            },
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z93",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "469",
+              "_description": "[82] Wenn BGM+Z93 (Bestellung eines Angebots Änderung der Technik) vorhanden, ist DTM+469 (Startdatum) Pflicht"
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19006)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19006)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19006)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19006)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19006)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19007,
+      "name": "Ablehnung Anforderung Messwerte",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19007)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19007)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19007)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19007)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19007)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19007)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19009,
+      "name": "Bestätigung Beendigung Rechnungsabwicklung MSB über LF",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19009)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19009)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19009)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19009)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19009)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19009)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19010,
+      "name": "Ablehnung Beendigung Rechnungsabwicklung MSB über LF",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19010)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19010)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19010)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19010)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19010)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19010)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19011,
+      "name": "Bestätigung der Ab-/Bestellung von Werten für ESA",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19011)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19011)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19011)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19011)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19012,
+      "name": "Ablehnung der Ab-/Bestellung von Werten für ESA",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19012)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19012)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19012)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19012)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19012)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19012)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19013,
+      "name": "Bestätigung der Stornierung einer Bestellung für ESA",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19013)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19013)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19013)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19013)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19013)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19013)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19013)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19014,
+      "name": "Ablehnung der Stornierung einer Bestellung für ESA",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19014)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19014)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19014)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19014)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19014)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19014)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19014)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19015,
+      "name": "Bestätigung Gerätewechselabsicht",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19015)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19015)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19015)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19015)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19015)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19015)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19015)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19016,
+      "name": "Ablehnung Gerätewechselabsicht",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19016)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19016)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19016)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19016)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19016)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19016)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19016)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19101,
+      "name": "Ablehnung Anfrage Stammdaten",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19101)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19101)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19101)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19101)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19101)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19101)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19101)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19102,
+      "name": "Ablehnung Anfrage Werte",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19102)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19102)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19102)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19102)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19102)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19102)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19103,
+      "name": "Ablehnung Brennwert und Zustandszahl",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19103)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19103)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19103)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19103)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19103)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19103)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19104,
+      "name": "Ablehnung Anfrage vom MSB Gas",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19104)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19104)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19104)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19104)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19104)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19110,
+      "name": "Ablehnung Allokationsliste",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19110)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19110)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19110)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19110)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19110)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19110)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19114,
+      "name": "Ablehnung der Reklamation von Werten",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19114)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19114)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19114)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19114)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19115,
+      "name": "Ablehnung Anforderung bilanzierte Menge",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19115)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19115)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19115)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19115)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19115)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19116,
+      "name": "Bestätigung Sperr-/Entsperrauftrag",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19116)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19116)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19116)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19117,
+      "name": "Ablehnung Sperr-/Entsperrauftrag",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19117)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19117)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19117)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19117)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19117)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19117)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19117)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19118,
+      "name": "Bestätigung Anfrage Sperrung",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19118)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19118)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19118)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19118)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19118)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19118)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19118)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19119,
+      "name": "Ablehnung Anfrage Sperrung",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19119)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19119)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19119)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19119)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19119)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19119)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19119)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19120,
+      "name": "Mitteilung zur Änderung",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19120)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19120)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19120)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19120)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19120)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19120)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19121,
+      "name": "Mitteilung zur Änderung Prognosegrundlage",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19121)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19121)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19121)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19121)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19121)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19121)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19123,
+      "name": "Ablehnung der Reklamation einer Definition",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19123)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19123)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19123)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19123)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19123)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19123)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19124,
+      "name": "Mitteilung zur Änderung Zählzeitdefinition",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19124)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19124)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19124)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19124)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19124)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19124)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19127,
+      "name": "Mitteilung zur Konfigurationsänderung",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19127)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19127)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19127)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19127)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19127)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19127)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19128,
+      "name": "Bestätigung Stornierung Sperr-/Entsperrauftrag",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19128)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19128)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19128)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19128)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19128)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19128)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19128)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19129,
+      "name": "Ablehnung Stornierung Sperr-/Entsperrauftrag",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19129)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19129)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19129)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19129)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19129)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19129)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19129)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19130,
+      "name": "Bearbeitungsstand zur Reklamation einer Konfiguration",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19130)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19130)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19130)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19130)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19130)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19130)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19131,
+      "name": "Antwort auf Bestellung Beendigung einer Konfiguration",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19131)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19131)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19131)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19131)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19131)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19131)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19132,
+      "name": "Mitteilung zur Bestellung Änderung einer Konfiguration",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19132)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19132)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19132)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19132)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19132)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19132)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19133,
+      "name": "Bearbeitungsstand Bestellung Abrechnungsdaten",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19133)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19133)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19133)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19133)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19133)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19133)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19204,
+      "name": "Ablehnung Ab-/Bestellung der Aggregationsebene",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.4b (no AHB constraint for PID 19204)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.4b (no AHB constraint for PID 19204)"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19204)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19204)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.4b (no AHB constraint for PID 19204)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19204)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19204)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19301,
+      "name": "Ablehnung Abo",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19301)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19301)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19301)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19301)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 19302,
+      "name": "Bestätigung Ende Abo",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19302)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.4b (no AHB constraint for PID 19302)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 1.4b (no AHB constraint for PID 19302)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.4b (no AHB constraint for PID 19302)"
+        }
+      ],
+      "group_rules": []
+    }
+  ]
+}

@@ -1,0 +1,970 @@
+{
+  "schema_version": 1,
+  "message_type": "INVOIC",
+  "release": "2.8e",
+  "source_document": "INVOIC AHB 2.8e vom 01.10.2025",
+  "pruefidentifikatoren": [
+    {
+      "code": 31001,
+      "name": "Abschlagsrechnung",
+      "segment_rules": [
+        {
+          "tag": "ALC",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "GEI",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PCD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "PYT",
+          "requirement": "M"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "TAX",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.8e (no AHB constraint for PID 31001)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 31002,
+      "name": "NN-Rechnung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "PYT",
+          "requirement": "M"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "TAX",
+          "requirement": "M"
+        },
+        {
+          "tag": "ALC",
+          "requirement": "O",
+          "_description": "ALC is optional per MIG 2.8e (no AHB constraint for PID 31002)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.8e (no AHB constraint for PID 31002)"
+        },
+        {
+          "tag": "GEI",
+          "requirement": "O",
+          "_description": "GEI is optional per MIG 2.8e (no AHB constraint for PID 31002)"
+        },
+        {
+          "tag": "PCD",
+          "requirement": "O",
+          "_description": "PCD is optional per MIG 2.8e (no AHB constraint for PID 31002)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 31003,
+      "name": "WiM-Rechnung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "PYT",
+          "requirement": "M"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "TAX",
+          "requirement": "M"
+        },
+        {
+          "tag": "ALC",
+          "requirement": "O",
+          "_description": "ALC is optional per MIG 2.8e (no AHB constraint for PID 31003)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.8e (no AHB constraint for PID 31003)"
+        },
+        {
+          "tag": "GEI",
+          "requirement": "O",
+          "_description": "GEI is optional per MIG 2.8e (no AHB constraint for PID 31003)"
+        },
+        {
+          "tag": "PCD",
+          "requirement": "O",
+          "_description": "PCD is optional per MIG 2.8e (no AHB constraint for PID 31003)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 31004,
+      "name": "Stornorechnung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PYT",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "TAX",
+          "requirement": "M"
+        },
+        {
+          "tag": "ALC",
+          "requirement": "O",
+          "_description": "ALC is optional per MIG 2.8e (no AHB constraint for PID 31004)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.8e (no AHB constraint for PID 31004)"
+        },
+        {
+          "tag": "GEI",
+          "requirement": "O",
+          "_description": "GEI is optional per MIG 2.8e (no AHB constraint for PID 31004)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O",
+          "_description": "LIN is optional per MIG 2.8e (no AHB constraint for PID 31004)"
+        },
+        {
+          "tag": "PCD",
+          "requirement": "O",
+          "_description": "PCD is optional per MIG 2.8e (no AHB constraint for PID 31004)"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "O",
+          "_description": "PRI is optional per MIG 2.8e (no AHB constraint for PID 31004)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.8e (no AHB constraint for PID 31004)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 31005,
+      "name": "MMM-Rechnung (Mehr-/Mindermengensaldo)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "PYT",
+          "requirement": "M"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "TAX",
+          "requirement": "M"
+        },
+        {
+          "tag": "ALC",
+          "requirement": "O",
+          "_description": "ALC is optional per MIG 2.8e (no AHB constraint for PID 31005)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.8e (no AHB constraint for PID 31005)"
+        },
+        {
+          "tag": "GEI",
+          "requirement": "O",
+          "_description": "GEI is optional per MIG 2.8e (no AHB constraint for PID 31005)"
+        },
+        {
+          "tag": "PCD",
+          "requirement": "O",
+          "_description": "PCD is optional per MIG 2.8e (no AHB constraint for PID 31005)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 31006,
+      "name": "MMM-Rechnung (selbst ausgestellt)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "PYT",
+          "requirement": "M"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "TAX",
+          "requirement": "M"
+        },
+        {
+          "tag": "ALC",
+          "requirement": "O",
+          "_description": "ALC is optional per MIG 2.8e (no AHB constraint for PID 31006)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.8e (no AHB constraint for PID 31006)"
+        },
+        {
+          "tag": "GEI",
+          "requirement": "O",
+          "_description": "GEI is optional per MIG 2.8e (no AHB constraint for PID 31006)"
+        },
+        {
+          "tag": "PCD",
+          "requirement": "O",
+          "_description": "PCD is optional per MIG 2.8e (no AHB constraint for PID 31006)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 31007,
+      "name": "Aggregierte Mehr-/Mindermenge Rechnung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "PYT",
+          "requirement": "M"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "TAX",
+          "requirement": "M"
+        },
+        {
+          "tag": "ALC",
+          "requirement": "O",
+          "_description": "ALC is optional per MIG 2.8e (no AHB constraint for PID 31007)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.8e (no AHB constraint for PID 31007)"
+        },
+        {
+          "tag": "GEI",
+          "requirement": "O",
+          "_description": "GEI is optional per MIG 2.8e (no AHB constraint for PID 31007)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.8e (no AHB constraint for PID 31007)"
+        },
+        {
+          "tag": "PCD",
+          "requirement": "O",
+          "_description": "PCD is optional per MIG 2.8e (no AHB constraint for PID 31007)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 31008,
+      "name": "Aggregierte Mehr-/Mindermenge Rechnung (selbst ausgestellt)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "PYT",
+          "requirement": "M"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "TAX",
+          "requirement": "M"
+        },
+        {
+          "tag": "ALC",
+          "requirement": "O",
+          "_description": "ALC is optional per MIG 2.8e (no AHB constraint for PID 31008)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.8e (no AHB constraint for PID 31008)"
+        },
+        {
+          "tag": "GEI",
+          "requirement": "O",
+          "_description": "GEI is optional per MIG 2.8e (no AHB constraint for PID 31008)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.8e (no AHB constraint for PID 31008)"
+        },
+        {
+          "tag": "PCD",
+          "requirement": "O",
+          "_description": "PCD is optional per MIG 2.8e (no AHB constraint for PID 31008)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 31009,
+      "name": "MSB-Rechnung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "PYT",
+          "requirement": "M"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "TAX",
+          "requirement": "M"
+        },
+        {
+          "tag": "ALC",
+          "requirement": "O",
+          "_description": "ALC is optional per MIG 2.8e (no AHB constraint for PID 31009)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.8e (no AHB constraint for PID 31009)"
+        },
+        {
+          "tag": "GEI",
+          "requirement": "O",
+          "_description": "GEI is optional per MIG 2.8e (no AHB constraint for PID 31009)"
+        },
+        {
+          "tag": "PCD",
+          "requirement": "O",
+          "_description": "PCD is optional per MIG 2.8e (no AHB constraint for PID 31009)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 31010,
+      "name": "Kapazitätsrechnung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PYT",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "TAX",
+          "requirement": "M"
+        },
+        {
+          "tag": "ALC",
+          "requirement": "O",
+          "_description": "ALC is optional per MIG 2.8e (no AHB constraint for PID 31010)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.8e (no AHB constraint for PID 31010)"
+        },
+        {
+          "tag": "GEI",
+          "requirement": "O",
+          "_description": "GEI is optional per MIG 2.8e (no AHB constraint for PID 31010)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 2.8e (no AHB constraint for PID 31010)"
+        },
+        {
+          "tag": "PCD",
+          "requirement": "O",
+          "_description": "PCD is optional per MIG 2.8e (no AHB constraint for PID 31010)"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "O",
+          "_description": "PRI is optional per MIG 2.8e (no AHB constraint for PID 31010)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 2.8e (no AHB constraint for PID 31010)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 31011,
+      "name": "Rechnung sonstige Leistung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PRI",
+          "requirement": "M"
+        },
+        {
+          "tag": "PYT",
+          "requirement": "M"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "TAX",
+          "requirement": "M"
+        },
+        {
+          "tag": "ALC",
+          "requirement": "O",
+          "_description": "ALC is optional per MIG 2.8e (no AHB constraint for PID 31011)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.8e (no AHB constraint for PID 31011)"
+        },
+        {
+          "tag": "GEI",
+          "requirement": "O",
+          "_description": "GEI is optional per MIG 2.8e (no AHB constraint for PID 31011)"
+        },
+        {
+          "tag": "PCD",
+          "requirement": "O",
+          "_description": "PCD is optional per MIG 2.8e (no AHB constraint for PID 31011)"
+        }
+      ],
+      "group_rules": []
+    }
+  ]
+}

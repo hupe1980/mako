@@ -1,0 +1,350 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hupe1980/edi-energy-rs/profiles/schemas/ahb.schema.json",
+  "title": "EDI@Energy AHB Profile",
+  "description": "Application Handbook (AHB) rules per Pruefidentifikator for one (message_type, release) pair.",
+  "type": "object",
+  "required": [
+    "message_type",
+    "release",
+    "source_document",
+    "pruefidentifikatoren"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "description": "Schema version number. Current maximum supported version is 1. Versions higher than MAX_SCHEMA_VERSION in xtask/src/codegen.rs are rejected. Additive-only changes (new optional fields with defaults) do not require a version bump.",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "message_type": {
+      "type": "string",
+      "pattern": "^[A-Z]{6}$"
+    },
+    "release": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9.]+$"
+    },
+    "valid_until": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "ISO 8601 date (YYYY-MM-DD) after which this profile expires. Absent means open-ended."
+    },
+    "ahb_revision": {
+      "type": "string",
+      "description": "Human-readable AHB revision identifier, e.g. 'AHB S2.1, Stand 01.10.2024'."
+    },
+    "source_document": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifies the BDEW PDF used to author this profile, e.g. 'UTILMD AHB S2.1 vom 01.10.2024'."
+    },
+    "supersedes_directory": {
+      "type": "string",
+      "description": "Folder name of the prior release that this profile supersedes, e.g. 'fv20241001'."
+    },
+    "pruefidentifikatoren": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PruefidentifikatorEntry"
+      }
+    }
+  },
+  "$defs": {
+    "Requirement": {
+      "type": "string",
+      "enum": [
+        "M",
+        "C",
+        "S",
+        "O",
+        "N"
+      ],
+      "description": "M = mandatory (Muss), C = conditional (BDEW Bedingungsoperator — requires conditional_rules), S = should (Soll — warning if absent), O = optional (Kann), N = not used (must not appear)."
+    },
+    "ConditionalRule": {
+      "type": "object",
+      "description": "A BDEW Bedingungsoperator rule. Supported operators: I (if present → mandatory), V (if absent → mandatory), E (if present → forbidden), X (exclusive — exactly one of this or secondary_tag), U (at least one of this or secondary_tag), O (at most one of this or secondary_tag), G (repeat count gate), Z (qualifier-gated I/E).",
+      "required": [
+        "when_tag",
+        "then_requirement"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "operator": {
+          "type": "string",
+          "enum": [
+            "I",
+            "V",
+            "E",
+            "X",
+            "U",
+            "O",
+            "G",
+            "K",
+            "Z"
+          ],
+          "default": "I",
+          "description": "BDEW Bedingungsoperator code. Defaults to I (if trigger present → mandatory)."
+        },
+        "secondary_tag": {
+          "type": "string",
+          "pattern": "^[A-Z]{2,3}$",
+          "description": "Second segment tag for two-operand operators (X, U, O). Optional for K (at most one); use additional_tags for K rules with ≥3 operands."
+        },
+        "count_threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Repeat-count threshold for the G operator: the condition fires when the trigger segment occurs ≥ count_threshold times."
+        },
+        "when_tag": {
+          "type": "string",
+          "pattern": "^[A-Z]{2,3}$",
+          "description": "The segment tag to look for as the condition trigger (e.g. 'QTY')."
+        },
+        "when_element_index": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "0-based element index in the trigger segment. Default 0."
+        },
+        "when_value": {
+          "type": "string",
+          "description": "If present, the condition fires only when the trigger segment has this value at when_element_index. If absent, any occurrence of when_tag triggers the condition."
+        },
+        "when_value_alternatives": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Alternative values for when_value (OR semantics). The condition fires when any of these values appears at when_element_index."
+        },
+        "when_additional_elements": {
+          "type": "array",
+          "description": "Additional element conditions that must ALL hold simultaneously (AND semantics) with the primary when_tag/when_value condition.",
+          "items": {
+            "type": "object",
+            "required": [
+              "element_index"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "element_index": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "0-based element index in the trigger segment."
+              },
+              "value": {
+                "type": "string",
+                "description": "Required element value at element_index."
+              },
+              "value_alternatives": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Alternative values (OR semantics) at element_index."
+              }
+            }
+          }
+        },
+        "then_requirement": {
+          "type": "string",
+          "enum": [
+            "M",
+            "N",
+            "S"
+          ],
+          "description": "M = this segment becomes mandatory when the condition holds; N = this segment must not appear when the condition holds; S = this segment should appear (Soll) when the condition holds — absence produces a Warning, not an Error."
+        },
+        "then_qualifier_index": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "0-based element index to check in the TARGET segment when then_requirement='M'. When combined with then_qualifier_value, the mandatory check requires that at least one occurrence of the target segment has this value at the given element index. Default 0."
+        },
+        "then_qualifier_value": {
+          "type": "string",
+          "description": "Required element value in the target segment (at then_qualifier_index). If present, the mandatory check asserts that at least one occurrence of target tag has this qualifier value — not merely that the tag appears at all."
+        },
+        "_description": {
+          "type": "string",
+          "description": "Human-readable BDEW condition reference, e.g. '[92] Wenn QTY DE6063 mit Wert 67 vorhanden'."
+        },
+        "additional_tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z]{2,3}$"
+          },
+          "default": [],
+          "description": "Extra segment tags (beyond when_tag and secondary_tag) for the K operator. Together they form the complete set of mutually-exclusive tags."
+        }
+      }
+    },
+    "QualifierMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "FieldRule": {
+      "type": "object",
+      "required": [
+        "element",
+        "requirement",
+        "element_index"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "element": {
+          "type": "string",
+          "description": "Data element identifier, e.g. \"7402\"."
+        },
+        "requirement": {
+          "$ref": "#/$defs/Requirement"
+        },
+        "allowed_values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Exhaustive list of allowed values for this element, if restricted."
+        },
+        "element_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based element index within the segment. Must be set explicitly — there is no default to avoid silently checking element 0 when the DE is at a different position (F-021)."
+        }
+      }
+    },
+    "SegmentRule": {
+      "type": "object",
+      "required": [
+        "tag",
+        "requirement"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tag": {
+          "type": "string",
+          "pattern": "^[A-Z]{2,3}$"
+        },
+        "requirement": {
+          "$ref": "#/$defs/Requirement"
+        },
+        "qualifier_restrictions": {
+          "$ref": "#/$defs/QualifierMap"
+        },
+        "required_qualifiers": {
+          "$ref": "#/$defs/QualifierMap",
+          "description": "At least one occurrence of this segment must have the specified qualifier value for the given DE."
+        },
+        "field_rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldRule"
+          }
+        },
+        "conditional_rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConditionalRule"
+          },
+          "default": [],
+          "description": "BDEW Bedingungsoperator rules. Required when requirement='C'. Each rule specifies a trigger condition (presence/value of another segment) and the effective requirement for this segment when the condition holds. Multiple rules are independent (OR semantics — any trigger fires the consequence independently)."
+        },
+        "_description": {
+          "type": "string",
+          "description": "Human-readable note documenting the rule origin, referenced BDEW condition number, or context. Not used in code generation."
+        }
+      }
+    },
+    "PruefidentifikatorEntry": {
+      "type": "object",
+      "required": [
+        "code",
+        "name",
+        "segment_rules"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "integer",
+          "minimum": 10000,
+          "maximum": 99999,
+          "description": "5-digit Pruefidentifikator code."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable process name, e.g. \"Anmeldung Einspeisung\"."
+        },
+        "segment_rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SegmentRule"
+          }
+        },
+        "group_rules": {
+          "type": "array",
+          "description": "Per-segment-group-instance rules (F-001). Each entry is evaluated once per occurrence of the named group rather than across the flat message segment list.",
+          "items": {
+            "$ref": "#/$defs/GroupRule"
+          }
+        }
+      }
+    },
+    "GroupRule": {
+      "type": "object",
+      "description": "An AHB rule scoped to a specific segment-group instance. Unlike segment_rules (which scan the flat message), group_rules fire once per occurrence of group_id, checking only the segments within that group window. Use conditional_rules to express BDEW Bedingungsoperator conditions that must hold within a single group occurrence (F-001 fix).",
+      "required": [
+        "group_id",
+        "tag",
+        "requirement"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "group_id": {
+          "type": "string",
+          "pattern": "^SG[0-9]+$",
+          "description": "Segment-group identifier as defined in the MIG profile (e.g. \"SG4\")."
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^[A-Z]{2,3}$",
+          "description": "EDIFACT segment tag to check within each group instance (e.g. \"STS\")."
+        },
+        "requirement": {
+          "type": "string",
+          "enum": [
+            "M",
+            "N",
+            "O",
+            "C"
+          ],
+          "description": "M = mandatory in every group occurrence, N = must not appear in any occurrence, O = optional (qualifier_restrictions still enforced when present), C = conditional (use conditional_rules to specify the conditions)."
+        },
+        "qualifier_restrictions": {
+          "$ref": "#/$defs/QualifierMap",
+          "description": "Qualifier restrictions applied per group instance. Maps element DE identifier to list of allowed values."
+        },
+        "conditional_rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConditionalRule"
+          },
+          "default": [],
+          "description": "BDEW Bedingungsoperator rules scoped to each group occurrence. Each rule is evaluated against only the segments within the current group instance (segs parameter in with_scoped_group_rule_fn). This resolves F-001: intra-SG conditional dependencies are now evaluated per-instance rather than against the flat message. Required when requirement='C'. Multiple rules are independent (OR semantics — any trigger fires independently)."
+        },
+        "_description": {
+          "type": "string",
+          "description": "Human-readable note documenting the AHB rule source."
+        }
+      }
+    }
+  }
+}

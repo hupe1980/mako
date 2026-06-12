@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hupe1980/edi-energy-rs/profiles/schemas/codelists.schema.json",
+  "title": "EDI@Energy Code Lists",
+  "description": "Allowed qualifier/code values for each data element in one release.",
+  "type": "object",
+  "required": ["release", "lists"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "description": "Schema version number. Current maximum supported version is 1. Versions higher than MAX_SCHEMA_VERSION in xtask/src/codegen.rs are rejected. Additive-only changes do not require a version bump.",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "release": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9.]+$",
+      "description": "Must match the release directory and the release field in mig.json / ahb.json."
+    },
+    "lists": {
+      "type": "object",
+      "description": "Map from DE/qualifier identifier to the exhaustive set of allowed code values.",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" },
+        "minItems": 1
+      }
+    }
+  }
+}

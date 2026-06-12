@@ -1,0 +1,366 @@
+{
+  "schema_version": 1,
+  "message_type": "ORDRSP",
+  "release": "1.4c",
+  "valid_from": "2026-04-01",
+  "ordering_hint": [
+    "UNH",
+    "BGM",
+    "DTM",
+    "IMD",
+    "RFF",
+    "AJT",
+    "FTX",
+    "NAD",
+    "CTA",
+    "COM",
+    "LIN",
+    "CUX",
+    "UNS",
+    "MOA",
+    "UNT"
+  ],
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Nachrichten-Kopfsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M"
+        },
+        {
+          "id": "S009",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "BGM",
+      "name": "Beginn der Nachricht",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "M"
+        },
+        {
+          "id": "C106",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {
+        "1001": [
+          "7"
+        ]
+      }
+    },
+    {
+      "tag": "DTM",
+      "name": "Nachrichtendatum",
+      "mandatory": true,
+      "max_occurrences": 6,
+      "elements": [
+        {
+          "id": "C507",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {
+        "2005": [
+          "137",
+          "203",
+          "163",
+          "164",
+          "469",
+          "472"
+        ]
+      }
+    },
+    {
+      "tag": "IMD",
+      "name": "Abonnement / Produkt-/Leistungsbeschreibung",
+      "mandatory": false,
+      "max_occurrences": 2,
+      "elements": [
+        {
+          "id": "7077",
+          "status": "C"
+        },
+        {
+          "id": "C273",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "UNS",
+      "name": "Abschnitts-Kontrollsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0081",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "MOA",
+      "name": "Monetary Amount (Summe)",
+      "mandatory": false,
+      "max_occurrences": 5,
+      "elements": [
+        {
+          "id": "C516",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "UNT",
+      "name": "Nachrichten-Endesegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M"
+        },
+        {
+          "id": "0062",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG1",
+      "trigger_segment": "RFF",
+      "mandatory": true,
+      "max_occurrences": 9999,
+      "segments": [
+        {
+          "tag": "RFF",
+          "name": "Referenz",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C506",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {
+            "1153": [
+              "ON",
+              "ACW",
+              "TN",
+              "Z13"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG2",
+      "trigger_segment": "AJT",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "segments": [
+        {
+          "tag": "AJT",
+          "name": "Antwortkategorie",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "4465",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {}
+        },
+        {
+          "tag": "FTX",
+          "name": "Allgemeine Information",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "elements": [
+            {
+              "id": "4451",
+              "status": "M"
+            },
+            {
+              "id": "C108",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {
+            "4451": [
+              "AAP"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG3",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "MP-ID Absender/Empfänger",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M"
+            },
+            {
+              "id": "C082",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR",
+              "VY",
+              "Z22"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG6",
+          "trigger_segment": "CTA",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "segments": [
+            {
+              "tag": "CTA",
+              "name": "Ansprechpartner",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "3139",
+                  "status": "C"
+                },
+                {
+                  "id": "C056",
+                  "status": "C"
+                }
+              ],
+              "qualifier_restrictions": {}
+            },
+            {
+              "tag": "COM",
+              "name": "Kommunikationsverbindung",
+              "mandatory": false,
+              "max_occurrences": 5,
+              "elements": [
+                {
+                  "id": "C076",
+                  "status": "M"
+                }
+              ],
+              "qualifier_restrictions": {}
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    {
+      "id": "SG8",
+      "trigger_segment": "CUX",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "segments": [
+        {
+          "tag": "CUX",
+          "name": "Währung",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C504",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {
+            "6343": [
+              "11"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG27",
+      "trigger_segment": "LIN",
+      "mandatory": false,
+      "max_occurrences": 200000,
+      "segments": [
+        {
+          "tag": "LIN",
+          "name": "Positionsdaten",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "1082",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {}
+        },
+        {
+          "tag": "FTX",
+          "name": "Besondere Sachverhalte / IP-Adresse / IP-Range / APN-Daten",
+          "mandatory": false,
+          "max_occurrences": 99,
+          "elements": [
+            {
+              "id": "4451",
+              "status": "M"
+            },
+            {
+              "id": "C108",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {
+            "4451": [
+              "ABO",
+              "Z27",
+              "Z28",
+              "Z33"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    }
+  ],
+  "ahb_revision": "1.4c",
+  "source_document": "ORDRSP AHB 1.4c, Stand 01.04.2026"
+}

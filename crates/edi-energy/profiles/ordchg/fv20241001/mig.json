@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "message_type": "ORDCHG",
+  "release": "1.1",
+  "valid_from": "2024-10-01",
+  "ordering_hint": [
+    "UNH",
+    "BGM",
+    "DTM",
+    "RFF",
+    "NAD",
+    "CTA",
+    "COM",
+    "UNS",
+    "UNT"
+  ],
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Nachrichten-Kopfsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M"
+        },
+        {
+          "id": "S009",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "BGM",
+      "name": "Beginn der Nachricht",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "M"
+        },
+        {
+          "id": "C106",
+          "status": "C"
+        },
+        {
+          "id": "1225",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {
+        "1001": [
+          "Z51",
+          "Z52",
+          "Z57"
+        ],
+        "1225": [
+          "1"
+        ]
+      }
+    },
+    {
+      "tag": "DTM",
+      "name": "Nachrichtendatum",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C507",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {
+        "2005": [
+          "137"
+        ]
+      }
+    },
+    {
+      "tag": "UNS",
+      "name": "Abschnitts-Kontrollsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0081",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "UNT",
+      "name": "Nachrichten-Endesegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M"
+        },
+        {
+          "id": "0062",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG1",
+      "trigger_segment": "RFF",
+      "mandatory": true,
+      "max_occurrences": 9999,
+      "segments": [
+        {
+          "tag": "RFF",
+          "name": "Referenz",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C506",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {
+            "1153": [
+              "ON",
+              "TN",
+              "Z13"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG3",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "MP-ID Absender/Empfänger",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M"
+            },
+            {
+              "id": "C082",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG6",
+          "trigger_segment": "CTA",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "segments": [
+            {
+              "tag": "CTA",
+              "name": "Ansprechpartner",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "3139",
+                  "status": "C"
+                },
+                {
+                  "id": "C056",
+                  "status": "C"
+                }
+              ],
+              "qualifier_restrictions": {}
+            },
+            {
+              "tag": "COM",
+              "name": "Kommunikationsverbindung",
+              "mandatory": false,
+              "max_occurrences": 5,
+              "elements": [
+                {
+                  "id": "C076",
+                  "status": "M"
+                }
+              ],
+              "qualifier_restrictions": {}
+            }
+          ],
+          "groups": []
+        }
+      ]
+    }
+  ],
+  "valid_until": "2026-09-30",
+  "ahb_revision": "1.1",
+  "source_document": "ORDCHG AHB 1.1, Stand 01.10.2024"
+}

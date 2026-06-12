@@ -1,0 +1,797 @@
+{
+  "schema_version": 1,
+  "message_type": "INVOIC",
+  "release": "2.8e",
+  "valid_from": "2025-10-01",
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Nachrichtenanfang",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "S009",
+          "status": "M",
+          "components": 6
+        }
+      ]
+    },
+    {
+      "tag": "BGM",
+      "name": "Rechnungsnummer",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "M",
+          "components": 4
+        },
+        {
+          "id": "C106",
+          "status": "C",
+          "components": 3
+        }
+      ],
+      "qualifier_restrictions": {
+        "1001": [
+          "380",
+          "389",
+          "457",
+          "Z25"
+        ],
+        "1225": [
+          "7",
+          "9"
+        ]
+      }
+    },
+    {
+      "tag": "DTM",
+      "name": "Datums-/Zeitangaben",
+      "mandatory": true,
+      "max_occurrences": 9,
+      "elements": [
+        {
+          "id": "C507",
+          "status": "M",
+          "components": 3
+        }
+      ],
+      "qualifier_restrictions": {
+        "2005": [
+          "137",
+          "9",
+          "155",
+          "156",
+          "Z42",
+          "Z43",
+          "203",
+          "Z11",
+          "Z12"
+        ]
+      }
+    },
+    {
+      "tag": "IMD",
+      "name": "Rechnungstyp",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C272",
+          "status": "C",
+          "components": 3
+        },
+        {
+          "id": "C273",
+          "status": "C",
+          "components": 3
+        }
+      ],
+      "qualifier_restrictions": {
+        "7081": [
+          "ABR",
+          "ABS",
+          "JVR",
+          "MVR",
+          "WIM",
+          "ZVR",
+          "13I",
+          "13R",
+          "MMM",
+          "MSB",
+          "NAP",
+          "Z43",
+          "Z44",
+          "Z45",
+          "SOR",
+          "KON",
+          "TEC"
+        ],
+        "7009": [
+          "Z06",
+          "Z07"
+        ]
+      }
+    },
+    {
+      "tag": "FTX",
+      "name": "Meldeinformationen",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "4451",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "C108",
+          "status": "C",
+          "components": 5
+        }
+      ],
+      "qualifier_restrictions": {
+        "4451": [
+          "REG"
+        ]
+      }
+    },
+    {
+      "tag": "GEI",
+      "name": "Spezifikation der Sonderrechnung",
+      "mandatory": false,
+      "max_occurrences": 10,
+      "elements": [
+        {
+          "id": "7365",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "C529",
+          "status": "C",
+          "components": 3
+        }
+      ],
+      "qualifier_restrictions": {
+        "7365": [
+          "Z01"
+        ]
+      }
+    },
+    {
+      "tag": "UNS",
+      "name": "Abschnitts-Kontrollsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0081",
+          "status": "M",
+          "components": 1
+        }
+      ]
+    },
+    {
+      "tag": "UNT",
+      "name": "Nachrichtenende",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        }
+      ]
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG1",
+      "trigger_segment": "RFF",
+      "mandatory": true,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "RFF",
+          "name": "Referenz",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C506",
+              "status": "M",
+              "components": 5
+            }
+          ],
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13",
+              "OI",
+              "ACE",
+              "Z56"
+            ]
+          }
+        },
+        {
+          "tag": "DTM",
+          "name": "Referenzdatum",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "elements": [
+            {
+              "id": "C507",
+              "status": "M",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "2005": [
+              "Z01"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG2",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "Name und Adresse",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C082",
+              "status": "C",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR",
+              "DP",
+              "ZSH"
+            ]
+          }
+        },
+        {
+          "tag": "LOC",
+          "name": "Meldepunkt",
+          "mandatory": false,
+          "max_occurrences": 25,
+          "elements": [
+            {
+              "id": "3227",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C517",
+              "status": "C",
+              "components": 2
+            }
+          ],
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG3",
+          "trigger_segment": "RFF",
+          "mandatory": false,
+          "max_occurrences": 9999,
+          "segments": [
+            {
+              "tag": "RFF",
+              "name": "Steuernummer / Umsatzsteuernummer",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C506",
+                  "status": "M",
+                  "components": 5
+                }
+              ],
+              "qualifier_restrictions": {
+                "1153": [
+                  "VA"
+                ]
+              }
+            }
+          ],
+          "groups": []
+        },
+        {
+          "id": "SG5",
+          "trigger_segment": "CTA",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "segments": [
+            {
+              "tag": "CTA",
+              "name": "Ansprechpartner",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "3139",
+                  "status": "C",
+                  "components": 1
+                },
+                {
+                  "id": "C056",
+                  "status": "C",
+                  "components": 2
+                }
+              ]
+            },
+            {
+              "tag": "COM",
+              "name": "Kommunikationsverbindung",
+              "mandatory": true,
+              "max_occurrences": 5,
+              "elements": [
+                {
+                  "id": "C076",
+                  "status": "M",
+                  "components": 2
+                }
+              ]
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    {
+      "id": "SG7",
+      "trigger_segment": "CUX",
+      "mandatory": true,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "CUX",
+          "name": "Währungsangaben",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C504",
+              "status": "M",
+              "components": 5
+            }
+          ]
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG8",
+      "trigger_segment": "PYT",
+      "mandatory": true,
+      "max_occurrences": 10,
+      "segments": [
+        {
+          "tag": "PYT",
+          "name": "Zahlungsbedingungen",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "4279",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C019",
+              "status": "C",
+              "components": 5
+            }
+          ],
+          "qualifier_restrictions": {
+            "4279": [
+              "3"
+            ]
+          }
+        },
+        {
+          "tag": "DTM",
+          "name": "Fälligkeitsdatum",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "elements": [
+            {
+              "id": "C507",
+              "status": "M",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "2005": [
+              "265"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG26",
+      "trigger_segment": "LIN",
+      "mandatory": false,
+      "max_occurrences": 9999999,
+      "segments": [
+        {
+          "tag": "LIN",
+          "name": "Positionsdaten",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "1082",
+              "status": "C",
+              "components": 1
+            }
+          ]
+        },
+        {
+          "tag": "QTY",
+          "name": "Mengenangaben",
+          "mandatory": false,
+          "max_occurrences": 3,
+          "elements": [
+            {
+              "id": "C186",
+              "status": "M",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "6063": [
+              "47",
+              "136",
+              "Z17"
+            ]
+          }
+        },
+        {
+          "tag": "DTM",
+          "name": "Positionsbezogener Abrechnungszeitraum",
+          "mandatory": false,
+          "max_occurrences": 3,
+          "elements": [
+            {
+              "id": "C507",
+              "status": "M",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "2005": [
+              "155",
+              "156",
+              "203"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG27",
+          "trigger_segment": "MOA",
+          "mandatory": true,
+          "max_occurrences": 99,
+          "segments": [
+            {
+              "tag": "MOA",
+              "name": "Positionsnettobetrag",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C516",
+                  "status": "M",
+                  "components": 3
+                }
+              ]
+            }
+          ],
+          "groups": []
+        },
+        {
+          "id": "SG29",
+          "trigger_segment": "PRI",
+          "mandatory": false,
+          "max_occurrences": 25,
+          "segments": [
+            {
+              "tag": "PRI",
+              "name": "Preis",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C509",
+                  "status": "M",
+                  "components": 5
+                }
+              ]
+            }
+          ],
+          "groups": []
+        },
+        {
+          "id": "SG34",
+          "trigger_segment": "TAX",
+          "mandatory": true,
+          "max_occurrences": 99,
+          "segments": [
+            {
+              "tag": "TAX",
+              "name": "Umsatzsteuer der Position",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "5283",
+                  "status": "M",
+                  "components": 1
+                },
+                {
+                  "id": "C241",
+                  "status": "C",
+                  "components": 3
+                },
+                {
+                  "id": "C243",
+                  "status": "C",
+                  "components": 6
+                }
+              ],
+              "qualifier_restrictions": {
+                "5153": [
+                  "VAT"
+                ]
+              }
+            }
+          ],
+          "groups": []
+        },
+        {
+          "id": "SG39",
+          "trigger_segment": "ALC",
+          "mandatory": false,
+          "max_occurrences": 30,
+          "segments": [
+            {
+              "tag": "ALC",
+              "name": "Abschlag / Zuschlag",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "5463",
+                  "status": "M",
+                  "components": 1
+                },
+                {
+                  "id": "C552",
+                  "status": "C",
+                  "components": 2
+                }
+              ],
+              "qualifier_restrictions": {
+                "5463": [
+                  "A",
+                  "C"
+                ],
+                "5189": [
+                  "Z01",
+                  "Z02"
+                ]
+              }
+            }
+          ],
+          "groups": [
+            {
+              "id": "SG41",
+              "trigger_segment": "PCD",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "segments": [
+                {
+                  "tag": "PCD",
+                  "name": "Prozentangabe",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "C501",
+                      "status": "M",
+                      "components": 3
+                    }
+                  ]
+                }
+              ],
+              "groups": []
+            },
+            {
+              "id": "SG42",
+              "trigger_segment": "MOA",
+              "mandatory": false,
+              "max_occurrences": 2,
+              "segments": [
+                {
+                  "tag": "MOA",
+                  "name": "Bemessungsgrundlage / Rabattbetrag",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "C516",
+                      "status": "M",
+                      "components": 3
+                    }
+                  ]
+                }
+              ],
+              "groups": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "SG50",
+      "trigger_segment": "MOA",
+      "mandatory": true,
+      "max_occurrences": 100,
+      "segments": [
+        {
+          "tag": "MOA",
+          "name": "Rechnungsbetrag / Summenbetrag",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C516",
+              "status": "M",
+              "components": 3
+            }
+          ]
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG51",
+          "trigger_segment": "RFF",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "segments": [
+            {
+              "tag": "RFF",
+              "name": "Referenz auf Vorgängerrechnung",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C506",
+                  "status": "M",
+                  "components": 5
+                }
+              ],
+              "qualifier_restrictions": {
+                "1153": [
+                  "OI"
+                ]
+              }
+            },
+            {
+              "tag": "DTM",
+              "name": "Datum der Vorgängerrechnung",
+              "mandatory": false,
+              "max_occurrences": 5,
+              "elements": [
+                {
+                  "id": "C507",
+                  "status": "M",
+                  "components": 3
+                }
+              ],
+              "qualifier_restrictions": {
+                "2005": [
+                  "3"
+                ]
+              }
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    {
+      "id": "SG52",
+      "trigger_segment": "TAX",
+      "mandatory": true,
+      "max_occurrences": 10,
+      "segments": [
+        {
+          "tag": "TAX",
+          "name": "Umsatzsteuer der Rechnung",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "5283",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C241",
+              "status": "C",
+              "components": 3
+            },
+            {
+              "id": "C243",
+              "status": "C",
+              "components": 6
+            }
+          ],
+          "qualifier_restrictions": {
+            "5153": [
+              "VAT"
+            ]
+          }
+        },
+        {
+          "tag": "MOA",
+          "name": "Steuerbeträge (steuersatzbezogen)",
+          "mandatory": false,
+          "max_occurrences": 9,
+          "elements": [
+            {
+              "id": "C516",
+              "status": "M",
+              "components": 3
+            }
+          ]
+        }
+      ],
+      "groups": []
+    }
+  ],
+  "valid_until": "2026-09-30",
+  "ahb_revision": "2.8e",
+  "source_document": "INVOIC AHB 2.8e, Stand 01.10.2025"
+}

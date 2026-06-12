@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "message_type": "COMDIS",
+  "release": "1.0g",
+  "source_document": "COMDIS AHB 1.0g vom 01.10.2025",
+  "pruefidentifikatoren": [
+    {
+      "code": 29001,
+      "name": "Ablehnung REMADV",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.0g (no AHB constraint for PID 29001)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 29002,
+      "name": "Ablehnung IFTSTA",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "O",
+          "_description": "CUX is optional per MIG 1.0g (no AHB constraint for PID 29002)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.0g (no AHB constraint for PID 29002)"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MOA is optional per MIG 1.0g (no AHB constraint for PID 29002)"
+        }
+      ],
+      "group_rules": []
+    }
+  ]
+}

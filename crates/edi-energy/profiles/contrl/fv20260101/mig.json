@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "message_type": "CONTRL",
+  "release": "2.0b",
+  "valid_from": "2026-01-01",
+  "supersedes_directory": "fv20251001",
+  "pid_exempt": true,
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Nachrichten-Kopfsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "S009",
+          "status": "M",
+          "components": 6
+        }
+      ]
+    },
+    {
+      "tag": "UCI",
+      "name": "Übertragungsdatei-Antwort",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0020",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "S002",
+          "status": "M",
+          "components": 4
+        },
+        {
+          "id": "S003",
+          "status": "M",
+          "components": 4
+        },
+        {
+          "id": "0083",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "0085",
+          "status": "C",
+          "components": 1
+        },
+        {
+          "id": "0013",
+          "status": "C",
+          "components": 1
+        },
+        {
+          "id": "S011",
+          "status": "C",
+          "components": 2
+        }
+      ],
+      "qualifier_restrictions": {
+        "0083": [
+          "4",
+          "7"
+        ]
+      }
+    },
+    {
+      "tag": "UNT",
+      "name": "Nachrichten-Endesegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        }
+      ]
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG1",
+      "trigger_segment": "UCM",
+      "mandatory": false,
+      "max_occurrences": 999999,
+      "segments": [
+        {
+          "tag": "UCM",
+          "name": "Nachrichtenantwort",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "0062",
+              "status": "C",
+              "components": 1
+            },
+            {
+              "id": "S009",
+              "status": "M",
+              "components": 6
+            },
+            {
+              "id": "0083",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "0085",
+              "status": "C",
+              "components": 1
+            },
+            {
+              "id": "0013",
+              "status": "C",
+              "components": 1
+            },
+            {
+              "id": "S011",
+              "status": "C",
+              "components": 2
+            }
+          ],
+          "qualifier_restrictions": {
+            "0083": [
+              "4"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG2",
+          "trigger_segment": "UCS",
+          "mandatory": false,
+          "max_occurrences": 999,
+          "segments": [
+            {
+              "tag": "UCS",
+              "name": "Segment-Fehleranzeige",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "0096",
+                  "status": "M",
+                  "components": 1
+                },
+                {
+                  "id": "0085",
+                  "status": "C",
+                  "components": 1
+                }
+              ]
+            },
+            {
+              "tag": "UCD",
+              "name": "Datenelement-Fehleranzeige",
+              "mandatory": false,
+              "max_occurrences": 99,
+              "elements": [
+                {
+                  "id": "0085",
+                  "status": "M",
+                  "components": 1
+                },
+                {
+                  "id": "S011",
+                  "status": "M",
+                  "components": 2
+                }
+              ]
+            }
+          ],
+          "groups": []
+        }
+      ]
+    }
+  ],
+  "ahb_revision": "2.0b",
+  "source_document": "CONTRL AHB 2.0b, Stand 01.01.2026"
+}

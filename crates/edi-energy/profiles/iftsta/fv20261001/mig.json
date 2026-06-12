@@ -1,0 +1,534 @@
+{
+  "schema_version": 1,
+  "message_type": "IFTSTA",
+  "release": "2.1",
+  "valid_from": "2026-10-01",
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Nachrichten-Kopfsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "S009",
+          "status": "M",
+          "components": 6
+        }
+      ]
+    },
+    {
+      "tag": "BGM",
+      "name": "Beginn der Nachricht",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "M",
+          "components": 4
+        },
+        {
+          "id": "C106",
+          "status": "C",
+          "components": 3
+        }
+      ],
+      "qualifier_restrictions": {
+        "1001": [
+          "Z03",
+          "Z09",
+          "Z33",
+          "Z49",
+          "Z72",
+          "Z73",
+          "Z86"
+        ]
+      }
+    },
+    {
+      "tag": "DTM",
+      "name": "Dokumentendatum",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C507",
+          "status": "M",
+          "components": 3
+        }
+      ],
+      "qualifier_restrictions": {
+        "2005": [
+          "137"
+        ]
+      }
+    },
+    {
+      "tag": "UNT",
+      "name": "Nachrichten-Endesegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        }
+      ]
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG1",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 2,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "MP-ID Absender/Empfänger",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C082",
+              "status": "C",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG4",
+      "trigger_segment": "EQD",
+      "mandatory": false,
+      "max_occurrences": 99999,
+      "segments": [
+        {
+          "tag": "EQD",
+          "name": "Einzelheiten zu Equipment",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "8053",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C237",
+              "status": "C",
+              "components": 2
+            }
+          ],
+          "qualifier_restrictions": {
+            "8053": [
+              "Z01"
+            ]
+          }
+        },
+        {
+          "tag": "RFF",
+          "name": "Prüfidentifikator",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C506",
+              "status": "M",
+              "components": 5
+            }
+          ],
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG6",
+          "trigger_segment": "LOC",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "segments": [
+            {
+              "tag": "LOC",
+              "name": "Meldepunkt",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "3227",
+                  "status": "M",
+                  "components": 1
+                },
+                {
+                  "id": "C517",
+                  "status": "C",
+                  "components": 2
+                }
+              ],
+              "qualifier_restrictions": {
+                "3227": [
+                  "172"
+                ]
+              }
+            },
+            {
+              "tag": "DTM",
+              "name": "Betrachtungszeitintervall / Zeitpunkt der Statusvergabe",
+              "mandatory": true,
+              "max_occurrences": 2,
+              "elements": [
+                {
+                  "id": "C507",
+                  "status": "M",
+                  "components": 3
+                }
+              ],
+              "qualifier_restrictions": {
+                "2005": [
+                  "492",
+                  "334"
+                ]
+              }
+            }
+          ],
+          "groups": []
+        },
+        {
+          "id": "SG7",
+          "trigger_segment": "STS",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "segments": [
+            {
+              "tag": "STS",
+              "name": "Prüfstatus Antwort auf Summenzeitreihen",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C601",
+                  "status": "C",
+                  "components": 2
+                },
+                {
+                  "id": "C555",
+                  "status": "C",
+                  "components": 2
+                },
+                {
+                  "id": "C556",
+                  "status": "C",
+                  "components": 2
+                }
+              ]
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    {
+      "id": "SG14",
+      "trigger_segment": "CNI",
+      "mandatory": false,
+      "max_occurrences": 99999,
+      "segments": [
+        {
+          "tag": "CNI",
+          "name": "Sendungsdaten",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "1490",
+              "status": "C",
+              "components": 1
+            }
+          ]
+        },
+        {
+          "tag": "LOC",
+          "name": "Meldepunkt",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3227",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C517",
+              "status": "C",
+              "components": 2
+            }
+          ],
+          "qualifier_restrictions": {
+            "3227": [
+              "172"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG15",
+          "trigger_segment": "STS",
+          "mandatory": true,
+          "max_occurrences": 99,
+          "segments": [
+            {
+              "tag": "STS",
+              "name": "MSB-Wechselstatus / Sendungspositionsstatus",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C601",
+                  "status": "C",
+                  "components": 2
+                },
+                {
+                  "id": "C555",
+                  "status": "C",
+                  "components": 2
+                },
+                {
+                  "id": "C556",
+                  "status": "C",
+                  "components": 2
+                },
+                {
+                  "id": "1131",
+                  "status": "C",
+                  "components": 1
+                }
+              ]
+            },
+            {
+              "tag": "RFF",
+              "name": "Referenz",
+              "mandatory": false,
+              "max_occurrences": 9,
+              "elements": [
+                {
+                  "id": "C506",
+                  "status": "M",
+                  "components": 5
+                }
+              ],
+              "qualifier_restrictions": {
+                "1153": [
+                  "Z13",
+                  "ACW",
+                  "ADY",
+                  "TN",
+                  "AUU"
+                ]
+              }
+            }
+          ],
+          "groups": [
+            {
+              "id": "SG16",
+              "trigger_segment": "EFI",
+              "mandatory": false,
+              "max_occurrences": 99,
+              "segments": [
+                {
+                  "tag": "EFI",
+                  "name": "Ansicht des Senders / Privilegierte Energiemenge",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "C077",
+                      "status": "M",
+                      "components": 2
+                    }
+                  ]
+                },
+                {
+                  "tag": "DTM",
+                  "name": "Beginn / Ende des Zeitraums",
+                  "mandatory": false,
+                  "max_occurrences": 9,
+                  "elements": [
+                    {
+                      "id": "C507",
+                      "status": "M",
+                      "components": 3
+                    }
+                  ]
+                },
+                {
+                  "tag": "QTY",
+                  "name": "Menge",
+                  "mandatory": false,
+                  "max_occurrences": 9,
+                  "elements": [
+                    {
+                      "id": "C186",
+                      "status": "M",
+                      "components": 3
+                    }
+                  ]
+                }
+              ],
+              "groups": []
+            },
+            {
+              "id": "SG17",
+              "trigger_segment": "NAD",
+              "mandatory": false,
+              "max_occurrences": 9,
+              "segments": [
+                {
+                  "tag": "NAD",
+                  "name": "Ansprechpartner",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "3035",
+                      "status": "M",
+                      "components": 1
+                    },
+                    {
+                      "id": "C082",
+                      "status": "C",
+                      "components": 3
+                    }
+                  ]
+                }
+              ],
+              "groups": [
+                {
+                  "id": "SG18",
+                  "trigger_segment": "CTA",
+                  "mandatory": false,
+                  "max_occurrences": 9,
+                  "segments": [
+                    {
+                      "tag": "CTA",
+                      "name": "Ansprechpartner",
+                      "mandatory": true,
+                      "max_occurrences": 1,
+                      "elements": [
+                        {
+                          "id": "3139",
+                          "status": "C",
+                          "components": 1
+                        },
+                        {
+                          "id": "C056",
+                          "status": "C",
+                          "components": 2
+                        }
+                      ]
+                    },
+                    {
+                      "tag": "COM",
+                      "name": "Kommunikationsverbindung",
+                      "mandatory": false,
+                      "max_occurrences": 9,
+                      "elements": [
+                        {
+                          "id": "C076",
+                          "status": "M",
+                          "components": 2
+                        }
+                      ]
+                    }
+                  ],
+                  "groups": []
+                }
+              ]
+            },
+            {
+              "id": "SG25",
+              "trigger_segment": "GID",
+              "mandatory": false,
+              "max_occurrences": 9999,
+              "segments": [
+                {
+                  "tag": "GID",
+                  "name": "Sendungspositionseinzelheiten",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "1496",
+                      "status": "C",
+                      "components": 1
+                    }
+                  ]
+                },
+                {
+                  "tag": "FTX",
+                  "name": "Freier Text",
+                  "mandatory": false,
+                  "max_occurrences": 9,
+                  "elements": [
+                    {
+                      "id": "4451",
+                      "status": "M",
+                      "components": 1
+                    },
+                    {
+                      "id": "4453",
+                      "status": "C",
+                      "components": 1
+                    },
+                    {
+                      "id": "C107",
+                      "status": "C",
+                      "components": 3
+                    },
+                    {
+                      "id": "C108",
+                      "status": "C",
+                      "components": 5
+                    }
+                  ]
+                }
+              ],
+              "groups": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "ahb_revision": "2.1",
+  "source_document": "IFTSTA AHB 2.1, Stand 01.10.2026"
+}

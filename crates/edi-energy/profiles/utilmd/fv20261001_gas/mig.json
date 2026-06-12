@@ -1,0 +1,382 @@
+{
+  "schema_version": 1,
+  "message_type": "UTILMD",
+  "release": "G1.2",
+  "valid_from": "2026-10-01",
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Message Header",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "S009",
+          "status": "M",
+          "components": 6
+        }
+      ]
+    },
+    {
+      "tag": "BGM",
+      "name": "Beginning of Message",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "M",
+          "components": 4
+        },
+        {
+          "id": "C106",
+          "status": "C",
+          "components": 3
+        },
+        {
+          "id": "1225",
+          "status": "C",
+          "components": 1
+        }
+      ],
+      "qualifier_restrictions": {
+        "1001": [
+          "E01",
+          "E03",
+          "E0F",
+          "E1A"
+        ]
+      }
+    },
+    {
+      "tag": "DTM",
+      "name": "Date/Time/Period",
+      "mandatory": true,
+      "max_occurrences": 2,
+      "elements": [
+        {
+          "id": "C507",
+          "status": "M",
+          "components": 3
+        }
+      ]
+    },
+    {
+      "tag": "UNT",
+      "name": "Message Trailer",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        }
+      ]
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG1",
+      "trigger_segment": "RFF",
+      "mandatory": false,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "RFF",
+          "name": "Reference",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C506",
+              "status": "M",
+              "components": 5
+            }
+          ]
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG2",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "Name and Address",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C082",
+              "status": "C",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR",
+              "DDQ",
+              "BF",
+              "DER"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG3",
+          "trigger_segment": "CTA",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "segments": [
+            {
+              "tag": "CTA",
+              "name": "Contact Information",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "3139",
+                  "status": "C",
+                  "components": 1
+                },
+                {
+                  "id": "C056",
+                  "status": "C",
+                  "components": 2
+                }
+              ]
+            },
+            {
+              "tag": "COM",
+              "name": "Communication Contact",
+              "mandatory": true,
+              "max_occurrences": 5,
+              "elements": [
+                {
+                  "id": "C076",
+                  "status": "M",
+                  "components": 2
+                }
+              ]
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    {
+      "id": "SG4",
+      "trigger_segment": "IDE",
+      "mandatory": true,
+      "max_occurrences": 9999,
+      "segments": [
+        {
+          "tag": "IDE",
+          "name": "Identity",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "7495",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C206",
+              "status": "M",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "7495": [
+              "Z18",
+              "Z19",
+              "Z31"
+            ]
+          }
+        },
+        {
+          "tag": "STS",
+          "name": "Status",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "elements": [
+            {
+              "id": "9015",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "9013",
+              "status": "C",
+              "components": 1
+            },
+            {
+              "id": "9011",
+              "status": "C",
+              "components": 1
+            }
+          ]
+        },
+        {
+          "tag": "DTM",
+          "name": "Date/Time/Period",
+          "mandatory": false,
+          "max_occurrences": 20,
+          "elements": [
+            {
+              "id": "C507",
+              "status": "M",
+              "components": 3
+            }
+          ]
+        },
+        {
+          "tag": "FTX",
+          "name": "Free Text",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "elements": [
+            {
+              "id": "4451",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C108",
+              "status": "C",
+              "components": 5
+            }
+          ]
+        },
+        {
+          "tag": "AGR",
+          "name": "Agreement Identification",
+          "mandatory": false,
+          "max_occurrences": 2,
+          "elements": [
+            {
+              "id": "C543",
+              "status": "M",
+              "components": 3
+            }
+          ]
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG5",
+          "trigger_segment": "LOC",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "segments": [
+            {
+              "tag": "LOC",
+              "name": "Place/Location Identification",
+              "mandatory": true,
+              "max_occurrences": 3,
+              "elements": [
+                {
+                  "id": "3227",
+                  "status": "M",
+                  "components": 1
+                },
+                {
+                  "id": "C517",
+                  "status": "C",
+                  "components": 4
+                }
+              ]
+            }
+          ],
+          "groups": []
+        },
+        {
+          "id": "SG6",
+          "trigger_segment": "RFF",
+          "mandatory": true,
+          "max_occurrences": 9,
+          "segments": [
+            {
+              "tag": "RFF",
+              "name": "Reference",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C506",
+                  "status": "M",
+                  "components": 5
+                }
+              ],
+              "qualifier_restrictions": {
+                "1153": [
+                  "Z13",
+                  "TN",
+                  "ACE",
+                  "MG"
+                ]
+              }
+            }
+          ],
+          "groups": []
+        },
+        {
+          "id": "SG12",
+          "trigger_segment": "NAD",
+          "mandatory": false,
+          "max_occurrences": 99,
+          "segments": [
+            {
+              "tag": "NAD",
+              "name": "Name and Address",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "3035",
+                  "status": "M",
+                  "components": 1
+                },
+                {
+                  "id": "C082",
+                  "status": "C",
+                  "components": 3
+                },
+                {
+                  "id": "C058",
+                  "status": "C",
+                  "components": 5
+                }
+              ]
+            }
+          ],
+          "groups": []
+        }
+      ]
+    }
+  ],
+  "ahb_revision": "G1.2",
+  "source_document": "UTILMD AHB G1.2, Stand 01.10.2026"
+}

@@ -1,0 +1,314 @@
+{
+  "schema_version": 1,
+  "message_type": "COMDIS",
+  "release": "1.0g",
+  "valid_from": "2026-10-01",
+  "supersedes_directory": "fv20251001",
+  "pid_source": "rff_z13",
+  "ordering_hint": [
+    "UNH",
+    "BGM",
+    "RFF",
+    "DTM",
+    "CUX",
+    "NAD",
+    "CTA",
+    "COM",
+    "DOC",
+    "MOA",
+    "AJT",
+    "FTX",
+    "UNT"
+  ],
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Nachrichten-Kopfsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M"
+        },
+        {
+          "id": "S009",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "BGM",
+      "name": "Beginn der Nachricht",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "C"
+        },
+        {
+          "id": "C106",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {
+        "1001": [
+          "456",
+          "739"
+        ]
+      }
+    },
+    {
+      "tag": "RFF",
+      "name": "Prüfidentifikator",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C506",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {
+        "1153": [
+          "Z13"
+        ]
+      }
+    },
+    {
+      "tag": "DTM",
+      "name": "Dokumentendatum",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C507",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {
+        "2005": [
+          "137"
+        ]
+      }
+    },
+    {
+      "tag": "CUX",
+      "name": "Währungsangaben",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C504",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {
+        "6343": [
+          "4"
+        ],
+        "6347": [
+          "2"
+        ]
+      }
+    },
+    {
+      "tag": "UNT",
+      "name": "Nachrichten-Endesegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M"
+        },
+        {
+          "id": "0062",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG1",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "MP-ID Absender/Empfänger",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M"
+            },
+            {
+              "id": "C082",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "tag": "CTA",
+          "name": "Ansprechpartner",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3139",
+              "status": "C"
+            },
+            {
+              "id": "C056",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {
+            "3139": [
+              "IC"
+            ]
+          }
+        },
+        {
+          "tag": "COM",
+          "name": "Kommunikationsverbindung",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "elements": [
+            {
+              "id": "C076",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {
+            "3155": [
+              "EM",
+              "FX",
+              "TE",
+              "AJ",
+              "AL"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG2",
+      "trigger_segment": "DOC",
+      "mandatory": true,
+      "max_occurrences": 9999,
+      "segments": [
+        {
+          "tag": "DOC",
+          "name": "Dokument-/Nachricht-Einzelheiten",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C002",
+              "status": "M"
+            },
+            {
+              "id": "C503",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {
+            "1001": [
+              "380",
+              "Z41",
+              "Z42"
+            ]
+          }
+        },
+        {
+          "tag": "MOA",
+          "name": "angeforderter Betrag",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C516",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {
+            "5025": [
+              "9"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG3",
+          "trigger_segment": "AJT",
+          "mandatory": true,
+          "max_occurrences": 9,
+          "segments": [
+            {
+              "tag": "AJT",
+              "name": "Begründung der Korrektheit",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "4465",
+                  "status": "M"
+                },
+                {
+                  "id": "1082",
+                  "status": "C"
+                }
+              ],
+              "qualifier_restrictions": {}
+            },
+            {
+              "tag": "FTX",
+              "name": "Begründung Richtigkeit",
+              "mandatory": false,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "4451",
+                  "status": "M"
+                },
+                {
+                  "id": "C107",
+                  "status": "C"
+                },
+                {
+                  "id": "C108",
+                  "status": "C"
+                }
+              ],
+              "qualifier_restrictions": {
+                "4451": [
+                  "ACD",
+                  "ACB"
+                ]
+              }
+            }
+          ],
+          "groups": []
+        }
+      ]
+    }
+  ],
+  "ahb_revision": "1.0g",
+  "source_document": "COMDIS AHB 1.0g, Stand 01.10.2026"
+}

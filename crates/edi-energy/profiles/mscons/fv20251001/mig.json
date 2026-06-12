@@ -1,0 +1,514 @@
+{
+  "schema_version": 1,
+  "message_type": "MSCONS",
+  "release": "2.4c",
+  "valid_from": "2025-10-01",
+  "supersedes_directory": "fv20240401",
+  "ordering_hint": [
+    "UNH",
+    "BGM",
+    "DTM",
+    "RFF",
+    "NAD",
+    "CTA",
+    "COM",
+    "UNS",
+    "LOC",
+    "DTM",
+    "CCI",
+    "LIN",
+    "PIA",
+    "QTY",
+    "STS",
+    "UNT"
+  ],
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Nachrichtenkopfsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "S009",
+          "status": "M",
+          "components": 6
+        }
+      ]
+    },
+    {
+      "tag": "BGM",
+      "name": "Beginn der Nachricht",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "M",
+          "components": 4
+        },
+        {
+          "id": "C106",
+          "status": "C",
+          "components": 3
+        },
+        {
+          "id": "1225",
+          "status": "C",
+          "components": 1
+        }
+      ],
+      "qualifier_restrictions": {
+        "1001": [
+          "7",
+          "35",
+          "Z27"
+        ]
+      }
+    },
+    {
+      "tag": "DTM",
+      "name": "Nachrichtendatum",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C507",
+          "status": "M",
+          "components": 3
+        }
+      ],
+      "qualifier_restrictions": {
+        "2005": [
+          "137"
+        ]
+      }
+    },
+    {
+      "tag": "UNS",
+      "name": "Abschnitts-Kontrollsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0081",
+          "status": "M",
+          "components": 1
+        }
+      ]
+    },
+    {
+      "tag": "UNT",
+      "name": "Nachrichten-Endesegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        }
+      ]
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG1",
+      "trigger_segment": "RFF",
+      "mandatory": false,
+      "max_occurrences": 9,
+      "segments": [
+        {
+          "tag": "RFF",
+          "name": "Referenzangaben",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C506",
+              "status": "M",
+              "components": 5
+            }
+          ],
+          "qualifier_restrictions": {
+            "1153": [
+              "AGI",
+              "Z13",
+              "ACW",
+              "MG"
+            ]
+          }
+        },
+        {
+          "tag": "DTM",
+          "name": "Versionsangabe",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C507",
+              "status": "M",
+              "components": 3
+            }
+          ]
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG2",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "MP-ID Absender/Empfänger",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C082",
+              "status": "C",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG4",
+          "trigger_segment": "CTA",
+          "mandatory": false,
+          "max_occurrences": 9,
+          "segments": [
+            {
+              "tag": "CTA",
+              "name": "Ansprechpartner",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "3139",
+                  "status": "C",
+                  "components": 1
+                },
+                {
+                  "id": "C056",
+                  "status": "C",
+                  "components": 2
+                }
+              ]
+            },
+            {
+              "tag": "COM",
+              "name": "Kommunikationsverbindung",
+              "mandatory": false,
+              "max_occurrences": 5,
+              "elements": [
+                {
+                  "id": "C076",
+                  "status": "M",
+                  "components": 2
+                }
+              ]
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    {
+      "id": "SG5",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 99999,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "Liefer- bzw. Bezugsort",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C082",
+              "status": "C",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "DP"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG6",
+          "trigger_segment": "LOC",
+          "mandatory": true,
+          "max_occurrences": 99999,
+          "segments": [
+            {
+              "tag": "LOC",
+              "name": "Identifikationsangabe",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "3227",
+                  "status": "M",
+                  "components": 1
+                },
+                {
+                  "id": "C517",
+                  "status": "M",
+                  "components": 4
+                }
+              ],
+              "qualifier_restrictions": {
+                "3227": [
+                  "172",
+                  "237",
+                  "Z06",
+                  "Z98",
+                  "ZZZ"
+                ]
+              }
+            },
+            {
+              "tag": "DTM",
+              "name": "Zeitraumangaben",
+              "mandatory": false,
+              "max_occurrences": 9,
+              "elements": [
+                {
+                  "id": "C507",
+                  "status": "M",
+                  "components": 3
+                }
+              ],
+              "qualifier_restrictions": {
+                "2005": [
+                  "163",
+                  "164",
+                  "293",
+                  "137",
+                  "7",
+                  "25",
+                  "37",
+                  "306"
+                ]
+              }
+            }
+          ],
+          "groups": [
+            {
+              "id": "SG7",
+              "trigger_segment": "RFF",
+              "mandatory": false,
+              "max_occurrences": 99,
+              "segments": [
+                {
+                  "tag": "RFF",
+                  "name": "Gerätenummer / Konfigurations-ID",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "C506",
+                      "status": "M",
+                      "components": 5
+                    }
+                  ],
+                  "qualifier_restrictions": {
+                    "1153": [
+                      "MG",
+                      "AGK",
+                      "Z19"
+                    ]
+                  }
+                }
+              ],
+              "groups": []
+            },
+            {
+              "id": "SG8",
+              "trigger_segment": "CCI",
+              "mandatory": false,
+              "max_occurrences": 99,
+              "segments": [
+                {
+                  "tag": "CCI",
+                  "name": "Zeitreihentyp",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "7059",
+                      "status": "C",
+                      "components": 1
+                    },
+                    {
+                      "id": "C214",
+                      "status": "C",
+                      "components": 4
+                    }
+                  ]
+                }
+              ],
+              "groups": []
+            },
+            {
+              "id": "SG9",
+              "trigger_segment": "LIN",
+              "mandatory": false,
+              "max_occurrences": 99999,
+              "segments": [
+                {
+                  "tag": "LIN",
+                  "name": "Laufende Position",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "1082",
+                      "status": "C",
+                      "components": 1
+                    }
+                  ]
+                },
+                {
+                  "tag": "PIA",
+                  "name": "Produktidentifikation (OBIS-Kennzahl)",
+                  "mandatory": false,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "4347",
+                      "status": "M",
+                      "components": 1
+                    },
+                    {
+                      "id": "C212",
+                      "status": "M",
+                      "components": 4
+                    }
+                  ],
+                  "qualifier_restrictions": {
+                    "4347": [
+                      "5"
+                    ]
+                  }
+                }
+              ],
+              "groups": [
+                {
+                  "id": "SG10",
+                  "trigger_segment": "QTY",
+                  "mandatory": true,
+                  "max_occurrences": 9999,
+                  "segments": [
+                    {
+                      "tag": "QTY",
+                      "name": "Mengenangaben",
+                      "mandatory": true,
+                      "max_occurrences": 1,
+                      "elements": [
+                        {
+                          "id": "C186",
+                          "status": "M",
+                          "components": 3
+                        }
+                      ],
+                      "qualifier_restrictions": {
+                        "6063": [
+                          "220",
+                          "67",
+                          "Z10",
+                          "Z18",
+                          "Z19"
+                        ]
+                      }
+                    },
+                    {
+                      "tag": "DTM",
+                      "name": "Zeitangaben Messwert",
+                      "mandatory": false,
+                      "max_occurrences": 9,
+                      "elements": [
+                        {
+                          "id": "C507",
+                          "status": "M",
+                          "components": 3
+                        }
+                      ],
+                      "qualifier_restrictions": {
+                        "2005": [
+                          "163",
+                          "164",
+                          "7",
+                          "25",
+                          "306"
+                        ]
+                      }
+                    },
+                    {
+                      "tag": "STS",
+                      "name": "Statusangabe",
+                      "mandatory": false,
+                      "max_occurrences": 9,
+                      "elements": [
+                        {
+                          "id": "9015",
+                          "status": "C",
+                          "components": 1
+                        },
+                        {
+                          "id": "C601",
+                          "status": "C",
+                          "components": 4
+                        }
+                      ]
+                    }
+                  ],
+                  "groups": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "valid_until": "2026-09-30",
+  "ahb_revision": "2.4c",
+  "source_document": "MSCONS AHB 2.4c, Stand 01.10.2025"
+}

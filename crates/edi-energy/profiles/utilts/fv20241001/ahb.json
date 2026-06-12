@@ -1,0 +1,564 @@
+{
+  "schema_version": 1,
+  "message_type": "UTILTS",
+  "release": "1.1e",
+  "source_document": "UTILTS AHB 1.1e vom 01.10.2024",
+  "pruefidentifikatoren": [
+    {
+      "code": 25001,
+      "name": "Übermittlung Berechnungsformel",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.1e (no AHB constraint for PID 25001)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.1e (no AHB constraint for PID 25001)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 1.1e (no AHB constraint for PID 25001)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 25004,
+      "name": "Übersicht Zählzeitdefinitionen",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.1e (no AHB constraint for PID 25004)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.1e (no AHB constraint for PID 25004)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.1e (no AHB constraint for PID 25004)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 1.1e (no AHB constraint for PID 25004)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.1e (no AHB constraint for PID 25004)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 25005,
+      "name": "Ausgerollte Zählzeitdefinition",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.1e (no AHB constraint for PID 25005)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.1e (no AHB constraint for PID 25005)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.1e (no AHB constraint for PID 25005)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.1e (no AHB constraint for PID 25005)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 1.1e (no AHB constraint for PID 25005)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 25006,
+      "name": "Übersicht Schaltzeitdefinitionen",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.1e (no AHB constraint for PID 25006)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.1e (no AHB constraint for PID 25006)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.1e (no AHB constraint for PID 25006)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.1e (no AHB constraint for PID 25006)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.1e (no AHB constraint for PID 25006)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 1.1e (no AHB constraint for PID 25006)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.1e (no AHB constraint for PID 25006)"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O",
+          "_description": "SEQ is optional per MIG 1.1e (no AHB constraint for PID 25006)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 25007,
+      "name": "Übersicht Leistungskurvendefinitionen",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "STS",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.1e (no AHB constraint for PID 25007)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.1e (no AHB constraint for PID 25007)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.1e (no AHB constraint for PID 25007)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.1e (no AHB constraint for PID 25007)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.1e (no AHB constraint for PID 25007)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 1.1e (no AHB constraint for PID 25007)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.1e (no AHB constraint for PID 25007)"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O",
+          "_description": "SEQ is optional per MIG 1.1e (no AHB constraint for PID 25007)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 25008,
+      "name": "Ausgerollte Schaltzeitdefinition",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.1e (no AHB constraint for PID 25008)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.1e (no AHB constraint for PID 25008)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.1e (no AHB constraint for PID 25008)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.1e (no AHB constraint for PID 25008)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.1e (no AHB constraint for PID 25008)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.1e (no AHB constraint for PID 25008)"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O",
+          "_description": "SEQ is optional per MIG 1.1e (no AHB constraint for PID 25008)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 1.1e (no AHB constraint for PID 25008)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 25009,
+      "name": "Ausgerollte Leistungskurvendefinition",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.1e (no AHB constraint for PID 25009)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.1e (no AHB constraint for PID 25009)"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "COM is optional per MIG 1.1e (no AHB constraint for PID 25009)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.1e (no AHB constraint for PID 25009)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.1e (no AHB constraint for PID 25009)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.1e (no AHB constraint for PID 25009)"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O",
+          "_description": "SEQ is optional per MIG 1.1e (no AHB constraint for PID 25009)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 1.1e (no AHB constraint for PID 25009)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 25010,
+      "name": "Antwort auf Übermittlung der Berechnungsformel",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O",
+          "_description": "CAV is optional per MIG 1.1e (no AHB constraint for PID 25010)"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.1e (no AHB constraint for PID 25010)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.1e (no AHB constraint for PID 25010)"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "LOC is optional per MIG 1.1e (no AHB constraint for PID 25010)"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O",
+          "_description": "QTY is optional per MIG 1.1e (no AHB constraint for PID 25010)"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O",
+          "_description": "SEQ is optional per MIG 1.1e (no AHB constraint for PID 25010)"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O",
+          "_description": "STS is optional per MIG 1.1e (no AHB constraint for PID 25010)"
+        }
+      ],
+      "group_rules": []
+    }
+  ]
+}

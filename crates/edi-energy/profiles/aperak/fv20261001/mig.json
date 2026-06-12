@@ -1,0 +1,283 @@
+{
+  "schema_version": 1,
+  "message_type": "APERAK",
+  "release": "2.2",
+  "valid_from": "2026-10-01",
+  "ordering_hint": [
+    "UNH",
+    "BGM",
+    "DTM",
+    "RFF",
+    "NAD",
+    "ERC",
+    "FTX",
+    "UNT"
+  ],
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Nachrichten-Kopfsegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "S009",
+          "status": "M",
+          "components": 6
+        }
+      ]
+    },
+    {
+      "tag": "BGM",
+      "name": "Beginn der Nachricht",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "M",
+          "components": 4
+        },
+        {
+          "id": "C106",
+          "status": "C",
+          "components": 3
+        },
+        {
+          "id": "1225",
+          "status": "C",
+          "components": 1
+        }
+      ],
+      "qualifier_restrictions": {
+        "1001": [
+          "312",
+          "313"
+        ]
+      }
+    },
+    {
+      "tag": "DTM",
+      "name": "Dokumentendatum",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C507",
+          "status": "M",
+          "components": 3
+        }
+      ],
+      "qualifier_restrictions": {
+        "2005": [
+          "137"
+        ]
+      }
+    },
+    {
+      "tag": "UNT",
+      "name": "Nachrichten-Endesegment",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M",
+          "components": 1
+        },
+        {
+          "id": "0062",
+          "status": "M",
+          "components": 1
+        }
+      ]
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG2",
+      "trigger_segment": "RFF",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "segments": [
+        {
+          "tag": "RFF",
+          "name": "Referenzangaben",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C506",
+              "status": "M",
+              "components": 5
+            }
+          ],
+          "qualifier_restrictions": {
+            "1153": [
+              "ACW",
+              "AWR",
+              "ACD",
+              "Z13",
+              "TN"
+            ]
+          }
+        },
+        {
+          "tag": "DTM",
+          "name": "Referenzdatum",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C507",
+              "status": "M",
+              "components": 3
+            }
+          ]
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG3",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 2,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "MP-ID Absender/Empfänger",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "C082",
+              "status": "C",
+              "components": 3
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG4",
+      "trigger_segment": "ERC",
+      "mandatory": false,
+      "max_occurrences": 99999,
+      "segments": [
+        {
+          "tag": "ERC",
+          "name": "Fehlercode",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C901",
+              "status": "M",
+              "components": 3
+            }
+          ]
+        },
+        {
+          "tag": "FTX",
+          "name": "Freier Text",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "4451",
+              "status": "M",
+              "components": 1
+            },
+            {
+              "id": "4453",
+              "status": "C",
+              "components": 1
+            },
+            {
+              "id": "C107",
+              "status": "C",
+              "components": 3
+            },
+            {
+              "id": "C108",
+              "status": "C",
+              "components": 5
+            }
+          ]
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG5",
+          "trigger_segment": "RFF",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "segments": [
+            {
+              "tag": "RFF",
+              "name": "Referenznummer der Nachricht",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C506",
+                  "status": "M",
+                  "components": 5
+                }
+              ]
+            },
+            {
+              "tag": "FTX",
+              "name": "Fehlerbeschreibung",
+              "mandatory": false,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "4451",
+                  "status": "M",
+                  "components": 1
+                },
+                {
+                  "id": "4453",
+                  "status": "C",
+                  "components": 1
+                },
+                {
+                  "id": "C107",
+                  "status": "C",
+                  "components": 3
+                },
+                {
+                  "id": "C108",
+                  "status": "C",
+                  "components": 5
+                }
+              ]
+            }
+          ],
+          "groups": []
+        }
+      ]
+    }
+  ],
+  "ahb_revision": "2.2",
+  "source_document": "APERAK AHB 2.2, Stand 01.10.2026"
+}

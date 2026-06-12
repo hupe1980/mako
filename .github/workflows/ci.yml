@@ -1,0 +1,214 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # ── Formatting ──────────────────────────────────────────────────────────────
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # ── Clippy ──────────────────────────────────────────────────────────────────
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --all-features
+
+  # ── Tests ───────────────────────────────────────────────────────────────────
+  test:
+    name: Test (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - --all-features
+          - --no-default-features
+          - --features utilmd
+          - --features mscons
+          - --features aperak
+          - --features contrl
+          - --features invoic
+          - --features orders
+          - --features partin
+          - --features remadv
+          - --features reqote
+          - --features iftsta
+          - --features insrpt
+          - --features ordchg
+          - --features ordrsp
+          - --features comdis
+          - --features pricat
+          - --features utilts
+          - --features quotes
+          - --features diagnostics
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p edi-energy ${{ matrix.features }}
+
+  # ── Strict warning gate ─────────────────────────────────────────────────────
+  warnings:
+    name: No warnings (all targets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # ── Documentation ───────────────────────────────────────────────────────────
+  doc:
+    name: Documentation
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --no-deps --all-features
+
+  # ── MSRV ────────────────────────────────────────────────────────────────────
+  msrv:
+    name: Minimum Supported Rust Version (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p edi-energy --all-features
+
+  # ── Deny ────────────────────────────────────────────────────────────────────
+  deny:
+    name: Licenses & Advisories (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
+  # ── xtask smoke ─────────────────────────────────────────────────────────────
+  xtask:
+    name: xtask builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p xtask
+      - run: cargo run -p xtask -- help
+
+  codegen-check:
+    name: Codegen check (generated files are up-to-date)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask codegen --check
+
+  validate-profiles:
+    name: Validate profiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask validate-profiles
+
+  validate-pruefids:
+    name: Validate Pruefidentifikator coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Full informational scan (MISSING PIDs are warnings, not failures).
+      - name: Coverage scan (informational)
+        run: cargo xtask validate-pruefids
+      # Hard gate for message types with complete test-fixture coverage.
+      # Add a type here once every PID in its latest AHB is covered by a fixture.
+      - name: Coverage gate — aperak (strict)
+        run: cargo xtask validate-pruefids --message-type aperak --strict
+      - name: Coverage gate — comdis (strict)
+        run: cargo xtask validate-pruefids --message-type comdis --strict
+
+  release-diff-smoke:
+    name: release-diff smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        # Use a real cross-release diff so a broken diff tool is detected.
+        # MSCONS fv20240401 → fv20251001 is a known non-trivial update.
+      - run: |
+          out=$(cargo xtask release-diff --message-type mscons --from fv20240401 --to fv20251001)
+          echo "$out"
+          echo "$out" | grep -q '##' || { echo 'ERROR: release-diff produced no section headers'; exit 1; }
+
+  # ── Changelog guard ─────────────────────────────────────────────────────────
+  changelog-check:
+    name: Changelog — [Unreleased] must be non-empty
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check [Unreleased] section is non-empty
+        run: |
+          # Verify CHANGELOG.md exists
+          if [ ! -f CHANGELOG.md ]; then
+            echo "error: CHANGELOG.md not found" >&2
+            exit 1
+          fi
+          # Extract lines between ## [Unreleased] and the next ## [...] heading
+          unreleased=$(awk '/^## \[Unreleased\]/{found=1; next} found && /^## \[/{exit} found{print}' CHANGELOG.md | grep -v '^[[:space:]]*$')
+          if [ -z "$unreleased" ]; then
+            echo "error: The [Unreleased] section in CHANGELOG.md is empty." >&2
+            echo "  Add at least one entry describing your changes before merging." >&2
+            exit 1
+          fi
+          echo "CHANGELOG.md [Unreleased] section has content — OK"
+
+  # ── Semver API compatibility ─────────────────────────────────────────────────
+  semver-checks:
+    name: Semver API compatibility check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          package: edi-energy

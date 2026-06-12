@@ -1,0 +1,305 @@
+{
+  "schema_version": 1,
+  "message_type": "REQOTE",
+  "release": "1.3c",
+  "source_document": "REQOTE AHB 1.3c vom 01.04.2025",
+  "pruefidentifikatoren": [
+    {
+      "code": 35001,
+      "name": "Anforderung Angebot",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.3c (no AHB constraint for PID 35001)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.3c (no AHB constraint for PID 35001)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.3c (no AHB constraint for PID 35001)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.3c (no AHB constraint for PID 35001)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 35002,
+      "name": "Anfrage",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.3c (no AHB constraint for PID 35002)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.3c (no AHB constraint for PID 35002)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.3c (no AHB constraint for PID 35002)"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O",
+          "_description": "PIA is optional per MIG 1.3c (no AHB constraint for PID 35002)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 35003,
+      "name": "Anfrage von Werten für Rechnungsabwicklung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.3c (no AHB constraint for PID 35003)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 35004,
+      "name": "Anfrage einer Konfiguration",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "conditional_rules": [
+            {
+              "when_tag": "RFF",
+              "when_element_index": 0,
+              "when_value": "Z41",
+              "then_requirement": "M",
+              "_description": "[17] Wenn SG1 RFF+Z41 (Referenznummer des Vorgangs der Anmeldung nach WiM) vorhanden, ist SG11 NAD (NB) Pflicht"
+            }
+          ]
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 35005,
+      "name": "Anfrage Angebot Änderung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "CCI is optional per MIG 1.3c (no AHB constraint for PID 35005)"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "CTA is optional per MIG 1.3c (no AHB constraint for PID 35005)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 1.3c (no AHB constraint for PID 35005)"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O",
+          "_description": "IMD is optional per MIG 1.3c (no AHB constraint for PID 35005)"
+        }
+      ],
+      "group_rules": []
+    }
+  ]
+}
