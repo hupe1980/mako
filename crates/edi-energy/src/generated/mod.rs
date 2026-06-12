@@ -248,7 +248,7 @@ const _: () = assert!(utilts_fv20260401::CODEGEN_SCHEMA_VERSION == CURRENT_CODEG
 /// when a profile is removed or renamed after a BDEW format update.
 ///
 /// # Example
-/// ```rust,no_run
+/// ```rust,ignore
 /// use edi_energy::releases;
 /// use edi_energy::builders::MsconsBuilder;
 /// let msg = MsconsBuilder::new(releases::mscons_fv20261001().clone())

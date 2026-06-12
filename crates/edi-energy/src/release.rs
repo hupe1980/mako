@@ -336,12 +336,15 @@ impl Release {
     /// ```rust
     /// use edi_energy::{Release, MessageType, ReleaseRegistry};
     ///
+    /// # #[cfg(feature = "utilmd")]
+    /// # {
     /// let registry = ReleaseRegistry::global();
     /// let r = Release::new("S2.2");
     /// assert!(r.is_registered(MessageType::Utilmd, registry));
     ///
     /// let bad = Release::new("X9.9");
     /// assert!(!bad.is_registered(MessageType::Utilmd, registry));
+    /// # }
     /// ```
     #[must_use]
     pub fn is_registered(

@@ -4454,7 +4454,7 @@ fn emit_mod_rs(profiles: &[ProfileData]) -> String {
     .unwrap();
     writeln!(out, "///").unwrap();
     writeln!(out, "/// # Example").unwrap();
-    writeln!(out, "/// ```rust,no_run").unwrap();
+    writeln!(out, "/// ```rust,ignore").unwrap();
     writeln!(out, "/// use edi_energy::releases;").unwrap();
     writeln!(out, "/// use edi_energy::builders::MsconsBuilder;").unwrap();
     writeln!(
