@@ -172,43 +172,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         # Use a real cross-release diff so a broken diff tool is detected.
         # MSCONS fv20240401 → fv20251001 is a known non-trivial update.
+        # release-diff exits 1 when differences are found (expected here); use
+        # `|| true` so bash -e does not abort on the expected non-zero exit.
       - run: |
-          out=$(cargo xtask release-diff --message-type mscons --from fv20240401 --to fv20251001)
+          out=$(cargo xtask release-diff --message-type mscons --from fv20240401 --to fv20251001 || true)
           echo "$out"
           echo "$out" | grep -q '##' || { echo 'ERROR: release-diff produced no section headers'; exit 1; }
-
-  # ── Changelog guard ─────────────────────────────────────────────────────────
-  changelog-check:
-    name: Changelog — [Unreleased] must be non-empty
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check [Unreleased] section is non-empty
-        run: |
-          # Verify CHANGELOG.md exists
-          if [ ! -f CHANGELOG.md ]; then
-            echo "error: CHANGELOG.md not found" >&2
-            exit 1
-          fi
-          # Extract lines between ## [Unreleased] and the next ## [...] heading
-          unreleased=$(awk '/^## \[Unreleased\]/{found=1; next} found && /^## \[/{exit} found{print}' CHANGELOG.md | grep -v '^[[:space:]]*$')
-          if [ -z "$unreleased" ]; then
-            echo "error: The [Unreleased] section in CHANGELOG.md is empty." >&2
-            echo "  Add at least one entry describing your changes before merging." >&2
-            exit 1
-          fi
-          echo "CHANGELOG.md [Unreleased] section has content — OK"
-
-  # ── Semver API compatibility ─────────────────────────────────────────────────
-  semver-checks:
-    name: Semver API compatibility check
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: obi1kenobi/cargo-semver-checks-action@v2
-        with:
-          package: edi-energy

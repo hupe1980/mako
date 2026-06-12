@@ -149,6 +149,7 @@ fn parse_unknown_type_returns_unknown_variant() {
         } => {
             assert_eq!(message_type_code.as_ref(), "FOOBAR");
         }
+        #[allow(unreachable_patterns)]
         other => panic!("expected AnyMessage::Unknown, got: {other:?}"),
     }
 }
