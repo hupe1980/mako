@@ -4533,6 +4533,48 @@ fn emit_mod_rs(profiles: &[ProfileData]) -> String {
     }
     writeln!(out, "}}").unwrap();
 
+    // ── archived_profile_feature ──────────────────────────────────────────────
+    // Returns the Cargo feature flag that gates the archived profile, or None if
+    // the (message_type, release) pair is not a known archived profile.
+    // Used by the registry to surface a helpful error instead of ProfileNotFound.
+    writeln!(out).unwrap();
+    writeln!(
+        out,
+        "/// Return the Cargo feature flag that gates the archived profile for the given"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// `(message_type, release)` pair, or `None` if not an archived profile."
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "pub(crate) fn archived_profile_feature(message_type: &str, release: &str) -> Option<&'static str> {{"
+    )
+    .unwrap();
+
+    let archived: Vec<_> = profiles.iter().filter(|p| p.archived).collect();
+    if archived.is_empty() {
+        writeln!(out, "    let _ = (message_type, release);").unwrap();
+        writeln!(out, "    None").unwrap();
+    } else {
+        writeln!(out, "    match (message_type, release) {{").unwrap();
+        for p in &archived {
+            let archive_feature = archive_feature_name(&p.message_type);
+            let mt_str = &p.message_type; // already uppercase
+            let release_str = &p.release;
+            writeln!(
+                out,
+                "        ({mt_str:?}, {release_str:?}) => Some({archive_feature:?}),"
+            )
+            .unwrap();
+        }
+        writeln!(out, "        _ => None,").unwrap();
+        writeln!(out, "    }}").unwrap();
+    }
+    writeln!(out, "}}").unwrap();
+
     out
 }
 

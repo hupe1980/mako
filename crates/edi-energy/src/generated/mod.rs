@@ -614,3 +614,14 @@ pub mod releases {
         &R
     }
 }
+
+/// Return the Cargo feature flag that gates the archived profile for the given
+/// `(message_type, release)` pair, or `None` if not an archived profile.
+pub(crate) fn archived_profile_feature(message_type: &str, release: &str) -> Option<&'static str> {
+    match (message_type, release) {
+        ("CONTRL", "2.0b") => Some("contrl-archive"),
+        ("INSRPT", "1.1a") => Some("insrpt-archive"),
+        ("MSCONS", "2.4c") => Some("mscons-archive"),
+        _ => None,
+    }
+}
