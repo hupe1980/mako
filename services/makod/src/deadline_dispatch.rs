@@ -9,7 +9,7 @@
 //! All deadline commands are dispatched via
 //! [`Process::execute_and_enqueue_with_retry`], which atomically persists
 //! both events *and* any outbox entries (e.g. APERAK Ablehnung) produced by
-//! the `TimeoutExpired` handler in a single [`WriteBatch`].  This ensures
+//! the `TimeoutExpired` handler in a single `WriteBatch`.  This ensures
 //! there is no window where the `DeadlineExpired` event is stored but the
 //! outbound APERAK message is lost.
 //!
@@ -28,8 +28,6 @@
 //!
 //! [`workflow_names`]: mako_engine::builder::EngineModule::workflow_names
 //! [`EngineModule`]: mako_engine::builder::EngineModule
-//! [`WriteBatch`]: slatedb::WriteBatch
-//! [`Workflow::on_deadline`]: mako_engine::workflow::Workflow::on_deadline
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -413,7 +411,7 @@ pub async fn dispatch_deadline(
 
 /// All workflow names known to the deadline dispatcher.
 ///
-/// Every name returned by an [`EngineModule::workflow_names`] implementation
+/// Every name returned by an `EngineModule::workflow_names` implementation
 /// that is registered with the production engine **must** appear here.
 /// [`assert_dispatch_coverage`] enforces this at startup.
 pub const DISPATCH_TABLE: &[&str] = &[
@@ -445,7 +443,7 @@ pub const DISPATCH_TABLE: &[&str] = &[
 /// # Panics
 ///
 /// Panics with an actionable message when a workflow name declared by an
-/// [`EngineModule`] is absent from [`DISPATCH_TABLE`].  Call this at startup
+/// `EngineModule` is absent from [`DISPATCH_TABLE`].  Call this at startup
 /// before spawning the scheduler so missing entries are caught immediately.
 pub fn assert_dispatch_coverage(registered: &[&str]) {
     for &wf in registered {
@@ -463,7 +461,7 @@ pub fn assert_dispatch_coverage(registered: &[&str]) {
 ///
 /// # Panics
 ///
-/// Panics when a workflow name declared by a registered [`EngineModule`] via
+/// Panics when a workflow name declared by a registered `EngineModule` via
 /// [`workflow_names`] is not covered by [`dispatch_deadline`]. This converts
 /// a silent regulatory miss into an immediate startup failure.
 ///

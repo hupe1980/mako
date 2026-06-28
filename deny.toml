@@ -178,13 +178,13 @@ reason  = "tokio-tungstenite 0.24 (energy-api) pulls 0.26.11; reqwest pulls 1.0.
 
 [[bans.skip]]
 name    = "itertools"
-version = "0.10"
-reason  = "criterion 0.5 depends on itertools 0.10.x; workspace and slatedb ecosystem use 0.14/0.15."
-
-[[bans.skip]]
-name    = "itertools"
 version = "0.14"
 reason  = "foyer-memory (via slatedb) depends on itertools 0.14.x while rest of workspace uses 0.15."
+
+[[bans.skip]]
+name    = "unicode-width"
+version = "0.1"
+reason  = "miette 7 directly depends on unicode-width 0.1.x while textwrap (pulled by miette) uses 0.2.x; resolve when miette upgrades."
 
 [advisories]
 ignore = [

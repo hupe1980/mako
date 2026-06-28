@@ -3,7 +3,7 @@
 //! Domain crates (`mako-gpke`, `mako-wim`, …) declare which EDIFACT message
 //! types they depend on by implementing
 //! [`EngineModule::profile_requirements`].  The engine builder validates these
-//! requirements against the injected [`ReleaseRegistry`] at startup — without
+//! requirements against the injected `ReleaseRegistry` at startup — without
 //! requiring domain crates to import `edi-energy` in their production
 //! `[dependencies]`.
 //!
@@ -30,7 +30,7 @@
 //! # Validation
 //!
 //! [`EngineBuilder::build`] calls every registered module's
-//! [`profile_requirements`] method.  For each requirement it checks that the
+//! [`EngineModule::profile_requirements`] method.  For each requirement it checks that the
 //! caller-supplied validation function (see
 //! [`EngineBuilder::with_profile_validator`]) confirms at least one active
 //! profile exists.  If not, `build` panics with an actionable error message —

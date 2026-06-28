@@ -135,7 +135,7 @@ domain_id!(
     /// Used as `sender` and `receiver` in EDIFACT message headers and as
     /// domain party identifiers in all MaKo process commands. The numeric
     /// value is stored without the agency qualifier — use
-    /// [`edi_energy::AgencyCode`] when rendering outbound NAD segments.
+    /// `edi_energy::AgencyCode` when rendering outbound NAD segments.
     MarktpartnerCode,
     "Marktpartner-Code — BDEW code (293), GS1 GLN (9), or EIC (305) market-participant identifier"
 );

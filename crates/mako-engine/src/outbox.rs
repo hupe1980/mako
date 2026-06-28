@@ -87,7 +87,7 @@ use crate::{
 /// ```
 ///
 /// [`Workflow::handle`]: crate::workflow::Workflow::handle
-/// [`SlateDbStore::append_with_outbox`]: crate::store_slatedb::SlateDbStore::append_with_outbox
+/// [`SlateDbStore::append_with_outbox`]: crate::event_store::AtomicAppend::append_with_outbox
 #[derive(Debug, Clone)]
 pub struct PendingOutbox {
     /// EDIFACT or XML message type (e.g. `"APERAK"`, `"CONTRL"`, `"REMADV"`).

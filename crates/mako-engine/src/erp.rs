@@ -460,13 +460,13 @@ impl ErpAdapter for ErpAdapterTestHarness {
 /// Inject canned [`InboundErpCommand`] payloads and verify that the engine
 /// processes them correctly.
 ///
-/// ```rust,ignore
+/// ```text
 /// let source = ErpCommandSourceTestHarness::new();
 /// source.inject(InboundErpCommand {
 ///     idempotency_key: "order-42".into(),
 ///     tenant_id: TenantId::new(),
-///     payload_schema: "…/Vertrag.json".into(),
-///     payload: serde_json::json!({ "_typ": "VERTRAG", … }),
+///     payload_schema: ".../Vertrag.json".into(),
+///     payload: serde_json::json!({ "_typ": "VERTRAG", ... }),
 /// }).await;
 ///
 /// // The engine picks up the command on the next poll.

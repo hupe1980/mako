@@ -242,7 +242,7 @@ impl StreamId {
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::InvalidStreamId`] if `id` is empty or contains
+    /// Returns [`crate::error::EngineError::InvalidStreamId`] if `id` is empty or contains
     /// a NUL byte.
     pub fn try_new(id: impl Into<Box<str>>) -> Result<Self, crate::error::EngineError> {
         let id: Box<str> = id.into();

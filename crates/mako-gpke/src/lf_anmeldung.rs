@@ -62,7 +62,7 @@ pub const WORKFLOW_NAME: &str = "gpke-lf-anmeldung";
 /// when the ERP calls `POST /api/v1/commands`.
 ///
 /// These are LF→NB/LFA direction only; the corresponding NB→LF response PIDs
-/// ([`ANTWORT_PIDS`]) complete the conversation.
+/// ([`ANTWORT_PIDS_LF`]) complete the conversation.
 pub const ANFRAGE_PIDS_LF: &[u32] = &[
     55001, // Anfrage Lieferbeginn (LF → NB)
     55002, // Anfrage Lieferende  (LF → NB)

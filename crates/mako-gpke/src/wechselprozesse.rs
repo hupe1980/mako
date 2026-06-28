@@ -66,7 +66,7 @@ use mako_engine::{
 ///
 /// Only these PIDs are routed to `GpkeSupplierChangeWorkflow` by the engine.
 /// The corresponding outbound ANTWORT PIDs (55003–55006, 55018) are derived
-/// internally by [`response_pid_for`] and stored in the `AntwortGesendet` event.
+/// internally by `response_pid_for` and stored in the `AntwortGesendet` event.
 ///
 /// | PID range      | Process (LFW24 AHB name)                   | AHB profile |
 /// |----------------|--------------------------------------------|--------------|
@@ -141,7 +141,7 @@ pub enum SupplierChangeEvent {
     },
     /// Outbound UTILMD business response (55003/55004/55005/55006/55018/56003/56004) was sent
     /// to the counterparty. The response PID is derived from the anfrage PID and
-    /// the `accepted` flag by [`response_pid_for`].
+    /// the `accepted` flag by `response_pid_for`.
     AntwortGesendet {
         /// Derived outbound UTILMD response PID.
         response_pid: Option<Pruefidentifikator>,

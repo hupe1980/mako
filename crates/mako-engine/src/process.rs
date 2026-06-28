@@ -715,7 +715,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
     ///
     /// Like [`execute`], but requires `S: AtomicAppend`. When the workflow's
     /// `handle` returns outbox messages alongside events, both are written to
-    /// storage in a single [`WriteBatch`], eliminating the silent message-loss
+    /// storage in a single `WriteBatch`, eliminating the silent message-loss
     /// window that would exist with separate writes.
     ///
     /// When the handle returns no outbox messages, this degenerates to a plain
@@ -916,7 +916,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
         }
     }
 
-    /// Like [`execute_and_enqueue`] but retries on [`VersionConflict`] up to
+    /// Like [`execute_and_enqueue`] but retries on [`crate::error::EngineError::VersionConflict`] up to
     /// `max_attempts` times.
     ///
     /// [`execute_and_enqueue`]: Process::execute_and_enqueue
@@ -1004,7 +1004,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
     }
 
     /// Like [`execute_and_enqueue_with_snapshot`] but retries on
-    /// [`VersionConflict`] up to `max_attempts` times.
+    /// [`crate::error::EngineError::VersionConflict`] up to `max_attempts` times.
     ///
     /// [`execute_and_enqueue_with_retry`]: Process::execute_and_enqueue_with_retry
     ///

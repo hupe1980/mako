@@ -1194,7 +1194,7 @@ impl AtomicAppend for SlateDbStore {
     /// messages in a single SlateDB transaction.
     ///
     /// The `outbox` slice contains lightweight [`PendingOutbox`] values produced
-    /// by [`Workflow::handle`]. This method stamps the events first, then
+    /// by [`crate::workflow::Workflow::handle`]. This method stamps the events first, then
     /// materialises each pending outbox entry into a full [`OutboxMessage`]
     /// using the context fields from the stamped envelopes (including the
     /// store-assigned `event_id` as `causation_event_id`). Both the events and
@@ -1274,7 +1274,7 @@ impl crate::projection::ProjectionCheckpointStore for SlateDbStore {
     /// Load the checkpoint for `name` from per-stream cursor keys.
     ///
     /// Scans the prefix `cp/{name}/` and reconstructs a
-    /// [`GlobalProjectionCheckpoint`] from the individual u64 LE cursor
+    /// [`crate::projection::GlobalProjectionCheckpoint`] from the individual u64 LE cursor
     /// values.  Returns an empty checkpoint (all cursors zero) when no keys
     /// exist under the prefix yet, triggering a full replay from the
     /// beginning.
@@ -2527,7 +2527,7 @@ impl SlateDbStore {
 
 // ── SlateDbPartnerStore ───────────────────────────────────────────────────────
 
-/// Durable [`PartnerStore`] backed by SlateDB.
+/// Durable [`crate::partner::PartnerStore`] backed by SlateDB.
 ///
 /// Key schema:
 /// - `pt/{tenant_id}/{gln}` → `JSON(PartnerRecord)`
@@ -2537,7 +2537,7 @@ impl SlateDbStore {
 /// per-tenant scans.
 ///
 /// Upsert reads the existing record, merges via
-/// [`PartnerRecord::merge_from_partin`], and writes the merged result within
+/// [`crate::partner::PartnerRecord::merge_from_partin`], and writes the merged result within
 /// the same snapshot-isolation transaction to prevent write races.
 ///
 /// Obtain via [`SlateDbStore::as_partner_store`].

@@ -95,6 +95,11 @@ kramdown:
 
 highlighter: rouge
 
+# ── Permalink style ──────────────────────────────────────────────────────────
+# "pretty" generates /page-name/index.html so GitHub Pages serves the page
+# for both /page-name and /page-name/ (no trailing-slash 404s).
+permalink: pretty
+
 # ── Collections / plugins ────────────────────────────────────────────────────
 plugins:
   - jekyll-seo-tag

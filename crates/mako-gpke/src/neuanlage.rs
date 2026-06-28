@@ -587,18 +587,12 @@ mod tests {
         } else {
             panic!("expected AntwortGesendet");
         }
-        let state = out
-            .events
-            .iter()
-            .fold(state, GpkeNeuanlageWorkflow::apply);
+        let state = out.events.iter().fold(state, GpkeNeuanlageWorkflow::apply);
         assert!(matches!(state, NeuanlageState::AntwortGesendet { .. }));
 
         // Step 3: activate
         let out = GpkeNeuanlageWorkflow::handle(&state, NeuanlageCommand::Aktivieren).unwrap();
-        let state = out
-            .events
-            .iter()
-            .fold(state, GpkeNeuanlageWorkflow::apply);
+        let state = out.events.iter().fold(state, GpkeNeuanlageWorkflow::apply);
         assert!(matches!(state, NeuanlageState::Aktiviert(_)));
     }
 
@@ -628,10 +622,7 @@ mod tests {
         } else {
             panic!("expected AntwortGesendet");
         }
-        let state = out
-            .events
-            .iter()
-            .fold(state, GpkeNeuanlageWorkflow::apply);
+        let state = out.events.iter().fold(state, GpkeNeuanlageWorkflow::apply);
         assert!(matches!(state, NeuanlageState::Rejected { .. }));
     }
 

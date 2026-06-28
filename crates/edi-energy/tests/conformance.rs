@@ -17,6 +17,7 @@
 //!
 //! ```json
 //! { "expected_rule_prefixes": ["SEM-UTILMD-MALO-FORMAT"] }
+#![allow(dead_code, unused_imports)]
 use std::path::{Path, PathBuf};
 
 #[cfg(any(

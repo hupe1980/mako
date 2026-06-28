@@ -1,4 +1,4 @@
-//! [`MessageAdapter`] registries for all domain workflows.
+//! `MessageAdapter` registries for all domain workflows.
 //!
 //! This module is the **wiring layer** between raw parsed `AnyMessage` values
 //! (produced by `edi-energy`) and typed domain commands (consumed by each
