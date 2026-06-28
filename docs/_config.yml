@@ -5,11 +5,11 @@ description: >-
   runtime · AS4 transport · regulatory deadlines.
 tagline: "EDI@Energy for Rust — production-grade MaKo workflows"
 url: "https://hupe1980.github.io"
-baseurl: "/edi-energy-rs"
+baseurl: "/mako"
 lang: en
 
 # ── Repository ────────────────────────────────────────────────────────────────
-repository: hupe1980/edi-energy-rs
+repository: hupe1980/mako
 github_username: hupe1980
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
@@ -44,7 +44,7 @@ search:
 # ── Aux links (top right) ─────────────────────────────────────────────────────
 aux_links:
   "GitHub":
-    - "https://github.com/hupe1980/edi-energy-rs"
+    - "https://github.com/hupe1980/mako"
   "crates.io":
     - "https://crates.io/crates/edi-energy"
 
@@ -52,11 +52,11 @@ aux_links_new_tab: true
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 footer_content: >-
-  <a href="https://github.com/hupe1980/edi-energy-rs/blob/main/LICENSE-MIT">MIT</a>
+  <a href="https://github.com/hupe1980/mako/blob/main/LICENSE-MIT">MIT</a>
   or
-  <a href="https://github.com/hupe1980/edi-energy-rs/blob/main/LICENSE-APACHE">Apache 2.0</a>
+  <a href="https://github.com/hupe1980/mako/blob/main/LICENSE-APACHE">Apache 2.0</a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/hupe1980/edi-energy-rs/blob/main/CHANGELOG.md">Changelog</a>
+  <a href="https://github.com/hupe1980/mako/blob/main/CHANGELOG.md">Changelog</a>
   &nbsp;·&nbsp;
   Conforms to <a href="https://www.edi-energy.de/">BDEW EDI@Energy</a>
 
@@ -108,7 +108,7 @@ twitter:
 social:
   name: mako
   links:
-    - "https://github.com/hupe1980/edi-energy-rs"
+    - "https://github.com/hupe1980/mako"
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 defaults:

@@ -4,6 +4,9 @@
 //! messages produce clean reports and invalid messages produce the expected
 //! rule ID in their findings.
 
+// Helpers and imports are only used inside feature-gated test fns.
+#![allow(dead_code, unused_imports)]
+
 use edi_energy::{EdiEnergyMessage, Platform};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

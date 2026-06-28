@@ -1,7 +1,9 @@
 ---
 layout: default
 title: Getting Started
-nav_order: 2mermaid: truedescription: >
+nav_order: 2
+mermaid: true
+description: >
   Step-by-step guide to integrating edi-energy and mako-engine into your
   Rust application — EDIFACT parsing, AHB validation, and running your
   first MaKo workflow.
