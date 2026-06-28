@@ -240,7 +240,7 @@ async fn handle_put_record<S: DirectoryServiceHandler + Clone>(
             );
             resp
         }
-        Ok(PutRecordResponse::NotSupported) => StatusCode::METHOD_NOT_ALLOWED.into_response(),
+        Ok(PutRecordResponse::NotSupported) => StatusCode::NOT_IMPLEMENTED.into_response(),
         Err(e) => service_error(e),
     }
 }

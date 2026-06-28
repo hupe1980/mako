@@ -3,10 +3,10 @@
 /// # Quick start
 ///
 /// ```no_run
-/// use edi_energy::{parse, EdiEnergyMessage};
+/// use edi_energy::{Platform, EdiEnergyMessage};
 ///
 /// let input = std::fs::read("message.edi").unwrap();
-/// let msg = parse(&input).unwrap();
+/// let msg = Platform::with_all_profiles().parse(&input).unwrap();
 /// if let Some(mt) = msg.try_message_type() { println!("type: {}", mt.as_str()); }
 /// let report = msg.validate().unwrap();
 /// println!("valid: {}", report.is_valid());
@@ -101,6 +101,19 @@ pub struct ParseConfig {
     /// lightweight messages inside the per-message limits can otherwise consume
     /// unbounded memory.
     pub max_messages_per_interchange: Option<usize>,
+    /// Maximum number of segments allowed within a single EDIFACT message (UNH…UNT pair).
+    ///
+    /// Defaults to `Some(500)`.  Set to `None` to disable the limit for
+    /// trusted, size-bounded sources only.
+    ///
+    /// This limit acts as the primary per-message `DoS` defence: an adversary
+    /// who constructs a valid interchange with one very deep message can
+    /// otherwise drive segment allocations up to the interchange-wide
+    /// `max_segments` ceiling (default 10,000) within a single UNH/UNT pair.
+    /// At 500 segments/message × 1,000 messages the interchange limit still
+    /// binds first; this field provides defence-in-depth for the per-message
+    /// allocation cost.
+    pub max_segments_per_message: Option<usize>,
     /// Reference date used for profile validity lookups during `validate()`.
     ///
     /// When `None` (the default), `time::OffsetDateTime::now_utc().date()` is
@@ -125,6 +138,7 @@ impl Default for ParseConfig {
             max_segments: Some(10_000),
             max_input_bytes: Some(10 * 1024 * 1024),
             max_messages_per_interchange: Some(1_000),
+            max_segments_per_message: Some(500),
             reference_date: None,
         }
     }
@@ -150,28 +164,6 @@ impl ParseConfig {
         }
         cfg
     }
-}
-
-/// Parse a single EDI@Energy message from an in-memory byte slice.
-///
-/// The byte slice must contain exactly one EDIFACT message (UNB…UNZ envelope
-/// with a single UNH…UNT message). If the byte slice contains multiple messages,
-/// use [`parse_interchange`] instead.
-///
-/// # Errors
-///
-/// Returns `Err` when the input is not valid EDIFACT syntax or the message type
-/// is unknown / compiled out.
-#[cfg_attr(
-    feature = "tracing",
-    tracing::instrument(skip(input), fields(bytes = input.len()))
-)]
-pub fn parse(input: &[u8]) -> Result<AnyMessage, Error> {
-    parse_with_registry(
-        input,
-        ParseConfig::default(),
-        crate::registry::ReleaseRegistry::global(),
-    )
 }
 
 /// Parse only the UNH/BGM envelope fields from a byte slice, **without**
@@ -202,60 +194,56 @@ pub fn parse_envelope_only(input: &[u8]) -> Result<crate::light_message::LightMe
     )
 }
 
+/// Parse a single EDIFACT message from a byte slice using the global registry.
+///
+/// Applies the default [`ParseConfig`] limits.  For custom limits or a custom
+/// registry, use [`Parser`] directly.
+///
+/// # Errors
+///
+/// Returns `Err` on EDIFACT syntax errors, unknown message type, or profile
+/// lookup failure.
+pub fn parse(input: &[u8]) -> Result<AnyMessage, Error> {
+    parse_with_registry(
+        input,
+        ParseConfig::default(),
+        crate::registry::ReleaseRegistry::global(),
+    )
+}
+
 /// Parse a single message using an explicit registry.
 ///
 /// Used by [`Platform::parse`] to avoid the global-registry singleton.
-/// Free functions (`parse`) delegate to this with
-/// [`ReleaseRegistry::global()`].
 pub(crate) fn parse_with_registry(
     input: &[u8],
     config: ParseConfig,
     registry: &crate::registry::ReleaseRegistry,
 ) -> Result<AnyMessage, Error> {
+    let per_msg_limit = config.max_segments_per_message;
     let cfg = config.to_reader_config();
     let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(input, cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
+    if let Some(lim) = per_msg_limit {
+        let actual = segments.len();
+        if actual > lim {
+            return Err(Error::TooManySegmentsInMessage { limit: lim, actual });
+        }
+    }
     dispatch_message(segments, registry)
 }
 
-/// Parse all messages from an EDIFACT interchange (UNB…UNZ envelope containing
-/// multiple UNH…UNT messages).
+/// Parse all messages from an interchange using the global registry.
 ///
-/// The default [`ParseConfig`] is applied, which enforces a limit of
-/// **1 000 messages per interchange** ([`ParseConfig::default`] sets
-/// `max_messages_per_interchange = Some(1_000)`).  Use [`Parser::with_config`]
-/// to raise or remove this limit for large interchanges.
+/// Parse all EDIFACT messages from an interchange reader using the global registry.
 ///
-/// Returns a lazy iterator yielding one [`AnyMessage`] per message window.
-/// An empty interchange (no messages) produces an empty iterator.
-///
-/// Each item is a `Result` — errors are surfaced per-message rather than
-/// terminating the whole parse.  Collect to `Result<Vec<_>, _>` to fail fast,
-/// or process each `Result` individually to skip bad messages.
-///
-/// # Examples
-///
-/// ```no_run
-/// use edi_energy::{parse_interchange, EdiEnergyMessage};
-///
-/// let input = std::io::Cursor::new(b"UNB+UNOC:3+S:14+R:14+200101:0900+1'UNH+1+UTILMD:D:11A:UN:5.5.3a'BGM+E03+00011001+9'UNT+3+1'UNZ+1+1'");
-/// for msg in parse_interchange(input) {
-///     let msg = msg?;
-///     if let Some(mt) = msg.try_message_type() { println!("type: {}", mt.as_str()); }
-/// }
-/// # Ok::<(), edi_energy::Error>(())
-/// ```
+/// Applies the default [`ParseConfig`] limits.  For custom limits, use
+/// [`Parser::parse_interchange`].
 ///
 /// # Errors
 ///
-/// Each iterator item is `Result<AnyMessage, Error>`.
-/// - [`Error::Parse`] — I/O or EDIFACT syntax error.
-/// - [`Error::TooManyMessages`] — interchange contains more messages than
-///   `ParseConfig::max_messages_per_interchange` (default: 1 000).  The
-///   item at position `limit` is the first to return this error; the iterator
-///   is not fused and will continue returning `TooManyMessages` for subsequent
-///   items.  Use [`Parser::with_config`] with a higher limit if needed.
+/// Each item in the iterator is a `Result`; parse errors or unknown message
+/// types are surfaced per-message rather than aborting the whole interchange.
 pub fn parse_interchange(reader: impl Read) -> impl Iterator<Item = Result<AnyMessage, Error>> {
     parse_interchange_with_registry(reader, ParseConfig::default())
 }
@@ -279,13 +267,14 @@ pub(crate) fn parse_interchange_with_registry(
 ///
 /// Eliminates the duplicate `max_messages_per_interchange` / `map` logic that
 /// previously appeared in both `parse_interchange_with_registry` and
-/// `parse_interchange_with_arc_registry` (F-020).
+/// `parse_interchange_with_arc_registry`.
 pub(crate) fn parse_interchange_impl(
     reader: impl Read,
     config: ParseConfig,
     registry: std::sync::Arc<crate::registry::ReleaseRegistry>,
 ) -> impl Iterator<Item = Result<AnyMessage, Error>> {
     let limit = config.max_messages_per_interchange;
+    let per_msg_limit = config.max_segments_per_message;
     let cfg = config.to_reader_config();
     MessageWindowsIter::new(from_bufread_stream_with_config(BufReader::new(reader), cfg))
         .enumerate()
@@ -296,6 +285,12 @@ pub(crate) fn parse_interchange_impl(
                 }
             }
             let window = window.map_err(Error::Parse)?;
+            if let Some(lim) = per_msg_limit {
+                let actual = window.segments.len();
+                if actual > lim {
+                    return Err(Error::TooManySegmentsInMessage { limit: lim, actual });
+                }
+            }
             dispatch_message(window.segments, &registry)
         })
 }
@@ -374,9 +369,9 @@ pub(crate) fn parse_interchange_buffered_impl(
 /// `Parser` is the primary API for parsing with custom [`ParseConfig`].
 /// Construct with [`Parser::new`] (default config) or [`Parser::with_config`].
 ///
-/// The free functions [`parse`] and [`parse_interchange`] are convenience
-/// wrappers around `Parser::new()` for the default-config case.  Use `Parser`
-/// directly whenever you need custom segment limits, a reference date, or the
+/// The [`Parser`] API is the primary API for parsing with custom [`ParseConfig`].
+/// Construct with [`Parser::new`] (default config) or [`Parser::with_config`].
+/// Use `Parser` directly whenever you need custom segment limits, a reference date, or the
 /// more advanced interchange paths.
 ///
 /// # Example
@@ -713,6 +708,32 @@ fn parse_interchange_full_from_segments(
     segments: Vec<OwnedSegment>,
     config: &ParseConfig,
 ) -> Result<crate::interchange::ParsedInterchange, Error> {
+    parse_interchange_full_from_segments_with_registry(
+        segments,
+        config,
+        std::sync::Arc::clone(crate::registry::ReleaseRegistry::global_arc()),
+    )
+}
+
+/// Arc-registry variant used by [`Platform::parse_interchange_full`].
+pub(crate) fn parse_interchange_full_with_arc_registry(
+    data: &[u8],
+    config: ParseConfig,
+    registry: std::sync::Arc<crate::registry::ReleaseRegistry>,
+) -> Result<crate::interchange::ParsedInterchange, Error> {
+    let cfg = config.to_reader_config();
+    let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(data, cfg)
+        .collect::<Result<_, _>>()
+        .map_err(Error::Parse)?;
+    parse_interchange_full_from_segments_with_registry(segments, &config, registry)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn parse_interchange_full_from_segments_with_registry(
+    segments: Vec<OwnedSegment>,
+    config: &ParseConfig,
+    registry: std::sync::Arc<crate::registry::ReleaseRegistry>,
+) -> Result<crate::interchange::ParsedInterchange, Error> {
     use crate::interchange::{InterchangeHeader, MessageEnvelope, ParsedInterchange};
 
     // ── Parse UNB ──────────────────────────────────────────────────────────────
@@ -767,11 +788,14 @@ fn parse_interchange_full_from_segments(
     };
 
     // ── Parse UNZ ─────────────────────────────────────────────────────────────
-    let unz = segments.iter().rfind(|s| s.tag == "UNZ");
-    let (trailer_ref, declared_message_count) = match unz {
-        Some(unz) => {
-            let count: usize = unz.element_str(0).and_then(|s| s.parse().ok()).unwrap_or(0);
-            let tref = unz.element_str(1).unwrap_or("").to_owned();
+    let unz_seg = segments.iter().rfind(|s| s.tag == "UNZ");
+    let (trailer_ref, declared_message_count) = match unz_seg {
+        Some(unz_seg) => {
+            let count: usize = unz_seg
+                .element_str(0)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let tref = unz_seg.element_str(1).unwrap_or("").to_owned();
             (tref.into_boxed_str(), count)
         }
         None => ("".into(), 0),
@@ -784,15 +808,14 @@ fn parse_interchange_full_from_segments(
 
     let mut messages: Vec<MessageEnvelope> = Vec::new();
     for (index, window_result) in msg_iter.enumerate() {
-        // F-012: enforce max_messages_per_interchange before parsing the next message.
+        // enforce max_messages_per_interchange before parsing the next message.
         if let Some(limit) = config.max_messages_per_interchange {
             if index >= limit {
                 return Err(Error::TooManyMessages { limit });
             }
         }
         let window = window_result.map_err(Error::Parse)?;
-        let message =
-            dispatch_message(window.segments, crate::registry::ReleaseRegistry::global())?;
+        let message = dispatch_message(window.segments, &registry)?;
         messages.push(MessageEnvelope {
             message,
             header: header.clone(),
@@ -800,7 +823,7 @@ fn parse_interchange_full_from_segments(
         });
     }
 
-    // F-013: validate UNZ control reference matches UNB control reference.
+    // validate UNZ control reference matches UNB control reference.
     if !trailer_ref.is_empty() && trailer_ref.as_ref() != header.control_ref.as_ref() {
         return Err(Error::InterchangeRefMismatch {
             unb_ref: header.control_ref.to_string(),
@@ -808,7 +831,7 @@ fn parse_interchange_full_from_segments(
         });
     }
 
-    // F-013: validate UNZ message count matches actual message count.
+    // validate UNZ message count matches actual message count.
     if declared_message_count != 0 && declared_message_count != messages.len() {
         return Err(Error::InterchangeCountMismatch {
             declared: declared_message_count,

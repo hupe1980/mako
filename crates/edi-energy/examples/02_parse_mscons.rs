@@ -21,7 +21,7 @@
 //! ```
 #![allow(clippy::result_large_err)]
 
-use edi_energy::{AnyMessage, EdiEnergyMessage, parse};
+use edi_energy::{AnyMessage, EdiEnergyMessage, Platform};
 
 const MSCONS_BYTES: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+240115:0800+INTER-MS-001'\
@@ -45,7 +45,7 @@ UNT+17+MSG-002'\
 UNZ+1+INTER-MS-001'";
 
 fn main() -> Result<(), edi_energy::Error> {
-    let msg = parse(MSCONS_BYTES)?;
+    let msg = Platform::with_all_profiles().parse(MSCONS_BYTES)?;
 
     println!(
         "Message type : {}",
@@ -105,7 +105,7 @@ fn main() -> Result<(), edi_energy::Error> {
                         .as_ref()
                         .and_then(|p| p.item_number.as_deref())
                         .unwrap_or("-");
-                    println!("    [LI {}] OBIS: {}", li_i, obis);
+                    println!("    [LI {li_i}] OBIS: {obis}");
 
                     for qty_entry in &item.quantities {
                         let value_f64 = qty_entry.qty.value_f64().unwrap_or(f64::NAN);
@@ -135,7 +135,7 @@ fn main() -> Result<(), edi_energy::Error> {
 
     // Serialize and verify round-trip
     let bytes = msg.serialize()?;
-    let reparsed = parse(&bytes)?;
+    let reparsed = Platform::with_all_profiles().parse(&bytes)?;
     assert_eq!(reparsed.try_message_type(), msg.try_message_type());
     println!("\nRound-trip   : OK ({} bytes)", bytes.len());
 

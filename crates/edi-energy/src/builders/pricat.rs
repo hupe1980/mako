@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 
 use edifact_rs::Writer;
 
+use crate::AgencyCode;
 use crate::{Error, Release};
 
 use super::{Set, Unset, bytes_to_segments};
@@ -193,6 +194,8 @@ struct PricatBuilderInner {
     release: Release,
     sender_id: Option<String>,
     receiver_id: Option<String>,
+    sender_agency: AgencyCode,
+    receiver_agency: AgencyCode,
     message_ref: String,
     document_code: String,
     document_id: Option<String>,
@@ -251,6 +254,8 @@ impl PricatBuilder<Unset, Unset> {
                 release,
                 sender_id: None,
                 receiver_id: None,
+                sender_agency: AgencyCode::Bdew,
+                receiver_agency: AgencyCode::Bdew,
                 message_ref: "1".to_owned(),
                 document_code: "Z04".to_owned(),
                 document_id: None,
@@ -280,6 +285,23 @@ impl<S, R> PricatBuilder<S, R> {
     pub fn receiver(mut self, id: impl Into<String>) -> PricatBuilder<S, Set> {
         self.inner.receiver_id = Some(id.into());
         self.transition()
+    }
+
+    /// Override the agency code for the sender's party identifier.
+    ///
+    /// Default: [`AgencyCode::Bdew`] (`"293"`). Use [`AgencyCode::Entso`] (`"305"`)
+    /// for TSO/ÜNB parties that carry a 16-char EIC code.
+    pub fn sender_agency(mut self, agency: crate::AgencyCode) -> Self {
+        self.inner.sender_agency = agency;
+        self
+    }
+
+    /// Override the agency code for the receiver's party identifier.
+    ///
+    /// Default: [`AgencyCode::Bdew`] (`"293"`).
+    pub fn receiver_agency(mut self, agency: crate::AgencyCode) -> Self {
+        self.inner.receiver_agency = agency;
+        self
     }
 
     /// Set the BGM document identifier.
@@ -345,10 +367,20 @@ impl<S, R> PricatBuilder<S, R> {
         }
         emit_seg!(w, "DTM", &dtm_val);
         if let Some(id) = &self.inner.sender_id {
-            emit_seg!(w, "NAD", "MS", &format!("{id}::293"));
+            emit_seg!(
+                w,
+                "NAD",
+                "MS",
+                &self.inner.sender_agency.format_nad_c082(id)
+            );
         }
         if let Some(id) = &self.inner.receiver_id {
-            emit_seg!(w, "NAD", "MR", &format!("{id}::293"));
+            emit_seg!(
+                w,
+                "NAD",
+                "MR",
+                &self.inner.receiver_agency.format_nad_c082(id)
+            );
         }
         for (group_idx, group) in self.inner.price_groups.iter().enumerate() {
             emit_seg!(w, "PGI", &group.group_type);

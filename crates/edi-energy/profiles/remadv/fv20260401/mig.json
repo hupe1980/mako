@@ -1,0 +1,578 @@
+{
+  "schema_version": 1,
+  "message_type": "REMADV",
+  "release": "2.9f",
+  "valid_from": "2026-04-01",
+  "ordering_hint": [
+    "UNH",
+    "BGM",
+    "DTM",
+    "RFF",
+    "NAD",
+    "CTA",
+    "COM",
+    "CUX",
+    "DOC",
+    "MOA",
+    "DTM",
+    "RFF",
+    "AJT",
+    "FTX",
+    "DLI",
+    "UNS",
+    "MOA",
+    "UNT"
+  ],
+  "segments": [
+    {
+      "tag": "UNH",
+      "name": "Message Header",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0062",
+          "status": "M"
+        },
+        {
+          "id": "S009",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "BGM",
+      "name": "Beginning of Message",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "M"
+        },
+        {
+          "id": "C106",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {
+        "1001": [
+          "239"
+        ]
+      }
+    },
+    {
+      "tag": "DTM",
+      "name": "Date/Time/Period (Dokumentendatum)",
+      "mandatory": true,
+      "max_occurrences": 5,
+      "elements": [
+        {
+          "id": "C507",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {
+        "2005": [
+          "137"
+        ]
+      }
+    },
+    {
+      "tag": "RFF",
+      "name": "Reference (Prüfidentifikator)",
+      "mandatory": true,
+      "max_occurrences": 5,
+      "elements": [
+        {
+          "id": "C506",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {
+        "1153": [
+          "Z13"
+        ]
+      }
+    },
+    {
+      "tag": "NAD",
+      "name": "Name and Address",
+      "mandatory": true,
+      "max_occurrences": 2,
+      "elements": [
+        {
+          "id": "3035",
+          "status": "M"
+        },
+        {
+          "id": "C082",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {
+        "3035": [
+          "MS",
+          "MR"
+        ]
+      }
+    },
+    {
+      "tag": "CTA",
+      "name": "Contact Information",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "3139",
+          "status": "C"
+        },
+        {
+          "id": "C056",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "COM",
+      "name": "Communication Contact",
+      "mandatory": false,
+      "max_occurrences": 5,
+      "elements": [
+        {
+          "id": "C076",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "CUX",
+      "name": "Currencies (Zahlungswährung)",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C504",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {
+        "6343": [
+          "11"
+        ]
+      }
+    },
+    {
+      "tag": "DOC",
+      "name": "Document/Message Details (Rückmeldung)",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "C002",
+          "status": "M"
+        },
+        {
+          "id": "C503",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "MOA",
+      "name": "Monetary Amount",
+      "mandatory": true,
+      "max_occurrences": 5,
+      "elements": [
+        {
+          "id": "C516",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "AJT",
+      "name": "Adjustment Details (Abweichungsgrund)",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "4465",
+          "status": "M"
+        },
+        {
+          "id": "1229",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "FTX",
+      "name": "Free Text",
+      "mandatory": false,
+      "max_occurrences": 5,
+      "elements": [
+        {
+          "id": "4451",
+          "status": "M"
+        },
+        {
+          "id": "C108",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "DLI",
+      "name": "Document Line Identification",
+      "mandatory": false,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "1082",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "UNS",
+      "name": "Section Control",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0081",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "UNT",
+      "name": "Message Trailer",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "0074",
+          "status": "M"
+        },
+        {
+          "id": "0062",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
+    }
+  ],
+  "segment_groups": [
+    {
+      "id": "SG1",
+      "trigger_segment": "NAD",
+      "mandatory": true,
+      "max_occurrences": 99,
+      "segments": [
+        {
+          "tag": "NAD",
+          "name": "Name and Address (MS/MR)",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "3035",
+              "status": "M"
+            },
+            {
+              "id": "C082",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG3",
+          "trigger_segment": "CTA",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "segments": [
+            {
+              "tag": "CTA",
+              "name": "Contact Information",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "3139",
+                  "status": "C"
+                },
+                {
+                  "id": "C056",
+                  "status": "C"
+                }
+              ],
+              "qualifier_restrictions": {}
+            },
+            {
+              "tag": "COM",
+              "name": "Communication Contact",
+              "mandatory": false,
+              "max_occurrences": 5,
+              "elements": [
+                {
+                  "id": "C076",
+                  "status": "M"
+                }
+              ],
+              "qualifier_restrictions": {}
+            }
+          ],
+          "groups": []
+        }
+      ]
+    },
+    {
+      "id": "SG4",
+      "trigger_segment": "CUX",
+      "mandatory": true,
+      "max_occurrences": 5,
+      "segments": [
+        {
+          "tag": "CUX",
+          "name": "Currencies",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C504",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {
+            "6343": [
+              "11"
+            ]
+          }
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "SG5",
+      "trigger_segment": "DOC",
+      "mandatory": true,
+      "max_occurrences": 999999,
+      "segments": [
+        {
+          "tag": "DOC",
+          "name": "Document/Message Details",
+          "mandatory": true,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "C002",
+              "status": "M"
+            },
+            {
+              "id": "C503",
+              "status": "C"
+            }
+          ],
+          "qualifier_restrictions": {}
+        },
+        {
+          "tag": "MOA",
+          "name": "Monetary Amount",
+          "mandatory": true,
+          "max_occurrences": 5,
+          "elements": [
+            {
+              "id": "C516",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {}
+        },
+        {
+          "tag": "DTM",
+          "name": "Date/Time/Period (Rechnungsdatum)",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "elements": [
+            {
+              "id": "C507",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {}
+        },
+        {
+          "tag": "RFF",
+          "name": "Reference (COMDIS)",
+          "mandatory": false,
+          "max_occurrences": 5,
+          "elements": [
+            {
+              "id": "C506",
+              "status": "M"
+            }
+          ],
+          "qualifier_restrictions": {}
+        }
+      ],
+      "groups": [
+        {
+          "id": "SG7",
+          "trigger_segment": "AJT",
+          "mandatory": false,
+          "max_occurrences": 100,
+          "segments": [
+            {
+              "tag": "AJT",
+              "name": "Adjustment Details",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "4465",
+                  "status": "M"
+                },
+                {
+                  "id": "1229",
+                  "status": "C"
+                }
+              ],
+              "qualifier_restrictions": {}
+            },
+            {
+              "tag": "RFF",
+              "name": "Reference (Rechnung)",
+              "mandatory": false,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "C506",
+                  "status": "M"
+                }
+              ],
+              "qualifier_restrictions": {}
+            },
+            {
+              "tag": "FTX",
+              "name": "Free Text",
+              "mandatory": false,
+              "max_occurrences": 5,
+              "elements": [
+                {
+                  "id": "4451",
+                  "status": "M"
+                },
+                {
+                  "id": "C108",
+                  "status": "C"
+                }
+              ],
+              "qualifier_restrictions": {}
+            }
+          ],
+          "groups": []
+        },
+        {
+          "id": "SG10",
+          "trigger_segment": "DLI",
+          "mandatory": false,
+          "max_occurrences": 9999,
+          "segments": [
+            {
+              "tag": "DLI",
+              "name": "Document Line Identification",
+              "mandatory": true,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "1082",
+                  "status": "M"
+                }
+              ],
+              "qualifier_restrictions": {}
+            }
+          ],
+          "groups": [
+            {
+              "id": "SG12",
+              "trigger_segment": "AJT",
+              "mandatory": true,
+              "max_occurrences": 10,
+              "segments": [
+                {
+                  "tag": "AJT",
+                  "name": "Adjustment Details (Position)",
+                  "mandatory": true,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "4465",
+                      "status": "M"
+                    },
+                    {
+                      "id": "1229",
+                      "status": "C"
+                    }
+                  ],
+                  "qualifier_restrictions": {}
+                },
+                {
+                  "tag": "RFF",
+                  "name": "Reference (Rechnung/Bestellung)",
+                  "mandatory": false,
+                  "max_occurrences": 1,
+                  "elements": [
+                    {
+                      "id": "C506",
+                      "status": "M"
+                    }
+                  ],
+                  "qualifier_restrictions": {}
+                },
+                {
+                  "tag": "FTX",
+                  "name": "Free Text (Positionsebene)",
+                  "mandatory": false,
+                  "max_occurrences": 5,
+                  "elements": [
+                    {
+                      "id": "4451",
+                      "status": "M"
+                    },
+                    {
+                      "id": "C108",
+                      "status": "C"
+                    }
+                  ],
+                  "qualifier_restrictions": {}
+                }
+              ],
+              "groups": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "ahb_revision": "1.0",
+  "source_document": "REMADV MIG 2.9e / AHB 2.9f, Stand 01.04.2026 — SCAFFOLD: verify against BDEW publication before production use"
+}

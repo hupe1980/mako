@@ -1,3 +1,13 @@
+---
+layout: default
+title: Platform
+nav_order: 13
+parent: Reference
+description: >
+  Use Platform for multi-tenant gateways, test isolation, hot-reload, and
+  custom DoS limits. Alternative to the global ReleaseRegistry singleton.
+---
+
 # Platform Guide
 
 The `Platform` struct provides explicit, isolated instances of the EDI@Energy processing pipeline. This is the recommended approach for multi-tenant servers, integration tests, and any application that needs more than one profile configuration at the same time.
@@ -168,6 +178,8 @@ for result in platform.parse_interchange(reader) {
 
 ## See Also
 
+- [Getting Started](./getting-started.md)
+- [Process Engine Guide](./engine.md) — `mako-engine` runtime, stores, deadlines, outbox
 - [Parsing Guide](./parsing.md)
 - [Validation Guide](./validation.md)
 - [Release Lifecycle](./release-lifecycle.md)

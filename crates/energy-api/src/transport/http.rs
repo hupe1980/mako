@@ -113,7 +113,7 @@ pub fn build_client(config: &TlsConfig) -> Result<Client, Error> {
     if let (Some(cert_pem), Some(key_pem)) = (&config.client_cert_pem, &config.client_key_pem) {
         // reqwest::Identity::from_pem accepts a combined PEM buffer
         // (certificate chain followed by private key, or vice versa).
-        let combined = format!("{}\n{}", cert_pem, key_pem);
+        let combined = format!("{cert_pem}\n{key_pem}");
         let identity = reqwest::Identity::from_pem(combined.as_bytes())
             .map_err(|e| Error::Transport(format!("mTLS identity PEM: {e}")))?;
         builder = builder.identity(identity);

@@ -210,7 +210,7 @@ struct PruefidentifikatorEntry {
 /// For example: "within each SG10 occurrence, if QTY+67 is present, then
 /// STS+Z32 must also be present in that same SG10 occurrence."
 ///
-/// This directly resolves F-001: the `segs` parameter passed to the generated
+/// This directly resolves  the `segs` parameter passed to the generated
 /// `with_scoped_group_rule_fn` closure is already the per-instance sub-slice
 /// (edifact-rs `walk_group_tree` slices via `total_span` before calling the
 /// closure), so no further scoping is needed.
@@ -233,7 +233,7 @@ struct AhbGroupRule {
     ///
     /// Each rule is evaluated against `segs`, which is already the per-instance
     /// sub-slice within the `with_scoped_group_rule_fn` closure.  This is the
-    /// primary mechanism for F-001 (intra-SG conditional rule evaluation).
+    /// primary mechanism for intra-SG conditional rule evaluation.
     ///
     /// Example: within each SG10, "if QTY+67 → STS+Z32 must be present".
     #[serde(default)]
@@ -459,7 +459,7 @@ struct AhbFieldRule {
     allowed_values: Vec<String>,
     /// 0-based element index within the segment.
     /// Must be set explicitly; there is no default to avoid silently checking
-    /// the wrong element when the DE is not at position 0 (F-021).
+    /// the wrong element when the DE is not at position 0.
     element_index: usize,
 }
 
@@ -541,7 +541,7 @@ pub fn run(workspace_root: &str, args: &[String]) {
         .join("src")
         .join("generated");
 
-    // ── Pre-codegen JSON Schema validation (F-015) ────────────────────────────
+    // ── Pre-codegen JSON Schema validation ────────────────────────────
     // Validate all mig.json / ahb.json / codelists.json files against the JSON
     // Schema in profiles/schemas/ before generating any Rust code.  This catches
     // type mismatches and unknown fields that serde's deny_unknown_fields would
@@ -588,10 +588,7 @@ pub fn run(workspace_root: &str, args: &[String]) {
     if let Some(ref filter) = message_type_filter {
         profiles.retain(|p| p.message_type.to_uppercase() == *filter);
         if profiles.is_empty() {
-            eprintln!(
-                "xtask codegen: no profiles found for message type {:?}",
-                filter
-            );
+            eprintln!("xtask codegen: no profiles found for message type {filter:?}");
             std::process::exit(1);
         }
     }
@@ -620,7 +617,7 @@ pub fn run(workspace_root: &str, args: &[String]) {
     }
 
     // Guard: same-wire-code pairs must have an explicit `supersedes_directory` link.
-    // This enforces the AHB correction policy documented in F-001.
+    // This enforces the AHB correction policy enforced by the codegen pipeline.
     {
         // Group profiles by (message_type, release) to find same-wire-code pairs.
         let mut wire_code_map: std::collections::HashMap<(String, String), Vec<&ProfileData>> =
@@ -647,7 +644,7 @@ pub fn run(workspace_root: &str, args: &[String]) {
                         "  error: {msg_type} {wire_code}: profile `{}` (valid_from {:?}) \
                          supersedes `{}` (valid_from {:?}) but does not declare \
                          `supersedes_directory: {:?}` in mig.json — add this field to \
-                         document the AHB correction chain (see F-001)",
+                         document the AHB correction chain (see",
                         newer.folder_name,
                         newer.valid_from,
                         older.folder_name,
@@ -694,7 +691,7 @@ pub fn run(workspace_root: &str, args: &[String]) {
     if check_mode {
         // --check mode requires rustfmt for a byte-for-byte comparison with the
         // on-disk formatted files.  Fail loudly rather than silently skipping the
-        // comparison (F-022).
+        // comparison.
         let rustfmt_bin = which_rustfmt().unwrap_or_else(|| {
             eprintln!(
                 "error: rustfmt is required for `--check` mode but was not found.\n\
@@ -755,7 +752,7 @@ pub fn run(workspace_root: &str, args: &[String]) {
         }
 
         // Also verify message_type.rs has from_unh_code() arms for every registered message type.
-        // This catches the F-006 drift where a new profile is added but message_type.rs is not updated.
+        // This catches message-type/profile registration drift where a new profile is added but message_type.rs is not updated.
         let message_type_rs = PathBuf::from(workspace_root)
             .join("crates")
             .join("edi-energy")
@@ -770,18 +767,18 @@ pub fn run(workspace_root: &str, args: &[String]) {
             let mut dispatch_errors: Vec<String> = Vec::new();
             for mt in &known_types {
                 // Check that from_unh_code() has an arm for this type
-                let arm = format!("\"{}\"", mt);
+                let arm = format!("\"{mt}\"");
                 if !mt_src.contains(&arm) {
                     dispatch_errors.push(format!(
                         "  error: MessageType::from_unh_code() missing arm for {mt:?} — \
-                         add it to crates/edi-energy/src/message_type.rs (F-006)"
+                         add it to crates/edi-energy/src/message_type.rs"
                     ));
                 }
                 // Check that as_str() has an arm for this type
                 if !mt_src.contains(&format!("=> \"{mt}\"")) {
                     dispatch_errors.push(format!(
                         "  error: MessageType::as_str() missing arm for {mt:?} — \
-                         add it to crates/edi-energy/src/message_type.rs (F-006)"
+                         add it to crates/edi-energy/src/message_type.rs"
                     ));
                 }
             }
@@ -838,7 +835,7 @@ pub fn run(workspace_root: &str, args: &[String]) {
     // Format the generated files
     format_generated(&generated_dir);
 
-    // Verify message_type.rs dispatch coverage (F-006 guard).
+    // Verify message_type.rs dispatch coverage.
     // This is a warning-only check in normal mode; --check mode exits 1 on failure.
     if message_type_filter.is_none() {
         let message_type_rs = PathBuf::from(workspace_root)
@@ -851,10 +848,10 @@ pub fn run(workspace_root: &str, args: &[String]) {
             let known: std::collections::BTreeSet<String> =
                 all.iter().map(|p| p.message_type.to_uppercase()).collect();
             for mt in &known {
-                if !mt_src.contains(&format!("\"{}\"", mt)) {
+                if !mt_src.contains(&format!("\"{mt}\"")) {
                     eprintln!(
                         "  warning: MessageType::from_unh_code() may be missing arm for {mt:?} \
-                         — update crates/edi-energy/src/message_type.rs (F-006)"
+                         — update crates/edi-energy/src/message_type.rs"
                     );
                 }
             }
@@ -902,8 +899,7 @@ fn discover_profiles(profiles_dir: &Path) -> Vec<ProfileData> {
 
             if !mig_path.exists() || !ahb_path.exists() || !codelists_path.exists() {
                 eprintln!(
-                    "  warning: skipping {} {} — missing one or more JSON files",
-                    message_type, folder_name
+                    "  warning: skipping {message_type} {folder_name} — missing one or more JSON files"
                 );
                 continue;
             }
@@ -955,20 +951,18 @@ fn discover_profiles(profiles_dir: &Path) -> Vec<ProfileData> {
             ] {
                 if version < MIN_SCHEMA_VERSION {
                     eprintln!(
-                        "  error: {} {folder_name} {name} has schema_version {version} \
+                        "  error: {message_type} {folder_name} {name} has schema_version {version} \
                          (minimum is {MIN_SCHEMA_VERSION}) — update the profile JSON file \
-                         to at least schema_version {MIN_SCHEMA_VERSION}",
-                        message_type
+                         to at least schema_version {MIN_SCHEMA_VERSION}"
                     );
                     std::process::exit(1);
                 }
                 if version > MAX_SCHEMA_VERSION {
                     eprintln!(
-                        "  error: {} {folder_name} {name} has schema_version {version} \
+                        "  error: {message_type} {folder_name} {name} has schema_version {version} \
                          (maximum supported is {MAX_SCHEMA_VERSION}) — this profile was \
                          authored for a newer codegen; update xtask/src/codegen.rs to \
-                         support schema version {version}",
-                        message_type
+                         support schema version {version}"
                     );
                     std::process::exit(1);
                 }
@@ -976,7 +970,7 @@ fn discover_profiles(profiles_dir: &Path) -> Vec<ProfileData> {
 
             // Prefer the explicit `valid_from` field in mig.json over the directory-name
             // derivation.  The directory-name fallback exists only for legacy profiles
-            // created before F-020 added the explicit field.
+            // created before the explicit field was added.
             let valid_from = mig
                 .valid_from
                 .as_deref()
@@ -1361,7 +1355,7 @@ fn emit_profile_module(p: &ProfileData) -> String {
     // like "WiM", "GPKE", "MaBiS" that clippy wants in backticks.
     writeln!(out, "#![allow(clippy::doc_markdown)]").unwrap();
     writeln!(out).unwrap();
-    // Codegen schema version constant (F-040): enables runtime/CI detection of
+    // Codegen schema version constant: enables runtime/CI detection of
     // profiles that were generated by an incompatible codegen version.
     // The value matches the MAX_SCHEMA_VERSION accepted by this codegen.
     writeln!(
@@ -1374,6 +1368,10 @@ fn emit_profile_module(p: &ProfileData) -> String {
         "/// Compared against `mig.json` `schema_version` in CI to detect drift."
     )
     .unwrap();
+    // `#[allow(dead_code)]` is required because `const _: () = assert!(…)` in
+    // mod.rs references this constant, but the Rust dead_code lint does not
+    // track uses through anonymous const evaluation.
+    writeln!(out, "#[allow(dead_code)]").unwrap();
     writeln!(out, "pub(crate) const CODEGEN_SCHEMA_VERSION: u32 = 1;").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "use std::sync::{{Arc, LazyLock}};").unwrap();
@@ -1494,7 +1492,7 @@ fn collect_group_segments<'a>(group: &'a MigGroup, result: &mut Vec<&'a MigSegme
 }
 
 /// Collect the set of all segment tags that appear inside ANY segment group
-/// (at any nesting depth).  Used by F-010 fix to skip global cardinality rules
+/// (at any nesting depth).  Used by to skip global cardinality rules
 /// for tags that also appear in groups.
 fn collect_all_group_tags(groups: &[MigGroup]) -> std::collections::HashSet<String> {
     let mut tags = std::collections::HashSet::new();
@@ -1577,7 +1575,7 @@ fn emit_codelists_statics(out: &mut String, codelists: &CodelistsData) {
             if i > 0 {
                 write!(out, ", ").unwrap();
             }
-            write!(out, "{:?}", v).unwrap();
+            write!(out, "{v:?}").unwrap();
         }
         writeln!(out, "];").unwrap();
     }
@@ -1585,7 +1583,7 @@ fn emit_codelists_statics(out: &mut String, codelists: &CodelistsData) {
 }
 
 fn emit_is_code_valid(out: &mut String, _codelists: &CodelistsData) {
-    // F-026 fix: delegate to code_list() instead of duplicating match arms.
+    // delegate to code_list() instead of duplicating match arms.
     // code_list() already has the single authoritative per-DE dispatch;
     // `is_code_valid` just binary-searches the returned slice.
     // Unknown DE ids return None → treated as valid (open set assumption).
@@ -1604,7 +1602,7 @@ fn emit_is_code_valid(out: &mut String, _codelists: &CodelistsData) {
 }
 
 fn emit_suggest_code(out: &mut String, _codelists: &CodelistsData) {
-    // F-013 fix: use the `code` argument to find the lexicographically nearest valid code.
+    // use the `code` argument to find the lexicographically nearest valid code.
     // `partition_point` finds the first index where the sorted code list value >= `code`.
     // This is the closest valid code by lexicographic order — much more useful than
     // always returning the first code regardless of the invalid input.
@@ -1678,7 +1676,7 @@ fn emit_expected_components(out: &mut String, segments: &[&MigSegment]) {
     for (val, patterns) in &by_value {
         let joined = patterns
             .iter()
-            .map(|(tag, idx)| format!("({:?}, {})", tag, idx))
+            .map(|(tag, idx)| format!("({tag:?}, {idx})"))
             .collect::<Vec<_>>()
             .join(" | ");
         writeln!(out, "            {joined} => Some({val}),").unwrap();
@@ -1699,7 +1697,7 @@ fn emit_code_list_fn(out: &mut String, codelists: &CodelistsData) {
     writeln!(out, "        match de_id {{").unwrap();
     for de_id in codelists.lists.keys() {
         let const_name = format!("CODES_{}", de_id.replace('-', "_").to_uppercase());
-        writeln!(out, "            {:?} => Some({const_name}),", de_id).unwrap();
+        writeln!(out, "            {de_id:?} => Some({const_name}),").unwrap();
     }
     writeln!(out, "            _ => None,").unwrap();
     writeln!(out, "        }}").unwrap();
@@ -1733,7 +1731,7 @@ fn emit_directory_validator_fn(out: &mut String, message_type: &str, release: &s
     .unwrap();
     writeln!(
         out,
-        "    // Cached in a LazyLock so construction happens once per profile (F-019 fix)."
+        "    // Cached in a LazyLock so construction happens once per profile."
     )
     .unwrap();
     writeln!(
@@ -1934,7 +1932,7 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
 
     // Collect HEADER-ONLY segments with max_occurrences > 1.
     //
-    // F-010 fix: only emit global cardinality rules for segment tags that appear
+    // only emit global cardinality rules for segment tags that appear
     // EXCLUSIVELY in mig.segments (the top-level header) and NOT in any group.
     // Tags that appear in both the header and in groups (e.g. DTM in UTILMD)
     // cannot be correctly checked with a flat global count — any rule would
@@ -1953,7 +1951,7 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
         })
         .collect();
 
-    // Collect top-level groups that have mandatory inner segments (for F-004 fix).
+    // Collect top-level groups that have mandatory inner segments (for).
     // Only groups with mandatory non-trigger segments need a window rule.
     let groups_needing_window_rules: Vec<&MigGroup> = mig
         .segment_groups
@@ -1966,7 +1964,7 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
         })
         .collect();
 
-    // F-001 fix: detect trigger tags that are shared among multiple top-level groups.
+    // detect trigger tags that are shared among multiple top-level groups.
     //
     // When the same trigger tag (e.g. "NAD") is used by two or more top-level groups
     // (e.g. SG2 and SG5 in MSCONS), a flat segment count cannot distinguish which
@@ -1989,12 +1987,12 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
         m
     };
 
-    // Collect groups with a finite max_occurrences (F-007 fix: enforce group cardinality).
+    // Collect groups with a finite max_occurrences ( enforce group cardinality).
     // A group with max_occurrences == 1 is already handled by the segment-ordering rule
     // (trigger tag can only appear once), so we only emit explicit count rules for
     // groups that allow multiple occurrences.  Groups with max_occurrences == 0 are
     // treated as "no explicit limit" and skipped.
-    // F-001: only include groups whose trigger is unique at this level.
+    //  only include groups whose trigger is unique at this level.
     let groups_with_max: Vec<&MigGroup> = mig
         .segment_groups
         .iter()
@@ -2004,7 +2002,7 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
         })
         .collect();
 
-    // F-001: for shared triggers, collect combined max bounds (sum of all group maxes)
+    //  for shared triggers, collect combined max bounds (sum of all group maxes)
     // keyed by trigger tag.  Only emit when the combined bound is meaningfully finite.
     let combined_max_bounds: Vec<(&str, u32)> = {
         let mut by_trigger: std::collections::BTreeMap<&str, (u32, Vec<&str>)> =
@@ -2027,10 +2025,10 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
             .collect()
     };
 
-    // Collect groups that require a minimum number of occurrences (F-006 fix).
+    // Collect groups that require a minimum number of occurrences.
     // Effective minimum = explicit `min_occurrences` field, or 1 for mandatory groups.
     // Skip groups with effective min == 0 (nothing to enforce).
-    // F-001: only include groups whose trigger is unique at this level.
+    //  only include groups whose trigger is unique at this level.
     let groups_with_min: Vec<(&MigGroup, u32)> = mig
         .segment_groups
         .iter()
@@ -2047,7 +2045,7 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
         })
         .collect();
 
-    // F-001: for shared triggers, emit combined minimum checks (most restrictive mandatory group).
+    //  for shared triggers, emit combined minimum checks (most restrictive mandatory group).
     let combined_min_bounds: Vec<(&str, u32)> = {
         let mut by_trigger: std::collections::BTreeMap<&str, u32> =
             std::collections::BTreeMap::new();
@@ -2082,17 +2080,17 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
         emit_group_window_rule_fn(out, group, &pack_name);
     }
 
-    // Emit group cardinality rule functions (F-007: enforce group max_occurrences)
+    // Emit group cardinality rule functions (enforce group max_occurrences)
     for group in &groups_with_max {
         emit_group_cardinality_rule_fn(out, group, &pack_name);
     }
 
-    // Emit group minimum-occurrence rule functions (F-006: enforce mandatory group presence)
+    // Emit group minimum-occurrence rule functions (enforce mandatory group presence)
     for (group, min) in &groups_with_min {
         emit_group_min_occurrences_rule_fn(out, group, *min, &pack_name);
     }
 
-    // F-001: emit combined-bounds rules for trigger tags shared by multiple top-level groups.
+    //  emit combined-bounds rules for trigger tags shared by multiple top-level groups.
     for (trigger, combined_max) in &combined_max_bounds {
         emit_group_combined_max_rule_fn(out, trigger, *combined_max, &pack_name);
     }
@@ -2101,7 +2099,7 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
     }
 
     // Emit segment-ordering rule (Layer 3.5)
-    // F-002 fix: sequence now contains only top-level segments, preventing
+    // sequence now contains only top-level segments, preventing
     // false "out-of-order" violations in messages with repeating groups.
     let seq = mig_segment_sequence(mig);
     emit_segment_order_rule_fn(out, &seq, &pack_name);
@@ -2117,12 +2115,7 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
         "    static {static_name}: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {{"
     )
     .unwrap();
-    writeln!(
-        out,
-        "        Arc::new(ProfileRulePack::new({:?})",
-        pack_name
-    )
-    .unwrap();
+    writeln!(out, "        Arc::new(ProfileRulePack::new({pack_name:?})").unwrap();
     writeln!(out, "            .for_message_type({:?})", mig.message_type).unwrap();
     writeln!(out, "            .for_release({:?})", mig.release).unwrap();
     for seg in &mandatory_segs {
@@ -2162,7 +2155,7 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
     writeln!(out, "    }});").unwrap();
     writeln!(out).unwrap();
 
-    // Accessor: returns Arc::clone() — O(1), zero allocation (F-005 fix).
+    // Accessor: returns Arc::clone() — O(1), zero allocation.
     writeln!(
         out,
         "    pub(crate) fn mig_rule_pack() -> Arc<ProfileRulePack> {{"
@@ -2249,7 +2242,7 @@ fn emit_cardinality_rule_fn(out: &mut String, tag: &str, max: u32, _pack_name: &
     .unwrap();
     writeln!(
         out,
-        "    /// header and groups use per-group window rules instead (F-010 fix)."
+        "    /// header and groups use per-group window rules instead."
     )
     .unwrap();
     writeln!(
@@ -2293,7 +2286,7 @@ fn group_cardinality_rule_fn_name(trigger_tag: &str, group_id: &str) -> String {
 }
 
 /// Emit a rule function that enforces the maximum number of group occurrences
-/// for a given trigger segment (F-007 fix).
+/// for a given trigger segment.
 ///
 /// The generated function counts occurrences of `trigger_segment` in the flat
 /// segment list.  Each occurrence marks the start of one group instance.  When
@@ -2359,7 +2352,7 @@ fn group_min_occurrences_rule_fn_name(trigger_tag: &str, group_id: &str) -> Stri
 }
 
 /// Emit a rule function that enforces the minimum number of group occurrences
-/// for a given trigger segment (F-006 fix).
+/// for a given trigger segment.
 ///
 /// The generated function counts occurrences of `trigger_segment` in the flat
 /// segment list.  When the count is below `min_occurrences`, an `Error`-severity
@@ -2429,7 +2422,7 @@ fn group_combined_min_rule_fn_name(trigger_tag: &str) -> String {
 }
 
 /// Emit a combined max-occurrences rule for a trigger tag shared by multiple top-level
-/// groups (F-001 fix).
+/// groups.
 ///
 /// When multiple groups share the same trigger tag, individual per-group max rules
 /// cannot correctly distinguish which occurrences belong to which group.  This function
@@ -2493,7 +2486,7 @@ fn emit_group_combined_max_rule_fn(
 }
 
 /// Emit a combined min-occurrences rule for a trigger tag shared by multiple top-level
-/// groups (F-001 fix).
+/// groups.
 fn emit_group_combined_min_rule_fn(
     out: &mut String,
     trigger: &str,
@@ -2538,7 +2531,7 @@ fn emit_group_combined_min_rule_fn(
     writeln!(out, "    }}").unwrap();
 }
 
-/// Emit a group-window validation function for F-004.
+/// Emit a group-window validation function.
 ///
 /// The generated function scans the flat segment list for all occurrences of
 /// the group trigger tag, builds per-window slices (trigger..next_trigger),
@@ -2575,7 +2568,7 @@ fn emit_group_window_rule_fn(out: &mut String, group: &MigGroup, pack_name: &str
     writeln!(out).unwrap();
     writeln!(
         out,
-        "    /// Layer 3 — group-window rule for `{trigger}` groups (F-004)."
+        "    /// Layer 3 — group-window rule for `{trigger}` groups."
     )
     .unwrap();
     writeln!(out, "    ///").unwrap();
@@ -2903,7 +2896,7 @@ fn emit_segment_order_rule_fn(out: &mut String, sequence: &[String], pack_name: 
 
 fn emit_ahb_rule_pack(out: &mut String, ahb: &AhbProfile, message_type: &str) {
     // Import AHB helper functions from the shared module instead of duplicating
-    // them in every generated profile file (F-011).
+    // them in every generated profile file.
     // `ahb_helpers.rs` is a hand-written, non-generated file that lives in
     // `src/generated/` alongside the generated profile modules.
     //
@@ -2990,11 +2983,11 @@ fn emit_ahb_rule_pack(out: &mut String, ahb: &AhbProfile, message_type: &str) {
         let fn_name = ahb_pid_pack_fn_name(pid_entry.code);
         writeln!(out, "            Some({}) => {fn_name}(),", pid_entry.code).unwrap();
     }
-    // None => O(1) Arc::clone from the cached all-PIDs pack (zero allocation, F-005).
+    // None => O(1) Arc::clone from the cached all-PIDs pack (zero allocation.
     writeln!(out, "            None => Arc::clone(&{lazy_name}),").unwrap();
     // Unknown PID: return a pack with one warning rule wrapped in Arc so validation
     // does not silently pass with zero checks.  The raw PID value is intentionally NOT
-    // embedded in the message text (F-014: policy against including parsed data
+    // embedded in the message text (policy against including parsed data
     // in issue messages). The PID is available in the report's `pruefidentifikator` field.
     writeln!(
         out,
@@ -3029,17 +3022,17 @@ fn emit_ahb_pid_conditional_rule_fns(out: &mut String, pid: &PruefidentifikatorE
     // Emit only the conditional rule functions (complex logic, kept as standalone fns).
     for rule in &pid.segment_rules {
         for (i, cond) in rule.conditional_rules.iter().enumerate() {
-            match cond.operator {
+            if matches!(
+                cond.operator,
                 AhbOperator::X | AhbOperator::U | AhbOperator::O
-                    if cond.secondary_tag.is_none() =>
-                {
-                    eprintln!(
-                        "  gap: AHB PID {} segment {} cond {} operator={:?} requires \
-                             secondary_tag — rule is emitted but will reference MISSING segment",
-                        pid.code, rule.tag, i, cond.operator
-                    );
-                }
-                _ => {}
+            ) && cond.secondary_tag.is_none()
+            {
+                panic!(
+                    "codegen error: AHB PID {} segment {} cond {} operator={:?} requires \
+                     secondary_tag but none is set. Add \"secondary_tag\" to the profile JSON \
+                     entry, or change the operator to I/V if no cross-segment check is intended.",
+                    pid.code, rule.tag, i, cond.operator
+                );
             }
             emit_ahb_conditional_rule_fn(out, pid.code, &rule.tag, i, cond);
         }
@@ -3063,7 +3056,7 @@ fn emit_ahb_pid_rule_fn(
     // Emit a LazyLock<Arc<ProfileRulePack>> static that builds the per-PID pack exactly once.
     // Simple rules (mandatory, not-used, qualifier, field-value, required-qualifier) are
     // expressed as inline closures calling the module-level helper functions, reducing
-    // generated code size significantly (F-002).
+    // generated code size significantly.
     writeln!(out).unwrap();
     writeln!(
         out,
@@ -3093,9 +3086,8 @@ fn emit_ahb_pid_rule_fn(
         // Warn when requirement is C but no conditional_rules are provided.
         if rule.requirement == "C" && rule.conditional_rules.is_empty() {
             eprintln!(
-                "  warning: AHB PID {} segment {} requirement=C but has no conditional_rules — \
-                 add at least one ConditionalRule to enforce the BDEW Bedingungsoperator",
-                code, tag
+                "  warning: AHB PID {code} segment {tag} requirement=C but has no conditional_rules — \
+                 add at least one ConditionalRule to enforce the BDEW Bedingungsoperator"
             );
         }
 
@@ -3233,7 +3225,7 @@ fn emit_ahb_pid_rule_fn(
         }
     }
 
-    // ── Group-instance-scoped rules (F-001) ─────────────────────────────────
+    // ── Group-instance-scoped rules ─────────────────────────────────
     // These are evaluated once per occurrence of the named segment-group (e.g.
     // once per SG4 instance) rather than over the flat message segment list.
     // `group_scope` accepts any Into<Arc<str>> since edifact-rs 0.10.0.
@@ -3241,13 +3233,13 @@ fn emit_ahb_pid_rule_fn(
         emit_ahb_group_rule(out, pid.code, gr);
     }
 
-    // F-021: cap issues per rule to prevent report flooding from a single broken file.
+    //  cap issues per rule to prevent report flooding from a single broken file.
     writeln!(out, "            .with_max_issues_per_rule(50)").unwrap();
     writeln!(out, "        )").unwrap();
     writeln!(out, "    }});").unwrap();
     writeln!(out).unwrap();
 
-    // Accessor: returns Arc::clone() — O(1), zero allocation (F-005 fix).
+    // Accessor: returns Arc::clone() — O(1), zero allocation.
     writeln!(out, "    fn {fn_name}() -> Arc<ProfileRulePack> {{").unwrap();
     writeln!(out, "        Arc::clone(&{static_name})").unwrap();
     writeln!(out, "    }}").unwrap();
@@ -3262,7 +3254,7 @@ fn ahb_conditional_rule_fn_name(pid: u32, tag: &str, idx: usize) -> String {
 /// Delegates to the built-in `require_segment_in_group` / `forbid_segment_in_group`
 /// helpers for M/N requirements, emits custom `with_scoped_group_rule_fn` closures
 /// for qualifier-restriction checks, and emits inlined group-scoped conditional
-/// closures for `conditional_rules` entries (F-001 fix).
+/// closures for `conditional_rules` entries.
 fn emit_ahb_group_rule(out: &mut String, code: u32, gr: &AhbGroupRule) {
     let group_id = &gr.group_id;
     let tag = &gr.tag;
@@ -3308,7 +3300,7 @@ fn emit_ahb_group_rule(out: &mut String, code: u32, gr: &AhbGroupRule) {
             // The closure signature is |group, segs, ctx, issues| where `segs` is
             // *already* the per-SG-instance sub-slice (edifact-rs slices via
             // `all_segments[group.total_span.clone()]` before invoking the closure).
-            // No further slicing is needed — just use `segs` directly (F-001/F-022 fix).
+            // No further slicing is needed — just use `segs` directly.
             writeln!(
                 out,
                 "            .with_scoped_group_rule_fn({group_id:?}, {rule_id:?}, |group, segs, _ctx, issues| {{"
@@ -3331,12 +3323,24 @@ fn emit_ahb_group_rule(out: &mut String, code: u32, gr: &AhbGroupRule) {
         }
     }
 
-    // ── Intra-SG conditional rules (F-001) ──────────────────────────────────
+    // ── Intra-SG conditional rules ──────────────────────────────────
     // Each rule is emitted as a `with_scoped_group_rule_fn` closure.  Since
     // edifact-rs passes `segs` as the per-instance sub-slice (via `total_span`),
     // the condition and consequence are evaluated only against segments within
     // the current group occurrence — exactly as the BDEW AHB intends.
     for (i, cond) in gr.conditional_rules.iter().enumerate() {
+        if matches!(
+            cond.operator,
+            AhbOperator::X | AhbOperator::U | AhbOperator::O
+        ) && cond.secondary_tag.is_none()
+        {
+            panic!(
+                "codegen error: AHB PID {} group {} segment {} cond {} operator={:?} requires \
+                 secondary_tag but none is set. Add \"secondary_tag\" to the profile JSON \
+                 entry, or change the operator to I/V if no cross-segment check is intended.",
+                code, group_id, tag, i, cond.operator
+            );
+        }
         emit_ahb_group_conditional_closure(out, code, group_id, tag, i, cond);
     }
 }
@@ -3508,7 +3512,12 @@ fn emit_ahb_group_conditional_closure(
     match rule.operator {
         // ── X — Exclusive-OR: exactly one of {A, B} ─────────────────────────
         AhbOperator::X => {
-            let b_tag = rule.secondary_tag.as_deref().unwrap_or("MISSING");
+            let b_tag = rule.secondary_tag.as_deref().unwrap_or_else(|| {
+                panic!(
+                    "codegen error: AHB PID {pid} group {group_id} segment {tag} cond {idx} \
+                 operator=X requires secondary_tag"
+                )
+            });
             let msg = format!(
                 "in {group_id}: exactly one of {{{when_tag}, {b_tag}}} must appear for Pruefidentifikator {pid} ({condition_desc})"
             );
@@ -3524,7 +3533,12 @@ fn emit_ahb_group_conditional_closure(
         }
         // ── U — AND: both A and B must appear ───────────────────────────────
         AhbOperator::U => {
-            let b_tag = rule.secondary_tag.as_deref().unwrap_or("MISSING");
+            let b_tag = rule.secondary_tag.as_deref().unwrap_or_else(|| {
+                panic!(
+                    "codegen error: AHB PID {pid} group {group_id} segment {tag} cond {idx} \
+                 operator=U requires secondary_tag"
+                )
+            });
             let msg = format!(
                 "in {group_id}: both {when_tag} and {b_tag} must appear for Pruefidentifikator {pid} ({condition_desc})"
             );
@@ -3540,7 +3554,12 @@ fn emit_ahb_group_conditional_closure(
         }
         // ── O — OR: at least one of {A, B} ──────────────────────────────────
         AhbOperator::O => {
-            let b_tag = rule.secondary_tag.as_deref().unwrap_or("MISSING");
+            let b_tag = rule.secondary_tag.as_deref().unwrap_or_else(|| {
+                panic!(
+                    "codegen error: AHB PID {pid} group {group_id} segment {tag} cond {idx} \
+                 operator=O requires secondary_tag"
+                )
+            });
             let msg = format!(
                 "in {group_id}: at least one of {{{when_tag}, {b_tag}}} must appear for Pruefidentifikator {pid} ({condition_desc})"
             );
@@ -3856,15 +3875,12 @@ fn emit_ahb_conditional_rule_fn(
     match rule.operator {
         // ── X — Exclusive-OR: exactly one of {A, B} must appear ──────────────
         AhbOperator::X => {
-            let b_tag = rule
-                .secondary_tag
-                .as_deref()
-                .unwrap_or_else(|| {
-                    eprintln!(
-                        "  error: AHB PID {pid} segment {tag} cond {idx} operator=X missing secondary_tag"
-                    );
-                    "MISSING"
-                });
+            let b_tag = rule.secondary_tag.as_deref().unwrap_or_else(|| {
+                panic!(
+                    "codegen error: AHB PID {pid} segment {tag} cond {idx} \
+                     operator=X requires secondary_tag"
+                )
+            });
             let msg = format!(
                 "operator X violation for Pruefidentifikator {pid}: exactly one of \
                  {{{when_tag}, {b_tag}}} must appear, but got both or neither"
@@ -3889,15 +3905,12 @@ fn emit_ahb_conditional_rule_fn(
 
         // ── U — AND conjunction: both A and B must appear ────────────────────
         AhbOperator::U => {
-            let b_tag = rule
-                .secondary_tag
-                .as_deref()
-                .unwrap_or_else(|| {
-                    eprintln!(
-                        "  error: AHB PID {pid} segment {tag} cond {idx} operator=U missing secondary_tag"
-                    );
-                    "MISSING"
-                });
+            let b_tag = rule.secondary_tag.as_deref().unwrap_or_else(|| {
+                panic!(
+                    "codegen error: AHB PID {pid} segment {tag} cond {idx} \
+                     operator=U requires secondary_tag"
+                )
+            });
             let msg_a = format!(
                 "operator U violation for Pruefidentifikator {pid}: \
                  both {when_tag} and {b_tag} are required, but {when_tag} is absent"
@@ -3936,15 +3949,12 @@ fn emit_ahb_conditional_rule_fn(
 
         // ── O — OR conjunction: at least one of {A, B} must appear ───────────
         AhbOperator::O => {
-            let b_tag = rule
-                .secondary_tag
-                .as_deref()
-                .unwrap_or_else(|| {
-                    eprintln!(
-                        "  error: AHB PID {pid} segment {tag} cond {idx} operator=O missing secondary_tag"
-                    );
-                    "MISSING"
-                });
+            let b_tag = rule.secondary_tag.as_deref().unwrap_or_else(|| {
+                panic!(
+                    "codegen error: AHB PID {pid} segment {tag} cond {idx} \
+                     operator=O requires secondary_tag"
+                )
+            });
             let msg = format!(
                 "operator O violation for Pruefidentifikator {pid}: \
                  at least one of {{{when_tag}, {b_tag}}} must appear, but neither is present"
@@ -4144,7 +4154,7 @@ fn emit_conditional_consequence(
         writeln!(out, "            }}").unwrap();
         writeln!(out, "        }}").unwrap();
     } else {
-        // then_requirement "M" = Error, "S" = Soll (Warning) (F-008 fix).
+        // then_requirement "M" = Error, "S" = Soll (Warning).
         let severity = if rule.then_requirement == "S" {
             "ValidationSeverity::Warning"
         } else {
@@ -4223,10 +4233,7 @@ fn emit_profile_impl(out: &mut String, p: &ProfileData, struct_name: &str, _feat
                 let d = parts[2];
                 format!("Some(::time::macros::date!({y}-{m}-{d}))")
             } else {
-                eprintln!(
-                    "  warning: invalid valid_until date '{}' — treating as None",
-                    date_str
-                );
+                eprintln!("  warning: invalid valid_until date '{date_str}' — treating as None");
                 "None".to_owned()
             }
         }
@@ -4469,17 +4476,21 @@ fn emit_mod_rs(profiles: &[ProfileData]) -> String {
     writeln!(out, "pub mod releases {{").unwrap();
     // The `use` statements are only needed when at least one message feature is
     // enabled; gate them to avoid unused-import warnings with --no-default-features.
-    // Include both normal features and archive features in the `any()` guard.
+    // Only include archive feature names when there are actually archived profiles.
     let all_features: String = profiles
         .iter()
         .flat_map(|p| {
             let f = feature_name(&p.message_type);
-            let af = archive_feature_name(&p.message_type);
-            [
-                format!("feature = \"{f}\""),
-                format!("feature = \"{af}\""),
-                "feature = \"archive\"".to_owned(),
-            ]
+            if p.archived {
+                let af = archive_feature_name(&p.message_type);
+                vec![
+                    format!("feature = \"{f}\""),
+                    format!("feature = \"{af}\""),
+                    "feature = \"archive\"".to_owned(),
+                ]
+            } else {
+                vec![format!("feature = \"{f}\"")]
+            }
         })
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
@@ -4568,6 +4579,8 @@ fn format_generated(dir: &Path) {
     }
 
     let status = std::process::Command::new(&rustfmt)
+        .arg("--edition")
+        .arg("2024")
         .args(&files)
         .status()
         .unwrap_or_else(|e| {
@@ -4606,6 +4619,8 @@ fn rustfmt_string(rustfmt_bin: &str, src: String) -> Result<String, String> {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
     let mut child = Command::new(rustfmt_bin)
+        .arg("--edition")
+        .arg("2024")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -4808,10 +4823,10 @@ mod tests {
         assert_eq!(seq[1], "BGM");
     }
 
-    // ── mig_segment_sequence: group trigger inclusion (F-001 regression guard) ─
+    // ── mig_segment_sequence: group trigger inclusion (regression guard) ─
 
     /// Verifies that group-trigger segments not in `mig.segments` are included in
-    /// the derived EXPECTED_ORDER — the critical F-001 fix.  A UTILMD-shaped profile
+    /// the derived EXPECTED_ORDER — the critical   A UTILMD-shaped profile
     /// (UNH, BGM, DTM, UNT at top level; RFF/NAD/IDE as group triggers) must produce
     /// a sequence that includes the group-trigger tags.
     #[test]
@@ -4943,7 +4958,7 @@ mod tests {
         assert_eq!(parse_fv_date("fv20261231"), Some((2026, 12, 31)));
     }
 
-    // ── date arithmetic (F-010 prune-expired) ─────────────────────────────────
+    // ── date arithmetic (prune-expired) ───────────────────────────────────────
 
     #[test]
     fn date_to_unix_days_unix_epoch() {
@@ -5417,7 +5432,7 @@ mod tests {
         );
     }
 
-    // ── F-002: "O" (optional/Kann) requirement — inline closure approach ──────
+    // ── "O" (optional/Kann) requirement — inline closure approach ──────
 
     /// A segment with requirement="O" and a qualifier restriction must emit
     /// a qualifier inline closure (that fires only when the segment is present)
@@ -5468,7 +5483,7 @@ mod tests {
         );
     }
 
-    // ── F-001: emit_ahb_group_rule ────────────────────────────────────────────
+    // ── emit_ahb_group_rule ────────────────────────────────────────────
 
     /// Group rule with requirement=M emits `require_segment_in_group`.
     #[test]
@@ -5573,7 +5588,7 @@ mod tests {
     }
 
     /// Group rule with conditional_rules emits `with_scoped_group_rule_fn` closures
-    /// containing the per-instance conditional logic (F-001 fix).
+    /// containing the per-instance conditional logic.
     #[test]
     fn group_rule_conditional_emits_group_conditional_closure() {
         let cond = AhbConditionalRule {

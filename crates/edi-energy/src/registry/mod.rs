@@ -124,7 +124,7 @@ pub trait Profile: Send + Sync {
     /// The validator is constructed once (at first access) and stored in a
     /// `static LazyLock` inside each generated profile module.  Returning a
     /// `&'static` reference eliminates per-call allocation on hot validation
-    /// paths (resolves F-019).
+    /// paths (resolves.
     ///
     /// Used by Layer 2 validation in the validation engine.
     fn directory_validator(&self) -> &'static DirectoryValidator;
@@ -135,7 +135,7 @@ pub trait Profile: Send + Sync {
     /// [`edifact_rs::SegmentGroupIndexed`] tree, enabling group-aware validation
     /// (`validate_lenient_grouped`). Each scoped group rule closure receives only
     /// the segments within its specific group occurrence via `group.total_span`,
-    /// implementing the per-SG-instance segment window (resolves F-001/F-022).
+    /// implementing the per-SG-instance segment window.
     ///
     /// Returns an empty slice for profiles with no segment groups.
     fn group_schema(&self) -> &'static [edifact_rs::GroupDef] {
@@ -280,7 +280,7 @@ impl ReleaseRegistry {
         }
     }
 
-    /// Override the grace period for this registry (F-009 fix).
+    /// Override the grace period for this registry.
     ///
     /// The returned registry is independent of the global singleton.  Use this
     /// when building a [`crate::Platform`] for a specific tenant or test scenario
@@ -363,7 +363,34 @@ impl ReleaseRegistry {
     /// last registered one is returned as before.  When all candidates have a
     /// `valid_from` that is strictly in the future relative to `date`,
     /// [`Error::ProfileNotYetActive`] is returned — the previous behaviour of
-    /// silently returning the most-future-dated profile is gone (F-002 fix).
+    /// silently returning the most-future-dated profile is gone.
+    ///
+    /// # Wire-code collisions
+    ///
+    /// BDEW occasionally reuses the same EDIFACT release string across two
+    /// consecutive format versions.  The date parameter is therefore **required**
+    /// for correct dispatch — `profile()` falls back to today when called without
+    /// an explicit date.
+    ///
+    /// Known collisions (as of 2026):
+    ///
+    /// | Message type | Wire code | Profiles |
+    /// |--------------|-----------|---------|
+    /// | INVOIC       | `"2.8e"`  | `fv20251001` (valid from 2025-10-01) and `fv20260401` (valid from 2026-04-01) |
+    /// | UTILTS       | `"1.1e"`  | `fv20241001` (valid from 2024-10-01) and `fv20260401` (valid from 2026-04-01) |
+    ///
+    /// UTILMD Strom and Gas do **not** have collisions: the FV2024-10-01 profiles
+    /// carry wire codes `"S1.1a"` / `"G1.0a"`, while `fv20251001` uses `"S2.1"` /
+    /// `"G1.1"` — distinct codes, no disambiguation needed.
+    ///
+    /// When a collision is resolved by date, a `DEBUG`-level trace event is
+    /// emitted (requires the `tracing` feature):
+    ///
+    /// ```text
+    /// edi_energy::registry: wire_code_collision_resolved
+    ///   message_type=INVOIC release="2.8e" date=2025-11-01
+    ///   resolved_to="fv20251001" candidates=2
+    /// ```
     ///
     /// # Errors
     ///
@@ -386,9 +413,25 @@ impl ReleaseRegistry {
             .index
             .get(&message_type)
             .and_then(|m| m.get(release.as_str()))
-            .ok_or_else(|| Error::ProfileNotFound {
-                message_type,
-                release: release.clone(),
+            .ok_or_else(|| {
+                // Before returning a generic `ProfileNotFound`, check whether
+                // the combination is a known archived profile gated behind a
+                // disabled feature so we can surface a more actionable error.
+                let mt_str = message_type.as_str();
+                if let Some(feat) =
+                    crate::generated::archived_profile_feature(mt_str, release.as_str())
+                {
+                    Error::ProfileArchived {
+                        message_type,
+                        release: release.clone(),
+                        feature_flag: feat,
+                    }
+                } else {
+                    Error::ProfileNotFound {
+                        message_type,
+                        release: release.clone(),
+                    }
+                }
             })?;
 
         // Pick the candidate with the greatest valid_from ≤ date.
@@ -396,6 +439,19 @@ impl ReleaseRegistry {
             .iter()
             .rfind(|&&i| self.profiles[i].valid_from().is_none_or(|vf| vf <= date))
         {
+            // When multiple profiles share the same wire code (collision), emit a
+            // debug trace so operators can verify the correct profile was selected.
+            #[cfg(feature = "tracing")]
+            if candidates.len() > 1 {
+                tracing::debug!(
+                    message_type = ?message_type,
+                    release = release.as_str(),
+                    date = %date,
+                    resolved_to = self.profiles[idx].release().as_str(),
+                    candidates = candidates.len(),
+                    "wire_code_collision_resolved",
+                );
+            }
             return Ok(self.profiles[idx]);
         }
 
@@ -439,6 +495,33 @@ impl ReleaseRegistry {
             .copied()
     }
 
+    /// Returns `true` if at least one registered profile for `message_type`
+    /// has one or more AHB rules for `pid`.
+    ///
+    /// Returns `false` when no profile exists for `message_type`, or when all
+    /// matching profiles return an empty rule pack for `pid` — which is the
+    /// case for unknown or not-yet-imported Prüfidentifikatoren.
+    ///
+    /// Use this to detect **vacuous validation**: `msg.validate()` always
+    /// returns `Ok(report)` with `report.is_valid() == true` when the AHB
+    /// rule pack for a PID is empty, making it impossible from the report
+    /// alone to distinguish a genuinely-validated message from one that
+    /// passed only because no rules were checked.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use edi_energy::{MessageType, Pruefidentifikator, registry::ReleaseRegistry};
+    ///
+    /// let has_rules = ReleaseRegistry::global()
+    ///     .pid_has_ahb_rules(MessageType::Utilmd, Pruefidentifikator::new(55001).unwrap());
+    /// assert!(has_rules, "PID 55001 must have an AHB profile");
+    /// ```
+    #[must_use]
+    pub fn pid_has_ahb_rules(&self, message_type: MessageType, pid: Pruefidentifikator) -> bool {
+        self.profiles_for(message_type)
+            .any(|p| p.ahb_rule_pack(Some(pid)).rule_count() > 0)
+    }
+
     /// Return all known releases for a message type in ascending semantic order.
     ///
     /// Within-track releases (e.g. `"2.5a"` → `"2.10a"`) are ordered correctly
@@ -456,6 +539,38 @@ impl ReleaseRegistry {
         releases.sort();
         releases.dedup_by_key(|r| r.as_str());
         releases
+    }
+
+    /// Return all distinct BDEW format-version strings present in the registry,
+    /// sorted chronologically.
+    ///
+    /// A format version is derived from each profile's [`Profile::valid_from`]
+    /// date: a profile with `valid_from = 2025-10-01` contributes
+    /// `"FV2025-10-01"`.  Profiles without a `valid_from` date are skipped.
+    ///
+    /// The returned strings are suitable for passing directly to
+    /// `FormatVersion::parse` in `mako-engine`.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use edi_energy::registry::ReleaseRegistry;
+    ///
+    /// let fvs = ReleaseRegistry::global().format_versions();
+    /// assert!(fvs.iter().any(|v| v == "FV2025-10-01"));
+    /// ```
+    #[must_use]
+    pub fn format_versions(&self) -> Vec<String> {
+        let mut dates: Vec<time::Date> = self
+            .profiles
+            .iter()
+            .filter_map(|p| p.valid_from())
+            .collect();
+        dates.sort();
+        dates.dedup();
+        dates
+            .into_iter()
+            .map(|d| format!("FV{:04}-{:02}-{:02}", d.year(), d.month() as u8, d.day()))
+            .collect()
     }
 
     /// Return the semantically greatest (latest) release for `message_type`
@@ -489,7 +604,7 @@ impl ReleaseRegistry {
     /// for example UTILMD Strom (`ReleaseTrack::Strom`) and UTILMD Gas
     /// (`ReleaseTrack::Gas`).
     ///
-    /// Resolves F-027: uses the explicit `ReleaseTrack` enum for dispatch
+    /// Resolves  uses the explicit `ReleaseTrack` enum for dispatch
     /// instead of string-prefix matching, ensuring forward-compatibility when
     /// BDEW introduces new tracks with codes that share prefixes.
     ///
@@ -590,7 +705,7 @@ impl ReleaseRegistry {
             .collect();
 
         // Step 1: current = profile with greatest valid_from ≤ date.
-        // Tie-break by release string (descending) for determinism (F-019).
+        // Tie-break by release string (descending) for determinism.
         let current = candidates
             .iter()
             .filter_map(|p| p.valid_from().map(|vf| (vf, *p)))

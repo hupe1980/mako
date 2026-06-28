@@ -1,0 +1,17 @@
+source "https://rubygems.org"
+
+# GitHub Pages gem — pins Jekyll and all approved plugins to the versions
+# deployed on github.com. Pin to a specific version for reproducible builds.
+# https://pages.github.com/versions/
+gem "github-pages", "~> 232", group: :jekyll_plugins
+
+# Just the Docs remote theme
+gem "just-the-docs", "~> 0.10"
+
+# Plugins (must also be listed in _config.yml plugins:)
+group :jekyll_plugins do
+  gem "jekyll-seo-tag"
+  gem "jekyll-feed"
+  gem "jekyll-sitemap"
+  gem "jekyll-github-metadata"
+end

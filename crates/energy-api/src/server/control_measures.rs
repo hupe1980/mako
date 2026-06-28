@@ -9,7 +9,7 @@
 //! - **MSB** implements `on_konfiguration` / `on_initial_zustand` (receives commands).
 //! - **NB/LF** implements the six response/info handlers (receives callbacks).
 //!
-//! Unimplemented methods default to returning `405 Method Not Allowed`.
+//! Unimplemented methods default to returning `501 Not Implemented`.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -31,7 +31,7 @@ use crate::models::electricity::{
 /// Business-logic callbacks for the Control Measures API v1.
 ///
 /// All methods have a default implementation that returns
-/// `405 Method Not Allowed`, so implementors only need to override the
+/// `501 Not Implemented`, so implementors only need to override the
 /// endpoints relevant to their role.
 pub trait ControlMeasuresHandler: Send + Sync + 'static {
     // MSB side — receives commands from NB/LF
@@ -47,7 +47,7 @@ pub trait ControlMeasuresHandler: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), Error>> + Send {
         async {
             Err(Error::Http {
-                status: 405,
+                status: 501,
                 body: "not implemented".into(),
             })
         }
@@ -63,7 +63,7 @@ pub trait ControlMeasuresHandler: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), Error>> + Send {
         async {
             Err(Error::Http {
-                status: 405,
+                status: 501,
                 body: "not implemented".into(),
             })
         }
@@ -82,7 +82,7 @@ pub trait ControlMeasuresHandler: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), Error>> + Send {
         async {
             Err(Error::Http {
-                status: 405,
+                status: 501,
                 body: "not implemented".into(),
             })
         }
@@ -100,7 +100,7 @@ pub trait ControlMeasuresHandler: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), Error>> + Send {
         async {
             Err(Error::Http {
-                status: 405,
+                status: 501,
                 body: "not implemented".into(),
             })
         }
@@ -117,7 +117,7 @@ pub trait ControlMeasuresHandler: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), Error>> + Send {
         async {
             Err(Error::Http {
-                status: 405,
+                status: 501,
                 body: "not implemented".into(),
             })
         }
@@ -135,7 +135,7 @@ pub trait ControlMeasuresHandler: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), Error>> + Send {
         async {
             Err(Error::Http {
-                status: 405,
+                status: 501,
                 body: "not implemented".into(),
             })
         }
@@ -152,7 +152,7 @@ pub trait ControlMeasuresHandler: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), Error>> + Send {
         async {
             Err(Error::Http {
-                status: 405,
+                status: 501,
                 body: "not implemented".into(),
             })
         }
@@ -170,7 +170,7 @@ pub trait ControlMeasuresHandler: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), Error>> + Send {
         async {
             Err(Error::Http {
-                status: 405,
+                status: 501,
                 body: "not implemented".into(),
             })
         }

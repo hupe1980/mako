@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "message_type": "UTILMD",
-  "release": "G1.1",
+  "release": "G1.0a",
   "valid_from": "2024-10-01",
   "segments": [
     {
@@ -377,7 +377,7 @@
       ]
     }
   ],
-  "valid_until": "2026-09-30",
+  "valid_until": "2025-09-30",
   "ahb_revision": "G1.1",
   "source_document": "UTILMD AHB G1.1, Stand 01.10.2024"
 }

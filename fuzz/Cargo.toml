@@ -8,11 +8,15 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.4"
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
 
 [dependencies.edi-energy]
 path = "../crates/edi-energy"
 features = ["utilmd", "mscons", "aperak", "contrl", "invoic", "remadv", "orders", "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp", "quotes", "comdis", "pricat", "utilts"]
+
+[dependencies.mako-engine]
+path = "../crates/mako-engine"
+default-features = false
 
 [[bin]]
 name = "fuzz_parse_validate"
@@ -24,6 +28,20 @@ bench = false
 [[bin]]
 name = "fuzz_interchange"
 path = "fuzz_targets/fuzz_interchange.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_builder"
+path = "fuzz_targets/fuzz_builder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_format_version"
+path = "fuzz_targets/fuzz_format_version.rs"
 test = false
 doc = false
 bench = false

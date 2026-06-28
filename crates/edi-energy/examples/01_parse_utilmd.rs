@@ -14,7 +14,7 @@
 
 #![allow(clippy::result_large_err)]
 
-use edi_energy::{AnyMessage, EdiEnergyMessage, parse};
+use edi_energy::{AnyMessage, EdiEnergyMessage, Platform};
 
 /// A minimal UTILMD 55001 "Lieferbeginn Strom" interchange.
 ///
@@ -41,7 +41,7 @@ UNT+8+MSG-001'\
 UNZ+1+INTER-2024-001'";
 
 fn main() -> Result<(), edi_energy::Error> {
-    let msg = parse(UTILMD_BYTES)?;
+    let msg = Platform::with_all_profiles().parse(UTILMD_BYTES)?;
 
     // ── Message-type routing ─────────────────────────────────────────────────
     println!(
@@ -111,7 +111,7 @@ fn main() -> Result<(), edi_energy::Error> {
     // ── Validation ───────────────────────────────────────────────────────────
     let report = msg.validate()?;
     if report.is_valid() {
-        println!("\nValidation   : OK ({})", report);
+        println!("\nValidation   : OK ({report})");
     } else {
         println!("\nValidation   : {} finding(s)", report.errors().len());
         for err in report.errors() {

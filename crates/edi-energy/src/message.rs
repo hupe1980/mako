@@ -131,7 +131,7 @@ pub trait EdiEnergyMessage: Send + Sync {
     /// Both the `is_acceptable` check and the profile lookup use `ctx.date()` as
     /// the reference date — no call to `now_utc()` is made.  This ensures the
     /// method is fully deterministic for tests that set an explicit reference date
-    /// (resolves F-014: previously `validate_against` used `now_utc()` internally,
+    /// (resolves  previously `validate_against` used `now_utc()` internally,
     /// causing an off-by-one risk near midnight and making date-deterministic
     /// integration tests unreliable).
     ///

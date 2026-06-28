@@ -28,8 +28,14 @@
 //! --output-json  <PATH>   Write machine-readable JSON report to a file
 //! --min-density  <N>      Fail if avg rules/PID < N for any active profile
 //!                         (default: 0, disabled)
+//!                         Recommended baseline: 0.4
+//!                         Enable in CI: --min-density 0.4
 //! --min-cond-rules <N>    Fail if total conditional_rules < N for any active
 //!                         profile (default: 0, disabled)
+//! --report-unmodelled     Print segment/group rules that have empty
+//!                         conditional_rules but a _description note explaining
+//!                         why the rule is not yet modelled. These are known
+//!                         AHB gaps requiring future work.
 //! ```
 
 use std::collections::BTreeSet;
@@ -81,7 +87,6 @@ struct AhbProfile {
 
 #[derive(Deserialize)]
 struct AhbPruefidentifikator {
-    #[allow(dead_code)]
     code: u32,
     #[allow(dead_code)]
     name: String,
@@ -98,6 +103,10 @@ struct AhbSegmentRule {
     requirement: String,
     #[serde(default)]
     conditional_rules: Vec<serde_json::Value>,
+    /// Free-text note explaining why no conditional rule is modelled (starts
+    /// with `_` so it is treated as a JSON "comment field" by convention).
+    #[serde(rename = "_description", default)]
+    description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -107,9 +116,23 @@ struct AhbGroupRule {
     tag: String,
     #[serde(default)]
     conditional_rules: Vec<serde_json::Value>,
+    #[serde(rename = "_description", default)]
+    description: Option<String>,
 }
 
 // ── Report structures (JSON-serializable) ────────────────────────────────────
+
+/// A segment or group rule with an empty `conditional_rules` but a `_description`
+/// explaining why no rule is modelled. Surfaced by `--report-unmodelled`.
+#[derive(Serialize, Clone)]
+pub struct UnmodelledRule {
+    /// PID that contains the unmodelled rule.
+    pub pid: u32,
+    /// Segment tag or group ID.
+    pub id: String,
+    /// The `_description` comment from the AHB JSON.
+    pub description: String,
+}
 
 /// Full audit report — one entry per profile directory.
 #[derive(Serialize)]
@@ -135,6 +158,14 @@ pub struct ProfileReport {
     pub uncovered_segments: Vec<String>,
     /// Mandatory MIG groups with no group_rule in any PID.
     pub mandatory_groups_without_rules: Vec<MandatoryGroupGap>,
+    /// Segment rules with empty `conditional_rules` and a `_description` note.
+    /// These represent known AHB constraints that have not yet been encoded.
+    /// Populated only when `--report-unmodelled` is passed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unmodelled_segment_rules: Vec<UnmodelledRule>,
+    /// Group rules with empty `conditional_rules` and a `_description` note.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unmodelled_group_rules: Vec<UnmodelledRule>,
     /// Is the profile archived?
     pub archived: bool,
 }
@@ -155,6 +186,9 @@ pub struct AuditSummary {
     pub profiles_with_zero_pids: usize,
     pub profiles_below_density_threshold: Vec<String>,
     pub profiles_below_cond_rules_threshold: Vec<String>,
+    /// Total segment + group rules that have empty `conditional_rules` but a
+    /// `_description` note (only populated when `--report-unmodelled` is set).
+    pub total_unmodelled_rules: usize,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -180,6 +214,7 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         .find(|w| w[0] == "--min-cond-rules")
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(0);
+    let report_unmodelled: bool = args.iter().any(|a| a == "--report-unmodelled");
 
     let profiles_dir = PathBuf::from(workspace_root)
         .join("crates")
@@ -218,19 +253,19 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
             let mig: MigProfile = match load_json(&mig_path) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("ERROR  {}/{}/mig.json: {e}", msg_type, rel_name);
+                    eprintln!("ERROR  {msg_type}/{rel_name}/mig.json: {e}");
                     continue;
                 }
             };
             let ahb: AhbProfile = match load_json(&ahb_path) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("ERROR  {}/{}/ahb.json: {e}", msg_type, rel_name);
+                    eprintln!("ERROR  {msg_type}/{rel_name}/ahb.json: {e}");
                     continue;
                 }
             };
 
-            let report = analyse_profile(&msg_type, &rel_name, &mig, &ahb);
+            let report = analyse_profile(&msg_type, &rel_name, &mig, &ahb, report_unmodelled);
             reports.push(report);
         }
     }
@@ -277,10 +312,37 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         profiles_with_zero_pids: zero_pids,
         profiles_below_density_threshold: below_density.clone(),
         profiles_below_cond_rules_threshold: below_cond.clone(),
+        total_unmodelled_rules: reports
+            .iter()
+            .map(|r| r.unmodelled_segment_rules.len() + r.unmodelled_group_rules.len())
+            .sum(),
     };
 
     // ── Human-readable output ─────────────────────────────────────────────────
     print_table(&reports, &summary, min_density, min_cond_rules);
+
+    // ── Unmodelled rule report ────────────────────────────────────────────────
+    if report_unmodelled && summary.total_unmodelled_rules > 0 {
+        eprintln!(
+            "\nUnmodelled AHB rules ({} total — rules with empty conditional_rules + _description):",
+            summary.total_unmodelled_rules
+        );
+        for r in &reports {
+            if r.unmodelled_segment_rules.is_empty() && r.unmodelled_group_rules.is_empty() {
+                continue;
+            }
+            eprintln!("  {}/{}", r.message_type, r.release_dir);
+            for u in &r.unmodelled_segment_rules {
+                eprintln!("    [seg] PID {:5}  {}  → {}", u.pid, u.id, u.description);
+            }
+            for u in &r.unmodelled_group_rules {
+                eprintln!("    [grp] PID {:5}  {}  → {}", u.pid, u.id, u.description);
+            }
+        }
+        eprintln!();
+    } else if report_unmodelled {
+        eprintln!("No unmodelled rules found.");
+    }
 
     // ── JSON report ───────────────────────────────────────────────────────────
     if let Some(ref path) = output_json {
@@ -321,6 +383,7 @@ fn analyse_profile(
     release_dir: &str,
     mig: &MigProfile,
     ahb: &AhbProfile,
+    report_unmodelled: bool,
 ) -> ProfileReport {
     // Collect ALL MIG segment tags (root + nested in groups), excluding
     // EDIFACT structure segments that are MIG-layer-enforced, not AHB-layer.
@@ -348,17 +411,39 @@ fn analyse_profile(
     let mut total_seg_rules = 0usize;
     let mut total_grp_rules = 0usize;
     let mut total_cond_rules = 0usize;
+    let mut unmodelled_seg: Vec<UnmodelledRule> = Vec::new();
+    let mut unmodelled_grp: Vec<UnmodelledRule> = Vec::new();
 
     for pid in &ahb.pruefidentifikatoren {
         for sr in &pid.segment_rules {
             covered_by_any.insert(sr.tag.clone());
             total_seg_rules += 1;
             total_cond_rules += sr.conditional_rules.len();
+            if report_unmodelled
+                && sr.conditional_rules.is_empty()
+                && sr.description.as_deref().is_some_and(|d| !d.is_empty())
+            {
+                unmodelled_seg.push(UnmodelledRule {
+                    pid: pid.code,
+                    id: sr.tag.clone(),
+                    description: sr.description.clone().unwrap_or_default(),
+                });
+            }
         }
         for gr in &pid.group_rules {
             groups_with_rules.insert(gr.group_id.clone());
             total_grp_rules += 1;
             total_cond_rules += gr.conditional_rules.len();
+            if report_unmodelled
+                && gr.conditional_rules.is_empty()
+                && gr.description.as_deref().is_some_and(|d| !d.is_empty())
+            {
+                unmodelled_grp.push(UnmodelledRule {
+                    pid: pid.code,
+                    id: gr.group_id.clone(),
+                    description: gr.description.clone().unwrap_or_default(),
+                });
+            }
         }
     }
 
@@ -398,6 +483,8 @@ fn analyse_profile(
         covered_segments: covered,
         uncovered_segments: uncovered,
         mandatory_groups_without_rules: mandatory_gaps,
+        unmodelled_segment_rules: unmodelled_seg,
+        unmodelled_group_rules: unmodelled_grp,
         archived: mig.archived || mig.pid_exempt,
     }
 }

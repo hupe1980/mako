@@ -254,7 +254,7 @@ impl MessageCore {
                         edifact_rs::ValidationLayer::Structure,
                         dir_validator.clone(),
                     );
-                // F-008: when Pruefidentifikator cannot be determined, inject a Warning-severity
+                // when Pruefidentifikator cannot be determined, inject a Warning-severity
                 // advisory via with_static_issue (edifact-rs 0.10.0) so downstream audit logs
                 // know AHB Layer 4 was skipped.  Running the union-of-all-PIDs pack would
                 // produce guaranteed false positives from mutually-exclusive qualifier constraints.
@@ -282,7 +282,7 @@ impl MessageCore {
                 // `group_segments_indexed` partitions `message_segments` into a
                 // `SegmentGroupIndexed` tree so that `with_scoped_group_rule_fn` closures
                 // receive only the segments within each specific group occurrence via
-                // `group.total_span` — resolving the per-SG-instance window gap (F-001/F-022).
+                // `group.total_span` — resolving the per-SG-instance window gap,.
                 // `validate_lenient_grouped` short-circuits the group pass in O(1) when no
                 // group rules are registered, so profiles without group rules have negligible
                 // overhead from the tree construction.

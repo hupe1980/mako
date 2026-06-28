@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 
 use edifact_rs::Writer;
 
+use crate::AgencyCode;
 use crate::{Error, Pruefidentifikator, Release};
 
 use super::{Set, Unset, bytes_to_segments, dtm_today, format_dtm137};
@@ -44,6 +45,8 @@ struct MsconsBuilderInner {
     pruefidentifikator: Option<Pruefidentifikator>,
     sender_id: Option<String>,
     receiver_id: Option<String>,
+    sender_agency: AgencyCode,
+    receiver_agency: AgencyCode,
     message_ref: String,
     document_code: String,
     document_date: Option<String>,
@@ -97,6 +100,8 @@ impl MsconsBuilder<Unset, Unset> {
                 pruefidentifikator: None,
                 sender_id: None,
                 receiver_id: None,
+                sender_agency: AgencyCode::Bdew,
+                receiver_agency: AgencyCode::Bdew,
                 message_ref: "1".to_owned(),
                 document_code: "7".to_owned(),
                 document_date: None,
@@ -125,6 +130,23 @@ impl<S, R> MsconsBuilder<S, R> {
     pub fn receiver(mut self, id: impl Into<String>) -> MsconsBuilder<S, Set> {
         self.inner.receiver_id = Some(id.into());
         self.transition()
+    }
+
+    /// Override the agency code for the sender's party identifier.
+    ///
+    /// Default: [`AgencyCode::Bdew`] (`"293"`). Use [`AgencyCode::Entso`] (`"305"`)
+    /// for TSO/ÜNB parties that carry a 16-char EIC code.
+    pub fn sender_agency(mut self, agency: crate::AgencyCode) -> Self {
+        self.inner.sender_agency = agency;
+        self
+    }
+
+    /// Override the agency code for the receiver's party identifier.
+    ///
+    /// Default: [`AgencyCode::Bdew`] (`"293"`).
+    pub fn receiver_agency(mut self, agency: crate::AgencyCode) -> Self {
+        self.inner.receiver_agency = agency;
+        self
     }
 
     /// Set the Pruefidentifikator (e.g. `21001`).
@@ -204,10 +226,20 @@ impl<S, R> MsconsBuilder<S, R> {
             emit_seg!(w, "RFF", &format!("{qualifier}:{value}"));
         }
         if let Some(id) = &self.inner.sender_id {
-            emit_seg!(w, "NAD", "MS", &format!("{id}::293"));
+            emit_seg!(
+                w,
+                "NAD",
+                "MS",
+                &self.inner.sender_agency.format_nad_c082(id)
+            );
         }
         if let Some(id) = &self.inner.receiver_id {
-            emit_seg!(w, "NAD", "MR", &format!("{id}::293"));
+            emit_seg!(
+                w,
+                "NAD",
+                "MR",
+                &self.inner.receiver_agency.format_nad_c082(id)
+            );
         }
         if !self.inner.metering_points.is_empty() {
             emit_seg!(w, "UNS", "D");

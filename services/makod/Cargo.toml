@@ -1,0 +1,64 @@
+[package]
+name             = "makod"
+version.workspace          = true
+description      = "Main binary for running the Mako process engine"
+authors.workspace          = true
+edition.workspace          = true
+license.workspace          = true
+repository.workspace       = true
+rust-version.workspace     = true
+publish          = false
+
+[[bin]]
+name = "makod"
+path = "src/main.rs"
+
+[lib]
+name = "makod"
+path = "src/lib.rs"
+
+[dependencies]
+mako-engine  = { path = "../../crates/mako-engine", features = ["slatedb"] }
+mako-gpke    = { path = "../../crates/mako-gpke" }
+mako-wim     = { path = "../../crates/mako-wim" }
+mako-geli-gas = { path = "../../crates/mako-geli-gas" }
+mako-wim-gas = { path = "../../crates/mako-wim-gas" }
+mako-mabis   = { path = "../../crates/mako-mabis" }
+mako-as4     = { path = "../../crates/mako-as4", features = ["server"] }
+energy-api   = { path = "../../crates/energy-api", features = ["server", "client"] }
+asx-rs       = { version = "0.3", features = ["as4", "client", "interop-strict", "server"] }
+edi-energy   = { path = "../../crates/edi-energy", default-features = false, features = [
+    "utilmd", "mscons", "aperak", "contrl", "invoic", "remadv",
+    "orders", "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp",
+    "quotes", "comdis", "pricat", "utilts",
+] }
+
+anyhow             = { workspace = true }
+axum               = { version = "0.8", features = [] }
+clap               = { version = "4", features = ["derive", "env"] }
+fd-lock            = "4"
+object_store       = { version = "0.12", features = ["aws", "gcp", "azure"] }
+serde              = { version = "1", features = ["derive"] }
+toml               = { version = "0.8", default-features = false, features = ["parse"] }
+serde_json         = { workspace = true }
+subtle             = "2"
+time               = { workspace = true }
+tokio              = { version = "1", features = ["full"] }
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+uuid               = { workspace = true }
+reqwest            = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+hmac               = { version = "0.12", features = ["std"] }
+secrecy            = { version = "0.8", features = ["alloc"] }
+sha2               = "0.10"
+
+[dev-dependencies]
+mako-engine  = { path = "../../crates/mako-engine", features = ["testing"] }
+mako-gpke    = { path = "../../crates/mako-gpke" }
+mako-geli-gas = { path = "../../crates/mako-geli-gas" }
+mako-wim     = { path = "../../crates/mako-wim" }
+mako-wim-gas = { path = "../../crates/mako-wim-gas" }
+edi-energy  = { path = "../../crates/edi-energy", default-features = false, features = ["utilmd", "aperak"] }
+tokio       = { version = "1", features = ["full"] }
+serde_json  = { workspace = true }
+time        = { workspace = true }

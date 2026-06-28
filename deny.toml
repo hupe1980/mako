@@ -16,17 +16,183 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "Zlib",
     "CDLA-Permissive-2.0",
     "MIT-0",
+    # 0BSD: public-domain-like permissive license, used by mailparse and quoted_printable
+    # (transitive deps via asx-rs). Acceptable for commercial use — effectively no conditions.
+    "0BSD",
 ]
 confidence-threshold = 0.9
 
 [bans]
-multiple-versions = "warn"
-wildcards = "allow"
-deny = []
+# Hard-deny multiple major-version duplicates. Any new duplicate requires an
+# explicit `skip` entry with a justification comment. This prevents silent
+# binary-size bloat and version-skew bugs in serialization/crypto crates.
+multiple-versions = "deny"
+# Deny wildcard version constraints for external (registry) dependencies.
+# Path-only workspace-internal deps are exempt (`allow-wildcard-paths = true`)
+# because they have no semver version to specify.
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+    # openssl-sys (and its peers openssl, openssl-macros) is banned for general
+    # TLS use. The workspace uses rustls-tls exclusively for HTTP clients
+    # (reqwest, object_store). However, openssl is an ACCEPTED exception for
+    # WS-Security XML cryptography (RSA/ECDSA signing and X.509 handling) via
+    # `asx-rs/crypto`, which has no pure-Rust equivalent with the same X.509
+    # PEM handling surface.
+    #
+    # The `wrappers` field permits a banned crate when it is pulled only by the
+    # listed direct parents.  Provenance chain:
+    #   asx-rs → openssl → openssl-sys
+    #   asx-rs → openssl → openssl-macros (proc-macro companion)
+    # Only top-level `openssl` is directly pulled by `asx-rs`.
+    # If any OTHER crate pulls openssl into the tree, cargo deny will still fail.
+    { name = "openssl",        wrappers = ["asx-rs"],       reason = "C-linked OpenSSL forbidden for TLS; permitted only via asx-rs WS-Security XML crypto" },
+    { name = "openssl-sys",    wrappers = ["openssl"],      reason = "C-binding companion to openssl 0.10; same asx-rs WS-Security exception" },
+    { name = "openssl-macros", wrappers = ["openssl"],      reason = "proc-macro companion to openssl 0.10; same asx-rs WS-Security exception" },
+]
+
+# ── Skip entries for unavoidable transitive duplicates ───────────────────────
+#
+# Each entry documents WHY the duplicate exists and what would resolve it.
+# Review and tighten on every annual dependency update pass.
+
+[[bans.skip]]
+name    = "thiserror"
+version = "1"
+reason  = "slatedb 0.13 and several ecosystem crates (foyer, object_store) still depend on thiserror 1.x. Workspace crates use thiserror 2. Resolve when slatedb bumps to thiserror 2."
+
+[[bans.skip]]
+name    = "thiserror-impl"
+version = "1"
+reason  = "proc-macro companion of thiserror 1.x; same root cause as thiserror duplicate."
+
+[[bans.skip]]
+name    = "hashbrown"
+version = "0.14"
+reason  = "indexmap 2.x depends on hashbrown 0.14. Ecosystem migration to 0.15+ in progress."
+
+[[bans.skip]]
+name    = "hashbrown"
+version = "0.15"
+reason  = "lru and tokio-util pull hashbrown 0.15. Resolves when upstream crates align on 0.16."
+
+[[bans.skip]]
+name    = "hashbrown"
+version = "0.16"
+reason  = "foyer-memory/slatedb pull hashbrown 0.16. Resolves when foyer aligns on 0.17."
+
+[[bans.skip]]
+name    = "foldhash"
+version = "0.1"
+reason  = "Companion to hashbrown 0.15; resolves with hashbrown 0.15 dedup."
+
+[[bans.skip]]
+name    = "getrandom"
+version = "0.2"
+reason  = "rand 0.8 (pulled by slatedb/foyer ecosystem) depends on getrandom 0.2. Workspace uses rand 0.9."
+
+[[bans.skip]]
+name    = "getrandom"
+version = "0.3"
+reason  = "rand 0.9 depends on getrandom 0.3. Resolves when getrandom 0.4 adoption is complete."
+
+[[bans.skip]]
+name    = "rand"
+version = "0.8"
+reason  = "slatedb ecosystem pulls rand 0.8. Workspace uses rand 0.9. Resolve when slatedb updates."
+
+[[bans.skip]]
+name    = "rand_core"
+version = "0.6"
+reason  = "Companion to rand 0.8; same root cause."
+
+[[bans.skip]]
+name    = "rustix"
+version = "0.38"
+reason  = "tokio/mio pull rustix 0.38; newer deps pull 1.x. Resolve when tokio aligns on rustix 1."
+
+[[bans.skip]]
+name    = "linux-raw-sys"
+version = "0.4"
+reason  = "Companion to rustix 0.38; same root cause."
+
+[[bans.skip]]
+name    = "nom"
+version = "7"
+reason  = "edifact-rs (edi-energy grammar layer) depends on nom 7. Resolve when edifact-rs migrates to nom 8."
+
+[[bans.skip]]
+name    = "winnow"
+version = "0.6"
+reason  = "toml_edit (build-time dep of cargo) pulls winnow 0.6. Workspace direct deps use 0.7."
+
+[[bans.skip]]
+name    = "quick-xml"
+version = "0.38"
+reason  = "asx-rs / SOAP deps pull quick-xml 0.38. Direct deps use 0.40."
+
+[[bans.skip]]
+name    = "lru"
+version = "0.12"
+reason  = "asx-rs pulls lru 0.12. Resolve when asx-rs updates."
+
+[[bans.skip]]
+name    = "heck"
+version = "0.4"
+reason  = "proc-macro crates (clap_derive, enum-iterator-derive) still depend on heck 0.4."
+
+# Windows crates version-skew: Microsoft publishes rapid minor bumps; ecosystem
+# convergence lags. These are safe to skip — they do not share serialization state.
+[[bans.skip]]
+name    = "windows-core"
+version = "0.61"
+reason  = "Windows crate ecosystem version skew; no serialization or ABI shared state."
+
+[[bans.skip]]
+name    = "windows-link"
+version = "0.1"
+reason  = "Windows crate ecosystem version skew."
+
+[[bans.skip]]
+name    = "windows-result"
+version = "0.3"
+reason  = "Windows crate ecosystem version skew."
+
+[[bans.skip]]
+name    = "windows-strings"
+version = "0.4"
+reason  = "Windows crate ecosystem version skew."
+
+[[bans.skip]]
+name    = "windows-sys"
+version = "0.59"
+reason  = "Windows crate ecosystem version skew."
 
 [advisories]
-ignore = []
+ignore = [
+    # RUSTSEC-2025-0141: bincode 1.x unmaintained.
+    # Pulled transitively by slatedb → foyer. The crate is functionally complete
+    # (the authors declared v1.3.3 final); no security impact in our usage
+    # (serialization for internal SlateDB structures, not user-controlled input).
+    # Resolve when slatedb migrates to bincode 2.x or an alternative.
+    { id = "RUSTSEC-2025-0141", reason = "bincode 1.x pulled by slatedb/foyer; functionally complete, no CVE, no user-controlled input" },
+    # RUSTSEC-2024-0436: paste macro unmaintained (dtolnay archived the repo).
+    # The crate is syntactically stable; no security surface. Used by slatedb
+    # proc-macro machinery. Resolve when slatedb migrates away.
+    { id = "RUSTSEC-2024-0436", reason = "paste macro pulled by slatedb; no CVE, compile-time only, no runtime security surface" },
+    # RUSTSEC-2025-0134: rustls-pemfile unmaintained (thin wrapper around
+    # rustls-pki-types). Pulled transitively by object_store or slatedb.
+    # Migration path: update dependent to use rustls-pki-types ≥ 1.9.0 directly.
+    # Resolve on next annual dependency update pass.
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile pulled by slatedb/object_store; thin wrapper around rustls-pki-types, no security regression" },
+    # RUSTSEC-2026-0187: lopdf stack-overflow via deeply nested PDF objects.
+    # Affects `xtask extract-pdf` which processes BDEW specification PDFs from
+    # docs/pdfs/ on developer machines — not untrusted/attacker-controlled input.
+    # Impact: developer-machine SIGABRT only; no production code path.
+    # Resolution: bump pdf-extract to a version that depends on lopdf ≥ 0.42.0
+    # once such a release is published upstream (pdf-extract 0.10 pins 0.38).
+    { id = "RUSTSEC-2026-0187", reason = "lopdf DoS only reachable via xtask extract-pdf on BDEW PDFs (trusted developer input). Resolve when pdf-extract ships a release requiring lopdf ≥ 0.42." },
+]

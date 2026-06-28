@@ -1,0 +1,11 @@
+[package]
+name         = "mako-redispatch"
+version.workspace     = true
+description  = "Redispatch 2.0 process engine for German grid congestion management (§§ 13, 13a, 14 EnWG) — coming soon"
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+keywords     = ["redispatch", "energy", "mako", "bdew", "congestion"]
+categories   = ["data-structures"]

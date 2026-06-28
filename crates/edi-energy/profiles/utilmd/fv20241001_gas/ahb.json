@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "message_type": "UTILMD",
-  "release": "G1.1",
+  "release": "G1.0a",
   "source_document": "UTILMD AHB G1.1 vom 01.10.2024",
   "pruefidentifikatoren": [
     {

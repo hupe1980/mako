@@ -1,0 +1,11 @@
+[package]
+name         = "mako-gabi-gas"
+version.workspace     = true
+description  = "GaBi Gas process engine for German gas market balancing communication (Gasbilanzierung) — coming soon"
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+keywords     = ["gabi-gas", "gas", "balancing", "mako", "dvgw"]
+categories   = ["data-structures"]

@@ -23,7 +23,7 @@ use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     // ── 1. Parse ────────────────────────────────────────────────────────────
-    let msg = match edi_energy::parse(data) {
+    let msg = match edi_energy::Platform::with_all_profiles().parse(data) {
         Ok(m) => m,
         Err(_) => return, // invalid input → expected, not a bug
     };
@@ -35,7 +35,7 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(bytes) = edi_energy_serialize(&msg) {
         // Re-parsing the serialized bytes must succeed and yield the same
         // message type — a panic or type mismatch would be a fuzz finding.
-        if let Ok(msg2) = edi_energy::parse(&bytes) {
+        if let Ok(msg2) = edi_energy::Platform::with_all_profiles().parse(&bytes) {
             assert_eq!(
                 message_type_tag(&msg),
                 message_type_tag(&msg2),

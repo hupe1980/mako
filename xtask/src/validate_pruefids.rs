@@ -27,9 +27,10 @@
 //!   (ORPHANED — always a correctness bug: either a stale fixture or an ahb.json
 //!   that is missing a PID declaration).
 //! - MISSING PIDs (declared in ahb.json but lacking a fixture) cause a non-zero
-//!   exit only when `--strict` mode is requested; otherwise they are informational
-//!   coverage warnings.  CI runs without `--strict` so the gate is not blocked
-//!   by coverage gaps while the fixture library is being built up.
+//!   exit only when `--strict` mode is requested; otherwise they are
+//!   informational coverage warnings unless the `--min-coverage` floor is hit.
+//! - `--min-coverage` defaults to 100 so the workspace can enforce full fixture
+//!   coverage by default while still allowing opt-out for ad-hoc local scans.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -57,7 +58,7 @@ struct PruefidentifikatorEntry {
 /// - `strict == false` (the default CI mode) — MISSING PIDs are informational only.
 /// - `strict == true`  — MISSING PIDs also trigger exit 1.
 /// - `min_coverage_pct` (ratchet gate) — fails if `covered / total < min_coverage_pct / 100`.
-///   Set to 0 (default) to disable the ratchet gate.
+///   Set to 0 to disable the ratchet gate. The CLI default is 100.
 ///
 /// `message_type_filter` — when `Some("INVOIC")` (case-insensitive), only
 /// checks PIDs for that message type and ignores all others.

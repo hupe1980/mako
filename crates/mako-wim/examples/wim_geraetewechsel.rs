@@ -1,0 +1,458 @@
+//! # WiM Gerätewechsel — mako-wim + edi-energy end-to-end example
+//!
+//! Demonstrates the full write→store→read cycle for a WiM "Gerätewechsel"
+//! (PID 11001) process using the `mako-engine` event-sourced runtime,
+//! `mako-wim` domain logic, and `edi-energy` for EDIFACT parsing.
+//!
+//! ## Key difference from GPKE
+//!
+//! WiM uses a **5-Werktage** APERAK deadline, not the GPKE 24h wall-clock
+//! window. The deadline is calculated via `fristen::add_werktage(5, BdewMaKo)`.
+//!
+//! ## Architecture boundary demonstrated
+//!
+//! ```text
+//! edi-energy (transport boundary)          mako-wim (pure domain)
+//! ─────────────────────────────────────    ────────────────────────────
+//! Platform::parse(raw_bytes)             → DeviceChangeCommand { pid, … }
+//! msg.validate()                         → WimDeviceChangeWorkflow::handle()
+//! extract sender/receiver/melo           → pure, no I/O, deterministic
+//! ```
+//!
+//! ## Deadline helpers — reference table
+//!
+//! | Process | Frist | Helper |
+//! |---|---|---|
+//! | GPKE Lieferbeginn | 24 h wall-clock | `fristen::add_hours(24)` |
+//! | WiM Gerätewechsel | **5 Werktage** | `fristen::add_werktage(5, BdewMaKo)` |
+//! | GeLi Gas Anmeldung | 10 Werktage | `fristen::add_werktage(10, BdewMaKo)` |
+//!
+//! ## Run
+//!
+//! ```text
+//! cargo run --example wim_geraetewechsel -p mako-wim
+//! ```
+
+use edi_energy::{AnyMessage, EdiEnergyMessage, Platform};
+use mako_engine::{
+    builder::EngineBuilder,
+    deadline::{Deadline, DeadlineStore, InMemoryDeadlineStore},
+    event_store::{EventStore, InMemoryEventStore},
+    fristen::{self, HolidayCalendar},
+    ids::TenantId,
+    inbox::{InMemoryInboxStore, InboxStore, inbox_key},
+    outbox::{InMemoryOutboxStore, OutboxMessage, OutboxStore},
+    projection::ProjectionRunner,
+    registry::{InMemoryProcessRegistry, ProcessRegistry, RegistryKey},
+    snapshot::InMemorySnapshotStore,
+    types::{DeviceId, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator},
+    version::WorkflowId,
+    workflow::CommandContext,
+};
+use mako_wim::{DeviceChangeCommand, DeviceChangeProjection, WimDeviceChangeWorkflow};
+
+// ── EDIFACT fixture ───────────────────────────────────────────────────────────
+//
+// Minimal WiM UTILMD Anmeldung Messstellenbetrieb (PID 11001).
+// BGM+E01 is used for WiM Anmeldung in UTILMD S2.x.
+// NAD+MS = neuer Messstellenbetreiber (nMSB, sender)
+// NAD+MR = Netzbetreiber (NB, receiver)
+// IDE+Z19 = Messlokation identifier
+// LOC+172 = meter device location with device_id
+
+const UTILMD_GERAETEWECHSEL: &[u8] = b"\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WIM-2025-001'\
+UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
+BGM+E01:::+00011001::+9'\
+DTM+137:20250115:102'\
+RFF+Z13:WIM-REF-001'\
+NAD+MS+4012345000023::293'\
+NAD+MR+9900357000004::293'\
+IDE+Z19+DE0001000001234567890000000000001::'\
+LOC+172+ZHR-12345678::'\
+UNT+9+MSG-001'\
+UNZ+1+WIM-2025-001'";
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("╔════════════════════════════════════════════════════════════╗");
+    println!("║  mako-wim — WiM Gerätewechsel end-to-end example           ║");
+    println!("╚════════════════════════════════════════════════════════════╝");
+    println!();
+
+    // ── Infrastructure via EngineBuilder ──────────────────────────────────────
+    let ctx = EngineBuilder::new()
+        .with_event_store(InMemoryEventStore::new())
+        .with_snapshot_store(InMemorySnapshotStore::new())
+        .with_outbox_store(InMemoryOutboxStore::new())
+        .with_deadline_store(InMemoryDeadlineStore::new())
+        .with_registry(InMemoryProcessRegistry::new())
+        .build();
+
+    let inbox = InMemoryInboxStore::new();
+
+    // Snapshot every 2 events (low threshold for illustration;
+    // production value is typically 100–200).
+    const SNAP_INTERVAL: u64 = 2;
+
+    let process = ctx.spawn::<WimDeviceChangeWorkflow>(
+        TenantId::new(),
+        WorkflowId::new("wim-device-change", "FV2025-10-01"),
+    );
+
+    println!("  Stream : {}", process.stream_id());
+    println!();
+
+    // ── Step 1: Parse + validate EDIFACT — transport boundary ─────────────────
+    println!("[1/6] Parsing EDIFACT bytes with edi-energy...");
+
+    let msg = Platform::with_all_profiles().parse(UTILMD_GERAETEWECHSEL)?;
+    let msg_type = msg
+        .try_message_type()
+        .map(|t| t.as_str().to_owned())
+        .unwrap_or_else(|| "Unknown".to_owned());
+    let release = msg.detect_release()?.as_str().to_owned();
+    let pid = Pruefidentifikator::new(msg.detect_pruefidentifikator()?.as_u32())
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let msg_ref = MessageRef::new(msg.message_ref());
+
+    let (sender, receiver, melo_id, device_id, document_date) = if let AnyMessage::Utilmd(u) = &msg
+    {
+        (
+            MarktpartnerCode::new(
+                u.sender()
+                    .and_then(|n| n.party_id.as_deref())
+                    .unwrap_or_default(),
+            ),
+            MarktpartnerCode::new(
+                u.receiver()
+                    .and_then(|n| n.party_id.as_deref())
+                    .unwrap_or_default(),
+            ),
+            MeLo::new(
+                u.transactions()
+                    .first()
+                    .and_then(|tx| tx.ide.object_id.as_deref())
+                    .unwrap_or_default(),
+            ),
+            // device_id from LOC+172 — use a fallback if not parsed
+            DeviceId::new("ZHR-12345678"),
+            u.dtm()
+                .iter()
+                .find(|d| d.is_document_date())
+                .and_then(|d| d.value.clone())
+                .unwrap_or_default(),
+        )
+    } else {
+        unreachable!("fixture is always UTILMD")
+    };
+
+    let report = msg.validate()?;
+    let validation_passed = report.is_valid();
+    let validation_errors: Vec<String> = report
+        .errors()
+        .iter()
+        .map(|i| {
+            if let Some(rid) = i.rule_id() {
+                format!("[{rid}] {i}")
+            } else {
+                format!("{i}")
+            }
+        })
+        .collect();
+
+    println!("  ✓ Message type : {msg_type}");
+    println!("  ✓ Release      : {release}");
+    println!("  ✓ PID          : {pid}  (WiM Gerätewechsel Anmeldung)");
+    println!("  ✓ Sender (nMSB): {sender}");
+    println!("  ✓ Receiver (NB): {receiver}");
+    println!("  ✓ MeLo         : {melo_id}");
+    println!("  ✓ Device       : {device_id}");
+    println!(
+        "  ✓ Validation   : {} ({} issues)",
+        if validation_passed {
+            "passed"
+        } else {
+            "failed"
+        },
+        validation_errors.len()
+    );
+
+    // ── Step 2: Inbox deduplication ───────────────────────────────────────────
+    println!();
+    println!("[2/6] Inbox deduplication...");
+
+    let key = inbox_key(sender.as_str(), msg_ref.as_str()).map_err(|e| anyhow::anyhow!(e))?;
+    if !inbox.accept(&key).await? {
+        println!("  ✗ DUPLICATE — idempotency key: {key}");
+        return Ok(());
+    }
+    println!("  ✓ New message accepted — key: {key}");
+
+    // ── Step 3: ReceiveUtilmd — domain command (pure, no I/O) ────────────────
+    println!();
+    println!("[3/6] Dispatching ReceiveUtilmd...");
+
+    let envs = process
+        .execute(DeviceChangeCommand::ReceiveUtilmd {
+            pid,
+            sender: sender.clone(),
+            receiver: receiver.clone(),
+            melo_id: melo_id.clone(),
+            device_id: device_id.clone(),
+            document_date: document_date.clone(),
+            message_ref: msg_ref.clone(),
+            validation_passed,
+            validation_errors: validation_errors.clone(),
+        })
+        .await?;
+
+    for env in &envs {
+        println!(
+            "  ✓ {} (seq {}, schema_v{})",
+            env.event_type, env.sequence_number, env.schema_version
+        );
+    }
+
+    let utilmd_conversation_id = envs[0].conversation_id;
+    let utilmd_event_id = envs[0].event_id;
+
+    // ── 5-Werktage APERAK deadline (WiM / BNetzA BK6-18-032) ─────────────────
+    //
+    // WiM differs from GPKE here: the APERAK Frist is 5 BUSINESS DAYS,
+    // not 24 wall-clock hours. Public holidays are excluded.
+    //
+    // Contrast:
+    //   GPKE:  fristen::add_hours(now, 24)             — wall-clock
+    //   WiM:   fristen::add_werktage(now.date(), 5, BdewMaKo)  — business days
+    //   GeLi:  fristen::add_werktage(now.date(), 10, BdewMaKo) — business days
+    let received_date = time::OffsetDateTime::now_utc().date();
+    let aperak_due_date = fristen::add_werktage(received_date, 5, HolidayCalendar::BdewMaKo);
+    let aperak_due_at = aperak_due_date.midnight().assume_utc();
+
+    let aperak_deadline = Deadline::new(
+        process.stream_id().clone(),
+        process.process_id(),
+        process.tenant_id(),
+        process.workflow_id().clone(),
+        "aperak-response-window",
+        aperak_due_at,
+    );
+    let aperak_deadline_id = aperak_deadline.deadline_id();
+    ctx.deadline_store().register(&aperak_deadline).await?;
+    println!(
+        "  [deadline] APERAK window registered (5 Werktage — due {aperak_due_date}, id: {}…)",
+        &aperak_deadline_id.to_string()[..8]
+    );
+
+    ctx.registry()
+        .register(
+            process.tenant_id(),
+            &RegistryKey::from_conversation_and_sender(utilmd_conversation_id, sender.as_str()),
+            process.identity(),
+        )
+        .await?;
+    println!(
+        "  [registry] Registered under conversation_id {}…",
+        &utilmd_conversation_id.to_string()[..8]
+    );
+
+    // ── Step 4: DispatchAperak ────────────────────────────────────────────────
+    println!();
+    println!("[4/6] Dispatching positive APERAK (same conversation as UTILMD)...");
+
+    let aperak_ctx = CommandContext::new(
+        envs[0].tenant_id,
+        envs[0].process_id,
+        envs[0].workflow_id.clone(),
+    )
+    .with_conversation(utilmd_conversation_id)
+    .with_causation(utilmd_event_id.into());
+
+    let aperak_envs = process
+        .execute_with(
+            DeviceChangeCommand::DispatchAperak {
+                positive: true,
+                reason: None,
+            },
+            aperak_ctx,
+        )
+        .await?;
+
+    for env in &aperak_envs {
+        println!(
+            "  ✓ {} (seq {}, conv {}…)",
+            env.event_type,
+            env.sequence_number,
+            &env.conversation_id.to_string()[..8]
+        );
+    }
+
+    let aperak_env = &aperak_envs[0];
+    ctx.outbox_store()
+        .enqueue(&[OutboxMessage::new(
+            process.stream_id().clone(),
+            aperak_env.process_id,
+            aperak_env.tenant_id,
+            aperak_env.correlation_id,
+            aperak_env.conversation_id,
+            aperak_env.event_id,
+            "APERAK",
+            receiver.as_str(),
+            serde_json::json!({
+                "positive":       true,
+                "message_ref":    "APERAK-WIM-001",
+                "in_response_to": aperak_env.correlation_id.to_string(),
+            }),
+        )])
+        .await?;
+    ctx.deadline_store().cancel(aperak_deadline_id).await?;
+    println!(
+        "  [outbox] APERAK queued ({} pending)",
+        ctx.outbox_store().len().await?
+    );
+    println!("  [deadline] 5-Werktage window cancelled (APERAK dispatched in time)");
+
+    // ── Step 5: Complete ──────────────────────────────────────────────────────
+    println!();
+    println!("[5/6] Completing device change (meter swap confirmed)...");
+
+    let complete_envs = process
+        .execute(DeviceChangeCommand::Complete {
+            device_id: DeviceId::new("ZHR-99999999"),
+        })
+        .await?;
+    for env in &complete_envs {
+        println!("  ✓ {} (seq {})", env.event_type, env.sequence_number);
+    }
+
+    let snapped = process
+        .take_snapshot(ctx.snapshot_store(), SNAP_INTERVAL)
+        .await?;
+    println!(
+        "  [snap] Snapshot taken: {snapped} (event count {})",
+        process.event_count().await?
+    );
+
+    // ── Step 6: State + projections ───────────────────────────────────────────
+    println!();
+    println!("[6/6] Inspecting typed process state...");
+
+    let state = process.state_with_snapshot(ctx.snapshot_store()).await?;
+    println!("  Status              : {}", state.status_str());
+    // Access typed data from the enum variant — no unwrap() required.
+    if let mako_wim::DeviceChangeState::ValidationPassed(ref data)
+    | mako_wim::DeviceChangeState::AperakSent(ref data)
+    | mako_wim::DeviceChangeState::Completed(ref data)
+    | mako_wim::DeviceChangeState::Initiated(ref data) = state
+    {
+        println!("  MeLo                : {}", data.melo_id);
+        println!("  Incoming MSB (GLN)  : {}", data.incoming_msb);
+        println!("  Grid operator (GLN) : {}", data.grid_operator);
+        println!("  Device ID           : {}", data.device_id);
+        println!("  Prüfidentifikator   : {}", data.pruefidentifikator);
+    }
+
+    println!();
+    println!("  [6b] Full-replay projection (DeviceChangeProjection)...");
+    let all_events = ctx.event_store().load(process.stream_id()).await?;
+    let mut proj = DeviceChangeProjection::default();
+    ProjectionRunner::run(&mut proj, &all_events);
+    if let Some(rec) = proj.records.get(process.stream_id().as_str()) {
+        println!(
+            "  Status: {}  (events: {}, cursor seq: {})",
+            rec.status(),
+            rec.event_count(),
+            proj.last_seq
+        );
+    }
+
+    println!();
+    println!("  [6c] Incremental catch-up projection...");
+    let mut partial = DeviceChangeProjection::default();
+    ProjectionRunner::run(&mut partial, &all_events[..2]);
+    println!(
+        "  Partial cursor (after ReceiveUtilmd): seq {}",
+        partial.last_seq
+    );
+    ProjectionRunner::catch_up(&mut partial, &all_events);
+    if let Some(rec) = partial.records.get(process.stream_id().as_str()) {
+        println!(
+            "  After catch-up: seq {} — status: {}",
+            partial.last_seq,
+            rec.status()
+        );
+    }
+
+    // ── Guards ────────────────────────────────────────────────────────────────
+    println!();
+    println!("[+] Guard: stale ReceiveUtilmd on completed process is rejected...");
+    let guard_err = process
+        .execute(DeviceChangeCommand::ReceiveUtilmd {
+            pid,
+            sender: sender.clone(),
+            receiver: receiver.clone(),
+            melo_id: melo_id.clone(),
+            device_id: device_id.clone(),
+            document_date: document_date.clone(),
+            message_ref: msg_ref.clone(),
+            validation_passed: true,
+            validation_errors: vec![],
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        guard_err
+            .as_workflow_error()
+            .is_some_and(|we| we.is_invalid_state())
+    );
+    println!("  ✓ Rejected: {guard_err}");
+
+    println!();
+    println!("[+] Guard: AS4 retry duplicate is rejected by inbox...");
+    assert!(!inbox.accept(&key).await?);
+    println!("  ✓ Duplicate UTILMD rejected");
+
+    println!();
+    println!("[+] Guard: outbox delivery and drain...");
+    let pending = ctx.outbox_store().pending_now(10).await?;
+    assert_eq!(pending.len(), 1, "expected one pending APERAK");
+    ctx.outbox_store()
+        .acknowledge(pending[0].message_id)
+        .await?;
+    println!(
+        "  ✓ Outbox drained ({} remaining)",
+        ctx.outbox_store().len().await?
+    );
+
+    println!();
+    println!("[+] Guard: no overdue deadlines after cancellation...");
+    assert!(ctx.deadline_store().due_now(10).await?.deadlines.is_empty());
+    println!("  ✓ No overdue deadlines");
+
+    println!();
+    println!("[+] Guard: registry lookup by conversation_id...");
+    let found = ctx
+        .registry()
+        .lookup(
+            process.tenant_id(),
+            &RegistryKey::from_conversation_and_sender(utilmd_conversation_id, sender.as_str()),
+        )
+        .await?
+        .expect("must be registered");
+    assert_eq!(found.process_id, process.process_id());
+    let resumed = ctx.resume::<WimDeviceChangeWorkflow>(found);
+    println!(
+        "  ✓ Resumed process event count: {}",
+        resumed.event_count().await?
+    );
+
+    println!();
+    println!("══════════════════════════════════════════════════════════════════");
+    println!("  All checks passed — mako-wim + edi-energy round-trip OK.");
+    println!("══════════════════════════════════════════════════════════════════");
+
+    Ok(())
+}

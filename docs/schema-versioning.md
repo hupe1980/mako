@@ -1,3 +1,13 @@
+---
+layout: default
+title: Schema Versioning
+nav_order: 31
+parent: Release & Compliance
+description: >
+  Profile JSON schema versioning policy: additive changes, breaking changes,
+  MIN_SCHEMA_VERSION / MAX_SCHEMA_VERSION, and the codegen compatibility matrix.
+---
+
 # Profile Schema Versioning
 
 Each profile file (`mig.json`, `ahb.json`, `codelists.json`) carries a top-level
@@ -58,7 +68,7 @@ alters its semantics in a way that requires all profiles to be updated.
 
 ---
 
-## The `archived` field (F-010 lifecycle)
+## The `archived` field (profile lifecycle)
 
 Profiles have an optional `valid_until` date (ISO 8601, e.g. `"2026-09-30"`).
 Once the BDEW transition grace period has elapsed, the profile should no longer

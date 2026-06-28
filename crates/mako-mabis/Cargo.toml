@@ -1,0 +1,28 @@
+[package]
+name         = "mako-mabis"
+version.workspace     = true
+description  = "MABIS process engine for German electricity market balance group accounting (Marktprozesse Bilanzkreisverantwortlicher)"
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+keywords     = ["mabis", "bilanzkreis", "edifact", "energy", "mako"]
+categories   = ["data-structures"]
+
+[dependencies]
+mako-engine = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+time        = { workspace = true }
+
+[dev-dependencies]
+# edi-energy is only needed for integration tests.
+# Production code uses only mako-engine's ProfileRequirement for startup checks.
+edi-energy  = { path = "../edi-energy", features = ["mscons"] }
+# testing feature enables InMemoryXxx stores and EngineBuilder::new().
+mako-engine = { workspace = true, features = ["testing"] }
+serde_json  = { workspace = true }
+time        = { workspace = true }
+tokio       = { version = "1", features = ["full"] }

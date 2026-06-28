@@ -3,24 +3,45 @@ resolver = "2"
 members = [
     "crates/edi-energy",
     "crates/energy-api",
+    "crates/mako-engine",
+    "crates/mako-gpke",
+    "crates/mako-wim",
+    "crates/mako-geli-gas",
+    "crates/mako-mabis",
+    "crates/mako-as4",
+    "crates/mako-redispatch",
+    "crates/redispatch-xml",
+    "crates/dvgw-edi",
+    "crates/mako-gabi-gas",
+    "crates/mako-wim-gas",
+    "crates/mako-nbw",
+    "services/makod",
     "xtask",
 ]
 exclude = ["fuzz"]
 
 [workspace.package]
-version     = "0.1.0"
+version     = "0.2.0"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
 repository  = "https://github.com/hupe1980/mako"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
+anyhow      = "1"
+dashmap     = "6"
 edifact-rs  = "~0.10"
 miette      = { version = "7", features = ["fancy-no-syscall"] }
+serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
 thiserror   = "2"
-time        = { version = "0.3", features = ["std", "macros"] }
+time        = { version = "0.3", features = ["std", "macros", "serde-well-known", "parsing", "formatting"] }
+time-tz     = { version = "2", features = ["db"] }
+uuid        = { version = "1", features = ["v4", "v5", "serde"] }
+
+# ── Internal workspace crates (path + version so domain crates can be published) ─
+mako-engine = { path = "crates/mako-engine", version = "0.2" }
 
 # ── Release profile ─────────────────────────────────────────────────────────
 [profile.release]

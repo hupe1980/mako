@@ -1,3 +1,13 @@
+---
+layout: default
+title: Parsing
+nav_order: 10
+parent: Reference
+description: >
+  All entry points for reading EDI@Energy EDIFACT data: parse, parse_interchange,
+  Platform::parse, ParseConfig DoS limits, and error variants.
+---
+
 # Parsing Guide
 
 This guide covers all available entry points for reading EDIFACT data.

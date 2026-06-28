@@ -3,6 +3,7 @@
 
 /// Codegen schema version this module was generated from.
 /// Compared against `mig.json` `schema_version` in CI to detect drift.
+#[allow(dead_code)]
 pub(crate) const CODEGEN_SCHEMA_VERSION: u32 = 1;
 
 use std::sync::{Arc, LazyLock};
@@ -200,7 +201,7 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
 // Layer 2 scope: mandatory segment presence, element/component counts,
 // code-list validity. Does NOT check segment sequence or repetition
 // cardinality — those are Layer 3 (MIG ProfileRulePack) responsibilities.
-// Cached in a LazyLock so construction happens once per profile (F-019 fix).
+// Cached in a LazyLock so construction happens once per profile.
 static DIRECTORY_VALIDATOR_UTILMD_S2_2: LazyLock<DirectoryValidator> = LazyLock::new(|| {
     DirectoryValidator::new(
         "EDI@Energy-UTILMD-S2.2",
@@ -1067,6 +1068,273 @@ fn ahb_55555_pack() -> Arc<ProfileRulePack> {
     Arc::clone(&AHB_55555_PACK)
 }
 
+static AHB_56001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.2-56001")
+            .for_message_type("UTILMD")
+            .for_release("S2.2")
+            .with_named_stateless_rule_fn("AHB-56001-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-56001-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 56001", "56001", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56001-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-56001-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E01']", |q| matches!(q, "E01"), "56001", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56001-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-56001-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 56001", "56001", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56001-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-56001-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "56001", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56001-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-56001-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 56001", "56001", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56001-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-56001-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "56001", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56001-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-56001-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 56001", "56001", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56001-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-56001-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "56001", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56001-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-56001-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 56001", "56001", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56001-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-56001-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "56001", issues);
+            })
+
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A06" is present in SG4 // [358] Wenn STS+E01++A06 (Status: in Bearbeitung) vorhanden, ist DTM+Z07 (Lieferbeginndatum in Bearbeitung) Pflicht
+            .with_scoped_group_rule_fn("SG4", "AHB-56001-SG4-DTM-I0", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A06")) && !segs.iter().any(|s| s.tag == "DTM" && s.element_str(0).is_some_and(|v| v == "Z07")) {
+                    issues.push(ValidationIssue::new(ValidationSeverity::Error, "in SG4: conditional segment DTM (DE[0]=\"Z07\") is missing for Pruefidentifikator 56001 (I: when STS DE[0]=\"E01\"+DE[2]=\"A06\" is present in SG4)".to_owned()).with_rule_id("AHB-56001-SG4-DTM-I0").with_segment("DTM".to_owned()));
+                }
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4 // [48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht
+            .with_scoped_group_rule_fn("SG4", "AHB-56001-SG4-FTX-I0", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A99")) && !segs.iter().any(|s| s.tag == "FTX") {
+                    issues.push(ValidationIssue::new(ValidationSeverity::Error, "in SG4: conditional segment FTX is missing for Pruefidentifikator 56001 (I: when STS DE[0]=\"E01\"+DE[2]=\"A99\" is present in SG4)".to_owned()).with_rule_id("AHB-56001-SG4-FTX-I0").with_segment("FTX".to_owned()));
+                }
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_56001_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_56001_PACK)
+}
+
+static AHB_56002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.2-56002")
+            .for_message_type("UTILMD")
+            .for_release("S2.2")
+            .with_named_stateless_rule_fn("AHB-56002-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-56002-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 56002", "56002", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56002-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-56002-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E03']", |q| matches!(q, "E03"), "56002", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56002-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-56002-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 56002", "56002", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56002-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-56002-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "56002", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56002-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-56002-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 56002", "56002", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56002-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-56002-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "56002", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56002-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-56002-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 56002", "56002", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56002-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-56002-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "56002", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56002-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-56002-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 56002", "56002", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56002-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-56002-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "56002", issues);
+            })
+
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A06" is present in SG4 // [358] Wenn STS+E01++A06 (Status: in Bearbeitung) vorhanden, ist DTM+Z07 (Lieferbeginndatum in Bearbeitung) Pflicht
+            .with_scoped_group_rule_fn("SG4", "AHB-56002-SG4-DTM-I0", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A06")) && !segs.iter().any(|s| s.tag == "DTM" && s.element_str(0).is_some_and(|v| v == "Z07")) {
+                    issues.push(ValidationIssue::new(ValidationSeverity::Error, "in SG4: conditional segment DTM (DE[0]=\"Z07\") is missing for Pruefidentifikator 56002 (I: when STS DE[0]=\"E01\"+DE[2]=\"A06\" is present in SG4)".to_owned()).with_rule_id("AHB-56002-SG4-DTM-I0").with_segment("DTM".to_owned()));
+                }
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4 // [48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht
+            .with_scoped_group_rule_fn("SG4", "AHB-56002-SG4-FTX-I0", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A99")) && !segs.iter().any(|s| s.tag == "FTX") {
+                    issues.push(ValidationIssue::new(ValidationSeverity::Error, "in SG4: conditional segment FTX is missing for Pruefidentifikator 56002 (I: when STS DE[0]=\"E01\"+DE[2]=\"A99\" is present in SG4)".to_owned()).with_rule_id("AHB-56002-SG4-FTX-I0").with_segment("FTX".to_owned()));
+                }
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_56002_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_56002_PACK)
+}
+
+static AHB_56003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.2-56003")
+            .for_message_type("UTILMD")
+            .for_release("S2.2")
+            .with_named_stateless_rule_fn("AHB-56003-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-56003-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 56003", "56003", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56003-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-56003-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E0F']", |q| matches!(q, "E0F"), "56003", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56003-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-56003-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 56003", "56003", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56003-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-56003-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "56003", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56003-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-56003-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 56003", "56003", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56003-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-56003-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "56003", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56003-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-56003-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 56003", "56003", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56003-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-56003-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "56003", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56003-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-56003-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 56003", "56003", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56003-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-56003-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "56003", issues);
+            })
+
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A06" is present in SG4 // [358] Wenn STS+E01++A06 (Status: in Bearbeitung) vorhanden, ist DTM+Z07 (Lieferbeginndatum in Bearbeitung) Pflicht
+            .with_scoped_group_rule_fn("SG4", "AHB-56003-SG4-DTM-I0", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A06")) && !segs.iter().any(|s| s.tag == "DTM" && s.element_str(0).is_some_and(|v| v == "Z07")) {
+                    issues.push(ValidationIssue::new(ValidationSeverity::Error, "in SG4: conditional segment DTM (DE[0]=\"Z07\") is missing for Pruefidentifikator 56003 (I: when STS DE[0]=\"E01\"+DE[2]=\"A06\" is present in SG4)".to_owned()).with_rule_id("AHB-56003-SG4-DTM-I0").with_segment("DTM".to_owned()));
+                }
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4 // [48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht
+            .with_scoped_group_rule_fn("SG4", "AHB-56003-SG4-FTX-I0", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A99")) && !segs.iter().any(|s| s.tag == "FTX") {
+                    issues.push(ValidationIssue::new(ValidationSeverity::Error, "in SG4: conditional segment FTX is missing for Pruefidentifikator 56003 (I: when STS DE[0]=\"E01\"+DE[2]=\"A99\" is present in SG4)".to_owned()).with_rule_id("AHB-56003-SG4-FTX-I0").with_segment("FTX".to_owned()));
+                }
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_56003_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_56003_PACK)
+}
+
+static AHB_56004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.2-56004")
+            .for_message_type("UTILMD")
+            .for_release("S2.2")
+            .with_named_stateless_rule_fn("AHB-56004-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-56004-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 56004", "56004", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56004-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-56004-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E1A']", |q| matches!(q, "E1A"), "56004", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56004-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-56004-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 56004", "56004", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56004-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-56004-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "56004", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56004-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-56004-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 56004", "56004", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56004-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-56004-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "56004", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56004-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-56004-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 56004", "56004", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56004-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-56004-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "56004", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56004-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-56004-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 56004", "56004", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-56004-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-56004-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "56004", issues);
+            })
+
+            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4 // [7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht
+            .with_scoped_group_rule_fn("SG4", "AHB-56004-SG4-DTM-I0", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "7") && s.element_str(2).is_some_and(|v| v == "ZG9" || v == "ZH1" || v == "ZH2")) && !segs.iter().any(|s| s.tag == "DTM") {
+                    issues.push(ValidationIssue::new(ValidationSeverity::Error, "in SG4: conditional segment DTM is missing for Pruefidentifikator 56004 (I: when STS DE[0]=\"7\"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4)".to_owned()).with_rule_id("AHB-56004-SG4-DTM-I0").with_segment("DTM".to_owned()));
+                }
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+
+            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4 // [11] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+36 (Ende) Pflicht
+            .with_scoped_group_rule_fn("SG4", "AHB-56004-SG4-DTM-I1", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "7") && s.element_str(2).is_some_and(|v| v == "ZG9" || v == "ZH1" || v == "ZH2")) && !segs.iter().any(|s| s.tag == "DTM" && s.element_str(0).is_some_and(|v| v == "36")) {
+                    issues.push(ValidationIssue::new(ValidationSeverity::Error, "in SG4: conditional segment DTM (DE[0]=\"36\") is missing for Pruefidentifikator 56004 (I: when STS DE[0]=\"7\"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4)".to_owned()).with_rule_id("AHB-56004-SG4-DTM-I1").with_segment("DTM".to_owned()));
+                }
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4 // [48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht
+            .with_scoped_group_rule_fn("SG4", "AHB-56004-SG4-FTX-I0", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A99")) && !segs.iter().any(|s| s.tag == "FTX") {
+                    issues.push(ValidationIssue::new(ValidationSeverity::Error, "in SG4: conditional segment FTX is missing for Pruefidentifikator 56004 (I: when STS DE[0]=\"E01\"+DE[2]=\"A99\" is present in SG4)".to_owned()).with_rule_id("AHB-56004-SG4-FTX-I0").with_segment("FTX".to_owned()));
+                }
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_56004_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_56004_PACK)
+}
+
 static AHB_ALL_PACK_UTILMD_S2_2: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     let pack = ProfileRulePack::new("UTILMD-AHB-S2.2-ALL")
         .for_message_type("UTILMD")
@@ -1098,6 +1366,18 @@ static AHB_ALL_PACK_UTILMD_S2_2: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(
     let pack = pack
         .merge_with_override(ahb_55555_pack().as_ref().clone())
         .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_56001_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_56002_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_56003_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_56004_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
     Arc::new(pack)
 });
 
@@ -1112,6 +1392,10 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             Some(55017) => ahb_55017_pack(),
             Some(55018) => ahb_55018_pack(),
             Some(55555) => ahb_55555_pack(),
+            Some(56001) => ahb_56001_pack(),
+            Some(56002) => ahb_56002_pack(),
+            Some(56003) => ahb_56003_pack(),
+            Some(56004) => ahb_56004_pack(),
             None => Arc::clone(&AHB_ALL_PACK_UTILMD_S2_2),
             Some(_unknown) => Arc::new(ProfileRulePack::new("unknown-pid")
                 .for_message_type("UTILMD")

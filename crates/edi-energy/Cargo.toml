@@ -11,6 +11,8 @@ keywords     = ["edifact", "edi", "energy", "german", "bdew"]
 categories   = ["parser-implementations", "encoding"]
 
 [dependencies]
+# Minimum version: 0.9.1 — required for ValidationIssue::context_get() and
+# related context-map APIs used in src/report.rs.
 edifact-rs = { workspace = true }
 miette     = { workspace = true, optional = true }
 serde      = { version = "1", features = ["derive"], optional = true }
@@ -100,6 +102,7 @@ quotes-archive  = ["quotes"]
 comdis-archive  = ["comdis"]
 pricat-archive  = ["pricat"]
 utilts-archive  = ["utilts"]
+
 ## Enables structured tracing spans via the `tracing` crate.
 tracing      = ["dep:tracing"]
 ## Enables `serde::Serialize` for [`EdiEnergyReport`] and related types, and

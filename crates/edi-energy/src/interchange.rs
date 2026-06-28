@@ -1,4 +1,4 @@
-/// Process-layer types for EDIFACT interchange envelope handling (F-032).
+/// Process-layer types for EDIFACT interchange envelope handling.
 ///
 /// An EDIFACT *interchange* (UNB…UNZ envelope) wraps one or more messages.
 /// Standard `parse_interchange()` discards the UNB metadata; the types here
@@ -105,7 +105,7 @@ impl MessageEnvelope {
     pub fn validate(&self) -> Result<EdiEnergyReport, crate::Error> {
         // Delegate to the EdiEnergyMessage trait impl for ALL variants, including
         // Unknown.  The Unknown impl returns Ok(report) with a warning, which is
-        // exactly the consistent behaviour we want here (resolves F-015).
+        // exactly the consistent behaviour we want here (resolves.
         EdiEnergyMessage::validate(&self.message)
     }
 
@@ -114,7 +114,7 @@ impl MessageEnvelope {
     ///
     /// Pass the registry from the owning [`crate::Platform`] rather than calling
     /// this via the global singleton.  Using an explicit registry is required for
-    /// test isolation and multi-tenant deployments (F-007 fix).
+    /// test isolation and multi-tenant deployments.
     ///
     /// For convenience in simple single-registry programs, call
     /// [`MessageEnvelope::is_wire_code_acceptable_on_global`] instead.
@@ -142,16 +142,21 @@ impl MessageEnvelope {
         self.is_wire_code_acceptable_on(date, crate::registry::ReleaseRegistry::global())
     }
 
-    /// Extract the GLN from a 13-digit numeric sender ID, or return `None`.
+    /// Extract the sender's party identifier from a 13-digit numeric sender ID
+    /// (BDEW code, agency `293`, or GS1 GLN, agency `9`), or return `None`.
+    ///
+    /// Returns `None` for 16-char EIC codes — check [`InterchangeHeader::sender_id`]
+    /// directly when EIC senders are expected.
     #[must_use]
-    pub fn sender_gln(&self) -> Option<&str> {
-        extract_gln(&self.header.sender_id)
+    pub fn sender_party_id(&self) -> Option<&str> {
+        extract_13digit_party_id(&self.header.sender_id)
     }
 
-    /// Extract the GLN from a 13-digit numeric receiver ID, or return `None`.
+    /// Extract the receiver's party identifier from a 13-digit numeric receiver ID,
+    /// or return `None`.
     #[must_use]
-    pub fn receiver_gln(&self) -> Option<&str> {
-        extract_gln(&self.header.receiver_id)
+    pub fn receiver_party_id(&self) -> Option<&str> {
+        extract_13digit_party_id(&self.header.receiver_id)
     }
 
     /// The transmission date from the interchange header, if present.
@@ -226,7 +231,7 @@ impl ParsedInterchange {
 
 // ── GLN extraction helper ─────────────────────────────────────────────────────
 
-fn extract_gln(id: &str) -> Option<&str> {
+fn extract_13digit_party_id(id: &str) -> Option<&str> {
     if id.len() == 13 && id.bytes().all(|b| b.is_ascii_digit()) {
         Some(id)
     } else {

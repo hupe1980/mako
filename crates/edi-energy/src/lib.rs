@@ -3,10 +3,10 @@
 //! # Quick start
 //!
 //! ```rust,no_run
-//! use edi_energy::{parse, AnyMessage, EdiEnergyMessage};
+//! use edi_energy::{Platform, AnyMessage, EdiEnergyMessage};
 //!
 //! let input: &[u8] = b"UNB+UNOA:3+SENDER+RECEIVER+200101:0900+1'UNH+1+UTILMD:D:11A:UN:S2.2'BGM+E01+11001+9'UNT+2+1'UNZ+1+1'";
-//! let msg = parse(input)?;
+//! let msg = Platform::with_all_profiles().parse(input)?;
 //! let report = msg.validate()?;
 //! assert!(report.is_valid());
 //! # Ok::<(), edi_energy::Error>(())
@@ -50,6 +50,7 @@
 // Builder methods that return `Self` all have obvious must-use semantics.
 #![allow(clippy::return_self_not_must_use)]
 
+mod agency_code;
 mod any_message;
 mod custom_rule_pack;
 mod error;
@@ -74,6 +75,7 @@ pub mod registry;
 #[doc(hidden)]
 pub(crate) mod generated;
 
+pub use agency_code::AgencyCode;
 pub use any_message::AnyMessage;
 pub use custom_rule_pack::CustomRulePack;
 pub use error::{Error, ProfileError};
@@ -99,40 +101,22 @@ pub use report::EdiEnergyReport;
 pub mod releases {
     #[cfg(any(
         feature = "aperak",
-        feature = "aperak-archive",
         feature = "comdis",
-        feature = "comdis-archive",
         feature = "contrl",
-        feature = "contrl-archive",
         feature = "iftsta",
-        feature = "iftsta-archive",
         feature = "insrpt",
-        feature = "insrpt-archive",
         feature = "invoic",
-        feature = "invoic-archive",
         feature = "mscons",
-        feature = "mscons-archive",
         feature = "ordchg",
-        feature = "ordchg-archive",
         feature = "orders",
-        feature = "orders-archive",
         feature = "ordrsp",
-        feature = "ordrsp-archive",
         feature = "partin",
-        feature = "partin-archive",
         feature = "pricat",
-        feature = "pricat-archive",
         feature = "quotes",
-        feature = "quotes-archive",
         feature = "remadv",
-        feature = "remadv-archive",
         feature = "reqote",
-        feature = "reqote-archive",
         feature = "utilmd",
-        feature = "utilmd-archive",
         feature = "utilts",
-        feature = "utilts-archive",
-        feature = "archive",
     ))]
     pub use crate::generated::releases::*;
 }
@@ -142,7 +126,7 @@ pub use edifact_rs::{
     EdifactDeserialize, EdifactSerialize, ReaderConfig, ValidationIssue, ValidationReport,
     ValidationSeverity,
 };
-// ValidationIssueSummary is unconditionally available (F-021 fix).
+// ValidationIssueSummary is unconditionally available.
 // serde::Serialize is available on the type when the `serde` feature is enabled.
 pub use report::ValidationIssueSummary;
 

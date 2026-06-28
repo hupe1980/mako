@@ -3,6 +3,7 @@
 
 /// Codegen schema version this module was generated from.
 /// Compared against `mig.json` `schema_version` in CI to detect drift.
+#[allow(dead_code)]
 pub(crate) const CODEGEN_SCHEMA_VERSION: u32 = 1;
 
 use std::sync::{Arc, LazyLock};
@@ -155,7 +156,7 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
 // Layer 2 scope: mandatory segment presence, element/component counts,
 // code-list validity. Does NOT check segment sequence or repetition
 // cardinality — those are Layer 3 (MIG ProfileRulePack) responsibilities.
-// Cached in a LazyLock so construction happens once per profile (F-019 fix).
+// Cached in a LazyLock so construction happens once per profile.
 static DIRECTORY_VALIDATOR_PARTIN_1_0F: LazyLock<DirectoryValidator> = LazyLock::new(|| {
     DirectoryValidator::new(
         "EDI@Energy-PARTIN-1.0f",
@@ -318,7 +319,7 @@ fn rule_unt_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
 ///
 /// This rule only fires for segment tags that appear exclusively in the
 /// message header (not in any segment group).  Tags shared between the
-/// header and groups use per-group window rules instead (F-010 fix).
+/// header and groups use per-group window rules instead.
 fn rule_com_max_occurrences(
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
@@ -340,7 +341,7 @@ fn rule_com_max_occurrences(
 ///
 /// This rule only fires for segment tags that appear exclusively in the
 /// message header (not in any segment group).  Tags shared between the
-/// header and groups use per-group window rules instead (F-010 fix).
+/// header and groups use per-group window rules instead.
 fn rule_fii_max_occurrences(
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
@@ -362,7 +363,7 @@ fn rule_fii_max_occurrences(
 ///
 /// This rule only fires for segment tags that appear exclusively in the
 /// message header (not in any segment group).  Tags shared between the
-/// header and groups use per-group window rules instead (F-010 fix).
+/// header and groups use per-group window rules instead.
 fn rule_ftx_max_occurrences(
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
@@ -384,7 +385,7 @@ fn rule_ftx_max_occurrences(
 ///
 /// This rule only fires for segment tags that appear exclusively in the
 /// message header (not in any segment group).  Tags shared between the
-/// header and groups use per-group window rules instead (F-010 fix).
+/// header and groups use per-group window rules instead.
 fn rule_dtm_max_occurrences(
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
@@ -406,7 +407,7 @@ fn rule_dtm_max_occurrences(
 ///
 /// This rule only fires for segment tags that appear exclusively in the
 /// message header (not in any segment group).  Tags shared between the
-/// header and groups use per-group window rules instead (F-010 fix).
+/// header and groups use per-group window rules instead.
 fn rule_cav_max_occurrences(
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
@@ -428,7 +429,7 @@ fn rule_cav_max_occurrences(
 ///
 /// This rule only fires for segment tags that appear exclusively in the
 /// message header (not in any segment group).  Tags shared between the
-/// header and groups use per-group window rules instead (F-010 fix).
+/// header and groups use per-group window rules instead.
 fn rule_nad_max_occurrences(
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,

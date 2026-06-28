@@ -3,6 +3,7 @@
 
 /// Codegen schema version this module was generated from.
 /// Compared against `mig.json` `schema_version` in CI to detect drift.
+#[allow(dead_code)]
 pub(crate) const CODEGEN_SCHEMA_VERSION: u32 = 1;
 
 use std::sync::{Arc, LazyLock};
@@ -200,10 +201,10 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
 // Layer 2 scope: mandatory segment presence, element/component counts,
 // code-list validity. Does NOT check segment sequence or repetition
 // cardinality — those are Layer 3 (MIG ProfileRulePack) responsibilities.
-// Cached in a LazyLock so construction happens once per profile (F-019 fix).
-static DIRECTORY_VALIDATOR_UTILMD_S2_1: LazyLock<DirectoryValidator> = LazyLock::new(|| {
+// Cached in a LazyLock so construction happens once per profile.
+static DIRECTORY_VALIDATOR_UTILMD_S1_1A: LazyLock<DirectoryValidator> = LazyLock::new(|| {
     DirectoryValidator::new(
-        "EDI@Energy-UTILMD-S2.1",
+        "EDI@Energy-UTILMD-S1.1a",
         segment_lookup,
         is_code_valid,
         suggest_code,
@@ -213,7 +214,7 @@ static DIRECTORY_VALIDATOR_UTILMD_S2_1: LazyLock<DirectoryValidator> = LazyLock:
 });
 
 pub(crate) fn directory_validator() -> &'static DirectoryValidator {
-    &DIRECTORY_VALIDATOR_UTILMD_S2_1
+    &DIRECTORY_VALIDATOR_UTILMD_S1_1A
 }
 
 fn rule_unh_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
@@ -322,7 +323,7 @@ fn rule_group_sg1_rff_max_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by RFF occurs {count} times; maximum is 99"),
             )
-            .with_rule_id("MIG-UTILMD-MIG-S2.1-GROUP-SG1-RFF-CARD-MAX")
+            .with_rule_id("MIG-UTILMD-MIG-S1.1a-GROUP-SG1-RFF-CARD-MAX")
             .with_segment("RFF".to_owned()),
         );
     }
@@ -343,7 +344,7 @@ fn rule_group_sg2_nad_max_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by NAD occurs {count} times; maximum is 99"),
             )
-            .with_rule_id("MIG-UTILMD-MIG-S2.1-GROUP-SG2-NAD-CARD-MAX")
+            .with_rule_id("MIG-UTILMD-MIG-S1.1a-GROUP-SG2-NAD-CARD-MAX")
             .with_segment("NAD".to_owned()),
         );
     }
@@ -364,7 +365,7 @@ fn rule_group_sg4_ide_max_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by IDE occurs {count} times; maximum is 9_999"),
             )
-            .with_rule_id("MIG-UTILMD-MIG-S2.1-GROUP-SG4-IDE-CARD-MAX")
+            .with_rule_id("MIG-UTILMD-MIG-S1.1a-GROUP-SG4-IDE-CARD-MAX")
             .with_segment("IDE".to_owned()),
         );
     }
@@ -384,7 +385,7 @@ fn rule_group_sg2_nad_min_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by NAD occurs {count} times; minimum is 1"),
             )
-            .with_rule_id("MIG-UTILMD-MIG-S2.1-GROUP-SG2-NAD-CARD-MIN")
+            .with_rule_id("MIG-UTILMD-MIG-S1.1a-GROUP-SG2-NAD-CARD-MIN")
             .with_segment("NAD".to_owned()),
         );
     }
@@ -404,7 +405,7 @@ fn rule_group_sg4_ide_min_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by IDE occurs {count} times; minimum is 1"),
             )
-            .with_rule_id("MIG-UTILMD-MIG-S2.1-GROUP-SG4-IDE-CARD-MIN")
+            .with_rule_id("MIG-UTILMD-MIG-S1.1a-GROUP-SG4-IDE-CARD-MIN")
             .with_segment("IDE".to_owned()),
         );
     }
@@ -427,7 +428,7 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
                     ValidationSeverity::Error,
                     "segment appears out of order".to_owned(),
                 )
-                .with_rule_id("MIG-UTILMD-MIG-S2.1-ORDER")
+                .with_rule_id("MIG-UTILMD-MIG-S1.1a-ORDER")
                 .with_segment(seg.tag.to_owned()),
             );
         }
@@ -437,9 +438,9 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
 
 static MIG_UTILMD_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("UTILMD-MIG-S2.1")
+        ProfileRulePack::new("UTILMD-MIG-S1.1a")
             .for_message_type("UTILMD")
-            .for_release("S2.1")
+            .for_release("S1.1a")
             .with_stateless_rule_fn(rule_unh_mandatory)
             .with_stateless_rule_fn(rule_bgm_mandatory)
             .with_stateless_rule_fn(rule_dtm_mandatory)
@@ -496,9 +497,9 @@ fn rule_ahb_55555_sts_cond_0(
 }
 
 static AHB_55001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
-    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55001")
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S1.1a-55001")
             .for_message_type("UTILMD")
-            .for_release("S2.1")
+            .for_release("S1.1a")
             .with_named_stateless_rule_fn("AHB-55001-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-55001-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55001", "55001", issues);
             })
@@ -560,9 +561,9 @@ fn ahb_55001_pack() -> Arc<ProfileRulePack> {
 }
 
 static AHB_55002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
-    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55002")
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S1.1a-55002")
             .for_message_type("UTILMD")
-            .for_release("S2.1")
+            .for_release("S1.1a")
             .with_named_stateless_rule_fn("AHB-55002-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-55002-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55002", "55002", issues);
             })
@@ -624,9 +625,9 @@ fn ahb_55002_pack() -> Arc<ProfileRulePack> {
 }
 
 static AHB_55003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
-    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55003")
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S1.1a-55003")
             .for_message_type("UTILMD")
-            .for_release("S2.1")
+            .for_release("S1.1a")
             .with_named_stateless_rule_fn("AHB-55003-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-55003-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55003", "55003", issues);
             })
@@ -688,9 +689,9 @@ fn ahb_55003_pack() -> Arc<ProfileRulePack> {
 }
 
 static AHB_55004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
-    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55004")
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S1.1a-55004")
             .for_message_type("UTILMD")
-            .for_release("S2.1")
+            .for_release("S1.1a")
             .with_named_stateless_rule_fn("AHB-55004-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-55004-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55004", "55004", issues);
             })
@@ -763,9 +764,9 @@ fn ahb_55004_pack() -> Arc<ProfileRulePack> {
 }
 
 static AHB_55005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
-    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55005")
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S1.1a-55005")
             .for_message_type("UTILMD")
-            .for_release("S2.1")
+            .for_release("S1.1a")
             .with_named_stateless_rule_fn("AHB-55005-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-55005-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55005", "55005", issues);
             })
@@ -838,9 +839,9 @@ fn ahb_55005_pack() -> Arc<ProfileRulePack> {
 }
 
 static AHB_55006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
-    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55006")
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S1.1a-55006")
             .for_message_type("UTILMD")
-            .for_release("S2.1")
+            .for_release("S1.1a")
             .with_named_stateless_rule_fn("AHB-55006-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-55006-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55006", "55006", issues);
             })
@@ -913,9 +914,9 @@ fn ahb_55006_pack() -> Arc<ProfileRulePack> {
 }
 
 static AHB_55017_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
-    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55017")
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S1.1a-55017")
             .for_message_type("UTILMD")
-            .for_release("S2.1")
+            .for_release("S1.1a")
             .with_named_stateless_rule_fn("AHB-55017-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-55017-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55017", "55017", issues);
             })
@@ -966,9 +967,9 @@ fn ahb_55017_pack() -> Arc<ProfileRulePack> {
 }
 
 static AHB_55018_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
-    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55018")
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S1.1a-55018")
             .for_message_type("UTILMD")
-            .for_release("S2.1")
+            .for_release("S1.1a")
             .with_named_stateless_rule_fn("AHB-55018-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-55018-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55018", "55018", issues);
             })
@@ -1019,9 +1020,9 @@ fn ahb_55018_pack() -> Arc<ProfileRulePack> {
 }
 
 static AHB_55555_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
-    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55555")
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S1.1a-55555")
             .for_message_type("UTILMD")
-            .for_release("S2.1")
+            .for_release("S1.1a")
             .with_named_stateless_rule_fn("AHB-55555-BGM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "BGM", "AHB-55555-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55555", "55555", issues);
             })
@@ -1067,10 +1068,10 @@ fn ahb_55555_pack() -> Arc<ProfileRulePack> {
     Arc::clone(&AHB_55555_PACK)
 }
 
-static AHB_ALL_PACK_UTILMD_S2_1: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
-    let pack = ProfileRulePack::new("UTILMD-AHB-S2.1-ALL")
+static AHB_ALL_PACK_UTILMD_S1_1A: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    let pack = ProfileRulePack::new("UTILMD-AHB-S1.1a-ALL")
         .for_message_type("UTILMD")
-        .for_release("S2.1");
+        .for_release("S1.1a");
     let pack = pack
         .merge_with_override(ahb_55001_pack().as_ref().clone())
         .expect("AHB union pack merge_with_override failed");
@@ -1112,7 +1113,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             Some(55017) => ahb_55017_pack(),
             Some(55018) => ahb_55018_pack(),
             Some(55555) => ahb_55555_pack(),
-            None => Arc::clone(&AHB_ALL_PACK_UTILMD_S2_1),
+            None => Arc::clone(&AHB_ALL_PACK_UTILMD_S1_1A),
             Some(_unknown) => Arc::new(ProfileRulePack::new("unknown-pid")
                 .for_message_type("UTILMD")
                 .with_named_stateless_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
@@ -1124,7 +1125,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
         }
 }
 
-static RELEASE_UTILMD_FV20241001: LazyLock<Release> = LazyLock::new(|| Release::new("S2.1"));
+static RELEASE_UTILMD_FV20241001: LazyLock<Release> = LazyLock::new(|| Release::new("S1.1a"));
 
 pub(crate) struct UtilmdFv20241001Profile;
 
@@ -1139,7 +1140,7 @@ impl Profile for UtilmdFv20241001Profile {
         Some(::time::macros::date!(2024 - 10 - 01))
     }
     fn valid_until(&self) -> Option<::time::Date> {
-        Some(::time::macros::date!(2026 - 09 - 30))
+        Some(::time::macros::date!(2025 - 06 - 05))
     }
     fn ahb_revision(&self) -> Option<&'static str> {
         Some("S2.1")

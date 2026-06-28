@@ -1,0 +1,11 @@
+[package]
+name         = "dvgw-edi"
+version.workspace     = true
+description  = "DVGW EDIFACT format parser and validator for the German gas market (ALLOCAT, NOMINT, NOMRES)"
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+keywords     = ["dvgw", "edifact", "gas", "allocat", "nomint"]
+categories   = ["parser-implementations", "encoding"]

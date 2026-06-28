@@ -13,7 +13,7 @@
 //! ```
 
 use edi_energy::{
-    EdiEnergyMessage, ObjectType, Pruefidentifikator, Release,
+    EdiEnergyMessage, ObjectType, Platform, Pruefidentifikator, Release,
     builders::{AperakBuilder, ContrlBuilder, MsconsBuilder, UtilmdBuilder},
 };
 
@@ -31,12 +31,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // ── UTILMD ────────────────────────────────────────────────────────────────────
 
 fn build_utilmd() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== UTILMD (S2.1 — Strom, valid from 01.10.2024) ===");
+    println!("=== UTILMD (S2.1 — Strom, valid from 01.10.2025) ===");
 
     let pid = Pruefidentifikator::new(55001)?;
-    // S2.1 is the current UTILMD Strom format (fv20241001).
-    // Use releases::utilmd_fv20241001() to get the validated Release constant.
-    let release = edi_energy::releases::utilmd_fv20241001().clone();
+    // S2.1 is the current UTILMD Strom format (fv20251001).
+    // Use releases::utilmd_fv20251001() to get the validated Release constant.
+    let release = edi_energy::releases::utilmd_fv20251001().clone();
 
     let bytes = UtilmdBuilder::new(release)
         .pruefidentifikator(pid)
@@ -58,10 +58,10 @@ fn build_utilmd() -> Result<(), Box<dyn std::error::Error>> {
         "Segments     : {}",
         bytes.iter().filter(|&&b| b == b'\'').count()
     );
-    println!("Payload      :\n{}", text);
+    println!("Payload      :\n{text}");
 
     // Re-parse and validate what we built
-    let msg = edi_energy::parse(&bytes)?;
+    let msg = Platform::with_all_profiles().parse(&bytes)?;
     println!(
         "Type         : {}",
         msg.try_message_type()
@@ -103,9 +103,9 @@ fn build_mscons() -> Result<(), Box<dyn std::error::Error>> {
         "Segments     : {}",
         bytes.iter().filter(|&&b| b == b'\'').count()
     );
-    println!("Payload      :\n{}", text);
+    println!("Payload      :\n{text}");
 
-    let msg = edi_energy::parse(&bytes)?;
+    let msg = Platform::with_all_profiles().parse(&bytes)?;
     println!(
         "Type         : {}",
         msg.try_message_type()
@@ -144,9 +144,9 @@ fn build_aperak() -> Result<(), Box<dyn std::error::Error>> {
         "Segments     : {}",
         bytes.iter().filter(|&&b| b == b'\'').count()
     );
-    println!("Payload      :\n{}", text);
+    println!("Payload      :\n{text}");
 
-    let msg = edi_energy::parse(&bytes)?;
+    let msg = Platform::with_all_profiles().parse(&bytes)?;
     println!(
         "Type         : {}",
         msg.try_message_type()
@@ -178,9 +178,9 @@ fn build_contrl() -> Result<(), Box<dyn std::error::Error>> {
         "Segments     : {}",
         bytes.iter().filter(|&&b| b == b'\'').count()
     );
-    println!("Payload      :\n{}", text);
+    println!("Payload      :\n{text}");
 
-    let msg = edi_energy::parse(&bytes)?;
+    let msg = Platform::with_all_profiles().parse(&bytes)?;
     println!(
         "Type         : {}",
         msg.try_message_type()

@@ -3,6 +3,7 @@
 
 /// Codegen schema version this module was generated from.
 /// Compared against `mig.json` `schema_version` in CI to detect drift.
+#[allow(dead_code)]
 pub(crate) const CODEGEN_SCHEMA_VERSION: u32 = 1;
 
 use std::sync::{Arc, LazyLock};
@@ -213,7 +214,7 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
 // Layer 2 scope: mandatory segment presence, element/component counts,
 // code-list validity. Does NOT check segment sequence or repetition
 // cardinality — those are Layer 3 (MIG ProfileRulePack) responsibilities.
-// Cached in a LazyLock so construction happens once per profile (F-019 fix).
+// Cached in a LazyLock so construction happens once per profile.
 static DIRECTORY_VALIDATOR_ORDERS_1_4C: LazyLock<DirectoryValidator> = LazyLock::new(|| {
     DirectoryValidator::new(
         "EDI@Energy-ORDERS-1.4c",

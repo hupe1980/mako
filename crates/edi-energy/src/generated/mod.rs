@@ -1,6 +1,6 @@
 // @generated — do not edit by hand; run `cargo xtask codegen` to regenerate
 //
-// Generated profiles: 36
+// Generated profiles: 40
 #![allow(clippy::used_underscore_binding)]
 
 pub(super) mod ahb_helpers;
@@ -67,6 +67,8 @@ mod quotes_fv20250401;
 mod quotes_fv20260401;
 #[cfg(feature = "remadv")]
 mod remadv_fv20251001;
+#[cfg(feature = "remadv")]
+mod remadv_fv20260401;
 #[cfg(feature = "reqote")]
 mod reqote_fv20250401;
 #[cfg(feature = "reqote")]
@@ -75,6 +77,12 @@ mod reqote_fv20260401;
 mod utilmd_fv20241001;
 #[cfg(feature = "utilmd")]
 mod utilmd_fv20241001_gas;
+#[cfg(feature = "utilmd")]
+mod utilmd_fv20250606;
+#[cfg(feature = "utilmd")]
+mod utilmd_fv20251001;
+#[cfg(feature = "utilmd")]
+mod utilmd_fv20251001_gas;
 #[cfg(feature = "utilmd")]
 mod utilmd_fv20261001;
 #[cfg(feature = "utilmd")]
@@ -144,6 +152,8 @@ pub(crate) fn register_profiles(_profiles: &mut Vec<&'static dyn Profile>) {
     _profiles.push(&quotes_fv20260401::PROFILE);
     #[cfg(feature = "remadv")]
     _profiles.push(&remadv_fv20251001::PROFILE);
+    #[cfg(feature = "remadv")]
+    _profiles.push(&remadv_fv20260401::PROFILE);
     #[cfg(feature = "reqote")]
     _profiles.push(&reqote_fv20250401::PROFILE);
     #[cfg(feature = "reqote")]
@@ -152,6 +162,12 @@ pub(crate) fn register_profiles(_profiles: &mut Vec<&'static dyn Profile>) {
     _profiles.push(&utilmd_fv20241001::PROFILE);
     #[cfg(feature = "utilmd")]
     _profiles.push(&utilmd_fv20241001_gas::PROFILE);
+    #[cfg(feature = "utilmd")]
+    _profiles.push(&utilmd_fv20250606::PROFILE);
+    #[cfg(feature = "utilmd")]
+    _profiles.push(&utilmd_fv20251001::PROFILE);
+    #[cfg(feature = "utilmd")]
+    _profiles.push(&utilmd_fv20251001_gas::PROFILE);
     #[cfg(feature = "utilmd")]
     _profiles.push(&utilmd_fv20261001::PROFILE);
     #[cfg(feature = "utilmd")]
@@ -223,6 +239,8 @@ const _: () = assert!(quotes_fv20250401::CODEGEN_SCHEMA_VERSION == CURRENT_CODEG
 const _: () = assert!(quotes_fv20260401::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
 #[cfg(feature = "remadv")]
 const _: () = assert!(remadv_fv20251001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
+#[cfg(feature = "remadv")]
+const _: () = assert!(remadv_fv20260401::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
 #[cfg(feature = "reqote")]
 const _: () = assert!(reqote_fv20250401::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
 #[cfg(feature = "reqote")]
@@ -232,6 +250,13 @@ const _: () = assert!(utilmd_fv20241001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEG
 #[cfg(feature = "utilmd")]
 const _: () =
     assert!(utilmd_fv20241001_gas::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
+#[cfg(feature = "utilmd")]
+const _: () = assert!(utilmd_fv20250606::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
+#[cfg(feature = "utilmd")]
+const _: () = assert!(utilmd_fv20251001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
+#[cfg(feature = "utilmd")]
+const _: () =
+    assert!(utilmd_fv20251001_gas::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
 #[cfg(feature = "utilmd")]
 const _: () = assert!(utilmd_fv20261001::CODEGEN_SCHEMA_VERSION == CURRENT_CODEGEN_SCHEMA_VERSION);
 #[cfg(feature = "utilmd")]
@@ -259,78 +284,50 @@ const _: () = assert!(utilts_fv20260401::CODEGEN_SCHEMA_VERSION == CURRENT_CODEG
 pub mod releases {
     #[cfg(any(
         feature = "aperak",
-        feature = "aperak-archive",
         feature = "archive",
         feature = "comdis",
-        feature = "comdis-archive",
         feature = "contrl",
         feature = "contrl-archive",
         feature = "iftsta",
-        feature = "iftsta-archive",
         feature = "insrpt",
         feature = "insrpt-archive",
         feature = "invoic",
-        feature = "invoic-archive",
         feature = "mscons",
         feature = "mscons-archive",
         feature = "ordchg",
-        feature = "ordchg-archive",
         feature = "orders",
-        feature = "orders-archive",
         feature = "ordrsp",
-        feature = "ordrsp-archive",
         feature = "partin",
-        feature = "partin-archive",
         feature = "pricat",
-        feature = "pricat-archive",
         feature = "quotes",
-        feature = "quotes-archive",
         feature = "remadv",
-        feature = "remadv-archive",
         feature = "reqote",
-        feature = "reqote-archive",
         feature = "utilmd",
-        feature = "utilmd-archive",
-        feature = "utilts",
-        feature = "utilts-archive"
+        feature = "utilts"
     ))]
     use crate::Release;
     #[cfg(any(
         feature = "aperak",
-        feature = "aperak-archive",
         feature = "archive",
         feature = "comdis",
-        feature = "comdis-archive",
         feature = "contrl",
         feature = "contrl-archive",
         feature = "iftsta",
-        feature = "iftsta-archive",
         feature = "insrpt",
         feature = "insrpt-archive",
         feature = "invoic",
-        feature = "invoic-archive",
         feature = "mscons",
         feature = "mscons-archive",
         feature = "ordchg",
-        feature = "ordchg-archive",
         feature = "orders",
-        feature = "orders-archive",
         feature = "ordrsp",
-        feature = "ordrsp-archive",
         feature = "partin",
-        feature = "partin-archive",
         feature = "pricat",
-        feature = "pricat-archive",
         feature = "quotes",
-        feature = "quotes-archive",
         feature = "remadv",
-        feature = "remadv-archive",
         feature = "reqote",
-        feature = "reqote-archive",
         feature = "utilmd",
-        feature = "utilmd-archive",
-        feature = "utilts",
-        feature = "utilts-archive"
+        feature = "utilts"
     ))]
     use std::sync::LazyLock;
 
@@ -533,6 +530,13 @@ pub mod releases {
         &R
     }
 
+    /// Release `2.9f` — valid from profile directory `fv20260401`.
+    #[cfg(feature = "remadv")]
+    pub fn remadv_fv20260401() -> &'static Release {
+        static R: LazyLock<Release> = LazyLock::new(|| Release::new("2.9f"));
+        &R
+    }
+
     /// Release `1.3c` — valid from profile directory `fv20250401`.
     #[cfg(feature = "reqote")]
     pub fn reqote_fv20250401() -> &'static Release {
@@ -547,16 +551,37 @@ pub mod releases {
         &R
     }
 
-    /// Release `S2.1` — valid from profile directory `fv20241001`.
+    /// Release `S1.1a` — valid from profile directory `fv20241001`.
     #[cfg(feature = "utilmd")]
     pub fn utilmd_fv20241001() -> &'static Release {
+        static R: LazyLock<Release> = LazyLock::new(|| Release::new("S1.1a"));
+        &R
+    }
+
+    /// Release `G1.0a` — valid from profile directory `fv20241001_gas`.
+    #[cfg(feature = "utilmd")]
+    pub fn utilmd_fv20241001_gas() -> &'static Release {
+        static R: LazyLock<Release> = LazyLock::new(|| Release::new("G1.0a"));
+        &R
+    }
+
+    /// Release `S1.2` — valid from profile directory `fv20250606`.
+    #[cfg(feature = "utilmd")]
+    pub fn utilmd_fv20250606() -> &'static Release {
+        static R: LazyLock<Release> = LazyLock::new(|| Release::new("S1.2"));
+        &R
+    }
+
+    /// Release `S2.1` — valid from profile directory `fv20251001`.
+    #[cfg(feature = "utilmd")]
+    pub fn utilmd_fv20251001() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("S2.1"));
         &R
     }
 
-    /// Release `G1.1` — valid from profile directory `fv20241001_gas`.
+    /// Release `G1.1` — valid from profile directory `fv20251001_gas`.
     #[cfg(feature = "utilmd")]
-    pub fn utilmd_fv20241001_gas() -> &'static Release {
+    pub fn utilmd_fv20251001_gas() -> &'static Release {
         static R: LazyLock<Release> = LazyLock::new(|| Release::new("G1.1"));
         &R
     }

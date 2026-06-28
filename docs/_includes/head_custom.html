@@ -1,0 +1,46 @@
+<!-- ── mako custom <head> additions ─────────────────────────────────────────
+     Injected by Just the Docs via _includes/head_custom.html
+──────────────────────────────────────────────────────────────────────────── -->
+
+<!-- Canonical URL -->
+{% if page.url %}
+<link rel="canonical" href="{{ page.url | absolute_url }}">
+{% endif %}
+
+<!-- Open Graph / Twitter card -->
+<meta property="og:type"        content="website">
+<meta property="og:title"       content="{{ page.title | default: site.title }}">
+<meta property="og:description" content="{{ page.description | default: site.description }}">
+<meta property="og:url"         content="{{ page.url | absolute_url }}">
+<meta property="og:image"       content="{{ '/assets/img/og-card.png' | absolute_url }}">
+<meta property="og:site_name"   content="{{ site.title }}">
+<meta name="twitter:card"       content="summary_large_image">
+<meta name="twitter:title"      content="{{ page.title | default: site.title }}">
+<meta name="twitter:description" content="{{ page.description | default: site.description }}">
+<meta name="twitter:image"      content="{{ '/assets/img/og-card.png' | absolute_url }}">
+
+<!-- Structured data: SoftwareSourceCode -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  "name": "mako",
+  "description": "Production-grade Rust library for German energy market communication (BDEW MaKo / EDI@Energy).",
+  "url": "{{ site.url }}{{ site.baseurl }}",
+  "codeRepository": "https://github.com/hupe1980/edi-energy-rs",
+  "programmingLanguage": "Rust",
+  "license": "https://opensource.org/licenses/MIT",
+  "keywords": ["EDIFACT", "EDI@Energy", "MaKo", "BDEW", "energy market", "Rust", "UTILMD", "MSCONS"]
+}
+</script>
+
+<!-- Mermaid diagram support (loaded only when a page uses ``` mermaid blocks) -->
+{% if page.mermaid or layout.mermaid %}
+<script defer src="https://cdn.jsdelivr.net/npm/mermaid@{{ site.mermaid.version }}/dist/mermaid.min.js"
+        integrity="sha384-placeholder" crossorigin="anonymous"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    mermaid.initialize({ startOnLoad: true, theme: "default", securityLevel: "loose" });
+  });
+</script>
+{% endif %}

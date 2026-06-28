@@ -10,10 +10,14 @@ const HELP: &str = "\
 Usage: cargo xtask <COMMAND>
 
 Commands:
+  add-release         Scaffold a new BDEW format-version profile directory skeleton
+  bump-version        Bump workspace version in root Cargo.toml (usage: bump-version X.Y.Z)
   codegen             Generate Rust profile code from EDI@Energy specifications
   validate-profiles   Validate all committed profiles for consistency errors
   validate-pruefids   Check that every AHB Pruefidentifikator has a test fixture
+  validate-release-codes  Verify that every profile's release code appears in a UNH 0057 fixture
   audit-ahb           Comprehensive AHB rule-coverage analysis for all profiles
+  check-release-coverage  Fail when no profile covers the current (or --date) date
 
 Options for `validate-pruefids`:
   --message-type <TYPE> Filter coverage check to the given message type (e.g. INVOIC)
@@ -28,12 +32,17 @@ Options for `generate-fixtures`:
   --dry-run              Print what would be generated without touching the FS.
   --message-type <TYPE>  Only generate for one message type (e.g. UTILMD).
 
+  --date <YYYY-MM-DD>   Date to check against (default: today)
+
 Options for `audit-ahb`:
   --message-type <TYPE>   Limit audit to one message type (e.g. UTILMD)
   --output-json  <PATH>   Write machine-readable JSON report to a file
   --min-density  <N>      Fail if avg (seg+grp) rules/PID < N for any active profile
   --min-cond-rules <N>    Fail if total conditional_rules < N for any active profile
   extract-pdf         Extract MIG/AHB table data from a PDF (best-effort draft)
+  extract-docx        Extract MIG/AHB table data from a DOCX (exact column parser)
+  import-xml-ahb      Import AHB from official BDEW XML (requires BDEW subscription)
+  import-xml-mig      Import MIG from official BDEW XML (requires BDEW subscription)
   import-codelists    Import code values from CSV into a codelists.json profile
   generate-fixtures   Generate minimal synthetic .edi fixtures for uncovered PIDs
   help                Print this help message
@@ -49,6 +58,12 @@ Options for `codegen`:
                         feature to compile and are excluded from the default build.
                         Run this annually after the BDEW format update cycle.
   --grace-days <N>      Grace period in days after valid_until before archiving (default: 90).
+
+Options for `add-release`:
+  --fv           <FV>       BDEW format-version string (e.g. FV2027-10-01)
+  --date         <DATE>     valid_from date ISO 8601; inferred from --fv when omitted
+  --message-type <TYPE>     Only scaffold one message type (e.g. UTILMD)
+  --dry-run                 Print what would be created without touching the FS
 
 Options for `release-diff`:
   --message-type <TYPE> Message type to diff (e.g. UTILMD)
@@ -67,28 +82,59 @@ Options for `extract-pdf`:
   --message-type <TYPE>     Message type (utilmd, mscons, aperak, contrl, …)
   --release      <RELEASE>  EDI@Energy release (inferred from path if omitted)
 
+Options for `extract-docx`:
+  --file         <PATH>     DOCX file to extract from
+  --message-type <TYPE>     Message type (utilmd, mscons, aperak, contrl, …)
+  --release      <RELEASE>  EDI@Energy release (inferred from path if omitted)
+  --mode         <MODE>     What to extract: mig | ahb | both (default: both)
+
+Options for `import-xml-ahb`:
+  --file         <PATH>     BDEW AHB XML file (<AHB> root)
+  --message-type <TYPE>     Message type (inferred from XML root when possible)
+  --release      <RELEASE>  Format version (e.g. FV2026-10-01; inferred from path)
+  --valid-from   <DATE>     ISO 8601 profile activation date (e.g. 2026-10-01)
+
+Options for `import-xml-mig`:
+  --file         <PATH>     BDEW MIG XML file (<M_MSGTYPE> root)
+  --message-type <TYPE>     Message type (inferred from XML root when possible)
+  --release      <RELEASE>  Format version (e.g. FV2026-10-01; inferred from path)
+  --valid-from   <DATE>     ISO 8601 profile activation date (e.g. 2026-10-01)
+
 Exit codes:
   0  All checks passed / codegen succeeded
   1  One or more errors were found
 ";
 
+mod add_release;
 mod audit_ahb;
+mod bump_version;
+mod check_release_coverage;
 mod codegen;
+mod extract_docx;
 mod extract_pdf;
 mod generate_fixtures;
 mod import_codelists;
+mod import_xml_profiles;
 mod release_diff;
 mod validate_profiles;
 mod validate_pruefids;
+mod validate_release_codes;
 
 fn main() {
     match std::env::args().nth(1).as_deref() {
+        Some("add-release") => add_release(),
+        Some("bump-version") => bump_version(),
         Some("audit-ahb") => audit_ahb(),
+        Some("check-release-coverage") => check_release_coverage::check_release_coverage(),
         Some("codegen") => codegen(),
         Some("validate-profiles") => validate_profiles(),
         Some("validate-pruefids") => validate_pruefids(),
+        Some("validate-release-codes") => validate_release_codes(),
         Some("release-diff") => release_diff(),
         Some("extract-pdf") => extract_pdf(),
+        Some("extract-docx") => extract_docx(),
+        Some("import-xml-ahb") => import_xml_ahb(),
+        Some("import-xml-mig") => import_xml_mig(),
         Some("import-codelists") => import_codelists(),
         Some("generate-fixtures") => generate_fixtures(),
         Some("help" | "--help" | "-h") | None => print!("{HELP}"),
@@ -102,6 +148,24 @@ fn main() {
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
+
+fn add_release() {
+    let (workspace_root, _) = workspace_info();
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let ok = add_release::run(&workspace_root, &args);
+    if !ok {
+        std::process::exit(1);
+    }
+}
+
+fn bump_version() {
+    let (workspace_root, _) = workspace_info();
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let ok = bump_version::run(&workspace_root, &args);
+    if !ok {
+        std::process::exit(1);
+    }
+}
 
 fn audit_ahb() {
     let (workspace_root, _) = workspace_info();
@@ -135,13 +199,22 @@ fn validate_pruefids() {
         .windows(2)
         .find(|w| w[0] == "--min-coverage")
         .and_then(|w| w[1].parse().ok())
-        .unwrap_or(0);
+        .unwrap_or(100);
     let ok = validate_pruefids::run(
         &workspace_root,
         message_type_filter.as_deref(),
         strict,
         min_coverage_pct,
     );
+    if !ok {
+        std::process::exit(1);
+    }
+}
+
+fn validate_release_codes() {
+    let (workspace_root, _) = workspace_info();
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let ok = validate_release_codes::run(&workspace_root, &args);
     if !ok {
         std::process::exit(1);
     }
@@ -161,6 +234,33 @@ fn extract_pdf() {
     let (workspace_root, _) = workspace_info();
     let args: Vec<String> = std::env::args().skip(2).collect();
     let ok = extract_pdf::run(&workspace_root, &args);
+    if !ok {
+        std::process::exit(1);
+    }
+}
+
+fn extract_docx() {
+    let (workspace_root, _) = workspace_info();
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let ok = extract_docx::run(&workspace_root, &args);
+    if !ok {
+        std::process::exit(1);
+    }
+}
+
+fn import_xml_ahb() {
+    let (workspace_root, _) = workspace_info();
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let ok = import_xml_profiles::run_import_ahb(&workspace_root, &args);
+    if !ok {
+        std::process::exit(1);
+    }
+}
+
+fn import_xml_mig() {
+    let (workspace_root, _) = workspace_info();
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let ok = import_xml_profiles::run_import_mig(&workspace_root, &args);
     if !ok {
         std::process::exit(1);
     }

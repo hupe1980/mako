@@ -3,6 +3,7 @@
 
 /// Codegen schema version this module was generated from.
 /// Compared against `mig.json` `schema_version` in CI to detect drift.
+#[allow(dead_code)]
 pub(crate) const CODEGEN_SCHEMA_VERSION: u32 = 1;
 
 use std::sync::{Arc, LazyLock};
@@ -187,7 +188,7 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
 // Layer 2 scope: mandatory segment presence, element/component counts,
 // code-list validity. Does NOT check segment sequence or repetition
 // cardinality — those are Layer 3 (MIG ProfileRulePack) responsibilities.
-// Cached in a LazyLock so construction happens once per profile (F-019 fix).
+// Cached in a LazyLock so construction happens once per profile.
 static DIRECTORY_VALIDATOR_IFTSTA_2_1: LazyLock<DirectoryValidator> = LazyLock::new(|| {
     DirectoryValidator::new(
         "EDI@Energy-IFTSTA-2.1",
@@ -268,7 +269,7 @@ fn rule_nad_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     }
 }
 
-/// Layer 3 — group-window rule for `EQD` groups (F-004).
+/// Layer 3 — group-window rule for `EQD` groups.
 ///
 /// When a `EQD` group is present, the mandatory inner segments
 /// must also be present within each group window.

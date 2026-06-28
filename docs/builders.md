@@ -1,3 +1,13 @@
+---
+layout: default
+title: Builders
+nav_order: 12
+parent: Reference
+description: >
+  Fluent type-state builder API for constructing valid EDI@Energy EDIFACT
+  messages: UTILMD, MSCONS, APERAK, CONTRL, INVOIC, REMADV, ORDERS, ORDRSP.
+---
+
 # Builder Guide
 
 The `edi_energy::builders` module provides a fluent, type-state builder API for constructing valid EDI@Energy EDIFACT messages programmatically.

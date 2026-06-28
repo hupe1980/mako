@@ -28,7 +28,7 @@ use crate::{
 /// **Builder**: Use `crate::PricatBuilder` to create PRICAT messages
 /// programmatically. The builder covers the header (UNH, BGM, RFF+Z13,
 /// DTM+137, NAD+MR/MS, UNT); SG17/SG36/SG40 price body segments are not
-/// yet supported (see REFACTOR.md F-030).
+/// yet supported (see REFACTOR.md).
 ///
 /// | Field      | Segment | Meaning                             |
 /// |------------|---------|-------------------------------------|

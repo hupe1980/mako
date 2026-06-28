@@ -1,0 +1,11 @@
+[package]
+name         = "mako-nbw"
+version.workspace     = true
+description  = "Netzbetreiberwechsel process engine for German energy market DSO concession change (PARTIN-based market location transfer) — coming soon"
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+keywords     = ["nbw", "netzbetreiberwechsel", "partin", "energy", "bdew"]
+categories   = ["data-structures"]

@@ -1,0 +1,262 @@
+{
+  "schema_version": 1,
+  "message_type": "REMADV",
+  "release": "2.9f",
+  "source_document": "REMADV AHB 2.9f vom 01.04.2026 — SCAFFOLD: verify against BDEW publication before production use",
+  "pruefidentifikatoren": [
+    {
+      "code": 33001,
+      "name": "Bestätigung",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "DLI",
+          "requirement": "O",
+          "_description": "DLI is optional per MIG 2.9e (no AHB constraint for PID 33001)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.9e (no AHB constraint for PID 33001)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG5",
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MIG: MOA is mandatory in SG5 per MIG; AHB requirement unverified — O for safety"
+        }
+      ]
+    },
+    {
+      "code": 33002,
+      "name": "Abweisung",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "DLI",
+          "requirement": "O",
+          "_description": "DLI is optional per MIG 2.9e (no AHB constraint for PID 33002)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.9e (no AHB constraint for PID 33002)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG5",
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MIG: MOA is mandatory in SG5; AHB requirement unverified — O for safety"
+        }
+      ]
+    },
+    {
+      "code": 33003,
+      "name": "Abweisung Kopf- und Summenebene",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DLI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.9e (no AHB constraint for PID 33003)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG5",
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MIG: MOA is mandatory in SG5; AHB requirement unverified — O for safety"
+        }
+      ]
+    },
+    {
+      "code": 33004,
+      "name": "Abweisung Positionsebene",
+      "segment_rules": [
+        {
+          "tag": "AJT",
+          "requirement": "M"
+        },
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "CUX",
+          "requirement": "M"
+        },
+        {
+          "tag": "DLI",
+          "requirement": "M"
+        },
+        {
+          "tag": "DOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "MOA",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX is optional per MIG 2.9e (no AHB constraint for PID 33004)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG5",
+          "tag": "MOA",
+          "requirement": "O",
+          "_description": "MIG: MOA is mandatory in SG5; AHB requirement unverified — O for safety"
+        }
+      ]
+    }
+  ]
+}

@@ -7,13 +7,11 @@
 //!   [`Error::ProfileNotFound`], not a spurious validation result.
 //! - A message carrying a registered release code validates correctly.
 
-#![allow(unused_imports, dead_code)]
-
-use edi_energy::{AnyMessage, EdiEnergyMessage, Error, MessageType, Release};
+use edi_energy::{EdiEnergyMessage, Error, MessageType, Release};
 
 // ── Multi-release coexistence fixtures ───────────────────────────────────────
 
-/// Well-formed UTILMD message with the registered release S2.1 (fv20241001 Strom).
+/// Well-formed UTILMD message with the registered release S2.1 (fv20251001 Strom).
 #[cfg(feature = "utilmd")]
 const UTILMD_S2_1: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+240101:0000+1'\
@@ -49,7 +47,9 @@ UNZ+1+2'";
 #[test]
 #[cfg(feature = "utilmd")]
 fn registered_release_validates_against_own_profile() {
-    let msg = edi_energy::parse(UTILMD_S2_1).expect("parse must succeed");
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(UTILMD_S2_1)
+        .expect("parse must succeed");
     let release = msg.detect_release().expect("release must be detected");
     assert_eq!(release.as_str(), "S2.1");
 
@@ -68,7 +68,9 @@ fn registered_release_validates_against_own_profile() {
 #[test]
 #[cfg(feature = "utilmd")]
 fn unregistered_release_returns_profile_not_found() {
-    let msg = edi_energy::parse(UTILMD_554A_UNKNOWN).expect("parse must succeed");
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(UTILMD_554A_UNKNOWN)
+        .expect("parse must succeed");
     let release = msg.detect_release().expect("release must be detected");
     assert_eq!(release.as_str(), "5.5.4a");
 
@@ -80,7 +82,7 @@ fn unregistered_release_returns_profile_not_found() {
             assert_eq!(message_type, MessageType::Utilmd);
             assert_eq!(r.as_str(), "5.5.4a");
         }
-        other => panic!("expected ProfileNotFound, got {:?}", other),
+        other => panic!("expected ProfileNotFound, got {other:?}"),
     }
 }
 
@@ -95,8 +97,12 @@ fn unregistered_release_returns_profile_not_found() {
 #[cfg(feature = "utilmd")]
 fn mixed_release_validates_independently() {
     // Parse both as separate interchanges (full UNB/UNZ envelopes).
-    let known = edi_energy::parse(UTILMD_S2_1).expect("parse must succeed");
-    let unknown = edi_energy::parse(UTILMD_554A_UNKNOWN).expect("parse must succeed");
+    let known = edi_energy::Platform::with_all_profiles()
+        .parse(UTILMD_S2_1)
+        .expect("parse must succeed");
+    let unknown = edi_energy::Platform::with_all_profiles()
+        .parse(UTILMD_554A_UNKNOWN)
+        .expect("parse must succeed");
 
     // Validating the registered release first.
     assert!(
@@ -129,7 +135,9 @@ fn mixed_release_validates_independently() {
 #[cfg(feature = "utilmd")]
 fn validate_against_explicit_release_overrides_assoc_code() {
     // Parse a 5.5.4a message (no registered profile for that release).
-    let msg = edi_energy::parse(UTILMD_554A_UNKNOWN).expect("parse must succeed");
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(UTILMD_554A_UNKNOWN)
+        .expect("parse must succeed");
 
     // Pinning to the registered S2.1 profile allows validation to proceed.
     let pinned = Release::new("S2.1");
@@ -150,63 +158,6 @@ fn validate_against_explicit_release_overrides_assoc_code() {
 }
 
 // ── Grace-period boundary tests ───────────────────────────────────────────────
-
-/// `is_acceptable_on` exact boundary tests for MSCONS fv20240401 (wire 2.4c).
-///
-/// Profile: `valid_from = 2024-04-01`, `valid_until = 2025-09-30`.
-/// Grace period ends: `valid_until + 7 days = 2025-10-07`.
-///
-/// Expected acceptability:
-///   - `2024-03-31` → false (before valid_from)
-///   - `2024-04-01` → true  (exactly valid_from)
-///   - `2025-09-30` → true  (exactly valid_until / last normative day)
-///   - `2025-10-07` → true  (valid_until + 7, last grace day)
-///   - `2025-10-08` → false (valid_until + 8, grace expired)
-#[cfg(all(
-    feature = "mscons",
-    any(feature = "mscons-archive", feature = "archive")
-))]
-#[test]
-fn is_acceptable_on_grace_period_boundaries_mscons_fv20240401() {
-    use edi_energy::registry::ReleaseRegistry;
-    use time::macros::date;
-
-    let reg = ReleaseRegistry::global();
-    let _release = Release::new("2.4c");
-    // fv20240401 profile (valid_from 2024-04-01, valid_until 2025-09-30) —
-    // we use profiles_for to find it, but is_acceptable_on uses the latest
-    // registered profile for "2.4c" (which may be fv20251001).  So we test
-    // the grace expiry of the *fv20240401* profile through `TransitionState`
-    // and the direct `is_acceptable_on` for the specific transition moment.
-
-    // Verify valid_until via profiles_for.
-    let p = reg
-        .profiles_for(MessageType::Mscons)
-        .find(|p| {
-            p.valid_from() == Some(date!(2024 - 04 - 01))
-                && p.valid_until() == Some(date!(2025 - 09 - 30))
-        })
-        .expect("fv20240401 must have valid_until 2025-09-30");
-    assert_eq!(p.release().as_str(), "2.4c");
-
-    // The final day of the grace window for the outgoing profile is 2025-10-07.
-    // After that it must no longer be accepted.  is_acceptable_on uses the
-    // *profile* for (MessageType, release) — fv20251001 is also 2.4c (takes
-    // over) so we drive this via TransitionState instead.
-    let ts_last_grace = reg.transition_state(MessageType::Mscons, date!(2025 - 10 - 07), None);
-    assert!(
-        !matches!(ts_last_grace, edi_energy::TransitionState::None),
-        "on 2025-10-07 there must be a known state (Stable or Transition)"
-    );
-
-    let ts_expired = reg.transition_state(MessageType::Mscons, date!(2025 - 10 - 08), None);
-    // On 2025-10-08 fv20251001 became normative (valid_from = 2025-10-01),
-    // so the state must be Stable (not None, not Transition with the old release).
-    assert!(
-        !matches!(ts_expired, edi_energy::TransitionState::None),
-        "on 2025-10-08 some MSCONS profile must still be active"
-    );
-}
 
 /// `is_acceptable_on` pre-launch boundary: a date before `valid_from` must
 /// return `false`.
@@ -342,47 +293,50 @@ fn transition_state_returns_both_profiles_during_grace_period() {
 
 // ── Same-wire-code disambiguation ────────────────────────────────────────────
 
-/// When two profiles share the same wire release code (e.g. COMDIS `"1.0g"` in
-/// both `fv20251001` and `fv20261001`), `profile_on` must return the profile
+/// When two profiles share the same wire release code (e.g. INVOIC `"2.8e"` in
+/// both `fv20251001` and `fv20260401`), `profile_on` must return the profile
 /// whose `valid_from` is the greatest value that is ≤ `date`.
+///
+/// INVOIC MIG 2.8e covers Oct 2025 onward; `fv20260401` supersedes `fv20251001`
+/// (AHB update only) but keeps the same wire code.
 ///
 /// This guards against the previous H-2 bug where the index used
 /// `HashMap::insert` and silently discarded the earlier profile.
-#[cfg(feature = "comdis")]
+#[cfg(feature = "invoic")]
 #[test]
 fn profile_on_disambiguates_same_wire_code_by_date() {
     use edi_energy::registry::ReleaseRegistry;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let release = Release::new("1.0g");
+    let release = Release::new("2.8e");
 
-    // Both fv20251001 (valid_from 2025-10-01) and fv20261001 (valid_from 2026-10-01)
-    // carry the wire code "1.0g".  On a date before fv20261001 the earlier profile
+    // Both fv20251001 (valid_from 2025-10-01) and fv20260401 (valid_from 2026-04-01)
+    // carry the wire code "2.8e".  On a date before fv20260401 the earlier profile
     // must be returned.
     let profile_2025 = reg
-        .profile_on(MessageType::Comdis, &release, date!(2025 - 10 - 01))
-        .expect("profile_on must find a COMDIS 1.0g profile on 2025-10-01");
+        .profile_on(MessageType::Invoic, &release, date!(2025 - 10 - 01))
+        .expect("profile_on must find an INVOIC 2.8e profile on 2025-10-01");
     assert_eq!(
         profile_2025.valid_from(),
         Some(date!(2025 - 10 - 01)),
         "on 2025-10-01 the fv20251001 profile must be selected"
     );
 
-    // On or after fv20261001 the later profile must be returned.
+    // On or after fv20260401 the later profile must be returned.
     let profile_2026 = reg
-        .profile_on(MessageType::Comdis, &release, date!(2026 - 10 - 01))
-        .expect("profile_on must find a COMDIS 1.0g profile on 2026-10-01");
+        .profile_on(MessageType::Invoic, &release, date!(2026 - 04 - 01))
+        .expect("profile_on must find an INVOIC 2.8e profile on 2026-04-01");
     assert_eq!(
         profile_2026.valid_from(),
-        Some(date!(2026 - 10 - 01)),
-        "on 2026-10-01 the fv20261001 profile must be selected"
+        Some(date!(2026 - 04 - 01)),
+        "on 2026-04-01 the fv20260401 profile must be selected"
     );
 
     // On a date between the two profiles only the earlier one is eligible.
     let profile_between = reg
-        .profile_on(MessageType::Comdis, &release, date!(2026 - 03 - 15))
-        .expect("profile_on must find a COMDIS 1.0g profile on 2026-03-15");
+        .profile_on(MessageType::Invoic, &release, date!(2026 - 01 - 15))
+        .expect("profile_on must find an INVOIC 2.8e profile on 2026-01-15");
     assert_eq!(
         profile_between.valid_from(),
         Some(date!(2025 - 10 - 01)),
@@ -390,18 +344,12 @@ fn profile_on_disambiguates_same_wire_code_by_date() {
     );
 }
 
-// ── CONTRL same-wire-code disambiguation (F-038) ─────────────────────────────
+// ── CONTRL same-wire-code disambiguation ─────────────────────────────
 
-/// CONTRL `fv20251001` (archived, `valid_until: 2025-12-31`) and
-/// `fv20260101` (current, `valid_until: open`) both carry wire release `"2.0b"`.
+/// `fv20260101` carries wire release `"2.0b"`.
 ///
-/// The registry must return the correct profile for each validity window:
-/// - On a date in 2025: `fv20251001` (valid_from 2025-10-01)
-/// - On a date in 2026+: `fv20260101` (valid_from 2026-01-01)
-/// - On exactly the boundary (2026-01-01): `fv20260101`
-///
-/// The archived `fv20251001` profile must never be returned for 2026+ dates.
-#[cfg(any(feature = "contrl", feature = "contrl-archive"))]
+/// The registry must return `fv20260101` for all dates from 2026-01-01 onward.
+#[cfg(feature = "contrl")]
 #[test]
 fn contrl_same_wire_code_disambiguation() {
     use edi_energy::registry::ReleaseRegistry;
@@ -410,22 +358,7 @@ fn contrl_same_wire_code_disambiguation() {
     let reg = ReleaseRegistry::global();
     let release = Release::new("2.0b");
 
-    // On 2025-11-15 (inside fv20251001 validity window): the archived profile
-    // must be returned.  Note: requires `contrl-archive` feature to be compiled.
-    #[cfg(feature = "contrl-archive")]
-    {
-        let profile_2025 = reg
-            .profile_on(MessageType::Contrl, &release, date!(2025 - 11 - 15))
-            .expect("profile_on must find a CONTRL 2.0b profile on 2025-11-15");
-        assert_eq!(
-            profile_2025.valid_from(),
-            Some(date!(2025 - 10 - 01)),
-            "on 2025-11-15 the fv20251001 profile must be selected"
-        );
-    }
-
-    // On exactly 2026-01-01 (valid_from of fv20260101): the newer profile must
-    // be returned regardless of the archived fv20251001.
+    // On exactly 2026-01-01 (valid_from of fv20260101): the profile must be returned.
     let profile_boundary = reg
         .profile_on(MessageType::Contrl, &release, date!(2026 - 01 - 01))
         .expect("profile_on must find a CONTRL 2.0b profile on 2026-01-01");
@@ -443,5 +376,311 @@ fn contrl_same_wire_code_disambiguation() {
         profile_2026.valid_from(),
         Some(date!(2026 - 01 - 01)),
         "on 2026-06-01 the fv20260101 profile must be selected"
+    );
+}
+
+// ── UTILMD Strom S2.1 boundary disambiguation ───────────────────────────────
+
+/// `fv20251001` carries UTILMD Strom wire release `"S2.1"`.
+///
+/// S2.1 is only available from fv20251001 (valid_from 2025-10-01) onwards.
+/// Before that date, `profile_on` must return `Err`.
+/// This test guards the corrected profile release codes.
+#[cfg(feature = "utilmd")]
+#[test]
+fn utilmd_strom_s2_1_boundary_selects_correct_profile() {
+    use edi_energy::registry::ReleaseRegistry;
+    use time::macros::date;
+
+    let reg = ReleaseRegistry::global();
+    let release = Release::new("S2.1");
+
+    // Before fv20251001 valid_from: S2.1 is not yet active — profile_on returns Err.
+    let result_before = reg.profile_on(MessageType::Utilmd, &release, date!(2025 - 09 - 30));
+    assert!(
+        result_before.is_err(),
+        "on 2025-09-30 (before S2.1 validity) profile_on must return Err"
+    );
+
+    // On the first day of fv20251001 validity: must select the 2025-10-01 profile.
+    let profile_boundary = reg
+        .profile_on(MessageType::Utilmd, &release, date!(2025 - 10 - 01))
+        .expect("profile_on must find a UTILMD S2.1 profile on 2025-10-01");
+    assert_eq!(
+        profile_boundary.valid_from(),
+        Some(date!(2025 - 10 - 01)),
+        "on 2025-10-01 (first day of fv20251001) the 2025-10-01 profile must be selected"
+    );
+
+    // Well into fv20251001: still the 2025 profile.
+    let profile_2026 = reg
+        .profile_on(MessageType::Utilmd, &release, date!(2026 - 03 - 15))
+        .expect("profile_on must find a UTILMD S2.1 profile on 2026-03-15");
+    assert_eq!(
+        profile_2026.valid_from(),
+        Some(date!(2025 - 10 - 01)),
+        "on 2026-03-15 the fv20251001 (valid_from 2025-10-01) profile must still be selected"
+    );
+}
+
+/// UTILMD Strom S1.2 bridging profile (fv20250606) — gap coverage.
+///
+/// BK6-22-024 (LFW24 MpBNr2) created a transitional S1.2 release effective
+/// 2025-06-06, bridging the period between S1.1a (deleted) and S2.1 (2025-10-01).
+/// `profile_on` must:
+///   - resolve S1.2 on dates 2025-06-06 … 2025-09-30 (inclusive)
+///   - return Err before 2025-06-06 (no earlier S1.2 profile)
+///
+/// This guards against accidental deletion of the bridging profile and
+/// ensures the 117-day gap (2025-06-06 → 2025-09-30) is covered.
+#[cfg(feature = "utilmd")]
+#[test]
+fn utilmd_strom_s1_2_bridging_profile_covers_gap() {
+    use edi_energy::registry::ReleaseRegistry;
+    use time::macros::date;
+
+    let reg = ReleaseRegistry::global();
+    let release = Release::new("S1.2");
+
+    // Before fv20250606 valid_from: S1.2 not yet active.
+    let result_before = reg.profile_on(MessageType::Utilmd, &release, date!(2025 - 06 - 05));
+    assert!(
+        result_before.is_err(),
+        "on 2025-06-05 (before S1.2 validity) profile_on must return Err"
+    );
+
+    // On the exact start date: fv20250606 must be selected.
+    let profile_start = reg
+        .profile_on(MessageType::Utilmd, &release, date!(2025 - 06 - 06))
+        .expect("profile_on must find a UTILMD S1.2 profile on 2025-06-06");
+    assert_eq!(
+        profile_start.valid_from(),
+        Some(date!(2025 - 06 - 06)),
+        "on 2025-06-06 (valid_from) the fv20250606 profile must be selected"
+    );
+
+    // Mid-gap date: still S1.2.
+    let profile_mid = reg
+        .profile_on(MessageType::Utilmd, &release, date!(2025 - 08 - 15))
+        .expect("profile_on must find a UTILMD S1.2 profile on 2025-08-15");
+    assert_eq!(
+        profile_mid.valid_from(),
+        Some(date!(2025 - 06 - 06)),
+        "on 2025-08-15 (mid-gap) the fv20250606 profile must be selected"
+    );
+
+    // Last day of gap: still S1.2.
+    let profile_end = reg
+        .profile_on(MessageType::Utilmd, &release, date!(2025 - 09 - 30))
+        .expect("profile_on must find a UTILMD S1.2 profile on 2025-09-30");
+    assert_eq!(
+        profile_end.valid_from(),
+        Some(date!(2025 - 06 - 06)),
+        "on 2025-09-30 (last day before S2.1) the fv20250606 profile must be selected"
+    );
+}
+
+/// UTILMD Strom S1.2 bridging profile — ex-MPES PID coverage.
+///
+/// PIDs 56001–56004 (Einspeisung Strom) were transferred from MPES to GPKE
+/// per BK6-22-024 effective 2025-06-06.  They must be present in the S1.2
+/// AHB and must not appear in an earlier release.
+#[cfg(feature = "utilmd")]
+#[test]
+fn utilmd_strom_s1_2_includes_ex_mpes_einspeisung_pids() {
+    use edi_energy::registry::ReleaseRegistry;
+    use time::macros::date;
+
+    let reg = ReleaseRegistry::global();
+    let release = Release::new("S1.2");
+
+    let profile = reg
+        .profile_on(MessageType::Utilmd, &release, date!(2025 - 06 - 06))
+        .expect("S1.2 profile must be present");
+
+    // A PID is registered iff its AHB rule pack is non-empty.
+    let has_pid = |code: u32| -> bool {
+        let pid = edi_energy::Pruefidentifikator::new(code).unwrap();
+        profile.ahb_rule_pack(Some(pid)).rule_count() > 0
+    };
+
+    // All ex-MPES Einspeisung PIDs must be registered in S1.2.
+    for expected in [56001u32, 56002, 56003, 56004] {
+        assert!(
+            has_pid(expected),
+            "PID {expected} (ex-MPES Einspeisung) must be present in UTILMD S1.2 AHB"
+        );
+    }
+
+    // Legacy GPKE supply PIDs must still be present.
+    for expected in [55001u32, 55002, 55003, 55004, 55005, 55006] {
+        assert!(
+            has_pid(expected),
+            "PID {expected} (GPKE supply) must still be present in UTILMD S1.2 AHB"
+        );
+    }
+}
+
+/// UTILMD Gas G1.1 boundary.
+///
+/// Dual-release transition window test.
+///
+/// UTILMD Strom fv20251001 (S2.1) has `valid_until = 2026-09-30`.
+/// UTILMD Strom fv20261001 (S2.2) has `valid_from  = 2026-10-01`.
+///
+/// # `transition_state` behaviour
+///
+/// The algorithm selects the profile with the **greatest** `valid_from ≤ date`
+/// as "current", then checks whether it is in its outgoing grace window
+/// (`date >= valid_until && date <= valid_until + GRACE`).
+///
+/// Because S2.2's `valid_from` (Oct 1) is exactly the day after S2.1's
+/// `valid_until` (Sep 30), the Transition window is exactly **one day**
+/// (2026-09-30): on that day S2.1 is still "current" (S2.2 not yet active),
+/// its `valid_until` condition is met, and S2.2 qualifies as incoming.
+///
+/// | Date           | Expected `transition_state`                 |
+/// |----------------|---------------------------------------------|
+/// | 2026-09-29     | `Stable { "S2.1" }`  — before valid_until   |
+/// | 2026-09-30     | `Transition { out="S2.1", in="S2.2" }`      |
+/// | 2026-10-01     | `Stable { "S2.2" }`  — S2.2 is now current  |
+///
+/// # `profile_on` grace window
+///
+/// `profile_on` applies `is_acceptable` which extends acceptance of S2.1
+/// wire messages until `valid_until + GRACE_DAYS = 2026-10-07`.  After that
+/// date only S2.2 (no `valid_until`) can be looked up.
+///
+/// | Date       | `profile_on(S2.1)` | `profile_on(S2.2)` |
+/// |------------|--------------------|--------------------|
+/// | 2026-10-01 | Ok (still in grace)| Ok                 |
+/// | 2026-10-07 | Ok (last grace day)| Ok                 |
+/// | 2026-10-08 | Err (expired)      | Ok                 |
+#[cfg(feature = "utilmd")]
+#[test]
+fn utilmd_strom_transition_state_grace_window() {
+    use edi_energy::registry::{ReleaseRegistry, TRANSITION_GRACE_DAYS, TransitionState};
+    use time::macros::date;
+
+    assert_eq!(
+        TRANSITION_GRACE_DAYS, 7,
+        "test assumes 7-day TRANSITION_GRACE_DAYS; update boundary dates if changed"
+    );
+
+    let reg = ReleaseRegistry::global();
+
+    // ── Before valid_until of S2.1 ───────────────────────────────────────────
+    // S2.1 is current; valid_until condition not yet met → Stable.
+    let before = reg.transition_state(MessageType::Utilmd, date!(2026 - 09 - 29), Some("S"));
+    match before {
+        TransitionState::Stable { profile } => {
+            assert_eq!(
+                profile.release().as_str(),
+                "S2.1",
+                "day before valid_until: expected Stable S2.1"
+            );
+        }
+        other => panic!("expected Stable on 2026-09-29, got {other:?}"),
+    }
+
+    // ── On valid_until of S2.1 (single transition day) ───────────────────────
+    // S2.1 still "current"; in_outgoing_grace fires; S2.2 qualifies as incoming.
+    let transition_day =
+        reg.transition_state(MessageType::Utilmd, date!(2026 - 09 - 30), Some("S"));
+    match transition_day {
+        TransitionState::Transition { outgoing, incoming } => {
+            assert_eq!(
+                outgoing.release().as_str(),
+                "S2.1",
+                "2026-09-30: outgoing must be S2.1"
+            );
+            assert_eq!(
+                incoming.release().as_str(),
+                "S2.2",
+                "2026-09-30: incoming must be S2.2"
+            );
+        }
+        other => panic!("expected Transition on 2026-09-30 (transition day), got {other:?}"),
+    }
+
+    // ── Day of S2.2's valid_from: S2.2 is now "current" ─────────────────────
+    // greatest valid_from ≤ 2026-10-01 is S2.2; S2.2 has no valid_until → Stable.
+    let s2_2_active = reg.transition_state(MessageType::Utilmd, date!(2026 - 10 - 01), Some("S"));
+    match s2_2_active {
+        TransitionState::Stable { profile } => {
+            assert_eq!(
+                profile.release().as_str(),
+                "S2.2",
+                "2026-10-01: S2.2 must be current and Stable"
+            );
+        }
+        other => panic!("expected Stable S2.2 on 2026-10-01, got {other:?}"),
+    }
+
+    // ── profile_on: S2.1 still accepted within grace window ──────────────────
+    // profile_on only filters by valid_from ≤ date; it does NOT enforce valid_until.
+    // Use is_acceptable_on to verify the 7-day grace window enforcement.
+    let release_s2_1 = Release::new("S2.1");
+    let release_s2_2 = Release::new("S2.2");
+
+    // profile_on always resolves S2.1 as long as valid_from ≤ date.
+    let p = reg
+        .profile_on(MessageType::Utilmd, &release_s2_1, date!(2026 - 10 - 01))
+        .expect("profile_on must resolve S2.1 by valid_from (no valid_until check)");
+    assert_eq!(p.valid_from(), Some(date!(2025 - 10 - 01)));
+
+    // is_acceptable_on enforces valid_until + GRACE: S2.1 valid last day is 2026-10-07.
+    assert!(
+        reg.is_acceptable_on(MessageType::Utilmd, &release_s2_1, date!(2026 - 10 - 01)),
+        "S2.1 must be normatively acceptable on 2026-10-01 (within grace window)"
+    );
+    assert!(
+        reg.is_acceptable_on(MessageType::Utilmd, &release_s2_1, date!(2026 - 10 - 07)),
+        "S2.1 must be normatively acceptable on 2026-10-07 (last grace day)"
+    );
+    assert!(
+        !reg.is_acceptable_on(MessageType::Utilmd, &release_s2_1, date!(2026 - 10 - 08)),
+        "S2.1 must NOT be normatively acceptable on 2026-10-08 (grace window expired)"
+    );
+
+    // S2.2 is always acceptable from its valid_from onward (no valid_until set).
+    let p = reg
+        .profile_on(MessageType::Utilmd, &release_s2_2, date!(2026 - 10 - 01))
+        .expect("S2.2 must be resolvable from its valid_from");
+    assert_eq!(p.valid_from(), Some(date!(2026 - 10 - 01)));
+
+    assert!(
+        reg.is_acceptable_on(MessageType::Utilmd, &release_s2_2, date!(2026 - 10 - 08)),
+        "S2.2 must be normatively acceptable after grace window"
+    );
+}
+
+/// `fv20251001_gas` carries release "G1.1" (valid from 2025-10-01).
+/// Before that date, `profile_on` must return `Err`.
+/// This test guards the corrected profile release codes.
+#[cfg(feature = "utilmd")]
+#[test]
+fn utilmd_gas_g1_1_boundary_selects_correct_profile() {
+    use edi_energy::registry::ReleaseRegistry;
+    use time::macros::date;
+
+    let reg = ReleaseRegistry::global();
+    let release = Release::new("G1.1");
+
+    // Before fv20251001_gas valid_from: G1.1 is not yet active — profile_on returns Err.
+    let result_before = reg.profile_on(MessageType::Utilmd, &release, date!(2025 - 09 - 30));
+    assert!(
+        result_before.is_err(),
+        "on 2025-09-30 (before G1.1 validity) profile_on must return Err"
+    );
+
+    // On the first day of fv20251001_gas validity: must select the newer profile.
+    let profile_boundary = reg
+        .profile_on(MessageType::Utilmd, &release, date!(2025 - 10 - 01))
+        .expect("profile_on must find a UTILMD G1.1 profile on 2025-10-01");
+    assert_eq!(
+        profile_boundary.valid_from(),
+        Some(date!(2025 - 10 - 01)),
+        "on 2025-10-01 the fv20251001_gas (valid_from 2025-10-01) profile must be selected"
     );
 }

@@ -316,7 +316,7 @@ fn profile_valid_from_fv20261001() {
 
     let reg = ReleaseRegistry::global();
     // Use profile_on with the profile's own activation date so the lookup
-    // succeeds regardless of what day the tests are run (F-002 determinism).
+    // succeeds regardless of what day the tests are run.
     let p = reg
         .profile_on(
             MessageType::Mscons,
@@ -332,9 +332,13 @@ fn profile_valid_from_fv20261001() {
     assert_eq!(releases::mscons_fv20261001().as_str(), "2.5");
 }
 
-// ── UTILMD S2.1 / S2.2 profile tests ─────────────────────────────────────────
+// ── UTILMD release boundary tests ────────────────────────────────────────────
 
-/// UTILMD S2.1 lives in folder fv20241001 — valid_from must be 2024-10-01.
+/// UTILMD S1.1a lives in folder fv20241001 — valid_from must be 2024-10-01.
+///
+/// This is the corrected release code for the FV2024-10-01 profile.  The BDEW
+/// wire code for UTILMD Strom messages sent in the Oct 2024 – Jun 2025 window
+/// is "S1.1a", not "S2.1" (which starts with fv20251001 on 2025-10-01).
 #[cfg(feature = "utilmd")]
 #[test]
 fn utilmd_s21_valid_from_is_2024_10_01() {
@@ -342,9 +346,14 @@ fn utilmd_s21_valid_from_is_2024_10_01() {
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
+    // The old S2.1 label on fv20241001 was a bug; correct code is S1.1a.
     let p = reg
-        .profile(MessageType::Utilmd, &Release::new("S2.1"))
-        .expect("UTILMD S2.1 profile must be registered");
+        .profile_on(
+            MessageType::Utilmd,
+            &Release::new("S1.1a"),
+            date!(2024 - 10 - 01),
+        )
+        .expect("UTILMD S1.1a profile must be registered in fv20241001");
 
     let vf = p
         .valid_from()
@@ -360,7 +369,7 @@ fn utilmd_s22_valid_from_is_2026_10_01() {
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    // Use profile_on with the profile's own activation date (F-002 determinism).
+    // Use profile_on with the profile's own activation date.
     let p = reg
         .profile_on(
             MessageType::Utilmd,
@@ -375,16 +384,22 @@ fn utilmd_s22_valid_from_is_2026_10_01() {
     assert_eq!(vf, date!(2026 - 10 - 01));
 }
 
-/// ProcessContext must select UTILMD S2.1 for today (2024-10-01 to 2026-09-30)
-/// and UTILMD S2.2 from 2026-10-01 onward — using the Strom track `"S"`.
-/// Legacy UTILMD 5.5.3a (no valid_from) must never be selected by date.
+/// ProcessContext release timeline for UTILMD Strom (track "S"):
+///
+/// | Date range           | Release | Profile         |
+/// |----------------------|---------|-----------------|
+/// | before 2024-10-01    | —       | none            |
+/// | 2024-10-01 – Jun 05  | S1.1a   | fv20241001      |
+/// | 2025-06-06 – Sep 30  | S1.2    | fv20250606      |
+/// | 2025-10-01 – Sep 30  | S2.1    | fv20251001      |
+/// | 2026-10-01 –         | S2.2    | fv20261001      |
 #[cfg(feature = "utilmd")]
 #[test]
 fn process_context_selects_active_utilmd_strom_release() {
     use edi_energy::{ProcessContext, ReleaseTrack};
     use time::macros::date;
 
-    // Day before S2.1 goes live — no Strom profile active yet.
+    // Day before S1.1a goes live — no Strom profile active yet.
     let before = ProcessContext::for_date(date!(2024 - 09 - 30));
     assert!(
         before
@@ -393,11 +408,25 @@ fn process_context_selects_active_utilmd_strom_release() {
         "no Strom UTILMD profile active before 2024-10-01"
     );
 
-    // From 2024-10-01 onward → S2.1
-    let s21_era = ProcessContext::for_date(date!(2025 - 01 - 01));
+    // From 2024-10-01 onward → S1.1a (not S2.1!)
+    let s11a_era = ProcessContext::for_date(date!(2025 - 01 - 01));
+    let s11a_rel = s11a_era
+        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Strom)
+        .expect("S1.1a must be active on 2025-01-01");
+    assert_eq!(s11a_rel.as_str(), "S1.1a");
+
+    // From 2025-06-06 → S1.2 (LFW24 bridging profile)
+    let s12_era = ProcessContext::for_date(date!(2025 - 06 - 06));
+    let s12_rel = s12_era
+        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Strom)
+        .expect("S1.2 must be active on 2025-06-06");
+    assert_eq!(s12_rel.as_str(), "S1.2");
+
+    // From 2025-10-01 → S2.1
+    let s21_era = ProcessContext::for_date(date!(2025 - 10 - 01));
     let s21_rel = s21_era
         .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Strom)
-        .expect("S2.1 must be active on 2025-01-01");
+        .expect("S2.1 must be active on 2025-10-01");
     assert_eq!(s21_rel.as_str(), "S2.1");
 
     // On 2026-09-30 — still S2.1
@@ -430,15 +459,21 @@ fn process_context_selects_active_utilmd_strom_release() {
     );
 }
 
-/// ProcessContext must select UTILMD G1.1 for 2024-10-01 to 2026-09-30
-/// and UTILMD G1.2 from 2026-10-01 onward — using the Gas track `"G"`.
+/// ProcessContext release timeline for UTILMD Gas (track "G"):
+///
+/// | Date range           | Release | Profile            |
+/// |----------------------|---------|--------------------|
+/// | before 2024-10-01    | —       | none               |
+/// | 2024-10-01 – Sep 30  | G1.0a   | fv20241001_gas     |
+/// | 2025-10-01 – Sep 30  | G1.1    | fv20251001_gas     |
+/// | 2026-10-01 –         | G1.2    | fv20261001_gas     |
 #[cfg(feature = "utilmd")]
 #[test]
 fn process_context_selects_active_utilmd_gas_release() {
     use edi_energy::{ProcessContext, ReleaseTrack};
     use time::macros::date;
 
-    // Before G1.1 — no Gas profile active.
+    // Before G1.0a — no Gas profile active.
     let before = ProcessContext::for_date(date!(2024 - 09 - 30));
     assert!(
         before
@@ -447,11 +482,18 @@ fn process_context_selects_active_utilmd_gas_release() {
         "no Gas UTILMD profile active before 2024-10-01"
     );
 
-    // From 2024-10-01 → G1.1
-    let g11_era = ProcessContext::for_date(date!(2025 - 06 - 01));
+    // From 2024-10-01 → G1.0a (not G1.1!)
+    let g10a_era = ProcessContext::for_date(date!(2025 - 06 - 01));
+    let g10a_rel = g10a_era
+        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Gas)
+        .expect("G1.0a must be active on 2025-06-01");
+    assert_eq!(g10a_rel.as_str(), "G1.0a");
+
+    // From 2025-10-01 → G1.1
+    let g11_era = ProcessContext::for_date(date!(2025 - 10 - 01));
     let g11_rel = g11_era
         .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Gas)
-        .expect("G1.1 must be active on 2025-06-01");
+        .expect("G1.1 must be active on 2025-10-01");
     assert_eq!(g11_rel.as_str(), "G1.1");
 
     // From 2026-10-01 → G1.2
@@ -521,7 +563,7 @@ fn aperak_fv20261001_valid_from_is_2026_10_01() {
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    // Use profile_on with the profile's own activation date (F-002 determinism).
+    // Use profile_on with the profile's own activation date.
     let p = reg
         .profile_on(
             MessageType::Aperak,
@@ -1233,7 +1275,7 @@ fn process_context_selects_active_reqote_release() {
 /// REMADV fv20251001 (MIG 2.9e / AHB 1.0a, Publikationsdatum 01.10.2025)
 /// — valid from 2025-10-01, wire code "2.9e".
 /// This is the only fv-dated REMADV profile available (no next-version AHB
-/// has been published as of June 2026). See REFACTOR.md F-025.
+/// has been published as of June 2026). See REFACTOR.md.
 #[cfg(feature = "remadv")]
 #[test]
 fn remadv_fv20251001_valid_from_is_2025_10_01() {
@@ -1280,13 +1322,13 @@ fn process_context_selects_active_remadv_release() {
         .expect("profile must be returned");
     assert_eq!(profile.valid_from(), Some(date!(2025 - 10 - 01)));
 
-    // Far future — still fv20251001 (no next version published yet).
+    // Far future — fv20260401 (wire: 2.9f) is the latest published REMADV profile.
     let future = ProcessContext::for_date(date!(2030 - 01 - 01));
     let future_profile = future
         .active_profile(MessageType::Remadv)
         .expect("some REMADV profile must be active");
-    assert_eq!(future_profile.valid_from(), Some(date!(2025 - 10 - 01)));
-    assert_eq!(future_profile.release().as_str(), "2.9e");
+    assert_eq!(future_profile.valid_from(), Some(date!(2026 - 04 - 01)));
+    assert_eq!(future_profile.release().as_str(), "2.9f");
 }
 
 // ── ORDCHG profile tests ──────────────────────────────────────────────────────

@@ -6,8 +6,6 @@
 //! - Each message type implements `EdifactDeserialize` (parse from segments).
 //! - Each message type implements `EdifactSerialize` (round-trip via `serialize()`).
 
-#![allow(unused_imports, dead_code)]
-
 #[cfg(any(
     feature = "utilmd",
     feature = "mscons",
@@ -27,7 +25,7 @@
     feature = "pricat",
     feature = "utilts",
 ))]
-use edi_energy::{AnyMessage, EdiEnergyMessage, EdifactDeserialize, parse};
+use edi_energy::{AnyMessage, EdiEnergyMessage, EdifactDeserialize, Platform};
 
 // ── UTILMD typed fields ───────────────────────────────────────────────────────
 
@@ -44,7 +42,7 @@ UNT+6+MSG001'";
 #[cfg(feature = "utilmd")]
 #[test]
 fn utilmd_bgm_field_extracted() {
-    let msg = parse(UTILMD_TYPED).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD_TYPED).unwrap();
     let AnyMessage::Utilmd(u) = msg else {
         panic!("expected UTILMD")
     };
@@ -57,7 +55,7 @@ fn utilmd_bgm_field_extracted() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn utilmd_dtm_fields_extracted() {
-    let msg = parse(UTILMD_TYPED).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD_TYPED).unwrap();
     let AnyMessage::Utilmd(u) = msg else {
         panic!("expected UTILMD")
     };
@@ -71,7 +69,7 @@ fn utilmd_dtm_fields_extracted() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn utilmd_sender_receiver_extracted() {
-    let msg = parse(UTILMD_TYPED).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD_TYPED).unwrap();
     let AnyMessage::Utilmd(u) = msg else {
         panic!("expected UTILMD")
     };
@@ -86,12 +84,12 @@ fn utilmd_sender_receiver_extracted() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn utilmd_round_trip_serialize() {
-    let msg = parse(UTILMD_TYPED).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD_TYPED).unwrap();
     let AnyMessage::Utilmd(u) = msg else {
         panic!("expected UTILMD")
     };
     let bytes = u.serialize().expect("serialize must succeed");
-    let msg2 = parse(&bytes).unwrap();
+    let msg2 = Platform::with_all_profiles().parse(&bytes).unwrap();
     let AnyMessage::Utilmd(u2) = msg2 else {
         panic!("re-parse must be UTILMD")
     };
@@ -128,7 +126,7 @@ UNT+5+MSG002'";
 #[cfg(feature = "mscons")]
 #[test]
 fn mscons_typed_fields() {
-    let msg = parse(MSCONS_TYPED).unwrap();
+    let msg = Platform::with_all_profiles().parse(MSCONS_TYPED).unwrap();
     let AnyMessage::Mscons(m) = msg else {
         panic!("expected MSCONS")
     };
@@ -149,12 +147,12 @@ fn mscons_typed_fields() {
 #[cfg(feature = "mscons")]
 #[test]
 fn mscons_round_trip_serialize() {
-    let msg = parse(MSCONS_TYPED).unwrap();
+    let msg = Platform::with_all_profiles().parse(MSCONS_TYPED).unwrap();
     let AnyMessage::Mscons(m) = msg else {
         panic!("expected MSCONS")
     };
     let bytes = m.serialize().expect("serialize must succeed");
-    let msg2 = parse(&bytes).unwrap();
+    let msg2 = Platform::with_all_profiles().parse(&bytes).unwrap();
     let AnyMessage::Mscons(m2) = msg2 else {
         panic!("re-parse must be MSCONS")
     };
@@ -177,7 +175,7 @@ UNT+7+MSG003'";
 #[cfg(feature = "aperak")]
 #[test]
 fn aperak_typed_fields_and_ref_acw() {
-    let msg = parse(APERAK_TYPED).unwrap();
+    let msg = Platform::with_all_profiles().parse(APERAK_TYPED).unwrap();
     let AnyMessage::Aperak(a) = msg else {
         panic!("expected APERAK")
     };
@@ -195,12 +193,12 @@ fn aperak_typed_fields_and_ref_acw() {
 #[cfg(feature = "aperak")]
 #[test]
 fn aperak_round_trip_serialize() {
-    let msg = parse(APERAK_TYPED).unwrap();
+    let msg = Platform::with_all_profiles().parse(APERAK_TYPED).unwrap();
     let AnyMessage::Aperak(a) = msg else {
         panic!("expected APERAK")
     };
     let bytes = a.serialize().expect("serialize must succeed");
-    let msg2 = parse(&bytes).unwrap();
+    let msg2 = Platform::with_all_profiles().parse(&bytes).unwrap();
     let AnyMessage::Aperak(a2) = msg2 else {
         panic!("re-parse must be APERAK")
     };
@@ -219,7 +217,7 @@ UNT+3+MSG004'";
 #[cfg(feature = "contrl")]
 #[test]
 fn contrl_uci_field_extracted() {
-    let msg = parse(CONTRL_TYPED).unwrap();
+    let msg = Platform::with_all_profiles().parse(CONTRL_TYPED).unwrap();
     let AnyMessage::Contrl(c) = msg else {
         panic!("expected CONTRL")
     };
@@ -233,12 +231,12 @@ fn contrl_uci_field_extracted() {
 #[cfg(feature = "contrl")]
 #[test]
 fn contrl_round_trip_serialize() {
-    let msg = parse(CONTRL_TYPED).unwrap();
+    let msg = Platform::with_all_profiles().parse(CONTRL_TYPED).unwrap();
     let AnyMessage::Contrl(c) = msg else {
         panic!("expected CONTRL")
     };
     let bytes = c.serialize().expect("serialize must succeed");
-    let msg2 = parse(&bytes).unwrap();
+    let msg2 = Platform::with_all_profiles().parse(&bytes).unwrap();
     let AnyMessage::Contrl(c2) = msg2 else {
         panic!("re-parse must be CONTRL")
     };
@@ -418,7 +416,9 @@ fn utilmd_builder_serialize_roundtrip() {
     );
 
     // Round-trip: must parse back successfully
-    let msg = parse(&bytes).expect("serialized bytes must parse");
+    let msg = Platform::with_all_profiles()
+        .parse(&bytes)
+        .expect("serialized bytes must parse");
     let AnyMessage::Utilmd(u) = msg else {
         panic!("must re-parse as UTILMD")
     };
@@ -438,7 +438,9 @@ fn contrl_builder_serialize_roundtrip() {
         .expect("ContrlBuilder::serialize must succeed");
 
     assert!(!bytes.is_empty());
-    let msg = parse(&bytes).expect("serialized CONTRL must parse");
+    let msg = Platform::with_all_profiles()
+        .parse(&bytes)
+        .expect("serialized CONTRL must parse");
     let AnyMessage::Contrl(c) = msg else {
         panic!("must re-parse as CONTRL")
     };
@@ -638,7 +640,9 @@ UNT+6+INV001'";
 #[cfg(feature = "invoic")]
 #[test]
 fn invoic_typed_fields() {
-    let msg = edi_energy::parse(INVOIC_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(INVOIC_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Invoic(m) = msg else {
         panic!("expected INVOIC")
     };
@@ -659,12 +663,16 @@ fn invoic_typed_fields() {
 #[cfg(feature = "invoic")]
 #[test]
 fn invoic_round_trip_serialize() {
-    let msg = edi_energy::parse(INVOIC_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(INVOIC_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Invoic(m) = msg else {
         panic!("expected INVOIC")
     };
     let bytes = m.serialize().expect("serialize must succeed");
-    let msg2 = edi_energy::parse(&bytes).unwrap();
+    let msg2 = edi_energy::Platform::with_all_profiles()
+        .parse(&bytes)
+        .unwrap();
     let edi_energy::AnyMessage::Invoic(m2) = msg2 else {
         panic!("re-parse must be INVOIC")
     };
@@ -687,7 +695,9 @@ UNT+6+REM001'";
 #[cfg(feature = "remadv")]
 #[test]
 fn remadv_typed_fields() {
-    let msg = edi_energy::parse(REMADV_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(REMADV_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Remadv(m) = msg else {
         panic!("expected REMADV")
     };
@@ -704,12 +714,16 @@ fn remadv_typed_fields() {
 #[cfg(feature = "remadv")]
 #[test]
 fn remadv_round_trip_serialize() {
-    let msg = edi_energy::parse(REMADV_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(REMADV_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Remadv(m) = msg else {
         panic!("expected REMADV")
     };
     let bytes = m.serialize().expect("serialize must succeed");
-    let msg2 = edi_energy::parse(&bytes).unwrap();
+    let msg2 = edi_energy::Platform::with_all_profiles()
+        .parse(&bytes)
+        .unwrap();
     let edi_energy::AnyMessage::Remadv(m2) = msg2 else {
         panic!("re-parse must be REMADV")
     };
@@ -731,7 +745,9 @@ UNT+6+ORD001'";
 #[cfg(feature = "orders")]
 #[test]
 fn orders_typed_fields() {
-    let msg = edi_energy::parse(ORDERS_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(ORDERS_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Orders(m) = msg else {
         panic!("expected ORDERS")
     };
@@ -748,12 +764,16 @@ fn orders_typed_fields() {
 #[cfg(feature = "orders")]
 #[test]
 fn orders_round_trip_serialize() {
-    let msg = edi_energy::parse(ORDERS_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(ORDERS_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Orders(m) = msg else {
         panic!("expected ORDERS")
     };
     let bytes = m.serialize().expect("serialize must succeed");
-    let msg2 = edi_energy::parse(&bytes).unwrap();
+    let msg2 = edi_energy::Platform::with_all_profiles()
+        .parse(&bytes)
+        .unwrap();
     let edi_energy::AnyMessage::Orders(m2) = msg2 else {
         panic!("re-parse must be ORDERS")
     };
@@ -775,7 +795,9 @@ UNT+6+IFT001'";
 #[cfg(feature = "iftsta")]
 #[test]
 fn iftsta_typed_fields() {
-    let msg = edi_energy::parse(IFTSTA_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(IFTSTA_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Iftsta(m) = msg else {
         panic!("expected IFTSTA")
     };
@@ -792,12 +814,16 @@ fn iftsta_typed_fields() {
 #[cfg(feature = "iftsta")]
 #[test]
 fn iftsta_round_trip_serialize() {
-    let msg = edi_energy::parse(IFTSTA_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(IFTSTA_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Iftsta(m) = msg else {
         panic!("expected IFTSTA")
     };
     let bytes = m.serialize().expect("serialize must succeed");
-    let msg2 = edi_energy::parse(&bytes).unwrap();
+    let msg2 = edi_energy::Platform::with_all_profiles()
+        .parse(&bytes)
+        .unwrap();
     let edi_energy::AnyMessage::Iftsta(m2) = msg2 else {
         panic!("re-parse must be IFTSTA")
     };
@@ -819,7 +845,9 @@ UNT+6+INS001'";
 #[cfg(feature = "insrpt")]
 #[test]
 fn insrpt_typed_fields() {
-    let msg = edi_energy::parse(INSRPT_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(INSRPT_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Insrpt(m) = msg else {
         panic!("expected INSRPT")
     };
@@ -832,12 +860,16 @@ fn insrpt_typed_fields() {
 #[cfg(feature = "insrpt")]
 #[test]
 fn insrpt_round_trip_serialize() {
-    let msg = edi_energy::parse(INSRPT_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(INSRPT_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Insrpt(m) = msg else {
         panic!("expected INSRPT")
     };
     let bytes = m.serialize().expect("serialize must succeed");
-    let msg2 = edi_energy::parse(&bytes).unwrap();
+    let msg2 = edi_energy::Platform::with_all_profiles()
+        .parse(&bytes)
+        .unwrap();
     let edi_energy::AnyMessage::Insrpt(m2) = msg2 else {
         panic!("re-parse must be INSRPT")
     };
@@ -859,7 +891,9 @@ UNT+6+REQ001'";
 #[cfg(feature = "reqote")]
 #[test]
 fn reqote_typed_fields() {
-    let msg = edi_energy::parse(REQOTE_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(REQOTE_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Reqote(m) = msg else {
         panic!("expected REQOTE")
     };
@@ -872,12 +906,16 @@ fn reqote_typed_fields() {
 #[cfg(feature = "reqote")]
 #[test]
 fn reqote_round_trip_serialize() {
-    let msg = edi_energy::parse(REQOTE_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(REQOTE_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Reqote(m) = msg else {
         panic!("expected REQOTE")
     };
     let bytes = m.serialize().expect("serialize must succeed");
-    let msg2 = edi_energy::parse(&bytes).unwrap();
+    let msg2 = edi_energy::Platform::with_all_profiles()
+        .parse(&bytes)
+        .unwrap();
     let edi_energy::AnyMessage::Reqote(m2) = msg2 else {
         panic!("re-parse must be REQOTE")
     };
@@ -899,7 +937,9 @@ UNT+6+PAR001'";
 #[cfg(feature = "partin")]
 #[test]
 fn partin_typed_fields() {
-    let msg = edi_energy::parse(PARTIN_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(PARTIN_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Partin(m) = msg else {
         panic!("expected PARTIN")
     };
@@ -912,12 +952,16 @@ fn partin_typed_fields() {
 #[cfg(feature = "partin")]
 #[test]
 fn partin_round_trip_serialize() {
-    let msg = edi_energy::parse(PARTIN_TYPED).unwrap();
+    let msg = edi_energy::Platform::with_all_profiles()
+        .parse(PARTIN_TYPED)
+        .unwrap();
     let edi_energy::AnyMessage::Partin(m) = msg else {
         panic!("expected PARTIN")
     };
     let bytes = m.serialize().expect("serialize must succeed");
-    let msg2 = edi_energy::parse(&bytes).unwrap();
+    let msg2 = edi_energy::Platform::with_all_profiles()
+        .parse(&bytes)
+        .unwrap();
     let edi_energy::AnyMessage::Partin(m2) = msg2 else {
         panic!("re-parse must be PARTIN")
     };

@@ -1,4 +1,4 @@
-/// Cheap envelope-only view of a parsed EDIFACT message (F-004).
+/// Cheap envelope-only view of a parsed EDIFACT message.
 ///
 /// `LightMessage` holds the raw `Vec<OwnedSegment>` plus the small set of
 /// fields that any AS4 router or forwarder needs:

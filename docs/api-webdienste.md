@@ -1,3 +1,13 @@
+---
+layout: default
+title: API-Webdienste Strom
+nav_order: 22
+parent: Architecturemermaid: truedescription: >
+  BDEW API-Webdienste Strom — REST/JSON iMS channel vs. EDIFACT/AS4 channel.
+  energy-api crate for iMS control measures, MaLo-ID queries, and directory
+  service integration.
+---
+
 # BDEW API-Webdienste Strom
 
 The German energy market uses **two distinct communication channels** for
@@ -9,10 +19,36 @@ single application.
 
 ## Two parallel channels
 
-| Channel | Crate | Processes |
-|---------|-------|-----------|
-| EDIFACT/AS4 | `edi-energy` | UTILMD, MSCONS, APERAK, CONTRL, INVOIC, REMADV, ORDERS, ORDRSP, and all other MaKo message types |
-| REST/JSON (API-Webdienste) | `energy-api` | iMS control measures (NB/LF/MSB), MaLo-ID queries, directory service |
+```mermaid
+graph LR
+    subgraph EDIFACT["EDIFACT / AS4 channel"]
+        direction TB
+        MSH["Trading Partner MSH"]
+        makod["makod\n(AS4 :4080)"]
+        engine["mako-engine\n+ domain crates"]
+        MSH -->|"AS4/SOAP EDIFACT"| makod
+        makod --> engine
+        engine -->|"AS4/SOAP EDIFACT"| MSH
+    end
+
+    subgraph REST["REST / JSON channel (iMS)"]
+        direction TB
+        NB["Netzbetreiber\n(MSB initiates)"]
+        webdienste["makod\n(Webdienste :8090)"]
+        energy_api["energy-api\nserver/client"]
+        NB -->|"HTTPS JSON"| webdienste
+        webdienste --> energy_api
+        energy_api -->|"HTTPS JSON"| NB
+    end
+
+    style EDIFACT fill:#f0f4ff,stroke:#99b
+    style REST fill:#f0fff4,stroke:#9b9
+```
+
+| Channel | Crates | Transport | Processes |
+|---------|--------|-----------|-----------|
+| EDIFACT/AS4 | `edi-energy` + `mako-engine` + `makod` | SOAP/MTOM, TLS, WS-Security | UTILMD, MSCONS, APERAK, CONTRL, INVOIC, REMADV, ORDERS, ORDRSP, and all other MaKo message types |
+| REST/JSON (API-Webdienste) | `energy-api` | HTTPS, JWS signatures | iMS control measures, MaLo-ID queries, directory service |
 
 The REST channel is a **parallel channel introduced for intelligente Messsysteme
 (iMS) processes** as of 2026-01-29 ([BDEW API-Webdienste Strom, valid from
@@ -24,18 +60,22 @@ participants who are in scope for iMS.
 
 ## When to use each crate
 
-### `edi-energy` — for all EDIFACT/AS4 processes
+### EDIFACT/AS4 channel — `edi-energy` + `mako-engine` + `makod`
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.1", features = ["utilmd", "mscons"] }
+edi-energy  = { version = "0.1", features = ["utilmd", "mscons"] }
+mako-engine = { version = "0.1", features = ["slatedb"] }
+mako-gpke   = "0.1"   # or mako-wim / mako-geli-gas / mako-mabis
 ```
 
-Use this crate for:
-- Parsing and validating EDIFACT messages received over AS4.
-- Building outgoing EDIFACT messages.
-- Running AHB rule validation for Pruefidentifikatoren.
-- Platform-level multi-tenant processing with `Platform`.
+Use these crates for:
+- Parsing and validating EDIFACT messages received over AS4 (`edi-energy`).
+- Building outgoing EDIFACT messages (`edi-energy` builders).
+- Running long-lived market processes with event sourcing, regulatory deadlines, and atomic outbox enqueue (`mako-engine` + domain crates).
+- Production AS4 inbound reception with WSS verification and deduplication (`makod` via `asx-rs`).
+
+See the [Process Engine Guide](./engine.md) for `mako-engine` architecture and the [Getting Started guide](./getting-started.md) for a first workflow example.
 
 ### `energy-api` — for iMS REST processes
 
@@ -64,6 +104,9 @@ Use this crate for:
 | iMS Steuerbefehle (Konfiguration, Abschalten, Zuschalten) | REST/JSON | `energy-api` | `ControlMeasuresClient` |
 | iMS Rückmeldungen | REST/JSON | `energy-api` | `ControlMeasuresClient` |
 | MaLo-ID-Abfrage | REST/JSON | `energy-api` | `MaloIdentClient` |
+| iMS Universalbestellprozess — Anmeldung (PID 11021) | REST/JSON | `energy-api` | `WimOrderHandler::on_anmeldung` |
+| iMS Universalbestellprozess — Bestätigung (PID 11022) | REST/JSON | `energy-api` | `WimOrderHandler::on_bestaetigung` |
+| iMS Universalbestellprozess — Ablehnung (PID 11023) | REST/JSON | `energy-api` | `WimOrderHandler::on_ablehnung` |
 | Endpunkt-Lookup | REST/JSON | `energy-api` | `DirectoryServiceClient` |
 
 ---
@@ -74,10 +117,32 @@ A market participant acting as **Netzbetreiber (NB)** typically needs both
 channels simultaneously: EDIFACT for GPKE/WiM process messages and REST for iMS
 control measure reception.
 
+```mermaid
+sequenceDiagram
+    participant MSB as Messstellenbetreiber
+    participant NB_AS4 as makod :4080<br/>(AS4 inbound)
+    participant NB_WEB as makod :8090<br/>(Webdienste)
+    participant engine as mako-engine<br/>(GPKE / WiM)
+    participant dir as Verzeichnisdienst<br/>(BDEW)
+
+    Note over MSB,dir: Channel 1 — EDIFACT/AS4 (Gerätewechsel)
+    MSB->>NB_AS4: POST /as4/inbox<br/>UTILMD PID 11002
+    NB_AS4->>engine: WimDeviceChangeWorkflow::Initiate
+    engine-->>NB_AS4: events + APERAK outbox
+    NB_AS4-->>MSB: AS4 Receipt + APERAK
+
+    Note over MSB,dir: Channel 2 — REST/JSON (iMS Steuerbefehl)
+    MSB->>dir: GET /v1/organisations/NB-GLN<br/>(endpoint lookup)
+    dir-->>MSB: endpoint URL + JWS cert
+    MSB->>NB_WEB: POST /controlMeasures/v1/configure<br/>(iMS Konfigurationsbefehl)
+    NB_WEB-->>MSB: 200 OK (receipt)
+```
+
+
 ```rust
 use edi_energy::{parse_interchange, EdiEnergyMessage};
 use energy_api::directory::DirectoryServiceClient;
-use energy_api::server::ControlMeasuresServer;
+use energy_api::server::control_measures;
 use url::Url;
 
 // ── EDIFACT/AS4 channel ──────────────────────────────────────────────────────
@@ -119,7 +184,7 @@ and REST payloads.
 | Feature | What it enables |
 |---------|-----------------|
 | `client` | `ControlMeasuresClient`, `MaloIdentClient`, `DirectoryServiceClient` HTTP clients (reqwest + rustls) |
-| `server` | Axum router factories for `ControlMeasuresServer` and `MaloIdentServer` receive handlers |
+| `server` | Axum router factories for `ControlMeasuresHandler`, `MaloIdentHandler`, and `WimOrderHandler` receive handlers |
 | `websocket` | WebSocket subscription client for real-time directory updates (tokio-tungstenite) |
 | `crypto` | JWS ECDSA-SHA256 sign/verify for directory records (p256) |
 
@@ -143,7 +208,8 @@ Gas API-Webdienste announcements.
 
 ## Further reading
 
-- [Getting Started — `edi-energy`](getting-started.md)
-- [Platform guide — multi-tenant EDIFACT processing](platform.md)
+- [Getting Started](getting-started.md) — EDIFACT parsing and process engine first steps
+- [Process Engine Guide](engine.md) — `mako-engine` architecture, stores, deadlines, outbox
+- [Platform guide](platform.md) — multi-tenant EDIFACT processing
 - [Validation guide](validation.md)
 - BDEW MaKo document portal: <https://www.bdew-mako.de/documents>

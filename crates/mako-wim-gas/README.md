@@ -1,0 +1,60 @@
+# mako-wim-gas
+
+**WiM Gas — Wechselprozesse im Messwesen Gas**
+
+> **This crate is a name reservation. Implementation is pending.**
+
+Process engine workflows for the German gas metering-point operator change
+processes. Governed by the BDEW WiM Gas specification and the BNetzA ruling
+**BK7-24-01-009** ("GeLi Gas 3.0", same umbrella ruling as GeLi Gas supplier
+switching). Current process documentation: **AWH WiM Gas V2.0**
+(BDEW/VKU/GEODE/FNBGas, 2025-08-04).
+
+## Key boundaries
+
+### WiM Gas vs. GeLi Gas
+
+Both live under BK7-24-01-009 but cover entirely different processes:
+
+| Aspect | GeLi Gas (`mako-geli-gas`) | WiM Gas (`mako-wim-gas`) |
+|---|---|---|
+| Scope | Supplier switching (Lieferbeginn/-ende) | MSB change (Anmeldung/Kündigung gMSB) |
+| Parties | LFN ↔ GNB | MSBN / MSBA ↔ NB / gMSB |
+| EDIFACT PIDs | 44001–44018, 44555 | 44022–44053, 44168–44170 |
+| APERAK Frist | 10 Werktage | 10 Werktage |
+
+### WiM Gas vs. WiM Strom
+
+| Aspect | WiM Strom (`mako-wim`) | WiM Gas (`mako-wim-gas`) |
+|---|---|---|
+| Medium | Electricity | Gas |
+| APERAK Frist | **5 Werktage** | **10 Werktage** |
+| Ruling | BK6-24-174 | BK7-24-01-009 |
+| EDIFACT | UTILMD S2.x | UTILMD G1.x |
+
+> **Saturday counts as a Werktag for both.** Sunday and public holidays do not.
+
+## PID Inventory
+
+| PID range | Process | Status |
+|---|---|---|
+| 44022–44024 | Kündigung MSB Gas (NB → MSBA) | ✗ Not registered — placeholder |
+| 44039–44041 | Anmeldung MSB Gas (MSBN → NB) | ✗ Not registered — placeholder |
+| 44042–44044 | Ende MSB Gas (NB → MSBN) | ✗ Not registered — placeholder |
+| 44051–44053 | Vorläufige Abmeldung / Ende MSB Gas (NB → MSBA) | ✗ Not registered — placeholder |
+| 44168–44170 | Verpflichtungsanfrage (NB → gMSB) | ✗ Not registered — placeholder |
+
+## EDIFACT Format Versions
+
+| Format version | Valid from | Valid until | Profile status |
+|---|---|---|---|
+| `FV2025-10-01` | 2025-10-01 | 2026-09-30 | ✓ available (UTILMD AHB Gas 1.1) |
+| `FV2026-10-01` | 2026-10-01 | — | ✓ available (UTILMD AHB Gas 1.2) |
+
+## Regulatory references
+
+- **BNetzA BK7-24-01-009** — GeLi Gas 3.0 / WiM Gas ruling,
+  Beschluss 12.09.2025, abgeschlossen 24.09.2025
+- **BDEW/VKU/GEODE/FNBGas AWH WiM Gas V2.0** (2025-08-04) —
+  `docs/pdfs/bdew-mako/BDEW_VKU_GEODE_FNBGas_AWH_WiMGas_V2_0_20250804.pdf`
+- **UTILMD AHB Gas 1.1 / 1.2** — EDIFACT message specification

@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 
 use edifact_rs::Writer;
 
+use crate::AgencyCode;
 use crate::{Error, Release};
 
 use super::{Set, Unset, bytes_to_segments, dtm_today, format_dtm137};
@@ -20,6 +21,8 @@ struct InvoicBuilderInner {
     release: Release,
     sender_id: Option<String>,
     receiver_id: Option<String>,
+    sender_agency: AgencyCode,
+    receiver_agency: AgencyCode,
     message_ref: String,
     document_code: String,
     document_id: Option<String>,
@@ -67,6 +70,8 @@ impl InvoicBuilder<Unset, Unset> {
                 release,
                 sender_id: None,
                 receiver_id: None,
+                sender_agency: AgencyCode::Bdew,
+                receiver_agency: AgencyCode::Bdew,
                 message_ref: "1".to_owned(),
                 document_code: "380".to_owned(),
                 document_id: None,
@@ -94,6 +99,23 @@ impl<S, R> InvoicBuilder<S, R> {
     pub fn receiver(mut self, id: impl Into<String>) -> InvoicBuilder<S, Set> {
         self.inner.receiver_id = Some(id.into());
         self.transition()
+    }
+
+    /// Override the agency code for the sender's party identifier.
+    ///
+    /// Default: [`AgencyCode::Bdew`] (`"293"`). Use [`AgencyCode::Entso`] (`"305"`)
+    /// for TSO/ÜNB parties that carry a 16-char EIC code.
+    pub fn sender_agency(mut self, agency: crate::AgencyCode) -> Self {
+        self.inner.sender_agency = agency;
+        self
+    }
+
+    /// Override the agency code for the receiver's party identifier.
+    ///
+    /// Default: [`AgencyCode::Bdew`] (`"293"`).
+    pub fn receiver_agency(mut self, agency: crate::AgencyCode) -> Self {
+        self.inner.receiver_agency = agency;
+        self
     }
 
     /// Set the BGM document identifier (invoice number / Rechnungsnummer).
@@ -139,10 +161,20 @@ impl<S, R> InvoicBuilder<S, R> {
         emit_seg!(w, "BGM", &self.inner.document_code, doc_id);
         emit_seg!(w, "DTM", &dtm_val);
         if let Some(id) = &self.inner.sender_id {
-            emit_seg!(w, "NAD", "MS", &format!("{id}::293"));
+            emit_seg!(
+                w,
+                "NAD",
+                "MS",
+                &self.inner.sender_agency.format_nad_c082(id)
+            );
         }
         if let Some(id) = &self.inner.receiver_id {
-            emit_seg!(w, "NAD", "MR", &format!("{id}::293"));
+            emit_seg!(
+                w,
+                "NAD",
+                "MR",
+                &self.inner.receiver_agency.format_nad_c082(id)
+            );
         }
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;

@@ -10,11 +10,10 @@
 // generation contract.  If a signature must change, update `emit_ahb_rule_pack`
 // in `xtask/src/codegen.rs` to match, then run `cargo xtask codegen`.
 //
-// `#[allow(dead_code)]` is required because not every compiled feature
-// combination uses every helper (e.g. a profile with no SOLL segments never
-// calls `ahb_check_soll` in its generated rule closures).  The helpers are
-// nonetheless kept as a complete set for consistency and codegen simplicity.
-#![allow(dead_code)]
+// `#[allow(dead_code)]` on every helper: not every compiled feature combination
+// calls every function (e.g. a profile with no SOLL segments never calls
+// `ahb_check_soll`).  Item-level allows keep scope minimal while permitting the
+// full helper set to compile under any feature subset.
 // Segment occurrence indices are bounded by EDIFACT message limits and fit safely in u16/u8.
 #![allow(clippy::cast_possible_truncation)]
 
@@ -24,6 +23,7 @@ use edifact_rs::{ValidationIssue, ValidationSeverity};
 ///
 /// Emits an `Error`-severity issue when `tag` is absent from `segments`.
 #[inline]
+#[allow(dead_code)]
 pub(super) fn ahb_check_mandatory(
     segments: &[edifact_rs::Segment<'_>],
     tag: &str,
@@ -46,6 +46,7 @@ pub(super) fn ahb_check_mandatory(
 ///
 /// Unlike [`ahb_check_mandatory`], a missing segment is a warning, not an error.
 #[inline]
+#[allow(dead_code)]
 pub(super) fn ahb_check_soll(
     segments: &[edifact_rs::Segment<'_>],
     tag: &str,
@@ -66,6 +67,7 @@ pub(super) fn ahb_check_soll(
 
 /// Forbid a segment — emits `Error` for every occurrence of `tag`.
 #[inline]
+#[allow(dead_code)]
 pub(super) fn ahb_check_not_used(
     segments: &[edifact_rs::Segment<'_>],
     tag: &str,
@@ -89,6 +91,7 @@ pub(super) fn ahb_check_not_used(
 /// `is_allowed` is a predicate that returns `true` for valid qualifier values.
 /// Emits `Error` for every occurrence whose qualifier is absent or not allowed.
 #[inline]
+#[allow(dead_code)]
 pub(super) fn ahb_check_qualifier(
     segments: &[edifact_rs::Segment<'_>],
     tag: &str,
@@ -121,6 +124,7 @@ pub(super) fn ahb_check_qualifier(
 /// is absent or rejected by `is_allowed`.
 #[inline]
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 pub(super) fn ahb_check_field_value(
     segments: &[edifact_rs::Segment<'_>],
     tag: &str,
@@ -153,6 +157,7 @@ pub(super) fn ahb_check_field_value(
 /// `is_required` returns `true` for the qualifier value(s) that must be present.
 /// Emits `Error` when no occurrence of `tag` has a matching qualifier.
 #[inline]
+#[allow(dead_code)]
 pub(super) fn ahb_check_required_qualifier(
     segments: &[edifact_rs::Segment<'_>],
     tag: &str,
@@ -182,6 +187,7 @@ pub(super) fn ahb_check_required_qualifier(
 /// apply only when a specific qualifier or value is present elsewhere in the
 /// message.
 #[inline]
+#[allow(dead_code)]
 pub(super) fn ahb_check_conditional(
     segments: &[edifact_rs::Segment<'_>],
     condition_fn: impl Fn(&[edifact_rs::Segment<'_>]) -> bool,

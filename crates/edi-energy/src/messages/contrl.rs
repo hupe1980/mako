@@ -221,7 +221,7 @@ fn parse_message_responses(segments: &[edifact_rs::Segment<'_>]) -> Vec<ContrlMe
                 j += 1;
                 continue;
             }
-            let Some(ucs) = try_deserialize::<Ucs>(&segments[j]) else {
+            let Some(ucs_seg) = try_deserialize::<Ucs>(&segments[j]) else {
                 j += 1;
                 continue;
             };
@@ -236,7 +236,7 @@ fn parse_message_responses(segments: &[edifact_rs::Segment<'_>]) -> Vec<ContrlMe
                 k += 1;
             }
             segment_errors.push(ContrlSegmentError {
-                ucs,
+                ucs: ucs_seg,
                 element_errors,
             });
             j = k;

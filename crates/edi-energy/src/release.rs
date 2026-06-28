@@ -5,7 +5,7 @@ use crate::Error;
 /// Coarse track classification for a BDEW EDI@Energy release code.
 ///
 /// Used for unambiguous multi-track dispatch in `ReleaseRegistry` without
-/// relying on fragile string-prefix matching (resolves F-027).
+/// relying on fragile string-prefix matching (resolves.
 ///
 /// # Example
 ///
@@ -116,7 +116,7 @@ pub enum ReleaseKind {
     /// Retained verbatim for forward-compatibility.  When a release is
     /// constructed with an unrecognised code, `tracing::warn!` is emitted
     /// (when the `tracing` feature is enabled) so unknown patterns surface in
-    /// production observability backends (resolves F-031).
+    /// production observability backends (resolves.
     Opaque(Box<str>),
 }
 
@@ -124,7 +124,7 @@ impl ReleaseKind {
     /// Returns the coarse [`ReleaseTrack`] for this release code.
     ///
     /// Use this for explicit, type-safe track dispatch instead of
-    /// `release.as_str().starts_with("S")` string-prefix matching (resolves F-027).
+    /// `release.as_str().starts_with("S")` string-prefix matching (resolves.
     #[must_use]
     pub fn track(&self) -> ReleaseTrack {
         match self {
@@ -156,18 +156,18 @@ impl ReleaseKind {
     /// pattern.
     #[must_use]
     pub fn parse(s: &str) -> Self {
-        // S<major>.<minor>
+        // S<major>.<minor> or S<major>.<minor><letter>  e.g. "S2.1", "S1.1a"
         if let Some(rest) = s.strip_prefix('S') {
-            if let Some((maj, min)) = split_two_numeric(rest) {
+            if let Some((maj, min)) = split_two_numeric_allow_suffix(rest) {
                 return ReleaseKind::Strom {
                     major: maj,
                     minor: min,
                 };
             }
         }
-        // G<major>.<minor>
+        // G<major>.<minor> or G<major>.<minor><letter>  e.g. "G1.1", "G1.0a"
         if let Some(rest) = s.strip_prefix('G') {
-            if let Some((maj, min)) = split_two_numeric(rest) {
+            if let Some((maj, min)) = split_two_numeric_allow_suffix(rest) {
                 return ReleaseKind::Gas {
                     major: maj,
                     minor: min,
@@ -186,10 +186,21 @@ impl ReleaseKind {
     }
 }
 
-fn split_two_numeric(s: &str) -> Option<(u32, u32)> {
+/// Parse `"<major>.<minor>"` or `"<major>.<minor><letter>"` into `(major, minor)`.
+///
+/// Strips a trailing ASCII alphabetic suffix from the minor component so that
+/// BDEW corrigendum release codes like `"S1.1a"` and `"G1.0a"` are classified
+/// as Strom / Gas tracks instead of falling back to `ReleaseKind::Opaque`.
+fn split_two_numeric_allow_suffix(s: &str) -> Option<(u32, u32)> {
     let (a, b) = s.split_once('.')?;
-    let major = a.parse().ok()?;
-    let minor = b.parse().ok()?;
+    let major: u32 = a.parse().ok()?;
+    // Strip a trailing alphabetic suffix (e.g. "1a" → strip "a" → parse "1").
+    let minor_str = b.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let minor: u32 = minor_str.parse().ok()?;
+    // Guard against empty minor (e.g. "1." would give minor_str = "").
+    if minor_str.is_empty() {
+        return None;
+    }
     Some((major, minor))
 }
 
@@ -265,7 +276,7 @@ fn parse_short(s: &str) -> Option<ReleaseKind> {
 ///
 /// Internally uses `Arc<str>` so `Clone` is an atomic refcount increment with
 /// no heap allocation — safe to clone on hot paths without measurable allocator
-/// pressure (F-040).
+/// pressure.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Release(std::sync::Arc<str>);
 
@@ -329,7 +340,7 @@ impl Release {
     /// Returns `true` when `release` is registered for `message_type` in `registry`.
     ///
     /// This is the fast-path check for builder code that wants to fail early before
-    /// any serialization attempt — resolves F-028.
+    /// any serialization attempt.
     ///
     /// # Example
     ///
@@ -362,7 +373,7 @@ impl Release {
     /// Returns `ReleaseKind::Opaque` when the string does not match any known
     /// BDEW release pattern.  When the `tracing` feature is enabled, an
     /// `Opaque` result emits a `tracing::warn!` so unknown patterns surface
-    /// in production observability backends (resolves F-031).
+    /// in production observability backends (resolves.
     #[must_use]
     pub fn kind(&self) -> ReleaseKind {
         let kind = ReleaseKind::parse(&self.0);
@@ -380,7 +391,7 @@ impl Release {
     /// Return the coarse [`ReleaseTrack`] for this release code.
     ///
     /// Prefer this over `release.as_str().starts_with("S")` pattern matching
-    /// for track dispatch — it is unambiguous and forward-compatible (resolves F-027).
+    /// for track dispatch — it is unambiguous and forward-compatible (resolves.
     ///
     /// ```
     /// use edi_energy::{Release, ReleaseTrack};
@@ -396,7 +407,7 @@ impl Release {
     }
 
     /// Compare two releases within the same track, returning `None` for
-    /// cross-track pairs (F-017 fix).
+    /// cross-track pairs.
     ///
     /// This is the semantically correct comparison to use in application code.
     /// Unlike `Ord::cmp`, it never silently falls back to byte order.

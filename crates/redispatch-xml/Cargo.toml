@@ -1,0 +1,11 @@
+[package]
+name         = "redispatch-xml"
+version.workspace     = true
+description  = "Redispatch 2.0 XML/XSD format parsing and validation for the German electricity grid (CIM/ENTSO-E-based, per BDEW specifications)"
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+keywords     = ["redispatch", "xml", "xsd", "energy", "bdew"]
+categories   = ["encoding", "data-structures"]

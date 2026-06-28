@@ -1,0 +1,19 @@
+[package]
+name         = "mako-as4"
+version.workspace     = true
+description  = "BDEW MaKo AS4 profile — AS4/ebMS3 transport for German energy market communication"
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+keywords     = ["as4", "ebms", "energy", "mako", "bdew"]
+categories   = ["network-programming", "encoding"]
+
+[dependencies]
+asx-rs = { version = "0.3", features = ["as4", "interop-strict"] }
+
+[features]
+## Activates the `asx-rs/server` feature (Axum router helpers) so dependents
+## can wire BDEW router defaults without taking a direct `asx-rs` dep.
+server = ["asx-rs/server"]

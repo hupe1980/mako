@@ -11,6 +11,8 @@ use crate::Error;
 /// The valid range is `10000–99999` (all 5-digit decimal numbers).
 /// The value is extracted from element 1 of the BGM segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Pruefidentifikator(u32);
 
 impl Pruefidentifikator {
@@ -45,7 +47,7 @@ impl Pruefidentifikator {
     /// the string is not a decimal integer.
     ///
     /// This method delegates to [`FromStr`] for the numeric parse so that both
-    /// entry points produce consistent error variants (F-028):
+    /// entry points produce consistent error variants:
     /// - Non-numeric input → [`Error::InvalidPruefidentifikatorFormat`] (carries the raw value).
     /// - Out-of-range integer → [`Error::InvalidPruefidentifikatorRange`].
     ///

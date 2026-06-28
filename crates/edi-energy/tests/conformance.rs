@@ -17,7 +17,6 @@
 //!
 //! ```json
 //! { "expected_rule_prefixes": ["SEM-UTILMD-MALO-FORMAT"] }
-#![allow(dead_code)]
 use std::path::{Path, PathBuf};
 
 #[cfg(any(
@@ -39,14 +38,14 @@ use std::path::{Path, PathBuf};
     feature = "pricat",
     feature = "utilts",
 ))]
-use edi_energy::{EdiEnergyMessage, parse};
+use edi_energy::{EdiEnergyMessage, Platform};
 
 /// Deterministic reference date used by all conformance tests.
 ///
 /// Derived dynamically from the latest `valid_from` across all registered
 /// profiles, plus a 365-day margin.  This means the date automatically
 /// advances when new profiles (with later `valid_from` dates) are added via
-/// `cargo xtask codegen`, without any manual constant update (F-016 fix).
+/// `cargo xtask codegen`, without any manual constant update.
 ///
 /// If no profile has a `valid_from` date, falls back to 2027-01-01.
 #[cfg(any(
@@ -85,11 +84,49 @@ fn conformance_reference_date() -> time::Date {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+#[cfg(any(
+    feature = "utilmd",
+    feature = "mscons",
+    feature = "aperak",
+    feature = "contrl",
+    feature = "invoic",
+    feature = "remadv",
+    feature = "orders",
+    feature = "iftsta",
+    feature = "insrpt",
+    feature = "reqote",
+    feature = "partin",
+    feature = "ordchg",
+    feature = "ordrsp",
+    feature = "quotes",
+    feature = "comdis",
+    feature = "pricat",
+    feature = "utilts",
+))]
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
 /// Load every `*.edi` file directly under `dir`, returning `(name, bytes)`.
+#[cfg(any(
+    feature = "utilmd",
+    feature = "mscons",
+    feature = "aperak",
+    feature = "contrl",
+    feature = "invoic",
+    feature = "remadv",
+    feature = "orders",
+    feature = "iftsta",
+    feature = "insrpt",
+    feature = "reqote",
+    feature = "partin",
+    feature = "ordchg",
+    feature = "ordrsp",
+    feature = "quotes",
+    feature = "comdis",
+    feature = "pricat",
+    feature = "utilts",
+))]
 fn load_edi_files(dir: &Path) -> Vec<(String, Vec<u8>)> {
     if !dir.exists() {
         return Vec::new();
@@ -115,6 +152,25 @@ fn load_edi_files(dir: &Path) -> Vec<(String, Vec<u8>)> {
 }
 
 /// Parse `<name>.expected.json` next to an invalid `.edi` file.
+#[cfg(any(
+    feature = "utilmd",
+    feature = "mscons",
+    feature = "aperak",
+    feature = "contrl",
+    feature = "invoic",
+    feature = "remadv",
+    feature = "orders",
+    feature = "iftsta",
+    feature = "insrpt",
+    feature = "reqote",
+    feature = "partin",
+    feature = "ordchg",
+    feature = "ordrsp",
+    feature = "quotes",
+    feature = "comdis",
+    feature = "pricat",
+    feature = "utilts",
+))]
 fn load_expected(dir: &Path, name: &str) -> Vec<String> {
     let json_path = dir.join(format!("{name}.expected.json"));
     let raw = std::fs::read_to_string(&json_path)
@@ -172,9 +228,11 @@ fn run_valid_fixtures(message_type: &str) {
         dir.display()
     );
     for (name, bytes) in files {
-        let msg = parse(&bytes).unwrap_or_else(|e| {
-            panic!("[{message_type}/valid/{name}] parse error: {e}");
-        });
+        let msg = Platform::with_all_profiles()
+            .parse(&bytes)
+            .unwrap_or_else(|e| {
+                panic!("[{message_type}/valid/{name}] parse error: {e}");
+            });
         let report = msg
             .validate_on_date(conformance_reference_date())
             .unwrap_or_else(|e| {
@@ -218,9 +276,11 @@ fn run_invalid_fixtures(message_type: &str) {
     );
     for (name, bytes) in files {
         let expected_prefixes = load_expected(&dir, &name);
-        let msg = parse(&bytes).unwrap_or_else(|e| {
-            panic!("[{message_type}/invalid/{name}] parse error: {e}");
-        });
+        let msg = Platform::with_all_profiles()
+            .parse(&bytes)
+            .unwrap_or_else(|e| {
+                panic!("[{message_type}/invalid/{name}] parse error: {e}");
+            });
         let report = msg
             .validate_on_date(conformance_reference_date())
             .unwrap_or_else(|e| {

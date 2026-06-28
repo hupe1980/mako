@@ -4,9 +4,7 @@
 //! messages produce clean reports and invalid messages produce the expected
 //! rule ID in their findings.
 
-#![allow(unused_imports, dead_code)]
-
-use edi_energy::{EdiEnergyMessage, parse};
+use edi_energy::{EdiEnergyMessage, Platform};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -81,7 +79,9 @@ UNZ+1+1'";
 #[cfg(feature = "utilmd")]
 #[test]
 fn utilmd_valid_malo_id_passes() {
-    let msg = parse(UTILMD_VALID_MALO).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(UTILMD_VALID_MALO)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_valid(&report);
 }
@@ -89,7 +89,9 @@ fn utilmd_valid_malo_id_passes() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn utilmd_short_malo_id_triggers_sem_rule() {
-    let msg = parse(UTILMD_BAD_MALO_SHORT).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(UTILMD_BAD_MALO_SHORT)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_has_rule(&report, "SEM-UTILMD-MALO-FORMAT");
 }
@@ -97,7 +99,9 @@ fn utilmd_short_malo_id_triggers_sem_rule() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn utilmd_lowercase_malo_id_triggers_sem_rule() {
-    let msg = parse(UTILMD_BAD_MALO_LOWERCASE).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(UTILMD_BAD_MALO_LOWERCASE)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_has_rule(&report, "SEM-UTILMD-MALO-FORMAT");
 }
@@ -137,7 +141,9 @@ UNZ+1+1'";
 #[cfg(feature = "mscons")]
 #[test]
 fn mscons_valid_melo_id_passes() {
-    let msg = parse(MSCONS_VALID_MELO).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(MSCONS_VALID_MELO)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_valid(&report);
 }
@@ -145,7 +151,9 @@ fn mscons_valid_melo_id_passes() {
 #[cfg(feature = "mscons")]
 #[test]
 fn mscons_short_melo_id_triggers_sem_rule() {
-    let msg = parse(MSCONS_BAD_MELO_SHORT).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(MSCONS_BAD_MELO_SHORT)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_has_rule(&report, "SEM-MSCONS-MELO-FORMAT");
 }
@@ -189,7 +197,9 @@ UNZ+1+1'";
 #[cfg(feature = "mscons")]
 #[test]
 fn mscons_valid_period_order_passes() {
-    let msg = parse(MSCONS_VALID_PERIOD).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(MSCONS_VALID_PERIOD)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_valid(&report);
 }
@@ -197,7 +207,9 @@ fn mscons_valid_period_order_passes() {
 #[cfg(feature = "mscons")]
 #[test]
 fn mscons_inverted_period_order_triggers_sem_rule() {
-    let msg = parse(MSCONS_BAD_PERIOD_ORDER).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(MSCONS_BAD_PERIOD_ORDER)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_has_rule(&report, "SEM-MSCONS-PERIOD-ORDER");
 }
@@ -222,7 +234,9 @@ UNZ+1+1'";
 #[cfg(feature = "mscons")]
 #[test]
 fn mscons_unknown_unit_triggers_sem_rule() {
-    let msg = parse(MSCONS_BAD_UNIT).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(MSCONS_BAD_UNIT)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_has_rule(&report, "SEM-MSCONS-UNIT-UNKNOWN");
 }
@@ -230,7 +244,9 @@ fn mscons_unknown_unit_triggers_sem_rule() {
 #[cfg(feature = "mscons")]
 #[test]
 fn mscons_valid_unit_kwh_passes() {
-    let msg = parse(MSCONS_VALID_MELO).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(MSCONS_VALID_MELO)
+        .unwrap();
     let report = msg.validate().unwrap();
     // KWH is in the approved list — no unit error expected.
     let unit_errors = report.filter_by_rule_id("SEM-MSCONS-UNIT-UNKNOWN");
@@ -429,7 +445,9 @@ fn utilmd_pid_fixtures_parse() {
         (55553, UTILMD_PID_55553),
         (55555, UTILMD_PID_55555),
     ] {
-        parse(bytes).unwrap_or_else(|e| panic!("UTILMD PID {pid} fixture failed to parse: {e}"));
+        Platform::with_all_profiles()
+            .parse(bytes)
+            .unwrap_or_else(|e| panic!("UTILMD PID {pid} fixture failed to parse: {e}"));
     }
 }
 
@@ -443,7 +461,9 @@ fn mscons_pid_fixtures_parse() {
         (13005, MSCONS_PID_13005),
         (13013, MSCONS_PID_13013),
     ] {
-        parse(bytes).unwrap_or_else(|e| panic!("MSCONS PID {pid} fixture failed to parse: {e}"));
+        Platform::with_all_profiles()
+            .parse(bytes)
+            .unwrap_or_else(|e| panic!("MSCONS PID {pid} fixture failed to parse: {e}"));
     }
 }
 
@@ -491,7 +511,9 @@ UNZ+1+1'";
 #[cfg(feature = "aperak")]
 #[test]
 fn aperak_valid_with_acw_ref_passes() {
-    let msg = parse(APERAK_VALID_WITH_REF).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(APERAK_VALID_WITH_REF)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_valid(&report);
 }
@@ -499,7 +521,9 @@ fn aperak_valid_with_acw_ref_passes() {
 #[cfg(feature = "aperak")]
 #[test]
 fn aperak_missing_ref_triggers_sem_rule() {
-    let msg = parse(APERAK_MISSING_REF).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(APERAK_MISSING_REF)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_has_rule(&report, "AHB-29001-RFF-M");
 }
@@ -507,7 +531,9 @@ fn aperak_missing_ref_triggers_sem_rule() {
 #[cfg(feature = "aperak")]
 #[test]
 fn aperak_wrong_rff_qualifier_triggers_sem_rule() {
-    let msg = parse(APERAK_WRONG_RFF_QUALIFIER).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(APERAK_WRONG_RFF_QUALIFIER)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_has_rule(&report, "AHB-29001-RFF-1153-Q");
 }
@@ -518,7 +544,9 @@ fn aperak_wrong_rff_qualifier_triggers_sem_rule() {
 fn aperak_pid_fixtures_parse() {
     {
         let (pid, bytes) = (29001_u32, APERAK_VALID_WITH_REF as &[u8]);
-        parse(bytes).unwrap_or_else(|e| panic!("APERAK PID {pid} fixture failed to parse: {e}"));
+        Platform::with_all_profiles()
+            .parse(bytes)
+            .unwrap_or_else(|e| panic!("APERAK PID {pid} fixture failed to parse: {e}"));
     }
 }
 
@@ -553,7 +581,9 @@ UNZ+1+1'";
 #[cfg(feature = "contrl")]
 #[test]
 fn contrl_valid_code_4_passes() {
-    let msg = parse(CONTRL_VALID_CODE_4).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(CONTRL_VALID_CODE_4)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_valid(&report);
 }
@@ -561,7 +591,9 @@ fn contrl_valid_code_4_passes() {
 #[cfg(feature = "contrl")]
 #[test]
 fn contrl_valid_code_7_passes() {
-    let msg = parse(CONTRL_VALID_CODE_7).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(CONTRL_VALID_CODE_7)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_valid(&report);
 }
@@ -569,7 +601,9 @@ fn contrl_valid_code_7_passes() {
 #[cfg(feature = "contrl")]
 #[test]
 fn contrl_missing_uci_triggers_mig_rule() {
-    let msg = parse(CONTRL_MISSING_UCI).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(CONTRL_MISSING_UCI)
+        .unwrap();
     let report = msg.validate().unwrap();
     assert_has_rule(&report, "MIG-UCI-REQ");
 }
@@ -579,7 +613,9 @@ fn contrl_missing_uci_triggers_mig_rule() {
 #[test]
 fn contrl_no_pruefidentifikator() {
     use edi_energy::Error;
-    let msg = parse(CONTRL_VALID_CODE_4).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(CONTRL_VALID_CODE_4)
+        .unwrap();
     let contrl = match msg {
         edi_energy::AnyMessage::Contrl(c) => c,
         _ => panic!("expected CONTRL"),
@@ -593,7 +629,7 @@ fn contrl_no_pruefidentifikator() {
     );
 }
 
-// ── F-006: validate_with_context ─────────────────────────────────────────────
+// ── validate_with_context ─────────────────────────────────────────────
 
 /// `validate_with_context` must accept a message whose declared release is
 /// within the normative acceptance window for the context's date.
@@ -605,7 +641,9 @@ fn validate_with_context_accepts_valid_release() {
 
     // MSCONS 2.4c is valid from 2025-10-01, valid_until 2026-09-30.
     // On 2026-01-15 (mid-cycle) it must be accepted.
-    let msg = parse(MSCONS_VALID_MELO).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(MSCONS_VALID_MELO)
+        .unwrap();
     let ctx = ProcessContext::for_date(date!(2026 - 01 - 15));
     let report = msg
         .validate_with_context(&ctx)
@@ -627,7 +665,9 @@ fn validate_with_context_rejects_expired_release() {
 
     // MSCONS 2.4c valid_until = 2026-09-30; grace ends 2026-10-07.
     // On 2026-10-08, the release "2.4c" must be rejected.
-    let msg = parse(MSCONS_VALID_MELO).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(MSCONS_VALID_MELO)
+        .unwrap();
     let ctx = ProcessContext::for_date(date!(2026 - 10 - 08));
     let err = msg
         .validate_with_context(&ctx)

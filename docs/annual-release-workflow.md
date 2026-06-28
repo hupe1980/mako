@@ -1,3 +1,14 @@
+---
+layout: default
+title: Annual Release Workflow
+nav_order: 30
+parent: Release & Compliance
+description: >
+  Step-by-step engineering playbook for incorporating a new BDEW annual
+  release: extract-pdf, import-xml-ahb, codegen, validate-pruefids, add-release,
+  check-release-coverage.
+---
+
 # Annual Release Workflow
 
 This document is the step-by-step engineering playbook for incorporating a new
@@ -245,6 +256,7 @@ Before merging:
 - [ ] `cargo xtask codegen --prune-expired` run; expired profiles archived
 - [ ] `cargo xtask validate-profiles` exits 0
 - [ ] `cargo xtask codegen --check` exits 0
+- [ ] `cargo xtask validate-release-codes` exits 0 — every profile `release` field matches a UNH 0057 value in a fixture (F-033)
 - [ ] `cargo test --all-features` exits 0
 - [ ] `REVIEW.md` committed with release-diff output
 - [ ] CHANGELOG.md updated

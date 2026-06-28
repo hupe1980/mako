@@ -3,6 +3,7 @@
 
 /// Codegen schema version this module was generated from.
 /// Compared against `mig.json` `schema_version` in CI to detect drift.
+#[allow(dead_code)]
 pub(crate) const CODEGEN_SCHEMA_VERSION: u32 = 1;
 
 use std::sync::{Arc, LazyLock};
@@ -163,7 +164,7 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
 // Layer 2 scope: mandatory segment presence, element/component counts,
 // code-list validity. Does NOT check segment sequence or repetition
 // cardinality — those are Layer 3 (MIG ProfileRulePack) responsibilities.
-// Cached in a LazyLock so construction happens once per profile (F-019 fix).
+// Cached in a LazyLock so construction happens once per profile.
 static DIRECTORY_VALIDATOR_REMADV_2_9E: LazyLock<DirectoryValidator> = LazyLock::new(|| {
     DirectoryValidator::new(
         "EDI@Energy-REMADV-2.9e",
@@ -309,7 +310,7 @@ fn rule_unt_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     }
 }
 
-/// Layer 3 — group-window rule for `DOC` groups (F-004).
+/// Layer 3 — group-window rule for `DOC` groups.
 ///
 /// When a `DOC` group is present, the mandatory inner segments
 /// must also be present within each group window.
@@ -1123,7 +1124,7 @@ impl Profile for RemadvFv20251001Profile {
         Some(::time::macros::date!(2025 - 10 - 01))
     }
     fn valid_until(&self) -> Option<::time::Date> {
-        None
+        Some(::time::macros::date!(2026 - 03 - 31))
     }
     fn ahb_revision(&self) -> Option<&'static str> {
         Some("2.9e")

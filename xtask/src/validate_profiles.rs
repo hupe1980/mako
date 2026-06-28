@@ -29,25 +29,25 @@ struct MigProfile {
     ordering_hint: Vec<String>,
     #[serde(default)]
     pid_source: String,
-    // Added in F-029: expiry date for release transition modeling.
+    // Added in  expiry date for release transition modeling.
     #[serde(default)]
     valid_until: Option<String>,
-    // Added in F-001: links a newer release to the older one it supersedes.
+    // Added in  links a newer release to the older one it supersedes.
     #[serde(default)]
     supersedes_directory: Option<String>,
-    // Added in F-029: AHB revision identifier.
+    // Added in  AHB revision identifier.
     #[serde(default)]
     ahb_revision: Option<String>,
-    // Added in F-029: source document title.
+    // Added in  source document title.
     #[serde(default)]
     source_document: Option<String>,
-    // Added in F-010: explicit archive marker set by `cargo xtask codegen --prune-expired`.
+    // Added in  explicit archive marker set by `cargo xtask codegen --prune-expired`.
     #[serde(default)]
     archived: bool,
-    // Added in F-002: profiles that intentionally have no PIDs (e.g. CONTRL).
+    // Added in  profiles that intentionally have no PIDs (e.g. CONTRL).
     #[serde(default)]
     pid_exempt: bool,
-    // Added in F-020: explicit valid_from date matching directory name.
+    // Added in  explicit valid_from date matching directory name.
     #[serde(default)]
     valid_from: Option<String>,
     segments: Vec<MigSegment>,
@@ -97,16 +97,16 @@ struct AhbProfile {
     schema_version: u32,
     message_type: String,
     release: String,
-    // Added in F-029: expiry date for release transition modeling.
+    // Added in  expiry date for release transition modeling.
     #[serde(default)]
     valid_until: Option<String>,
-    // Added in F-001: links a newer release to the older one it supersedes.
+    // Added in  links a newer release to the older one it supersedes.
     #[serde(default)]
     supersedes_directory: Option<String>,
-    // Added in F-029: AHB revision identifier.
+    // Added in  AHB revision identifier.
     #[serde(default)]
     ahb_revision: Option<String>,
-    // Added in F-029: source document title.
+    // Added in  source document title.
     #[serde(default)]
     source_document: Option<String>,
     pruefidentifikatoren: Vec<PruefidentifikatorEntry>,
@@ -119,13 +119,13 @@ struct PruefidentifikatorEntry {
     code: u32,
     name: String,
     segment_rules: Vec<AhbSegmentRule>,
-    /// Per-segment-group-instance rules (F-001). Each entry is scoped to a
+    /// Per-segment-group-instance rules. Each entry is scoped to a
     /// specific group definition and fires once per group occurrence.
     #[serde(default)]
     group_rules: Vec<AhbGroupRule>,
 }
 
-/// A single AHB rule scoped to a segment-group instance (F-001).
+/// A single AHB rule scoped to a segment-group instance.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[allow(dead_code)]
@@ -139,7 +139,7 @@ struct AhbGroupRule {
     /// Qualifier restrictions: element DE identifier → list of allowed values.
     #[serde(default)]
     qualifier_restrictions: BTreeMap<String, Vec<String>>,
-    /// BDEW Bedingungsoperator rules scoped to each group occurrence (F-001 fix).
+    /// BDEW Bedingungsoperator rules scoped to each group occurrence.
     #[serde(default)]
     conditional_rules: Vec<AhbConditionalRule>,
     /// Human-readable description for documentation.
@@ -159,10 +159,10 @@ struct AhbSegmentRule {
     field_rules: Vec<AhbFieldRule>,
     #[serde(default)]
     required_qualifiers: BTreeMap<String, Vec<String>>,
-    // Added in F-003: conditional rules for segments with requirement "C".
+    // Added in  conditional rules for segments with requirement "C".
     #[serde(default)]
     conditional_rules: Vec<AhbConditionalRule>,
-    // Added in F-002: human-readable description (not used in validation).
+    // Added in  human-readable description (not used in validation).
     #[serde(default, rename = "_description")]
     description: String,
 }
@@ -191,16 +191,16 @@ struct AhbConditionalRule {
     when_value_alternatives: Vec<String>,
     #[serde(default)]
     when_additional_elements: Vec<AhbWhenElement>,
-    /// BDEW Bedingungsoperator (I/V/E/X/U/O/G/K/Z). Added in F-003.
+    /// BDEW Bedingungsoperator (I/V/E/X/U/O/G/K/Z).
     #[serde(default)]
     operator: Option<String>,
-    /// Secondary trigger segment tag (required for X/U/O operators; optional for K). Added in F-003.
+    /// Secondary trigger segment tag (required for X/U/O operators; optional for K).
     #[serde(default)]
     secondary_tag: Option<String>,
-    /// Extra segment tags for the K operator (beyond when_tag and secondary_tag). Added in F-021.
+    /// Extra segment tags for the K operator (beyond when_tag and secondary_tag).
     #[serde(default)]
     additional_tags: Vec<String>,
-    /// Count threshold for the G (≥N) operator. Added in F-003.
+    /// Count threshold for the G (≥N) operator.
     #[serde(default)]
     count_threshold: Option<u32>,
     then_requirement: String,
@@ -220,7 +220,7 @@ struct AhbFieldRule {
     requirement: String,
     #[serde(default)]
     allowed_values: Vec<String>,
-    /// 0-based element index within the segment — must be set explicitly (F-021).
+    /// 0-based element index within the segment — must be set explicitly.
     element_index: usize,
 }
 
@@ -538,13 +538,13 @@ fn check_profile(
         ));
     }
 
-    // 4b. F-020: valid_from field must be present and consistent with the directory name.
+    // 4b.  valid_from field must be present and consistent with the directory name.
     if is_fv_dir {
         let expected_date = parse_fv_date_str(expected_release);
         match &mig.valid_from {
             None => errors.push(format!(
                 "{rel_prefix}/mig.json  `valid_from` field is missing — add \
-                 e.g. {:?} to match the directory name (F-020)",
+                 e.g. {:?} to match the directory name",
                 expected_date.as_deref().unwrap_or("YYYY-MM-DD"),
             )),
             Some(vf) if expected_date.as_deref() != Some(vf.as_str()) => errors.push(format!(
@@ -558,7 +558,7 @@ fn check_profile(
         }
     }
 
-    // 5. Audit trail: ahb_revision and source_document must be set (F-007).
+    // 5. Audit trail: ahb_revision and source_document must be set.
     if mig.ahb_revision.as_deref().unwrap_or("").trim().is_empty() {
         warnings.push(format!(
             "{rel_prefix}/mig.json  `ahb_revision` is missing — add BDEW AHB revision letter for audit traceability"
@@ -578,7 +578,7 @@ fn check_profile(
 
     // 6. Build known segment tag set from MIG + segment element-count map
     let mig_tags: BTreeSet<&str> = collect_all_tags(&mig);
-    // Map from tag → element count for the first definition in MIG (used for F-008 checks).
+    // Map from tag → element count for the first definition in MIG.
     let mig_element_counts: BTreeMap<&str, usize> = collect_segment_element_counts(&mig);
 
     // 7. Build known code-list keys
@@ -601,6 +601,20 @@ fn check_profile(
             ));
         }
 
+        // Zero-rule guard: a PID with no segment_rules AND no
+        // group_rules is a silent validation hole — every inbound message passes
+        // AHB validation vacuously.  Profiles that intentionally have no PIDs set
+        // `pid_exempt = true` on their MIG; individual PIDs cannot opt out.
+        if pid.segment_rules.is_empty() && pid.group_rules.is_empty() {
+            errors.push(format!(
+                "{rel_prefix}/ahb.json  PID {}: has zero segment_rules and zero \
+                 group_rules — messages will pass AHB validation vacuously. \
+                 Import the rules from the official BDEW AHB or mark the profile \
+                 `pid_exempt = true` if PIDs are intentionally absent.",
+                pid.code
+            ));
+        }
+
         for rule in &pid.segment_rules {
             // Segment tag cross-reference
             if !mig_tags.contains(rule.tag.as_str()) {
@@ -610,7 +624,7 @@ fn check_profile(
                 ));
             }
 
-            // Requirement value check — M/C/N/O/S/X are valid (F-027: S added)
+            // Requirement value check — M/C/N/O/S/X are valid
             if !matches!(rule.requirement.as_str(), "M" | "C" | "N" | "O" | "S" | "X") {
                 errors.push(format!(
                     "{rel_prefix}/ahb.json  PID {}: segment {:?} has invalid requirement {:?} (expected M/C/N/O/S/X)",
@@ -628,7 +642,7 @@ fn check_profile(
                 }
             }
 
-            // F-022: conditional rule when_tag and secondary_tag cross-check.
+            //  conditional rule when_tag and secondary_tag cross-check.
             // Both must refer to segments defined in mig.json.
             for (ci, cond) in rule.conditional_rules.iter().enumerate() {
                 if !mig_tags.contains(cond.when_tag.as_str()) {
@@ -681,7 +695,7 @@ fn check_profile(
                 }
             }
 
-            // F-008: element_index cross-check — warn when index exceeds segment's element count.
+            //  element_index cross-check — warn when index exceeds segment's element count.
             if let Some(&elem_count) = mig_element_counts.get(rule.tag.as_str()) {
                 for fr in &rule.field_rules {
                     if fr.element_index >= elem_count {
@@ -695,7 +709,7 @@ fn check_profile(
         }
     }
 
-    // F-017a: valid_until >= valid_from (if valid_until is set and we can infer valid_from)
+    // valid_until >= valid_from (if valid_until is set and we can infer valid_from)
     // For `fv<YYYYMMDD>` directories, parse the valid_from date from the folder name.
     // Dates compared lexicographically as ISO-8601 strings (YYYY-MM-DD format).
     if let Some(valid_until) = &mig.valid_until
@@ -707,7 +721,7 @@ fn check_profile(
             ));
     }
 
-    // F-016: Warn when a non-archived profile has no valid_until and has been open-ended
+    //  Warn when a non-archived profile has no valid_until and has been open-ended
     // for more than 14 months (> the maximum BDEW annual update cycle).  This surfaces
     // profiles where a successor should have been authored but wasn't.
     if !mig.archived
@@ -739,13 +753,13 @@ fn check_profile(
                 warnings.push(format!(
                     "{rel_prefix}/mig.json  no `valid_until` set — profile has been open-ended for \
                      >14 months (valid_from {valid_from_str:?}). Set `valid_until` when BDEW publishes \
-                     the successor, or set `pid_exempt: true` if this type has no annual update (F-016)"
+                     the successor, or set `pid_exempt: true` if this type has no annual update"
                 ));
             }
         }
     }
 
-    // F-017b: schema_version must be >= SCHEMA_MIN
+    // schema_version must be >= SCHEMA_MIN
     const SCHEMA_MIN: u32 = 1;
     if mig.schema_version < SCHEMA_MIN {
         errors.push(format!(
@@ -760,7 +774,7 @@ fn check_profile(
         ));
     }
 
-    // F-017c: implausible segment counts — fewer than 3 top-level segments is suspicious.
+    // Implausible segment counts — fewer than 3 top-level segments is suspicious.
     let total_seg_count = count_all_segments(&mig);
     if total_seg_count < 3 {
         warnings.push(format!(
@@ -768,7 +782,7 @@ fn check_profile(
         ));
     }
 
-    // F-017d: max_occurrences = 0 on any segment is always wrong.
+    // max_occurrences = 0 on any segment is always wrong.
     for seg in &mig.segments {
         if seg.max_occurrences == 0 {
             errors.push(format!(
@@ -778,7 +792,7 @@ fn check_profile(
         }
     }
 
-    // F-002: AHB rule-coverage quality gates.
+    //  AHB rule-coverage quality gates.
     // These are WARNING-level; they do not block CI but make gaps visible.
     if !mig.archived && !mig.pid_exempt {
         let pid_count = ahb.pruefidentifikatoren.len();
@@ -805,7 +819,7 @@ fn check_profile(
                 .count();
             if avg < MIN_DENSITY && app_seg_count as f64 >= MIN_DENSITY {
                 warnings.push(format!(
-                    "{rel_prefix}/ahb.json  avg rules/PID is {avg:.1} (threshold {MIN_DENSITY}) — AHB coverage is critically sparse (F-002)"
+                    "{rel_prefix}/ahb.json  avg rules/PID is {avg:.1} (threshold {MIN_DENSITY}) — AHB coverage is critically sparse"
                 ));
             }
 
@@ -820,7 +834,7 @@ fn check_profile(
                 collect_mandatory_group_gaps(&mig.segment_groups, &groups_with_rules);
             for (group_id, trigger) in &mandatory_uncovered {
                 warnings.push(format!(
-                    "{rel_prefix}/ahb.json  mandatory group {group_id:?} (trigger: {trigger:?}) has no group_rule in any PID — add per-instance trigger-segment enforcement (F-002)"
+                    "{rel_prefix}/ahb.json  mandatory group {group_id:?} (trigger: {trigger:?}) has no group_rule in any PID — add per-instance trigger-segment enforcement"
                 ));
             }
         }
@@ -1031,7 +1045,7 @@ fn parse_fv_date(folder_name: &str) -> Option<String> {
 /// Convert a Unix day count (days since 1970-01-01) to `(year, month)`.
 ///
 /// Uses the proleptic Gregorian calendar — accurate for any date after 1970.
-/// Sufficient precision for the 14-month open-ended profile check (F-016).
+/// Sufficient precision for the 14-month open-ended profile check.
 fn days_to_year_month(days: u64) -> (u32, u32) {
     // Algorithm: civil_from_days (Howard Hinnant, public domain).
     let z = days as i64 + 719_468;

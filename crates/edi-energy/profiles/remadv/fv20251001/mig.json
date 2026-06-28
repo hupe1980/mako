@@ -3,6 +3,7 @@
   "message_type": "REMADV",
   "release": "2.9e",
   "valid_from": "2025-10-01",
+  "valid_until": "2026-03-31",
   "ordering_hint": [
     "UNH",
     "BGM",

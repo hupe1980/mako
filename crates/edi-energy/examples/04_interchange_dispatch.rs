@@ -16,7 +16,7 @@
 
 use std::io::Cursor;
 
-use edi_energy::{AnyMessage, EdiEnergyMessage, parse_interchange};
+use edi_energy::{AnyMessage, EdiEnergyMessage, Platform};
 
 /// An interchange containing five different EDI@Energy message types.
 const INTERCHANGE: &[u8] = b"\
@@ -57,7 +57,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reader = Cursor::new(INTERCHANGE);
     let mut counts = std::collections::HashMap::<String, usize>::new();
 
-    for (i, result) in parse_interchange(reader).enumerate() {
+    for (i, result) in Platform::with_all_profiles()
+        .parse_interchange(reader)
+        .enumerate()
+    {
         let msg = result?;
 
         let type_name = msg

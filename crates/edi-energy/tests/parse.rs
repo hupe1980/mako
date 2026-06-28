@@ -5,11 +5,10 @@
 //! `validate_envelope` can succeed.
 
 // Many imports and constants are only used inside feature-gated test fns.
-#![allow(unused_imports, dead_code)]
 
 use edi_energy::{
-    AnyMessage, DEFAULT_MAX_SEGMENT_BYTES, EdiEnergyMessage, Error, MessageType, ParseConfig,
-    Parser, parse, parse_interchange,
+    AnyMessage, DEFAULT_MAX_SEGMENT_BYTES, EdiEnergyMessage, MessageType, ParseConfig, Parser,
+    Platform,
 };
 
 // ── Minimal valid EDIFACT interchanges ───────────────────────────────────────
@@ -99,19 +98,19 @@ fn default_max_segment_bytes_is_64kib() {
     assert_eq!(DEFAULT_MAX_SEGMENT_BYTES, 64 * 1024);
 }
 
-// ── parse() ───────────────────────────────────────────────────────────────────
+// ── Platform::with_all_profiles().parse() ───────────────────────────────────────────────────────────────────
 
 #[cfg(feature = "utilmd")]
 #[test]
 fn parse_utilmd_message_type() {
-    let msg = parse(UTILMD).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD).unwrap();
     assert_eq!(msg.try_message_type(), Some(MessageType::Utilmd));
 }
 
 #[cfg(feature = "utilmd")]
 #[test]
 fn parse_utilmd_assoc_code() {
-    let msg = parse(UTILMD).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD).unwrap();
     let release = msg.detect_release().unwrap();
     assert_eq!(release.as_str(), "S2.1");
 }
@@ -119,7 +118,7 @@ fn parse_utilmd_assoc_code() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn parse_utilmd_pruefidentifikator() {
-    let msg = parse(UTILMD).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD).unwrap();
     let pid = msg.detect_pruefidentifikator().unwrap();
     assert_eq!(pid.as_u32(), 55001);
 }
@@ -127,7 +126,7 @@ fn parse_utilmd_pruefidentifikator() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn parse_utilmd_variant() {
-    let msg = parse(UTILMD).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD).unwrap();
     assert!(
         matches!(msg, AnyMessage::Utilmd(_)),
         "expected AnyMessage::Utilmd"
@@ -136,13 +135,15 @@ fn parse_utilmd_variant() {
 
 #[test]
 fn parse_garbage_returns_err() {
-    let result = parse(b"not edifact at all");
+    let result = Platform::with_all_profiles().parse(b"not edifact at all");
     assert!(result.is_err(), "garbage input must not parse successfully");
 }
 
 #[test]
 fn parse_unknown_type_returns_unknown_variant() {
-    let result = parse(UNKNOWN_TYPE).expect("unknown type must not error");
+    let result = Platform::with_all_profiles()
+        .parse(UNKNOWN_TYPE)
+        .expect("unknown type must not error");
     match result {
         AnyMessage::Unknown {
             message_type_code, ..
@@ -159,7 +160,7 @@ fn parse_unknown_type_returns_unknown_variant() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn parse_reader_is_equivalent_to_parse() {
-    let msg_bytes = parse(UTILMD).unwrap();
+    let msg_bytes = Platform::with_all_profiles().parse(UTILMD).unwrap();
     let msg_reader = Parser::new()
         .parse_reader(std::io::Cursor::new(UTILMD))
         .unwrap();
@@ -202,12 +203,13 @@ fn parse_with_max_limit_succeeds() {
     let _ = Parser::with_config(cfg).parse(UTILMD); // May fail with FeatureNotEnabled — that's fine.
 }
 
-// ── parse_interchange() ───────────────────────────────────────────────────────
+// ── Platform::with_all_profiles().parse_interchange() ───────────────────────────────────────────────────────
 
 #[cfg(feature = "utilmd")]
 #[test]
 fn parse_interchange_single_message() {
-    let messages: Vec<_> = parse_interchange(std::io::Cursor::new(UTILMD))
+    let messages: Vec<_> = Platform::with_all_profiles()
+        .parse_interchange(std::io::Cursor::new(UTILMD))
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(messages.len(), 1);
@@ -217,7 +219,8 @@ fn parse_interchange_single_message() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn parse_interchange_two_messages() {
-    let messages: Vec<_> = parse_interchange(std::io::Cursor::new(TWO_UTILMD))
+    let messages: Vec<_> = Platform::with_all_profiles()
+        .parse_interchange(std::io::Cursor::new(TWO_UTILMD))
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(messages.len(), 2);
@@ -229,7 +232,8 @@ fn parse_interchange_two_messages() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn parse_interchange_yields_correct_pids() {
-    let messages: Vec<_> = parse_interchange(std::io::Cursor::new(TWO_UTILMD))
+    let messages: Vec<_> = Platform::with_all_profiles()
+        .parse_interchange(std::io::Cursor::new(TWO_UTILMD))
         .collect::<Result<_, _>>()
         .unwrap();
     let pids: Vec<u32> = messages
@@ -244,7 +248,8 @@ fn parse_interchange_yields_correct_pids() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn parse_interchange_is_lazy_iterator() {
-    let mut iter = parse_interchange(std::io::Cursor::new(TWO_UTILMD));
+    let platform = Platform::with_all_profiles();
+    let mut iter = platform.parse_interchange(std::io::Cursor::new(TWO_UTILMD));
     let first = iter.next().unwrap().unwrap();
     assert_eq!(first.try_message_type(), Some(MessageType::Utilmd));
     let second = iter.next().unwrap().unwrap();
@@ -260,7 +265,9 @@ fn parse_interchange_is_lazy_iterator() {
 #[cfg(feature = "diagnostics")]
 #[test]
 fn diagnostics_error_renders_via_miette() {
-    let err = parse(b"not valid edifact").unwrap_err();
+    let err = Platform::with_all_profiles()
+        .parse(b"not valid edifact")
+        .unwrap_err();
     let report = miette::Report::new(err);
     let rendered = format!("{report:?}");
     // The rendered string must not be empty.
@@ -272,7 +279,7 @@ fn diagnostics_error_renders_via_miette() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn message_detect_release() {
-    let msg = parse(UTILMD).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD).unwrap();
     let release = msg.detect_release().unwrap();
     assert_eq!(release.as_str(), "S2.1");
 }
@@ -280,7 +287,7 @@ fn message_detect_release() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn message_detect_pruefidentifikator() {
-    let msg = parse(UTILMD).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD).unwrap();
     let pid = msg.detect_pruefidentifikator().unwrap();
     assert_eq!(pid.as_u32(), 55001);
 }
@@ -288,10 +295,10 @@ fn message_detect_pruefidentifikator() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn message_serialize_round_trips() {
-    let msg = parse(UTILMD).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD).unwrap();
     let bytes = msg.serialize().unwrap();
     // Re-parse the serialised bytes and check message type is preserved.
-    let reparsed = parse(&bytes).unwrap();
+    let reparsed = Platform::with_all_profiles().parse(&bytes).unwrap();
     assert_eq!(reparsed.try_message_type(), msg.try_message_type());
 }
 
@@ -301,7 +308,7 @@ fn message_serialize_round_trips() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn validate_without_profiles_returns_ok_report() {
-    let msg = parse(UTILMD).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD).unwrap();
     let report = msg.validate().unwrap();
     assert!(report.is_valid(), "expected valid report: {report}");
 }
@@ -310,7 +317,7 @@ fn validate_without_profiles_returns_ok_report() {
 #[test]
 fn validate_pruefidentifikator_matches() {
     use edi_energy::{Pruefidentifikator, validate_and_check_pid};
-    let msg = parse(UTILMD).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD).unwrap();
     let pid = Pruefidentifikator::new(55001).unwrap();
     let report = validate_and_check_pid(&msg, pid).unwrap();
     assert!(
@@ -323,7 +330,7 @@ fn validate_pruefidentifikator_matches() {
 #[test]
 fn validate_pruefidentifikator_mismatch_adds_error() {
     use edi_energy::{Pruefidentifikator, validate_and_check_pid};
-    let msg = parse(UTILMD).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD).unwrap();
     let wrong_pid = Pruefidentifikator::new(11002).unwrap();
     let report = validate_and_check_pid(&msg, wrong_pid).unwrap();
     assert!(
@@ -346,7 +353,7 @@ fn validate_pruefidentifikator_mismatch_adds_error() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn report_into_result_ok_when_valid() {
-    let msg = parse(UTILMD).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD).unwrap();
     let report = msg.validate().unwrap();
     report
         .into_result()
@@ -356,7 +363,7 @@ fn report_into_result_ok_when_valid() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn report_display_shows_counts() {
-    let msg = parse(UTILMD).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD).unwrap();
     let report = msg.validate().unwrap();
     let s = report.to_string();
     // Format: "N error(s), N warning(s), N info(s)"
@@ -377,7 +384,7 @@ UNH+1+INVOIC:D:97A:UN:EAN008'\
 BGM+380+00011001+9'\
 UNT+3+1'\
 UNZ+1+1'";
-    match parse(INVOIC) {
+    match Platform::with_all_profiles().parse(INVOIC) {
         Err(Error::FeatureNotEnabled {
             message_type,
             feature,
@@ -405,7 +412,8 @@ UNZ+1+1'";
 ))]
 #[test]
 fn parse_interchange_multi_type_dispatch() {
-    let messages: Vec<_> = parse_interchange(std::io::Cursor::new(FIVE_TYPE_INTERCHANGE))
+    let messages: Vec<_> = Platform::with_all_profiles()
+        .parse_interchange(std::io::Cursor::new(FIVE_TYPE_INTERCHANGE))
         .collect::<Result<_, _>>()
         .expect("all 5 messages in a mixed interchange must parse");
 
@@ -465,7 +473,7 @@ fn parse_interchange_multi_type_dispatch() {
     );
 
     // validate() must not panic for any message.  Messages parsed via
-    // parse_interchange() are per-message windows without the outer UNB
+    // Platform::with_all_profiles().parse_interchange() are per-message windows without the outer UNB
     // envelope, so validate() may return Err — that is expected and correct.
     // What must NOT happen is a panic.
     for (i, msg) in messages.iter().enumerate() {
@@ -498,7 +506,7 @@ fn assert_edifact_charset(bytes: &[u8], label: &str) {
 #[cfg(feature = "utilmd")]
 #[test]
 fn serialized_utilmd_is_clean_ascii() {
-    let msg = parse(UTILMD).unwrap();
+    let msg = Platform::with_all_profiles().parse(UTILMD).unwrap();
     let bytes = msg.serialize().unwrap();
     assert_edifact_charset(&bytes, "serialized UTILMD");
     assert!(!bytes.contains(&0u8), "no null bytes in serialized UTILMD");
@@ -512,7 +520,8 @@ fn serialized_utilmd_is_clean_ascii() {
 ))]
 #[test]
 fn serialized_interchange_all_clean_ascii() {
-    let messages: Vec<_> = parse_interchange(std::io::Cursor::new(FIVE_TYPE_INTERCHANGE))
+    let messages: Vec<_> = Platform::with_all_profiles()
+        .parse_interchange(std::io::Cursor::new(FIVE_TYPE_INTERCHANGE))
         .collect::<Result<_, _>>()
         .unwrap();
     for (i, msg) in messages.iter().enumerate() {
@@ -541,7 +550,7 @@ fn builder_serialized_utilmd_is_clean_ascii() {
     assert!(!bytes.contains(&0u8));
 }
 
-// ── F-003 Platform isolation tests ───────────────────────────────────────────
+// ── Platform isolation tests ───────────────────────────────────────────
 
 /// A `Platform` backed by an *empty* registry must return `AnyMessage::Unknown`
 /// for a message type that the global registry would recognise (e.g. UTILMD),
@@ -637,7 +646,7 @@ fn parse_interchange_full_buffered_yields_header_eagerly_and_messages_lazily() {
     assert!(iter.next().is_none(), "iterator must be exhausted");
 }
 
-// ── LightMessage / parse_envelope_only (F-004) ────────────────────────────────
+// ── LightMessage / parse_envelope_only ────────────────────────────────
 
 #[cfg(feature = "utilmd")]
 #[test]
@@ -672,7 +681,9 @@ fn light_message_into_message_equals_full_parse() {
     use edi_energy::parse_envelope_only;
     let light = parse_envelope_only(UTILMD).expect("envelope parse must succeed");
     let full = light.into_message().expect("upgrade must succeed");
-    let direct = parse(UTILMD).expect("direct parse must succeed");
+    let direct = Platform::with_all_profiles()
+        .parse(UTILMD)
+        .expect("direct parse must succeed");
     assert_eq!(full.try_message_type(), direct.try_message_type());
 }
 
@@ -718,7 +729,7 @@ fn parser_parse_interchange_full_materialises_all_messages() {
     assert!(ic.is_structurally_valid(), "UNZ count and ref must match");
 }
 
-// ── F-013: ValidationIssueSummary pruefidentifikator ─────────────────────────
+// ── ValidationIssueSummary pruefidentifikator ─────────────────────────
 
 /// `ValidationIssueSummary` must include `pruefidentifikator` when serialized
 /// from a report produced by validating a message with a known PID.
@@ -742,7 +753,9 @@ QTY+220:100:KWH'\
 UNT+6+1'\
 UNZ+1+1'";
 
-    let msg = parse(MSCONS_WITH_PID).expect("parse must succeed");
+    let msg = Platform::with_all_profiles()
+        .parse(MSCONS_WITH_PID)
+        .expect("parse must succeed");
     let report = msg
         .validate()
         .expect("validate must not fail with ProfileNotFound");

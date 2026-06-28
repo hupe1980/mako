@@ -1,3 +1,11 @@
 [toolchain]
-channel    = "stable"
+# Pin to the declared MSRV so every developer and CI lane compiles on exactly
+# the same toolchain. Bumping the MSRV requires updating this value and the
+# `msrv` CI job in .github/workflows/ci.yml simultaneously.
+#
+# 1.88 is the minimum because:
+#   - `let_chains` stabilised in 1.88 (used in xtask/src/codegen.rs)
+#   - `usize::is_multiple_of` stabilised in 1.88 (used in xtask/src/codegen.rs)
+#   - time ≥ 0.3.47 declares rust-version = "1.88"
+channel    = "1.88"
 components = ["rustfmt", "clippy"]

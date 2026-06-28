@@ -4,7 +4,7 @@ use crate::{
     MessageType,
     messages::{
         core::MessageCore,
-        segments::{Bgm, Dtm, Nad, collect_dtm, find_bgm, find_nad},
+        segments::{Bgm, Dtm, Ftx, Nad, collect_dtm, find_bgm, find_nad, try_deserialize},
     },
 };
 
@@ -20,6 +20,7 @@ use crate::{
 /// | `dtm`      | DTM     | Date / time segments (up to 6)      |
 /// | `sender`   | NAD+MS  | Message sender                      |
 /// | `receiver` | NAD+MR  | Message receiver                    |
+/// | `ftx`      | FTX     | Free text (rejection reason, …)     |
 ///
 /// Wire type string: `ORDRSP:D:10A:UN:{release}`.
 ///
@@ -41,6 +42,8 @@ pub struct OrdrespMessage {
     sender: Option<Nad>,
     /// NAD+MR — message receiver.
     receiver: Option<Nad>,
+    /// FTX — free text segments (rejection reason, commentary, …).
+    ftx: Vec<Ftx>,
 }
 
 impl OrdrespMessage {
@@ -51,14 +54,20 @@ impl OrdrespMessage {
         assoc_code: impl Into<Box<str>>,
         pruefidentifikator: Option<u32>,
     ) -> Self {
-        let (bgm, dtm, sender, receiver) = {
+        let (bgm, dtm, sender, receiver, ftx) = {
             let borrowed: Vec<edifact_rs::Segment<'_>> =
                 segments.iter().map(|s| s.as_borrowed()).collect();
+            let ftx = borrowed
+                .iter()
+                .filter(|s| s.tag == "FTX")
+                .filter_map(|s| try_deserialize::<Ftx>(s))
+                .collect::<Vec<_>>();
             (
                 find_bgm(&borrowed),
                 collect_dtm(&borrowed),
                 find_nad(&borrowed, "MS"),
                 find_nad(&borrowed, "MR"),
+                ftx,
             )
         };
         Self {
@@ -73,6 +82,7 @@ impl OrdrespMessage {
             dtm,
             sender,
             receiver,
+            ftx,
         }
     }
 
@@ -110,6 +120,15 @@ impl OrdrespMessage {
     #[must_use]
     pub fn receiver(&self) -> Option<&Nad> {
         self.receiver.as_ref()
+    }
+
+    /// FTX — free text segments (rejection reasons, commentary, …).
+    ///
+    /// For ORDRSP 19002 (Ablehnung), the rejection reason is typically
+    /// carried in the first FTX segment's text field.
+    #[must_use]
+    pub fn ftx(&self) -> &[Ftx] {
+        &self.ftx
     }
 }
 

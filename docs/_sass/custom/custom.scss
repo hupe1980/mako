@@ -1,0 +1,211 @@
+// ── mako — custom Just the Docs overrides ────────────────────────────────────
+//
+// Brand palette:
+//   Primary (energy amber):   #f59e0b  (amber-500)
+//   Primary dark:             #d97706  (amber-600)
+//   Accent (electricity blue):#2563eb  (blue-600)
+//   Surface dark:             #0f172a  (slate-900)
+//   Border subtle:            #e2e8f0  (slate-200)
+//
+// Just the Docs custom SCSS entry point — imported automatically when the file
+// is placed at docs/_sass/custom/custom.scss.
+// https://just-the-docs.com/docs/customization/#custom-styles
+
+// ── Color tokens ─────────────────────────────────────────────────────────────
+$color-primary:       #f59e0b !default;
+$color-primary-dark:  #d97706 !default;
+$color-accent:        #2563eb !default;
+
+// ── Override Just the Docs link / button colours ─────────────────────────────
+:root {
+  --color-btn-primary-bg:          #{$color-primary};
+  --color-btn-primary-border:      #{$color-primary-dark};
+  --color-btn-primary-text:        #0f172a;
+  --color-btn-primary-shadow:      0 1px 0 rgba(0,0,0,.1), 0 0 0 3px rgba(245,158,11,.25);
+  --color-link:                    #{$color-accent};
+  --color-link-hover:              #{$color-primary-dark};
+}
+
+// ── Hero section ─────────────────────────────────────────────────────────────
+.mako-hero {
+  text-align: center;
+  padding: 3.5rem 1.5rem 2.5rem;
+  margin-bottom: 2rem;
+  border-bottom: 1px solid var(--color-border);
+
+  &__badge-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.4rem;
+    margin-bottom: 1.5rem;
+
+    img { height: 20px; }
+  }
+
+  &__title {
+    font-size: clamp(2.25rem, 5vw, 3.5rem);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+    margin: 0 0 0.75rem;
+    background: linear-gradient(135deg, #{$color-primary} 0%, #{$color-accent} 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  &__subtitle {
+    font-size: 1.2rem;
+    color: var(--color-fg-muted);
+    max-width: 640px;
+    margin: 0 auto 1.75rem;
+    line-height: 1.6;
+  }
+
+  &__cta {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+
+  &__warning {
+    display: inline-block;
+    font-size: 0.85rem;
+    color: #92400e;
+    background: #fef3c7;
+    border: 1px solid #fde68a;
+    border-radius: 6px;
+    padding: 0.4rem 0.85rem;
+  }
+}
+
+// ── CTA buttons ──────────────────────────────────────────────────────────────
+.mako-cta-primary {
+  background: $color-primary;
+  color: #0f172a !important;
+  border-color: $color-primary-dark;
+  font-weight: 700;
+  padding: 0.6rem 1.5rem;
+  border-radius: 8px;
+  font-size: 1rem;
+  text-decoration: none !important;
+  transition: background 0.15s, transform 0.1s;
+
+  &:hover {
+    background: $color-primary-dark;
+    transform: translateY(-1px);
+  }
+}
+
+.mako-cta-secondary {
+  background: transparent;
+  color: var(--color-fg-default) !important;
+  border: 1px solid var(--color-border);
+  font-weight: 600;
+  padding: 0.6rem 1.5rem;
+  border-radius: 8px;
+  font-size: 1rem;
+  text-decoration: none !important;
+  transition: border-color 0.15s, background 0.15s;
+
+  &:hover {
+    background: var(--color-btn-secondary-hover-bg);
+    border-color: $color-primary;
+  }
+}
+
+// ── Feature cards ─────────────────────────────────────────────────────────────
+.mako-features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.25rem;
+  margin: 2rem 0 2.5rem;
+}
+
+.mako-feature {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 1.5rem 1.25rem;
+  background: var(--color-btn-secondary-bg);
+  transition: border-color 0.15s, box-shadow 0.15s;
+
+  &:hover {
+    border-color: $color-primary;
+    box-shadow: 0 4px 16px rgba(245, 158, 11, 0.12);
+  }
+
+  &__icon {
+    font-size: 2rem;
+    line-height: 1;
+    margin-bottom: 0.75rem;
+  }
+
+  h3 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    margin: 0 0 0.5rem;
+  }
+
+  p {
+    font-size: 0.9rem;
+    color: var(--color-fg-muted);
+    margin: 0 0 0.75rem;
+    line-height: 1.55;
+  }
+
+  a {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $color-accent;
+    text-decoration: none;
+
+    &:hover { text-decoration: underline; }
+  }
+}
+
+// ── Code blocks: add a subtle left border for readability ────────────────────
+div.highlighter-rouge,
+figure.highlight {
+  border-left: 3px solid $color-primary;
+  border-radius: 0 6px 6px 0;
+}
+
+// ── Callout improvements ─────────────────────────────────────────────────────
+.callout {
+  border-radius: 8px;
+}
+
+// ── Sidebar brand accent ──────────────────────────────────────────────────────
+.site-header {
+  border-bottom-color: $color-primary !important;
+}
+
+// ── Table zebra striping ─────────────────────────────────────────────────────
+table {
+  width: 100%;
+
+  tbody tr:nth-child(even) {
+    background: var(--color-btn-secondary-bg);
+  }
+}
+
+// ── `mt-8` utility (used in index.md headings) ───────────────────────────────
+.mt-8 { margin-top: 2rem !important; }
+
+// ── Responsive: collapse hero padding on small screens ───────────────────────
+@media (max-width: 600px) {
+  .mako-hero {
+    padding: 2rem 1rem 1.75rem;
+  }
+
+  .mako-hero__title {
+    font-size: 2rem;
+  }
+
+  .mako-features {
+    grid-template-columns: 1fr;
+  }
+}

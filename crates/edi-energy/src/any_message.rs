@@ -134,10 +134,10 @@ pub enum AnyMessage {
     /// # Example
     ///
     /// ```no_run
-    /// use edi_energy::{parse, AnyMessage};
+    /// use edi_energy::{Platform, AnyMessage};
     ///
     /// let input: &[u8] = &[];
-    /// let msg = parse(input)?;
+    /// let msg = Platform::with_all_profiles().parse(input)?;
     /// if let AnyMessage::Unknown { message_type_code, release, .. } = &msg {
     ///     eprintln!("Unhandled message type: {} (release {})", message_type_code, release);
     /// }

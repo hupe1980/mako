@@ -2,7 +2,7 @@
 //!
 //! Covers the three performance-critical paths:
 //!
-//! 1. **parse** — `parse()` on pre-built byte fixtures of increasing segment
+//! 1. **parse** — `Platform::with_all_profiles().parse()` on pre-built byte fixtures of increasing segment
 //!    count.
 //! 2. **serialize** — `EdiEnergyMessage::serialize()` for each message type.
 //! 3. **build** — full builder pipeline (construct → serialize → parse).
@@ -19,7 +19,7 @@
 #![allow(clippy::result_large_err)]
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use edi_energy::{EdiEnergyMessage, Pruefidentifikator, Release, parse, parse_envelope_only};
+use edi_energy::{EdiEnergyMessage, Platform, Pruefidentifikator, Release, parse_envelope_only};
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -80,22 +80,38 @@ fn bench_parse(c: &mut Criterion) {
 
     #[cfg(feature = "utilmd")]
     group.bench_function("utilmd_minimal", |b| {
-        b.iter(|| parse(black_box(UTILMD_MINIMAL)).unwrap())
+        b.iter(|| {
+            Platform::with_all_profiles()
+                .parse(black_box(UTILMD_MINIMAL))
+                .unwrap()
+        })
     });
 
     #[cfg(feature = "mscons")]
     group.bench_function("mscons_minimal", |b| {
-        b.iter(|| parse(black_box(MSCONS_MINIMAL)).unwrap())
+        b.iter(|| {
+            Platform::with_all_profiles()
+                .parse(black_box(MSCONS_MINIMAL))
+                .unwrap()
+        })
     });
 
     #[cfg(feature = "aperak")]
     group.bench_function("aperak_minimal", |b| {
-        b.iter(|| parse(black_box(APERAK_MINIMAL)).unwrap())
+        b.iter(|| {
+            Platform::with_all_profiles()
+                .parse(black_box(APERAK_MINIMAL))
+                .unwrap()
+        })
     });
 
     #[cfg(feature = "contrl")]
     group.bench_function("contrl_minimal", |b| {
-        b.iter(|| parse(black_box(CONTRL_MINIMAL)).unwrap())
+        b.iter(|| {
+            Platform::with_all_profiles()
+                .parse(black_box(CONTRL_MINIMAL))
+                .unwrap()
+        })
     });
 
     group.finish();
@@ -108,25 +124,25 @@ fn bench_serialize(c: &mut Criterion) {
 
     #[cfg(feature = "utilmd")]
     {
-        let msg = parse(UTILMD_MINIMAL).unwrap();
+        let msg = Platform::with_all_profiles().parse(UTILMD_MINIMAL).unwrap();
         group.bench_function("utilmd", |b| b.iter(|| msg.serialize().unwrap()));
     }
 
     #[cfg(feature = "mscons")]
     {
-        let msg = parse(MSCONS_MINIMAL).unwrap();
+        let msg = Platform::with_all_profiles().parse(MSCONS_MINIMAL).unwrap();
         group.bench_function("mscons", |b| b.iter(|| msg.serialize().unwrap()));
     }
 
     #[cfg(feature = "aperak")]
     {
-        let msg = parse(APERAK_MINIMAL).unwrap();
+        let msg = Platform::with_all_profiles().parse(APERAK_MINIMAL).unwrap();
         group.bench_function("aperak", |b| b.iter(|| msg.serialize().unwrap()));
     }
 
     #[cfg(feature = "contrl")]
     {
-        let msg = parse(CONTRL_MINIMAL).unwrap();
+        let msg = Platform::with_all_profiles().parse(CONTRL_MINIMAL).unwrap();
         group.bench_function("contrl", |b| b.iter(|| msg.serialize().unwrap()));
     }
 
@@ -219,7 +235,9 @@ fn bench_roundtrip(c: &mut Criterion) {
                             .receiver("9900357000004")
                             .serialize()
                             .unwrap();
-                        parse(black_box(&bytes)).unwrap()
+                        Platform::with_all_profiles()
+                            .parse(black_box(&bytes))
+                            .unwrap()
                     })
                 },
             );
@@ -237,19 +255,19 @@ fn bench_validate(c: &mut Criterion) {
 
     #[cfg(feature = "utilmd")]
     {
-        let msg = parse(UTILMD_MINIMAL).unwrap();
+        let msg = Platform::with_all_profiles().parse(UTILMD_MINIMAL).unwrap();
         group.bench_function("utilmd", |b| b.iter(|| black_box(&msg).validate().unwrap()));
     }
 
     #[cfg(feature = "mscons")]
     {
-        let msg = parse(MSCONS_MINIMAL).unwrap();
+        let msg = Platform::with_all_profiles().parse(MSCONS_MINIMAL).unwrap();
         group.bench_function("mscons", |b| b.iter(|| black_box(&msg).validate().unwrap()));
     }
 
     #[cfg(feature = "aperak")]
     {
-        let msg = parse(APERAK_MINIMAL).unwrap();
+        let msg = Platform::with_all_profiles().parse(APERAK_MINIMAL).unwrap();
         group.bench_function("aperak", |b| b.iter(|| black_box(&msg).validate().unwrap()));
     }
 
@@ -305,7 +323,7 @@ fn bench_validate_on_date(c: &mut Criterion) {
 
     #[cfg(feature = "utilmd")]
     {
-        let msg = parse(UTILMD_MINIMAL).unwrap();
+        let msg = Platform::with_all_profiles().parse(UTILMD_MINIMAL).unwrap();
         group.bench_function("utilmd", |b| {
             b.iter(|| black_box(&msg).validate_on_date(black_box(date)).unwrap())
         });
@@ -313,7 +331,7 @@ fn bench_validate_on_date(c: &mut Criterion) {
 
     #[cfg(feature = "mscons")]
     {
-        let msg = parse(MSCONS_MINIMAL).unwrap();
+        let msg = Platform::with_all_profiles().parse(MSCONS_MINIMAL).unwrap();
         group.bench_function("mscons", |b| {
             b.iter(|| black_box(&msg).validate_on_date(black_box(date)).unwrap())
         });
@@ -330,7 +348,6 @@ fn bench_validate_on_date(c: &mut Criterion) {
 /// parses and validates every message.  This exercises the full hot path
 /// for AS4 adapter workloads: tokenization + dispatch + rule-pack evaluation.
 fn bench_interchange_throughput(c: &mut Criterion) {
-    use edi_energy::parse_interchange;
     use std::io::Cursor;
 
     let mut group = c.benchmark_group("interchange_throughput");
@@ -369,7 +386,8 @@ fn bench_interchange_throughput(c: &mut Criterion) {
             group.throughput(criterion::Throughput::Elements(count as u64));
             group.bench_function(&label, |b| {
                 b.iter(|| {
-                    let _ = parse_interchange(Cursor::new(black_box(interchange.as_ref())))
+                    let _ = Platform::with_all_profiles()
+                        .parse_interchange(Cursor::new(black_box(interchange.as_ref())))
                         .collect::<Vec<_>>();
                 })
             });
@@ -377,7 +395,8 @@ fn bench_interchange_throughput(c: &mut Criterion) {
             let label_v = format!("mscons_{count}_parse_validate");
             group.bench_function(&label_v, |b| {
                 b.iter(|| {
-                    parse_interchange(Cursor::new(black_box(interchange.as_ref())))
+                    Platform::with_all_profiles()
+                        .parse_interchange(Cursor::new(black_box(interchange.as_ref())))
                         .map(|r| r.and_then(|m| m.validate()))
                         .collect::<Vec<_>>()
                 })
@@ -390,7 +409,7 @@ fn bench_interchange_throughput(c: &mut Criterion) {
 // ── LightMessage vs full-parse routing benchmark ──────────────────────────────
 
 /// Compares `parse_envelope_only()` (routing-only) parse path against a full
-/// `parse()` to expose the cost delta of loading all segment fields into owned
+/// `Platform::with_all_profiles().parse()` to expose the cost delta of loading all segment fields into owned
 /// heap storage.  `parse_envelope_only` is the fast path used in AS4 dispatch
 /// to extract only the message type and PID without materialising the full AST.
 fn bench_light_vs_full_parse(c: &mut Criterion) {
@@ -402,7 +421,11 @@ fn bench_light_vs_full_parse(c: &mut Criterion) {
             b.iter(|| parse_envelope_only(black_box(MSCONS_MINIMAL)).unwrap())
         });
         group.bench_function("mscons_full", |b| {
-            b.iter(|| parse(black_box(MSCONS_MINIMAL)).unwrap())
+            b.iter(|| {
+                Platform::with_all_profiles()
+                    .parse(black_box(MSCONS_MINIMAL))
+                    .unwrap()
+            })
         });
     }
 
@@ -412,7 +435,11 @@ fn bench_light_vs_full_parse(c: &mut Criterion) {
             b.iter(|| parse_envelope_only(black_box(UTILMD_MINIMAL)).unwrap())
         });
         group.bench_function("utilmd_full", |b| {
-            b.iter(|| parse(black_box(UTILMD_MINIMAL)).unwrap())
+            b.iter(|| {
+                Platform::with_all_profiles()
+                    .parse(black_box(UTILMD_MINIMAL))
+                    .unwrap()
+            })
         });
     }
 
@@ -440,7 +467,7 @@ fn bench_validate_multi_pid(c: &mut Criterion) {
                 .receiver("9900357000004")
                 .serialize()
                 .unwrap();
-            let msg = parse(&bytes).unwrap();
+            let msg = Platform::with_all_profiles().parse(&bytes).unwrap();
             group.bench_with_input(BenchmarkId::new("utilmd", pid), &msg, |b, msg| {
                 b.iter(|| black_box(msg).validate_on_date(black_box(date)))
             });

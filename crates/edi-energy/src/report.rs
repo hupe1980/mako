@@ -4,7 +4,7 @@ use edifact_rs::{ValidationIssue, ValidationReport};
 
 /// Classify a rule ID into a validation layer origin string.
 ///
-/// Used to populate [`ValidationIssueSummary::rule_origin`] (F-026).
+/// Used to populate [`ValidationIssueSummary::rule_origin`].
 ///
 /// Returns `None` when `rule_id` is `None` or does not match a known prefix.
 fn classify_rule_origin(rule_id: &str) -> Option<&'static str> {
@@ -30,7 +30,7 @@ fn classify_rule_origin(rule_id: &str) -> Option<&'static str> {
 /// `ValidationReport`.
 ///
 /// Unconditionally available (no feature gate required).  The `serde` feature
-/// adds `#[derive(Serialize)]` so instances can be JSON-encoded directly (F-021 fix).
+/// adds `#[derive(Serialize)]` so instances can be JSON-encoded directly.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
@@ -114,20 +114,20 @@ impl ValidationIssueSummary {
     ///
     /// The PID is resolved in priority order:
     /// 1. `issue.context_get("pid")` — set per-issue by AHB rule closures via
-    ///    `with_context_entry("pid", …)` (edifact-rs 0.9.1+, F-018 fix).
+    ///    `with_context_entry("pid", …)` (edifact-rs 0.9.1+,).
     /// 2. `pruefidentifikator` — report-level fallback for callers that set the
     ///    PID on the report rather than on individual issues.
     ///
     /// Use this from `EdiEnergyReport::serialize` so every serialized issue
     /// carries the PID context needed for regulatory audit logs.
     pub fn from_issue_with_pid(issue: &ValidationIssue, pruefidentifikator: Option<u32>) -> Self {
-        // Per-issue context (F-018): prefer the PID embedded in the issue itself.
+        // Per-issue context: prefer the PID embedded in the issue itself.
         let resolved_pid = issue
             .context_get("pid")
             .and_then(|s| s.parse::<u32>().ok())
             .or(pruefidentifikator);
 
-        // Derive rule_origin from rule_id prefix (F-026).
+        // Derive rule_origin from rule_id prefix.
         let rule_origin = issue.rule_id.as_deref().and_then(classify_rule_origin);
 
         Self {
@@ -212,7 +212,7 @@ impl EdiEnergyReport {
     /// Sets `release` (wire format release code) and `ahb_revision` on the report.
     /// Both are emitted in the serialized JSON output so downstream audit systems
     /// can identify exactly which BDEW specification version governed the validation,
-    /// including AHB correction revisions that share a wire code (see F-018).
+    /// including AHB correction revisions that share a wire code (see.
     #[must_use]
     #[allow(dead_code)]
     pub(crate) fn with_profile_meta(
@@ -296,7 +296,7 @@ impl EdiEnergyReport {
         self.inner.iter_issues()
     }
 
-    /// Iterate over issues from a specific validation layer (F-026).
+    /// Iterate over issues from a specific validation layer.
     ///
     /// Filters by the same `rule_origin` tag used in [`ValidationIssueSummary::rule_origin`]:
     /// - `"parse"` — EDIFACT parse / tokenizer errors (L1)
@@ -311,8 +311,8 @@ impl EdiEnergyReport {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use edi_energy::EdiEnergyMessage;
-    /// let msg = edi_energy::parse(b"UNB+...").unwrap();
+    /// use edi_energy::{EdiEnergyMessage, Platform};
+    /// let msg = Platform::with_all_profiles().parse(b"UNB+...").unwrap();
     /// let report = msg.validate().unwrap();
     /// let ahb_errors: Vec<_> = report.issues_by_origin("ahb").collect();
     /// ```

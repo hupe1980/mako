@@ -18,7 +18,7 @@
 //! cargo run --example 05_validate
 //! ```
 
-use edi_energy::{EdiEnergyMessage, ValidationSeverity, parse};
+use edi_energy::{EdiEnergyMessage, Platform, ValidationSeverity};
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn check_valid() -> Result<(), Box<dyn std::error::Error>> {
-    let msg = parse(VALID_UTILMD)?;
+    let msg = Platform::with_all_profiles().parse(VALID_UTILMD)?;
 
     println!(
         "Type    : {}",
@@ -89,7 +89,7 @@ fn check_valid() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn demo_report_api() -> Result<(), Box<dyn std::error::Error>> {
-    let msg = parse(VALID_UTILMD)?;
+    let msg = Platform::with_all_profiles().parse(VALID_UTILMD)?;
     let report = msg.validate()?;
 
     // Total issue count across all severities

@@ -152,7 +152,7 @@ impl Platform {
     )]
     pub fn parse(&self, input: &[u8]) -> Result<AnyMessage, Error> {
         let msg = crate::parse::parse_with_registry(input, ParseConfig::default(), &self.registry)?;
-        // Record structured span fields after parsing (F-034 fix).
+        // Record structured span fields after parsing.
         #[cfg(feature = "tracing")]
         {
             let span = tracing::Span::current();
@@ -230,6 +230,28 @@ impl Platform {
         crate::parse::parse_interchange_with_arc_registry(
             reader,
             config,
+            Arc::clone(&self.registry),
+        )
+    }
+
+    /// Fully parse a byte slice as an EDIFACT interchange, returning a
+    /// [`ParsedInterchange`][crate::interchange::ParsedInterchange] that
+    /// contains both the UNB envelope and all contained messages.
+    ///
+    /// Use [`Platform::parse_interchange`] for large interchanges where you
+    /// want lazy, per-message iteration instead of materialising everything.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` on syntax errors, envelope structural errors (missing UNB/UNZ,
+    /// mismatched control reference or count), or individual message parse errors.
+    pub fn parse_interchange_full(
+        &self,
+        data: &[u8],
+    ) -> Result<crate::interchange::ParsedInterchange, Error> {
+        crate::parse::parse_interchange_full_with_arc_registry(
+            data,
+            ParseConfig::default(),
             Arc::clone(&self.registry),
         )
     }
@@ -376,7 +398,7 @@ impl Platform {
     /// This is the platform-aware alternative to
     /// `MessageEnvelope::is_wire_code_acceptable_on_global`: it uses the
     /// platform's own [`ReleaseRegistry`] so that test registries and
-    /// multi-tenant configurations are respected (F-007 fix).
+    /// multi-tenant configurations are respected.
     #[must_use]
     pub fn is_wire_code_acceptable_on(
         &self,
@@ -389,7 +411,7 @@ impl Platform {
     /// Warm up all `LazyLock` rule-pack statics across every registered profile.
     ///
     /// Triggers eager initialisation of every MIG and AHB union rule pack so
-    /// that the first real validation call incurs no latency spike (F-010 fix).
+    /// that the first real validation call incurs no latency spike.
     /// Call this once during service startup, before the first request is accepted.
     pub fn warm_up(&self) {
         for profile in self.registry.all_profiles() {

@@ -12,7 +12,7 @@
     feature = "aperak",
     feature = "contrl",
 ))]
-use edi_energy::{AnyMessage, EdiEnergyMessage, parse};
+use edi_energy::{AnyMessage, EdiEnergyMessage, Platform};
 
 // ── CONTRL hierarchy ──────────────────────────────────────────────────────────
 
@@ -33,7 +33,9 @@ UNT+5+MSG001'";
 #[cfg(feature = "contrl")]
 #[test]
 fn contrl_message_response_parsed() {
-    let msg = parse(CONTRL_HIERARCHY).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(CONTRL_HIERARCHY)
+        .unwrap();
     let AnyMessage::Contrl(c) = msg else {
         panic!("expected CONTRL")
     };
@@ -81,7 +83,7 @@ UNH+MSG001+CONTRL:D:3:UN:1.0a'\
 UCI+ICR001+SENDER001+RECEIVER001+4'\
 UNT+2+MSG001'";
 
-    let msg = parse(input).unwrap();
+    let msg = Platform::with_all_profiles().parse(input).unwrap();
     let AnyMessage::Contrl(c) = msg else {
         panic!("expected CONTRL")
     };
@@ -104,7 +106,7 @@ UCM+MSG001+UTILMD:D:11A:UN:5.5.3a+7+12'\
 UCM+MSG002+MSCONS:D:04B:UN:2.4c+4'\
 UNT+4+MSG001'";
 
-    let msg = parse(input).unwrap();
+    let msg = Platform::with_all_profiles().parse(input).unwrap();
     let AnyMessage::Contrl(c) = msg else {
         panic!("expected CONTRL")
     };
@@ -148,7 +150,9 @@ UNT+18+MSG002'";
 #[cfg(feature = "mscons")]
 #[test]
 fn mscons_delivery_point_parsed() {
-    let msg = parse(MSCONS_HIERARCHY).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(MSCONS_HIERARCHY)
+        .unwrap();
     let AnyMessage::Mscons(m) = msg else {
         panic!("expected MSCONS")
     };
@@ -166,7 +170,9 @@ fn mscons_delivery_point_parsed() {
 #[cfg(feature = "mscons")]
 #[test]
 fn mscons_time_series_within_delivery_point() {
-    let msg = parse(MSCONS_HIERARCHY).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(MSCONS_HIERARCHY)
+        .unwrap();
     let AnyMessage::Mscons(m) = msg else {
         panic!("expected MSCONS")
     };
@@ -185,7 +191,9 @@ fn mscons_time_series_within_delivery_point() {
 #[cfg(feature = "mscons")]
 #[test]
 fn mscons_line_items_within_time_series() {
-    let msg = parse(MSCONS_HIERARCHY).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(MSCONS_HIERARCHY)
+        .unwrap();
     let AnyMessage::Mscons(m) = msg else {
         panic!("expected MSCONS")
     };
@@ -211,7 +219,9 @@ fn mscons_line_items_within_time_series() {
 #[cfg(feature = "mscons")]
 #[test]
 fn mscons_quantities_with_status() {
-    let msg = parse(MSCONS_HIERARCHY).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(MSCONS_HIERARCHY)
+        .unwrap();
     let AnyMessage::Mscons(m) = msg else {
         panic!("expected MSCONS")
     };
@@ -249,7 +259,7 @@ NAD+MS+9900111222333::293'\
 NAD+MR+9900444555666::293'\
 UNT+5+MSG002'";
 
-    let msg = parse(input).unwrap();
+    let msg = Platform::with_all_profiles().parse(input).unwrap();
     let AnyMessage::Mscons(m) = msg else {
         panic!("expected MSCONS")
     };
@@ -281,7 +291,9 @@ UNT+11+MSG003'";
 #[cfg(feature = "aperak")]
 #[test]
 fn aperak_errors_parsed() {
-    let msg = parse(APERAK_HIERARCHY).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(APERAK_HIERARCHY)
+        .unwrap();
     let AnyMessage::Aperak(a) = msg else {
         panic!("expected APERAK")
     };
@@ -292,7 +304,9 @@ fn aperak_errors_parsed() {
 #[cfg(feature = "aperak")]
 #[test]
 fn aperak_first_error_group_fields() {
-    let msg = parse(APERAK_HIERARCHY).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(APERAK_HIERARCHY)
+        .unwrap();
     let AnyMessage::Aperak(a) = msg else {
         panic!("expected APERAK")
     };
@@ -313,7 +327,9 @@ fn aperak_first_error_group_fields() {
 #[cfg(feature = "aperak")]
 #[test]
 fn aperak_second_error_group_no_reference() {
-    let msg = parse(APERAK_HIERARCHY).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(APERAK_HIERARCHY)
+        .unwrap();
     let AnyMessage::Aperak(a) = msg else {
         panic!("expected APERAK")
     };
@@ -330,7 +346,9 @@ fn aperak_second_error_group_no_reference() {
 #[cfg(feature = "aperak")]
 #[test]
 fn aperak_ref_acw_still_extracted_with_errors() {
-    let msg = parse(APERAK_HIERARCHY).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(APERAK_HIERARCHY)
+        .unwrap();
     let AnyMessage::Aperak(a) = msg else {
         panic!("expected APERAK")
     };
@@ -360,7 +378,9 @@ UNT+11+MSG004'";
 #[cfg(feature = "utilmd")]
 #[test]
 fn utilmd_header_reference_parsed() {
-    let msg = parse(UTILMD_HIERARCHY).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(UTILMD_HIERARCHY)
+        .unwrap();
     let AnyMessage::Utilmd(u) = msg else {
         panic!("expected UTILMD")
     };
@@ -378,7 +398,9 @@ fn utilmd_header_reference_parsed() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn utilmd_transaction_parsed() {
-    let msg = parse(UTILMD_HIERARCHY).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(UTILMD_HIERARCHY)
+        .unwrap();
     let AnyMessage::Utilmd(u) = msg else {
         panic!("expected UTILMD")
     };
@@ -392,7 +414,9 @@ fn utilmd_transaction_parsed() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn utilmd_transaction_dtm_and_loc() {
-    let msg = parse(UTILMD_HIERARCHY).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(UTILMD_HIERARCHY)
+        .unwrap();
     let AnyMessage::Utilmd(u) = msg else {
         panic!("expected UTILMD")
     };
@@ -408,7 +432,9 @@ fn utilmd_transaction_dtm_and_loc() {
 #[cfg(feature = "utilmd")]
 #[test]
 fn utilmd_transaction_references() {
-    let msg = parse(UTILMD_HIERARCHY).unwrap();
+    let msg = Platform::with_all_profiles()
+        .parse(UTILMD_HIERARCHY)
+        .unwrap();
     let AnyMessage::Utilmd(u) = msg else {
         panic!("expected UTILMD")
     };
@@ -432,7 +458,7 @@ IDE+Z01+DE0001234567890'\
 IDE+Z01+DE0009876543210'\
 UNT+8+MSG004'";
 
-    let msg = parse(input).unwrap();
+    let msg = Platform::with_all_profiles().parse(input).unwrap();
     let AnyMessage::Utilmd(u) = msg else {
         panic!("expected UTILMD")
     };
@@ -460,7 +486,7 @@ NAD+MS+9900987654321::293'\
 NAD+MR+9900123456789::293'\
 UNT+4+MSG001'";
 
-    let msg = parse(input).unwrap();
+    let msg = Platform::with_all_profiles().parse(input).unwrap();
     let AnyMessage::Utilmd(u) = msg else {
         panic!("expected UTILMD")
     };
@@ -480,7 +506,7 @@ NAD+MS+9900111222333::293'\
 NAD+MR+9900444555666::293'\
 UNT+4+MSG002'";
 
-    let msg = parse(input).unwrap();
+    let msg = Platform::with_all_profiles().parse(input).unwrap();
     let AnyMessage::Mscons(m) = msg else {
         panic!("expected MSCONS")
     };
@@ -500,7 +526,7 @@ NAD+MS+9900777888999::293'\
 NAD+MR+9900333444555::293'\
 UNT+4+MSG003'";
 
-    let msg = parse(input).unwrap();
+    let msg = Platform::with_all_profiles().parse(input).unwrap();
     let AnyMessage::Aperak(a) = msg else {
         panic!("expected APERAK")
     };
@@ -521,7 +547,7 @@ UNH+MSG004+CONTRL:D:3:UN:1.0a'\
 UCI+ICR001+SENDER001+RECEIVER001+4'\
 UNT+2+MSG004'";
 
-    let msg = parse(input).unwrap();
+    let msg = Platform::with_all_profiles().parse(input).unwrap();
     let AnyMessage::Contrl(c) = msg else {
         panic!("expected CONTRL")
     };

@@ -12,7 +12,7 @@
 //! - `POST /maloId/dataForMarketLocationNegative/v1`
 //!
 //! Both sides can use the same [`MaloIdentHandler`] trait — override only
-//! the methods relevant to your role; unimplemented methods return `405`.
+//! the methods relevant to your role; unimplemented methods return `501`.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -28,20 +28,127 @@ use crate::models::electricity::{
     IdentificationParameter, MaloIdentResultNegative, MaloIdentResultPositive,
 };
 
+// ── MaloRegistry trait ────────────────────────────────────────────────────────
+
+/// Read-only port over the NB's cached MaLo master-data snapshot.
+///
+/// Implement this trait to provide a MaLo lookup backend for [`MaloIdentHandler`]
+/// implementations. The implementation is provided by the operator; `makod`
+/// ships `SlateDbMaloCache` as its production implementation.
+///
+/// # Tenant isolation
+///
+/// `tenant_id` is an opaque string key. In a single-tenant deployment pass
+/// the operator's GLN. In a multi-tenant deployment it scopes lookup results
+/// to the correct grid operator.
+///
+/// # Error semantics
+///
+/// - `Ok(Some(r))` — MaLo found; deliver positive callback with `r`.
+/// - `Ok(None)`    — MaLo not found; deliver negative callback.
+/// - `Err(_)`      — Transient storage error; retry via outbox.
+#[allow(async_fn_in_trait)]
+pub trait MaloRegistry: Send + Sync + 'static {
+    /// Look up a market location by the BDEW identification parameters.
+    async fn lookup(
+        &self,
+        tenant_id: &str,
+        params: &IdentificationParameter,
+    ) -> Result<Option<MaloIdentResultPositive>, Error>;
+}
+
+// ── Test/stub implementations ─────────────────────────────────────────────────
+
+/// A [`MaloRegistry`] that always returns `None` (negative result).
+///
+/// Useful for stubs, tests where MaLo data is irrelevant, and for
+/// deployments where the MaLo Identification API should temporarily return
+/// negative results while the cache is being populated.
+#[derive(Debug, Clone, Default)]
+pub struct NoopMaloRegistry;
+
+impl MaloRegistry for NoopMaloRegistry {
+    async fn lookup(
+        &self,
+        _tenant_id: &str,
+        _params: &IdentificationParameter,
+    ) -> Result<Option<MaloIdentResultPositive>, Error> {
+        Ok(None)
+    }
+}
+
+/// A [`MaloRegistry`] backed by a fixed in-memory lookup table.
+///
+/// Keyed by `(tenant_id, malo_id)`. The `malo_id` used for matching is
+/// `params.identification_parameter_id.as_ref()?.malo_id?.0` — i.e., the
+/// explicit MaLo-ID field in the request. Falls back to `Ok(None)` for
+/// address-only or parameter-only lookups (those require a real database index).
+///
+/// Suitable for unit tests and integration tests that need deterministic results.
+#[derive(Debug, Clone, Default)]
+pub struct StaticMaloRegistry {
+    entries: std::collections::HashMap<(String, String), MaloIdentResultPositive>,
+}
+
+impl StaticMaloRegistry {
+    /// Create an empty registry.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a MaLo result reachable by `(tenant_id, malo_id)` lookup.
+    pub fn insert(
+        &mut self,
+        tenant_id: impl Into<String>,
+        malo_id: impl Into<String>,
+        result: MaloIdentResultPositive,
+    ) {
+        self.entries
+            .insert((tenant_id.into(), malo_id.into()), result);
+    }
+}
+
+impl MaloRegistry for StaticMaloRegistry {
+    async fn lookup(
+        &self,
+        tenant_id: &str,
+        params: &IdentificationParameter,
+    ) -> Result<Option<MaloIdentResultPositive>, Error> {
+        let malo_id = params
+            .identification_parameter_id
+            .as_ref()
+            .and_then(|id| id.malo_id.as_ref())
+            .map(|m| m.0.as_str())
+            .unwrap_or("");
+        Ok(self
+            .entries
+            .get(&(tenant_id.to_owned(), malo_id.to_owned()))
+            .cloned())
+    }
+}
+
 // ── Handler trait ─────────────────────────────────────────────────────────────
 
 /// Business-logic callbacks for the MaLo Identification API v1.
 pub trait MaloIdentHandler: Send + Sync + 'static {
     /// `POST /maloId/request/v1` — NB receives a MaLo-ID identification request.
+    ///
+    /// `sender_market_partner_id` is the 13-digit BDEW code of the requesting
+    /// Lieferant, extracted from the `marketPartnerId` HTTP header.  The NB
+    /// must use this to discover the LF's callback URL (e.g. from the BDEW
+    /// Verzeichnisdienst or a static partner map) and deliver the result via
+    /// `MaloIdentClient::send_positive_response` / `send_negative_response`.
     fn on_request(
         &self,
         _tx_id: String,
         _creation_dt: String,
+        _sender_market_partner_id: String,
         _params: IdentificationParameter,
     ) -> impl Future<Output = Result<(), Error>> + Send {
         async {
             Err(Error::Http {
-                status: 405,
+                status: 501,
                 body: "not implemented".into(),
             })
         }
@@ -58,7 +165,7 @@ pub trait MaloIdentHandler: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), Error>> + Send {
         async {
             Err(Error::Http {
-                status: 405,
+                status: 501,
                 body: "not implemented".into(),
             })
         }
@@ -75,7 +182,7 @@ pub trait MaloIdentHandler: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), Error>> + Send {
         async {
             Err(Error::Http {
-                status: 405,
+                status: 501,
                 body: "not implemented".into(),
             })
         }
@@ -126,6 +233,7 @@ async fn handle_request<S: MaloIdentHandler>(
         .on_request(
             str_header(&headers, "transactionId"),
             str_header(&headers, "creationDateTime"),
+            str_header(&headers, "marketPartnerId"),
             params,
         )
         .await

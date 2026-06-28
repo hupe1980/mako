@@ -140,8 +140,15 @@ pub struct Nad {
     /// DE 3039 — party identification code (GLN / BDEW code), component 0 of C082.
     #[edifact(element = 1)]
     pub party_id: Option<String>,
-    /// DE 3055 — code list responsible agency, component 2 of C082
-    /// (e.g. `"9"` = GS1/EAN, `"293"` = BDEW).
+    /// DE 3055 — code list responsible agency, component 2 of C082.
+    ///
+    /// Common values in EDI@Energy:
+    /// - `"293"` — BDEW (the standard for German `MaKo` market participants)
+    /// - `"9"` — GS1/EAN (global GLN scheme, rare in German `MaKo`)
+    /// - `"305"` — ECOD/ENTSO-E (EIC codes for TSOs and Regelzonen)
+    /// - `"332"` — DVGW (legacy gas-sector codes)
+    ///
+    /// Use [`edi_energy::AgencyCode`] to parse or format this value.
     #[edifact(element = 1, component = 2)]
     pub agency_code: Option<String>,
     /// DE 3036 — party name, component 0 of C080.

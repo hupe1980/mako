@@ -21,6 +21,9 @@ target
 #.idea/
 
 # Custom
+.venv
+**/*.draft.json
+CONCEPT.md
 FINDINGS.md
 REVIEW.md
 TODO.md

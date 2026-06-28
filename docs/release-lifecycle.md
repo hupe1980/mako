@@ -1,3 +1,14 @@
+---
+layout: default
+title: Release Lifecycle
+nav_order: 32
+parent: Release & Compliance
+description: >-
+  BDEW format version lifecycle: active, upcoming, grace-period, and archived
+  states. How mako-engine handles concurrent FV coexistence with
+  WorkflowVersionPolicy::ForwardCompatible.
+---
+
 # Annual BDEW Release Lifecycle
 
 EDI@Energy specifications are updated annually. This document describes how new BDEW releases are incorporated into the library and what the `xtask` automation covers.

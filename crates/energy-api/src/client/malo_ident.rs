@@ -211,16 +211,21 @@ impl MaloIdentClient {
     fn sign_if_enabled(
         &self,
         req: reqwest::RequestBuilder,
-        uri: &str,
-        canonical_payload: &[u8],
-        creation_dt: &str,
-        tx_id: &str,
+        _uri: &str,
+        _canonical_payload: &[u8],
+        _creation_dt: &str,
+        _tx_id: &str,
     ) -> Result<reqwest::RequestBuilder, Error> {
         #[cfg(feature = "crypto")]
         if let Some(key) = &self.signing_key {
             use crate::transport::content_security::{self, HEADER_DIGEST, HEADER_SIGNATURE};
-            let (digest, sig) =
-                content_security::sign_request(uri, canonical_payload, creation_dt, tx_id, key)?;
+            let (digest, sig) = content_security::sign_request(
+                _uri,
+                _canonical_payload,
+                _creation_dt,
+                _tx_id,
+                key,
+            )?;
             return Ok(req
                 .header(HEADER_DIGEST, digest)
                 .header(HEADER_SIGNATURE, sig));

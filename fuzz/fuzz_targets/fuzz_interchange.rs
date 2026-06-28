@@ -31,12 +31,14 @@
 
 #![no_main]
 
-use edi_energy::{EdiEnergyMessage, parse_interchange_full_bytes, parse_interchange_bytes};
+use edi_energy::{EdiEnergyMessage, Platform};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
+    let platform = Platform::with_all_profiles();
+
     // ── Path A: full interchange (UNB envelope + all messages) ──────────────
-    if let Ok(interchange) = parse_interchange_full_bytes(data) {
+    if let Ok(interchange) = platform.parse_interchange_full(data) {
         // Touch envelope header fields — panicking here would be a real bug.
         let header = &interchange.header;
         let _ = std::hint::black_box(&header.sender_id);
@@ -50,14 +52,14 @@ fuzz_target!(|data: &[u8]| {
             // serialize() is a trait method — requires EdiEnergyMessage in scope.
             if let Ok(bytes) = envelope.message.serialize() {
                 // Re-parsing must not panic.
-                let _ = edi_energy::parse(&bytes);
+                let _ = platform.parse(&bytes);
             }
         }
     }
 
     // ── Path B: streaming interchange (iterator form, no envelope) ──────────
-    // parse_interchange_bytes yields Result<AnyMessage, Error> directly.
-    for result in parse_interchange_bytes(data) {
+    // parse_interchange yields Result<AnyMessage, Error> directly.
+    for result in platform.parse_interchange(std::io::Cursor::new(data)) {
         if let Ok(msg) = result {
             let _ = msg.validate();
         }

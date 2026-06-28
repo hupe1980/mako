@@ -30,6 +30,17 @@ use crate::types::directory::ApiRecord;
 /// Fixed JWS Protected Header for all directory record signatures.
 ///
 /// Decodes to `{"alg":"http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256","typ":"JWT"}`.
+///
+/// # Deviation from RFC 7518
+///
+/// The BDEW API-Webdienste Strom specification mandates the W3C XMLDSig URI
+/// (`http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256`) as the `alg`
+/// identifier rather than the JOSE-standard `"ES256"` (RFC 7518 §3.1).
+/// This is intentional and must not be changed to `"ES256"` — standard JWT
+/// libraries that validate against JOSE algorithm names will reject these
+/// tokens, but BDEW-conformant software expects the XMLDSig URI form.
+///
+/// Reference: BDEW API-Webdienste Strom, Abschnitt "Signatur", aktuelle Fassung.
 pub const JWS_PROTECTED_HEADER: &str =
     "eyJhbGciOiJodHRwOi8vd3d3LnczLm9yZy8yMDAxLzA0L3htbGRzaWctbW9yZSNlY2RzYS1zaGEyNTYiLCJ0eXAiOiJKV1QifQ";
 

@@ -15,7 +15,8 @@
 //! │   └── malo_ident         LF and NB callback calls
 //! └── server/       Electricity API servers  (feature = "server")
 //!     ├── control_measures   MSB and NB/LF receive handlers + axum router
-//!     └── malo_ident         NB and LF receive handlers + axum router
+//!     ├── malo_ident         NB and LF receive handlers + axum router
+//!     └── wim_order          MSB receive handler (iMS Anmeldung) + NB callbacks
 //! ```
 //!
 //! ## Feature flags

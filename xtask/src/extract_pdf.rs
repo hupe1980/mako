@@ -74,8 +74,14 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         return false;
     }
 
-    let mig = extract_mig(&text, &msg_type, &release);
-    let ahb = extract_ahb(&text, &msg_type, &release);
+    // The in-file release value uses a "DRAFT-" prefix to make clear that this
+    // JSON has not been reviewed/promoted to a production profile.  The directory
+    // name stays as-is (the actual BDEW release code) so codegen can still locate
+    // the future production mig.json/ahb.json beside the draft.
+    let draft_release = format!("DRAFT-{release}");
+
+    let mig = extract_mig(&text, &msg_type, &draft_release);
+    let ahb = extract_ahb(&text, &msg_type, &draft_release);
 
     let mig_path = out_dir.join("mig.draft.json");
     let ahb_path = out_dir.join("ahb.draft.json");
@@ -101,6 +107,75 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
             opts.min_pids
         );
         return false;
+    }
+
+    // ── Prior-release comparison ─────────────────────────────────────
+    // When --compare-dir is given, load the production mig.json / ahb.json from
+    // the prior release directory and emit a "prev N, now M" banner.  Exits
+    // non-zero when the new count dropped by more than --max-drop-pct percent
+    // relative to the prior release — catching silent partial extractions caused
+    // by BDEW PDF layout changes.
+    if let Some(ref cdir) = opts.compare_dir {
+        let prev_mig_path = std::path::PathBuf::from(cdir).join("mig.json");
+        let prev_ahb_path = std::path::PathBuf::from(cdir).join("ahb.json");
+
+        // MIG segment comparison
+        if prev_mig_path.exists() {
+            let prev_json: Value = std::fs::read_to_string(&prev_mig_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+            let prev_count = count_entries(&prev_json);
+            if prev_count > 0 {
+                let dropped = prev_count.saturating_sub(mig_entries);
+                let drop_pct = (dropped * 100) / prev_count;
+                if drop_pct > opts.max_drop_pct as usize {
+                    eprintln!(
+                        "error: MIG segment count dropped {drop_pct}% \
+                         (prev: {prev_count}, now: {mig_entries}) — \
+                         exceeds --max-drop-pct {}. \
+                         Check whether the BDEW PDF layout changed.",
+                        opts.max_drop_pct
+                    );
+                    return false;
+                }
+                let indicator = if mig_entries >= prev_count {
+                    "✓"
+                } else {
+                    "⚠ REVIEW"
+                };
+                eprintln!("MIG segment count: prev {prev_count} → now {mig_entries} {indicator}");
+            }
+        }
+
+        // AHB PID comparison
+        if prev_ahb_path.exists() {
+            let prev_json: Value = std::fs::read_to_string(&prev_ahb_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+            let prev_count = count_pids(&prev_json);
+            if prev_count > 0 {
+                let dropped = prev_count.saturating_sub(ahb_pids);
+                let drop_pct = (dropped * 100) / prev_count;
+                if drop_pct > opts.max_drop_pct as usize {
+                    eprintln!(
+                        "error: AHB PID count dropped {drop_pct}% \
+                         (prev: {prev_count}, now: {ahb_pids}) — \
+                         exceeds --max-drop-pct {}. \
+                         Check whether the BDEW AHB PDF layout changed.",
+                        opts.max_drop_pct
+                    );
+                    return false;
+                }
+                let indicator = if ahb_pids >= prev_count {
+                    "✓"
+                } else {
+                    "⚠ REVIEW"
+                };
+                eprintln!("AHB PID count:     prev {prev_count} → now {ahb_pids} {indicator}");
+            }
+        }
     }
 
     // Zero-guard: if the MIG extraction produced 0 segment entries but an
@@ -175,6 +250,9 @@ struct SegmentRow {
     level: u32,
     /// Human-readable segment/group description.
     name: String,
+    /// The innermost enclosing segment-group tag at parse time, e.g. `"SG4"`.
+    /// `None` for top-level rows (level 0).
+    parent_group: Option<String>,
 }
 
 // ── MIG extraction ────────────────────────────────────────────────────────────
@@ -195,6 +273,9 @@ fn extract_mig(text: &str, msg_type: &str, release: &str) -> Value {
             obj.insert("mandatory".into(), json!(row.mandatory));
             obj.insert("max_occurrences".into(), json!(row.max_occurrences));
             obj.insert("level".into(), json!(row.level));
+            if let Some(ref pg) = row.parent_group {
+                obj.insert("parent_group".into(), json!(pg));
+            }
             Value::Object(obj)
         })
         .collect();
@@ -224,6 +305,10 @@ fn extract_mig(text: &str, msg_type: &str, release: &str) -> Value {
 fn parse_segment_table(text: &str) -> Vec<SegmentRow> {
     let mut in_table = false;
     let mut rows = Vec::new();
+    // Stack of (level, group_tag) tracking the current nesting context.
+    // When we encounter an SG row at level L we push it; when we see a row
+    // at level ≤ the top of the stack we pop until the stack is consistent.
+    let mut group_stack: Vec<(u32, String)> = Vec::new();
 
     for line in text.lines() {
         // Detect the table header (appears on every MIG table page).
@@ -236,14 +321,25 @@ fn parse_segment_table(text: &str) -> Vec<SegmentRow> {
             continue;
         }
 
-        if let Some(row) = try_parse_row(line) {
+        if let Some(mut row) = try_parse_row(line) {
+            // Pop stack entries whose level >= current row's level so the
+            // stack always represents the open ancestors above this row.
+            while group_stack.last().is_some_and(|(l, _)| *l >= row.level) {
+                group_stack.pop();
+            }
+            // Assign parent_group from the current top of stack.
+            row.parent_group = group_stack.last().map(|(_, g)| g.clone());
+            // If this row is itself a group, push it for its children.
+            if row.is_group {
+                group_stack.push((row.level, row.tag.clone()));
+            }
             rows.push(row);
         }
     }
 
     // De-duplicate: the same group/segment can appear multiple times (once
-    // per AHB variant) — keep unique (tag, level) combinations in order,
-    // choosing the mandatory=true variant when there's a conflict.
+    // per AHB variant page).  Use (tag, level, parent_group) as the key so
+    // RFF inside SG1 and RFF inside SG4 are kept as separate entries.
     dedup_rows(rows)
 }
 
@@ -348,18 +444,22 @@ fn try_parse_row(line: &str) -> Option<SegmentRow> {
         max_occurrences,
         level,
         name,
+        parent_group: None, // filled in by parse_segment_table
     })
 }
 
 /// Remove duplicate rows that arise because the same MIG table repeats
 /// across multiple AHB pages.  Keep the row with `mandatory = true` when
-/// two rows share the same (tag, level) key.
+/// two rows share the same `(tag, level, parent_group)` key.
+///
+/// The `parent_group` component prevents `RFF` inside `SG1` and `RFF` inside
+/// `SG4` (both at the same level) from collapsing into a single entry.
 fn dedup_rows(rows: Vec<SegmentRow>) -> Vec<SegmentRow> {
-    let mut seen: HashMap<(String, u32), usize> = HashMap::new();
+    let mut seen: HashMap<(String, u32, Option<String>), usize> = HashMap::new();
     let mut result: Vec<SegmentRow> = Vec::new();
 
     for row in rows {
-        let key = (row.tag.clone(), row.level);
+        let key = (row.tag.clone(), row.level, row.parent_group.clone());
         if let Some(&idx) = seen.get(&key) {
             // Upgrade to mandatory if this occurrence is mandatory.
             if row.mandatory && !result[idx].mandatory {
@@ -511,6 +611,13 @@ struct ExtractPdfOpts {
     min_segments: usize,
     /// Minimum number of AHB Prüfidentifikatoren required; `0` disables the check.
     min_pids: usize,
+    /// Optional path to a prior-release `mig.json` / `ahb.json` dir for
+    /// automatic row-count comparison. When set, the extractor emits a
+    /// "prev: N, now: M" banner and exits non-zero if the new count dropped
+    /// by more than `--max-drop-pct` percent (default 10 %).
+    compare_dir: Option<String>,
+    /// Maximum tolerated percentage drop from the prior release (default: 10).
+    max_drop_pct: u64,
 }
 
 fn parse_args(args: &[String]) -> Result<ExtractPdfOpts, String> {
@@ -519,6 +626,8 @@ fn parse_args(args: &[String]) -> Result<ExtractPdfOpts, String> {
     let mut release = None;
     let mut min_segments: usize = 0;
     let mut min_pids: usize = 0;
+    let mut compare_dir: Option<String> = None;
+    let mut max_drop_pct: u64 = 10;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -552,6 +661,24 @@ fn parse_args(args: &[String]) -> Result<ExtractPdfOpts, String> {
                     format!("--min-pids must be a non-negative integer, got '{raw}'")
                 })?;
             }
+            "--compare-dir" => {
+                i += 1;
+                compare_dir = Some(
+                    args.get(i)
+                        .cloned()
+                        .ok_or("missing value for --compare-dir")?,
+                );
+            }
+            "--max-drop-pct" => {
+                i += 1;
+                let raw = args.get(i).ok_or("missing value for --max-drop-pct")?;
+                max_drop_pct = raw
+                    .parse::<u64>()
+                    .map_err(|_| format!("--max-drop-pct must be 0..100, got '{raw}'"))?;
+                if max_drop_pct > 100 {
+                    return Err(format!("--max-drop-pct must be 0..100, got '{raw}'"));
+                }
+            }
             other => {
                 return Err(format!("unknown argument: {other}"));
             }
@@ -564,6 +691,8 @@ fn parse_args(args: &[String]) -> Result<ExtractPdfOpts, String> {
         release,
         min_segments,
         min_pids,
+        compare_dir,
+        max_drop_pct,
     })
 }
 
@@ -576,11 +705,20 @@ Arguments:
   --release        <REL>     EDI@Energy release (inferred from file path if omitted)
   --min-segments   <N>       Fail if MIG extraction yields fewer than N segment entries (default: 0 = disabled)
   --min-pids       <N>       Fail if AHB extraction yields fewer than N Prüfidentifikatoren (default: 0 = disabled)
+  --compare-dir    <DIR>     Path to a prior-release profile dir containing mig.json / ahb.json.
+                             Emits prev→now count banner; fails if count drops by more than --max-drop-pct.
+  --max-drop-pct   <N>       Max tolerated % drop from prior release before failing (default: 10)
 
-Quality gates (--min-segments / --min-pids):
-  Use these to catch silent partial extractions when BDEW changes the PDF layout.
-  Example: --min-segments 15 --min-pids 3
-  The check exits non-zero and does NOT write draft files when the threshold is not met.
+Quality gates:
+  --min-segments / --min-pids: absolute lower bounds — fail when extraction produced too little output.
+  --compare-dir / --max-drop-pct: relative change guard — fail when count dropped vs. prior release.
+  Example combining both:
+    cargo xtask extract-pdf \\
+      --file docs/pdfs/UTILMD_AHB_S2.x_FV2026-10-01.pdf \\
+      --message-type utilmd \\
+      --release FV2026-10-01 \\
+      --compare-dir crates/edi-energy/profiles/utilmd/fv20251001 \\
+      --min-pids 5
 
 Output (inside crates/edi-energy/profiles/<type>/<release>/):  
   mig.draft.json   Extracted MIG segment table with level/mandatory/max_occurrences
@@ -688,5 +826,87 @@ mod tests {
         assert_eq!(infer_release("docs/pdfs/MSCONS_MIG_2.4c.pdf"), "2.4c");
         assert_eq!(infer_release("docs/pdfs/UTILMD_MIG_Strom_S2.1.pdf"), "S2.1");
         assert_eq!(infer_release("docs/pdfs/CONTRL_MIG_2.0b.pdf"), "2.0b");
+    }
+
+    /// `parse_segment_table` must assign a `parent_group` to segment rows that
+    /// appear inside a segment group block, and keep `None` for top-level rows.
+    #[test]
+    fn parent_group_assigned_during_parse() {
+        // Simulate two pages of the same table (the AHB prints the MIG table once
+        // per PID page, which is the source of duplicates that dedup_rows removes).
+        let text = "\
+Zähler Ebene MaxWdh foo
+  0010 UNH M M 1 1 0 Nachrichtenkopfsegment
+  0020 SG1 C C 9 9 1 Referenz-Gruppe
+  0030 RFF M M 1 1 2 Referenz
+  0040 SG2 M M 9 9 1 Partner
+  0050 NAD M M 1 1 2 Name und Adresse
+  0060 RFF C C 1 1 2 Partner-Referenz
+";
+        let rows = parse_segment_table(text);
+        // UNH at level 0: no parent
+        let unh = rows.iter().find(|r| r.tag == "UNH").unwrap();
+        assert_eq!(unh.parent_group, None);
+        // SG1 at level 1: no parent (top-level group)
+        let sg1 = rows.iter().find(|r| r.tag == "SG1").unwrap();
+        assert_eq!(sg1.parent_group, None);
+        // RFF at level 2 inside SG1: parent = "SG1"
+        let rff_sg1 = rows
+            .iter()
+            .find(|r| r.tag == "RFF" && r.parent_group.as_deref() == Some("SG1"))
+            .unwrap();
+        assert_eq!(rff_sg1.level, 2);
+        // NAD at level 2 inside SG2: parent = "SG2"
+        let nad = rows.iter().find(|r| r.tag == "NAD").unwrap();
+        assert_eq!(nad.parent_group.as_deref(), Some("SG2"));
+        // Second RFF at level 2 inside SG2: parent = "SG2", distinct from first RFF
+        let rff_sg2 = rows
+            .iter()
+            .find(|r| r.tag == "RFF" && r.parent_group.as_deref() == Some("SG2"))
+            .unwrap();
+        assert_eq!(rff_sg2.level, 2);
+        // Both RFF entries must be present (not deduplicated)
+        assert_eq!(
+            rows.iter().filter(|r| r.tag == "RFF").count(),
+            2,
+            "RFF in SG1 and RFF in SG2 must be kept as separate entries"
+        );
+    }
+
+    /// When the same table is repeated (duplicate page), `dedup_rows` must
+    /// remove exact duplicates but preserve same-tag/same-level rows that are
+    /// in different parent groups.
+    #[test]
+    fn dedup_preserves_same_tag_different_parent() {
+        let make = |tag: &str, level: u32, parent: Option<&str>| SegmentRow {
+            tag: tag.to_owned(),
+            is_group: false,
+            mandatory: true,
+            max_occurrences: 1,
+            level,
+            name: "test".to_owned(),
+            parent_group: parent.map(str::to_owned),
+        };
+        let rows = vec![
+            make("RFF", 2, Some("SG1")),
+            make("RFF", 2, Some("SG4")),
+            make("RFF", 2, Some("SG1")), // duplicate — should be removed
+        ];
+        let deduped = dedup_rows(rows);
+        assert_eq!(
+            deduped.len(),
+            2,
+            "duplicate RFF in SG1 removed; RFF in SG4 kept"
+        );
+        assert!(
+            deduped
+                .iter()
+                .any(|r| r.parent_group.as_deref() == Some("SG1"))
+        );
+        assert!(
+            deduped
+                .iter()
+                .any(|r| r.parent_group.as_deref() == Some("SG4"))
+        );
     }
 }

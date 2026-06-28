@@ -1,0 +1,60 @@
+[package]
+name         = "mako-engine"
+version.workspace     = true
+description  = "Event-sourced process engine for German energy market communication (MaKo)"
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+keywords     = ["event-sourcing", "cqrs", "energy", "mako", "bdew"]
+categories   = ["asynchronous", "data-structures"]
+
+[features]
+## Enables `InMemoryXxx` stores, `NoopXxx` stores, and test-only helpers such
+## as `InMemoryEventStore::all_events()`. Should **not** be enabled in
+## production binaries.
+testing = []
+
+## Enables `#[tracing::instrument]` spans on key engine operations:
+## `execute_command`, `state`, `state_with_snapshot`, `drain_outbox`.
+## `tracing` itself is always a dependency (the crate no-ops without a
+## subscriber, so library consumers pay no runtime cost unless they install
+## one). This feature controls only the heavier `#[instrument]` annotation.
+tracing = []
+
+## Enables [`store_slatedb::SlateDbStore`] — a durable [`EventStore`] +
+## [`OutboxStore`] backed by SlateDB. Pulls in `slatedb` and its object-store
+## dependencies. Do not enable in library crates; opt in at the binary level.
+slatedb = ["dep:slatedb"]
+
+[dependencies]
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+time       = { workspace = true }
+time-tz    = { workspace = true }
+uuid       = { workspace = true }
+tokio      = { version = "1", features = ["sync", "time"] }
+tracing    = { version = "0.1", default-features = false, features = ["log", "attributes"] }
+rand       = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+slatedb    = { version = "0.13.1", optional = true }
+
+[dev-dependencies]
+criterion   = { version = "0.5", features = ["html_reports", "async_tokio"] }
+tokio       = { version = "1", features = ["full"] }
+tokio-test  = "0.4"
+
+[[example]]
+name              = "process_lifecycle"
+required-features = ["testing"]
+
+[[bench]]
+name     = "replay_latency"
+harness  = false
+required-features = ["testing"]
+
+[[bench]]
+name     = "storage"
+harness  = false
+required-features = ["testing"]

@@ -1,4 +1,4 @@
-//! Compile-time completeness guard for the fuzz target (F-011).
+//! Compile-time completeness guard for the fuzz target.
 //!
 //! The fuzz target at `fuzz/fuzz_targets/fuzz_parse_validate.rs` manually
 //! matches on `AnyMessage` variants.  If a new message type is added without

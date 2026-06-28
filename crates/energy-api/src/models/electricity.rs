@@ -1,10 +1,12 @@
 //! Wire-format types for the EDI-Energy electricity market APIs.
 //!
-//! Covers two API families:
+//! Covers three API families:
 //! - **Control Measures** (`controlMeasuresV1.yaml`) — Steuerungshandlungen
 //!   between NB/LF and MSB.
 //! - **MaLo Identification** (`maloIdentV1.yaml`) — MaLo-ID retrieval for the
 //!   24 h supplier-switch process (GPKE part 2).
+//! - **WiM Order** (`wimOrderV1.yaml`) — iMS Universalbestellprozess for smart
+//!   meter commissioning (PIDs 11021–11023).
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -388,4 +390,96 @@ pub struct DataTranche {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub percent: Option<f64>,
     pub data_tranche_suppliers: Vec<TimeSlicedMarketPartner>,
+}
+
+// ── WiM Order (iMS Universalbestellprozess) ───────────────────────────────────
+
+/// Device category for the iMS Universalbestellprozess.
+///
+/// Specifies which type of smart meter the Netzbetreiber is ordering from the MSB.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WimDeviceCategory {
+    /// Intelligentes Messsystem (iMSys) — full smart meter system.
+    #[serde(rename = "iMSys")]
+    IMSys,
+    /// Moderne Messeinrichtung (mME) — basic smart meter display.
+    #[serde(rename = "mME")]
+    Mme,
+    /// Moderne Messeinrichtung mit Kommunikationsadapter (mME+KME).
+    #[serde(rename = "mME+KME")]
+    MmeKme,
+}
+
+/// Rejection reason code for a WiM Ablehnung response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WimRejectionReason {
+    /// MeLo does not exist in the MSB's service territory.
+    #[serde(rename = "meloUnknown")]
+    MeloUnknown,
+    /// MSB is not responsible for this MeLo.
+    #[serde(rename = "notResponsible")]
+    NotResponsible,
+    /// Requested device category is not installable at this MeLo.
+    #[serde(rename = "deviceCategoryNotSupported")]
+    DeviceCategoryNotSupported,
+    /// Regulatory prerequisites for iMSys rollout not yet met.
+    #[serde(rename = "rolloutPreconditionNotMet")]
+    RolloutPreconditionNotMet,
+    /// MSB technical capacity exhausted.
+    #[serde(rename = "capacityExhausted")]
+    CapacityExhausted,
+    /// Other / unspecified reason; see `reason_text` for details.
+    #[serde(rename = "other")]
+    Other,
+}
+
+/// Payload for a WiM Anmeldung (PID 11021) — NB orders iMS installation from MSB.
+///
+/// Sent by the Netzbetreiber to the Messstellenbetreiber over the REST channel.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WimAnmeldungRequest {
+    /// Messlokation EIC code at which the device should be installed.
+    pub melo_id: String,
+    /// 13-digit GLN of the Netzbetreiber (sender).
+    pub netzbetreiber_id: i64,
+    /// Requested process date (ISO 8601, date only, e.g. `"2026-06-01"`).
+    pub process_date: String,
+    /// Requested device category.
+    pub device_category: WimDeviceCategory,
+    /// Optional free-text notes (e.g. access instructions).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+/// Payload for a WiM Bestätigung (PID 11022) — MSB confirms the order.
+///
+/// Sent by the MSB to the Netzbetreiber after accepting an Anmeldung.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WimBestaetigung {
+    /// UUID of the original Anmeldung transaction this response refers to.
+    pub reference_id: Uuid,
+    /// Confirmed installation date (ISO 8601, date only).
+    pub confirmed_process_date: String,
+    /// Assigned device identifier (EIC or MSB-internal reference).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+}
+
+/// Payload for a WiM Ablehnung (PID 11023) — MSB rejects the order.
+///
+/// Sent by the MSB to the Netzbetreiber after refusing an Anmeldung.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WimAblehnung {
+    /// UUID of the original Anmeldung transaction this response refers to.
+    pub reference_id: Uuid,
+    /// Structured rejection reason code.
+    pub reason: WimRejectionReason,
+    /// Optional human-readable explanation (supplementary to `reason`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_text: Option<String>,
 }

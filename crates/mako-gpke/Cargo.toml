@@ -1,0 +1,28 @@
+[package]
+name         = "mako-gpke"
+version.workspace     = true
+description  = "GPKE process engine for German electricity market communication (Lieferbeginn, Lieferende, Netznutzungsabrechnung)"
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+keywords     = ["gpke", "edifact", "energy", "mako", "bdew"]
+categories   = ["data-structures"]
+
+[dependencies]
+mako-engine = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+time        = { workspace = true }
+
+[dev-dependencies]
+anyhow      = { workspace = true }
+# edi-energy is only needed for integration tests (parse → validate → execute).
+# Production code uses only mako-engine's ProfileRequirement for startup checks.
+edi-energy  = { path = "../edi-energy", features = ["utilmd", "aperak"] }
+mako-engine = { workspace = true, features = ["testing"] }
+serde_json  = { workspace = true }
+time        = { workspace = true }
+tokio       = { version = "1", features = ["full"] }

@@ -11,6 +11,20 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  # ── Lockfile freshness ──────────────────────────────────────────────────────
+  lockfile:
+    name: Lockfile up-to-date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify Cargo.lock is up-to-date
+        run: cargo update --locked
+        # `cargo update --locked` fails if Cargo.lock is stale (i.e., any
+        # dependency in Cargo.toml does not match what is recorded in Cargo.lock).
+        # This catches accidental Cargo.toml edits that weren't followed by a
+        # `cargo update` / `cargo build` to refresh the lockfile.
+
   # ── Formatting ──────────────────────────────────────────────────────────────
   fmt:
     name: Formatting
@@ -68,6 +82,51 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p edi-energy ${{ matrix.features }}
 
+  # ── Workspace tests (all crates except edi-energy feature matrix) ───────────
+  test-workspace:
+    name: Test workspace crates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Exclude edi-energy (covered by the feature-matrix job above) and the
+      # binary daemon (makod) which requires runtime-only feature flags.
+      - run: cargo test --workspace --all-features --exclude edi-energy --exclude makod
+
+  # ── makod binary and integration tests ──────────────────────────────────────
+  test-makod:
+    name: Test makod (binary + integration)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Run all makod unit and integration tests. The slatedb feature is
+      # enabled transitively via the production dep on mako-engine. The
+      # `testing` feature of mako-engine is available via dev-dependencies
+      # so integration tests can use InMemory stores.
+      - name: cargo test makod
+        run: cargo test -p makod --all-targets
+
+  # ── energy-api feature-matrix ────────────────────────────────────────────────
+  test-energy-api:
+    name: Test energy-api (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - --features crypto
+          - --features crypto,client,server
+          - --features crypto,client,server,websocket
+          - --no-default-features
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p energy-api ${{ matrix.features }}
+
   # ── Strict warning gate ─────────────────────────────────────────────────────
   warnings:
     name: No warnings (all targets)
@@ -94,15 +153,15 @@ jobs:
 
   # ── MSRV ────────────────────────────────────────────────────────────────────
   msrv:
-    name: Minimum Supported Rust Version (1.85)
+    name: Minimum Supported Rust Version (1.88)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.85"
+          toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p edi-energy --all-features
+      - run: cargo check --workspace --all-features
 
   # ── Deny ────────────────────────────────────────────────────────────────────
   deny:
@@ -156,12 +215,46 @@ jobs:
       # Full informational scan (MISSING PIDs are warnings, not failures).
       - name: Coverage scan (informational)
         run: cargo xtask validate-pruefids
-      # Hard gate for message types with complete test-fixture coverage.
-      # Add a type here once every PID in its latest AHB is covered by a fixture.
+      # Hard gates: all message types currently have 100% PID fixture coverage.
+      # These gates prevent regressions when new PIDs are added in future AHB
+      # releases. Add new types here once their fixture coverage reaches 100%.
       - name: Coverage gate — aperak (strict)
         run: cargo xtask validate-pruefids --message-type aperak --strict
       - name: Coverage gate — comdis (strict)
         run: cargo xtask validate-pruefids --message-type comdis --strict
+      - name: Coverage gate — iftsta (strict)
+        run: cargo xtask validate-pruefids --message-type iftsta --strict
+      - name: Coverage gate — insrpt (strict)
+        run: cargo xtask validate-pruefids --message-type insrpt --strict
+      - name: Coverage gate — invoic (strict)
+        run: cargo xtask validate-pruefids --message-type invoic --strict
+      - name: Coverage gate — mscons (strict)
+        run: cargo xtask validate-pruefids --message-type mscons --strict
+      - name: Coverage gate — ordchg (strict)
+        run: cargo xtask validate-pruefids --message-type ordchg --strict
+      - name: Coverage gate — orders (strict)
+        run: cargo xtask validate-pruefids --message-type orders --strict
+      - name: Coverage gate — ordrsp (strict)
+        run: cargo xtask validate-pruefids --message-type ordrsp --strict
+      - name: Coverage gate — partin (strict)
+        run: cargo xtask validate-pruefids --message-type partin --strict
+      - name: Coverage gate — pricat (strict)
+        run: cargo xtask validate-pruefids --message-type pricat --strict
+      - name: Coverage gate — quotes (strict)
+        run: cargo xtask validate-pruefids --message-type quotes --strict
+      - name: Coverage gate — remadv (strict)
+        run: cargo xtask validate-pruefids --message-type remadv --strict
+      - name: Coverage gate — reqote (strict)
+        run: cargo xtask validate-pruefids --message-type reqote --strict
+      - name: Coverage gate — utilmd (strict)
+        run: cargo xtask validate-pruefids --message-type utilmd --strict
+      - name: Coverage gate — utilts (strict)
+        run: cargo xtask validate-pruefids --message-type utilts --strict
+      # CONTRL is pid_exempt (no Prüfidentifikatoren) — the strict gate here
+      # verifies that both fv20251001 and fv20260101 profiles exist and are valid
+      # (prevents the FV2025-10-01 profile gap from reoccurring, see F-032).
+      - name: Coverage gate — contrl (strict)
+        run: cargo xtask validate-pruefids --message-type contrl --strict
 
   release-diff-smoke:
     name: release-diff smoke test
@@ -178,3 +271,12 @@ jobs:
           out=$(cargo xtask release-diff --message-type mscons --from fv20240401 --to fv20251001 || true)
           echo "$out"
           echo "$out" | grep -q '##' || { echo 'ERROR: release-diff produced no section headers'; exit 1; }
+
+  check-release-coverage:
+    name: Release coverage check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask check-release-coverage
