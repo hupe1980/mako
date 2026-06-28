@@ -5,10 +5,11 @@
 //! `validate_envelope` can succeed.
 
 // Many imports and constants are only used inside feature-gated test fns.
+#![allow(unused_imports)]
 
 use edi_energy::{
-    AnyMessage, DEFAULT_MAX_SEGMENT_BYTES, EdiEnergyMessage, MessageType, ParseConfig, Parser,
-    Platform,
+    AnyMessage, DEFAULT_MAX_SEGMENT_BYTES, EdiEnergyMessage, Error, MessageType, ParseConfig,
+    Parser, Platform,
 };
 
 // ── Minimal valid EDIFACT interchanges ───────────────────────────────────────
