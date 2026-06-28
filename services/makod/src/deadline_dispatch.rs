@@ -14,7 +14,7 @@
 //! outbound APERAK message is lost.
 //!
 //! Alternatively, [`Process::execute_timeout_with_retry`] may be used to
-//! delegate the dispatch to [`Workflow::on_deadline`], but this path is
+//! delegate the dispatch to `Workflow::on_deadline`, but this path is
 //! equivalent when every workflow registers a `TimeoutExpired` command in its
 //! `on_deadline` hook.
 //!
