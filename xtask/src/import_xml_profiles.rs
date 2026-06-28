@@ -442,9 +442,9 @@ fn attr_value(e: &quick_xml::events::BytesStart<'_>, name: &str) -> Option<Strin
 /// | Muss       | M        |
 /// | Soll       | S        |
 /// | Kann       | O        |
-/// | X / X [N]  | X        |
-/// | K / K [N]  | K        |
-/// | O / O [N]  | O        |
+/// | X / X \[N\]  | X        |
+/// | K / K \[N\]  | K        |
+/// | O / O \[N\]  | O        |
 fn split_ahb_status(raw: &str) -> (String, Option<String>) {
     let trimmed = raw.trim();
     // Detect multi-word German form first ("Muss [N]", "Kann [N]", etc.)

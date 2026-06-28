@@ -148,7 +148,7 @@ pub struct Nad {
     /// - `"305"` — ECOD/ENTSO-E (EIC codes for TSOs and Regelzonen)
     /// - `"332"` — DVGW (legacy gas-sector codes)
     ///
-    /// Use [`edi_energy::AgencyCode`] to parse or format this value.
+    /// Use [`crate::AgencyCode`] to parse or format this value.
     #[edifact(element = 1, component = 2)]
     pub agency_code: Option<String>,
     /// DE 3036 — party name, component 0 of C080.

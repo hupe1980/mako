@@ -590,7 +590,7 @@ mod tests {
         let state = out
             .events
             .iter()
-            .fold(state, |s, e| GpkeNeuanlageWorkflow::apply(s, e));
+            .fold(state, GpkeNeuanlageWorkflow::apply);
         assert!(matches!(state, NeuanlageState::AntwortGesendet { .. }));
 
         // Step 3: activate
@@ -598,7 +598,7 @@ mod tests {
         let state = out
             .events
             .iter()
-            .fold(state, |s, e| GpkeNeuanlageWorkflow::apply(s, e));
+            .fold(state, GpkeNeuanlageWorkflow::apply);
         assert!(matches!(state, NeuanlageState::Aktiviert(_)));
     }
 
@@ -631,7 +631,7 @@ mod tests {
         let state = out
             .events
             .iter()
-            .fold(state, |s, e| GpkeNeuanlageWorkflow::apply(s, e));
+            .fold(state, GpkeNeuanlageWorkflow::apply);
         assert!(matches!(state, NeuanlageState::Rejected { .. }));
     }
 
