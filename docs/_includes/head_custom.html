@@ -27,20 +27,12 @@
   "name": "mako",
   "description": "Production-grade Rust library for German energy market communication (BDEW MaKo / EDI@Energy).",
   "url": "{{ site.url }}{{ site.baseurl }}",
-  "codeRepository": "https://github.com/hupe1980/edi-energy-rs",
+  "codeRepository": "https://github.com/hupe1980/mako",
   "programmingLanguage": "Rust",
   "license": "https://opensource.org/licenses/MIT",
   "keywords": ["EDIFACT", "EDI@Energy", "MaKo", "BDEW", "energy market", "Rust", "UTILMD", "MSCONS"]
 }
 </script>
 
-<!-- Mermaid diagram support (loaded only when a page uses ``` mermaid blocks) -->
-{% if page.mermaid or layout.mermaid %}
-<script defer src="https://cdn.jsdelivr.net/npm/mermaid@{{ site.mermaid.version }}/dist/mermaid.min.js"
-        integrity="sha384-placeholder" crossorigin="anonymous"></script>
-<script>
-  document.addEventListener("DOMContentLoaded", function () {
-    mermaid.initialize({ startOnLoad: true, theme: "default", securityLevel: "loose" });
-  });
-</script>
-{% endif %}
+<!-- Mermaid diagram support is handled by the just-the-docs theme.
+     Configure via _config.yml (mermaid.version) and page front matter (mermaid: true). -->

@@ -45,8 +45,8 @@ graph TB
 
     subgraph Engine["mako-engine — Process Runtime"]
         ROUTER["PidRouter"]
-        PROCESS["Process&lt;W, S&gt;<br/>execute / execute_and_enqueue"]
-        WORKFLOW["Workflow::handle (pure)<br/>Workflow::apply (pure)"]
+        PROCESS["Process(W,S) — execute / execute_and_enqueue"]
+        WORKFLOW["Workflow.handle (pure) / Workflow.apply (pure)"]
         DEADLINE["DeadlineStore<br/>APERAK Fristen"]
         OUTBOX["OutboxStore<br/>atomic enqueue"]
         INBOX["InboxStore<br/>AS4 dedup"]
@@ -227,12 +227,12 @@ AS4 reception to durable event storage.
 ```mermaid
 sequenceDiagram
     participant MSH as Trading Partner MSH
-    participant makod as makod<br/>(AS4 :4080)
-    participant inbox as InboxStore<br/>(dedup)
-    participant parse as edi-energy<br/>parse + validate
+    participant makod as "makod (AS4 4080)"
+    participant inbox as InboxStore (dedup)
+    participant parse as edi-energy parse+validate
     participant router as PidRouter
-    participant process as Process&lt;SupplierChangeWorkflow&gt;
-    participant store as SlateDB<br/>(EventStore + OutboxStore)
+    participant process as "Process(SupplierChangeWorkflow)"
+    participant store as "SlateDB (EventStore+OutboxStore)"
     participant outbox as OutboxWorker
     participant partner as Partner MSH
 
@@ -250,7 +250,7 @@ sequenceDiagram
     makod->>router: route(pid=55001)
     router-->>makod: SupplierChangeWorkflow handler
     makod->>process: execute(InitiateSupplierChange { … })
-    Note over process: replay state via EventStore::fold_stream<br/>Workflow::handle (pure)<br/>produces events + PendingOutbox
+    Note over process: replay state via EventStore fold_stream,<br/>Workflow handle (pure) produces events + PendingOutbox
     process->>store: append_with_outbox(events, outbox) ← single WriteBatch
     store-->>process: Ok(envelopes)
     process-->>makod: envelopes
@@ -267,9 +267,9 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant sched as DeadlineScheduler<br/>(every 30 s)
+    participant sched as "DeadlineScheduler (every 30s)"
     participant ds as DeadlineStore
-    participant process as Process&lt;W&gt;
+    participant process as "Process(W)"
     participant store as SlateDB
 
     Note over process: On InitiateSupplierChange
@@ -279,7 +279,7 @@ sequenceDiagram
         sched->>ds: due_now(tenant, limit)
         ds-->>sched: [Deadline{label:"aperak-window"}]
         sched->>process: execute_timeout(deadline)
-        Note over process: Workflow::on_deadline("aperak-window", state)<br/>→ Some(SendAperakTimeout)
+        Note over process: Workflow on_deadline("aperak-window", state)<br/>→ Some(SendAperakTimeout)
         process->>store: append_with_outbox(TimeoutExpired, [APERAK reject])
         sched->>ds: cancel(deadline_id)
     end
