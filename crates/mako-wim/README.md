@@ -19,32 +19,43 @@ holidays do not.
 > `WorkflowError::NotImplemented` for unhandled commands (no silent data loss).
 > **✗ Not registered** — PID is not in the router; inbound messages are dead-lettered.
 
-| PID   | Process name                                   | EDIFACT     | Status                             |
-|-------|------------------------------------------------|-------------|------------------------------------|
-| 11001 | Gerätewechsel — Anmeldung nMSB                 | UTILMD S2.x | ✅ Implemented                     |
-| 11002 | Gerätewechsel — Abmeldung aMSB                 | UTILMD S2.x | ⚠️ Registered — not implemented   |
-| 11003 | Gerätewechsel — Bestätigung                    | UTILMD S2.x | ⚠️ Registered — not implemented   |
-| 11004 | Gerätewechsel — Ablehnung                      | UTILMD S2.x | ⚠️ Registered — not implemented   |
-| 11005 | Gerätewechsel — Fristgerecht                   | UTILMD S2.x | ⚠️ Registered — not implemented   |
-| 11006 | Gerätewechsel — Kündigung                      | UTILMD S2.x | ⚠️ Registered — not implemented   |
-| 11011 | Entstörung/Unterbrechung — Anmeldung           | UTILMD S2.x | ⚠️ Registered — not implemented   |
-| 11012 | Entstörung/Unterbrechung — Bestätigung         | UTILMD S2.x | ⚠️ Registered — not implemented   |
-| 11013 | Entstörung/Unterbrechung — Ablehnung           | UTILMD S2.x | ⚠️ Registered — not implemented   |
-| 11021 | iMSys — Anmeldung (Universalbestellprozess)    | REST/JSON   | ✅ Implemented (REST channel)      |
-| 11022 | iMSys — Bestätigung                            | REST/JSON   | ✅ Implemented (REST channel)      |
-| 11023 | iMSys — Ablehnung                              | REST/JSON   | ✅ Implemented (REST channel)      |
-| 11031 | Zählpunkt — Anmeldung                          | UTILMD S2.x | ⚠️ Registered — not implemented   |
-| 11032 | Zählpunkt — Abmeldung                          | UTILMD S2.x | ⚠️ Registered — not implemented   |
-| 11041 | Messdatenübermittlung — Anmeldung              | MSCONS 2.x  | ✗ Not registered                   |
-| 11042 | Messdatenübermittlung — Ablehnung              | MSCONS 2.x  | ✗ Not registered                   |
-| 11051 | Prüfidentifikator-Prüfung (WiM) — Reserve     | UTILMD S2.x | ⚠️ Registered — not implemented   |
-| 17001–17211 | WiM ORDERS (Zählpunktverwaltung)         | ORDERS      | ✗ Not registered           |
-| 39000–39002 | WiM ORDCHG (Änderungsbestellungen)       | ORDCHG      | ✗ Not registered           |
+### MSB-Wechsel — UTILMD (BK6-24-174)
 
-> **PIDs 11002–11099:** All 99 PIDs are registered under `wim-device-change`.
-> Only 11001 (Anmeldung nMSB) returns a real response; others return
-> `WorkflowError::NotImplemented` and the message is APERAK-rejected
-> without crashing the engine.
+| PID   | Process name                                    | EDIFACT       | Module           | Status                          |
+|-------|-------------------------------------------------|---------------|------------------|---------------------------------|
+| 55042 | Anmeldung MSB (nMSB → NB)                       | UTILMD S2.x   | `geraetewechsel` | ✅ Implemented                  |
+| 55039 | Kündigung MSB (nMSB → NB)                       | UTILMD S2.x   | `geraetewechsel` | ✅ Registered (shared workflow) |
+| 55051 | Ende MSB / Abmeldung (NB → MSBN)                | UTILMD S2.x   | `geraetewechsel` | ✅ Registered (shared workflow) |
+| 55168 | Verpflichtungsanfrage (NB → MSBN)               | UTILMD S2.x   | `geraetewechsel` | ✅ Registered (shared workflow) |
+
+### Geräteübernahme — ORDERS / ORDRSP
+
+| PID(s)       | Process name                                      | EDIFACT       | Module               | Status          |
+|--------------|---------------------------------------------------|---------------|----------------------|-----------------|
+| 17001–17011  | Geräteübernahme (Anfrage, Bestellung, Stornierung) | ORDERS 1.4b  | `geraeteubernahme`   | ✅ Implemented  |
+| 19001, 19002 | ORDRSP Bestellbestätigung / Ablehnung (NB → nMSB) | ORDRSP 1.4c  | `geraeteubernahme`   | ✅ Registered (nMSB role only) |
+| 19015, 19016 | ORDRSP Gerätewechselabsicht Best./Ablehnung       | ORDRSP 1.4c  | `geraeteubernahme`   | ✅ Registered (nMSB role only) |
+
+> PIDs 19001/19002/19015/19016 are only registered when `DeploymentRoles` includes `Marktrolle::Nmsb`.
+> On NB instances these PIDs belong to `mako-gpke` (GPKE Konfiguration). Never register both simultaneously.
+
+### Stammdaten — ORDERS
+
+| PID(s)        | Process name                                     | EDIFACT     | Module       | Status         |
+|---------------|--------------------------------------------------|-------------|--------------|----------------|
+| 17132         | Stammdaten Anforderung Strom (NB → MSB)          | ORDERS 1.4b | `stammdaten` | ✅ Implemented |
+| 17102–17133   | Stammdatenübermittlung responses (MSB → NB)      | ORDERS 1.4b | `stammdaten` | ✅ Implemented |
+
+### Weitere Prozesse
+
+| PID(s)                 | Process name                          | EDIFACT         | Module             | Status         |
+|------------------------|---------------------------------------|-----------------|--------------------|----------------|
+| 39000                  | Stornierung (ORDCHG)                  | ORDCHG 1.1      | `stornierung`      | ✅ Implemented |
+| 31003, 31009           | WiM-Rechnung / MSB-Rechnung           | INVOIC 2.8e     | `rechnung`         | ✅ Implemented (stub, settlement pending) |
+| 35001–35005 (REQOTE)   | Preisanfrage — Anfrage (NB → MSB)     | REQOTE 1.3c     | `preisanfrage`     | ✅ Implemented |
+| 15001–15005 (QUOTES)   | Preisanfrage — Antwort (MSB → NB)     | QUOTES 1.3c     | `preisanfrage`     | ✅ Implemented |
+| 27001–27003            | Preisliste (PRICAT)                   | PRICAT 2.1      | `preisliste`       | ✅ Implemented |
+| 11021–11023            | iMS Bestellung (Universalbestellprozess) | REST/JSON    | `steuerungsauftrag`| ✅ Implemented (API-Webdienste channel) |
 
 ## EDIFACT Format Versions
 
@@ -56,13 +67,16 @@ holidays do not.
 
 ## Modules
 
-| Rust module        | Contents                                                          |
-|--------------------|-------------------------------------------------------------------|
-| `geraetewechsel`   | PID 11001 (nMSB Anmeldung) + 11021–11023 (iMS REST) workflow + projection |
-| `geraeteubernahme` | Gerätübernahme — ANFRAGE/BESTELLUNG/STORNIERUNG workflows         |
-| `stammdaten`       | Stammdatenanforderung and Stammdatenübermittlung workflow         |
-| `steuerungsauftrag`| Steuerungsauftrag (iMS Steuerbefehl) workflow                    |
-| `stornierung`      | Stornierung — cancellation workflow                              |
+| Rust module        | Contents                                                                  |
+|--------------------|---------------------------------------------------------------------------|
+| `geraetewechsel`   | PIDs 55039, 55042, 55051, 55168 — MSB-Wechsel workflow + projection       |
+| `geraeteubernahme` | PIDs 17001–17011, 19001/19002/19015/19016 — Geräteübernahme ORDERS/ORDRSP |
+| `stammdaten`       | PIDs 17102–17133, 17132 — Stammdaten Anforderung / Übermittlung           |
+| `stornierung`      | PID 39000 — Stornierung ORDCHG                                            |
+| `rechnung`         | PIDs 31003, 31009 — WiM-Rechnung / MSB-Rechnung INVOIC                    |
+| `preisanfrage`     | PIDs 35001–35005 (REQOTE), 15001–15005 (QUOTES) — Preisanfrage            |
+| `preisliste`       | PIDs 27001–27003 — Preisliste PRICAT                                      |
+| `steuerungsauftrag`| PIDs 11021–11023 — iMS Steuerungsauftrag (API-Webdienste REST channel)    |
 
 ## Usage
 
@@ -83,7 +97,7 @@ let ctx = EngineBuilder::new()
 
 let process = ctx.spawn::<WimDeviceChangeWorkflow>(tenant_id, workflow_id);
 let events = process.execute(DeviceChangeCommand::ReceiveUtilmd {
-    pid: 11001,
+    pid: 55042,  // Anmeldung MSB (nMSB → NB)
     // …
 }).await?;
 ```

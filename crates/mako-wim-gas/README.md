@@ -18,7 +18,7 @@ Both live under BK7-24-01-009 but cover entirely different processes:
 |---|---|---|
 | Scope | Supplier switching (Lieferbeginn/-ende) | MSB change (Anmeldung/Kündigung gMSB) |
 | Parties | LFN ↔ GNB | MSBN / MSBA ↔ NB / gMSB |
-| EDIFACT PIDs | 44001–44018, 44022–44024, 44555 | 44039–44053, 44168–44170 |
+| EDIFACT PIDs | 44001–44021, 44022–44024 | 44039–44053, 44168–44170 |
 | APERAK Frist | 10 Werktage | 10 Werktage |
 
 ### WiM Gas vs. WiM Strom

@@ -61,9 +61,9 @@ graph TB
     end
 
     subgraph Domain["Domain Crates"]
-        GPKE["mako-gpke<br/>PIDs 55001–56010"]
+        GPKE["mako-gpke<br/>PIDs 55001–55018, 55555"]
         WIM["mako-wim<br/>PIDs 11001–11099"]
-        GAS["mako-geli-gas<br/>PIDs 17001–17099"]
+        GAS["mako-geli-gas<br/>PIDs 44001–44021"]
         MABIS["mako-mabis<br/>PID 13003"]
     end
 
@@ -111,7 +111,7 @@ graph TB
 
 ```toml
 [dependencies]
-edi-energy = "0.2"
+edi-energy = "0.3"
 ```
 
 By default this enables the four most common message types: **UTILMD**, **MSCONS**, **APERAK**, **CONTRL**.

@@ -215,4 +215,10 @@ ignore = [
     # Resolution: bump pdf-extract to a version that depends on lopdf ≥ 0.42.0
     # once such a release is published upstream (pdf-extract 0.10 pins 0.38).
     { id = "RUSTSEC-2026-0187", reason = "lopdf DoS only reachable via xtask extract-pdf on BDEW PDFs (trusted developer input). Resolve when pdf-extract ships a release requiring lopdf ≥ 0.42." },
+    # RUSTSEC-2026-0192: ttf-parser unmaintained (harfbuzz team migrating to skrifa).
+    # No CVE, no security vulnerability — maintenance announcement only.
+    # Pulled transitively by xtask → pdf-extract → lopdf → ttf-parser.
+    # Impact: xtask dev tooling only; no production or library code path.
+    # Resolution: bump pdf-extract when a release depending on skrifa is available.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser maintenance announcement only (no CVE); reachable only via xtask pdf tooling, not production code" },
 ]

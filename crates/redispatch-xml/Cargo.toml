@@ -9,3 +9,14 @@ repository.workspace  = true
 rust-version.workspace = true
 keywords     = ["redispatch", "xml", "xsd", "energy", "bdew"]
 categories   = ["encoding", "data-structures"]
+
+[dependencies]
+quick-xml   = { version = "0.40", features = ["serialize"] }
+serde       = { workspace = true }
+thiserror   = { workspace = true }
+time        = { workspace = true }
+
+[features]
+# Embeds all XSD schemas as static bytes; exposes `schema_bytes(DocumentType)` for
+# downstream tooling. Does NOT perform runtime XSD validation.
+bundled-schemas = []

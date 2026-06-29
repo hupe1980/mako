@@ -37,8 +37,8 @@ Redispatch 2.0 spans three crates:
 | Crate | Responsibility | Status |
 |---|---|---|
 | `edi-energy` | IFTSTA status messages (EDIFACT) | ✅ Implemented |
-| `redispatch-xml` | XML/XSD format parsing and validation | ⏳ Placeholder |
-| `mako-redispatch` ← **this crate** | Workflow impls, PID routing, deadline handling | ⏳ Blocked on `redispatch-xml` |
+| `redispatch-xml` | XML/XSD format parsing and validation | ✅ Implemented |
+| `mako-redispatch` ← **this crate** | Workflow impls, PID routing, deadline handling | ⏳ Planned |
 
 `makod` will activate Redispatch 2.0 handling once this crate provides a
 `RedispatchModule` that implements `EngineModule`.

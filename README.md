@@ -68,7 +68,7 @@ Two distinct concerns live here:
 
 ```toml
 [dependencies]
-edi-energy = "0.1"
+edi-energy = "0.3"
 ```
 
 ```rust
@@ -86,8 +86,8 @@ println!("Valid: {}", report.is_valid());
 
 ```toml
 [dependencies]
-mako-engine = { version = "0.1", features = ["testing"] }
-mako-gpke   = "0.1"
+mako-engine = { version = "0.3", features = ["testing"] }
+mako-gpke   = "0.3"
 ```
 
 ```rust
@@ -265,8 +265,8 @@ mako/
 │   ├── mako-as4/            # BDEW AS4 profile constants, P-Modes, security policy
 │   ├── dvgw-edi/            # DVGW EDIFACT formats — ALLOCAT, NOMINT, NOMRES (placeholder)
 │   ├── energy-api/          # BDEW REST/WebSocket API client + Axum server (iMS)
-│   ├── mako-redispatch/     # Redispatch 2.0 (placeholder)
-│   └── redispatch-xml/      # Redispatch 2.0 XML/XSD parsing
+│   ├── mako-redispatch/     # Redispatch 2.0 process engine (placeholder)
+│   └── redispatch-xml/      # Redispatch 2.0 XML/XSD parsing — all 9 document types
 │
 ├── services/
 │   └── makod/               # Production daemon

@@ -9,7 +9,7 @@
 //! | Crate | Responsibility | Status |
 //! |---|---|---|
 //! | `edi-energy` | IFTSTA status messages (EDIFACT) | ✅ In workspace |
-//! | `redispatch-xml` | XML/XSD format parsing and validation (ActivationDocument, PlannedResourceScheduleDocument, Stammdaten, …) | ⏳ Placeholder |
+//! | `redispatch-xml` | XML/XSD format parsing and validation (ActivationDocument, PlannedResourceScheduleDocument, Stammdaten, …) | ✅ Implemented |
 //! | `mako-redispatch` | Process engine — Workflow impls, PID routing, deadline handling | ⏳ **This crate** |
 //!
 //! # Domain background

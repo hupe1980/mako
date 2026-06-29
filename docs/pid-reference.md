@@ -632,3 +632,30 @@ Lieferbeginn| GPKE Teil 2                                  | ✅   | ✅   |
 ---
 
 *Source: BDEW PID 3.3 (FV2025-10-01, Fehlerkorrektur 27.03.2026) and PID 4.0 (FV2026-10-01).*
+
+---
+
+## Redispatch 2.0 — XML document types (not EDIFACT PIDs)
+
+Redispatch 2.0 uses CIM/IEC 62325-based **XML** documents, not EDIFACT. These
+document types have no Prüfidentifikator and are therefore not listed in the
+BDEW PID overview. They are handled by the `redispatch-xml` crate.
+
+| Document type | XSD version | Crate |
+|---|---|---|
+| `ActivationDocument` | 1.1f | `redispatch-xml` |
+| `PlannedResourceScheduleDocument` | 1.0f | `redispatch-xml` |
+| `AcknowledgementDocument` | 1.0f | `redispatch-xml` |
+| `Stammdaten` | 1.4b | `redispatch-xml` |
+| `StatusRequest_MarketDocument` | 1.1 | `redispatch-xml` |
+| `Unavailability_MarketDocument` | 1.1b | `redispatch-xml` |
+| `Kaskade` | 1.0 | `redispatch-xml` |
+| `NetworkConstraintDocument` | 1.1b | `redispatch-xml` |
+| `Kostenblatt` | 1.0d | `redispatch-xml` |
+
+IFTSTA status messages that accompany Redispatch 2.0 workflows are EDIFACT and
+use PIDs 21035–21047 (see the IFTSTA AHB section above).
+
+See [`crates/redispatch-xml`](../crates/redispatch-xml/README.md) for schema
+documentation and the parse/serialize/validate API.
+

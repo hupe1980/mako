@@ -20,17 +20,17 @@
 //! validated against BDEW-published XSD schemas (topicGroupId 25 in the BDEW
 //! MaKo document API).
 //!
-//! | Document type | Current version | Valid from |
+//! | Document type | XSD version | Valid from |
 //! |---|---|---|
-//! | `ActivationDocument` | XSD 1.1d | 2025-10-01 |
-//! | `PlannedResourceScheduleDocument` | XSD 1.0f | 2025-10-01 |
+//! | `ActivationDocument` | 1.1f | 2025-10-01 |
+//! | `PlannedResourceScheduleDocument` | 1.0f | 2025-10-01 |
 //! | `AcknowledgementDocument` | 1.0f | 2025-10-01 |
-//! | `Stammdaten` | XSD 1.4b | 2025-10-01 |
-//! | `StatusRequest_MarketDocument` | XSD 1.1 | 2025-10-01 |
-//! | `Unavailability_MarketDocument` | XSD 1.1b | 2025-10-01 |
-//! | `Beschaffungsanforderung_energetischerAusgleich` | XSD | 2025-10-01 |
-//! | `Beschaffungsvorbehalt` | XSD | 2025-10-01 |
-//! | `Kostenblatt` | XSD | 2025-10-01 |
+//! | `Stammdaten` | 1.4b | 2025-10-01 |
+//! | `StatusRequest_MarketDocument` | 1.1 | 2025-10-01 |
+//! | `Unavailability_MarketDocument` | 1.1b | 2025-10-01 |
+//! | `Kaskade` | 1.0 | 2025-10-01 |
+//! | `NetworkConstraintDocument` | 1.1b | 2025-10-01 |
+//! | `Kostenblatt` | 1.0d | 2025-10-01 |
 //!
 //! These are **not** EDIFACT. IFTSTA status messages for the Redispatch 2.0
 //! workflow are handled separately by the `edi-energy` crate.
@@ -45,6 +45,19 @@
 //! | Direktvermarkter | DV | Direct marketer of renewable energy |
 //! | Bilanzkreisverantwortlicher | BKV | Balance responsible party |
 //!
+//! # Quick start
+//!
+//! ```rust,no_run
+//! use redispatch_xml::{parse, Document};
+//!
+//! let xml: &[u8] = b"<ActivationDocument xmlns=\"urn:entsoe.eu:wgedi:errp:activationdocument:5:0\">...</ActivationDocument>";
+//! match parse(xml) {
+//!     Ok(Document::Activation(doc)) => println!("Got ACO/ACR/AAR: {:?}", doc.document_type),
+//!     Ok(other) => println!("Other document type: {:?}", other.document_type()),
+//!     Err(e) => eprintln!("Parse error: {e}"),
+//! }
+//! ```
+//!
 //! # Regulatory references
 //!
 //! - **§§ 13, 13a, 14 EnWG** — statutory basis for grid congestion management
@@ -53,5 +66,24 @@
 //!   balance, grid operator coordination, and information provision
 //! - **BDEW XML-Datenformate Redispatch 2.0** — XSD schemas and application
 //!   guidelines published on [bdew-mako.de](https://www.bdew-mako.de)
-//!
-//! This crate is a name reservation. Implementation is coming soon.
+
+#![deny(unsafe_code)]
+
+pub mod documents;
+pub mod error;
+mod parse;
+mod serialize;
+pub mod types;
+pub mod validation;
+
+// ── Top-level re-exports ──────────────────────────────────────────────────────
+
+pub use documents::{
+    AcknowledgementDocument, ActivationDocument, DocumentType, Kaskade, Kostenblatt,
+    NetworkConstraintDocument, PlannedResourceScheduleDocument, Stammdaten,
+    StatusRequestMarketDocument, UnavailabilityMarketDocument,
+};
+pub use error::RedispatchXmlError;
+pub use parse::{Document, detect, parse, parse_and_validate, parse_as};
+pub use serialize::{serialize, serialize_as};
+pub use validation::{ValidationResult, ValidationWarning, validate};

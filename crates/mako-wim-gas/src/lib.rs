@@ -26,7 +26,7 @@
 //! |---|---|---|
 //! | Ruling | BK7-24-01-009 | BK7-24-01-009 (same umbrella) |
 //! | Scope | Supplier switching (Lieferbeginn/-ende) | MSB change (Anmeldung/Kündigung gMSB) |
-//! | EDIFACT | UTILMD G (44001–44018, 44555) | UTILMD G (44039–44053, 44168–44170) |
+//! | EDIFACT | UTILMD G (44001–44021, 44022–44024) | UTILMD G (44039–44053, 44168–44170) |
 //! | APERAK Frist | 10 Werktage | 10 Werktage |
 //!
 //! | Aspect | WiM Strom (`mako-wim`) | WiM Gas (`mako-wim-gas`) |

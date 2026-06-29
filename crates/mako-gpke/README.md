@@ -6,7 +6,7 @@ Process engine workflows for the German electricity market supplier-switch
 and grid access billing processes. Implements the BDEW GPKE specification
 and BNetzA rulings:
 - **BK6-24-174** (Beschluss 24.10.2024, gültig seit 06.06.2025) — GPKE Teil 1–3 (Lieferantenwechsel, Zuordnungsprozesse)
-- **BK6-22-024** (Beschluss 21.03.2024) — GPKE Teil 4 (Stammdatenprozesse) + ex-MPES absorption (LFW24, effective 2025-06-06)
+- **BK6-22-024** (Beschluss 21.03.2024) — GPKE Teil 4 (Stammdatenprozesse, Konfigurationseinrichtung)
 
 ## APERAK Frist
 
@@ -33,15 +33,6 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 | 55017 | Kündigung Lieferbeginn                                | LFN → LFA   | ✅ Implemented |
 | 55018 | Bestätigung Kündigung Lieferbeginn                    | LFA → LFN   | ↩ Derived from 55017 always |
 | 55555 | Anfrage Daten der individuellen Bestellung            | LFN → NB    | ✅ Implemented (GPKE Teil 4, BK6-24-174) |
-| 56001 | Einspeisung Anmeldung (ex-MPES, BK6-22-024)           | LFE → NB    | ✅ AHB validated (fv20250606+) |
-| 56002 | Einspeisung Abmeldung / Kündigung (ex-MPES, BK6-22-024)| LFE → NB   | ✅ AHB validated (fv20250606+) |
-| 56003 | Einspeisung Bestätigung (ex-MPES, BK6-22-024)         | NB → LFE    | ✅ AHB validated (fv20250606+) |
-| 56004 | Einspeisung Ablehnung (ex-MPES, BK6-22-024)           | NB → LFE    | ✅ AHB validated (fv20250606+) |
-
-> **LFW24 (BK6-22-024):** PIDs 56001–56004 (Einspeisestelle) were transferred
-> from MPES to GPKE effective **2025-06-06**. Former PIDs 56005–56010 do not
-> appear in any extracted INVOIC AHB and are not registered.
-> PIDs 55007–55010 were removed in the LFW24 redesign to 24-hour processing.
 
 ### ORDERS/ORDRSP Konfigurationseinrichtung (GPKE Teil 4)
 
@@ -58,19 +49,19 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 |-------|-----------------------------------------------|-----------------|
 | 31001 | Abschlagsrechnung (Netznutzung)               | ✅ Implemented  |
 | 31002 | NN-Rechnung (Netznutzungsabrechnung)          | ✅ Implemented  |
-| 31004 | Stornorechnung                                | ✅ Implemented  |
 | 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo)        | ✅ Implemented  |
 | 31006 | MMM-Rechnung (selbst ausgestellt)             | ✅ Implemented  |
 | 31007 | Aggregierte Mehr-/Mindermenge Rechnung        | ✅ Implemented  |
 | 31008 | Aggregierte Mehr-/Mindermenge Rechnung (SA)   | ✅ Implemented  |
 
 > PIDs 31003 (WiM-Rechnung) and 31009 (MSB-Rechnung) belong to the WiM domain.
+> PID 31004 (Stornorechnung WiM Gas) belongs to `mako-wim-gas` (BK7-24-01-009).
 
 ## EDIFACT Format Versions
 
 | Format version   | Valid from | Valid until | Profile status                   |
 |------------------|------------|-------------|----------------------------------|
-| `FV2025-06-06`   | 2025-06-06 | 2025-09-30  | ✓ available (UTILMD S1.2 — LFW24 cutover; introduced PIDs 56001–56004) |
+| `FV2025-06-06`   | 2025-06-06 | 2025-09-30  | ✓ available (UTILMD S1.2 — LFW24 cutover) |
 | `FV2025-10-01`   | 2025-10-01 | 2026-09-30  | ✓ available (UTILMD S2.1 — current) |
 | `FV2026-10-01`   | 2026-10-01 | —           | ✓ available (UTILMD S2.2 — upcoming) |
 | `FV2026-04-01`   | 2026-04-01 | 2026-09-30  | ✓ available (INVOIC 2.8e, REMADV 2.9f, ORDERS 1.4b) |
@@ -83,7 +74,7 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 
 | Rust module         | Contents                                                |
 |---------------------|---------------------------------------------------------|
-| `wechselprozesse`   | PIDs 55001–55002, 55017, 56001–56004 (UTILMD supplier-switch + feed-in) |
+| `wechselprozesse`   | PIDs 55001–55002, 55017 (UTILMD supplier-switch) |
 | `lf_anmeldung`      | PIDs 55003–55006, 55018 (LF-role: receive NB ANTWORT)   |
 | `anfrage_bestellung`| PID 55555 (Anfrage Daten der individuellen Bestellung, LFN → NB, GPKE Teil 4) |
 | `abrechnung`        | PIDs 31001–31008 (INVOIC Netznutzungsabrechnung)        |
@@ -117,7 +108,7 @@ let events = process.execute(SupplierChangeCommand::ReceiveUtilmd {
 
 - BDEW GPKE Marktprozesse für die Belieferung mit Elektrizität
 - BNetzA **BK6-24-174** (Beschluss 24.10.2024, gültig seit 06.06.2025) — GPKE Teil 1–3
-- BNetzA **BK6-22-024** (Beschluss 21.03.2024) — GPKE Teil 4 + APERAK Frist 24 Stunden + ex-MPES PIDs 56001–56004
+- BNetzA **BK6-22-024** (Beschluss 21.03.2024) — GPKE Teil 4 + APERAK Frist 24 Stunden
 - EDI@Energy UTILMD Strom AHB S2.2 (`FV2026-10-01`)
 - EDI@Energy INVOIC AHB 2.8e / AHB 1.0 (`FV2025-10-01` onwards)
 - EDI@Energy APERAK AHB 2.2 (`FV2026-10-01`)
