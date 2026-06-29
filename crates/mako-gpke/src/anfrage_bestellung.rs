@@ -56,7 +56,7 @@ pub const WORKFLOW_NAME: &str = "gpke-anfrage-bestellung";
 ///
 /// Register a `Deadline` with this label immediately after `ValidationPassed`:
 ///
-/// ```rust,ignore
+/// ```text
 /// let due = mako_engine::fristen::add_hours(received_at, 24);
 /// let dl = Deadline::new(stream_id, …, ANFRAGE_WINDOW_LABEL, due);
 /// deadline_store.register(&dl).await?;

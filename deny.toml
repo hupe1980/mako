@@ -178,6 +178,11 @@ name    = "itertools"
 version = "0.14"
 reason  = "foyer-memory (via slatedb) depends on itertools 0.14.x while rest of workspace uses 0.15."
 
+[[bans.skip]]
+name    = "webpki-roots"
+version = "0.26"
+reason  = "tokio-tungstenite 0.24 (via energy-api WebSocket) pulls webpki-roots 0.26; reqwest/hyper-rustls pull 1.x. Resolve when tokio-tungstenite bumps its rustls peer deps."
+
 [advisories]
 ignore = [
     # RUSTSEC-2025-0141: bincode 1.x unmaintained.
