@@ -104,7 +104,10 @@ name    = "rand"
 version = "0.8"
 reason  = "slatedb ecosystem pulls rand 0.8. Workspace uses rand 0.9. Resolve when slatedb updates."
 
-# rand_chacha skip removed: slatedb updated; dependency no longer present.
+[[bans.skip]]
+name    = "rand_chacha"
+version = "0.3"
+reason  = "Companion to rand 0.8 (pulled by slatedb/foyer); workspace uses rand_chacha 0.9 via rand 0.9. Resolve when slatedb updates."
 
 [[bans.skip]]
 name    = "rand_core"
