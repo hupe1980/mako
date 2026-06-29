@@ -485,14 +485,19 @@ fn utilmd_strom_s1_2_bridging_profile_covers_gap() {
     );
 }
 
-/// UTILMD Strom S1.2 bridging profile — ex-MPES PID coverage.
+/// UTILMD Strom S1.2 bridging profile — known-PID detection is sound.
 ///
-/// PIDs 56001–56004 (Einspeisung Strom) were transferred from MPES to GPKE
-/// per BK6-22-024 effective 2025-06-06.  They must be present in the S1.2
-/// AHB and must not appear in an earlier release.
+/// A PID that does not appear in the AHB profile JSON does not exist in that
+/// release.  PIDs 56001–56010 (former MPES) are absent from every BDEW PID
+/// list (PID 3.3, PID 4.0) and must therefore never appear in any profile.
+///
+/// This test also verifies that the `has_pid` closure uses the correct
+/// detection idiom (`pack.name() != "unknown-pid"`) rather than the broken
+/// `rule_count() > 0` check, which returns `true` for every PID — including
+/// unregistered ones — because the fallback pack always has exactly 1 rule.
 #[cfg(feature = "utilmd")]
 #[test]
-fn utilmd_strom_s1_2_includes_ex_mpes_einspeisung_pids() {
+fn utilmd_strom_s1_2_known_pid_detection_is_sound() {
     use edi_energy::registry::ReleaseRegistry;
     use time::macros::date;
 
@@ -503,25 +508,27 @@ fn utilmd_strom_s1_2_includes_ex_mpes_einspeisung_pids() {
         .profile_on(MessageType::Utilmd, &release, date!(2025 - 06 - 06))
         .expect("S1.2 profile must be present");
 
-    // A PID is registered iff its AHB rule pack is non-empty.
+    // Correct detection: a PID is known iff its AHB rule pack is NOT the
+    // "unknown-pid" fallback (which has exactly 1 rule for any unknown code).
     let has_pid = |code: u32| -> bool {
         let pid = edi_energy::Pruefidentifikator::new(code).unwrap();
-        profile.ahb_rule_pack(Some(pid)).rule_count() > 0
+        profile.ahb_rule_pack(Some(pid)).name() != "unknown-pid"
     };
 
-    // All ex-MPES Einspeisung PIDs must be registered in S1.2.
-    for expected in [56001u32, 56002, 56003, 56004] {
+    // Core GPKE supply PIDs must be registered in S1.2.
+    for expected in [55001u32, 55002, 55003, 55004, 55005, 55006, 55555] {
         assert!(
             has_pid(expected),
-            "PID {expected} (ex-MPES Einspeisung) must be present in UTILMD S1.2 AHB"
+            "PID {expected} (GPKE supply) must be present in UTILMD S1.2 AHB"
         );
     }
 
-    // Legacy GPKE supply PIDs must still be present.
-    for expected in [55001u32, 55002, 55003, 55004, 55005, 55006] {
+    // Phantom PIDs (56001–56004, former MPES) must NOT be registered.
+    // These PIDs were never transferred to any crate and appear in no BDEW AHB.
+    for phantom in [56001u32, 56002, 56003, 56004] {
         assert!(
-            has_pid(expected),
-            "PID {expected} (GPKE supply) must still be present in UTILMD S1.2 AHB"
+            !has_pid(phantom),
+            "PID {phantom} (ex-MPES, non-existent) must NOT be present in UTILMD S1.2 AHB"
         );
     }
 }

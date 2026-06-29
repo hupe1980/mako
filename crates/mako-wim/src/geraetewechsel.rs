@@ -453,9 +453,15 @@ impl Workflow for WimDeviceChangeWorkflow {
                 if !matches!(state, DeviceChangeState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
                 }
-                // PID 11021 — iMSys Anmeldung (Universalbestellprozess via REST).
-                let pid = Pruefidentifikator::new(11_021).map_err(|e| {
-                    WorkflowError::rejected(format!("constant PID 11021 invalid: {e}"))
+                // PID 55042 (WiM MSB Anmeldung Strom) is the canonical EDIFACT process
+                // identifier for iMSys Universalbestellprozess Anmeldung regardless of
+                // transport channel.  REST (API-Webdienste Strom) and EDIFACT (UTILMD)
+                // both initiate the same underlying MaKo process; 55042 keeps the audit
+                // trail consistent and avoids phantom PIDs in the event store.
+                let pid = Pruefidentifikator::new(55_042).map_err(|e| {
+                    WorkflowError::rejected(format!(
+                        "constant PID 55042 (WiM Anmeldung MSB) invalid: {e}"
+                    ))
                 })?;
                 // REST orders carry no EDIFACT device ID; use the tx_id as a
                 // provisional placeholder until the MSB assigns a device EIC.

@@ -79,7 +79,7 @@
 //!   └── EngineContext (SlateDbStore — in-memory by default, local FS via --data-dir)
 //!         ├── GpkeModule    — UTILMD PIDs 55001–55002, 55016 (`gpke-supplier-change`)
 //!         │                   + INVOIC PIDs 31001–31002, 31004–31008 (`gpke-abrechnung`)
-//!         ├── WimModule     — PIDs 11001–11099 (WiM Gerätewechsel/-betrieb)
+//!         ├── WimModule     — PIDs 55039, 55042, 55051, 55168 (WiM Strom, BK6-24-174)
 //!         ├── GeliGasModule — PIDs 44001–44006, 44017–44018, 44022–44024 (GeLi Gas)
 //!         ├── WimGasModule  — PIDs 44039–44053, 44168–44170 (WiM Gas MSB-Wechsel)
 //!         └── MabisModule   — PID 13003 only (MABIS Bilanzkreisabrechnung Strom, MSCONS Summenzeitreihe)
@@ -132,6 +132,7 @@ use mako_mabis::MabisModule;
 use mako_wim::WimModule;
 use mako_wim_gas::WimGasModule;
 use secrecy::{ExposeSecret as _, SecretString};
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -1086,22 +1087,30 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         // only inbound IFTSTA messages (PIDs 21000–21007).
     }
 
+    // Hard-fail if any Noop store is active — a misconfigured deployment
+    // (e.g. missing [outbox] section in makod.toml) must never silently
+    // start with a Noop backend, whether in check mode or full daemon mode.
+    ctx.assert_production_stores();
+
     // ── --check mode early exit ────────────────────────────────────────
     //
     // All critical startup checks (profile validator, adapter coverage, data-dir
     // lock acquisition, ProcessRegistry reconciliation) have now completed.
     // In check mode we exit here — no workers, no transports, no listeners.
     if cli.check {
-        // Hard-fail if any Noop store is active — a misconfigured deployment
-        // (e.g. missing [outbox] section in makod.toml) must never silently
-        // start with a Noop backend.
-        ctx.assert_production_stores();
         info!(
             "check mode: all startup validations passed \
              (profiles, adapter coverage, store connectivity, ProcessRegistry reconciliation)"
         );
         return Ok(());
     }
+
+    // ── Graceful-shutdown token ────────────────────────────────────────────────
+    //
+    // All long-running background tasks and HTTP servers are wired to this
+    // token.  When the OS delivers SIGTERM / Ctrl-C, we cancel the token and
+    // every listener drains its in-flight requests before the store is closed.
+    let shutdown_token = CancellationToken::new();
 
     // ── Optional: HTTP REST API server ────────────────────────────────────────
     //
@@ -1178,8 +1187,12 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             max_body_mib  = cli.http_max_body_bytes / (1024 * 1024),
             "HTTP REST API listening",
         );
+        let http_token = shutdown_token.clone();
         tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app).await {
+            if let Err(e) = axum::serve(listener, app)
+                .with_graceful_shutdown(http_token.cancelled_owned())
+                .await
+            {
                 tracing::error!(error = %e, "HTTP server error");
             }
         });
@@ -1279,8 +1292,12 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             party_id = %party_id,
             "AS4 inbound transport listening (BDEW MaKo mandatory since 2024-04-01)",
         );
+        let as4_token = shutdown_token.clone();
         tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app).await {
+            if let Err(e) = axum::serve(listener, app)
+                .with_graceful_shutdown(as4_token.cancelled_owned())
+                .await
+            {
                 tracing::error!(error = %e, "AS4 server error");
             }
         });
@@ -1321,8 +1338,12 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             tenant_id = cli.tenant_id,
             "API-Webdienste Strom server listening (MaLo Identification active)",
         );
+        let wd_token = shutdown_token.clone();
         tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app).await {
+            if let Err(e) = axum::serve(listener, app)
+                .with_graceful_shutdown(wd_token.cancelled_owned())
+                .await
+            {
                 tracing::error!(error = %e, "API-Webdienste server error");
             }
         });
@@ -1619,8 +1640,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     info!("inbox purge worker started (daily, 72h TTL)");
 
     wait_for_shutdown().await;
-
-    info!("Mako engine shutting down");
+    info!("Mako engine shutting down — cancelling listeners");
+    // Signal all HTTP/AS4/API-Webdienste servers to stop accepting new connections
+    // and drain in-flight requests before we close the event store.
+    shutdown_token.cancel();
 
     // ── Graceful dead-letter drain ────────────────────────────────────
     //
@@ -2090,6 +2113,8 @@ fn init_tracing(cli: &Cli) {
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 
+/// Await an OS shutdown signal (SIGTERM on Unix, Ctrl-C everywhere).
+/// Returns after the first signal is received.
 async fn wait_for_shutdown() {
     use tokio::signal;
 

@@ -9,13 +9,14 @@
 //! |-------|-----------------------------------------------------|-------------|
 //! | 31001 | Abschlagsrechnung (Netznutzung)                     | 2.8e ✅     |
 //! | 31002 | NN-Rechnung (Netznutzungsabrechnung)                 | 2.8e ✅     |
-//! | 31004 | Stornorechnung (Storno der NN- / MMM-Rechnung)       | 2.8e ✅     |
 //! | 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo)               | 2.8e ✅     |
 //! | 31006 | MMM-Rechnung (selbst ausgestellt)                    | 2.8e ✅     |
 //! | 31007 | Aggregierte Mehr-/Mindermenge Rechnung               | 2.8e ✅     |
 //! | 31008 | Aggregierte Mehr-/Mindermenge Rechnung (SA)          | 2.8e ✅     |
+//! | 31009 | MSB-Rechnung (GPKE Teil 3, NB/MSB settlement)        | 2.8e ✅     |
 //!
 //! All 7 PIDs share the same INVOIC-receive → settle/dispute state machine.
+//! PID 31004 (Stornorechnung WiM Gas) belongs to `mako-wim-gas`; not listed here.
 //! The stored `pruefidentifikator` field in [`AbrechnungData`] lets read-models
 //! distinguish process variants.
 //!
@@ -248,9 +249,9 @@ impl CommandPayload for AbrechnungCommand {}
 
 /// GPKE billing workflow for INVOIC-based processes.
 ///
-/// Covers Netznutzungsabrechnung (31001/31002), Storno (31004) and
-/// Mehr-/Mindermengen (31005–31008) processes. These are the GPKE-domain
-/// billing PIDs in INVOIC AHB 2.8e / 1.0.
+/// Covers Netznutzungsabrechnung (31001/31002), Mehr-/Mindermengen (31005–31008)
+/// and MSB-Rechnung (31009) processes. These are the GPKE-domain billing PIDs
+/// in INVOIC AHB 2.8e / 1.0. PID 31004 belongs to `mako-wim-gas`.
 ///
 /// Spawn via [`mako_engine::process::Process`]:
 /// ```rust,ignore
@@ -355,7 +356,7 @@ impl Workflow for GpkeAbrechnungWorkflow {
                 }
                 if !INVOIC_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected a GPKE INVOIC PID (31001/31002/31004–31008), got {pid}",
+                        "expected a GPKE INVOIC PID (31001/31002/31005–31009), got {pid}",
                     )));
                 }
                 let mut events = vec![AbrechnungEvent::InvoicReceived {

@@ -44,6 +44,7 @@ serde_json         = { workspace = true }
 subtle             = "2"
 time               = { workspace = true }
 tokio              = { version = "1", features = ["full"] }
+tokio-util         = { version = "0.7", features = ["rt"] }
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 uuid               = { workspace = true }

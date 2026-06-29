@@ -19,7 +19,8 @@
 //!
 //! 3. **MSB (Messstellenbetreiber)** for the WiM Order API: a NB sends
 //!    `POST /wimBestellung/v1/anmeldung/`; `makod` spawns a
-//!    `WimDeviceChangeWorkflow` process (PID 11021 — iMSys Universalbestellprozess),
+//!    `WimDeviceChangeWorkflow` process (PID 55042 — WiM MSB Anmeldung Strom; REST
+//!    channel for the same process family as UTILMD 55042),
 //!    returns `202 Accepted`, and tracks the 5-Werktage APERAK window.
 //!
 //! ## API surface
@@ -296,7 +297,7 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
 
 impl wim_order::WimOrderHandler for MakodApiHandler {
     /// MSB receives an iMS Universalbestellprozess order from a NB via REST
-    /// (PID 11021).
+    /// (PID 55042 — WiM MSB Anmeldung Strom, REST transport).
     ///
     /// 1. Inbox idempotency guard — rejects duplicate `tx_id` values.
     /// 2. Converts the REST payload to a `DeviceChangeCommand::ReceiveRestOrder`.
@@ -366,7 +367,7 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
                 melo_id = %request.melo_id,
                 process_date = %request.process_date,
                 %process_id,
-                "WiM Anmeldung accepted — WimDeviceChangeWorkflow (PID 11021) spawned"
+                "WiM Anmeldung accepted — WimDeviceChangeWorkflow (PID 55042, REST channel) spawned"
             );
             Ok(())
         }

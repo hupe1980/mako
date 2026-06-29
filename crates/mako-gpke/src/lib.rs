@@ -92,18 +92,17 @@
 //! |-------|------------------------------------------|--------|
 //! | 31001 | Abschlagsrechnung (Netznutzung)              | ✅ Implemented |
 //! | 31002 | NN-Rechnung (Netznutzungsabrechnung)          | ✅ Implemented |
-//! | 31004 | Stornorechnung                               | ✅ Implemented |
 //! | 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo)        | ✅ Implemented |
 //! | 31006 | MMM-Rechnung (selbst ausgestellt)            | ✅ Implemented |
 //! | 31007 | Aggregierte Mehr-/Mindermenge Rechnung       | ✅ Implemented |
 //! | 31008 | Aggregierte Mehr-/Mindermenge Rechnung (SA)  | ✅ Implemented |
+//! | 31009 | MSB-Rechnung (GPKE Teil 3 — NB/MSB)          | ✅ Implemented |
 //!
 //! All 7 PIDs use [`GpkeAbrechnungWorkflow`] (workflow name:
 //! `"gpke-abrechnung"`). The `pruefidentifikator` stored in
 //! [`abrechnung::AbrechnungData`] lets read-models distinguish variants.
-//! PIDs 31003 (WiM-Rechnung) and 31009 (MSB-Rechnung) belong to WiM domain and
-//! are handled separately. Former PIDs 56005–56010 (ex-MPES) do not exist in
-//! any INVOIC AHB and are not registered.
+//! PID 31003 (WiM-Rechnung) belongs to `mako-wim`. PID 31004 (Stornorechnung
+//! WiM Gas) belongs to `mako-wim-gas` (BK7-24-01-009) — not registered here.
 //!
 //! ## Architecture
 //!
@@ -209,7 +208,8 @@ pub use wechselprozesse::{
 /// - PID 55007 (NB-seitiges Lieferende, UTILMD) → `"gpke-lf-abmeldung"`
 /// - PIDs 17115/17116/17117 (Sperrung/Entsperrung, ORDERS) → `"gpke-sperrung"`
 /// - **PID 55555** (Anfrage Daten der individuellen Bestellung, UTILMD) → `"gpke-anfrage-bestellung"`
-/// - PIDs 31001, 31002, 31004–31008 (billing, INVOIC) → `"gpke-abrechnung"`
+/// - PIDs 31001, 31002, 31005–31009 (billing, INVOIC) → `"gpke-abrechnung"`
+///   _(31003 → `mako-wim`; 31004 → `mako-wim-gas`)_
 /// - PIDs 19001, 19002 (inbound ORDRSP, NB role only) → `"gpke-konfiguration"`
 ///
 /// **Role-conditional PIDs (ORDRSP 19001/19002):**
@@ -326,11 +326,11 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             router.register(pid, lf_anmeldung::WORKFLOW_NAME);
         }
 
-        // IFTSTA GPKE Vollzugsmeldung PIDs 21024–21033.
+        // IFTSTA GPKE Vollzugsmeldung PID 21033 only.
         //
-        // Vollzugsmeldungen and Statusmeldungen that accompany the GPKE
-        // supplier-change process. All are routed to `gpke-supplier-change`
-        // for correlation via conversation ID (CI tag).
+        // PID 21033 is the single GPKE-owned IFTSTA PID (Ablehnung GPKE Teil 3).
+        // PIDs 21024–21032 belong to WiM Strom / WiM Gas / GeLi Gas and are
+        // not registered here. Routed to `gpke-supplier-change` via conversation ID.
         for &pid in wechselprozesse::IFTSTA_PIDS {
             router.register(pid, "gpke-supplier-change");
         }
@@ -364,7 +364,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             },
             ProfileRequirement {
                 message_type: "IFTSTA",
-                label: "IFTSTA Vollzugsmeldung (GPKE 21024–21033)",
+                label: "IFTSTA Vollzugsmeldung (GPKE 21033)",
             },
         ]
     }

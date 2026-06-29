@@ -83,7 +83,7 @@ pub const UTILMD_PIDS: &[u32] = &[
     55016, // Kündigung Lieferbeginn (LFN → LFA)
 ];
 
-/// IFTSTA GPKE Vollzugsmeldung Prüfidentifikatoren (PIDs 21024–21033).
+/// IFTSTA GPKE Prüfidentifikator (PID 21033 only — Ablehnung GPKE Teil 3).
 ///
 /// These are the Vollzugsmeldung and Statusmeldung messages exchanged by LF,
 /// NB/LFA in the GPKE supplier-change (Wechsel) process (BK6-22-024 LFW24).
@@ -186,13 +186,13 @@ pub enum SupplierChangeEvent {
         /// Label identifying the deadline type.
         label: Box<str>,
     },
-    /// Received a GPKE IFTSTA Vollzugsmeldung or Statusmeldung (PIDs 21024–21033).
+    /// Received a GPKE IFTSTA Statusmeldung (PID 21033 — Ablehnung GPKE Teil 3).
     ///
-    /// These messages confirm that a physical supplier switch has been executed
-    /// or report on process status. They do not drive state transitions in the
-    /// supplier-change state machine but are recorded for audit purposes.
+    /// PID 21033 is the single GPKE-owned IFTSTA PID. PIDs 21024–21032 belong to
+    /// WiM Strom / WiM Gas / GeLi Gas and are not handled here.
+    /// Does not drive state transitions; recorded for audit purposes.
     VollzugsmeldungReceived {
-        /// IFTSTA Prüfidentifikator (21024–21033).
+        /// IFTSTA Prüfidentifikator (21033).
         pid: Pruefidentifikator,
         /// Sender party code (GLN).
         sender: MarktpartnerCode,
@@ -417,13 +417,13 @@ pub enum SupplierChangeCommand {
         /// Label identifying the deadline type.
         label: Box<str>,
     },
-    /// Received a GPKE IFTSTA Vollzugsmeldung or Statusmeldung (PIDs 21024–21033).
+    /// Received a GPKE IFTSTA Statusmeldung (PID 21033 — Ablehnung GPKE Teil 3).
     ///
     /// Constructed by the IFTSTA adapter in `makod` when an inbound AS4
-    /// IFTSTA message with a GPKE Vollzugsmeldung PID arrives, or via the
+    /// IFTSTA message with PID 21033 arrives, or via the
     /// `"gpke.vollzugsmeldung.empfangen"` REST command.
     ReceiveVollzugsmeldung {
-        /// IFTSTA Prüfidentifikator (21024–21033).
+        /// IFTSTA Prüfidentifikator (21033).
         pid: Pruefidentifikator,
         /// Sender party code (GLN).
         sender: MarktpartnerCode,
