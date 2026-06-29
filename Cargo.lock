@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "dvgw-edi"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "ecb"
@@ -960,7 +960,7 @@ dependencies = [
 
 [[package]]
 name = "edi-energy"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "criterion",
  "edifact-rs",
@@ -1044,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "energy-api"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "base64ct",
@@ -2188,14 +2188,14 @@ dependencies = [
 
 [[package]]
 name = "mako-as4"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "asx-rs",
 ]
 
 [[package]]
 name = "mako-engine"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "criterion",
  "rand 0.9.4",
@@ -2213,11 +2213,11 @@ dependencies = [
 
 [[package]]
 name = "mako-gabi-gas"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "mako-geli-gas"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -2231,7 +2231,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gpke"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -2245,7 +2245,7 @@ dependencies = [
 
 [[package]]
 name = "mako-mabis"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "edi-energy",
  "mako-engine",
@@ -2258,15 +2258,15 @@ dependencies = [
 
 [[package]]
 name = "mako-nbw"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "mako-redispatch"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "mako-wim"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "mako-wim-gas"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -2294,7 +2294,7 @@ dependencies = [
 
 [[package]]
 name = "makod"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "asx-rs",
@@ -3305,7 +3305,7 @@ dependencies = [
 
 [[package]]
 name = "redispatch-xml"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "redox_syscall"

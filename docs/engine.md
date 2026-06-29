@@ -2,7 +2,9 @@
 layout: default
 title: Process Engine
 nav_order: 20
-parent: Architecturemermaid: truedescription: >
+parent: Architecture
+mermaid: true
+description: >
   mako-engine architecture: event-sourced Workflow FSMs, atomic dual-write,
   DeadlineStore, OutboxWorker, PidRouter, ProcessRegistry, and SlateDB backend.
 ---

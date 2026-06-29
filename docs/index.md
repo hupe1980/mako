@@ -3,9 +3,10 @@ layout: home
 title: mako — EDI@Energy for Rust
 nav_order: 1
 description: >-
-  Production-grade Rust library for German energy market communication
+  Rust library for German energy market communication
   (BDEW MaKo / EDI@Energy). EDIFACT parsing, AHB/MIG validation,
-  event-sourced process runtime, AS4 transport, and regulatory deadlines —
+  event-sourced process runtime, AS4 transport, regulatory deadlines,
+  OpenTelemetry observability, and a REST Command API with webhooks —
   all in one workspace.
 permalink: /
 ---
@@ -13,141 +14,243 @@ permalink: /
 <!-- ── Hero ──────────────────────────────────────────────────────────────── -->
 <div class="mako-hero">
   <div class="mako-hero__badge-row">
-    <a href="https://github.com/hupe1980/edi-energy-rs/actions/workflows/ci.yml">
-      <img src="https://github.com/hupe1980/edi-energy-rs/actions/workflows/ci.yml/badge.svg" alt="CI">
+    <a href="https://github.com/hupe1980/mako/actions/workflows/ci.yml">
+      <img src="https://github.com/hupe1980/mako/actions/workflows/ci.yml/badge.svg" alt="CI">
     </a>
     <a href="https://crates.io/crates/edi-energy">
-      <img src="https://img.shields.io/crates/v/edi-energy?label=edi-energy&color=f74c00&logo=rust" alt="crates.io">
+      <img src="https://img.shields.io/crates/v/edi-energy?label=edi-energy&color=f59e0b&logo=rust" alt="edi-energy on crates.io">
     </a>
     <a href="https://crates.io/crates/mako-engine">
-      <img src="https://img.shields.io/crates/v/mako-engine?label=mako-engine&color=f74c00&logo=rust" alt="crates.io">
+      <img src="https://img.shields.io/crates/v/mako-engine?label=mako-engine&color=f59e0b&logo=rust" alt="mako-engine on crates.io">
     </a>
     <img src="https://img.shields.io/badge/MSRV-1.88-orange?logo=rust" alt="MSRV 1.88">
-    <a href="https://github.com/hupe1980/edi-energy-rs/blob/main/LICENSE-MIT">
-      <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" alt="License">
+    <a href="https://github.com/hupe1980/mako/blob/main/LICENSE-MIT">
+      <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" alt="MIT / Apache-2.0">
     </a>
-    <img src="https://img.shields.io/badge/BDEW-EDI%40Energy-green" alt="BDEW EDI@Energy">
+    <img src="https://img.shields.io/badge/BDEW-FV2026--10--01-green" alt="BDEW FV2026-10-01">
   </div>
 
   <h1 class="mako-hero__title">mako ⚡</h1>
   <p class="mako-hero__subtitle">
-    End-to-end <strong>German energy market communication</strong> in Rust.<br>
-    Parse &amp; validate every EDI@Energy EDIFACT message. Run long-lived MaKo
-    workflows with event sourcing, regulatory deadlines, and AS4 transport.
+    The only Rust library that covers the full German energy market stack —<br>
+    from raw EDIFACT bytes to durable, auditable MaKo process state.
   </p>
 
   <div class="mako-hero__cta">
     <a href="{{ '/getting-started' | relative_url }}" class="btn btn-primary mako-cta-primary">
       Get started →
     </a>
-    <a href="https://github.com/hupe1980/edi-energy-rs" class="btn mako-cta-secondary">
-      View on GitHub
+    <a href="{{ '/reference' | relative_url }}" class="btn mako-cta-secondary">
+      API Reference
+    </a>
+    <a href="https://github.com/hupe1980/mako" class="btn mako-cta-secondary">
+      GitHub
     </a>
   </div>
 
   <div class="mako-hero__warning">
     <strong>⚠ Pre-1.0 — Experimental.</strong>
-    APIs may change between releases. Not yet recommended for production without
-    thorough in-house testing.
+    APIs may change between patch releases. Not yet recommended for production
+    without thorough in-house validation.
   </div>
 </div>
 
-<!-- ── Three-column pitch ────────────────────────────────────────────────── -->
+<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
+<div class="mako-kpis">
+  <div class="mako-kpi">
+    <span class="mako-kpi__value">17</span>
+    <span class="mako-kpi__label">EDIFACT message types</span>
+  </div>
+  <div class="mako-kpi">
+    <span class="mako-kpi__value">40+</span>
+    <span class="mako-kpi__label">AHB/MIG format versions</span>
+  </div>
+  <div class="mako-kpi">
+    <span class="mako-kpi__value">5-layer</span>
+    <span class="mako-kpi__label">validation pipeline</span>
+  </div>
+  <div class="mako-kpi">
+    <span class="mako-kpi__value">95+</span>
+    <span class="mako-kpi__label">Prüfidentifikatoren</span>
+  </div>
+  <div class="mako-kpi">
+    <span class="mako-kpi__value">1.88</span>
+    <span class="mako-kpi__label">MSRV stable Rust</span>
+  </div>
+  <div class="mako-kpi">
+    <span class="mako-kpi__value">0</span>
+    <span class="mako-kpi__label">unsafe blocks</span>
+  </div>
+</div>
+
+<!-- ── Six-column feature grid ──────────────────────────────────────────── -->
 <div class="mako-features">
   <div class="mako-feature">
-    <div class="mako-feature__icon">📦</div>
+    <div class="mako-feature__icon">🔍</div>
     <h3>Parse &amp; Validate</h3>
     <p>
-      All <strong>17 EDI@Energy EDIFACT message types</strong> — UTILMD, MSCONS,
-      APERAK, CONTRL, INVOIC, REMADV, ORDERS, ORDRSP, IFTSTA, INSRPT, and more.
-      Five-layer validation: schema → code lists → MIG → AHB → semantic rules.
-      Multi-version profile registry with 7-day transition grace windows, fully
-      compliant with BDEW annual release cycles.
+      All 17 EDI@Energy EDIFACT types. Five-layer pipeline: schema → code
+      lists → MIG → AHB → semantic rules. Structured <code>EdiEnergyReport</code>
+      with per-rule violation details, not raw strings.
     </p>
     <a href="{{ '/parsing' | relative_url }}">Parsing guide →</a>
   </div>
 
   <div class="mako-feature">
-    <div class="mako-feature__icon">♻️</div>
+    <div class="mako-feature__icon">⚙️</div>
     <h3>Process Runtime</h3>
     <p>
-      Event-sourced <strong>MaKo workflow engine</strong> with optimistic
-      concurrency, atomic dual-write (events + outbox in one
-      <code>WriteBatch</code>), APERAK deadline enforcement (GPKE 24 h / WiM 5
-      Werktage / GeLi Gas 10 Werktage), and a SlateDB-backed durable store.
-      Typestate workflow FSMs make invalid transitions a compile error.
+      Event-sourced FSM engine with optimistic concurrency, atomic dual-write
+      (events + outbox in one <code>WriteBatch</code>), and APERAK deadline
+      enforcement — GPKE 24 h, WiM 5 Werktage, GeLi Gas 10 Werktage.
     </p>
     <a href="{{ '/engine' | relative_url }}">Engine guide →</a>
   </div>
 
   <div class="mako-feature">
-    <div class="mako-feature__icon">🚀</div>
+    <div class="mako-feature__icon">🔌</div>
+    <h3>Command API &amp; Webhooks</h3>
+    <p>
+      ERP integration via <code>POST /api/v1/commands</code> (BO4E JSON).
+      Outbound events pushed to your ERP over HMAC-SHA256-signed webhooks.
+      Idempotency keys prevent double-processing on retries.
+    </p>
+    <a href="{{ '/erp-integration' | relative_url }}">ERP integration →</a>
+  </div>
+
+  <div class="mako-feature">
+    <div class="mako-feature__icon">📡</div>
+    <h3>AS4 + REST Dual Channel</h3>
+    <p>
+      AS4/ebMS3 inbound on <code>:4080</code>, HTTP REST on <code>:8080</code>,
+      and BDEW API-Webdienste Strom (iMS REST/JSON) on <code>:8090</code>.
+      Startup coverage validation panics on missing message adapters.
+    </p>
+    <a href="{{ '/api-webdienste' | relative_url }}">API-Webdienste →</a>
+  </div>
+
+  <div class="mako-feature">
+    <div class="mako-feature__icon">📊</div>
+    <h3>OpenTelemetry Observability</h3>
+    <p>
+      Structured traces and metrics exported via OTLP. Every workflow command,
+      event append, outbox delivery, and deadline dispatch carries a trace
+      context. Plug into Grafana, Jaeger, or any OTLP-compatible backend.
+    </p>
+    <a href="{{ '/makod' | relative_url }}#observability">Observability →</a>
+  </div>
+
+  <div class="mako-feature">
+    <div class="mako-feature__icon">🏭</div>
     <h3>Production Daemon</h3>
     <p>
-      <strong><code>makod</code></strong> — a single binary that assembles all
-      domain modules (GPKE, WiM, GeLi Gas, MABIS) behind three independent
-      ports: AS4/ebMS3 inbound&nbsp;(<code>:4080</code>), HTTP REST
-      (<code>:8080</code>), and BDEW API-Webdienste Strom
-      (<code>:8090</code>). Startup coverage validation panics on missing
-      adapters rather than silently dead-lettering messages.
+      <code>makod</code> — a single binary deploying all domain modules behind
+      a durable SlateDB event store. Docker-ready, Kubernetes-native, with
+      health endpoints, graceful shutdown, and S3/GCS/Azure object-store
+      backends for cloud deployments.
     </p>
     <a href="{{ '/makod' | relative_url }}">Operator guide →</a>
   </div>
 </div>
 
-<!-- ── Workspace at a Glance ─────────────────────────────────────────────── -->
-## Workspace at a Glance
-{: .mt-8 }
+<div markdown="1">
 
-| Crate / service | Purpose |
-|---|---|
-| [`edi-energy`](https://crates.io/crates/edi-energy) | Parse · validate · build all 17 EDI@Energy EDIFACT message types |
-| [`mako-engine`](https://crates.io/crates/mako-engine) | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
-| `mako-gpke` | GPKE — UTILMD Strom (55001–55018, 55555, 56001–56004) + INVOIC (31001–31008) + ORDERS/ORDRSP (17134–17135, 19001–19002) |
-| `mako-wim` | WiM (Wechselprozesse im Messwesen **Strom**) — UTILMD (11001–11003 Gerätewechsel) + ORDERS (17001–17011 Geräteübernahme, 17101 Stammdaten) + ORDCHG (39000 Stornierung) |
-| `mako-geli-gas` | GeLi Gas 3.0 (BK7-24-01-009) — UTILMD G (44001–44018, 44555) |
-| `mako-mabis` | MABIS — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB) |
-| `mako-wim-gas` | WiM Gas (BK7-24-01-009) — UTILMD G (44022–44053, 44168–44170 MSB change) *(placeholder)* |
-| `mako-gabi-gas` | GaBi Gas — Allokation, Nominierung, MMM Gas INVOIC (31010–31011) *(placeholder)* |
-| `mako-nbw` | Netzbetreiberwechsel — PARTIN bulk DSO handover *(placeholder)* |
-| `energy-api` | BDEW API-Webdienste Strom — REST/WebSocket client + Axum server |
-| `redispatch-xml` | Redispatch 2.0 XML/XSD format parsing |
-| `makod` | Production daemon — assembles all modules |
+---
 
 ## Quick Start
 {: .mt-8 }
 
-Add `edi-energy` to `Cargo.toml`:
+**EDIFACT parsing** — parse and validate a UTILMD message in three lines:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.1", features = ["utilmd", "mscons", "aperak"] }
+edi-energy = { version = "0.2", features = ["utilmd", "mscons", "aperak"] }
 ```
-
-Parse and validate a UTILMD message in three lines:
 
 ```rust
 use edi_energy::{parse, EdiEnergyMessage};
 
 let msg = parse(std::fs::read("lieferbeginn.edi")?.as_ref())?;
-msg.validate()?.into_error_result()?;
+msg.validate()?.into_error_result()?;  // returns Err if any AHB rule fires
 println!("PID {}", msg.detect_pruefidentifikator()?.as_u32()); // → 55001
 ```
 
-For the full process runtime, see the [Getting Started guide]({{ '/getting-started' | relative_url }}).
+**Full process runtime** — run a GPKE supplier-change workflow:
+
+```toml
+[dependencies]
+mako-engine = { version = "0.2", features = ["testing"] }
+mako-gpke   = "0.2"
+```
+
+```rust
+use mako_engine::process::Process;
+use mako_gpke::{GpkeSupplierChangeWorkflow, SupplierChangeCommand};
+
+let result = Process::new(stream_id, Arc::new(store))
+    .execute_and_enqueue(cmd, &mut outbox)
+    .await?;
+// Events and APERAK outbox entry written atomically — no lost messages on crash.
+```
+
+→ Full walkthrough in the [Getting Started guide]({{ '/getting-started' | relative_url }}).
+
+---
+
+## Workspace at a Glance
+{: .mt-8 }
+
+| Crate / service | Purpose |
+|---|---|
+| [`edi-energy`](https://crates.io/crates/edi-energy) | Parse · validate · build all 17 EDI@Energy EDIFACT types |
+| [`mako-engine`](https://crates.io/crates/mako-engine) | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines, OpenTelemetry |
+| `mako-gpke` | GPKE — UTILMD Strom (55001–56004) + INVOIC (31001–31008) + ORDERS/ORDRSP Konfiguration |
+| `mako-wim` | WiM Strom — Gerätewechsel (11001–11003) + ORDERS Geräteübernahme + Stammdaten |
+| `mako-wim-gas` | WiM Gas — UTILMD G (44022–44053) MSB-Wechsel Gas |
+| `mako-geli-gas` | GeLi Gas 3.0 (BK7-24-01-009) — UTILMD G (44001–44018, 44555) |
+| `mako-mabis` | MABIS — PID 13003 Bilanzkreisabrechnung Strom (BKV↔ÜNB) |
+| `mako-gabi-gas` | GaBi Gas — Allokation, Nominierung, MMM Gas INVOIC *(placeholder)* |
+| `mako-nbw` | Netzbetreiberwechsel — PARTIN bulk DSO handover *(placeholder)* |
+| `energy-api` | BDEW API-Webdienste Strom — REST/WebSocket client + Axum server |
+| `redispatch-xml` | Redispatch 2.0 XML/XSD parsing |
+| `makod` | Production daemon — all modules, three ports, SlateDB, OTLP |
+
+---
 
 ## Regulatory Compliance
 {: .mt-8 }
 
-mako tracks all current BNetzA rulings that govern German energy market
-communication:
+mako tracks every BNetzA ruling that governs German energy market communication
+and ships AHB/MIG profiles for every active format version:
 
 | Ruling | Scope | Effective |
 |---|---|---|
-| [BK6-24-174](https://www.bundesnetzagentur.de/) | GPKE Teil 1–3 + WiM + MaBiS | 06.06.2025 |
-| [BK6-22-024](https://www.bundesnetzagentur.de/) | GPKE Teil 4 (Stammdaten, ex-MPES PIDs 56001–56004) | 06.06.2025 |
-| [BK7-24-01-009](https://www.bundesnetzagentur.de/) | GeLi Gas 3.0 — UTILMD G supplier-switch | 01.10.2025 |
-| BDEW EDI@Energy FV2026-10-01 | All message types — annual release | 01.10.2026 |
+| BK6-24-174 | GPKE Teil 1–3 + WiM + MABIS | 06.06.2025 |
+| BK6-22-024 | GPKE Teil 4 — ex-MPES Einspeisung (PIDs 56001–56004) | 06.06.2025 |
+| BK7-24-01-009 | GeLi Gas 3.0 — UTILMD G supplier-switch | 01.10.2025 |
+| BDEW FV2026-10-01 | All message types — annual release | 01.10.2026 |
 
-See the [BNetzA regulatory reference]({{ '/bnetza' | relative_url }}) for the full ruling index
-and the [PID reference]({{ '/pid-reference' | relative_url }}) for a complete Prüfidentifikator table.
+Both `FV2025-10-01` and `FV2026-10-01` coexist in the same engine instance
+simultaneously. A process started under the old format version continues to
+completion under the same rules even after the annual cutover.
+
+→ [BNetzA regulatory reference]({{ '/bnetza' | relative_url }}) · [PID reference]({{ '/pid-reference' | relative_url }}) · [Release lifecycle]({{ '/release-lifecycle' | relative_url }})
+
+---
+
+## Why mako?
+{: .mt-8 }
+
+| | mako | Hand-rolled EDIFACT | Generic workflow engine |
+|---|:---:|:---:|:---:|
+| AHB/MIG validation built in | ✅ | ❌ | ❌ |
+| APERAK deadline enforcement | ✅ | ❌ | ⚠ manual |
+| Annual format-version migration | ✅ codegen | ❌ | ❌ |
+| Atomic dual-write (events + outbox) | ✅ | ❌ | ⚠ 2-phase |
+| AS4/ebMS3 transport | ✅ | ❌ | ❌ |
+| API-Webdienste Strom (iMS) | ✅ | ❌ | ❌ |
+| BO4E ERP webhooks | ✅ | ❌ | ❌ |
+| OpenTelemetry traces + metrics | ✅ | ❌ | ⚠ varies |
+| 100% safe Rust, no OpenSSL for TLS | ✅ | ❌ | ❌ |
+
+</div>

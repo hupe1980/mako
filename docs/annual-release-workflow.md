@@ -12,7 +12,7 @@ description: >
 # Annual Release Workflow
 
 This document is the step-by-step engineering playbook for incorporating a new
-BDEW annual release into `edi-energy-rs`.  Follow the steps in order for every
+BDEW annual release into the `mako` workspace.  Follow the steps in order for every
 October 1 rollover cycle.
 
 ---
@@ -320,7 +320,7 @@ The `archive` meta-feature activates all per-type archive features:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.1", features = ["archive"] }
+edi-energy = { version = "0.2", features = ["archive"] }
 ```
 
 Archive features always imply their base type feature (`mscons-archive` implies

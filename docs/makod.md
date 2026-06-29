@@ -686,7 +686,7 @@ Enable the `tracing` feature in `edi-energy` to get per-message parse/validate
 spans:
 
 ```toml
-edi-energy = { version = "0.1", features = ["tracing"] }
+edi-energy = { version = "0.2", features = ["tracing"] }
 ```
 
 These integrate with OpenTelemetry exporters when a global subscriber is
@@ -763,9 +763,47 @@ curl http://localhost:8080/admin/partners \
 
 ---
 
+## Observability
+{: #observability }
+
+`makod` exports OpenTelemetry traces and metrics via OTLP (gRPC or HTTP).
+Every significant operation carries a trace context:
+
+| Signal | What is instrumented |
+|---|---|
+| **Traces** | Inbound AS4/REST request → parse → route → execute → WriteBatch |
+| **Traces** | OutboxWorker delivery attempts (success / retry / dead-letter) |
+| **Traces** | DeadlineScheduler tick — due_now scan → TimeoutExpired dispatch |
+| **Metrics** | `mako.events.appended` counter (by workflow, tenant) |
+| **Metrics** | `mako.outbox.pending` gauge (by tenant) |
+| **Metrics** | `mako.deadline.fired` counter (by workflow, label) |
+| **Metrics** | `mako.process.duration_ms` histogram |
+
+### Configuration
+
+```toml
+[otel]
+endpoint    = "http://otel-collector:4317"   # OTLP gRPC
+service_name = "makod"
+# or: endpoint = "http://otel-collector:4318"  # OTLP HTTP
+```
+
+Or via environment:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
+OTEL_SERVICE_NAME=makod \
+makod --data-dir /var/lib/makod ...
+```
+
+Omit the `[otel]` section entirely to disable telemetry with zero overhead — the instrumentation compiles to a no-op when the feature is off.
+
+---
+
 ## See Also
 
 - [Getting Started](./getting-started.md) — first workflow in 5 minutes
 - [Process Engine Guide](./engine.md) — event-sourcing architecture
+- [ERP Integration](./erp-integration.md) — Command API and webhooks
 - [API-Webdienste Strom](./api-webdienste.md) — REST/JSON channel for iMS processes
 - [Annual Release Workflow](./annual-release-workflow.md) — incorporating new BDEW specs

@@ -1,9 +1,11 @@
 title: mako
 description: >-
-  Production-grade Rust library for German energy market communication (BDEW
-  MaKo / EDI@Energy). EDIFACT parsing · AHB validation · event-sourced process
-  runtime · AS4 transport · regulatory deadlines.
-tagline: "EDI@Energy for Rust — production-grade MaKo workflows"
+  Rust library for German energy market communication —
+  EDIFACT parsing, AHB/MIG validation, event-sourced MaKo process runtime,
+  AS4 transport, APERAK deadline enforcement, BO4E ERP webhooks, Command API,
+  and OpenTelemetry observability. Covers GPKE, WiM, GeLi Gas, MABIS, and
+  BDEW API-Webdienste Strom in a single Rust workspace.
+tagline: "Full-stack German energy market communication in Rust — EDIFACT · MaKo workflows · AS4 · BDEW compliant"
 url: "https://hupe1980.github.io"
 baseurl: "/mako"
 lang: en

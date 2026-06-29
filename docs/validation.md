@@ -164,7 +164,7 @@ Each issue carries:
 Enable the `serde` feature to serialize reports as JSON:
 
 ```toml
-edi-energy = { version = "0.1", features = ["serde"] }
+edi-energy = { version = "0.2", features = ["serde"] }
 ```
 
 ```rust
@@ -193,7 +193,7 @@ Output shape:
 Enable the `diagnostics` feature for `miette` integration:
 
 ```toml
-edi-energy = { version = "0.1", features = ["diagnostics"] }
+edi-energy = { version = "0.2", features = ["diagnostics"] }
 ```
 
 Reports then implement `miette::Diagnostic`, giving annotated terminal output with source spans when used with the `miette` error handler.

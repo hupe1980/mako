@@ -188,6 +188,14 @@ jobs:
           echo "$out"
           if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
 
+      - name: Publish mako-wim-gas
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish -p mako-wim-gas 2>&1) && rc=0 || rc=$?
+          echo "$out"
+          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+
       - name: Publish mako-geli-gas
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

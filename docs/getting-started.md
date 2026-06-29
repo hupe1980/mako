@@ -111,7 +111,7 @@ graph TB
 
 ```toml
 [dependencies]
-edi-energy = "0.1"
+edi-energy = "0.2"
 ```
 
 By default this enables the four most common message types: **UTILMD**, **MSCONS**, **APERAK**, **CONTRL**.
@@ -119,7 +119,7 @@ By default this enables the four most common message types: **UTILMD**, **MSCONS
 Enable additional types:
 
 ```toml
-edi-energy = { version = "0.1", features = ["invoic", "remadv", "orders"] }
+edi-energy = { version = "0.2", features = ["invoic", "remadv", "orders"] }
 ```
 
 ### Feature flags
@@ -290,13 +290,13 @@ sequenceDiagram
 ```toml
 [dependencies]
 # Core runtime
-mako-engine = { version = "0.1", features = ["testing"] }  # add "slatedb" for production
+mako-engine = { version = "0.2", features = ["testing"] }  # add "slatedb" for production
 
 # One or more domain crates depending on the market role:
-mako-gpke     = "0.1"   # GPKE — Lieferbeginn/-ende Strom (PIDs 55001–56010)
-mako-wim      = "0.1"   # WiM  — Messstellenwechsel Strom (PIDs 11001–11099)
-mako-geli-gas = "0.1"   # GeLi Gas — Lieferbeginn/-ende Gas (PIDs 17001–17099)
-mako-mabis    = "0.1"   # MABIS — Bilanzkreisabrechnung Strom (PID 13003)
+mako-gpke     = "0.2"   # GPKE — Lieferbeginn/-ende Strom (PIDs 55001–56010)
+mako-wim      = "0.2"   # WiM  — Messstellenwechsel Strom (PIDs 11001–11099)
+mako-geli-gas = "0.2"   # GeLi Gas — Lieferbeginn/-ende Gas (PIDs 17001–17099)
+mako-mabis    = "0.2"   # MABIS — Bilanzkreisabrechnung Strom (PID 13003)
 ```
 
 For the **production daemon** (`makod`) that wires everything together, see [Part 3](#part-3--running-makod) below.
@@ -459,226 +459,3 @@ Port  Service              Endpoint
 - [API-Webdienste Strom](./api-webdienste.md) — REST/JSON channel for iMS processes (`energy-api`)
 - [Release Lifecycle](./release-lifecycle.md) — annual BDEW profile updates
 
-
----
-
-## Part 1 — EDIFACT parsing (`edi-energy`)
-
-### Installation
-
-```toml
-[dependencies]
-edi-energy = "0.1"
-```
-
-By default this enables the four most common message types: **UTILMD**, **MSCONS**, **APERAK**, **CONTRL**.
-
-Enable additional types:
-
-```toml
-edi-energy = { version = "0.1", features = ["invoic", "remadv", "orders"] }
-```
-
-### Feature flags
-
-| Flag | Default | Description |
-|---|---|---|
-| `utilmd` | ✅ | UTILMD Strom and Gas — grid connection processes |
-| `mscons` | ✅ | MSCONS — metered services consumption reports |
-| `aperak` | ✅ | APERAK — application error acknowledgements |
-| `contrl` | ✅ | CONTRL — interchange syntax acknowledgements |
-| `invoic` | | Invoices |
-| `remadv` | | Remittance advice |
-| `orders` | | Purchase orders |
-| `iftsta` | | Multimodal status reports |
-| `insrpt` | | Inspection reports |
-| `reqote` | | Requests for quotation |
-| `partin` | | Party information |
-| `ordchg` | | Purchase order changes |
-| `ordrsp` | | Purchase order responses |
-| `quotes` | | Quotations |
-| `comdis` | | Commercial dispute (Handelsunstimmigkeit) |
-| `pricat` | | Price/sales catalogue |
-| `utilts` | | Technical master data |
-| `archive` | | All archived profiles (expired release windows) |
-| `serde` | | `Serialize` on `EdiEnergyReport` and validation issue types |
-| `diagnostics` | | `miette::Diagnostic` on reports (rich error output) |
-| `tracing` | | Structured spans via the `tracing` crate |
-
-### Your first parse
-
-```rust
-use edi_energy::{parse, EdiEnergyMessage};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let input = std::fs::read("my_message.edi")?;
-    let msg = parse(&input)?;
-
-    if let Some(mt) = msg.try_message_type() {
-        println!("Type    : {}", mt.as_str());
-    }
-    println!("Release : {}", msg.detect_release()?.as_str());
-    println!("PID     : {}", msg.detect_pruefidentifikator()?.as_u32());
-
-    let report = msg.validate()?;
-    println!("Valid   : {}", report.is_valid());
-
-    // Turn the report into a Result — propagates as Error::Validation
-    report.into_error_result()?;
-    Ok(())
-}
-```
-
-### Running the built-in examples
-
-```bash
-# Parse a UTILMD and inspect typed fields
-cargo run --example 01_parse_utilmd
-
-# Parse a MSCONS metering report
-cargo run --example 02_parse_mscons
-
-# Build messages from scratch
-cargo run --example 03_build_messages
-
-# Route a multi-message interchange
-cargo run --example 04_interchange_dispatch
-
-# Full validation report API walkthrough
-cargo run --example 05_validate
-
-# Streaming interchange reader
-cargo run --example 06_parse_reader
-```
-
-### Key concepts
-
-**Pruefidentifikator (PID):** Every EDI@Energy message has a 5-digit Pruefidentifikator (e.g. `55001 = Lieferbeginn Strom`) stored in the BGM segment. The library uses it to select the correct AHB validation rules.
-
-**Release:** A BDEW format-version string such as `"S2.1"` (UTILMD Strom) or `"2.4c"` (MSCONS). Releases are registered in the `ReleaseRegistry` and used to look up the right MIG and AHB profiles.
-
-**Validation layers:**
-
-| Layer | What it checks |
-|---|---|
-| 1 — Schema | Segment presence and mandatory data elements |
-| 2 — Code lists | Data element values against allowed code lists |
-| 3 — MIG | Message structure rules (segment order, group cardinality) |
-| 4 — AHB | Pruefidentifikator-specific mandatory/conditional rules |
-| 5 — Semantic | Cross-field business logic (date coherence, reference completeness) |
-
----
-
-## Part 2 — Process engine (`mako-engine` + domain crates)
-
-The process engine handles the **runtime side** of MaKo: tracking in-flight market processes (Lieferbeginn, Gerätewechsel, …) as event-sourced streams, enforcing regulatory deadlines, and enqueueing outbound EDIFACT messages atomically with domain events.
-
-### Installation
-
-```toml
-[dependencies]
-# Core runtime
-mako-engine = { version = "0.1", features = ["testing"] }  # add "slatedb" for production
-
-# One or more domain crates depending on the market role:
-mako-gpke     = "0.1"   # GPKE — Lieferbeginn/-ende Strom
-mako-wim      = "0.1"   # WiM  — Messstellenwechsel Strom
-mako-geli-gas = "0.1"   # GeLi Gas — Lieferbeginn/-ende Gas
-mako-mabis    = "0.1"   # MABIS — Bilanzkreisabrechnung
-```
-
-For the **production daemon** (`makod`) that wires everything together, see [services/makod](../services/makod/).
-
-### Building an engine context
-
-```rust
-use mako_engine::{
-    builder::EngineBuilder,
-    event_store::InMemoryEventStore,   // "testing" feature
-};
-
-let ctx = EngineBuilder::new()
-    .with_event_store(InMemoryEventStore::new())
-    .build();
-```
-
-For production, use `SlateDbStore`:
-
-```rust
-use mako_engine::store_slatedb::SlateDbStore;
-
-let store = SlateDbStore::open("/data/mako").await?;
-let ctx = EngineBuilder::new()
-    .with_event_store(store)
-    .build();
-```
-
-### Spawning and executing a process
-
-```rust
-use mako_engine::{ids::TenantId, version::WorkflowId};
-use mako_gpke::lieferbeginn::{SupplierChangeWorkflow, SupplierChangeCommand};
-
-let tenant = TenantId::new();
-let wf_id  = WorkflowId::new("supplier-change", "FV2025-10-01");
-
-// Spawn starts an empty process — no events yet.
-let process = ctx.spawn::<SupplierChangeWorkflow>(tenant, wf_id);
-
-// execute() replays state, calls Workflow::handle, and appends events.
-let envelopes = process.execute(SupplierChangeCommand::Initiate { .. }).await?;
-
-// Reconstruct current state by replaying all persisted events.
-let state = process.state().await?;
-```
-
-### Persisting routing information and resuming
-
-```rust
-// Register the conversation ID so subsequent messages can find this process.
-ctx.registry()
-    .register(tenant, &conversation_id.to_string(), process.identity())
-    .await?;
-
-// Later — resume on an incoming APERAK or CONTRL:
-let identity = ctx.registry()
-    .lookup(tenant, &conversation_id.to_string())
-    .await?
-    .expect("process not found");
-
-let resumed = ctx.resume::<SupplierChangeWorkflow>(identity);
-let envelopes = resumed.execute(SupplierChangeCommand::ReceiveAperak { .. }).await?;
-```
-
-### Dispatching inbound AS4 messages
-
-`makod` handles AS4 reception automatically. In tests or custom integrations, the dispatch path is:
-
-```rust
-use edi_energy::{Platform, EdiEnergyMessage};
-use mako_engine::pid_router::PidRouter;
-use mako_gpke::GpkeModule;
-
-let platform = Platform::with_all_profiles();
-let mut router = PidRouter::new();
-GpkeModule::register_pids(&mut router);
-
-let msg = platform.parse(payload_bytes)?;
-let pid = msg.detect_pruefidentifikator()?.as_u32();
-
-if let Some(handler) = router.route(pid) {
-    handler.dispatch(&ctx, tenant, msg).await?;
-}
-```
-
----
-
-## Next Steps
-
-- [Process Engine Guide](./engine.md) — `mako-engine` architecture, stores, deadlines, outbox
-- [Parsing Guide](./parsing.md) — single message, interchange, streaming reader
-- [Validation Guide](./validation.md) — interpreting reports, severity levels
-- [Builder Guide](./builders.md) — constructing messages programmatically
-- [Platform Guide](./platform.md) — multi-tenant use and test isolation
-- [API-Webdienste Strom](./api-webdienste.md) — REST/JSON channel for iMS processes (`energy-api`)
-- [Release Lifecycle](./release-lifecycle.md) — annual BDEW profile updates

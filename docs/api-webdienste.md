@@ -2,7 +2,9 @@
 layout: default
 title: API-Webdienste Strom
 nav_order: 22
-parent: Architecturemermaid: truedescription: >
+parent: Architecture
+mermaid: true
+description: >
   BDEW API-Webdienste Strom — REST/JSON iMS channel vs. EDIFACT/AS4 channel.
   energy-api crate for iMS control measures, MaLo-ID queries, and directory
   service integration.
@@ -64,9 +66,9 @@ participants who are in scope for iMS.
 
 ```toml
 [dependencies]
-edi-energy  = { version = "0.1", features = ["utilmd", "mscons"] }
-mako-engine = { version = "0.1", features = ["slatedb"] }
-mako-gpke   = "0.1"   # or mako-wim / mako-geli-gas / mako-mabis
+edi-energy  = { version = "0.2", features = ["utilmd", "mscons"] }
+mako-engine = { version = "0.2", features = ["slatedb"] }
+mako-gpke   = "0.2"   # or mako-wim / mako-geli-gas / mako-mabis
 ```
 
 Use these crates for:
@@ -81,8 +83,8 @@ See the [Process Engine Guide](./engine.md) for `mako-engine` architecture and t
 
 ```toml
 [dependencies]
-energy-api = { version = "0.1", features = ["client"] }   # HTTP client
-energy-api = { version = "0.1", features = ["server"] }   # Axum server handler
+energy-api = { version = "0.2", features = ["client"] }   # HTTP client
+energy-api = { version = "0.2", features = ["server"] }   # Axum server handler
 ```
 
 Use this crate for:
