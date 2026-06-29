@@ -149,6 +149,8 @@ add-release fv:
     cargo xtask add-release --fv {{ fv }}
 
 # Diff two profile releases (e.g. `just release-diff UTILMD fv20251001 fv20261001`)
+# Use folder-name format (fv20251001) or canonical FV format (FV2025-10-01).
+# Both spellings are accepted; FV2025-10-01 is normalised to fv20251001 automatically.
 release-diff type from to:
     cargo xtask release-diff --message-type {{ type }} --from {{ from }} --to {{ to }}
 

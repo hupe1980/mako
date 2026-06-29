@@ -28,23 +28,170 @@
 //! visible in the log output without any configuration.
 //!
 //! ```rust
-//! use mako_engine::dead_letter::{DeadLetterReason, DeadLetterSink, LogDeadLetterSink};
+//! use mako_engine::dead_letter::{AuditContext, DeadLetterReason, DeadLetterSink, LogDeadLetterSink};
 //!
 //! let sink = LogDeadLetterSink;
-//! sink.reject(&DeadLetterReason::UnknownPid(99999));
+//! sink.reject(&DeadLetterReason::UnknownPid { pid: 99999, context: AuditContext::now() });
 //! ```
 //!
 //! [`EngineBuilder::with_dead_letter_sink`]: crate::builder::EngineBuilder::with_dead_letter_sink
 
 use std::sync::Arc;
 
+// ── AuditContext ──────────────────────────────────────────────────────────────
+
+/// Structured audit context attached to every dead-letter event.
+///
+/// All fields are `Option` because they are only partially known at rejection
+/// time (e.g. `pid` is not available for a parse failure before the PID is
+/// decoded). Callers fill in as many fields as they have.
+///
+/// These fields map to §22 MessZV audit-log requirements for AS4 message
+/// rejection events:
+///
+/// | Field | §22 MessZV requirement |
+/// |---|---|
+/// | `message_type` | Nachrichtentyp (UTILMD, MSCONS, APERAK, …) |
+/// | `release_code` | Releasekennung (S2.1, G1.1, 2.4c, …) |
+/// | `pid` | Prüfidentifikator |
+/// | `sender_eic` | GLN des Absenders |
+/// | `receiver_eic` | GLN des Empfängers |
+/// | `message_ref` | UNH-Referenz |
+/// | `process_id` | Geschäftsvorfallkennung |
+/// | `tenant_id` | Mandant |
+/// | `correlation_id` | AS4 `ConversationId` or similar |
+/// | `timestamp` | Zeitstempel des Eingangs (German local time) |
+#[derive(Debug, Clone)]
+pub struct AuditContext {
+    /// EDIFACT message type (e.g. `"UTILMD"`, `"MSCONS"`, `"APERAK"`).
+    pub message_type: Option<String>,
+    /// BDEW release code (e.g. `"S2.1"`, `"G1.1"`, `"2.4c"`).
+    pub release_code: Option<String>,
+    /// BDEW Prüfidentifikator numeric code.
+    pub pid: Option<u32>,
+    /// GLN of the AS4 sender.
+    pub sender_eic: Option<String>,
+    /// GLN of the AS4 receiver.
+    pub receiver_eic: Option<String>,
+    /// UNH message reference (interchange + message ref).
+    pub message_ref: Option<String>,
+    /// Internal process / workflow stream ID.
+    pub process_id: Option<String>,
+    /// Tenant identifier (Mandant).
+    pub tenant_id: Option<String>,
+    /// AS4 ConversationId or engine correlation key.
+    pub correlation_id: Option<String>,
+    /// Timestamp of message receipt, in German local time (CET/CEST).
+    pub timestamp: time::OffsetDateTime,
+}
+
+impl AuditContext {
+    /// Create an `AuditContext` with only a timestamp, all other fields `None`.
+    ///
+    /// Use builder-style setters to fill in known fields:
+    /// ```rust
+    /// use mako_engine::dead_letter::AuditContext;
+    ///
+    /// let ctx = AuditContext::now()
+    ///     .with_message_type("UTILMD")
+    ///     .with_pid(55001)
+    ///     .with_sender_eic("4012345000023");
+    /// ```
+    #[must_use]
+    pub fn now() -> Self {
+        Self {
+            message_type: None,
+            release_code: None,
+            pid: None,
+            sender_eic: None,
+            receiver_eic: None,
+            message_ref: None,
+            process_id: None,
+            tenant_id: None,
+            correlation_id: None,
+            timestamp: time::OffsetDateTime::now_utc(),
+        }
+    }
+
+    /// Set the message type.
+    #[must_use]
+    pub fn with_message_type(mut self, mt: impl Into<String>) -> Self {
+        self.message_type = Some(mt.into());
+        self
+    }
+
+    /// Set the BDEW release code.
+    #[must_use]
+    pub fn with_release_code(mut self, rc: impl Into<String>) -> Self {
+        self.release_code = Some(rc.into());
+        self
+    }
+
+    /// Set the Prüfidentifikator.
+    #[must_use]
+    pub fn with_pid(mut self, pid: u32) -> Self {
+        self.pid = Some(pid);
+        self
+    }
+
+    /// Set the sender GLN.
+    #[must_use]
+    pub fn with_sender_eic(mut self, eic: impl Into<String>) -> Self {
+        self.sender_eic = Some(eic.into());
+        self
+    }
+
+    /// Set the receiver GLN.
+    #[must_use]
+    pub fn with_receiver_eic(mut self, eic: impl Into<String>) -> Self {
+        self.receiver_eic = Some(eic.into());
+        self
+    }
+
+    /// Set the UNH message reference.
+    #[must_use]
+    pub fn with_message_ref(mut self, r: impl Into<String>) -> Self {
+        self.message_ref = Some(r.into());
+        self
+    }
+
+    /// Set the internal process / stream ID.
+    #[must_use]
+    pub fn with_process_id(mut self, id: impl Into<String>) -> Self {
+        self.process_id = Some(id.into());
+        self
+    }
+
+    /// Set the tenant identifier.
+    #[must_use]
+    pub fn with_tenant_id(mut self, id: impl Into<String>) -> Self {
+        self.tenant_id = Some(id.into());
+        self
+    }
+
+    /// Set the AS4 correlation / conversation ID.
+    #[must_use]
+    pub fn with_correlation_id(mut self, id: impl Into<String>) -> Self {
+        self.correlation_id = Some(id.into());
+        self
+    }
+}
+
+impl Default for AuditContext {
+    fn default() -> Self {
+        Self::now()
+    }
+}
+
 // ── DeadLetterReason ──────────────────────────────────────────────────────────
 
 /// Structured reason why an inbound message was rejected.
 ///
 /// The variant gives the dispatch path enough information to emit an
-/// actionable CONTRL or log entry. Adding new variants is a non-breaking
-/// change thanks to `#[non_exhaustive]`.
+/// actionable CONTRL or log entry. Each variant carries an [`AuditContext`]
+/// with the §22 MessZV fields required for regulatory audit logging.
+///
+/// Adding new variants is a non-breaking change thanks to `#[non_exhaustive]`.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum DeadLetterReason {
@@ -54,7 +201,12 @@ pub enum DeadLetterReason {
     /// malformed message. Respond with a CONTRL negative acknowledgement.
     ///
     /// [`PidRouter`]: crate::pid_router::PidRouter
-    UnknownPid(u32),
+    UnknownPid {
+        /// The numeric Prüfidentifikator that had no registered workflow.
+        pid: u32,
+        /// §22 MessZV structured audit context.
+        context: AuditContext,
+    },
 
     /// No in-flight process matched the inbound `conversation_id`.
     ///
@@ -65,6 +217,8 @@ pub enum DeadLetterReason {
     UnknownConversation {
         /// The `conversation_id` from the inbound EDIFACT interchange.
         conversation_id: String,
+        /// §22 MessZV structured audit context.
+        context: AuditContext,
     },
 
     /// The message's format version has no registered [`MessageAdapter`].
@@ -78,6 +232,8 @@ pub enum DeadLetterReason {
         expected: String,
         /// The format version string carried in the inbound message.
         received: String,
+        /// §22 MessZV structured audit context.
+        context: AuditContext,
     },
 
     /// A message with this inbox key was already accepted (AS4 duplicate).
@@ -89,6 +245,8 @@ pub enum DeadLetterReason {
     DuplicateMessage {
         /// The inbox deduplication key (typically the AS4 `MessageId`).
         inbox_key: String,
+        /// §22 MessZV structured audit context.
+        context: AuditContext,
     },
 
     /// A workflow or adapter returned a processing error.
@@ -98,6 +256,8 @@ pub enum DeadLetterReason {
     ProcessingError {
         /// Short, human-readable description of the failure.
         message: String,
+        /// §22 MessZV structured audit context.
+        context: AuditContext,
     },
 
     /// The outbox delivery worker gave up after exhausting all retry attempts.
@@ -126,7 +286,7 @@ impl DeadLetterReason {
     #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
-            Self::UnknownPid(_) => "unknown_pid",
+            Self::UnknownPid { .. } => "unknown_pid",
             Self::UnknownConversation { .. } => "unknown_conversation",
             Self::VersionMismatch { .. } => "version_mismatch",
             Self::DuplicateMessage { .. } => "duplicate_message",
@@ -134,21 +294,41 @@ impl DeadLetterReason {
             Self::OutboxExhausted { .. } => "outbox_exhausted",
         }
     }
+
+    /// Return the [`AuditContext`] embedded in this reason, if present.
+    ///
+    /// `OutboxExhausted` does not carry an `AuditContext` because it refers
+    /// to an outbound message (not an inbound AS4 message).
+    #[must_use]
+    pub fn audit_context(&self) -> Option<&AuditContext> {
+        match self {
+            Self::UnknownPid { context, .. }
+            | Self::UnknownConversation { context, .. }
+            | Self::VersionMismatch { context, .. }
+            | Self::DuplicateMessage { context, .. }
+            | Self::ProcessingError { context, .. } => Some(context),
+            Self::OutboxExhausted { .. } => None,
+        }
+    }
 }
 
 impl std::fmt::Display for DeadLetterReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownPid(pid) => write!(f, "unknown PID {pid}"),
-            Self::UnknownConversation { conversation_id } => {
+            Self::UnknownPid { pid, .. } => write!(f, "unknown PID {pid}"),
+            Self::UnknownConversation {
+                conversation_id, ..
+            } => {
                 write!(f, "unknown conversation {conversation_id}")
             }
-            Self::VersionMismatch { expected, received } => write!(
+            Self::VersionMismatch {
+                expected, received, ..
+            } => write!(
                 f,
                 "version mismatch: expected {expected}, received {received}"
             ),
-            Self::DuplicateMessage { inbox_key } => write!(f, "duplicate message {inbox_key}"),
-            Self::ProcessingError { message } => write!(f, "processing error: {message}"),
+            Self::DuplicateMessage { inbox_key, .. } => write!(f, "duplicate message {inbox_key}"),
+            Self::ProcessingError { message, .. } => write!(f, "processing error: {message}"),
             Self::OutboxExhausted {
                 message_id,
                 message_type,
@@ -208,62 +388,46 @@ pub struct LogDeadLetterSink;
 
 impl DeadLetterSink for LogDeadLetterSink {
     fn reject(&self, reason: &DeadLetterReason) {
-        match reason {
-            DeadLetterReason::UnknownPid(pid) => {
-                tracing::warn!(
-                    pid,
-                    reason = reason.label(),
-                    "dead letter: unknown PID — no workflow registered; \
-                     send CONTRL negative acknowledgement",
-                );
-            }
-            DeadLetterReason::UnknownConversation { conversation_id } => {
-                tracing::warn!(
-                    conversation_id,
-                    reason = reason.label(),
-                    "dead letter: unknown conversation — no in-flight process found; \
-                     process may have completed or registry was lost on restart",
-                );
-            }
-            DeadLetterReason::VersionMismatch { expected, received } => {
-                tracing::warn!(
-                    expected,
-                    received,
-                    reason = reason.label(),
-                    "dead letter: format version mismatch — no adapter registered for received version",
-                );
-            }
-            DeadLetterReason::DuplicateMessage { inbox_key } => {
-                tracing::warn!(
-                    inbox_key,
-                    reason = reason.label(),
-                    "dead letter: duplicate message — AS4 retry already processed; ignoring",
-                );
-            }
-            DeadLetterReason::ProcessingError { message } => {
-                tracing::warn!(
-                    message,
-                    reason = reason.label(),
-                    "dead letter: processing error — message routed but could not be processed",
-                );
-            }
-            DeadLetterReason::OutboxExhausted {
-                message_id,
-                message_type,
-                recipient,
-                last_error,
-                attempts,
-            } => {
-                tracing::error!(
-                    %message_id,
+        // Emit all §22 MessZV structured audit fields when available.
+        if let Some(ctx) = reason.audit_context() {
+            tracing::warn!(
+                reason = reason.label(),
+                message_type = ctx.message_type.as_deref().unwrap_or(""),
+                release_code = ctx.release_code.as_deref().unwrap_or(""),
+                pid = ctx.pid.unwrap_or(0),
+                sender_eic = ctx.sender_eic.as_deref().unwrap_or(""),
+                receiver_eic = ctx.receiver_eic.as_deref().unwrap_or(""),
+                message_ref = ctx.message_ref.as_deref().unwrap_or(""),
+                process_id = ctx.process_id.as_deref().unwrap_or(""),
+                tenant_id = ctx.tenant_id.as_deref().unwrap_or(""),
+                correlation_id = ctx.correlation_id.as_deref().unwrap_or(""),
+                %ctx.timestamp,
+                "dead letter: {reason}",
+            );
+        } else {
+            // OutboxExhausted has no inbound audit context; log its own fields.
+            match reason {
+                DeadLetterReason::OutboxExhausted {
+                    message_id,
                     message_type,
                     recipient,
                     last_error,
                     attempts,
-                    reason = reason.label(),
-                    "dead letter: outbox exhausted — message removed after max delivery attempts; \
-                     manual intervention required to deliver this message",
-                );
+                } => {
+                    tracing::error!(
+                        %message_id,
+                        message_type,
+                        recipient,
+                        last_error,
+                        attempts,
+                        reason = reason.label(),
+                        "dead letter: outbox exhausted — message removed after max delivery \
+                         attempts; manual intervention required to deliver this message",
+                    );
+                }
+                _ => {
+                    tracing::warn!(reason = reason.label(), "dead letter: {reason}");
+                }
             }
         }
     }
@@ -303,10 +467,18 @@ mod tests {
 
     #[test]
     fn dead_letter_reason_labels() {
-        assert_eq!(DeadLetterReason::UnknownPid(55001).label(), "unknown_pid");
+        assert_eq!(
+            DeadLetterReason::UnknownPid {
+                pid: 55001,
+                context: AuditContext::now()
+            }
+            .label(),
+            "unknown_pid"
+        );
         assert_eq!(
             DeadLetterReason::UnknownConversation {
-                conversation_id: "abc".into()
+                conversation_id: "abc".into(),
+                context: AuditContext::now(),
             }
             .label(),
             "unknown_conversation"
@@ -315,6 +487,7 @@ mod tests {
             DeadLetterReason::VersionMismatch {
                 expected: "FV2025-10-01".into(),
                 received: "FV2026-10-01".into(),
+                context: AuditContext::now(),
             }
             .label(),
             "version_mismatch"
@@ -322,6 +495,7 @@ mod tests {
         assert_eq!(
             DeadLetterReason::DuplicateMessage {
                 inbox_key: "msg-1".into(),
+                context: AuditContext::now(),
             }
             .label(),
             "duplicate_message"
@@ -329,6 +503,7 @@ mod tests {
         assert_eq!(
             DeadLetterReason::ProcessingError {
                 message: "invalid state".into(),
+                context: AuditContext::now(),
             }
             .label(),
             "processing_error"
@@ -338,47 +513,91 @@ mod tests {
     #[test]
     fn log_sink_does_not_panic() {
         let sink = LogDeadLetterSink;
-        sink.reject(&DeadLetterReason::UnknownPid(99999));
+        sink.reject(&DeadLetterReason::UnknownPid {
+            pid: 99999,
+            context: AuditContext::now(),
+        });
         sink.reject(&DeadLetterReason::UnknownConversation {
             conversation_id: "conv-123".into(),
+            context: AuditContext::now(),
         });
         sink.reject(&DeadLetterReason::VersionMismatch {
             expected: "FV2025-10-01".into(),
             received: "FV2026-10-01".into(),
+            context: AuditContext::now(),
         });
         sink.reject(&DeadLetterReason::DuplicateMessage {
             inbox_key: "msg-42".into(),
+            context: AuditContext::now(),
         });
         sink.reject(&DeadLetterReason::ProcessingError {
             message: "workflow rejected command".into(),
+            context: AuditContext::now(),
         });
     }
 
     #[test]
     fn noop_sink_does_not_panic() {
         let sink = NoopDeadLetterSink;
-        sink.reject(&DeadLetterReason::UnknownPid(55001));
+        sink.reject(&DeadLetterReason::UnknownPid {
+            pid: 55001,
+            context: AuditContext::now(),
+        });
     }
 
     #[test]
     fn arc_blanket_impl_works() {
         let sink: Arc<LogDeadLetterSink> = Arc::new(LogDeadLetterSink);
-        sink.reject(&DeadLetterReason::UnknownPid(1));
+        sink.reject(&DeadLetterReason::UnknownPid {
+            pid: 1,
+            context: AuditContext::now(),
+        });
     }
 
     #[test]
     fn dead_letter_reason_display() {
         assert_eq!(
-            DeadLetterReason::UnknownPid(55001).to_string(),
+            DeadLetterReason::UnknownPid {
+                pid: 55001,
+                context: AuditContext::now()
+            }
+            .to_string(),
             "unknown PID 55001"
         );
         assert!(
             DeadLetterReason::VersionMismatch {
                 expected: "FV2025-10-01".into(),
                 received: "FV2026-10-01".into(),
+                context: AuditContext::now(),
             }
             .to_string()
             .contains("version mismatch")
         );
+    }
+
+    #[test]
+    fn audit_context_builder() {
+        let ctx = AuditContext::now()
+            .with_message_type("UTILMD")
+            .with_pid(55001)
+            .with_sender_eic("4012345000023")
+            .with_receiver_eic("9900357000004")
+            .with_message_ref("00001")
+            .with_tenant_id("tenant-a")
+            .with_correlation_id("conv-xyz");
+
+        assert_eq!(ctx.message_type.as_deref(), Some("UTILMD"));
+        assert_eq!(ctx.pid, Some(55001));
+        assert_eq!(ctx.sender_eic.as_deref(), Some("4012345000023"));
+        assert_eq!(ctx.correlation_id.as_deref(), Some("conv-xyz"));
+    }
+
+    #[test]
+    fn audit_context_returned_for_inbound_reasons() {
+        let r = DeadLetterReason::UnknownPid {
+            pid: 99,
+            context: AuditContext::now().with_pid(99),
+        };
+        assert!(r.audit_context().is_some());
     }
 }

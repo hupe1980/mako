@@ -30,7 +30,7 @@
 
 #![deny(unsafe_code)]
 #![deny(clippy::undocumented_unsafe_blocks)]
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 // `Error::Validation` intentionally carries a full `EdiEnergyReport` for rich diagnostics.

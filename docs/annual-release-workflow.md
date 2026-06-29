@@ -183,12 +183,10 @@ Both must succeed with zero errors.
 cargo xtask release-diff \
     --message-type UTILMD \
     --from fv20261001 \
-    --to fv20271001 \
-    --output-file REVIEW.md
+    --to fv20271001
 ```
 
-Commit `REVIEW.md` as part of the PR so reviewers can see exactly what changed
-without reading the full generated diff.
+Review the output to confirm only the expected segment rules changed.
 
 ---
 
@@ -205,24 +203,7 @@ decreased for the updated types.
 
 ---
 
-## Step 10 — Update CHANGELOG.md
-
-Add an entry to the top-level `CHANGELOG.md`:
-
-```markdown
-## Unreleased
-
-### Added
-- UTILMD Strom S2.3 profile (`fv20271001`, effective 2027-10-01)
-- MSCONS 3.x profile (`fv20271001`, effective 2027-10-01)
-
-### Changed
-- UTILMD Strom S2.2 (`fv20261001`) `valid_until` set to `2027-09-30`
-```
-
----
-
-## Step 11 — Archive expired profiles
+## Step 10 — Archive expired profiles
 
 After adding the new release profiles, mark any that are now more than 90 days
 past their `valid_until` as archived so they are excluded from the default build:
@@ -246,7 +227,7 @@ Commit the updated `mig.json` files and regenerated `mod.rs` together.
 
 ---
 
-## Step 12 — PR checklist
+## Step 11 — PR checklist
 
 Before merging:
 
@@ -258,8 +239,6 @@ Before merging:
 - [ ] `cargo xtask codegen --check` exits 0
 - [ ] `cargo xtask validate-release-codes` exits 0 — every profile `release` field matches a UNH 0057 value in a fixture (F-033)
 - [ ] `cargo test --all-features` exits 0
-- [ ] `REVIEW.md` committed with release-diff output
-- [ ] CHANGELOG.md updated
 - [ ] At least one `.edi` fixture added for newly introduced PIDs
 
 ---
@@ -320,7 +299,7 @@ The `archive` meta-feature activates all per-type archive features:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.2", features = ["archive"] }
+edi-energy = { version = "0.3", features = ["archive"] }
 ```
 
 Archive features always imply their base type feature (`mscons-archive` implies

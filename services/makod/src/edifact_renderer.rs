@@ -152,7 +152,7 @@ pub fn render_to_wire_bytes(
 /// | `sender`        | yes      | Sender GLN (our own)                          |
 /// | `receiver`      | no       | Receiver GLN (falls back to `msg.recipient`)  |
 /// | `malo`          | yes*     | Marktlokations-ID (GPKE/GeLi Gas PIDs)        |
-/// | `melo`          | yes*     | Messlokations-ID (WiM PIDs 11000–11999)       |
+/// | `melo`          | yes*     | Messlokations-ID (WiM PIDs 55039, 55042, 55051, 55168) |
 /// | `process_date`  | yes      | Process date (`YYYYMMDD` or `YYYY-MM-DD`)     |
 /// | `document_date` | no       | Document date (defaults to today at dispatch time)     |
 /// | `message_ref`   | no       | Derived from `causation_event_id` when absent          |
@@ -168,9 +168,9 @@ fn render_utilmd(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
         .and_then(|v| v.as_str())
         .unwrap_or(msg.recipient.as_ref());
 
-    // WiM PIDs (11000–11999) refer to Messlokationen; all other UTILMD PIDs
+    // WiM PIDs (55039, 55042, 55051, 55168) refer to Messlokationen; all other UTILMD PIDs
     // (GPKE 55xxx, ex-MPES 56xxx, GeLi Gas 44xxx) refer to Marktlokationen.
-    let (object_type, location_id_key) = if (11_000..=11_999).contains(&pid) {
+    let (object_type, location_id_key) = if matches!(pid, 55_039 | 55_042 | 55_051 | 55_168) {
         (ObjectType::Messlokation, "melo")
     } else {
         (ObjectType::Marktlokation, "malo")
@@ -233,19 +233,20 @@ fn render_utilmd(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
 /// |----------------|-------------------|-----------|---------------------|
 /// | 55001, 44001   | Lieferbeginn      | 163       | Delivery start      |
 /// | 55002, 44002   | Lieferende        | 164       | Delivery end        |
-/// | 55017          | Kündigung         | 163       | Cancellation date   |
+/// | 55016          | Kündigung         | 163       | Cancellation date   |
 /// | 56001–56004    | ex-MPES feed-in   | 163       | Delivery start      |
-/// | 11001–11004    | WiM Gerätewechsel | 163       | Execution date      |
+/// | 55039, 55042, 55051, 55168 | WiM Messstellenbetrieb | 163       | Execution date      |
 /// | 44003–44006    | GeLi Gas Antwort  | 163       | Confirmation date   |
 /// | _              | fallback          | 163       | Delivery start      |
 fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
     match pid {
-        55001 | 44001 => "163", // Lieferbeginn
-        55002 | 44002 => "164", // Lieferende
-        55017 => "163",         // Kündigung Lieferbeginn
-        56001..=56004 => "163", // ex-MPES feed-in
-        11001..=11004 => "163", // WiM Gerätewechsel
-        44003..=44006 => "163", // GeLi Gas confirmation/rejection
+        55001 | 44001 => "163",                 // Lieferbeginn
+        55002 | 44002 => "164",                 // Lieferende
+        55016 => "163",                         // Kündigung Lieferbeginn (inbound, LFN → LFA)
+        55017 | 55018 => "163",                 // Bestätigung/Ablehnung Kündigung (LFA → LFN)
+        56001..=56004 => "163",                 // ex-MPES feed-in
+        55039 | 55042 | 55051 | 55168 => "163", // WiM Messstellenbetrieb
+        44003..=44006 => "163",                 // GeLi Gas confirmation/rejection
         _ => "163",
     }
 }
@@ -766,7 +767,7 @@ mod tests {
     fn utilmd_dtm_qualifier_by_pid() {
         assert_eq!(utilmd_dtm_qualifier(55001), "163");
         assert_eq!(utilmd_dtm_qualifier(55002), "164");
-        assert_eq!(utilmd_dtm_qualifier(55017), "163");
+        assert_eq!(utilmd_dtm_qualifier(55016), "163");
         assert_eq!(utilmd_dtm_qualifier(44001), "163");
         assert_eq!(utilmd_dtm_qualifier(44002), "164");
     }

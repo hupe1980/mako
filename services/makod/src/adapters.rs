@@ -46,14 +46,15 @@ fn convert_pid(p: edi_energy::Pruefidentifikator) -> Result<Pruefidentifikator, 
         .map_err(|e| EngineError::Deserialization(format!("PID out of range: {e}")))
 }
 use mako_geli_gas::{
-    GasSperrungCommand, GasSupplierChangeCommand, GeliGasSperrungWorkflow,
+    GasSupplierChangeCommand, GeliGasStornierungCommand, GeliGasStornierungWorkflow,
     GeliGasSupplierChangeWorkflow,
 };
 use mako_gpke::{
-    AbrechnungCommand, GpkeAbrechnungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
-    GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungWorkflow,
-    GpkeSupplierChangeWorkflow, KonfigurationCommand, LfAbmeldungCommand, LfAnmeldungCommand,
-    NeuanlageCommand, SperrungCommand, SupplierChangeCommand,
+    AbrechnungCommand, AnfrageBestellungCommand, GpkeAbrechnungWorkflow,
+    GpkeAnfrageBestellungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
+    GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand,
+    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow, KonfigurationCommand, LfAbmeldungCommand,
+    LfAnmeldungCommand, NeuanlageCommand, SperrungCommand, SupplierChangeCommand,
 };
 use mako_mabis::{BillingCommand, DataStatus, IFTSTA_DATENSTATUS_PID, MabisBillingWorkflow};
 use mako_wim::{
@@ -67,16 +68,16 @@ use mako_wim_gas::{
     WimGasVerpflichtungsanfrageWorkflow,
 };
 
-// ── GPKE UTILMD Anfrage (PIDs 55001, 55002, 55017, 56001–56004) ───────────────
+// ── GPKE UTILMD Anfrage (PIDs 55001, 55002, 55016) ──────────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`GpkeSupplierChangeWorkflow`].
 ///
 /// Registers one adapter covering all current BDEW format versions.
 /// Extracts UTILMD S2.x fields to construct a
-/// [`SupplierChangeCommand::ReceiveUtilmd`] for the 7 inbound ANFRAGE PIDs:
-/// 55001–55002 (Lieferbeginn/Lieferende), 55017 (Kündigung), and 56001–56004
-/// (ex-MPES feed-in site). Outbound ANTWORT PIDs (55003–55006, 55018) and
-/// PID 55555 (Sperrung) are handled separately.
+/// [`SupplierChangeCommand::ReceiveUtilmd`] for the 3 inbound ANFRAGE PIDs:
+/// 55001–55002 (Lieferbeginn/Lieferende) and 55016 (Kündigung).
+/// Outbound ANTWORT PIDs (55003–55006, 55017, 55018) are handled separately.
+/// ORDERS Sperrung (PIDs 17115/17116/17117) uses [`gpke_sperrung_registry`].
 #[must_use]
 pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -105,7 +106,7 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 })
                 .and_then(convert_pid)?;
             let validation_result = msg.validate().ok();
-            let mut validation_passed = validation_result
+            let validation_passed = validation_result
                 .as_ref()
                 .map(|r| r.is_valid())
                 .unwrap_or(false);
@@ -113,46 +114,6 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 .as_ref()
                 .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
                 .unwrap_or_default();
-
-            // ── ex-MPES PIDs 56001–56004 — vacuous-validation guard ───
-            // PIDs 56001–56004 (Einspeisestelle, transferred from MPES to GPKE
-            // per BK6-22-024, effective 2025-06-06) have no UTILMD AHB profile
-            // yet. Without a profile, validate() returns Ok(valid=true) because
-            // zero rules are checked — a "vacuous pass" that is indistinguishable
-            // from a genuine pass.
-            //
-            // We detect this by querying the registry: if no registered UTILMD
-            // profile has AHB rules for this PID, validation was vacuous and we
-            // force validation_passed = false to prevent dispatching an
-            // unvalidated message as "validated".
-            //
-            // This guard self-corrects once the profile is imported:
-            //   cargo xtask import-xml-ahb
-            if matches!(pid.as_u32(), 56001..=56004) && validation_passed {
-                // Re-construct the edi_energy PID for the registry query.
-                // The new() call is infallible here — the PID was already
-                // accepted by convert_pid() earlier in this closure.
-                let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
-                    .map(|edi_pid| {
-                        edi_energy::registry::ReleaseRegistry::global()
-                            .pid_has_ahb_rules(edi_energy::MessageType::Utilmd, edi_pid)
-                    })
-                    .unwrap_or(false);
-
-                if !has_ahb_rules {
-                    tracing::error!(
-                        pid = pid.as_u32(),
-                        message_ref = msg.message_ref(),
-                        "GPKE adapter: PID {} (ex-MPES Einspeisestelle) has no UTILMD \
-                         AHB profile — validation was vacuous. Forcing \
-                         validation_passed = false to prevent a false positive. \
-                         Import the profile with \
-                         `cargo xtask import-xml-ahb` to restore processing.",
-                        pid.as_u32(),
-                    );
-                    validation_passed = false;
-                }
-            }
 
             Ok(SupplierChangeCommand::ReceiveUtilmd {
                 pid,
@@ -193,12 +154,19 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
     registry
 }
 
-// ── GPKE UTILMD Sperrung (PID 55555) ─────────────────────────────────────────
+// ── GPKE ORDERS Sperrung (PIDs 17115, 17116, 17117) ──────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`GpkeSperrungWorkflow`].
 ///
-/// Extracts UTILMD S2.x fields from an inbound Anweisung Sperrung (PID 55555)
-/// to construct a [`SperrungCommand::ReceiveSperrung`].
+/// Extracts ORDERS 1.4b fields from an inbound Sperrauftrag / Entsperrauftrag
+/// (PIDs 17115/17116/17117) to construct a [`SperrungCommand::ReceiveSperrung`].
+///
+/// **Message format**: ORDERS (AWH Sperrprozesse Strom, BK6-22-024).
+/// The Marktlokation is carried in the LOC segment (element 1, component 0).
+///
+/// **PID 55555** ("Anfrage Daten der individuellen Bestellung", GPKE Teil 4)
+/// is a completely separate UTILMD-based data-request process and must NOT
+/// be routed to this adapter.
 #[must_use]
 pub fn gpke_sperrung_registry() -> AdapterRegistry<GpkeSperrungWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -209,9 +177,10 @@ pub fn gpke_sperrung_registry() -> AdapterRegistry<GpkeSperrungWorkflow> {
                 EngineError::Deserialization("expected AnyMessage for GPKE Sperrung adapter".into())
             })?;
 
-            let AnyMessage::Utilmd(u) = msg else {
+            let AnyMessage::Orders(o) = msg else {
                 return Err(EngineError::Deserialization(
-                    "GPKE Sperrung adapter: expected UTILMD message".into(),
+                    "GPKE Sperrung adapter: expected ORDERS message (PIDs 17115/17116/17117)"
+                        .into(),
                 ));
             };
 
@@ -233,18 +202,23 @@ pub fn gpke_sperrung_registry() -> AdapterRegistry<GpkeSperrungWorkflow> {
                 .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
                 .unwrap_or_default();
 
+            // Marktlokation from the LOC segment (element 1, component 0).
+            // LOC+7+<MaLo>::Z13 — element 0 = qualifier, element 1 = location composite.
+            let location_id = mako_engine::types::MaLo::new(
+                o.segments()
+                    .iter()
+                    .find(|s| s.tag == "LOC")
+                    .and_then(|s| s.component_str(1, 0))
+                    .unwrap_or(""),
+            );
+
             Ok(SperrungCommand::ReceiveSperrung {
                 pid,
                 sender: mako_engine::types::MarktpartnerCode::new(
-                    u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                    o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
                 ),
-                location_id: mako_engine::types::MaLo::new(
-                    u.transactions()
-                        .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
-                        .unwrap_or(""),
-                ),
-                document_date: u
+                location_id,
+                document_date: o
                     .dtm()
                     .iter()
                     .find(|d| d.is_document_date())
@@ -260,7 +234,7 @@ pub fn gpke_sperrung_registry() -> AdapterRegistry<GpkeSperrungWorkflow> {
     registry
 }
 
-// ── GPKE INVOIC billing (PIDs 56005–56010) ───────────────────────────────────
+// ── GPKE INVOIC billing (PIDs 31001, 31002, 31004–31008) ─────────────────────
 
 /// Build an [`AdapterRegistry`] for [`GpkeAbrechnungWorkflow`].
 ///
@@ -410,7 +384,7 @@ pub fn wim_rechnung_registry() -> AdapterRegistry<WimRechnungWorkflow> {
     registry
 }
 
-// ── WiM Gerätewechsel (PID 11001) ───────────────────────────────────────────────
+// ── WiM Messstellenbetrieb (PIDs 55039, 55042, 55051, 55168) ──────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`WimDeviceChangeWorkflow`].
 #[must_use]
@@ -509,7 +483,7 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
 /// Handles all five ORDERS PIDs in the Geräteübernahme family:
 /// - `17001`/`17002` (Anfrage) → [`GeraeteubernahmeCommand::ReceiveAnfrage`]
 /// - `17005` (Bestellung) → [`GeraeteubernahmeCommand::ReceiveBestellung`]
-/// - `17009`/`17011` (Stornierung) → [`GeraeteubernahmeCommand::ReceiveStornierung`]
+/// - `17011` (Stornierung WiM Strom Teil 1) → [`GeraeteubernahmeCommand::ReceiveStornierung`]
 ///
 /// The MeLo ID is extracted from the `IDE` segment (element 1, component 0).
 /// The `DeviceId` (Anfrage only) is extracted from the first `RFF` segment's
@@ -602,7 +576,7 @@ pub fn wim_geraeteubernahme_registry() -> AdapterRegistry<WimGeraeteubernahmeWor
                 // Phase 2: Bestellung Geräteübernahme.
                 Ok(GeraeteubernahmeCommand::ReceiveBestellung { pid, message_ref })
             } else {
-                // Stornierung (17009 or 17011).
+                // Stornierung (17011 WiM Strom; 17009 routes to WiM Gas).
                 Ok(GeraeteubernahmeCommand::ReceiveStornierung { pid, message_ref })
             }
         },
@@ -695,11 +669,11 @@ pub fn wim_stammdaten_registry() -> AdapterRegistry<WimStammdatenWorkflow> {
     registry
 }
 
-// ── WiM Stornierung (PID 39000) ──────────────────────────────────────────────
+// ── WiM Stornierung (PID 39002) ──────────────────────────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`WimStornierungWorkflow`].
 ///
-/// Handles the single inbound ORDCHG PID 39000 (Stornierung) and produces a
+/// Handles the single inbound ORDCHG PID 39002 (Stornierung der Bestellung) and produces a
 /// [`StornierungCommand::ReceiveOrdchg`].
 ///
 /// - The MeLo ID is extracted from the `IDE` segment (element 1, component 0).
@@ -860,83 +834,6 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
     registry
 }
 
-// ── GeLi Gas Sperrung (PID 44555) ────────────────────────────────────────────
-
-/// Build an [`AdapterRegistry`] for [`GeliGasSperrungWorkflow`].
-///
-/// Extracts UTILMD G fields to construct a [`GasSperrungCommand::ReceiveSperrung`]
-/// for inbound PID 44555 (Anweisung Sperrung/Entsperrung Gas, GNB → LFN).
-///
-/// **APERAK Frist:** 10 Werktage (BK7 GeLi Gas 3.0, BK7-24-01-009).
-/// Saturday counts as a Werktag; Sunday and public holidays do not.
-#[must_use]
-pub fn geli_gas_sperrung_registry() -> AdapterRegistry<GeliGasSperrungWorkflow> {
-    let mut registry = AdapterRegistry::new();
-    registry.register(FnAdapter::new(
-        is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
-            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
-                EngineError::Deserialization(
-                    "expected AnyMessage for GeLi Gas Sperrung adapter".into(),
-                )
-            })?;
-
-            let AnyMessage::Utilmd(u) = msg else {
-                return Err(EngineError::Deserialization(
-                    "GeLi Gas Sperrung adapter: expected UTILMD message".into(),
-                ));
-            };
-
-            let pid = msg
-                .detect_pruefidentifikator()
-                .map_err(|e| {
-                    EngineError::Deserialization(format!(
-                        "GeLi Gas Sperrung adapter: PID detection failed: {e}"
-                    ))
-                })
-                .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
-
-            Ok(GasSperrungCommand::ReceiveSperrung {
-                pid,
-                gnb: mako_engine::types::MarktpartnerCode::new(
-                    u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
-                ),
-                lieferant: mako_engine::types::MarktpartnerCode::new(
-                    u.receiver()
-                        .and_then(|n| n.party_id.as_deref())
-                        .unwrap_or(""),
-                ),
-                malo_id: mako_engine::types::MaLo::new(
-                    u.transactions()
-                        .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
-                        .unwrap_or(""),
-                ),
-                document_date: u
-                    .dtm()
-                    .iter()
-                    .find(|d| d.is_document_date())
-                    .and_then(|d| d.value_str())
-                    .unwrap_or("")
-                    .to_owned(),
-                message_ref: mako_engine::types::MessageRef::new(msg.message_ref()),
-                validation_passed,
-                validation_errors,
-            })
-        },
-    ));
-    registry
-}
-
 // ── GPKE Konfigurationseinrichtung (PIDs 19001/19002 — ORDRSP from MSB) ───────
 
 /// Build an [`AdapterRegistry`] for [`GpkeKonfigurationWorkflow`].
@@ -1029,19 +926,19 @@ pub fn mabis_registry() -> AdapterRegistry<MabisBillingWorkflow> {
     registry
 }
 
-// ── GPKE UTILMD Antwort (PIDs 55003–55006, 55018) — LF role ──────────────────
+// ── GPKE UTILMD Antwort (PIDs 55003–55006, 55017, 55018) — LF role ──────────────
 
 /// Build an [`AdapterRegistry`] for [`GpkeLfAnmeldungWorkflow`].
 ///
-/// Handles inbound NB/LFA response PIDs (55003–55006, 55018) when `makod`
+/// Handles inbound NB/LFA response PIDs (55003–55006, 55017, 55018) when `makod`
 /// acts as the **Lieferant** — i.e. we previously sent the ANFRAGE outbound
 /// and are now receiving the NB/LFA acknowledgement.
 ///
 /// `accepted` is derived from the PID:
 /// - 55003 (Bestätigung Lieferbeginn), 55005 (Bestätigung Lieferende),
-///   55018 (Bestätigung Kündigung) → `accepted = true`
-/// - 55004 (Ablehnung Lieferbeginn), 55006 (Ablehnung Lieferende)
-///   → `accepted = false`
+///   55017 (Bestätigung Kündigung) → `accepted = true`
+/// - 55004 (Ablehnung Lieferbeginn), 55006 (Ablehnung Lieferende),
+///   55018 (Ablehnung Kündigung) → `accepted = false`
 ///
 /// An optional rejection reason is extracted from the first `STS` segment's
 /// free-text description when present.
@@ -1073,7 +970,7 @@ pub fn gpke_lf_anmeldung_registry() -> AdapterRegistry<GpkeLfAnmeldungWorkflow> 
                 .and_then(convert_pid)?;
 
             // Acceptance is determined by the PID alone per BDEW GPKE AHB.
-            let accepted = matches!(pid.as_u32(), 55003 | 55005 | 55018);
+            let accepted = matches!(pid.as_u32(), 55003 | 55005 | 55017);
 
             // Extract the rejection reason from the first transaction's FTX
             // segment (typically qualifier AAI or ZZZ in 55004/55006).
@@ -1274,6 +1171,15 @@ fn is_known_fv(fv: &FormatVersion) -> bool {
 /// AHB validation is performed inline; `validation_passed` is set accordingly.
 /// Acceptance/rejection is decided by the NB ERP via a subsequent
 /// `SendAntwort` command.
+///
+/// # AHB validation note
+///
+/// PIDs 55600/55601 are not yet present in the UTILMD Strom AHB profile JSON
+/// files. Until they are imported via `cargo xtask import-xml-ahb`, `msg.validate()`
+/// would return a vacuous pass (zero rules → always valid → `validation_passed = true`).
+/// This guard forces `validation_passed = false` when no AHB rules are registered,
+/// preventing structurally invalid or adversarially crafted messages from being
+/// accepted with an empty MaLo ID.
 #[must_use]
 pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -1301,7 +1207,7 @@ pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
                 })
                 .and_then(convert_pid)?;
             let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
+            let mut validation_passed = validation_result
                 .as_ref()
                 .map(|r| r.is_valid())
                 .unwrap_or(false);
@@ -1309,6 +1215,31 @@ pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
                 .as_ref()
                 .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
                 .unwrap_or_default();
+
+            // ── GPKE Neuanlage PIDs 55600/55601 — vacuous-validation guard ──
+            // These PIDs are not yet in the UTILMD Strom AHB profile set.
+            // Without a profile, validate() returns is_valid()=true (zero rules
+            // checked). Guard against that false positive.
+            if validation_passed {
+                let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
+                    .map(|edi_pid| {
+                        edi_energy::registry::ReleaseRegistry::global()
+                            .pid_has_ahb_rules(edi_energy::MessageType::Utilmd, edi_pid)
+                    })
+                    .unwrap_or(false);
+                if !has_ahb_rules {
+                    tracing::error!(
+                        pid = pid.as_u32(),
+                        message_ref = msg.message_ref(),
+                        "GPKE Neuanlage adapter: PID {} has no UTILMD AHB profile — \
+                         validation was vacuous. Forcing validation_passed = false to \
+                         prevent accepting invalid messages with empty MaLo IDs. \
+                         Import the profile with `cargo xtask import-xml-ahb`.",
+                        pid.as_u32(),
+                    );
+                    validation_passed = false;
+                }
+            }
 
             Ok(NeuanlageCommand::ReceiveAnmeldung {
                 pid,
@@ -1385,7 +1316,7 @@ pub fn gpke_lf_abmeldung_registry() -> AdapterRegistry<GpkeLfAbmeldungWorkflow> 
                 })
                 .and_then(convert_pid)?;
             let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
+            let mut validation_passed = validation_result
                 .as_ref()
                 .map(|r| r.is_valid())
                 .unwrap_or(false);
@@ -1393,6 +1324,33 @@ pub fn gpke_lf_abmeldung_registry() -> AdapterRegistry<GpkeLfAbmeldungWorkflow> 
                 .as_ref()
                 .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
                 .unwrap_or_default();
+
+            // ── PID 55007 — vacuous-validation guard ──────────────────────
+            // PID 55007 (Ankündigung NB-seitiges Lieferende, NB → LFN) was
+            // removed from the UTILMD AHB Strom in LFW24 and is absent from
+            // every profile version. Without AHB rules, validate() returns
+            // is_valid()=true (zero rules checked). Guard against that false
+            // positive by forcing validation_passed=false when no AHB profile
+            // exists for this PID.
+            if validation_passed {
+                let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
+                    .map(|edi_pid| {
+                        edi_energy::registry::ReleaseRegistry::global()
+                            .pid_has_ahb_rules(edi_energy::MessageType::Utilmd, edi_pid)
+                    })
+                    .unwrap_or(false);
+                if !has_ahb_rules {
+                    tracing::warn!(
+                        pid = pid.as_u32(),
+                        message_ref = msg.message_ref(),
+                        "GPKE LF-Abmeldung adapter: PID {} (NB-seitiges Lieferende) \
+                         has no UTILMD AHB profile — removed in LFW24. \
+                         Validation was vacuous; forcing validation_passed = false.",
+                        pid.as_u32(),
+                    );
+                    validation_passed = false;
+                }
+            }
 
             Ok(LfAbmeldungCommand::ReceiveAnkuendigung {
                 pid,
@@ -1451,23 +1409,21 @@ pub fn known_fvs() -> Vec<FormatVersion> {
         .collect()
 }
 
-// ── WiM Gas Anmeldung / Ende / Vorläufige Abmeldung (PIDs 44039–44053) ───────
+// ── WiM Gas Anmeldung / Ende / Vorläufige Abmeldung (PIDs 44042–44053) ───────
 
 /// Build an [`AdapterRegistry`] for [`WimGasAnmeldungWorkflow`].
 ///
 /// Extracts UTILMD G fields to construct a [`WimGasAnmeldungCommand::ReceiveUtilmd`]
-/// for inbound PIDs 44039–44053 (Anmeldung/Ende/Vorläufige Abmeldung MSB Gas).
+/// for inbound PIDs 44042–44053 (Anmeldung neuer MSB Gas / Ende MSB Gas).
 ///
 /// **APERAK Frist:** 10 Werktage (BNetzA BK7-24-01-009).
 /// Saturday counts as a Werktag; Sunday and public holidays do not.
 ///
 /// # AHB validation note
 ///
-/// WiM Gas PIDs (44039–44053) are not yet in the `fv*_gas` AHB profile set.
-/// Until profiles are imported via `cargo xtask import-xml-ahb`, `msg.validate()`
-/// returns a vacuous pass. This function applies the `pid_has_ahb_rules()` guard
-/// (same as ex-MPES PIDs 56001–56004) to force `validation_passed = false` when
-/// no AHB rules are registered, preventing false positives.
+/// WiM Gas PIDs 44039–44053, 44168–44170 have full AHB profiles in `fv20251001_gas`
+/// and `fv20261001_gas` (9+ segment rules each). The `pid_has_ahb_rules()` guard
+/// below is retained as a permanent defensive check against future import gaps.
 #[must_use]
 pub fn wim_gas_anmeldung_registry() -> AdapterRegistry<WimGasAnmeldungWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -1505,7 +1461,7 @@ pub fn wim_gas_anmeldung_registry() -> AdapterRegistry<WimGasAnmeldungWorkflow> 
                 .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
                 .unwrap_or_default();
 
-            // Vacuous-validation guard: WiM Gas PIDs 44039–44053 have no AHB
+            // Vacuous-validation guard: WiM Gas PIDs 44042–44053 have no AHB
             // profile yet. Without a profile, validate() returns Ok(valid=true)
             // (zero rules checked). Force validation_passed = false until profiles
             // are imported via `cargo xtask import-xml-ahb`.
@@ -1559,9 +1515,12 @@ pub fn wim_gas_anmeldung_registry() -> AdapterRegistry<WimGasAnmeldungWorkflow> 
     registry
 }
 
-// ── WiM Gas Kündigung (PIDs 44022–44024) ─────────────────────────────────────
+// ── WiM Gas Kündigung (PIDs 44039–44041) ─────────────────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`WimGasKuendigungWorkflow`].
+///
+/// Routes UTILMD G messages with PIDs 44039–44041 (WiM Gas Kündigung MSB Gas).
+/// Note: PIDs 44022–44024 are GeLi Gas Stornierung, not WiM Gas.
 ///
 /// **APERAK Frist:** 10 Werktage (BNetzA BK7-24-01-009).
 #[must_use]
@@ -1597,7 +1556,7 @@ pub fn wim_gas_kuendigung_registry() -> AdapterRegistry<WimGasKuendigungWorkflow
                 .as_ref()
                 .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
                 .unwrap_or_default();
-            // Vacuous-validation guard (same pattern as PIDs 56001–56004 and 44039–44053).
+            // Vacuous-validation guard (same pattern as PIDs 44039–44053).
             if validation_passed {
                 let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
                     .map(|edi_pid| {
@@ -1606,6 +1565,12 @@ pub fn wim_gas_kuendigung_registry() -> AdapterRegistry<WimGasKuendigungWorkflow
                     })
                     .unwrap_or(false);
                 if !has_ahb_rules {
+                    tracing::warn!(
+                        pid = pid.as_u32(),
+                        "WiM Gas Kündigung adapter: PID {} has no UTILMD AHB profile — \
+                         validation was vacuous. Import profile with `cargo xtask import-xml-ahb`.",
+                        pid.as_u32(),
+                    );
                     validation_passed = false;
                 }
             }
@@ -1680,7 +1645,7 @@ pub fn wim_gas_verpflichtungsanfrage_registry()
                 .as_ref()
                 .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
                 .unwrap_or_default();
-            // Vacuous-validation guard (same pattern as PIDs 56001–56004).
+            // Vacuous-validation guard (same pattern as PIDs 44039–44053).
             if validation_passed {
                 let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
                     .map(|edi_pid| {
@@ -1689,6 +1654,12 @@ pub fn wim_gas_verpflichtungsanfrage_registry()
                     })
                     .unwrap_or(false);
                 if !has_ahb_rules {
+                    tracing::warn!(
+                        pid = pid.as_u32(),
+                        "WiM Gas Verpflichtungsanfrage adapter: PID {} has no UTILMD AHB profile — \
+                         validation was vacuous. Import profile with `cargo xtask import-xml-ahb`.",
+                        pid.as_u32(),
+                    );
                     validation_passed = false;
                 }
             }
@@ -1703,6 +1674,287 @@ pub fn wim_gas_verpflichtungsanfrage_registry()
                         .unwrap_or(""),
                 ),
                 malo_id: mako_engine::types::MaLo::new(
+                    u.transactions()
+                        .first()
+                        .and_then(|t| t.ide.object_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                document_date: u
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE Stornierung (PIDs 55022–55024) ───────────────────────────────────────
+
+/// Build an [`AdapterRegistry`] for [`GpkeStornierungWorkflow`].
+///
+/// Routes UTILMD Strom messages with PIDs 55022–55024 (GPKE Stornierung):
+/// - 55022 — Anfrage nach Stornierung (LFN → NB)
+/// - 55023 — Bestätigung Stornierung  (NB response — accepted)
+/// - 55024 — Ablehnung Stornierung    (NB response — rejected)
+///
+/// **APERAK Frist:** 24 Stunden wall-clock (BK6-22-024 §5).
+#[must_use]
+pub fn gpke_stornierung_registry() -> AdapterRegistry<GpkeStornierungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Stornierung adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Stornierung adapter: expected UTILMD message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Stornierung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let mut validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+            // Vacuous-validation guard: warn if AHB profile not yet imported.
+            if validation_passed {
+                let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
+                    .map(|edi_pid| {
+                        edi_energy::registry::ReleaseRegistry::global()
+                            .pid_has_ahb_rules(edi_energy::MessageType::Utilmd, edi_pid)
+                    })
+                    .unwrap_or(false);
+                if !has_ahb_rules {
+                    tracing::warn!(
+                        pid = pid.as_u32(),
+                        "GPKE Stornierung adapter: PID {} has no UTILMD AHB profile — \
+                         validation was vacuous. Import profile with `cargo xtask import-xml-ahb`.",
+                        pid.as_u32(),
+                    );
+                    validation_passed = false;
+                }
+            }
+            Ok(GpkeStornierungCommand::ReceiveUtilmd {
+                pid,
+                sender: MarktpartnerCode::new(
+                    u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: MarktpartnerCode::new(
+                    u.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                vorgang_id: MaLo::new(
+                    u.transactions()
+                        .first()
+                        .and_then(|t| t.ide.object_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                document_date: u
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE Anfrage Daten der individuellen Bestellung (PID 55555) ───────────────
+
+/// Build an [`AdapterRegistry`] for [`GpkeAnfrageBestellungWorkflow`].
+///
+/// Routes UTILMD Strom messages with PID 55555 (GPKE Teil 4, BK6-24-174):
+///
+/// **Message format**: UTILMD Strom S2.x (`AnyMessage::Utilmd`).
+/// **APERAK Frist:** 24 Stunden wall-clock (BK6-22-024 §5).
+///
+/// The key fields extracted from the UTILMD message are:
+/// - `pid` — must be 55555
+/// - `sender` / `receiver` — from NAD+MS / NAD+MR party identifiers
+/// - `vorgang_id` — from `IDE+Z19` object ID (identifies the queried order)
+/// - `bearbeitungsstatus` — from `STS` DE 9015 qualifier (`"E07"` or `"E08"`)
+/// - `document_date` — from `DTM+137`
+#[must_use]
+pub fn gpke_anfrage_bestellung_registry() -> AdapterRegistry<GpkeAnfrageBestellungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE AnfrageBestellung adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE AnfrageBestellung adapter: expected UTILMD message (PID 55555)".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE AnfrageBestellung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+
+            // Vorgangsnummer from IDE+Z19 (element 1, component 0 = object ID).
+            let vorgang_id = MaLo::new(
+                u.transactions()
+                    .first()
+                    .and_then(|t| t.ide.object_id.as_deref())
+                    .unwrap_or(""),
+            );
+
+            // Bearbeitungsstatus from the first STS segment, element 0 (DE 9015).
+            // Expected values: "E07" (known/confirmed Vorgang) or "E08" (unconfirmed).
+            let bearbeitungsstatus = u
+                .transactions()
+                .first()
+                .and_then(|t| t.sts.first())
+                .and_then(|s| s.category.as_deref())
+                .unwrap_or("")
+                .to_owned();
+
+            Ok(AnfrageBestellungCommand::ReceiveAnfrage {
+                pid,
+                sender: MarktpartnerCode::new(
+                    u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: MarktpartnerCode::new(
+                    u.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                vorgang_id,
+                bearbeitungsstatus,
+                document_date: u
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GeLi Gas Stornierung (PIDs 44022–44024) ────────────────────────────────────
+
+/// Build an [`AdapterRegistry`] for [`GeliGasStornierungWorkflow`].
+///
+/// Routes UTILMD G messages with PIDs 44022–44024 (GeLi Gas Stornierung):
+/// - 44022 — Anfrage nach Stornierung (LFN/LFA → GNB)
+/// - 44023 — Bestätigung Stornierung  (GNB response — accepted)
+/// - 44024 — Ablehnung Stornierung    (GNB response — rejected)
+///
+/// **APERAK Frist:** 10 Werktage (BNetzA BK7-24-01-009).
+#[must_use]
+pub fn geli_gas_stornierung_registry() -> AdapterRegistry<GeliGasStornierungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas Stornierung adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas Stornierung adapter: expected UTILMD message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas Stornierung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let mut validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+            // Vacuous-validation guard: warn if AHB profile not yet imported.
+            if validation_passed {
+                let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
+                    .map(|edi_pid| {
+                        edi_energy::registry::ReleaseRegistry::global()
+                            .pid_has_ahb_rules(edi_energy::MessageType::Utilmd, edi_pid)
+                    })
+                    .unwrap_or(false);
+                if !has_ahb_rules {
+                    tracing::warn!(
+                        pid = pid.as_u32(),
+                        "GeLi Gas Stornierung adapter: PID {} has no UTILMD AHB profile — \
+                         validation was vacuous. Import profile with `cargo xtask import-xml-ahb`.",
+                        pid.as_u32(),
+                    );
+                    validation_passed = false;
+                }
+            }
+            Ok(GeliGasStornierungCommand::ReceiveUtilmd {
+                pid,
+                sender: MarktpartnerCode::new(
+                    u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: MarktpartnerCode::new(
+                    u.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                vorgang_id: MaLo::new(
                     u.transactions()
                         .first()
                         .and_then(|t| t.ide.object_id.as_deref())

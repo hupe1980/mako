@@ -448,7 +448,7 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `gpke.lieferende.anmelden` | `LF` | GPKE | 55002 | Old supplier registers supply end |
 | `gpke.lieferende.bestaetigen` | `NB` | GPKE | 55005/55006 | DSO accepts/rejects supply end |
 | `gpke.kuendigung.anmelden` | `LF` | GPKE | 55017 | LF cancels a Lieferbeginn Anmeldung |
-| `gpke.sperrung.bestaetigen` | `LF` | GPKE | 55555 | LF confirms disconnection execution |
+| `gpke.sperrung.bestaetigen` | `LF` | GPKE | 17115/17116/17117 | LF confirms disconnection execution |
 | `gpke.abrechnung.annehmen` | `NB` | GPKE | 31001/31002 | DSO settles a Netznutzungsabrechnung |
 | `gpke.abrechnung.ablehnen` | `NB` | GPKE | 31001/31002 | DSO disputes a Netznutzungsabrechnung |
 | `geli.lieferbeginn.anmelden` | `LFG` | GeLi Gas | 44001 | Gas supplier registers supply start |
@@ -686,7 +686,7 @@ Enable the `tracing` feature in `edi-energy` to get per-message parse/validate
 spans:
 
 ```toml
-edi-energy = { version = "0.2", features = ["tracing"] }
+edi-energy = { version = "0.3", features = ["tracing"] }
 ```
 
 These integrate with OpenTelemetry exporters when a global subscriber is

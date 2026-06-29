@@ -718,89 +718,71 @@ fn rule_group_sg52_tax_min_occurrences(
 /// The rule does NOT require every tag to be present (that is Layer 3's job);
 /// it only checks that tag positions are non-decreasing w.r.t. the expected order.
 fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
-    /// Header segment ordering (before UNS+D).
-    const EXPECTED_HEADER_ORDER: &[&str] = &["UNH", "BGM", "DTM", "IMD", "FTX", "GEI"];
-    /// Detail segment ordering (after UNS+D).
-    const EXPECTED_DETAIL_ORDER: &[&str] =
-        &["RFF", "NAD", "CUX", "PYT", "LIN", "MOA", "TAX", "UNT"];
-
-    /// Strict order check for the header section (no group repetition expected).
-    fn check_header_section(
-        segs: &[edifact_rs::Segment<'_>],
-        expected: &[&str],
-        rule_id: &str,
-        issues: &mut Vec<ValidationIssue>,
-    ) {
-        let mut cursor: usize = 0;
-        for seg in segs {
-            if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
-                cursor += pos;
-            } else if expected.contains(&seg.tag) {
-                issues.push(
-                    ValidationIssue::new(
-                        ValidationSeverity::Error,
-                        "segment appears out of order".to_owned(),
-                    )
-                    .with_rule_id(rule_id)
-                    .with_segment(seg.tag.to_owned()),
-                );
-            }
-            // Unknown tags are passed through — they get caught by the DirectoryValidator.
-        }
-    }
-
-    /// Group-trigger-aware order check for the detail section (post-UNS).
+    /// Per-group expected segment order derived from the MIG.
     ///
-    /// When the first tag in `expected` is seen again after the cursor has
-    /// already advanced, this indicates a new group-repetition occurrence
-    /// (e.g. a second `LOC` group in MSCONS).  The cursor is silently reset
-    /// to that position instead of reporting an ordering violation.
-    fn check_detail_section(
-        segs: &[edifact_rs::Segment<'_>],
-        expected: &[&str],
-        rule_id: &str,
-        issues: &mut Vec<ValidationIssue>,
-    ) {
-        let group_trigger = expected.first().copied().unwrap_or("");
-        let mut cursor: usize = 0;
-        for seg in segs {
-            // A repeated group-trigger tag resets the cursor to allow multiple group occurrences.
-            if cursor > 0 && seg.tag == group_trigger {
-                cursor = 0;
-            }
-            if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
-                cursor += pos;
-            } else if expected.contains(&seg.tag) {
-                issues.push(
-                    ValidationIssue::new(
-                        ValidationSeverity::Error,
-                        "segment appears out of order".to_owned(),
-                    )
-                    .with_rule_id(rule_id)
-                    .with_segment(seg.tag.to_owned()),
-                );
-            }
-            // Unknown tags are passed through — they get caught by the DirectoryValidator.
+    /// Returns an empty slice for groups not covered by the MIG or for the
+    /// catch-all arm, which causes those groups to be skipped silently.
+    fn group_order(name: &str) -> &'static [&'static str] {
+        match name {
+            "ROOT" => &["UNH", "BGM", "DTM", "IMD", "FTX", "GEI", "UNS", "UNT"],
+            "SG1" | "SG51" => &["RFF", "DTM"],
+            "SG2" => &["NAD", "LOC"],
+            "SG3" => &["RFF"],
+            "SG5" => &["CTA", "COM"],
+            "SG7" => &["CUX"],
+            "SG8" => &["PYT", "DTM"],
+            "SG26" => &["LIN", "QTY", "DTM"],
+            "SG27" | "SG42" | "SG50" => &["MOA"],
+            "SG29" => &["PRI"],
+            "SG34" => &["TAX"],
+            "SG39" => &["ALC"],
+            "SG41" => &["PCD"],
+            "SG52" => &["TAX", "MOA"],
+            _ => &[],
         }
     }
 
-    let uns_pos = segments.iter().position(|s| s.tag == "UNS");
-    let (header_segs, detail_segs) = match uns_pos {
-        Some(pos) => (&segments[..pos], &segments[pos + 1..]),
-        None => (segments, &[][..]),
-    };
-    check_header_section(
-        header_segs,
-        EXPECTED_HEADER_ORDER,
-        "MIG-INVOIC-MIG-2.8e-ORDER",
-        issues,
-    );
-    check_detail_section(
-        detail_segs,
-        EXPECTED_DETAIL_ORDER,
-        "MIG-INVOIC-MIG-2.8e-ORDER",
-        issues,
-    );
+    /// Recursively verify segment order within a group and all its children.
+    ///
+    /// Only `direct_segment_indices()` — segments that belong directly to this
+    /// group and are not claimed by any child group — are checked.  Child groups
+    /// are then visited recursively, so every segment in the message is covered
+    /// exactly once.
+    fn check_order(
+        group: &edifact_rs::group::SegmentGroupIndexed,
+        all_segs: &[edifact_rs::Segment<'_>],
+        rule_id: &str,
+        issues: &mut Vec<ValidationIssue>,
+    ) {
+        let expected = group_order(group.definition);
+        if !expected.is_empty() {
+            let mut cursor: usize = 0;
+            for idx in group.direct_segment_indices() {
+                let seg = &all_segs[idx];
+                if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
+                    cursor += pos;
+                } else if expected.contains(&seg.tag) {
+                    // Tag is known for this group but already passed — ordering violation.
+                    issues.push(
+                        ValidationIssue::new(
+                            ValidationSeverity::Error,
+                            "segment appears out of order".to_owned(),
+                        )
+                        .with_rule_id(rule_id)
+                        .with_segment(seg.tag.to_owned()),
+                    );
+                }
+                // Tags not in this group's expected order are unknown here;
+                // they are either in a child group (checked below) or caught by the DirectoryValidator.
+            }
+        }
+        for child in &group.children {
+            check_order(child, all_segs, rule_id, issues);
+        }
+    }
+
+    let tree = edifact_rs::group::group_segments_indexed(segments, GROUP_SCHEMA, "ROOT");
+    check_order(&tree, segments, "MIG-INVOIC-MIG-2.8e-ORDER", issues);
 }
 
 static MIG_INVOIC_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {

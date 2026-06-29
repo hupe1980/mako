@@ -40,14 +40,16 @@ use mako_engine::{
     process::Process,
 };
 use mako_geli_gas::{
-    GasSperrungCommand, GasSupplierChangeCommand, GeliGasSperrungWorkflow,
+    GasSupplierChangeCommand, GeliGasStornierungCommand, GeliGasStornierungWorkflow,
     GeliGasSupplierChangeWorkflow,
 };
 use mako_gpke::{
-    AbrechnungCommand, GpkeAbrechnungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
-    GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungWorkflow,
-    GpkeSupplierChangeWorkflow, KonfigurationCommand, LfAbmeldungCommand, LfAnmeldungCommand,
-    NeuanlageCommand, SperrungCommand, SupplierChangeCommand,
+    AbrechnungCommand, AnfrageBestellungCommand, GpkeAbrechnungWorkflow,
+    GpkeAnfrageBestellungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
+    GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand,
+    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow, KonfigurationCommand, LfAbmeldungCommand,
+    LfAnmeldungCommand, NeuanlageCommand, SperrungCommand, SupplierChangeCommand,
+    anfrage_bestellung::WORKFLOW_NAME as ANFRAGE_BESTELLUNG_WORKFLOW,
     lf_anmeldung::WORKFLOW_NAME as LF_ANMELDUNG_WORKFLOW,
 };
 use mako_mabis::{BillingCommand, MabisBillingWorkflow};
@@ -116,6 +118,20 @@ pub async fn dispatch_deadline(
             );
             p.execute_and_enqueue_with_retry(
                 SperrungCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "gpke-stornierung" => {
+            let p = Process::<GpkeStornierungWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                GpkeStornierungCommand::TimeoutExpired { deadline_id, label },
                 3,
             )
             .await?;
@@ -249,13 +265,13 @@ pub async fn dispatch_deadline(
                 .await
                 .map(|_| ())
         }
-        "geli-gas-sperrung" => {
-            let p = Process::<GeliGasSperrungWorkflow, _>::from_identity(
+        "geli-gas-stornierung" => {
+            let p = Process::<GeliGasStornierungWorkflow, _>::from_identity(
                 Arc::clone(&event_store),
                 identity,
             );
             p.execute_and_enqueue_with_retry(
-                GasSperrungCommand::TimeoutExpired { deadline_id, label },
+                GeliGasStornierungCommand::TimeoutExpired { deadline_id, label },
                 3,
             )
             .await?;
@@ -298,6 +314,20 @@ pub async fn dispatch_deadline(
             );
             p.execute_and_enqueue_with_retry(
                 LfAbmeldungCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        ANFRAGE_BESTELLUNG_WORKFLOW => {
+            let p = Process::<GpkeAnfrageBestellungWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                AnfrageBestellungCommand::TimeoutExpired { deadline_id, label },
                 3,
             )
             .await?;
@@ -418,10 +448,12 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "gpke-supplier-change",
     LF_ANMELDUNG_WORKFLOW,
     "gpke-sperrung",
+    "gpke-stornierung",
     "gpke-abrechnung",
     "gpke-konfiguration",
     "gpke-neuanlage",
     "gpke-lf-abmeldung",
+    ANFRAGE_BESTELLUNG_WORKFLOW,
     "wim-device-change",
     "wim-geraeteubernahme",
     "wim-stammdaten",
@@ -431,7 +463,7 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "wim-preisliste",
     "wim-rechnung",
     "geli-gas-supplier-change",
-    "geli-gas-sperrung",
+    "geli-gas-stornierung",
     "mabis-billing",
     "wim-gas-anmeldung",
     "wim-gas-kuendigung",

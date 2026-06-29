@@ -148,7 +148,7 @@ impl MetricVec {
 /// | [`dead_letter_recorded`] | `makod_dead_letter_recorded_total` | `reason` |
 ///
 /// For `makod_dead_letter_recorded_total`, the `reason` label is:
-/// - `unknown_pid:<N>` when `DeadLetterReason::UnknownPid(N)` — one label per
+/// - `unknown_pid:<N>` when `DeadLetterReason::UnknownPid { pid: N, .. }` — one label per
 ///   distinct PID, enabling per-PID alerting
 /// - a short category string (`unknown_conversation`, `version_mismatch`, etc.)
 ///   for all other reason variants

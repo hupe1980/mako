@@ -104,10 +104,7 @@ name    = "rand"
 version = "0.8"
 reason  = "slatedb ecosystem pulls rand 0.8. Workspace uses rand 0.9. Resolve when slatedb updates."
 
-[[bans.skip]]
-name    = "rand_chacha"
-version = "0.3"
-reason  = "Companion to rand 0.8; resolves when slatedb updates to rand 0.9."
+# rand_chacha skip removed: slatedb updated; dependency no longer present.
 
 [[bans.skip]]
 name    = "rand_core"
@@ -177,19 +174,9 @@ version = "0.59"
 reason  = "Windows crate ecosystem version skew."
 
 [[bans.skip]]
-name    = "webpki-roots"
-version = "0.26.11"
-reason  = "tokio-tungstenite 0.24 (energy-api) pulls 0.26.11; reqwest pulls 1.0.x — awaiting upstream tungstenite upgrade."
-
-[[bans.skip]]
 name    = "itertools"
 version = "0.14"
 reason  = "foyer-memory (via slatedb) depends on itertools 0.14.x while rest of workspace uses 0.15."
-
-[[bans.skip]]
-name    = "unicode-width"
-version = "0.1"
-reason  = "miette 7 directly depends on unicode-width 0.1.x while textwrap (pulled by miette) uses 0.2.x; resolve when miette upgrades."
 
 [advisories]
 ignore = [

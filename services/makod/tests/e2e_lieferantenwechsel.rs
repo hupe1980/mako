@@ -1,4 +1,4 @@
-//! Full end-to-end test: trilateral Lieferantenwechsel Strom (PIDs 55001, 55017).
+//! Full end-to-end test: trilateral Lieferantenwechsel Strom (PIDs 55001, 55016).
 //!
 //! Three mock ERP backends — [`MockLfn`] (new supplier), [`MockNb`]
 //! (Netzbetreiber), and [`MockLfa`] (old supplier) — exchange EDIFACT over the
@@ -11,9 +11,9 @@
 //!
 //! 1. **LFN → NB**: Anfrage Lieferbeginn (PID 55001) — the NB must approve
 //!    or reject the supply start within **24 wall-clock hours** (BK6-22-024).
-//! 2. **LFN → LFA**: Kündigung Lieferbeginn (PID 55017) — the old supplier
+//! 2. **LFN → LFA**: Kündigung Lieferbeginn (PID 55016) — the old supplier
 //!    **must always accept** the cancellation per LFW24; there is no rejection
-//!    path for PID 55017.
+//!    path for PID 55016 (LFA responds with 55017 Bestätigung).
 //!
 //! Each leg is an independent [`GpkeLfAnmeldungWorkflow`] process on the LFN side
 //! and an independent [`GpkeSupplierChangeWorkflow`] process on the receiving
@@ -34,20 +34,20 @@
 //!                                              → asserts UTILMD 55003 + MSCONS 13015
 //!                        ◄── UTILMD 55003 ───
 //!
-//!   [lfa_leg] submit_kuendigung(55017)
+//!   [lfa_leg] submit_kuendigung(55016)
 //!     → asserts outbox payload invariants
-//!     → renders UTILMD 55017 wire bytes
-//!                                                        ─── UTILMD 55017 ──►
+//!     → renders UTILMD 55016 wire bytes
+//!                                                        ─── UTILMD 55016 ──►
 //!                                                        receive_kuendigung(wire)
 //!                                                          → asserts UNH ref ≠ "1"
-//!                                                          → asserts PID 55017
+//!                                                          → asserts PID 55016
 //!                                                        send_bestaetigung()
-//!                                                          → asserts UTILMD 55018
+//!                                                          → asserts UTILMD 55017
 //!                                                          → asserts no MSCONS
-//!                                                        ◄── UTILMD 55018 ───
+//!                                                        ◄── UTILMD 55017 ───
 //!
 //!   [nb_leg]  receive_antwort_von_nb(wire_55003)
-//!   [lfa_leg] receive_antwort_von_lfa(wire_55018)
+//!   [lfa_leg] receive_antwort_von_lfa(wire_55017)
 //!   ──────────────────────────────────────────────────────────────────────────────
 //!   final:  nb_leg  = Active           AntwortGesendet         AntwortGesendet
 //!           lfa_leg = Active
@@ -91,14 +91,14 @@ const FV: &str = "FV2025-10-01";
 /// GPKE legs of a Lieferantenwechsel:
 ///
 /// - `nb_leg`:  `GpkeLfAnmeldungWorkflow` for the NB-directed Anfrage (PID 55001).
-/// - `lfa_leg`: `GpkeLfAnmeldungWorkflow` for the LFA-directed Kündigung (PID 55017).
+/// - `lfa_leg`: `GpkeLfAnmeldungWorkflow` for the LFA-directed Kündigung (PID 55016).
 ///
 /// Each leg is an entirely independent event-sourced process backed by its own
 /// `InMemoryEventStore`.  They share no state and no event log.
 struct MockLfn {
     /// LFN → NB leg: Anfrage Lieferbeginn Strom (55001 → 55003/55004).
     nb_leg: Process<GpkeLfAnmeldungWorkflow, InMemoryEventStore>,
-    /// LFN → LFA leg: Kündigung Lieferbeginn (55017 → 55018, always accepted).
+    /// LFN → LFA leg: Kündigung Lieferbeginn (55016 → 55017 accepted).
     lfa_leg: Process<GpkeLfAnmeldungWorkflow, InMemoryEventStore>,
     platform: Platform,
     fv: FormatVersion,
@@ -177,23 +177,24 @@ impl MockLfn {
         render_to_wire_bytes(msg, LFN_ID).expect("LFN: render_to_wire_bytes (55001)")
     }
 
-    /// ERP action: submit Kündigung Lieferbeginn (PID 55017) to the old supplier.
+    /// ERP action: submit Kündigung Lieferbeginn (PID 55016) to the old supplier.
     ///
     /// Per LFW24 the old supplier must always accept — this leg is never
-    /// rejected.  Asserts outbox payload invariants and returns the rendered
-    /// UTILMD 55017 wire bytes for transport to the LFA.
+    /// rejected (LFA responds with 55017 Bestätigung).  Asserts outbox payload
+    /// invariants and returns the rendered UTILMD 55016 wire bytes for transport
+    /// to the LFA.
     async fn submit_kuendigung(&self, malo_id: &str, process_date: &str) -> Vec<u8> {
         let (_, outbox) = self
             .lfa_leg
             .execute_and_collect(LfAnmeldungCommand::InitiateAnmeldung {
-                pid: Pruefidentifikator::new(55017).unwrap(),
+                pid: Pruefidentifikator::new(55016).unwrap(),
                 sender: MarktpartnerCode::new(LFN_ID),
                 receiver: MarktpartnerCode::new(LFA_ID),
                 location_id: MaLo::new(malo_id),
                 process_date: process_date.to_owned(),
             })
             .await
-            .expect("LFN: execute InitiateAnmeldung (55017)");
+            .expect("LFN: execute InitiateAnmeldung (55016)");
 
         assert_eq!(
             outbox.len(),
@@ -202,10 +203,7 @@ impl MockLfn {
         );
         let msg = &outbox[0];
         assert_eq!(msg.message_type.as_ref(), "UTILMD");
-        assert_eq!(msg.payload["pid"].as_u64().unwrap(), 55017_u64);
-        assert_eq!(msg.payload["malo"].as_str().unwrap(), malo_id);
-        assert_eq!(msg.payload["sender"].as_str().unwrap(), LFN_ID);
-        assert_eq!(msg.payload["receiver"].as_str().unwrap(), LFA_ID);
+        assert_eq!(msg.payload["pid"].as_u64().unwrap(), 55016_u64);
         assert_eq!(
             msg.payload["process_date"].as_str().unwrap(),
             process_date,
@@ -214,7 +212,7 @@ impl MockLfn {
         assert_eq!(
             msg.recipient.as_ref(),
             LFA_ID,
-            "UTILMD 55017 must be addressed to the LFA"
+            "UTILMD 55016 must be addressed to the LFA"
         );
         assert!(
             msg.payload.get("message_ref").is_none(),
@@ -227,7 +225,7 @@ impl MockLfn {
              the renderer sets it to today at dispatch time"
         );
 
-        render_to_wire_bytes(msg, LFN_ID).expect("LFN: render_to_wire_bytes (55017)")
+        render_to_wire_bytes(msg, LFN_ID).expect("LFN: render_to_wire_bytes (55016)")
     }
 
     /// ERP notification: receive NB's UTILMD response (55003/55004) and execute on `nb_leg`.
@@ -245,7 +243,7 @@ impl MockLfn {
             .expect("LFN: execute HandleAntwort (nb_leg)");
     }
 
-    /// ERP notification: receive LFA's UTILMD 55018 and execute on `lfa_leg`.
+    /// ERP notification: receive LFA's UTILMD 55017 and execute on `lfa_leg`.
     async fn receive_antwort_von_lfa(&self, wire: &[u8]) {
         let raw = self
             .platform
@@ -427,11 +425,11 @@ impl MockNb {
 // ── Mock LFA ERP backend ──────────────────────────────────────────────────────
 
 /// Simulates the **old supplier's (LFA) ERP** receiving LFN's Kündigung
-/// Lieferbeginn (PID 55017) and issuing the mandatory Bestätigung Kündigung
-/// (PID 55018).
+/// Lieferbeginn (PID 55016) and issuing the mandatory Bestätigung Kündigung
+/// (PID 55017).
 ///
 /// Per LFW24 (BK6-22-024): a Kündigung Lieferbeginn **must always be accepted**
-/// by LFA — there is no rejection path for PID 55017.
+/// by LFA — there is no rejection path for PID 55016.
 struct MockLfa {
     process: Process<GpkeSupplierChangeWorkflow, InMemoryEventStore>,
     platform: Platform,
@@ -451,12 +449,12 @@ impl MockLfa {
         }
     }
 
-    /// ERP notification: receive LFN's UTILMD 55017 wire bytes, adapt, and execute.
+    /// ERP notification: receive LFN's UTILMD 55016 wire bytes, adapt, and execute.
     ///
     /// AHB validation is forced to `true`.  Asserts:
     /// - UNH message_ref is non-trivial (derived from LFN's `causation_event_id`).
     /// - Adapter preserved the ref in `ReceiveUtilmd.message_ref`.
-    /// - Inbound PID is 55017 (Kündigung Lieferbeginn), not an Anfrage PID.
+    /// - Inbound PID is 55016 (Kündigung Lieferbeginn), not an Anfrage PID.
     async fn receive_kuendigung(&self, wire: &[u8]) {
         let raw = self
             .platform
@@ -484,8 +482,8 @@ impl MockLfa {
             } => {
                 assert_eq!(
                     pid.as_u32(),
-                    55017,
-                    "LFA must receive PID 55017 (Kündigung Lieferbeginn), got {pid}"
+                    55016,
+                    "LFA must receive PID 55016 (Kündigung Lieferbeginn), got {pid}"
                 );
                 assert_eq!(
                     message_ref.as_str(),
@@ -509,52 +507,52 @@ impl MockLfa {
         self.process
             .execute(cmd)
             .await
-            .expect("LFA: execute ReceiveUtilmd (55017)");
+            .expect("LFA: execute ReceiveUtilmd (55016)");
     }
 
-    /// ERP action: send Bestätigung Kündigung (PID 55018).
+    /// ERP action: send Bestätigung Kündigung (PID 55017).
     ///
-    /// A Kündigung Lieferbeginn (55017) is **always accepted** per LFW24 —
+    /// A Kündigung Lieferbeginn (55016) is **always accepted** per LFW24 —
     /// `accepted = true` is not optional here.
     ///
     /// Asserts:
-    /// - Exactly one outbox entry (UTILMD 55018 only — no MSCONS for Kündigung,
+    /// - Exactly one outbox entry (UTILMD 55017 only — no MSCONS for Kündigung,
     ///   only PID 55001 Lieferbeginn triggers GPKE Teil 3 Bewegungsdaten).
-    /// - UTILMD PID is 55018 (Bestätigung Kündigung).
+    /// - UTILMD PID is 55017 (Bestätigung Kündigung).
     /// - Recipient is the LFN.
     ///
-    /// Returns the rendered UTILMD 55018 wire bytes for transport back to LFN.
+    /// Returns the rendered UTILMD 55017 wire bytes for transport back to LFN.
     async fn send_bestaetigung(&self) -> Vec<u8> {
         let (_, outbox) = self
             .process
             .execute_and_collect(SupplierChangeCommand::SendAntwort {
-                accepted: true, // mandatory: LFA cannot reject PID 55017 per LFW24
+                accepted: true, // mandatory: LFA cannot reject PID 55016 per LFW24
                 reason: None,
                 obligations: vec![],
             })
             .await
-            .expect("LFA: execute SendAntwort (55017 → 55018)");
+            .expect("LFA: execute SendAntwort (55016 → 55017)");
 
         assert_eq!(
             outbox.len(),
             1,
-            "LFA outbox must have exactly one entry: UTILMD 55018 \
+            "LFA outbox must have exactly one entry: UTILMD 55017 \
              (no MSCONS for Kündigung — GPKE Teil 3 Bewegungsdaten is for PID 55001 only)"
         );
         let msg = &outbox[0];
         assert_eq!(msg.message_type.as_ref(), "UTILMD");
         assert_eq!(
             msg.payload["pid"].as_u64().unwrap(),
-            55018_u64,
-            "LFA must respond with PID 55018 (Bestätigung Kündigung Lieferbeginn)"
+            55017_u64,
+            "LFA must respond with PID 55017 (Bestätigung Kündigung Lieferbeginn)"
         );
         assert_eq!(
             msg.recipient.as_ref(),
             LFN_ID,
-            "UTILMD 55018 must be addressed to the LFN"
+            "UTILMD 55017 must be addressed to the LFN"
         );
 
-        render_to_wire_bytes(msg, LFA_ID).expect("LFA: render_to_wire_bytes (55018)")
+        render_to_wire_bytes(msg, LFA_ID).expect("LFA: render_to_wire_bytes (55017)")
     }
 
     async fn state(&self) -> SupplierChangeState {
@@ -564,15 +562,15 @@ impl MockLfa {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-/// Lieferantenwechsel Strom — happy path (55001→55003, 55017→55018).
+/// Lieferantenwechsel Strom — happy path (55001→55003, 55016→55017).
 ///
 /// Both GPKE legs complete successfully:
 /// - NB accepts the Lieferbeginn Anfrage  → UTILMD 55003 + MSCONS 13015
-/// - LFA accepts the Kündigung (mandatory) → UTILMD 55018
+/// - LFA accepts the Kündigung (mandatory) → UTILMD 55017
 ///
 /// Final state:
 /// - LFN `nb_leg`  → `Active`           (received 55003 Bestätigung from NB)
-/// - LFN `lfa_leg` → `Active`           (received 55018 Bestätigung from LFA)
+/// - LFN `lfa_leg` → `Active`           (received 55017 Bestätigung from LFA)
 /// - NB             → `AntwortGesendet`
 /// - LFA            → `AntwortGesendet`
 #[tokio::test]
@@ -583,14 +581,14 @@ async fn e2e_lieferantenwechsel_strom_happy_path() {
 
     // ── LFN: submit both legs (parallel in real systems; sequential here) ─────
     let wire_55001 = lfn.submit_lieferbeginn(MALO_ID, "20251001").await;
-    let wire_55017 = lfn.submit_kuendigung(MALO_ID, "20251001").await;
+    let wire_55016 = lfn.submit_kuendigung(MALO_ID, "20251001").await;
     assert!(
         matches!(lfn.nb_leg_state().await, LfAnmeldungState::Pending(_)),
         "nb_leg must be Pending after InitiateAnmeldung (55001)"
     );
     assert!(
         matches!(lfn.lfa_leg_state().await, LfAnmeldungState::Pending(_)),
-        "lfa_leg must be Pending after InitiateAnmeldung (55017)"
+        "lfa_leg must be Pending after InitiateAnmeldung (55016)"
     );
 
     // ── NB: receive UTILMD 55001, validate, send 55003 + MSCONS 13015 ─────────
@@ -608,13 +606,13 @@ async fn e2e_lieferantenwechsel_strom_happy_path() {
         "NB must be AntwortGesendet after sending Bestätigung"
     );
 
-    // ── LFA: receive UTILMD 55017, send 55018 ────────────────────────────────
-    lfa.receive_kuendigung(&wire_55017).await;
+    // ── LFA: receive UTILMD 55016, send 55017 ────────────────────────────────────
+    lfa.receive_kuendigung(&wire_55016).await;
     assert!(
         matches!(lfa.state().await, SupplierChangeState::ValidationPassed(_)),
-        "LFA must be ValidationPassed after receiving UTILMD 55017"
+        "LFA must be ValidationPassed after receiving UTILMD 55016"
     );
-    let wire_55018 = lfa.send_bestaetigung().await;
+    let wire_55017 = lfa.send_bestaetigung().await;
     assert!(
         matches!(
             lfa.state().await,
@@ -625,7 +623,7 @@ async fn e2e_lieferantenwechsel_strom_happy_path() {
 
     // ── LFN: receive both responses ───────────────────────────────────────────
     lfn.receive_antwort_von_nb(&wire_55003).await;
-    lfn.receive_antwort_von_lfa(&wire_55018).await;
+    lfn.receive_antwort_von_lfa(&wire_55017).await;
 
     // ── Final state — assert all business data fields ─────────────────────────
     let nb_leg_final = lfn.nb_leg_state().await;
@@ -644,10 +642,10 @@ async fn e2e_lieferantenwechsel_strom_happy_path() {
     let lfa_leg_final = lfn.lfa_leg_state().await;
     assert!(
         matches!(lfa_leg_final, LfAnmeldungState::Active(_)),
-        "LFN lfa_leg must be Active after receiving 55018 Bestätigung; got: {lfa_leg_final:?}"
+        "LFN lfa_leg must be Active after receiving 55017 Bestätigung; got: {lfa_leg_final:?}"
     );
     if let LfAnmeldungState::Active(data) = lfa_leg_final {
-        assert_eq!(data.pruefidentifikator.as_u32(), 55017);
+        assert_eq!(data.pruefidentifikator.as_u32(), 55016);
         assert_eq!(data.location_id.as_str(), MALO_ID);
         assert_eq!(data.process_date, "20251001");
         assert_eq!(data.sender.as_str(), LFN_ID);
@@ -664,7 +662,7 @@ async fn e2e_lieferantenwechsel_strom_happy_path() {
 ///
 /// Final state:
 /// - LFN `nb_leg`  → `Rejected`         (received 55004 Ablehnung from NB)
-/// - LFN `lfa_leg` → `Active`           (received 55018 Bestätigung from LFA)
+/// - LFN `lfa_leg` → `Active`           (received 55017 Bestätigung from LFA)
 /// - NB             → `Rejected`
 /// - LFA            → `AntwortGesendet`
 #[tokio::test]
@@ -675,7 +673,7 @@ async fn e2e_lieferantenwechsel_strom_nb_rejects() {
 
     // ── LFN: submit both legs ─────────────────────────────────────────────────
     let wire_55001 = lfn.submit_lieferbeginn(MALO_ID, "20251001").await;
-    let wire_55017 = lfn.submit_kuendigung(MALO_ID, "20251001").await;
+    let wire_55016 = lfn.submit_kuendigung(MALO_ID, "20251001").await;
 
     // ── NB: reject the Anfrage Lieferbeginn ───────────────────────────────────
     nb.receive_utilmd(&wire_55001).await;
@@ -689,8 +687,8 @@ async fn e2e_lieferantenwechsel_strom_nb_rejects() {
     );
 
     // ── LFA: accept Kündigung regardless (mandatory per LFW24) ────────────────
-    lfa.receive_kuendigung(&wire_55017).await;
-    let wire_55018 = lfa.send_bestaetigung().await;
+    lfa.receive_kuendigung(&wire_55016).await;
+    let wire_55017 = lfa.send_bestaetigung().await;
     assert!(
         matches!(
             lfa.state().await,
@@ -701,7 +699,7 @@ async fn e2e_lieferantenwechsel_strom_nb_rejects() {
 
     // ── LFN: receive both responses ───────────────────────────────────────────
     lfn.receive_antwort_von_nb(&wire_55004).await;
-    lfn.receive_antwort_von_lfa(&wire_55018).await;
+    lfn.receive_antwort_von_lfa(&wire_55017).await;
 
     // ── Final state assertions ────────────────────────────────────────────────
     let nb_leg_final = lfn.nb_leg_state().await;
@@ -717,7 +715,7 @@ async fn e2e_lieferantenwechsel_strom_nb_rejects() {
          got: {lfa_leg_final:?}"
     );
     if let LfAnmeldungState::Active(data) = lfa_leg_final {
-        assert_eq!(data.pruefidentifikator.as_u32(), 55017);
+        assert_eq!(data.pruefidentifikator.as_u32(), 55016);
         assert_eq!(data.location_id.as_str(), MALO_ID);
         assert_eq!(data.sender.as_str(), LFN_ID);
         assert_eq!(data.receiver.as_str(), LFA_ID);

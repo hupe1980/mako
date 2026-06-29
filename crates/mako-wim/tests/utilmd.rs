@@ -1,8 +1,8 @@
 //! End-to-end pipeline test: `edi-energy` parse → validate → `mako-engine` execute.
 //!
-//! This test covers the full production dispatch path for a WiM Gerätewechsel
-//! (PID 11001) message and verifies that the cross-crate extraction/adaptation
-//! boundary is exercised end-to-end. An incompatibility between `edi-energy`
+//! This test covers the full production dispatch path for a WiM Messstellenbetrieb
+//! (PID 55042 — Anmeldung MSB) message and verifies that the cross-crate extraction/
+//! adaptation boundary is exercised end-to-end. An incompatibility between `edi-energy`
 //! (e.g. renaming a method on `UtilmdMessage`) and the WiM adapter code would
 //! be caught by this test before reaching production.
 //!
@@ -14,7 +14,7 @@
 //!   │
 //!   ▼ msg.validate()                → EdiEnergyReport (is_valid / errors)
 //!   │
-//!   ▼ msg.detect_pruefidentifikator() → Pruefidentifikator (11001)
+//!   ▼ msg.detect_pruefidentifikator() → Pruefidentifikator (55042)
 //!   │
 //!   ▼ extract fields → DeviceChangeCommand::ReceiveUtilmd
 //!   │
@@ -35,27 +35,27 @@ use mako_engine::{
 };
 use mako_wim::{DeviceChangeCommand, DeviceChangeState, WimDeviceChangeWorkflow};
 
-// ── UTILMD W PID 11001 test fixture ──────────────────────────────────────────
+// ── UTILMD W PID 55042 test fixture ──────────────────────────────────────────
 
-/// A minimal WiM UTILMD Gerätewechsel Anmeldung (PID 11001) in EDIFACT format.
+/// A minimal WiM UTILMD Anmeldung MSB (PID 55042) in EDIFACT format.
 ///
 /// Follows the S2.1 schema (`fv20251001`):
 ///
 /// - UNB  — interchange header (sender 4012345000023, receiver 9900357000004)
 /// - UNH  — message header (UTILMD:D:11A:UN:S2.1)
-/// - BGM  — document type E01, PID 11001
+/// - BGM  — document type E01, PID 55042
 /// - DTM  — document date 2025-01-15
 /// - RFF  — Z13 reference (Auftragsreferenz)
-/// - NAD+MS — new MSB (nMSB, sender)
+/// - NAD+MS — new MSB (MSBN, sender)
 /// - NAD+MR — grid operator (NB, receiver)
 /// - IDE  — messlokation (Z19 qualifier)
 /// - LOC  — device ID (LOC+172)
 /// - UNT  — message trailer
 /// - UNZ  — interchange trailer
-const UTILMD_11001_BYTES: &[u8] = b"\
+const UTILMD_55042_BYTES: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WIM-2025-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
-BGM+E01:::+00011001::+9'\
+BGM+E01:::+00055042::+9'\
 DTM+137:20250115:102'\
 RFF+Z13:WIM-REF-001'\
 NAD+MS+4012345000023::293'\
@@ -78,8 +78,8 @@ async fn end_to_end_geraetewechsel_pipeline() {
     // ── Step 1: Parse raw EDIFACT bytes ──────────────────────────────────────
     let platform = Platform::with_all_profiles();
     let msg = platform
-        .parse(UTILMD_11001_BYTES)
-        .expect("UTILMD W PID 11001 parse must succeed");
+        .parse(UTILMD_55042_BYTES)
+        .expect("UTILMD W PID 55042 parse must succeed");
 
     // ── Step 2: Validate against BDEW profile rules ──────────────────────────
     let report = msg.validate().expect("validation call must not error");
@@ -94,11 +94,7 @@ async fn end_to_end_geraetewechsel_pipeline() {
             .as_u32(),
     )
     .expect("PID in range");
-    assert_eq!(
-        pid.as_u32(),
-        11001,
-        "PID must be 11001 (Gerätewechsel Anmeldung)"
-    );
+    assert_eq!(pid.as_u32(), 55042, "PID must be 55042 (Anmeldung MSB)");
 
     let (sender, receiver, melo_id, document_date, message_ref) =
         if let AnyMessage::Utilmd(utilmd) = &msg {
@@ -173,7 +169,7 @@ async fn end_to_end_geraetewechsel_pipeline() {
     let envelopes = process
         .execute(command)
         .await
-        .expect("execute must succeed for a valid PID-11001 command");
+        .expect("execute must succeed for a valid PID-55042 command");
 
     // ── Step 6: Verify events ─────────────────────────────────────────────────
     assert!(!envelopes.is_empty(), "at least one event must be emitted");
@@ -193,7 +189,7 @@ async fn end_to_end_geraetewechsel_pipeline() {
         match state {
             DeviceChangeState::ValidationPassed(data) => {
                 assert_eq!(data.melo_id, MeLo::new("DE0001000001234567890000000000001"));
-                assert_eq!(data.pruefidentifikator.as_u32(), 11001);
+                assert_eq!(data.pruefidentifikator.as_u32(), 55042);
             }
             other => panic!("state must be ValidationPassed after valid message; got {other:?}"),
         }

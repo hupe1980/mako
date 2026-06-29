@@ -139,12 +139,12 @@ fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
 }
 
-fn internal_error(msg: impl std::fmt::Display) -> Response {
-    tracing::error!(error = %msg, "partner admin API error");
+fn internal_error(e: impl std::fmt::Display) -> Response {
+    tracing::error!(error = %e, "partner admin API error");
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ErrorResponse {
-            error: msg.to_string(),
+            error: "internal error".to_string(),
         }),
     )
         .into_response()

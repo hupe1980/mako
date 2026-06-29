@@ -28,13 +28,16 @@
 //! | 17101–17135 | WiM Stammdaten / Konfiguration (ORDERS) |
 //! | 31001–31002, 31004–31008 | GPKE Netznutzungsabrechnung / MMM-Rechnung (INVOIC) |
 //! | 31003, 31009 | WiM-Rechnung / MSB-Rechnung (INVOIC) — WiM domain |
-//! | 31010–31011  | Kapazitätsrechnung / sonstige Leistung (INVOIC) — GaBi Gas domain |
+//! | 31010 | Kapazitätsrechnung (INVOIC) — Kapazitätsabrechnung Ausspeisepunkte Gas |
+//! | 31011 | Rechnung sonstige Leistung (INVOIC) — AWH Sperrprozesse Gas |
 //! | 33001–33004  | REMADV Bestätigung/Abweisung — paired with INVOIC workflows |
-//! | 37000–37014  | Netzbetreiberwechsel — PARTIN DSO concession handover (mako-nbw) |
-//! | 39000–39002 | WiM Stornierungen (ORDCHG) |
-//! | 44001–44018, 44555 | GeLi Gas Lieferantenwechsel (UTILMD G) |
-//! | 55001–55018, 55555 | GPKE Lieferantenwechsel / Kündigung / Sperrung (UTILMD) |
-//! | 56001–56004  | GPKE ex-MPES Einspeisung (übernommen per BK6-22-024, LFW24) |
+//! | 37000–37006  | PARTIN Kommunikationsdaten Strom (GPKE Teil 4) |
+//! | 37008–37014  | PARTIN Kommunikationsdaten Gas (GeLi Gas 2.0) |
+//! | 39000–39001 | ORDCHG Stornierung Sperr-/Entsperrauftrag (AWH Sperrprozesse Gas) |
+//! | 39002 | ORDCHG Stornierung Bestellung (WiM Strom Teil 2) |
+//! | 44001–44018 | GeLi Gas Lieferantenwechsel (UTILMD G) |
+//! | 55001–55018 | GPKE Lieferantenwechsel / Kündigung (UTILMD Strom) |
+//! | 55555 | GPKE Teil 4 — Anfrage Daten der individuellen Bestellung (UTILMD Strom) |
 //!
 //! # Usage
 //!

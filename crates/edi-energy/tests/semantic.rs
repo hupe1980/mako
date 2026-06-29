@@ -4,15 +4,19 @@
 //! messages produce clean reports and invalid messages produce the expected
 //! rule ID in their findings.
 
-// Helpers and imports are only used inside feature-gated test fns.
-#![allow(dead_code, unused_imports)]
+// Helper functions and the top-level import are only called from feature-gated
+// test fns; they carry individual #[allow(dead_code)] / #[allow(unused_imports)]
+// annotations below.
 
+// Only used inside feature-gated test fns.
+#[allow(unused_imports)]
 use edi_energy::{EdiEnergyMessage, Platform};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Assert that `report` contains at least one *error* finding whose `rule_id`
 /// starts with `prefix` and that the report is NOT valid.
+#[allow(dead_code)] // only called from feature-gated test fns
 #[track_caller]
 fn assert_has_rule(report: &edi_energy::EdiEnergyReport, prefix: &str) {
     let filtered = report.filter_by_rule_prefix(prefix);
@@ -29,6 +33,7 @@ fn assert_has_rule(report: &edi_energy::EdiEnergyReport, prefix: &str) {
 }
 
 /// Assert that `report` is valid (no error-severity findings).
+#[allow(dead_code)] // only called from feature-gated test fns
 #[track_caller]
 fn assert_valid(report: &edi_energy::EdiEnergyReport) {
     assert!(

@@ -33,7 +33,6 @@
 //! | 44005 | Bestätigung Lieferende Gas (NB an LFN)               | ✅ fv20251001_gas+  |
 //! | 44006 | Ablehnung Lieferende Gas (NB an LFN)                 | ✅ fv20251001_gas+  |
 //! | 44017 | Kündigung Lieferbeginn Gas (LFN an LFA)              | ✅ fv20251001_gas+  |
-//! | 44555 | Anweisung Sperrung Gas (NB an LFN / GNB)            | ✅ fv20251001_gas+  |
 
 use std::collections::HashMap;
 
@@ -265,16 +264,21 @@ impl CommandPayload for GasSupplierChangeCommand {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
-/// PIDs handled by this module (UTILMD G — gas Lieferantenwechsel).
+/// PIDs handled by this module (UTILMD G — gas Lieferantenwechsel, GeLi Gas 2.0/3.0).
 ///
-/// These are the actual BDEW EDI@Energy UTILMD Gas `Prüfidentifikator` values
-/// as defined in the GeLi Gas AHB profiles. **Not** to be confused with the
-/// ORDERS 17xxx range (WiM Messwesen commissioning).
+/// These are the BDEW EDI@Energy UTILMD Gas `Prüfidentifikator` values
+/// as defined in the GeLi Gas AHB profiles per `docs/pid-reference.md`.
+///
+/// **PIDs 44022–44024** (WiM Gas Stornierung) are NOT registered here \u2014
+/// they belong to `mako-wim-gas` per `docs/pid-reference.md`.
 pub const UTILMD_PIDS: &[u32] = &[
     44001, 44002, 44003, 44004, 44005, 44006, // Lieferbeginn / Lieferende (LFN ↔ NB)
-    44017,
-    44018, // Kündigung Lieferbeginn (LFN ↔ LFA)
-           // 44555 Anweisung Sperrung Gas is handled by GeliGasSperrungWorkflow (sperrung.rs)
+    44007, 44008, 44009, // Abmeldung NN vom NB (NB → LFN)
+    44010, 44011, 44012, // Abmeldungsanfrage des NB (NB → LFN)
+    44013, 44014, 44015, // Anmeldung/Abmeldung EoG
+    44016, // Kündigung beim alten Lieferanten
+    44017, 44018, // Kündigung Lieferbeginn (LFN ↔ LFA)
+    44019, 44020, 44021, // Bestandsliste / Änderungsmeldung
 ];
 
 /// GeLi Gas supplier-change workflow (PIDs 44001–44006, 44017–44018).

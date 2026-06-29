@@ -7,8 +7,11 @@
 //!   [`Error::ProfileNotFound`], not a spurious validation result.
 //! - A message carrying a registered release code validates correctly.
 
-#![allow(dead_code, unused_imports)]
+// All constants are guarded by #[cfg(feature = "...")] — no blanket lint
+// suppression needed.
 
+// Imports are used exclusively in feature-gated test fns.
+#[allow(unused_imports)]
 use edi_energy::{EdiEnergyMessage, Error, MessageType, Release};
 
 // ── Multi-release coexistence fixtures ───────────────────────────────────────

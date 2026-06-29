@@ -119,7 +119,7 @@ By default this enables the four most common message types: **UTILMD**, **MSCONS
 Enable additional types:
 
 ```toml
-edi-energy = { version = "0.2", features = ["invoic", "remadv", "orders"] }
+edi-energy = { version = "0.3", features = ["invoic", "remadv", "orders"] }
 ```
 
 ### Feature flags
@@ -290,7 +290,7 @@ sequenceDiagram
 ```toml
 [dependencies]
 # Core runtime
-mako-engine = { version = "0.2", features = ["testing"] }  # add "slatedb" for production
+mako-engine = { version = "0.3", features = ["testing"] }  # add "slatedb" for production
 
 # One or more domain crates depending on the market role:
 mako-gpke     = "0.2"   # GPKE — Lieferbeginn/-ende Strom (PIDs 55001–56010)

@@ -1,24 +1,28 @@
-//! WiM Stornierung — cancellation of commissioning orders (PIDs 39000–39002).
+//! WiM Stornierung — cancellation of commissioning orders (ORDCHG PID 39002).
 //!
-//! Models the BDEW WiM process by which a party cancels an existing device
-//! commissioning order (Sperr-/Entsperrauftrag) by sending an ORDCHG message.
+//! Models the BDEW WiM Strom Teil 2 process by which a party cancels an existing
+//! device commissioning order by sending an ORDCHG message.
+//!
+//! **PIDs 39000** ("Stornierung Sperr-/Entsperrauftrag", AWH Sperrprozesse Gas) and
+//! **39001** ("Weiterleitung der Stornierung", AWH Sperrprozesse Gas) belong to
+//! Gas Sperrprozesse and must NOT be registered here.
 //!
 //! # Process flow
 //!
 //! ```text
-//! Requesting party → ORDCHG 39000 (Stornierung) ─────────────────── NB/aMSB
-//!                                                                        │
-//! Requesting party ← ORDRSP 39001 (Bestätigung Stornierung) ←── 5 Werktage
-//!                  or ORDRSP 39002 (Ablehnung Stornierung)
+//! Requesting party → ORDCHG 39002 (Stornierung der Bestellung) ───────── NB/aMSB
+//!                                                                             │
+//! Requesting party ← ORDRSP 19013 (Bestätigung Stornierung) ←─── 5 Werktage
+//!                  or ORDRSP 19014 (Ablehnung Stornierung)
 //! ```
 //!
-//! Note: PIDs 39001 and 39002 are the ORDRSP response PIDs dispatched as
-//! outbox entries. Only 39000 is registered in the PID router.
+//! Only ORDCHG 39002 is registered in the PID router.
+//! ORDRSP 19013/19014 are dispatched as outbox entries.
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW WiM AHB** — Stornierung Sperr-/Entsperrauftrag
-//! - **BNetzA BK6-18-032** — 5 Werktage Frist for ORDRSP response
+//! - **BDEW WiM AHB Strom** — Stornierung der Bestellung (Teil 2)
+//! - **BNetzA BK6-24-174** — 5 Werktage Frist for ORDRSP response
 
 use std::collections::HashMap;
 
@@ -34,13 +38,22 @@ use mako_engine::{
 // ── PID constants ─────────────────────────────────────────────────────────────
 
 /// Inbound ORDCHG PID — triggers a new `WimStornierungWorkflow` process.
-pub const STORNIERUNG_PID: u32 = 39_000;
+///
+/// **PID 39000** ("Stornierung Sperr-/Entsperrauftrag", AWH Sperrprozesse Gas)
+/// belongs to Gas Sperrprozesse (`mako-geli-gas` / `mako-wim-gas`) per
+/// `docs/pid-reference.md`. It must not be registered in `mako-wim`.
+///
+/// **PID 39001** ("Weiterleitung der Stornierung", AWH Sperrprozesse Gas)
+/// also belongs to Gas Sperrprozesse. It must not be registered here.
+pub const STORNIERUNG_PID: u32 = 39_002;
 
 /// ORDRSP PID for a **positive** Stornierung response (cancellation accepted).
-pub const BESTAETIGUNG_PID: u32 = 39_001;
+/// Per BDEW ORDRSP AHB / WiM Strom Teil 2.
+pub const BESTAETIGUNG_PID: u32 = 19_013;
 
 /// ORDRSP PID for a **negative** Stornierung response (cancellation rejected).
-pub const ABLEHNUNG_PID: u32 = 39_002;
+/// Per BDEW ORDRSP AHB / WiM Strom Teil 2.
+pub const ABLEHNUNG_PID: u32 = 19_014;
 
 /// Deadline label for the 5-Werktage ORDRSP response window (WiM BK6-18-032).
 ///
@@ -61,7 +74,7 @@ pub const STORNIERUNG_DEADLINE_LABEL: &str = "wim-stornierung-deadline";
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum StornierungEvent {
-    /// ORDCHG 39000 (Stornierung) received.
+    /// ORDCHG 39002 (Stornierung der Bestellung) received.
     StornierungReceived {
         /// GLN of the message sender.
         sender: MarktpartnerCode,
@@ -81,12 +94,12 @@ pub enum StornierungEvent {
         /// Reference of the validated message.
         message_ref: MessageRef,
     },
-    /// ORDRSP 39001 dispatched — cancellation accepted.
+    /// ORDRSP 19013 dispatched — cancellation accepted.
     Bestaetigt {
         /// Message reference of the dispatched ORDRSP.
         response_ref: MessageRef,
     },
-    /// ORDRSP 39002 dispatched — cancellation rejected.
+    /// ORDRSP 19014 dispatched — cancellation rejected.
     Abgelehnt {
         /// Human-readable rejection reason.
         reason: String,
@@ -158,9 +171,9 @@ pub enum StornierungState {
     StornierungReceived(StornierungData),
     /// Validation passed; awaiting ORDRSP dispatch decision.
     ValidationPassed(StornierungData),
-    /// Cancellation confirmed (ORDRSP 39001 dispatched).
+    /// Cancellation confirmed (ORDRSP 19013 dispatched).
     Bestaetigt(StornierungData),
-    /// Cancellation rejected (ORDRSP 39002 dispatched or validation failed).
+    /// Cancellation rejected (ORDRSP 19014 dispatched or validation failed).
     Abgelehnt {
         /// Human-readable rejection reason.
         reason: String,
@@ -192,7 +205,7 @@ impl StornierungState {
 /// Commands for the WiM Stornierung workflow.
 #[derive(Clone)]
 pub enum StornierungCommand {
-    /// Inbound ORDCHG 39000 — Stornierung Sperr-/Entsperrauftrag.
+    /// Inbound ORDCHG 39002 — Stornierung der Bestellung (WiM Strom Teil 2).
     ///
     /// Domain fields extracted and EDIFACT validation performed at the
     /// transport boundary **before** constructing this command.
@@ -216,14 +229,14 @@ pub enum StornierungCommand {
         /// Validation error messages when `validation_passed = false`.
         validation_errors: Vec<String>,
     },
-    /// Dispatch ORDRSP 39001 — cancellation accepted.
+    /// Phase 2: Dispatch ORDRSP 19013 — cancellation accepted.
     ///
     /// **BNetzA BK6-18-032**: ORDRSP must be sent within **5 Werktage**.
     Accept {
         /// Message reference assigned to the outbound ORDRSP.
         response_ref: MessageRef,
     },
-    /// Dispatch ORDRSP 39002 — cancellation rejected.
+    /// Phase 2: Dispatch ORDRSP 19014 — cancellation rejected.
     Reject {
         /// Human-readable rejection reason.
         reason: String,
@@ -545,7 +558,7 @@ mod tests {
 
     fn stornierung_cmd(valid: bool) -> StornierungCommand {
         StornierungCommand::ReceiveOrdchg {
-            pid: Pruefidentifikator::new(39_000).unwrap(),
+            pid: Pruefidentifikator::new(39_002).unwrap(),
             sender: MarktpartnerCode::new("9900123456789"),
             receiver: MarktpartnerCode::new("4012345000023"),
             melo_id: MeLo::new("DE00056789012"),
@@ -611,7 +624,7 @@ mod tests {
         let result = WimStornierungWorkflow::handle(
             &state,
             StornierungCommand::ReceiveOrdchg {
-                pid: Pruefidentifikator::new(39_001).unwrap(),
+                pid: Pruefidentifikator::new(39_000).unwrap(), // Gas Sperrung PID — must be rejected
                 sender: MarktpartnerCode::new("9900123456789"),
                 receiver: MarktpartnerCode::new("4012345000023"),
                 melo_id: MeLo::new("DE00056789012"),
@@ -622,7 +635,10 @@ mod tests {
                 validation_errors: vec![],
             },
         );
-        assert!(result.is_err(), "PID 39001 is an outbound PID, not inbound");
+        assert!(
+            result.is_err(),
+            "PID 39000 (Gas Sperrung) must be rejected by WiM Stornierung"
+        );
     }
 
     #[test]

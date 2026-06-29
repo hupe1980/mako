@@ -17,7 +17,27 @@
 //!
 //! ```json
 //! { "expected_rule_prefixes": ["SEM-UTILMD-MALO-FORMAT"] }
-#![allow(dead_code, unused_imports)]
+// Helper functions and imports are gated by the same #[cfg(any(feature = …))]
+// blocks as the test fns that call them — no blanket suppression needed.
+#[cfg(any(
+    feature = "utilmd",
+    feature = "mscons",
+    feature = "aperak",
+    feature = "contrl",
+    feature = "invoic",
+    feature = "remadv",
+    feature = "orders",
+    feature = "iftsta",
+    feature = "insrpt",
+    feature = "reqote",
+    feature = "partin",
+    feature = "ordchg",
+    feature = "ordrsp",
+    feature = "quotes",
+    feature = "comdis",
+    feature = "pricat",
+    feature = "utilts",
+))]
 use std::path::{Path, PathBuf};
 
 #[cfg(any(

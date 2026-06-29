@@ -3,18 +3,7 @@
   "message_type": "APERAK",
   "release": "2.1i",
   "valid_from": "2025-10-01",
-  "ordering_hint": [
-    "UNH",
-    "BGM",
-    "DTM",
-    "RFF",
-    "NAD",
-    "CTA",
-    "COM",
-    "ERC",
-    "FTX",
-    "UNT"
-  ],
+  "ordering_hint": [],
   "segments": [
     {
       "tag": "UNH",

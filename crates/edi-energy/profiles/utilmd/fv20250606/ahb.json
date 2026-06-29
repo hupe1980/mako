@@ -120,6 +120,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "DTM",
           "requirement": "C",
@@ -280,6 +303,29 @@
         }
       ],
       "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
         {
           "group_id": "SG4",
           "tag": "DTM",
@@ -442,6 +488,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "DTM",
           "requirement": "C",
@@ -602,6 +671,29 @@
         }
       ],
       "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
         {
           "group_id": "SG4",
           "tag": "DTM",
@@ -785,6 +877,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "DTM",
           "requirement": "C",
@@ -966,6 +1081,29 @@
         }
       ],
       "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
         {
           "group_id": "SG4",
           "tag": "DTM",
@@ -1149,6 +1287,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "DTM",
           "requirement": "C",
@@ -1289,6 +1450,29 @@
         }
       ],
       "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
         {
           "group_id": "SG4",
           "tag": "DTM",
@@ -1443,40 +1627,9 @@
           "_description": "SEQ is optional per MIG S2.1 (no AHB constraint for PID 55555)"
         }
       ],
-      "group_rules": []
-    },
-    {
-      "code": 56001,
-      "name": "Einspeisung Anmeldung (Anfrage LFE an NB)",
-      "segment_rules": [
+      "group_rules": [
         {
-          "tag": "BGM",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "1001": [
-              "E01"
-            ]
-          },
-          "field_rules": []
-        },
-        {
-          "tag": "DTM",
-          "requirement": "M",
-          "required_qualifiers": {
-            "2005": [
-              "137"
-            ]
-          },
-          "field_rules": [
-            {
-              "element": "2005",
-              "requirement": "M",
-              "element_index": 0
-            }
-          ],
-          "conditional_rules": []
-        },
-        {
+          "group_id": "SG2",
           "tag": "NAD",
           "requirement": "M",
           "qualifier_restrictions": {
@@ -1485,25 +1638,10 @@
               "MR"
             ]
           },
-          "field_rules": []
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
         },
         {
-          "tag": "IDE",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "7495": [
-              "Z19"
-            ]
-          },
-          "field_rules": [
-            {
-              "element": "7402",
-              "requirement": "M",
-              "element_index": 0
-            }
-          ]
-        },
-        {
+          "group_id": "SG6",
           "tag": "RFF",
           "requirement": "M",
           "qualifier_restrictions": {
@@ -1511,452 +1649,7 @@
               "Z13"
             ]
           },
-          "field_rules": []
-        },
-        {
-          "tag": "FTX",
-          "requirement": "O",
-          "conditional_rules": []
-        },
-        {
-          "tag": "CCI",
-          "requirement": "O",
-          "conditional_rules": []
-        }
-      ],
-      "group_rules": [
-        {
-          "group_id": "SG4",
-          "tag": "DTM",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "E01",
-              "when_additional_elements": [
-                {
-                  "element_index": 2,
-                  "value": "A06"
-                }
-              ],
-              "then_requirement": "M",
-              "then_qualifier_index": 0,
-              "then_qualifier_value": "Z07",
-              "_description": "[358] Wenn STS+E01++A06 (Status: in Bearbeitung) vorhanden, ist DTM+Z07 (Lieferbeginndatum in Bearbeitung) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
-        },
-        {
-          "group_id": "SG4",
-          "tag": "FTX",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "E01",
-              "when_additional_elements": [
-                {
-                  "element_index": 2,
-                  "value": "A99"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
-        }
-      ]
-    },
-    {
-      "code": 56002,
-      "name": "Einspeisung Abmeldung / Kündigung (Anfrage LFE an NB)",
-      "segment_rules": [
-        {
-          "tag": "BGM",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "1001": [
-              "E03"
-            ]
-          },
-          "field_rules": []
-        },
-        {
-          "tag": "DTM",
-          "requirement": "M",
-          "required_qualifiers": {
-            "2005": [
-              "137"
-            ]
-          },
-          "field_rules": [
-            {
-              "element": "2005",
-              "requirement": "M",
-              "element_index": 0
-            }
-          ],
-          "conditional_rules": []
-        },
-        {
-          "tag": "NAD",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "3035": [
-              "MS",
-              "MR"
-            ]
-          },
-          "field_rules": []
-        },
-        {
-          "tag": "IDE",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "7495": [
-              "Z19"
-            ]
-          },
-          "field_rules": [
-            {
-              "element": "7402",
-              "requirement": "M",
-              "element_index": 0
-            }
-          ]
-        },
-        {
-          "tag": "RFF",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "1153": [
-              "Z13"
-            ]
-          },
-          "field_rules": []
-        },
-        {
-          "tag": "FTX",
-          "requirement": "O",
-          "conditional_rules": []
-        },
-        {
-          "tag": "CCI",
-          "requirement": "O",
-          "conditional_rules": []
-        }
-      ],
-      "group_rules": [
-        {
-          "group_id": "SG4",
-          "tag": "DTM",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "E01",
-              "when_additional_elements": [
-                {
-                  "element_index": 2,
-                  "value": "A06"
-                }
-              ],
-              "then_requirement": "M",
-              "then_qualifier_index": 0,
-              "then_qualifier_value": "Z07",
-              "_description": "[358] Wenn STS+E01++A06 (Status: in Bearbeitung) vorhanden, ist DTM+Z07 (Lieferbeginndatum in Bearbeitung) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
-        },
-        {
-          "group_id": "SG4",
-          "tag": "FTX",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "E01",
-              "when_additional_elements": [
-                {
-                  "element_index": 2,
-                  "value": "A99"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
-        }
-      ]
-    },
-    {
-      "code": 56003,
-      "name": "Einspeisung Bestätigung (Antwort NB an LFE, fristgerecht)",
-      "segment_rules": [
-        {
-          "tag": "BGM",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "1001": [
-              "E0F"
-            ]
-          },
-          "field_rules": []
-        },
-        {
-          "tag": "DTM",
-          "requirement": "M",
-          "required_qualifiers": {
-            "2005": [
-              "137"
-            ]
-          },
-          "field_rules": [
-            {
-              "element": "2005",
-              "requirement": "M",
-              "element_index": 0
-            }
-          ],
-          "conditional_rules": []
-        },
-        {
-          "tag": "NAD",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "3035": [
-              "MS",
-              "MR"
-            ]
-          },
-          "field_rules": []
-        },
-        {
-          "tag": "IDE",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "7495": [
-              "Z19"
-            ]
-          },
-          "field_rules": [
-            {
-              "element": "7402",
-              "requirement": "M",
-              "element_index": 0
-            }
-          ]
-        },
-        {
-          "tag": "RFF",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "1153": [
-              "Z13"
-            ]
-          },
-          "field_rules": []
-        },
-        {
-          "tag": "FTX",
-          "requirement": "O",
-          "conditional_rules": []
-        }
-      ],
-      "group_rules": [
-        {
-          "group_id": "SG4",
-          "tag": "DTM",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "E01",
-              "when_additional_elements": [
-                {
-                  "element_index": 2,
-                  "value": "A06"
-                }
-              ],
-              "then_requirement": "M",
-              "then_qualifier_index": 0,
-              "then_qualifier_value": "Z07",
-              "_description": "[358] Wenn STS+E01++A06 (Status: in Bearbeitung) vorhanden, ist DTM+Z07 (Lieferbeginndatum in Bearbeitung) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
-        },
-        {
-          "group_id": "SG4",
-          "tag": "FTX",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "E01",
-              "when_additional_elements": [
-                {
-                  "element_index": 2,
-                  "value": "A99"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
-        }
-      ]
-    },
-    {
-      "code": 56004,
-      "name": "Einspeisung Ablehnung (Antwort NB an LFE)",
-      "segment_rules": [
-        {
-          "tag": "BGM",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "1001": [
-              "E1A"
-            ]
-          },
-          "field_rules": []
-        },
-        {
-          "tag": "DTM",
-          "requirement": "M",
-          "required_qualifiers": {
-            "2005": [
-              "137"
-            ]
-          },
-          "field_rules": [
-            {
-              "element": "2005",
-              "requirement": "M",
-              "element_index": 0
-            }
-          ],
-          "conditional_rules": []
-        },
-        {
-          "tag": "NAD",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "3035": [
-              "MS",
-              "MR"
-            ]
-          },
-          "field_rules": []
-        },
-        {
-          "tag": "IDE",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "7495": [
-              "Z19"
-            ]
-          },
-          "field_rules": [
-            {
-              "element": "7402",
-              "requirement": "M",
-              "element_index": 0
-            }
-          ]
-        },
-        {
-          "tag": "RFF",
-          "requirement": "M",
-          "qualifier_restrictions": {
-            "1153": [
-              "Z13"
-            ]
-          },
-          "field_rules": []
-        },
-        {
-          "tag": "FTX",
-          "requirement": "O",
-          "conditional_rules": []
-        }
-      ],
-      "group_rules": [
-        {
-          "group_id": "SG4",
-          "tag": "DTM",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "7",
-              "when_additional_elements": [
-                {
-                  "element_index": 2,
-                  "value_alternatives": [
-                    "ZG9",
-                    "ZH1",
-                    "ZH2"
-                  ]
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht"
-            },
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "7",
-              "when_additional_elements": [
-                {
-                  "element_index": 2,
-                  "value_alternatives": [
-                    "ZG9",
-                    "ZH1",
-                    "ZH2"
-                  ]
-                }
-              ],
-              "then_requirement": "M",
-              "then_qualifier_index": 0,
-              "then_qualifier_value": "36",
-              "_description": "[11] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+36 (Ende) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
-        },
-        {
-          "group_id": "SG4",
-          "tag": "FTX",
-          "requirement": "C",
-          "conditional_rules": [
-            {
-              "when_tag": "STS",
-              "when_element_index": 0,
-              "when_value": "E01",
-              "when_additional_elements": [
-                {
-                  "element_index": 2,
-                  "value": "A99"
-                }
-              ],
-              "then_requirement": "M",
-              "_description": "[48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht"
-            }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
         }
       ]
     }

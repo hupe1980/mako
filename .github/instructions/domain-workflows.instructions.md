@@ -17,11 +17,16 @@ applyTo: "crates/mako-gpke/**, crates/mako-wim/**, crates/mako-geli-gas/**, crat
 | 31003, 31009 | `mako-wim` (WiM-Rechnung / MSB-Rechnung) | BK6-24-174 |
 | 13003 | `mako-mabis` | BK6-24-174 |
 | 44001–44006, 44017–44018, 44555 | `mako-geli-gas` | BK7-24-01-009 |
-| 44022–44053 | `mako-wim-gas` | BK7-24-01-009 |
+| 44039–44041 | `mako-wim-gas` (Kündigung MSB Gas) | BK7-24-01-009 |
+| 44042–44053 | `mako-wim-gas` (Anmeldung / Ende MSB Gas) | BK7-24-01-009 |
+| 44168–44170 | `mako-wim-gas` (Verpflichtungsanfrage) | BK7-24-01-009 |
 | 31010–31011 | `mako-gabi-gas` | BK7 |
 
 **PIDs that do NOT exist — never register:**
 44007–44016, 56005–56010, 13001, 11004–11099.
+
+**PIDs that belong to GeLi Gas, NOT WiM Gas:**
+44022–44024 (GeLi Gas Stornierung). Do not register these in `mako-wim-gas`.
 
 ## APERAK Fristen — never mix these up
 
@@ -59,9 +64,16 @@ Saturday = Werktag. Sundays and German public holidays do not count. All deadlin
 - Only PID **13003** (Bilanzkreisabrechnung Strom, BKV↔ÜNB). No other PIDs.
 - PIDs 13002–13028 (excl. 13003) are Messwesen PIDs — they do not belong here.
 
-## crates/mako-wim-gas / crates/mako-gabi-gas
+## crates/mako-wim-gas
 
-Placeholder crates. Do not implement business logic until the governing ruling is final and AHB profiles exist.
+- Governed by **BK7-24-01-009** (same umbrella as GeLi Gas).
+- PID ownership: **44039–44041** (Kündigung MSB Gas), **44042–44053** (Anmeldung / Ende MSB Gas), **44168–44170** (Verpflichtungsanfrage).
+- PIDs **44022–44024** are GeLi Gas Stornierung — do NOT register in this crate.
+- APERAK deadline: **10 Werktage** (same as GeLi Gas).
+- All three workflow modules (`kuendigung`, `anmeldung`, `verpflichtungsanfrage`) are implemented with full state machines.
+- AHB profiles for these PIDs are not yet imported; the adapter layer applies `pid_has_ahb_rules()` guards.
+
+## crates/mako-gabi-gas
 
 ## Cross-crate Rules
 

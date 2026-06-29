@@ -16,9 +16,11 @@
 //! # Output
 //!
 //! ```text
-//! COVERED   utilmd  11001  (tests/fixtures/utilmd/valid/pid_11001.edi)
-//! COVERED   utilmd  11004  (tests/fixtures/utilmd/valid/pid_11004.edi)
-//! MISSING   utilmd  11043  — no .edi fixture BGM segment found
+//! COVERED   utilmd  44001  (tests/fixtures/utilmd/valid/beispiel_44001_lieferbeginn_gas.edi)
+//! COVERED   utilmd  55001  (tests/fixtures/utilmd/valid/beispiel_55001_lieferbeginn.edi)
+//! MISSING   utilmd  11001  — no .edi fixture BGM segment found
+//!                          (WiM Strom AHB profiles not yet imported; add fixture after
+//!                           `cargo xtask import-xml-ahb` imports PIDs 11001–11003)
 //! ```
 //!
 //! # Exit codes

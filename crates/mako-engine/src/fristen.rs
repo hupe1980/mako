@@ -675,4 +675,52 @@ mod tests {
         );
         assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
     }
+
+    /// Deadline that lands on the day *after* the spring-forward transition
+    /// must use CEST (UTC+2), not CET (UTC+1).
+    ///
+    /// 2025-03-30 02:00 CET → 03:00 CEST (spring-forward).
+    /// received = Wednesday 2025-03-26; +4 Werktage:
+    ///   Thu 27 (+1), Fri 28 (+2), Sat 29 (+3), Sun 30 (skip), Mon 31 (+4).
+    /// Deadline falls on Monday 2025-03-31 which is CEST: 17:00 CEST = 15:00 UTC.
+    #[test]
+    fn deadline_on_day_after_spring_forward_is_cest() {
+        let received = OffsetDateTime::new_utc(date(2025, 3, 26), Time::MIDNIGHT);
+        let due = deadline_at_werktage(received, 4, HolidayCalendar::BdewMaKo);
+        assert_eq!(
+            due.date(),
+            date(2025, 3, 31),
+            "should land on Monday 2025-03-31"
+        );
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).hour(),
+            15,
+            "CEST: 17:00 local = 15:00 UTC (spring-forward already happened)"
+        );
+        assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
+    }
+
+    /// Deadline that lands on the day *after* the fall-back transition must
+    /// use CET (UTC+1), not CEST (UTC+2).
+    ///
+    /// 2025-10-26 03:00 CEST → 02:00 CET (fall-back).
+    /// received = Wednesday 2025-10-22; +4 Werktage:
+    ///   Thu 23 (+1), Fri 24 (+2), Sat 25 (+3), Sun 26 (skip), Mon 27 (+4).
+    /// Deadline falls on Monday 2025-10-27 which is CET: 17:00 CET = 16:00 UTC.
+    #[test]
+    fn deadline_on_day_after_fall_back_is_cet() {
+        let received = OffsetDateTime::new_utc(date(2025, 10, 22), Time::MIDNIGHT);
+        let due = deadline_at_werktage(received, 4, HolidayCalendar::BdewMaKo);
+        assert_eq!(
+            due.date(),
+            date(2025, 10, 27),
+            "should land on Monday 2025-10-27"
+        );
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).hour(),
+            16,
+            "CET: 17:00 local = 16:00 UTC (fall-back already happened)"
+        );
+        assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
+    }
 }

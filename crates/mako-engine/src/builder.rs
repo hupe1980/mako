@@ -163,10 +163,6 @@ pub trait EngineModule: Send + 'static {
     ///     for &pid in &[55001_u32, 55002, 55017] {
     ///         router.register(pid, "gpke-supplier-change");
     ///     }
-    ///     // Ex-MPES Einspeisestelle (übernommen per BK6-22-024 LFW24, ab 2025-06-06, PIDs 56001–56004)
-    ///     for pid in 56001_u32..=56004 {
-    ///         router.register(pid, "gpke-supplier-change");
-    ///     }
     /// }
     /// ```
     ///
@@ -1254,6 +1250,26 @@ impl<ES, SS, OS, DS, PR> EngineBuilder<ES, SS, OS, DS, PR> {
     }
 
     /// Set the snapshot store (default: [`NoopSnapshotStore`]).
+    ///
+    /// ## Default: `NoopSnapshotStore`
+    ///
+    /// Without calling this method the builder uses [`NoopSnapshotStore`],
+    /// which silently discards all snapshot writes and returns `None` for
+    /// every snapshot read.  The engine still functions correctly — every
+    /// command handling call replays the full event log from the beginning
+    /// instead of starting from a stored snapshot.  For low-volume processes
+    /// this is fine; for long-lived processes with many events the replay cost
+    /// can become significant.
+    ///
+    /// Enable snapshotting in production by providing a real [`SnapshotStore`]
+    /// implementation (e.g. the SlateDB-backed store in `makod`).  In tests,
+    /// [`InMemorySnapshotStore`][crate::snapshot::InMemorySnapshotStore] is
+    /// available behind the `testing` feature flag.
+    ///
+    /// Note: [`Process::state_with_snapshot`][crate::process::Process::state_with_snapshot]
+    /// is a compile-time no-op when the snapshot store is `NoopSnapshotStore`
+    /// — it never calls the store and always returns `None`, so no snapshot is
+    /// ever saved or loaded.
     #[must_use]
     pub fn with_snapshot_store<SS2: SnapshotStore>(
         self,
@@ -1466,50 +1482,96 @@ where
     #[must_use]
     #[allow(clippy::too_many_lines)]
     pub fn build(self) -> EngineContext<ES, SS, OS, DS, PR> {
-        // Warn when Noop stores are active — they are fine for testing but
-        // silently lose data in production. Checking type names is the only
-        // approach that works with the generic type-state builder without adding
-        // a new marker trait or changing the public API.
+        // ── Noop store safety checks ──────────────────────────────────────────
         //
-        // Gate: always emit in `testing` / `#[cfg(test)]` builds so that test
-        // harnesses see the warning in their log output. Also emit when the
-        // `tracing` feature is enabled (explicit instrumentation mode). In
-        // release production builds without the `testing` feature, Noop stores
-        // are not constructible at all (the struct definitions are cfg-gated),
-        // so this branch is dead code and will be optimised away by the compiler.
-        #[cfg(any(test, feature = "testing", feature = "tracing"))]
+        // Noop stores lose data silently: NoopDeadlineStore drops every APERAK
+        // deadline (BNetzA violation), NoopOutboxStore discards all outbound
+        // messages, NoopProcessRegistry loses conversation routing on restart.
+        //
+        // In production builds (no `testing` feature, not running under
+        // `#[test]`), the Noop constructors are cfg-gated out so this branch
+        // is dead code and compiles away. In test/testing/tracing builds we
+        // emit warnings so test harnesses see the configuration in log output.
+        //
+        // IMPORTANT: if you are reading this because a panic fired in production,
+        // it means the `testing` feature was accidentally enabled in the binary.
+        // Remove it from the production Cargo.toml feature list immediately.
         {
-            let ss_name = std::any::type_name::<SS>();
             let os_name = std::any::type_name::<OS>();
             let ds_name = std::any::type_name::<DS>();
             let pr_name = std::any::type_name::<PR>();
-            if ss_name.contains("NoopSnapshotStore") {
-                tracing::warn!(
-                    store = ss_name,
-                    "EngineBuilder: NoopSnapshotStore is active — snapshots will not be persisted. \
-                     Use SlateDbStore::as_snapshot_store() in production."
-                );
+
+            // Regulatory-critical stores: panic in any build context if these
+            // are noop. OutboxStore and DeadlineStore must be durable in
+            // production; ProcessRegistry must survive restarts.
+            #[cfg(not(any(test, feature = "testing")))]
+            {
+                if ds_name.contains("NoopDeadlineStore") {
+                    panic!(
+                        "EngineBuilder::build: NoopDeadlineStore is active in a \
+                         non-testing build. This silently discards all APERAK deadlines, \
+                         which is an immediately reportable BNetzA violation \
+                         (BK6-22-024 §5, BK7-24-01-009). \
+                         Call .with_deadline_store(SlateDbStore::as_deadline_store()) \
+                         in your production engine assembly. \
+                         If this is a test, enable the 'testing' feature."
+                    );
+                }
+                if os_name.contains("NoopOutboxStore") {
+                    panic!(
+                        "EngineBuilder::build: NoopOutboxStore is active in a \
+                         non-testing build. This silently discards all outbound \
+                         APERAK, CONTRL, and UTILMD messages. \
+                         Call .with_outbox_store(SlateDbStore::as_outbox_store()) \
+                         in your production engine assembly. \
+                         If this is a test, enable the 'testing' feature."
+                    );
+                }
+                if pr_name.contains("NoopProcessRegistry") {
+                    panic!(
+                        "EngineBuilder::build: NoopProcessRegistry is active in a \
+                         non-testing build. This means conversation routing \
+                         (PID → stream_id lookup) is lost on every restart, \
+                         breaking all WiM, GeLi Gas, and GPKE in-flight processes. \
+                         Call .with_registry(SlateDbStore::as_process_registry()) \
+                         in your production engine assembly. \
+                         If this is a test, enable the 'testing' feature."
+                    );
+                }
             }
-            if os_name.contains("NoopOutboxStore") {
-                tracing::warn!(
-                    store = os_name,
-                    "EngineBuilder: NoopOutboxStore is active — outbound messages will be silently \
-                     discarded. Use SlateDbStore::as_outbox_store() in production."
-                );
-            }
-            if ds_name.contains("NoopDeadlineStore") {
-                tracing::warn!(
-                    store = ds_name,
-                    "EngineBuilder: NoopDeadlineStore is active — scheduled deadlines will not fire \
-                     after restart. Use SlateDbStore::as_deadline_store() in production."
-                );
-            }
-            if pr_name.contains("NoopProcessRegistry") {
-                tracing::warn!(
-                    store = pr_name,
-                    "EngineBuilder: NoopProcessRegistry is active — process routing will be lost on \
-                     restart. Use SlateDbStore::as_process_registry() in production."
-                );
+
+            // In test/testing/tracing builds: emit warnings instead of panicking.
+            #[cfg(any(test, feature = "testing", feature = "tracing"))]
+            {
+                let ss_name = std::any::type_name::<SS>();
+                if ss_name.contains("NoopSnapshotStore") {
+                    tracing::warn!(
+                        store = ss_name,
+                        "EngineBuilder: NoopSnapshotStore is active — snapshots will not be \
+                         persisted. Use SlateDbStore::as_snapshot_store() in production."
+                    );
+                }
+                if os_name.contains("NoopOutboxStore") {
+                    tracing::warn!(
+                        store = os_name,
+                        "EngineBuilder: NoopOutboxStore is active — outbound messages will be \
+                         silently discarded. Use SlateDbStore::as_outbox_store() in production."
+                    );
+                }
+                if ds_name.contains("NoopDeadlineStore") {
+                    tracing::warn!(
+                        store = ds_name,
+                        "EngineBuilder: NoopDeadlineStore is active — scheduled deadlines will \
+                         not fire after restart. Use SlateDbStore::as_deadline_store() in production."
+                    );
+                }
+                if pr_name.contains("NoopProcessRegistry") {
+                    tracing::warn!(
+                        store = pr_name,
+                        "EngineBuilder: NoopProcessRegistry is active — process routing will be \
+                         lost on restart. Use SlateDbStore::as_process_registry() in production."
+                    );
+                }
             }
         }
         // Validate every module before assembling the context.

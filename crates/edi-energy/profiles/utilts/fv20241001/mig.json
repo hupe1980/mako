@@ -4,24 +4,7 @@
   "release": "1.1e",
   "valid_from": "2024-10-01",
   "pid_source": "rff_z13",
-  "ordering_hint": [
-    "UNH",
-    "BGM",
-    "DTM",
-    "NAD",
-    "CTA",
-    "COM",
-    "IDE",
-    "LOC",
-    "STS",
-    "FTX",
-    "RFF",
-    "SEQ",
-    "CCI",
-    "CAV",
-    "QTY",
-    "UNT"
-  ],
+  "ordering_hint": [],
   "segments": [
     {
       "tag": "UNH",

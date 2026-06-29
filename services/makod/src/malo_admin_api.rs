@@ -122,8 +122,9 @@ fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
 }
 
-fn internal_error(msg: impl std::fmt::Display) -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string()).into_response()
+fn internal_error(e: impl std::fmt::Display) -> Response {
+    tracing::error!("malo-admin-api internal error: {e}");
+    (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
 }
 
 fn iso_now() -> String {

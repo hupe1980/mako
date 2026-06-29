@@ -1,6 +1,6 @@
-//! End-to-end test: nMSB → NB WiM Stornierung (PID 39000).
+//! End-to-end test: nMSB → NB WiM Stornierung (PID 39002).
 //!
-//! A mock NB (Netzbetreiber / aMSB) receives an ORDCHG 39000 (Stornierung
+//! A mock NB (Netzbetreiber / aMSB) receives an ORDCHG 39002 (Stornierung
 //! Sperr-/Entsperrauftrag) from the requesting party and dispatches a positive
 //! or negative ORDRSP response.
 //!
@@ -9,7 +9,7 @@
 //! ```text
 //!   nMSB ERP (wire fixture)                     NB/aMSB ERP (MockNb)
 //!   ───────────────────────────────────────────────────────────────────
-//!                        ──── ORDCHG 39000 ───►
+//!                        ──── ORDCHG 39002 ───►
 //!                                                receive_ordchg(wire)
 //!                                                  → adapter: ReceiveOrdchg
 //!                                                  → state: ValidationPassed
@@ -21,7 +21,7 @@
 //!
 //! # Regulatory context
 //!
-//! - **PID 39000**: Stornierung Sperr-/Entsperrauftrag (ORDCHG, nMSB → NB)
+//! - **PID 39002**: Stornierung der Bestellung (ORDCHG, nMSB → NB)
 //! - **ORDRSP Frist**: **5 Werktage** (BNetzA BK6-18-032)
 //! - **Saturday counts as a Werktag**; Sunday and public holidays do not.
 //! - NB state machine:
@@ -50,15 +50,15 @@ const NB_ID: &str = "4012345000023"; // NB/aMSB (receiver)
 const MELO_ID: &str = "E0000000000000000001"; // Messlokation EIC code
 const FV: &str = "FV2025-10-01";
 
-// ── ORDCHG 39000 wire fixture ─────────────────────────────────────────────────
+// ── ORDCHG 39002 wire fixture ─────────────────────────────────────────────────
 //
-// Minimal EDIFACT ORDCHG — Stornierung Sperr-/Entsperrauftrag (PID 39000).
+// Minimal EDIFACT ORDCHG — Stornierung der Bestellung (PID 39002).
 // Direction: nMSB (sender NAD+MS) → NB/aMSB (receiver NAD+MR).
 // BGM code Z51 + PID in element 2; UNH release 1.1 per BDEW WiM AHB.
-const ORDCHG_39000_BYTES: &[u8] = b"\
+const ORDCHG_39002_BYTES: &[u8] = b"\
 UNB+UNOC:3+9900357000004:14+4012345000023:14+250115:0800+WIM-STOR-001'\
 UNH+MSG-001+ORDCHG:D:20B:UN:1.1'\
-BGM+Z51+00039000'\
+BGM+Z51+00039002'\
 DTM+137:20250115:102'\
 RFF+Z13:WIM-ORDER-001'\
 NAD+MS+9900357000004::293'\
@@ -89,7 +89,7 @@ impl MockNb {
         }
     }
 
-    /// ERP notification: receive ORDCHG 39000 wire bytes, adapt, and execute.
+    /// ERP notification: receive ORDCHG 39002 wire bytes, adapt, and execute.
     ///
     /// AHB validation is bypassed — the minimal fixture does not satisfy all
     /// profile rules; AHB conformance is tested separately in `edi-energy` tests.
@@ -107,7 +107,7 @@ impl MockNb {
 
         let cmd = wim_stornierung_registry()
             .dispatch(&raw as &dyn Any, &self.fv)
-            .expect("NB: adapt ORDCHG 39000 to StornierungCommand");
+            .expect("NB: adapt ORDCHG 39002 to StornierungCommand");
 
         let cmd = match cmd {
             StornierungCommand::ReceiveOrdchg {
@@ -120,7 +120,7 @@ impl MockNb {
                 cancelled_ref,
                 ..
             } => {
-                assert_eq!(pid.as_u32(), 39000, "adapter must extract PID 39000");
+                assert_eq!(pid.as_u32(), 39002, "adapter must extract PID 39002");
                 assert_eq!(sender.as_str(), NMSB_ID, "sender must be nMSB GLN");
                 assert_eq!(receiver.as_str(), NB_ID, "receiver must be NB GLN");
                 assert_eq!(melo_id.as_str(), MELO_ID, "MeLo must match IDE+Z19");
@@ -152,10 +152,10 @@ impl MockNb {
         self.process
             .execute(cmd)
             .await
-            .expect("NB: execute ReceiveOrdchg 39000");
+            .expect("NB: execute ReceiveOrdchg 39002");
     }
 
-    /// ERP action: accept the Stornierung (dispatch ORDRSP 39001).
+    /// ERP action: accept the Stornierung (dispatch ORDRSP 19013).
     async fn accept(&self) {
         self.process
             .execute(StornierungCommand::Accept {
@@ -165,7 +165,7 @@ impl MockNb {
             .expect("NB: execute Accept");
     }
 
-    /// ERP action: reject the Stornierung (dispatch ORDRSP 39002).
+    /// ERP action: reject the Stornierung (dispatch ORDRSP 19014).
     async fn reject(&self, reason: &str) {
         self.process
             .execute(StornierungCommand::Reject {
@@ -187,7 +187,7 @@ impl MockNb {
 async fn wim_stornierung_positive_acceptance() {
     let nb = MockNb::new();
 
-    nb.receive_ordchg(ORDCHG_39000_BYTES).await;
+    nb.receive_ordchg(ORDCHG_39002_BYTES).await;
 
     let state = nb.state().await;
     assert!(
@@ -208,7 +208,7 @@ async fn wim_stornierung_positive_acceptance() {
 async fn wim_stornierung_negative_rejection() {
     let nb = MockNb::new();
 
-    nb.receive_ordchg(ORDCHG_39000_BYTES).await;
+    nb.receive_ordchg(ORDCHG_39002_BYTES).await;
     nb.reject("Auftrag nicht stornierbar").await;
 
     let state = nb.state().await;
@@ -222,7 +222,7 @@ async fn wim_stornierung_negative_rejection() {
 async fn wim_stornierung_validation_failure_rejects() {
     let nb = MockNb::new();
 
-    let raw = nb.platform.parse(ORDCHG_39000_BYTES).expect("parse");
+    let raw = nb.platform.parse(ORDCHG_39002_BYTES).expect("parse");
     let cmd = wim_stornierung_registry()
         .dispatch(&raw as &dyn Any, &nb.fv)
         .expect("adapt");

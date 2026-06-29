@@ -21,7 +21,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version     = "0.2.1"
+version     = "0.3.0"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
@@ -41,7 +41,7 @@ time-tz     = { version = "2", features = ["db"] }
 uuid        = { version = "1", features = ["v4", "v5", "serde"] }
 
 # ── Internal workspace crates (path + version so domain crates can be published) ─
-mako-engine = { path = "crates/mako-engine", version = "0.2" }
+mako-engine = { path = "crates/mako-engine", version = "0.3" }
 
 # ── Release profile ─────────────────────────────────────────────────────────
 [profile.release]

@@ -47,9 +47,12 @@
       "qualifier_restrictions": {
         "1001": [
           "E01",
+          "E02",
           "E03",
           "E0F",
-          "E1A"
+          "E1A",
+          "E35",
+          "Z40"
         ]
       }
     },
@@ -210,6 +213,7 @@
           ],
           "qualifier_restrictions": {
             "7495": [
+              "24",
               "Z18",
               "Z19",
               "Z31"
@@ -378,5 +382,6 @@
     }
   ],
   "ahb_revision": "G1.2",
-  "source_document": "UTILMD AHB G1.2, Stand 01.10.2026"
+  "source_document": "UTILMD AHB G1.2, Stand 01.10.2026",
+  "ordering_hint": []
 }

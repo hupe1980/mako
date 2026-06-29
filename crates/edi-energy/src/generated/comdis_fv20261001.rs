@@ -372,26 +372,61 @@ fn rule_group_sg2_doc_min_occurrences(
 /// The rule does NOT require every tag to be present (that is Layer 3's job);
 /// it only checks that tag positions are non-decreasing w.r.t. the expected order.
 fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
-    const EXPECTED_ORDER: &[&str] = &[
-        "UNH", "BGM", "RFF", "DTM", "CUX", "NAD", "CTA", "COM", "DOC", "MOA", "AJT", "FTX", "UNT",
-    ];
-    let mut cursor: usize = 0;
-    for seg in segments {
-        if let Some(pos) = EXPECTED_ORDER[cursor..].iter().position(|&t| t == seg.tag) {
-            cursor += pos;
-        } else if EXPECTED_ORDER.contains(&seg.tag) {
-            // Tag is known but already passed — ordering violation.
-            issues.push(
-                ValidationIssue::new(
-                    ValidationSeverity::Error,
-                    "segment appears out of order".to_owned(),
-                )
-                .with_rule_id("MIG-COMDIS-MIG-1.0g-ORDER")
-                .with_segment(seg.tag.to_owned()),
-            );
+    /// Per-group expected segment order derived from the MIG.
+    ///
+    /// Returns an empty slice for groups not covered by the MIG or for the
+    /// catch-all arm, which causes those groups to be skipped silently.
+    fn group_order(name: &str) -> &'static [&'static str] {
+        match name {
+            "ROOT" => &["UNH", "BGM", "RFF", "DTM", "CUX", "UNT"],
+            "SG1" => &["NAD", "CTA", "COM"],
+            "SG2" => &["DOC", "MOA"],
+            "SG3" => &["AJT", "FTX"],
+            _ => &[],
         }
-        // Unknown tags are passed through — they get caught by the DirectoryValidator.
     }
+
+    /// Recursively verify segment order within a group and all its children.
+    ///
+    /// Only `direct_segment_indices()` — segments that belong directly to this
+    /// group and are not claimed by any child group — are checked.  Child groups
+    /// are then visited recursively, so every segment in the message is covered
+    /// exactly once.
+    fn check_order(
+        group: &edifact_rs::group::SegmentGroupIndexed,
+        all_segs: &[edifact_rs::Segment<'_>],
+        rule_id: &str,
+        issues: &mut Vec<ValidationIssue>,
+    ) {
+        let expected = group_order(group.definition);
+        if !expected.is_empty() {
+            let mut cursor: usize = 0;
+            for idx in group.direct_segment_indices() {
+                let seg = &all_segs[idx];
+                if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
+                    cursor += pos;
+                } else if expected.contains(&seg.tag) {
+                    // Tag is known for this group but already passed — ordering violation.
+                    issues.push(
+                        ValidationIssue::new(
+                            ValidationSeverity::Error,
+                            "segment appears out of order".to_owned(),
+                        )
+                        .with_rule_id(rule_id)
+                        .with_segment(seg.tag.to_owned()),
+                    );
+                }
+                // Tags not in this group's expected order are unknown here;
+                // they are either in a child group (checked below) or caught by the DirectoryValidator.
+            }
+        }
+        for child in &group.children {
+            check_order(child, all_segs, rule_id, issues);
+        }
+    }
+
+    let tree = edifact_rs::group::group_segments_indexed(segments, GROUP_SCHEMA, "ROOT");
+    check_order(&tree, segments, "MIG-COMDIS-MIG-1.0g-ORDER", issues);
 }
 
 static MIG_COMDIS_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {

@@ -1,4 +1,4 @@
-//! GPKE Wechselprozesse / Einspeiseprozesse Strom — UTILMD-based connection processes.
+//! GPKE Wechselprozesse Strom — UTILMD-based connection processes.
 //!
 //! Covers all GPKE processes that use the UTILMD S2.x message format per the
 //! LFW24 specification (BK6-22-024, effective 2025-06-06). The authoritative PID
@@ -15,11 +15,7 @@
 //! |-------|-------------------------------------------------|------------|
 //! | 55001 | Anfrage Lieferbeginn Strom (LFN → NB)           | LFN → NB  |
 //! | 55002 | Anfrage Lieferende Strom (LFN → NB)             | LFN → NB  |
-//! | 55017 | Kündigung Lieferbeginn (LFN → LFA)              | LFN → LFA |
-//! | 56001 | Einspeisestelle — Anmeldung (ex-MPES)           | LFE → NB  |
-//! | 56002 | Einspeisestelle — Abmeldung / Kündigung (ex-MPES) | LFE → NB  |
-//! | 56003 | Einspeisestelle — Bestätigung (ex-MPES)         | NB → LFE  |
-//! | 56004 | Einspeisestelle — Ablehnung (ex-MPES)           | NB → LFE  |
+//! | 55016 | Kündigung Lieferbeginn (LFN → LFA)              | LFN → LFA |
 //!
 //! ## Outbound ANTWORT — derived by this workflow, NOT routed as inbound
 //!
@@ -29,11 +25,15 @@
 //! | 55004 | Ablehnung Lieferbeginn (NB → LFN)               | 55001 reject |
 //! | 55005 | Bestätigung Lieferende (NB → LFN)               | 55002 accept |
 //! | 55006 | Ablehnung Lieferende (NB → LFN)                 | 55002 reject |
-//! | 55018 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55017 always |
+//! | 55017 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55016 accept |
+//! | 55018 | Ablehnung Kündigung Lieferbeginn (LFA → LFN)    | 55016 reject |
 //!
 //!
-//! **PID 55555** (Anweisung Sperrung) is handled by `GpkeSperrungWorkflow` — see
+//! ORDERS Sperrung (PIDs 17115/17116/17117) is handled by `GpkeSperrungWorkflow` — see
 //! the [`sperrung`][crate::sperrung] module.
+//!
+//! **PID 55555** is "Anfrage Daten der individuellen Bestellung" (GPKE Teil 4) —
+//! a separate UTILMD data-request process, not a Sperrung PID.
 //!
 //! **Removed PIDs (not in LFW24 AHB):** 55007, 55008, 55009, 55010. These
 //! existed in pre-LFW24 (S1.x) specifications but were removed with the
@@ -65,21 +65,22 @@ use mako_engine::{
 /// Inbound ANFRAGE PIDs handled by this workflow as a receiving NB/LFA.
 ///
 /// Only these PIDs are routed to `GpkeSupplierChangeWorkflow` by the engine.
-/// The corresponding outbound ANTWORT PIDs (55003–55006, 55018) are derived
+/// The corresponding outbound ANTWORT PIDs (55003–55006, 55017, 55018) are derived
 /// internally by `response_pid_for` and stored in the `AntwortGesendet` event.
 ///
 /// | PID range      | Process (LFW24 AHB name)                   | AHB profile |
-/// |----------------|--------------------------------------------|--------------|
+/// |----------------|--------------------------------------------|--------------||
 /// | 55001–55002    | Anfrage Lieferbeginn/Lieferende (LFN → NB) | S2.1–S2.2 ✅ |
-/// | 55017          | Kündigung Lieferbeginn (LFN → LFA)         | S2.1–S2.2 ✅ |
-/// | 56001–56004    | Einspeisung Strom (ex-MPES, BK6-22-024)    | S2.1–S2.2 ✅ |
+/// | 55016          | Kündigung Lieferbeginn (LFN → LFA)         | S2.1–S2.2 ✅ |
 ///
-/// **PID 55555** is handled by `GpkeSperrungWorkflow` (see `sperrung` module).
-/// **PIDs 55007–55010** are not in the LFW24 AHB; the router returns `None`.
+/// ORDERS Sperrung (PIDs 17115/17116/17117) is handled by `GpkeSperrungWorkflow`
+/// (see `sperrung` module). **PID 55555** is "Anfrage Daten der individuellen
+/// Bestellung" (GPKE Teil 4) — a separate UTILMD data-request process.
+/// **PIDs 55007–55015** are NB-initiated processes; routing is handled by
+/// `GpkeLfAbmeldungWorkflow` for PIDs 55007–55009.
 pub const UTILMD_PIDS: &[u32] = &[
     55001, 55002, // Anfrage Lieferbeginn/Lieferende (LFN → NB)
-    55017, // Kündigung Lieferbeginn (LFN → LFA)
-    56001, 56002, 56003, 56004, // ex-MPES Einspeisung (BK6-22-024, AHB fv20250606+)
+    55016, // Kündigung Lieferbeginn (LFN → LFA)
 ];
 
 /// IFTSTA GPKE Vollzugsmeldung Prüfidentifikatoren (PIDs 21024–21033).
@@ -102,13 +103,16 @@ pub const UTILMD_PIDS: &[u32] = &[
 /// | 21027 | Statusmeldung NB → LFA |
 /// | 21028 | Statusmeldung LFA → LFN |
 /// | 21029 | Statusmeldung LFA → NB |
-/// | 21030 | Vollzugsmeldung Einspeisung (ex-MPES) |
-/// | 21031 | Vollzugsmeldung Einspeisung (ex-MPES) |
-/// | 21032 | Statusmeldung Einspeisung (ex-MPES) |
-/// | 21033 | Statusmeldung Einspeisung (ex-MPES) |
-pub const IFTSTA_PIDS: &[u32] = &[
-    21_024, 21_025, 21_026, 21_027, 21_028, 21_029, 21_030, 21_031, 21_032, 21_033,
-];
+/// | 21030 | Vollzugsmeldung IFTSTA |
+/// | 21031 | Vollzugsmeldung IFTSTA |
+/// | 21033 | Ablehnung der Anfrage (GPKE Teil 3) |
+///
+/// **Ownership note (per `docs/pid-reference.md`):**
+/// - 21024–21027 → WiM Gas (`mako-wim-gas`)
+/// - 21028 → GeLi Gas 2.0 (`mako-geli-gas`)
+/// - 21029–21032 → WiM Strom Teil 1 (`mako-wim`)
+/// - 21033 → GPKE Teil 3 (here)
+pub const IFTSTA_PIDS: &[u32] = &[21_033];
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
@@ -139,7 +143,7 @@ pub enum SupplierChangeEvent {
         /// Reference of the validated message.
         message_ref: MessageRef,
     },
-    /// Outbound UTILMD business response (55003/55004/55005/55006/55018/56003/56004) was sent
+    /// Outbound UTILMD business response (55003/55004/55005/55006/55017/55018) was sent
     /// to the counterparty. The response PID is derived from the anfrage PID and
     /// the `accepted` flag by `response_pid_for`.
     AntwortGesendet {
@@ -266,7 +270,7 @@ pub enum SupplierChangeState {
     AntwortGesendet {
         /// Process data from the Anfrage.
         data: InitiatedData,
-        /// Derived outbound response PID (e.g. 55003 for accepted 55001, 56003 for 56001).
+        /// Derived outbound response PID (e.g. 55003 for accepted 55001, 55017 for accepted 55016).
         response_pid: Option<Pruefidentifikator>,
     },
     /// Supply relationship is active (or Kündigung is complete).
@@ -351,7 +355,7 @@ pub enum SupplierChangeCommand {
     /// the `accepted` flag:
     /// - 55001 (Lieferbeginn) → 55003 (accepted) / 55004 (rejected)
     /// - 55002 (Lieferende)   → 55005 (accepted) / 55006 (rejected)
-    /// - 55017 (Kündigung)    → 55018 (always accepted in LFW24)
+    /// - 55016 (Kündigung)    → 55017 (accepted) / 55018 (rejected)
     ///
     /// BDEW GPKE / BK6-22-024: Response must be sent within **24 wall-clock
     /// hours** of receiving the UTILMD Anfrage (not Werktage).
@@ -444,14 +448,7 @@ impl CommandPayload for SupplierChangeCommand {}
 /// |---------|---------------|----------------|
 /// | 55001   | 55003         | 55004          |
 /// | 55002   | 55005         | 55006          |
-/// | 55017   | 55018         | 55018 (Kündigung always accepted in LFW24) |
-/// | 56001   | 56003         | 56003 (ex-MPES Einspeisung Anmeldung → Fristgerecht) |
-/// | 56002   | 56004         | 56004 (ex-MPES Einspeisung Abmeldung → Kündigung) |
-///
-/// ex-MPES PIDs 56003 (response to 56001) and 56004 (response to 56002) are
-/// derived by analogy from the GPKE AHB structure (BK6-22-024 LFW24 MpBNr2).
-/// Verify against the current UTILMD S2.x AHB when a BDEW-issued mapping table
-/// is available.
+/// | 55016   | 55017         | 55018          |
 fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruefidentifikator> {
     let code: u32 = match anfrage_pid {
         55001 => {
@@ -468,11 +465,13 @@ fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruefidentifikat
                 55006
             }
         }
-        55017 => 55018, // Kündigung always accepted per LFW24
-        // ex-MPES Einspeisung (BK6-22-024 LFW24 MpBNr2):
-        // Only one response PID per anfrage — no separate rejection path defined in AHB.
-        56001 => 56003, // Einspeisung Anmeldung → Fristgerecht (regardless of accepted)
-        56002 => 56004, // Einspeisung Abmeldung → Kündigung (regardless of accepted)
+        55016 => {
+            if accepted {
+                55017 // Bestätigung Kündigung (LFA → LFN)
+            } else {
+                55018 // Ablehnung Kündigung (LFA → LFN)
+            }
+        }
         _ => return None,
     };
     Pruefidentifikator::new(code).ok()
@@ -636,9 +635,11 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
                 // PID guard — accepts only inbound ANFRAGE PIDs per UTILMD AHB S2.1/S2.2.
-                // Response PIDs 55003–55006, 55018 are outbound; they are derived
+                // Response PIDs 55003–55006, 55017, 55018 are outbound; they are derived
                 // internally by response_pid_for() and stored in AntwortGesendet events.
-                // PID 55555 is routed to GpkeSperrungWorkflow (separate module).
+                // ORDERS Sperrung (17115/17116/17117) is routed to GpkeSperrungWorkflow.
+                // PID 55555 is "Anfrage Daten der individuellen Bestellung" (GPKE Teil 4)
+                // — a separate UTILMD data-request process, unrelated to Sperrung.
                 //
                 // Note on PIDs 55007–55010:
                 // 55007–55009 are NB-initiated Lieferende (NB→LF) per UTILMD AHB Strom
@@ -653,9 +654,10 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 // implemented and tested.
                 if !UTILMD_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected an inbound ANFRAGE PID (55001, 55002, 55017, or \
-                         56001–56004), got {pid}. Response PIDs (55003–55006, 55018) \
-                         are outbound only. PID 55555 is handled by GpkeSperrungWorkflow.",
+                        "expected an inbound ANFRAGE PID (55001, 55002, or 55016), \
+                         got {pid}. Response PIDs (55003–55006, 55017, 55018) \
+                         are outbound only. ORDERS Sperrung (17115/17116/17117) \
+                         routes to GpkeSperrungWorkflow.",
                     )));
                 }
                 let mut events = vec![SupplierChangeEvent::Initiated {
@@ -699,7 +701,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 }];
 
                 // Always enqueue the UTILMD response back to the new supplier
-                // (55003/55004/55005/55006/55018/56003/56004).
+                // (55003/55004/55005/55006/55017/55018).
                 let mut outbox: Vec<PendingOutbox> = vec![];
                 if let Some(rpid) = response_pid {
                     outbox.push(PendingOutbox::new(

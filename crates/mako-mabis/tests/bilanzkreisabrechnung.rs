@@ -382,3 +382,44 @@ async fn projection_tracks_disputed_process() {
     // SummenzeitreiheReceived + PruefmitteilungNegativSent = 2 events
     assert_eq!(record.event_count(), 2, "2 events in the stream");
 }
+
+// ── Deadline accuracy ─────────────────────────────────────────────────────────
+
+/// MABIS BK6-24-174 §13.8: The BKV must respond with a Prüfmitteilung within
+/// **1 Werktag** of receiving the Summenzeitreihe.
+///
+/// This test verifies the deadline arithmetic on a holiday-boundary date.
+/// The Summenzeitreihe arrives on Mon 2025-01-06 (Heilige Drei Könige, a
+/// BDEW MaKo public holiday).  The 1-Werktag deadline skips the holiday and
+/// lands on Tue 2025-01-07 — not on Mon 06 itself (non-Werktag) or Wed 08
+/// (would be 2 Werktage).
+#[test]
+fn pruefmitteilung_deadline_1_werktag_after_heilige_drei_koenige() {
+    use mako_engine::fristen::{self, HolidayCalendar};
+    use time::{Date, Month};
+
+    // Received on Mon 2025-01-06 — Heilige Drei Könige (public holiday).
+    let received = Date::from_calendar_date(2025, Month::January, 6).unwrap();
+    let due = fristen::add_werktage(received, 1, HolidayCalendar::BdewMaKo);
+
+    // Mon 06 is a holiday → the next Werktag is Tue 07 Jan 2025.
+    assert_eq!(
+        due,
+        Date::from_calendar_date(2025, Month::January, 7).unwrap(),
+        "1 Werktag after Heilige Drei Könige (Mon 2025-01-06) must be Tue 2025-01-07, \
+         not Mon 2025-01-06 (holiday) or Wed 2025-01-08 (2 Werktage)"
+    );
+}
+
+/// Verify the deadline label constant is stable.
+///
+/// Changing [`PRUEFMITTEILUNG_DEADLINE_LABEL`] after deployment would
+/// orphan all existing `Deadline` records in the store — processes whose
+/// deadline was registered with the old label would never fire.
+#[test]
+fn pruefmitteilung_deadline_label_is_stable() {
+    assert_eq!(
+        PRUEFMITTEILUNG_DEADLINE_LABEL, "mabis-pruefmitteilung-1-werktag",
+        "changing this label orphans existing Deadline records"
+    );
+}

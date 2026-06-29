@@ -5,15 +5,13 @@ nav_order: 41
 parent: Regulatory
 description: >
   Complete Prüfidentifikator (PID) reference for all German energy market
-  processes: GPKE, WiM, GeLi Gas, MABIS, Messwesen, NBW, and GaBi Gas.
-  Covers BDEW PID 3.3 (FV2025-10-01).
+  processes. Covers BDEW PID 3.3 (FV2025-10-01) and PID 4.0 (FV2026-10-01).
 ---
 
 # Prüfidentifikator (PID) Reference
 
 **Source document:** BDEW EDI@Energy — *Anwendungsübersicht der Prüfidentifikatoren*  
-**Version:** 3.3 (FV2025-10-01), published 01.10.2025  
-**PDF:** [`docs/pdfs/bdew-mako/PID_3_3_20251001.pdf`](pdfs/bdew-mako/PID_3_3_20251001.pdf)
+**Versions:** PID 3.3 (FV2025-10-01, Fehlerkorrektur 27.03.2026) · PID 4.0 (FV2026-10-01, published 01.04.2026)
 
 A Prüfidentifikator (PID) identifies a specific EDIFACT message use case within a
 business process. Each PID is bound to one EDIFACT format (UTILMD, MSCONS, INVOIC, …)
@@ -21,444 +19,616 @@ and one business context (GPKE, WiM, GeLi Gas, …). The routing layer
 (`mako_engine::pid_router::PidRouter`) dispatches inbound messages to the correct
 workflow by PID.
 
-> **Legend** — *PID 3.3 column*  
-> ✅ = present in BDEW PID 3.3 (FV2025-10-01)  
-> ⚠️ = **not** in PID 3.3; introduced by a separate BNetzA decision or still uses an
->       older AHB PID number (see [Discrepancies](#discrepancies))
+> **Legend** — *PID 3.3 / PID 4.0 columns*  
+> ✅ = present in the respective BDEW PID overview document  
+> ⚠️ = **not** present in the respective PID overview document
 
 ---
 
 ## Table of contents
 
-1. [GPKE — Lieferantenwechsel Strom (55001–55018)](#gpke--lieferantenwechsel-strom)
-2. [GPKE — Sperrung / Entsperrung Strom (55555, 55557–55692)](#gpke--sperrung--entsperrung-strom)
-3. [GPKE — Einspeisestelle Strom (56001–56004)](#gpke--einspeisestelle-strom)
-4. [GPKE — INVOIC Abrechnung Strom (31001–31008)](#gpke--invoic-abrechnung-strom)
-5. [GPKE — ORDERS/ORDRSP Konfiguration Strom (17134–17135, 19001–19002)](#gpke--ordersordrsp-konfiguration-strom)
-6. [WiM Strom — Messstellenbetrieb UTILMD (55039–55053, 55168–55170)](#wim-strom--messstellenbetrieb-utilmd)
-7. [WiM Strom — Geräteübernahme ORDERS (17001–17011)](#wim-strom--geräteubernahme-orders)
-8. [WiM Strom — Stammdaten / Übermittlung ORDERS (17132, 17102–17133)](#wim-strom--stammdaten--übermittlung-orders)
-9. [WiM Strom — Stornierung ORDCHG (39000–39002)](#wim-strom--stornierung-ordchg)
-10. [WiM Strom — Legacy device-change UTILMD (11001–11003)](#wim-strom--legacy-device-change-utilmd-11001--11003)
-11. [WiM Gas — Messstellenbetrieb Gas (44022–44053)](#wim-gas--messstellenbetrieb-gas)
-12. [GeLi Gas — Lieferbeginn/-ende Gas (44001–44018)](#geli-gas--lieferbeginn-ende-gas)
-13. [GeLi Gas — Sperrung / Entsperrung Gas (44555)](#geli-gas--sperrung--entsperrung-gas)
-14. [Messwesen / MSCONS (13002–13028)](#messwesen--mscons-13002--13028)
-15. [MABIS (13003)](#mabis-13003)
-16. [NBW — Netzbetreiberwechsel PARTIN (15001–15005)](#nbw--netzbetreiberwechsel-partin)
-17. [GaBi Gas — INVOIC Billing Gas (31010–31011)](#gabi-gas--invoic-billing-gas)
-18. [Discrepancies](#discrepancies)
+1. [UTILMD AHB Strom (189 PIDs)](#utilmd-ahb-strom)
+2. [UTILMD AHB Gas (89 PIDs)](#utilmd-ahb-gas)
+3. [ORDERS AHB (46 PIDs)](#orders-ahb)
+4. [ORDRSP AHB (40 PIDs)](#ordrsp-ahb)
+5. [ORDCHG AHB (3 PIDs)](#ordchg-ahb)
+6. [IFTSTA AHB (35 PIDs)](#iftsta-ahb)
+7. [MSCONS AHB (25 PIDs)](#mscons-ahb)
+8. [INVOIC AHB (11 PIDs)](#invoic-ahb)
+9. [REMADV AHB (4 PIDs)](#remadv-ahb)
+10. [PARTIN AHB (14 PIDs)](#partin-ahb)
+11. [REQOTE AHB (5 PIDs)](#reqote-ahb)
+12. [QUOTES AHB (5 PIDs)](#quotes-ahb)
+13. [PRICAT AHB (3 PIDs)](#pricat-ahb)
+14. [INSRPT AHB (8 PIDs)](#insrpt-ahb)
+15. [UTILTS AHB (8 PIDs)](#utilts-ahb)
+16. [COMDIS AHB (2 PIDs)](#comdis-ahb)
 
 ---
 
-## GPKE — Lieferantenwechsel Strom
+## UTILMD AHB Strom
 
-**Crate:** `mako-gpke`  
-**Workflow:** `GpkeLfAnmeldungWorkflow` / `gpke-supplier-change`  
-**Format:** UTILMD AHB Strom  
-**Regulatory basis:** BK6-22-024 (LFW24)
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 55001 | Anmeldung verb. MaLo                              | GPKE Teil 2                                  | ✅   | ✅   |
+| 55002 | Bestätigung Anmeldung verb. MaLo                  | GPKE Teil 2                                  | ✅   | ✅   |
+| 55003 | Ablehnung Anmeldung verb. MaLo                    | GPKE Teil 2                                  | ✅   | ✅   |
+| 55004 | Abmeldung                                         | GPKE Teil 2                                  | ✅   | ✅   |
+| 55005 | Bestätigung Abmeldung                             | GPKE Teil 2                                  | ✅   | ✅   |
+| 55006 | Ablehnung Abmeldung                               | GPKE Teil 2                                  | ✅   | ✅   |
+| 55007 | Abmeldung / Beendigung der Zuordnung              | GPKE Teil 2                                  | ✅   | ✅   |
+| 55008 | Bestätigung Abmeldung                             | GPKE Teil 2                                  | ✅   | ✅   |
+| 55009 | Ablehnung Abmeldung                               | GPKE Teil 2                                  | ✅   | ✅   |
+| 55010 | Anfrage zur Beendigung der Zuordnung              | GPKE Teil 2                                  | ✅   | ✅   |
+| 55011 | Bestätigung Beendigung der Zuordnung              | GPKE Teil 2                                  | ✅   | ✅   |
+| 55012 | Ablehnung Beendigung der Zuordnung                | GPKE Teil 2                                  | ✅   | ✅   |
+| 55013 | Anmeldung / Zuordnung EOG                         | GPKE Teil 2                                  | ✅   | ✅   |
+| 55014 | Bestätigung EOG Anmeldung                         | GPKE Teil 2                                  | ✅   | ✅   |
+| 55015 | Ablehung EOG Anmeldung                            | GPKE Teil 2                                  | ✅   | ✅   |
+| 55016 | Kündigung                                         | GPKE Teil 2                                  | ✅   | ✅   |
+| 55017 | Bestätigung Kündigung                             | GPKE Teil 2                                  | ✅   | ✅   |
+| 55018 | Ablehnung Kündigung                               | GPKE Teil 2                                  | ✅   | ✅   |
+| 55022 | Anfrage nach Stornierung                          | GPKE Teil 4                                  | ✅   | ✅   |
+| 55023 | Bestätigung Anfrage Stornierung                   | GPKE Teil 4                                  | ✅   | ✅   |
+| 55024 | Ablehnung Anfrage Stornierung                     | GPKE Teil 4                                  | ✅   | ✅   |
+| 55035 | Antwort auf GDA verb. MaLo                        | GPKE Teil 4                                  | ✅   | ✅   |
+| 55036 | Existierende Zuordnung                            | GPKE Teil 2                                  | ✅   | ✅   |
+| 55037 | Beendigung der Zuordnung                          | GPKE Teil 2                                  | ✅   | ✅   |
+| 55038 | Aufhebung einer zuk. Zuordnung                    | GPKE Teil 2                                  | ✅   | ✅   |
+| 55039 | Kündigung MSB                                     | WiM Strom Teil 1                             | ✅   | ✅   |
+| 55040 | Bestätigung Kündigung MSB                         | WiM Strom Teil 1                             | ✅   | ✅   |
+| 55041 | Ablehnung Kündigung MSB                           | WiM Strom Teil 1                             | ✅   | ✅   |
+| 55042 | Anmeldung MSB                                     | WiM Strom Teil 1                             | ✅   | ✅   |
+| 55043 | Bestätigung Anmeldung MSB                         | WiM Strom Teil 1                             | ✅   | ✅   |
+| 55044 | Ablehnung Anmeldung MSB                           | WiM Strom Teil 1                             | ✅   | ✅   |
+| 55051 | Ende MSB                                          | WiM Strom Teil 1                             | ✅   | ✅   |
+| 55052 | Bestätigung Ende MSB                              | WiM Strom Teil 1                             | ✅   | ✅   |
+| 55053 | Ablehnung Ende MSB                                | WiM Strom Teil 1                             | ✅   | ✅   |
+| 55060 | Antwort auf GDA                                   | GPKE Teil 4                                  | ✅   | ✅   |
+| 55062 | Aktivierung von ZP                                | MaBiS                                        | ✅   | ✅   |
+| 55063 | Deaktivierung von ZP                              | MaBiS                                        | ✅   | ✅   |
+| 55064 | Antwort                                           | MaBiS                                        | ✅   | ✅   |
+| 55065 | Lieferantenclearingliste                          | MaBiS                                        | ✅   | ✅   |
+| 55066 | Korrekturliste zu Lieferantenclearingliste        | MaBiS                                        | ✅   | ✅   |
+| 55067 | Bilanzkreiszuordnungsliste                        | MaBiS                                        | ✅   | ✅   |
+| 55069 | Clearingliste DZR                                 | MaBiS                                        | ✅   | ✅   |
+| 55070 | Clearingliste BAS                                 | MaBiS                                        | ✅   | ✅   |
+| 55071 | Aktivierung der Zuordnungsermächtigung            | MaBiS                                        | ✅   | ✅   |
+| 55072 | Deaktivierung der Zuordnungsermächtigung          | MaBiS                                        | ✅   | ✅   |
+| 55073 | Übermittlung der Profildefinitionen               | MaBiS                                        | ✅   | ✅   |
+| 55074 | Stammdaten auf eine ORDERS                        | Prozesse zum Informationsaustausch zwischen Netzbetreiber und Herkunftsnachweis-register (HKN-R) des Umweltbundesamts (UBA)| ✅   | ✅   |
+| 55075 | Stammdaten aufgrund einer Änderung                | Prozesse zum Informationsaustausch zwischen Netzbetreiber und Herkunftsnachweis-register (HKN-R) des Umweltbundesamts (UBA)| ✅   | ✅   |
+| 55076 | Antwort auf Stammdatenänderung                    | Prozesse zum Informationsaustausch zwischen Netzbetreiber und Herkunftsnachweis-register (HKN-R) des Umweltbundesamts (UBA)| ✅   | ✅   |
+| 55077 | Anmeldung erz. MaLo                               | GPKE Teil 2                                  | ✅   | ✅   |
+| 55078 | Bestätigung Anmeldung erz. MaLo                   | GPKE Teil 2                                  | ✅   | ✅   |
+| 55080 | Ablehnung Anmeldung erz. MaLo                     | GPKE Teil 2                                  | ✅   | ✅   |
+| 55095 | Antwort auf GDA erz. MaLo                         | GPKE Teil 4                                  | ✅   | ✅   |
+| 55109 | Änderung Daten der MaLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55110 | Änderung Daten der MaLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55126 | Abr.-Daten BK-Abr. verb. MaLo                     | GPKE Teil 2                                  | ✅   | ✅   |
+| 55136 | Rückmeldung/Anfrage Daten der MaLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55137 | Rückmeldung/Anfrage Daten der MaLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55156 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2                                  | ✅   | ✅   |
+| 55168 | Verpflichtungsanfrage / Aufforderung              | WiM Strom Teil 1                             | ✅   | ✅   |
+| 55169 | Bestätigung Verpflichtungsanfrage                 | WiM Strom Teil 1                             | ✅   | ✅   |
+| 55170 | Ablehnung Verpflichtungsanfrage                   | WiM Strom Teil 1                             | ✅   | ✅   |
+| 55173 | Änderung der Lokationsbündelstruktur              | GPKE Teil 4                                  | ✅   | ✅   |
+| 55175 | Änderung der Lokationsbündelstruktur              | GPKE Teil 4                                  | ✅   | ✅   |
+| 55177 | Rückmeldung/Anfrage Lokationsbündelstruktur       | GPKE Teil 4                                  | ✅   | ✅   |
+| 55180 | Rückmeldung/Anfrage Lokationsbündelstruktur       | GPKE Teil 4                                  | ✅   | ✅   |
+| 55194 | Antowrt auf GDA (Strom an Gas)                    | GPKE Teil 4                                  | ✅   | ✅   |
+| 55195 | Bilanzierungsgebietsclearingliste                 | MaBiS                                        | ✅   | ✅   |
+| 55196 | Antwort auf Bilanzierungsgebietsclearingliste     | MaBiS                                        | ✅   | ✅   |
+| 55197 | Aktivierung ZP tägliche AAÜZ                      | MaBiS                                        | ✅   | ✅   |
+| 55198 | Deaktivierung tägliche AAÜZ                       | MaBiS                                        | ✅   | ✅   |
+| 55199 | Aktivierung ZP LF-AASZR                           | MaBiS                                        | ✅   | ✅   |
+| 55200 | Deaktivierung ZP LF-AASZR                         | MaBiS                                        | ✅   | ✅   |
+| 55201 | LF-AACL                                           | MaBiS                                        | ✅   | ✅   |
+| 55202 | Korrekturliste LF-AACL                            | MaBiS                                        | ✅   | ✅   |
+| 55203 | Aktivierung ZP monatliche AAÜZ                    | MaBiS                                        | ✅   | ✅   |
+| 55204 | Antwort auf Aktivierung ZP                        | MaBiS                                        | ✅   | ✅   |
+| 55205 | Weiterleitung Aktivierung ZP                      | MaBiS                                        | ✅   | ✅   |
+| 55206 | Deaktivierung ZP monatliche AAÜZ                  | MaBiS                                        | ✅   | ✅   |
+| 55207 | Antwort auf Deaktivierung ZP                      | MaBiS                                        | ✅   | ✅   |
+| 55208 | Weiterleitung Deaktivierung ZP                    | MaBiS                                        | ✅   | ✅   |
+| 55209 | Aktivierung ZP monatliche AAÜZ                    | MaBiS                                        | ✅   | ✅   |
+| 55210 | Antwort auf Aktiveirung ZP                        | MaBiS                                        | ✅   | ✅   |
+| 55211 | Weiterleitung Aktivierung ZP                      | MaBiS                                        | ✅   | ✅   |
+| 55212 | Deaktivierung ZP monatliche AAÜZ                  | MaBiS                                        | ✅   | ✅   |
+| 55213 | Antwort auf Deaktivierung ZP                      | MaBiS                                        | ✅   | ✅   |
+| 55214 | Weiterleitung Deaktivierung ZP                    | MaBiS                                        | ✅   | ✅   |
+| 55218 | Abr.-Daten NNA                                    | GPKE Teil 2                                  | ✅   | ✅   |
+| 55220 | Rückmeldung/Anfrage Abr.-Daten NNA                | GPKE Teil 2                                  | ✅   | ✅   |
+| 55223 | DZÜ-Liste                                         | MaBiS                                        | ✅   | ✅   |
+| 55224 | Antwort auf DZÜ-Liste                             | MaBiS                                        | ✅   | ✅   |
+| 55225 | Änderung Blindabr.-Daten der NeLo                 | GPKE Teil 4                                  | ✅   | ✅   |
+| 55227 | Rückmeldung/Anfrage Blindabr.-Daten der NeLo      | GPKE Teil 4                                  | ✅   | ✅   |
+| 55230 | Änderung Blindabr.-Daten der NeLo                 | GPKE Teil 4                                  | ✅   | ✅   |
+| 55232 | Rückmeldung/Anfrage Blindabr.-Daten der NeLo      | GPKE Teil 4                                  | ✅   | ✅   |
+| 55235 | Zuordnung ZP der NGZ zur NZR                      | AWH Erg. d. Marktregeln f. d. Durchfür. d. Bilanzkreisabr. Strom (MaBiS)| ✅   | ✅   |
+| 55236 | Beendigung Zuordnung ZP der NGZ zur NZR           | AWH Erg. d. Marktregeln f. d. Durchfür. d. Bilanzkreisabr. Strom (MaBiS)| ✅   | ✅   |
+| 55237 | Antwort                                           | AWH Erg. d. Marktregeln f. d. Durchfür. d. Bilanzkreisabr. Strom (MaBiS)| ✅   | ✅   |
+| 55238 | Anmeldung in Modell 2                             | AWH Modell 2 ladev.scharf.
+bila.
+Energie.zuord.möglichkeit| ✅   | ✅   |
+| 55239 | Antwort auf Anmeldung                             | AWH Modell 2 ladev.scharf.
+bila.
+Energie.zuord.möglichkeit| ✅   | ✅   |
+| 55240 | Beendigung der Zuordnung zur Marktlokation        | AWH Modell 2 ladev.scharf.
+bila.
+Energie.zuord.möglichkeit| ✅   | ✅   |
+| 55241 | Antwort auf Beendigung                            | AWH Modell 2 ladev.scharf.
+bila.
+Energie.zuord.möglichkeit| ✅   | ✅   |
+| 55242 | Abmeldung aus dem Modell 2                        | AWH Modell 2 ladev.scharf.
+bila.
+Energie.zuord.möglichkeit| ✅   | ✅   |
+| 55243 | Antwort auf Abmeldung                             | AWH Modell 2 ladev.scharf.
+bila.
+Energie.zuord.möglichkeit| ✅   | ✅   |
+| 55553 | Daten auf individuelle Bestellung                 | GPKE Teil 4                                  | ✅   | ✅   |
+| 55555 | Anfrage Daten der individuellen Bestellung        | GPKE Teil 4                                  | ✅   | ✅   |
+| 55557 | Änderung MSB-Abr.-Daten der MaLo                  | GPKE Teil 4                                  | ✅   | ✅   |
+| 55559 | Rückmeldung/Anfrage MSB-Abr.-Daten der MaLo       | GPKE Teil 4                                  | ✅   | ✅   |
+| 55600 | Anmeldung neuer verb. MaLo                        | GPKE Teil 2                                  | ✅   | ✅   |
+| 55601 | Anmeldung neuer erz. MaLo                         | GPKE Teil 2                                  | ✅   | ✅   |
+| 55602 | Bestätigung Anmeldung neuer verb. MaLo            | GPKE Teil 2                                  | ✅   | ✅   |
+| 55603 | Bestätigung Anmeldung neuer erz. MaLo             | GPKE Teil 2                                  | ✅   | ✅   |
+| 55604 | Ablehnung Anmeldung neuer verb. MaLo              | GPKE Teil 2                                  | ✅   | ✅   |
+| 55605 | Ablehnung Anmeldung neuer erz. MaLo               | GPKE Teil 2                                  | ✅   | ✅   |
+| 55607 | Ankündigung Zuordnung / Zuordnung des LF zur MaLo/ Tranche| GPKE Teil 2                                  | ✅   | ✅   |
+| 55608 | Bestätigung Zuordnung des LF zur MaLo/ Tranche    | GPKE Teil 2                                  | ✅   | ✅   |
+| 55609 | Ablehnung Zuordnung des LF zur MaLo/ Tranche      | GPKE Teil 2                                  | ✅   | ✅   |
+| 55611 | Beendigung der Zuordnung                          | GPKE Teil 2                                  | ✅   | ✅   |
+| 55613 | Abr.-Daten BK-Abr. verb. MaLo                     | GPKE Teil 2                                  | ✅   | ✅   |
+| 55614 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2                                  | ✅   | ✅   |
+| 55615 | Änderung Daten der NeLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55616 | Änderung Daten der MaLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55617 | Änderung Daten der TR                             | GPKE Teil 4                                  | ✅   | ✅   |
+| 55618 | Änderung Daten der SR                             | GPKE Teil 4                                  | ✅   | ✅   |
+| 55619 | Änderung Daten der Tranche                        | GPKE Teil 4                                  | ✅   | ✅   |
+| 55620 | Änderung Daten der MeLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55621 | Rückmeldung/Anfrage Daten zur NeLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55622 | Rückmeldung/Anfrage Daten der MaLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55623 | Rückmeldung/Anfrage Daten der TR                  | GPKE Teil 4                                  | ✅   | ✅   |
+| 55624 | Rückmeldung/Anfrage Daten der SR                  | GPKE Teil 4                                  | ✅   | ✅   |
+| 55625 | Rückmeldung/Anfrage Daten der Tranche             | GPKE Teil 4                                  | ✅   | ✅   |
+| 55626 | Rückmeldung/Anfrage Daten der MeLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55627 | Änderung Daten der NeLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55628 | Änderung Daten der MaLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55629 | Änderung Daten der TR                             | GPKE Teil 4                                  | ✅   | ✅   |
+| 55630 | Änderung Daten der SR                             | GPKE Teil 4                                  | ✅   | ✅   |
+| 55632 | Änderung Daten der MeLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55633 | Rückmeldung/Anfrage Daten zur NeLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55634 | Rückmeldung/Anfrage Daten der MaLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55635 | Rückmeldung/Anfrage Daten der TR                  | GPKE Teil 4                                  | ✅   | ✅   |
+| 55636 | Rückmeldung/Anfrage Daten der SR                  | GPKE Teil 4                                  | ✅   | ✅   |
+| 55638 | Rückmeldung/Anfrage Daten der MeLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55639 | Änderung Daten der NeLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55640 | Änderung Daten der MaLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55641 | Änderung Daten der SR                             | GPKE Teil 4                                  | ✅   | ✅   |
+| 55642 | Änderung Daten der Tranche                        | GPKE Teil 4                                  | ✅   | ✅   |
+| 55643 | Änderung Daten der MeLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55644 | Rückmeldung/Anfrage Daten der NeLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55645 | Rückmeldung/Anfrage Daten der MaLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55646 | Rückmeldung/Anfrage Daten der SR                  | GPKE Teil 4                                  | ✅   | ✅   |
+| 55647 | Rückmeldung/Anfrage Daten der Tranche             | GPKE Teil 4                                  | ✅   | ✅   |
+| 55648 | Rückmeldung/Anfrage Daten der MeLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55649 | Änderung Daten der NeLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55650 | Änderung Daten der MaLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55651 | Änderung Daten der SR                             | GPKE Teil 4                                  | ✅   | ✅   |
+| 55652 | Änderung Daten der Tranche                        | GPKE Teil 4                                  | ✅   | ✅   |
+| 55653 | Änderung Daten der MeLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55654 | Rückmeldung/Anfrage Daten der NeLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55655 | Rückmeldung/Anfrage Daten der MaLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55656 | Rückmeldung/Anfrage Daten der SR                  | GPKE Teil 4                                  | ✅   | ✅   |
+| 55657 | Rückmeldung/Anfrage Daten der Tranche             | GPKE Teil 4                                  | ✅   | ✅   |
+| 55658 | Rückmeldung/Anfrage Daten der MeLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55659 | Änderung Daten der NeLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55660 | Änderung Daten der MaLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55661 | Änderung Daten der SR                             | GPKE Teil 4                                  | ✅   | ✅   |
+| 55662 | Änderung Daten der Tranche                        | GPKE Teil 4                                  | ✅   | ✅   |
+| 55663 | Änderung Daten der MeLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55664 | Rückmeldung/Anfrage Daten der NeLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55665 | Rückmeldung/Anfrage Daten der MaLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55666 | Rückmeldung/Anfrage Daten der SR                  | GPKE Teil 4                                  | ✅   | ✅   |
+| 55667 | Rückmeldung/Anfrage Daten der Tranche             | GPKE Teil 4                                  | ✅   | ✅   |
+| 55669 | Rückmeldung/Anfrage Daten der MeLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55670 | Stammdaten BK-Treue                               | GPKE Teil 4                                  | ✅   | ✅   |
+| 55671 | Rückmeldung auf Stammdaten BK-Treue               | GPKE Teil 4                                  | ✅   | ✅   |
+| 55672 | Abr.-Daten BK-Abr. erz. Malo                      | GPKE Teil 2                                  | ✅   | ✅   |
+| 55673 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. erz. Malo  | GPKE Teil 2                                  | ✅   | ✅   |
+| 55674 | Abr.-Daten BK-Abr. erz. Malo                      | GPKE Teil 2                                  | ✅   | ✅   |
+| 55675 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. erz. Malo  | GPKE Teil 2                                  | ✅   | ✅   |
+| 55684 | Änderung Daten der MaLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55685 | Rückmeldung/Anfrage Daten der MaLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55686 | Änderung Daten der Tranche                        | GPKE Teil 4                                  | ✅   | ✅   |
+| 55687 | Rückmeldung/Anfrage Daten der Tranche             | GPKE Teil 4                                  | ✅   | ✅   |
+| 55688 | Änderung Daten der MaLo                           | GPKE Teil 4                                  | ✅   | ✅   |
+| 55689 | Rückmeldung/Anfrage Daten der MaLo                | GPKE Teil 4                                  | ✅   | ✅   |
+| 55690 | Lokationsbündelstruktur und DB                    | AWH Netzbetreiberwechsel                     | ✅   | ✅   |
+| 55691 | Änderung Paket-ID der MaLo                        | GPKE Teil 4                                  | ✅   | ✅   |
+| 55692 | Rückmeldung/Anfrage Paket-ID der MaLo             | GPKE Teil 4                                  | ✅   | ✅   |
+| 55693 | Änderung Daten der TR                             | GPKE Teil 4                                  | ⚠️  | ✅   |
+| 55694 | Rückmeldung/ Anfrage Daten der TR                 | GPKE Teil 4                                  | ⚠️  | ✅   |
 
-| PID   | Description                             | Direction  | PID 3.3 |
-|-------|-----------------------------------------|------------|---------|
-| 55001 | Anfrage Lieferbeginn (LF → NB)          | inbound    | ✅      |
-| 55002 | Anfrage Lieferende (LF → NB)            | inbound    | ✅      |
-| 55003 | Bestätigung Lieferbeginn (NB → LF)      | response   | ✅      |
-| 55004 | Ablehnung Lieferbeginn (NB → LF)        | response   | ✅      |
-| 55005 | Bestätigung Lieferende (NB → LF)        | response   | ✅      |
-| 55006 | Ablehnung Lieferende (NB → LF)          | response   | ✅      |
-| 55017 | Kündigung Lieferbeginn (LF → LFA)       | inbound    | ✅      |
-| 55018 | Bestätigung Kündigung (LFA → LF)        | response   | ✅      |
+## UTILMD AHB Gas
 
-**APERAK Frist:** 24 wall-clock hours (`fristen::add_hours(t, 24)`).
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 44001 | Anmeldung NN                                      | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44002 | Bestätigung Anmeldung                             | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44003 | Ablehnung Anmeldung                               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44004 | Abmeldung NN                                      | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44005 | Bestätigung Abmeldung                             | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44006 | Ablehnung Abmeldung                               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44007 | Abmeldung NN vom NB                               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44008 | Bestätigung Abmeldung vom NB                      | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44009 | Ablehnung Abmeldung vom NB                        | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44010 | Abmeldungsanfrage des NB                          | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44011 | Bestätigung Abmeldungsanfrage                     | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44012 | Ablehnung Abmeldungsanfrage                       | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44013 | Anmeldung EoG                                     | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44014 | Bestätigung EoG Anmeldung                         | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44015 | Ablehnung EoG Anmeldung                           | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44016 | Kündigung beim alten Lieferanten                  | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44017 | Bestätigung Kündigung                             | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44018 | Ablehnung Kündigung                               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44019 | Bestandsliste zugeordnete Marktlokationen         | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44020 | Änderungsmeldung zur Bestandsliste                | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44021 | Antwort auf Änderungsmeldung zur Bestandsliste    | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44022 | Anfrage nach Stornierung                          | WiM Gas                                      | ✅   | ✅   |
+| 44023 | Bestätigung Anfrage Stornierung                   | WiM Gas                                      | ✅   | ✅   |
+| 44024 | Ablehnung Anfrage Stornierung                     | WiM Gas                                      | ✅   | ✅   |
+| 44035 | Antwort auf die Geschäftsdatenanfrage             | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44036 | Informationsmeldung über existierende Zuordnung   | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44037 | Informationsmeldung zur Beendigung der Zuordnung  | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44038 | Informationsmeldung zur Aufhebung einer zuk. Zuordnung| GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44039 | Kündigung MSB                                     | WiM Gas                                      | ✅   | ✅   |
+| 44040 | Bestätigung Kündigung MSB                         | WiM Gas                                      | ✅   | ✅   |
+| 44041 | Ablehnung Kündigung MSB                           | WiM Gas                                      | ✅   | ✅   |
+| 44042 | Anmeldung MSB                                     | WiM Gas                                      | ✅   | ✅   |
+| 44043 | Bestätigung Anmeldung MSB                         | WiM Gas                                      | ✅   | ✅   |
+| 44044 | Ablehnung Anmeldung MSB                           | WiM Gas                                      | ✅   | ✅   |
+| 44051 | Ende MSB                                          | WiM Gas                                      | ✅   | ✅   |
+| 44052 | Bestätigung Ende MSB                              | WiM Gas                                      | ✅   | ✅   |
+| 44053 | Ablehnung Ende MSB                                | WiM Gas                                      | ✅   | ✅   |
+| 44060 | Antwort auf die Geschäftsdatenanfrage             | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44101 | Stammdaten zur Messlokation                       | Leitfaden Marktprozesse Netzbetreiberwechsel | ✅   | ✅   |
+| 44102 | Aktualisierte Stammdaten zur Messlokation         | Leitfaden Marktprozesse Netzbetreiberwechsel | ✅   | ✅   |
+| 44103 | Stammdaten zur verbrauchenden Marktlokation       | Leitfaden Marktprozesse Netzbetreiberwechsel | ✅   | ✅   |
+| 44104 | Aktualisierte Stammdaten zur verbrauchenden Marktlokation| Leitfaden Marktprozesse Netzbetreiberwechsel | ✅   | ✅   |
+| 44105 | Ablehnung auf Stammdaten zur verbrauchenden Marktlokation| Leitfaden Marktprozesse Netzbetreiberwechsel | ✅   | ✅   |
+| 44109 | Nicht bila.rel Änderung vom LF                    | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44111 | Antwort auf Änderung vom LF                       | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44112 | Nicht bila.rel. Änderung vom NB                   | Marktraumumstellung                          | ✅   | ✅   |
+| 44113 | Nicht bila.rel. Änderung vom NB                   | Marktraumumstellung                          | ✅   | ✅   |
+| 44115 | Antwort auf Änderung vom NB                       | Marktraumumstellung                          | ✅   | ✅   |
+| 44116 | Änderung vom MSB mit Abhängigkeiten               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44117 | Änderung vom MSB mit Abhängigkeiten               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44119 | Antwort auf Änderung vom MSB                      | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44120 | Bila.rel. Änderung vom LF                         | Marktraumumstellung                          | ✅   | ✅   |
+| 44121 | Antwort auf Änderung vom LF                       | Marktraumumstellung                          | ✅   | ✅   |
+| 44123 | Bila.rel. Änderung vom NB mit Abhängigkeiten      | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44124 | Antwort auf Änderung vom NB                       | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44137 | Nicht bila. rel. Anfrage an LF                    | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44138 | Antwort auf Anfrage                               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44139 | Nicht bila.rel. Anfrage an NB                     | Marktraumumstellung                          | ✅   | ✅   |
+| 44140 | Nicht bila.rel. Anfrage an NB                     | Marktraumumstellung                          | ✅   | ✅   |
+| 44142 | Antwort auf Anfrage                               | Marktraumumstellung                          | ✅   | ✅   |
+| 44143 | Anfrage an MSB mit Abhängigkeiten                 | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44145 | Antwort auf Anfrage                               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44146 | Ablehnung der Anfrage                             | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44147 | Anfrage an MSB mit Abhängigkeiten                 | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44148 | Anfrage an MSB mit Abhängigkeiten                 | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44149 | Antwort auf Anfrage                               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44150 | Bila. rel. Anfrage an LF                          | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44151 | Antwort auf Anfrage                               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44152 | Ablehnung der Anfrage                             | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44156 | Bila.rel. Anfrage an NB mit Abhängigkeiten        | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44157 | Antwort auf Anfrage                               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44159 | Änderung vom MSB ohne Abhängigkeiten              | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44160 | Änderung vom MSB ohne Abhängigkeiten              | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44161 | Antwort auf Änderung                              | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44162 | Anfrage an MSB ohne Abhängigkeiten                | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44163 | Antwort auf Anfrage                               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44164 | Ablehnung Anfrage                                 | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44165 | Nicht bila. rel Anfrage an MSB ohne Abhängigkeiten| GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44166 | Nicht bila. rel Anfrage an MSB ohne Abhängigkeiten| GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44167 | Antwort auf Anfrage                               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44168 | Verpflichtungsanfrage / Aufforderung              | WiM Gas                                      | ✅   | ✅   |
+| 44169 | Bestätigung Verpflichtungsanfrage                 | WiM Gas                                      | ✅   | ✅   |
+| 44170 | Ablehnung Verpflichtungsanfrage                   | WiM Gas                                      | ✅   | ⚠️  |
+| 44175 | Änderung der Marktlokationsstruktur               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44176 | Antwort auf Änderung der 
+Marktlokationsstruktur  | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44180 | Anfrage der Marktlokationsstruktur                | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44181 | Antwort auf Anfrage der 
+Marktlokationsstruktur   | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44182 | Ablehnung der Anfrage der 
+Marktlokationsstruktur | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 44183 | Ende MSB von NB                                   | AWH WiM Gas 2.0                              | ⚠️  | ✅   |
+
+## ORDERS AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 17001 | Bestellung Geräteübernahmeangebot                 | WiM Gas                                      | ✅   | ✅   |
+| 17002 | Weiterverpflichtung                               | WiM Gas                                      | ✅   | ✅   |
+| 17003 | Beauftragung Änderung Technik                     | WiM Gas                                      | ✅   | ⚠️  |
+| 17004 | Anforderung von Werten                            | WiM Strom Teil 2                             | ✅   | ✅   |
+| 17005 | Bestellung Rechnungsabwicklung MSB über LF        | WiM Strom Teil 1                             | ✅   | ✅   |
+| 17006 | Beendigung Rechnungsabwicklung MSB über LF        | WiM Strom Teil 1                             | ✅   | ✅   |
+| 17007 | Bestellung von Werten                             | WiM Strom Teil 2                             | ✅   | ✅   |
+| 17008 | Abbestellung von Werten                           | WiM Strom Teil 2                             | ✅   | ✅   |
+| 17009 | Anzeige Gerätewechselabsicht                      | WiM Gas                                      | ✅   | ✅   |
+| 17011 | Bestellung Angebot Änderung Technik               | WiM Strom Teil 1                             | ✅   | ✅   |
+| 17101 | Anfrage Stammdaten Marktlokation (Gas)            | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 17102 | Anfrage von Werten                                | GPKE Teil 4                                  | ✅   | ✅   |
+| 17103 | Anfrage Brennwert / Zustandszahl                  | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 17104 | Anfrage vom MSB Gas                               | GPKE Teil 4                                  | ✅   | ✅   |
+| 17110 | Anforderung der Allokationsliste                  | Prozesse zur Ermittlung und Abrechnung von Mehr-/Mindermengen Strom und Gas| ✅   | ✅   |
+| 17113 | Reklamation von Werten                            | WiM Gas                                      | ✅   | ✅   |
+| 17114 | Anforderung bilanzierte Menge                     | Prozesse zur Ermittlung und Abrechnung von Mehr-/Mindermengen Strom und Gas| ✅   | ⚠️  |
+| 17115 | Sperrauftrag                                      | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 17116 | Anfrage Sperrung                                  | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 17117 | Entsperrauftrag                                   | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 17118 | Bestellung einer Konfigurationsänderung           | GPKE Teil 3                                  | ✅   | ✅   |
+| 17120 | Bestellung Änderung Prognosegrundlage             | GPKE Teil 3                                  | ✅   | ✅   |
+| 17121 | Bestellung Änderung                               | GPKE Teil 3                                  | ✅   | ✅   |
+| 17122 | Reklamation einer Definition                      | GPKE Teil 3                                  | ✅   | ✅   |
+| 17123 | Bestellung Änderung Zählzeitdefinition            | GPKE Teil 3                                  | ✅   | ✅   |
+| 17126 | Anfrage Stammdaten Messlokation (Gas)             | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 17128 | Reklamation einer Konfiguration                   | GPKE Teil 3                                  | ✅   | ✅   |
+| 17129 | Bestellung Beendigung einer Konfiguration         | GPKE Teil 3                                  | ✅   | ✅   |
+| 17130 | Bestellung einer Konfiguration                    | GPKE Teil 3                                  | ✅   | ✅   |
+| 17131 | Bestellung Angebot einer Konfiguration            | GPKE Teil 3                                  | ✅   | ✅   |
+| 17132 | Anfrage Stammdaten (Strom)                        | GPKE Teil 4                                  | ✅   | ✅   |
+| 17133 | Bestellung Änderung Abrechnungsdaten              | GPKE Teil 2                                  | ✅   | ✅   |
+| 17134 | Einrichtung Konfiguration Zuordnung LF von NB     | GPKE Teil 3                                  | ✅   | ✅   |
+| 17135 | Einrichtung Konfiguration Zuordnung LF von MSB    | GPKE Teil 3                                  | ✅   | ✅   |
+| 17201 | Anforder. normierter Profile und Profilscharen    | MaBiS                                        | ✅   | ✅   |
+| 17202 | Anforder. Lieferantenclearingliste                | MaBiS                                        | ✅   | ✅   |
+| 17203 | Anforder. Bilanzkreiszuordnungsliste              | MaBiS                                        | ✅   | ✅   |
+| 17204 | Anforder. Clearingliste BAS                       | MaBiS                                        | ✅   | ✅   |
+| 17205 | Anforder. Clearingliste DZR                       | MaBiS                                        | ✅   | ✅   |
+| 17206 | Anforderung Bilanzierungsgebietsclearingliste     | MaBiS                                        | ✅   | ✅   |
+| 17207 | Ab-/Bestellung BK-SZR auf Aggregationsebene RZ    | MaBiS                                        | ✅   | ✅   |
+| 17208 | Anforderung Clearingliste ÜNB-DZR                 | MaBiS                                        | ✅   | ✅   |
+| 17209 | Anforderung Ausfallarbeit                         | Kommunikationsprozesse Redispatch            | ✅   | ✅   |
+| 17210 | Anforderung Lieferantenausfallarbeitsclearingliste| MaBiS                                        | ✅   | ✅   |
+| 17211 | Reklamation Profile bzw. Profilscharen            | MABIS                                        | ✅   | ✅   |
+| 17301 | Anforderung von Stammdaten bzw. Messwerten        | Prozesse zum Informationsaustausch zwischen Netzbetreiber und Herkunftsnachweis-register (HKN-R) des Umweltbundesamts (UBA)| ✅   | ✅   |
+
+## ORDRSP AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 19001 | Bestätigung Bestellung                            | WiM Gas                                      | ✅   | ✅   |
+| 19002 | Ablehnung Bestellung                              | WiM Gas                                      | ✅   | ✅   |
+| 19003 | Bestätigung Weiterverpflichtung                   | WiM Gas                                      | ✅   | ✅   |
+| 19004 | Ablehnung Weiterverpflichtung                     | WiM Gas                                      | ✅   | ✅   |
+| 19005 | Bestätigung Auftrag Änderung Technik              | WiM Gas                                      | ✅   | ✅   |
+| 19006 | Ablehnung Auftrag Änderung Technik                | WiM Gas                                      | ✅   | ✅   |
+| 19007 | Ablehnung Anforderung Werte                       | WiM Strom Teil 2                             | ✅   | ✅   |
+| 19009 | Bestätigung Beendigung Rechnungsabwicklung MSB    | WiM Strom Teil 1                             | ✅   | ✅   |
+| 19010 | Ablehnung Beendigung Rechnungsabwicklung MSB      | WiM Strom Teil 1                             | ✅   | ✅   |
+| 19011 | Bestätigung der Ab-/Bestellung von Werten         | WiM Strom Teil 2                             | ✅   | ✅   |
+| 19012 | Ablehnung der Ab-/Bestellung von Werten           | WiM Strom Teil 2                             | ✅   | ✅   |
+| 19013 | Bestätigung der Stornierung einer Bestellung      | WiM Strom Teil 2                             | ✅   | ✅   |
+| 19014 | Ablehnung der Stornierung einer Bestellung        | WiM Strom Teil 2                             | ✅   | ✅   |
+| 19015 | Bestätigung Gerätewechselabsicht                  | WiM Gas                                      | ✅   | ✅   |
+| 19016 | Ablehnung Gerätewechselabsicht                    | WiM Gas                                      | ✅   | ✅   |
+| 19101 | Ablehnung der Anfrage  Stammdaten                 | GPKE Teil 4                                  | ✅   | ✅   |
+| 19102 | Ablehnung der Anfrage Werte                       | GPKE Teil 4                                  | ✅   | ✅   |
+| 19103 | Ablehnung der Anfrage Brennwert / Zustandszahl    | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 19104 | Ablehnung der Anfrage vom MSB Gas                 | GPKE Teil 4                                  | ✅   | ✅   |
+| 19110 | Ablehnung der Anforderung Allokationsliste        | Prozesse zur Ermittlung und Abrechnung von Mehr-/Mindermengen Strom und Gas| ✅   | ✅   |
+| 19114 | Ablehnung Reklamation                             | WiM Gas                                      | ✅   | ✅   |
+| 19115 | Ablehnung der Anforderung bilanzierte Menge       | Prozesse zur Ermittlung und Abrechnung von Mehr-/Mindermengen Strom und Gas| ✅   | ⚠️  |
+| 19116 | Bestätigung Sperr-/Entsperrauftrag                | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 19117 | Ablehnung Sperr-/Entsperrauftrag                  | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 19118 | Bestätigung Anfrage Sperrung                      | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 19119 | Ablehnung Anfrage Sperrung                        | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 19120 | Mitteilung zur Änderung                           | GPKE Teil 3                                  | ✅   | ✅   |
+| 19121 | Mitteilung zur Änderung Prognosegrundlage         | GPKE Teil 3                                  | ✅   | ✅   |
+| 19123 | Ablehnung Reklamation einer Definition            | GPKE Teil 3                                  | ✅   | ✅   |
+| 19124 | Mitteilung zur Änderung Zählzeitdefinition        | GPKE Teil 3                                  | ✅   | ✅   |
+| 19127 | Mitteilung zur Konfigurationsänderung             | GPKE Teil 3                                  | ✅   | ✅   |
+| 19128 | Bestätigung Stornierung Sperr-/Entsperrauftrag    | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 19129 | Ablehnung Stornierung Sperr-/Entsperrauftrag      | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 19130 | Bearbeitungsstand Reklamation Konfiguration       | GPKE Teil 3                                  | ✅   | ✅   |
+| 19131 | Mitteilung zur Beendigung Konfiguration           | GPKE Teil 3                                  | ✅   | ✅   |
+| 19132 | Mitteilung zur Bestellung Konfiguration           | GPKE Teil 3                                  | ✅   | ✅   |
+| 19133 | Bearbeitungsstand Bestellung Änderung Abrechnungsdaten| GPKE Teil 2                                  | ✅   | ✅   |
+| 19204 | Ablehnung Ab-/Bestellung der Aggregationsebene    | MaBiS                                        | ✅   | ✅   |
+| 19301 | Abl. der Anforderung                              | Prozesse zum Informationsaustausch zwischen Netzbetreiber und Herkunftsnachweis-register (HKN-R) des Umweltbundesamts (UBA)| ✅   | ✅   |
+| 19302 | Best. der Anforderung zum Beenden des Abos zur Stammdaten bzw. Messwertübermittlung| Prozesse zum Informationsaustausch zwischen Netzbetreiber und Herkunftsnachweis-register (HKN-R) des Umweltbundesamts (UBA)| ✅   | ✅   |
+
+## ORDCHG AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 39000 | Stornierung Sperr-/Entsperrauftrag                | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 39001 | Weiterleitung der Stornierung                     | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 39002 | Stornierung der Bestellung                        | WiM Strom Teil 2                             | ✅   | ✅   |
+
+## IFTSTA AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 21000 | Statusmeldung                                     | MaBiS                                        | ✅   | ✅   |
+| 21001 | Statusmeldung                                     | MaBiS                                        | ✅   | ✅   |
+| 21002 | Abweisung                                         | MaBiS                                        | ✅   | ✅   |
+| 21003 | Statusmeldung                                     | MaBiS                                        | ✅   | ✅   |
+| 21004 | Statusmeldung                                     | MaBiS                                        | ✅   | ✅   |
+| 21005 | Statusmeldung                                     | MaBiS                                        | ✅   | ✅   |
+| 21007 | Statusmeldung                                     | WiM Gas                                      | ✅   | ✅   |
+| 21009 | Statusmeldung                                     | WiM Gas                                      | ✅   | ✅   |
+| 21010 | Statusmeldung                                     | WiM Gas                                      | ✅   | ✅   |
+| 21011 | Statusmeldung                                     | WiM Gas                                      | ✅   | ✅   |
+| 21012 | Statusmeldung                                     | WiM Gas                                      | ✅   | ✅   |
+| 21013 | Statusmeldung                                     | WiM Gas                                      | ✅   | ✅   |
+| 21015 | Informationsmeldung                               | WiM Gas                                      | ✅   | ⚠️  |
+| 21018 | Statusmeldung                                     | WiM Gas                                      | ✅   | ✅   |
+| 21024 | Statusmeldung                                     | WiM Gas                                      | ✅   | ⚠️  |
+| 21025 | Statusmeldung                                     | WiM Gas                                      | ✅   | ✅   |
+| 21026 | Statusmeldung                                     | WiM Gas                                      | ✅   | ⚠️  |
+| 21027 | Statusmeldung                                     | WiM Gas                                      | ✅   | ✅   |
+| 21028 | Informationsmeldung                               | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 21029 | Vorabinformation                                  | WiM Strom Teil 1                             | ✅   | ✅   |
+| 21030 | iMS-Ersteinbauzust.                               | WiM Strom Teil 1                             | ✅   | ✅   |
+| 21031 | Bestandss. / Eigenausbau iMS                      | WiM Strom Teil 1                             | ✅   | ✅   |
+| 21032 | Antwort auf das Angebot                           | WiM Strom Teil 1                             | ✅   | ✅   |
+| 21033 | Ablehnung der Anfrage                             | GPKE Teil 3                                  | ✅   | ✅   |
+| 21035 | Rückmeld. a. Liefers.                             | GPKE Teil 2                                  | ✅   | ✅   |
+| 21036 | Statusmeldung                                     | WiM Strom Teil 1                             | ✅   | ✅   |
+| 21037 | Ansicht NB                                        | Kommunikationsprozesse Redispatch            | ✅   | ✅   |
+| 21038 | Ansicht BTR                                       | Kommunikationsprozesse Redispatch            | ✅   | ✅   |
+| 21039 | Auftragsstatus (Sperren)                          | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 21040 | Info Entsperrauftrag                              | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 21042 | Bestellung (WiM)                                  | WiM Strom Teil 2                             | ✅   | ✅   |
+| 21043 | Bestellungsantwort / -mitteilung                  | GPKE Teil 3                                  | ✅   | ✅   |
+| 21044 | Bestellungsbeendigung                             | GPKE Teil 3                                  | ✅   | ✅   |
+| 21045 | EnFG Informationen                                | GPKE Teil 4                                  | ✅   | ✅   |
+| 21047 | Bearbeitungsstandsmeldung                         | GPKE Teil 2                                  | ✅   | ✅   |
+
+## MSCONS AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 13002 | Zählerstand (Gas)                                 | WiM Gas                                      | ✅   | ✅   |
+| 13003 | Summenzeitreihe                                   | MaBiS                                        | ✅   | ✅   |
+| 13005 | EEG-Überf.-ZR                                     | Geschäftsprozesse für EEG-Überführungszeitreihen V1.0| ✅   | ✅   |
+| 13006 | Messwert Storno                                   | WiM Gas                                      | ✅   | ✅   |
+| 13007 | Gasbeschaffenheit                                 | KoV Leitfaden Marktprozesse Bilanzkreismanagement Gas| ✅   | ✅   |
+| 13008 | Lastgang (Gas)                                    | KoV Leitfaden Marktprozesse Bilanzkreismanagement Gas| ✅   | ✅   |
+| 13009 | Energiemenge (Gas)                                | WiM Gas                                      | ✅   | ✅   |
+| 13010 | normiertes Profil                                 | MaBiS                                        | ✅   | ✅   |
+| 13011 | Profilschar                                       | MaBiS                                        | ✅   | ✅   |
+| 13012 | TEP vergh. Werte Referenzmessung                  | MaBiS                                        | ✅   | ✅   |
+| 13013 | Marktlokationsscharfe Allokationsliste Gas (MMMA) | Prozesse zur Ermittlung und Abrechnung von Mehr-/Mindermengen Strom und Gas| ✅   | ✅   |
+| 13014 | Marktlokationsscharfe bilanzierte Menge Strom/Gas (MMMA)| Prozesse zur Ermittlung und Abrechnung von Mehr-/Mindermengen Strom und Gas| ✅   | ✅   |
+| 13015 | Arbeit Leistungsmax. Kalenderjahr vor
+Lieferbeginn| GPKE Teil 2                                  | ✅   | ✅   |
+| 13016 | Energiemenge u. Leistungsmax. (Strom)             | GPKE Teil 2                                  | ✅   | ✅   |
+| 13017 | Zählerstand (Strom)                               | Prozesse zum Informationsaustausch zwischen Netzbetreiber und Herkunftsnachweis-register (HKN-R) des Umweltbundesamts (UBA)| ✅   | ✅   |
+| 13018 | Lastgang Messlokation, Netzkoppelpunkt, Netzlokation| MaBiS BK6-19-218 Bilanzkreistreue            | ✅   | ✅   |
+| 13019 | Energiemenge (Strom)                              | Prozesse zum Informationsaustausch zwischen Netzbetreiber und Herkunftsnachweis-register (HKN-R) des Umweltbundesamts (UBA)| ✅   | ✅   |
+| 13020 | Ausfallarbeitsüberführungszeitreihe               | MaBiS                                        | ✅   | ✅   |
+| 13021 | Übermittlung von meteorologischen Daten           | Kommunikationsprozesse Redispatch            | ✅   | ✅   |
+| 13022 | Redispatch 2.0 Einzelzeitreihe Ausfallarbeit      | Kommunikationsprozesse Redispatch            | ✅   | ✅   |
+| 13023 | Redispatch 2.0 Ausfallarbeitssummenzeitreihe      | MaBiS                                        | ✅   | ✅   |
+| 13025 | Lastgang Marktlokation, Tranche                   | Prozesse zum Informationsaustausch zwischen Netzbetreiber und Herkunftsnachweis-register (HKN-R) des Umweltbundesamts (UBA)| ✅   | ✅   |
+| 13026 | EEG-Überf.-ZR Aufgrund Ausfallarbeit              | Geschäftsprozesse für EEG-Überführungszeitreihen V1.0| ✅   | ✅   |
+| 13027 | Werte nach Typ 2                                  | WiM Strom Teil 2                             | ✅   | ✅   |
+| 13028 | Grundlage POG-Ermittlung                          | GPKE Teil 4                                  | ✅   | ✅   |
+
+## INVOIC AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 31001 | Abschlagsrechnung                                 | GPKE Teil 2                                  | ✅   | ✅   |
+| 31002 | NN-Rechnung                                       | GPKE Teil 2                                  | ✅   | ✅   |
+| 31003 | WiM-Rechnung                                      | WiM Gas                                      | ✅   | ✅   |
+| 31004 | Stornorechnung                                    | WiM Gas                                      | ✅   | ✅   |
+| 31005 | MMM-Rechnung                                      | Prozesse zur Ermittlung und Abrechnung von Mehr-/Mindermengen Strom und Gas| ✅   | ✅   |
+| 31006 | MMM-selbst ausgest. Rechnung                      | Prozesse zur Ermittlung und Abrechnung von Mehr-/Mindermengen Strom und Gas| ✅   | ✅   |
+| 31007 | Aggreg. MMM-Rechnung                              | Prozesse zur Ermittlung und Abrechnung von Mehr-/Mindermengen Strom und Gas| ✅   | ✅   |
+| 31008 | Aggreg. MMM-selbst ausgest. Rechnung              | Prozesse zur Ermittlung und Abrechnung von Mehr-/Mindermengen Strom und Gas| ✅   | ✅   |
+| 31009 | MSB-Rechnung                                      | GPKE Teil 3                                  | ✅   | ✅   |
+| 31010 | Kapazitätsrechnung                                | Prozessbeschreibung zur Kapazitätsabrechnung an Ausspeisepunkten zu Letztverbrauchern| ✅   | ✅   |
+| 31011 | Rechnung sonstige Leistung                        | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+
+## REMADV AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 33001 | Bestätigung                                       | WiM Gas                                      | ✅   | ✅   |
+| 33002 | Abweisung                                         | WiM Gas                                      | ✅   | ✅   |
+| 33003 | Strom Abweisung Kopf und Summe                    | GPKE Teil 2                                  | ✅   | ✅   |
+| 33004 | Strom Abweisung Position                          | GPKE Teil 2                                  | ✅   | ✅   |
+
+## PARTIN AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 37000 | Kommunikationsdaten des LF Strom                  | GPKE Teil 4                                  | ✅   | ✅   |
+| 37001 | Kommunikationsdaten des NB Strom                  | GPKE Teil 4                                  | ✅   | ✅   |
+| 37002 | Kommunikationsdaten des MSB Strom                 | GPKE Teil 4                                  | ✅   | ✅   |
+| 37003 | Kommunikationsdaten des BKV Strom                 | GPKE Teil 4                                  | ✅   | ✅   |
+| 37004 | Kommunikationsdaten des BIKO Strom                | GPKE Teil 4                                  | ✅   | ✅   |
+| 37005 | Kommunikationsdaten des ÜNB Strom                 | GPKE Teil 4                                  | ✅   | ✅   |
+| 37006 | Kommunikationsdaten des ESA Strom                 | GPKE Teil 4                                  | ✅   | ✅   |
+| 37008 | Kommunikationsdaten des LF Gas                    | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 37009 | Kommunikationsdaten des NB Gas                    | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 37010 | Kommunikationsdaten des MSB Gas                   | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 37011 | Kommunikationsdaten des MGV Gas                   | GeLi Gas 2.0                                 | ✅   | ✅   |
+| 37012 | Spartenübergreifende Kommunikationsdaten des NB Gas| GeLi Gas 2.0                                 | ✅   | ✅   |
+| 37013 | Spartenübergreifende Kommunikationsdaten des MSB Gas| GeLi Gas 2.0                                 | ✅   | ✅   |
+| 37014 | Spartenübergreifende Kommunikationsdaten des MSB Strom| GeLi Gas 2.0                                 | ✅   | ✅   |
+
+## REQOTE AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 35001 | Anfrage Geräteübernahmeangebot                    | WiM Gas                                      | ✅   | ✅   |
+| 35002 | Anfrage Rechnungsabwicklung MSB über LF           | WiM Strom Teil 1                             | ✅   | ✅   |
+| 35003 | Anfrage von Werten                                | WiM Strom Teil 2                             | ✅   | ✅   |
+| 35004 | Anfrage einer Konfiguration                       | GPKE Teil 3                                  | ✅   | ✅   |
+| 35005 | Anfrage Angebot Änderung Technik                  | AWH Prozesse zur Änderung der Technik an Lokationen| ✅   | ✅   |
+
+## QUOTES AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 15001 | Angebot Geräteübernahme                           | WiM Gas                                      | ✅   | ✅   |
+| 15002 | Angebot Abrechnung Messstellenbetrieb MSB         | WiM Strom Teil 1                             | ✅   | ✅   |
+| 15003 | Angebot zur Anfrage von Werten                    | WiM Strom Teil 2                             | ✅   | ✅   |
+| 15004 | Angebot  einer Konfiguration                      | GPKE Teil 3                                  | ✅   | ✅   |
+| 15005 | Angebot Änderung Technik                          | AWH Prozesse zur Änderung der Technik an Lokationen| ✅   | ✅   |
+
+## PRICAT AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 27001 | Übermittlung Ausgleichsenergiepreis               | MaBiS                                        | ✅   | ✅   |
+| 27002 | Preisblätter MSB-Leistungen                       | GPKE Teil 3                                  | ✅   | ✅   |
+| 27003 | Preisblätter NB-Leistungen                        | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+
+## INSRPT AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 23001 | Störungsmeldung                                   | WiM Gas                                      | ✅   | ✅   |
+| 23003 | Ablehnung                                         | WiM Gas                                      | ✅   | ✅   |
+| 23004 | Bestätigung                                       | WiM Gas                                      | ✅   | ✅   |
+| 23005 | Informationsmeldung                               | WiM Gas                                      | ✅   | ✅   |
+| 23008 | Ergebnisbericht                                   | WiM Gas                                      | ✅   | ✅   |
+| 23009 | Informationsmeldung                               | WiM Gas                                      | ✅   | ✅   |
+| 23011 | Informationsmeldung                               | WiM Strom Teil 2                             | ✅   | ✅   |
+| 23012 | Informationsmeldung                               | WiM Strom Teil 2                             | ✅   | ✅   |
+
+## UTILTS AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 25001 | Berechnungsformel                                 | WiM Strom Teil 2                             | ✅   | ✅   |
+| 25004 | Übermittlung Übersicht Zählzeitdefinitionen       | GPKE Teil 3                                  | ✅   | ✅   |
+| 25005 | Übermittlung einer ausgerollten Zählzeitdefinition| GPKE Teil 3                                  | ✅   | ✅   |
+| 25006 | Übermittlung Übersicht Schaltzeitdefinitionen     | GPKE Teil 3                                  | ✅   | ✅   |
+| 25007 | Übermittlung Übersicht Leistungskurvendefinitionen| GPKE Teil 3                                  | ✅   | ✅   |
+| 25008 | Übermittlung einer ausgerollten Schaltzeitdefinition| GPKE Teil 3                                  | ✅   | ✅   |
+| 25009 | Übermittlung einer ausgerollten Leistungskurvendefinition| GPKE Teil 3                                  | ✅   | ✅   |
+| 25010 | Antwort auf Berechnungsformel                     | WiM Strom Teil 2                             | ✅   | ✅   |
+
+## COMDIS AHB
+
+| PID    | Description                                       | Process                                       | 3.3  | 4.0  |
+|--------|---------------------------------------------------|-----------------------------------------------|------|------|
+| 29001 | Ablehnung REMADV                                  | AWH Sperrprozesse Gas                        | ✅   | ✅   |
+| 29002 | Ablehnung IFTSTA                                  | GPKE Teil 2                                  | ✅   | ✅   |
 
 ---
 
-## GPKE — Sperrung / Entsperrung Strom
-
-**Crate:** `mako-gpke`  
-**Workflow:** `GpkeSperrungWorkflow` / `gpke-sperrung`  
-**Format:** UTILMD AHB Strom  
-**Regulatory basis:** BK6-22-024
-
-| PID   | Description                                     | Direction  | PID 3.3 |
-|-------|-------------------------------------------------|------------|---------|
-| 55555 | Anweisung Sperrung Strom (NB → MSB)             | inbound    | ✅      |
-| 55557 | Anweisung Entsperrung Strom (NB → MSB)          | inbound    | ✅      |
-
-> The full Sperrung/Entsperrung range (55557–55692) contains many sub-process PIDs
-> for follow-up messages (Bestätigung, Ablehnung, information flows). Only 55555 and
-> 55557 are the primary workflow triggers registered in `SPERRUNG_PIDS`.
-
----
-
-## GPKE — Einspeisestelle Strom
-
-**Crate:** `mako-gpke`  
-**Workflow:** `SupplierChangeWorkflow` / `gpke-supplier-change` (shared)  
-**Format:** UTILMD AHB Strom  
-**Regulatory basis:** BK6-22-024 (LFW24), transferred from former MPES effective **2025-06-06**  
-**AHB profiles:** `fv20250606`, `fv20251001`, `fv20261001`
-
-| PID   | Description                                         | Direction  | PID 3.3 |
-|-------|-----------------------------------------------------|------------|---------|
-| 56001 | Einspeisung Anmeldung (LFE → NB)                    | inbound    | ⚠️      |
-| 56002 | Einspeisung Abmeldung / Kündigung (LFE → NB)        | inbound    | ⚠️      |
-| 56003 | Einspeisung Bestätigung, fristgerecht (NB → LFE)    | response   | ⚠️      |
-| 56004 | Einspeisung Ablehnung (NB → LFE)                    | response   | ⚠️      |
-
-> ⚠️ **Not in PID 3.3.** PIDs 56001–56004 were transferred from the former MPES domain
-> into GPKE per BK6-22-024 and are defined in the **UTILMD AHB Strom** (LFW24 annex),
-> not in the PID overview document. They are present in the project's UTILMD profiles
-> starting from `fv20250606`. Former PIDs 56005–56010 were never in any current AHB.
-
----
-
-## GPKE — INVOIC Abrechnung Strom
-
-**Crate:** `mako-gpke`  
-**Workflow:** `GpkeAbrechnungWorkflow` / `gpke-abrechnung`  
-**Format:** INVOIC AHB  
-**Regulatory basis:** BK6-22-024
-
-| PID   | Description                                        | Direction  | PID 3.3 |
-|-------|----------------------------------------------------|------------|---------|
-| 31001 | Rechnung (LF → NB or NB → LF)                     | inbound    | ✅      |
-| 31002 | Stornorechnung                                     | inbound    | ✅      |
-| 31004 | Mahnung                                            | inbound    | ✅      |
-| 31005 | Antwort auf Rechnung — Bestätigung                 | response   | ✅      |
-| 31006 | Antwort auf Rechnung — Ablehnung                   | response   | ✅      |
-| 31007 | Antwort auf Stornorechnung — Bestätigung           | response   | ✅      |
-| 31008 | Antwort auf Stornorechnung — Ablehnung             | response   | ✅      |
-
----
-
-## GPKE — ORDERS/ORDRSP Konfiguration Strom
-
-**Crate:** `mako-gpke`  
-**Workflow:** `GpkeKonfigurationWorkflow` / `gpke-konfiguration`  
-**Format:** ORDERS / ORDRSP AHB  
-**Regulatory basis:** BK6-22-024
-
-| PID   | Description                                        | Format  | Direction  | PID 3.3 |
-|-------|----------------------------------------------------|---------|------------|---------|
-| 17134 | Anfrage Konfiguration Strom (NB → LF)              | ORDERS  | inbound    | ✅      |
-| 17135 | Bestätigung/Anpassung Konfiguration (LF → NB)      | ORDERS  | inbound    | ✅      |
-| 19001 | Bestätigung Konfigurationsanfrage (NB → LF)        | ORDRSP  | outbound   | ✅      |
-| 19002 | Ablehnung Konfigurationsanfrage (NB → LF)          | ORDRSP  | outbound   | ✅      |
-
----
-
-## WiM Strom — Messstellenbetrieb UTILMD
-
-**Crate:** `mako-wim` *(future — see [discrepancy note](#wim-strom--legacy-device-change-utilmd-11001--11003))*  
-**Format:** UTILMD AHB Strom  
-**Regulatory basis:** BK6-18-032 / BK6-22-082 (WiM Strom Teil 1)
-
-These are the **current** AHB PIDs for WiM Strom Messstellenbetrieb as of FV2025-10-01.
-They supersede the legacy 11001–11003 numbering used in older AHB versions.
-
-### Beginn Messstellenbetrieb (MSB Anmeldung)
-
-| PID   | Description                              | Direction        | PID 3.3 |
-|-------|------------------------------------------|------------------|---------|
-| 55042 | Anmeldung MSB (MSBN → NB)                | inbound          | ✅      |
-| 55043 | Bestätigung Anmeldung MSB (NB → MSBN)    | response         | ✅      |
-| 55044 | Ablehnung Anmeldung MSB (NB → MSBN)      | response         | ✅      |
-| 55039 | Kündigung MSB (MSBN → NB)                | inbound          | ✅      |
-| 55040 | Bestätigung Kündigung MSB (NB → MSBN)    | response         | ✅      |
-| 55041 | Ablehnung Kündigung MSB (NB → MSBN)      | response         | ✅      |
-
-### Ende Messstellenbetrieb (MSB Abmeldung)
-
-| PID   | Description                              | Direction        | PID 3.3 |
-|-------|------------------------------------------|------------------|---------|
-| 55051 | Ende MSB / Abmeldung (NB → MSBN)         | inbound          | ✅      |
-| 55052 | Bestätigung Ende MSB (MSBN → NB)         | response         | ✅      |
-| 55053 | Ablehnung Ende MSB (MSBN → NB)           | response         | ✅      |
-| 55168 | Verpflichtungsanfrage / Aufforderung     | inbound          | ✅      |
-| 55169 | Bestätigung Verpflichtungsanfrage        | response         | ✅      |
-| 55170 | Ablehnung Verpflichtungsanfrage          | response         | ✅      |
-
----
-
-## WiM Strom — Geräteübernahme ORDERS
-
-**Crate:** `mako-wim`  
-**Workflow:** `WimGeraeteubernahmeWorkflow` / `wim-geraeteubernahme`  
-**Format:** ORDERS AHB  
-**Regulatory basis:** BK6-18-032
-
-| PID   | Description                                              | Direction  | PID 3.3 |
-|-------|----------------------------------------------------------|------------|---------|
-| 17001 | Anfrage Geräteübernahmeangebot (nMSB → NB / aMSB)       | inbound    | ✅      |
-| 17002 | Bestellung Geräteübernahme (nach separatem Angebot)      | inbound    | ✅      |
-| 17005 | Bestellung Geräteübernahme (Follow-up)                   | inbound    | ✅      |
-| 17009 | Stornierung Anfrage Geräteübernahmeangebot               | inbound    | ✅      |
-| 17011 | Stornierung Bestellung Geräteübernahme                   | inbound    | ✅      |
-
-**APERAK / ORDRSP Frist:** 5 Werktage (`fristen::add_werktage(d, 5, BdewMaKo)`).
-Saturday counts as a Werktag; Sunday and public holidays do not.
-
----
-
-## WiM Strom — Stammdaten / Übermittlung ORDERS
-
-**Crate:** `mako-wim`  
-**Workflow:** `WimStammdatenWorkflow` / `wim-stammdaten`  
-**Format:** ORDERS AHB  
-**Regulatory basis:** BK6-18-032  
-**AHB source:** ORDERS AHB fv20251001
-
-| PID(s)       | Description                                                      | Direction  | PID 3.3 |
-|--------------|------------------------------------------------------------------|------------|---------|
-| 17132        | Anfrage zur Übermittlung von Stammdaten **Strom** (NB → MSB)     | inbound    | ✅      |
-| 17102–17133  | Übermittlung Stammdaten responses (MSB → NB, Nb role only)       | inbound    | ✅      |
-
-> **Note:** PID 17101 is "Anfrage zur Übermittlung von Stammdaten **Gas**" (GeLi Gas / WiM Gas domain)
-> and is NOT registered in `mako-wim`. PIDs 17134/17135 are GPKE Konfiguration PIDs
-> ("Einrichtung Konfiguration aufgrund Zuordnung LF") registered in `mako-gpke`, not here.
-
----
-
-## WiM Strom — Stornierung ORDCHG
-
-**Crate:** `mako-wim`  
-**Workflow:** `WimStornierungWorkflow` / `wim-stornierung`  
-**Format:** ORDCHG AHB  
-**Regulatory basis:** BK6-18-032
-
-| PID   | Description                             | Direction  | PID 3.3 |
-|-------|-----------------------------------------|------------|---------|
-| 39000 | Stornierung (any party)                 | inbound    | ✅      |
-| 39001 | Bestätigung Stornierung (outbox only)   | outbound   | ✅      |
-| 39002 | Ablehnung Stornierung (outbox only)     | outbound   | ✅      |
-
----
-
-## WiM Strom — Legacy device-change UTILMD (11001–11003)
-
-**Crate:** `mako-wim`  
-**Workflow:** `WimDeviceChangeWorkflow` / `wim-device-change`  
-**Format:** UTILMD AHB Strom *(legacy)*
-
-| PID   | Description (legacy name)                          | Direction  | PID 3.3 |
-|-------|----------------------------------------------------|------------|---------|
-| 11001 | Gerätewechsel Anmeldung / Anmeldung MSB (nMSB → NB)| inbound    | ⚠️      |
-| 11002 | Gerätewechsel Abmeldung / Kündigung MSB (NB → aMSB)| inbound    | ⚠️      |
-| 11003 | Stammdatenänderung (NB ↔ MSB)                      | inbound    | ⚠️      |
-
-> ⚠️ **Not in PID 3.3 (FV2025-10-01) and not in any current UTILMD AHB profile.**
-> These PIDs appear to predate the WiM Strom Teil 1 reform. The current AHB uses
-> **55042–55044** (Anmeldung MSB) and **55051–55053** (Ende MSB) instead.
-> The `WimDeviceChangeWorkflow` needs to be updated to register the current PIDs.
-> See [Discrepancies](#discrepancies) for tracking.
-
----
-
-## WiM Gas — Messstellenbetrieb Gas
-
-**Crate:** `mako-wim-gas` *(placeholder)*  
-**Format:** UTILMD AHB Gas  
-**Regulatory basis:** BK7-24-01-009 (GeLi Gas 3.0, WiM Gas component)
-
-Key WiM Gas UTILMD PIDs appearing in PID 3.3 (process NB ↔ MSBA/gMSB):
-
-| PID   | Description                                        | PID 3.3 |
-|-------|----------------------------------------------------|---------|
-| 44022 | Kündigung MSB Gas (NB → MSBA)                      | ✅      |
-| 44023 | Bestätigung Kündigung MSB Gas                      | ✅      |
-| 44024 | Ablehnung Kündigung MSB Gas                        | ✅      |
-| 44039 | Anmeldung MSB Gas (MSBN → NB)                      | ✅      |
-| 44040 | Bestätigung Anmeldung MSB Gas                      | ✅      |
-| 44041 | Ablehnung Anmeldung MSB Gas                        | ✅      |
-| 44042 | Ende MSB Gas (NB → MSBN)                           | ✅      |
-| 44043 | Bestätigung Ende MSB Gas                           | ✅      |
-| 44044 | Ablehnung Ende MSB Gas                             | ✅      |
-| 44051 | Vorläufige Abmeldebestätigung MSB Gas (NB → MSBA)  | ✅      |
-| 44052 | Bestätigung Ende MSB (NB → MSBA)                   | ✅      |
-| 44053 | Ablehnung Ende MSB (NB → MSBA)                     | ✅      |
-| 44168 | Verpflichtungsanfrage Aufforderung (NB → gMSB)     | ✅      |
-| 44169 | Bestätigung Verpflichtungsanfrage                  | ✅      |
-| 44170 | Ablehnung Verpflichtungsanfrage                    | ✅      |
-
-**APERAK Frist:** 10 Werktage (`fristen::add_werktage(d, 10, BdewMaKo)`).
-
----
-
-## GeLi Gas — Lieferbeginn/-ende Gas
-
-**Crate:** `mako-geli-gas`  
-**Workflow:** `GeliGasSupplierChangeWorkflow` / `geli-gas-supplier-change`  
-**Format:** UTILMD AHB Gas  
-**Regulatory basis:** BK7-24-01-009 (GeLi Gas 3.0, Beschluss 12.09.2025, abgeschlossen 24.09.2025)
-
-| PID   | Description                                         | Direction  | PID 3.3 |
-|-------|-----------------------------------------------------|------------|---------|
-| 44001 | Anfrage Lieferbeginn Gas (LFN → NB)                 | inbound    | ✅      |
-| 44002 | Bestätigung Lieferbeginn Gas (NB → LFN)             | response   | ✅      |
-| 44003 | Ablehnung Lieferbeginn Gas (NB → LFN)               | response   | ✅      |
-| 44004 | Anfrage Lieferende Gas (LFN → NB)                   | inbound    | ✅      |
-| 44005 | Bestätigung Lieferende Gas (NB → LFN)               | response   | ✅      |
-| 44006 | Ablehnung Lieferende Gas (NB → LFN)                 | response   | ✅      |
-| 44017 | Kündigung Lieferbeginn Gas (LFN → LFA)              | inbound    | ✅      |
-| 44018 | Bestätigung Kündigung Lieferbeginn Gas (LFA → LFN)  | response   | ✅      |
-
-**APERAK Frist:** 10 Werktage (`fristen::add_werktage(d, 10, BdewMaKo)`).
-
-> GeLi Gas 3.0 scope is **UTILMD G only** (PIDs 44001–44018, 44555).
-> Gas MMM billing (INVOIC 31010–31011) belongs to **GaBi Gas** (`mako-gabi-gas`),
-> not GeLi Gas.
-
----
-
-## GeLi Gas — Sperrung / Entsperrung Gas
-
-**Crate:** `mako-geli-gas`  
-**Workflow:** `GeliGasSperrungWorkflow` / `geli-gas-sperrung`  
-**Format:** UTILMD AHB Gas  
-**Regulatory basis:** BK7-24-01-009 (GeLi Gas 3.0); UTILMD profile `fv20241001_gas`+
-
-| PID   | Description                                       | Direction  | PID 3.3 |
-|-------|---------------------------------------------------|------------|---------|
-| 44555 | Anweisung Sperrung Gas (NB → MSB)                 | inbound    | ⚠️      |
-
-> ⚠️ **Not in PID 3.3.** PID 44555 is defined in the **UTILMD AHB Gas** directly and
-> appears in the project's gas profiles (`fv20241001_gas`, `fv20251001_gas`,
-> `fv20261001_gas`) but was not extracted from the PID overview document.
-> This is likely a PDF table-column extraction limitation, not a genuine absence —
-> the PID is confirmed present in the AHB profiles.
-
----
-
-## Messwesen / MSCONS (13002–13028)
-
-**Crates:** cross-domain (not routed to a single MaKo workflow)  
-**Format:** MSCONS AHB  
-**Regulatory basis:** various (BK6/BK7 measurement data exchange)
-
-Selected PIDs appearing in PID 3.3 across multiple process contexts:
-
-| PID   | Description                              | Context             | PID 3.3 |
-|-------|------------------------------------------|---------------------|---------|
-| 13002 | Zählerstand (Gas / Strom)                | WiM Gas, Messwesen  | ✅      |
-| 13003 | Energiemenge (Strom)                     | Messwesen Strom     | ✅      |
-| 13005 | Lastgang (Strom, RLM)                    | Messwesen Strom     | ✅      |
-| 13006 | Zählerstand (Strom)                      | GPKE / WiM Strom    | ✅      |
-| 13007 | Gasbeschaffenheit                        | WiM Gas / Messwesen | ✅      |
-| 13008 | Lastgang (Gas, RLM)                      | WiM Gas / Messwesen | ✅      |
-| 13009 | Energiemenge (Gas)                       | WiM Gas / Messwesen | ✅      |
-| 13015 | Zählpunkt-Summenzeitreihe (Strom)        | Messwesen Strom     | ✅      |
-| 13016 | Lastgang (Strom, SLP)                    | Messwesen Strom     | ✅      |
-| 13017 | Energiemenge SLP synthetisch (Strom)     | Messwesen Strom     | ✅      |
-| 13019 | Statusmeldung Messwerte                  | Messwesen Strom     | ✅      |
-| 13025 | Lastgang (Strom, iMSys)                  | Messwesen Strom     | ✅      |
-| 13026 | Bilanzierungsrelevante Messwerte         | Messwesen Strom     | ✅      |
-| 13027 | Sonderausspielung                        | WiM Strom / AWH     | ✅      |
-| 13028 | Lastgang (Strom, SLP/Pegel)              | WiM Strom / GPKE    | ✅      |
-
-PIDs 13002–13028 are Messwesen PIDs; they are **not** MABIS PIDs.
-
----
-
-## MABIS (13003)
-
-**Crate:** `mako-mabis`  
-**Workflow:** `MabisBillingWorkflow` / `mabis-billing`  
-**Format:** MSCONS  
-**Regulatory basis:** BK6-06-013 (MABIS Bilanzkreisabrechnung Strom, BKV ↔ ÜNB)
-
-| PID   | Description                                      | PID 3.3 |
-|-------|--------------------------------------------------|---------|
-| 13003 | Summenzeitreihen und Ausfallarbeitssummen (MSCONS) | ✅     |
-
-> ℹ️ **PID 13001 does not exist** in any MSCONS AHB version.
-> The MABIS Bilanzkreisabrechnung is identified by PID **13003** in the MSCONS AHB.
-> PIDs 13002 and 13004–13028 are Messwesen-PIDs (meter data exchange) and do **not**
-> belong to MABIS. See [copilot-instructions.md](../.github/copilot-instructions.md)
-> domain rules for the full classification.
-
----
-
-## NBW — Netzbetreiberwechsel PARTIN
-
-**Crate:** `mako-nbw` *(placeholder)*  
-**Format:** PARTIN AHB  
-**Regulatory basis:** BDEW NBW process
-
-| PID   | Description                          | PID 3.3 |
-|-------|--------------------------------------|---------|
-| 15001 | PARTIN Stammdaten NB (bulk transfer) | ✅      |
-| 15002 | PARTIN Bestätigung                   | ✅      |
-| 15003 | PARTIN Ablehnung                     | ✅      |
-| 15004 | PARTIN Änderung                      | ✅      |
-| 15005 | PARTIN Löschung                      | ✅      |
-
----
-
-## GaBi Gas — INVOIC Billing Gas
-
-**Crate:** `mako-gabi-gas` *(placeholder)*  
-**Format:** INVOIC AHB  
-**Regulatory basis:** GaBi Gas (BK7-06-067 / BK7-24-01-009 MMM)
-
-| PID   | Description                           | PID 3.3 |
-|-------|---------------------------------------|---------|
-| 31010 | Rechnung Gas MMM (NB / BKV → LF)      | ✅      |
-| 31011 | Stornorechnung Gas MMM                | ✅      |
-
-> Gas MMM billing PIDs 31010–31011 belong to **GaBi Gas** (`mako-gabi-gas`), not
-> GeLi Gas. GeLi Gas 3.0 explicitly excludes INVOIC billing from its scope.
-
----
-
-## Discrepancies
-
-The following discrepancies were identified by cross-checking the project source against
-**BDEW PID 3.3 (FV2025-10-01)** and the UTILMD AHB profiles.
-
-### D-1 — WiM Strom: legacy PIDs 11001–11003 not in current AHB
-
-| | |
-|---|---|
-| **Severity** | High |
-| **Crate** | `mako-wim` |
-| **Current state** | `WimDeviceChangeWorkflow` registers PIDs 11001, 11002, 11003 |
-| **Expected** | Current UTILMD AHB Strom (FV2025-10-01) uses **55042–55044** (Anmeldung/Bestätigung/Ablehnung MSB) and **55051–55053** (Ende MSB / Abmeldung) |
-| **Evidence** | PIDs 11001–11003 are absent from all UTILMD AHB profiles (`fv20241001` through `fv20261001`) and from PID 3.3 |
-| **Action** | Update `geraetewechsel.rs` to register 55042, 55051 as trigger PIDs; map old PID constants to new AHB values; update `UTILMD_PIDS` routing slice |
-
-### D-2 — GPKE Einspeisestelle: PIDs 56001–56004 absent from PID 3.3
-
-| | |
-|---|---|
-| **Severity** | Informational |
-| **Crate** | `mako-gpke` |
-| **Current state** | PIDs 56001–56004 registered; present in UTILMD profiles `fv20250606`+ |
-| **Expected** | PID 3.3 (FV2025-10-01) does not list 56001–56004 |
-| **Reason** | Introduced by BK6-22-024 (LFW24) effective 2025-06-06; defined in UTILMD AHB annex, not yet reflected in the PID overview document |
-| **Action** | No code change needed. Verify inclusion in the next PID overview revision (expected FV2026-10-01) |
-
-### D-3 — GeLi Gas Sperrung: PID 44555 absent from PID 3.3
-
-| | |
-|---|---|
-| **Severity** | Informational |
-| **Crate** | `mako-geli-gas` |
-| **Current state** | PID 44555 registered; present in UTILMD Gas profiles (`fv20241001_gas`+) |
-| **Expected** | PID 3.3 (FV2025-10-01) does not list 44555 |
-| **Reason** | Likely a PDF table extraction artefact or the PID is defined directly in the UTILMD AHB Gas without appearing in the process overview table |
-| **Action** | Verify against the published UTILMD AHB Gas PDF. No code change pending confirmation |
-
-### D-4 — MABIS PID 13003 correctly registered; historic 13001 confusion resolved
-
-| | |
-|---|---|
-| **Severity** | Informational (resolved) |
-| **Crate** | `mako-mabis` |
-| **Current state** | `router.register(13003, "mabis-billing")` — correct MSCONS AHB PID |
-| **History** | Earlier versions used 13001 as an engine-internal routing key; that was incorrect. PID 13001 does not exist in any MSCONS AHB. |
-| **Action** | No change needed. PID 13003 is the correct BDEW Prüfidentifikator for Summenzeitreihen und Ausfallarbeitssummen. |
-
----
-
-*Last updated: FV2025-10-01 — cross-checked against BDEW PID 3.3 (01.10.2025)*
+*Source: BDEW PID 3.3 (FV2025-10-01, Fehlerkorrektur 27.03.2026) and PID 4.0 (FV2026-10-01).*

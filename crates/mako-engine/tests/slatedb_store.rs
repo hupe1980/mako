@@ -473,7 +473,10 @@ async fn dead_letter_persists_and_lists() {
     let (sink, worker) = store.as_dead_letter_sink();
     let handle = tokio::spawn(worker.run());
 
-    sink.reject(&DeadLetterReason::UnknownPid(55001));
+    sink.reject(&DeadLetterReason::UnknownPid {
+        pid: 55001,
+        context: mako_engine::dead_letter::AuditContext::now(),
+    });
 
     // Close the channel; the worker drains remaining entries then exits.
     sink.signal_shutdown();
@@ -502,12 +505,17 @@ async fn dead_letter_list_recent_order_and_limit() {
     let handle = tokio::spawn(worker.run());
 
     let reasons = [
-        DeadLetterReason::UnknownPid(55001),
+        DeadLetterReason::UnknownPid {
+            pid: 55001,
+            context: mako_engine::dead_letter::AuditContext::now(),
+        },
         DeadLetterReason::UnknownConversation {
             conversation_id: "conv-A".into(),
+            context: mako_engine::dead_letter::AuditContext::now(),
         },
         DeadLetterReason::DuplicateMessage {
             inbox_key: "msg-id-XYZ".into(),
+            context: mako_engine::dead_letter::AuditContext::now(),
         },
     ];
 
@@ -553,6 +561,7 @@ async fn dead_letter_visible_after_worker_drains() {
 
     sink.reject(&DeadLetterReason::ProcessingError {
         message: "simulated adapter crash".into(),
+        context: mako_engine::dead_letter::AuditContext::now(),
     });
 
     sink.signal_shutdown();
@@ -613,6 +622,7 @@ async fn dead_letter_key_space_is_isolated() {
     sink.reject(&DeadLetterReason::VersionMismatch {
         expected: "FV2025-10-01".into(),
         received: "FV2024-04-01".into(),
+        context: mako_engine::dead_letter::AuditContext::now(),
     });
 
     // Drain and verify.

@@ -16,11 +16,7 @@
 //! |-------|-----------------------------------------------------------|--------|
 //! | 55001 | Anfrage Lieferbeginn Strom (LFN → NB)                     | ✅ Implemented |
 //! | 55002 | Anfrage Lieferende Strom (LFN → NB)                       | ✅ Implemented |
-//! | 55017 | Kündigung Lieferbeginn (LFN → LFA)                       | ✅ Implemented |
-//! | 56001 | Einspeisestelle — Anmeldung (ex-MPES, BK6-22-024)         | ✅ AHB validated (fv20250606+) |
-//! | 56002 | Einspeisestelle — Abmeldung (ex-MPES, BK6-22-024)         | ✅ AHB validated (fv20250606+) |
-//! | 56003 | Einspeisestelle — Bestätigung (ex-MPES, BK6-22-024)       | ✅ AHB validated (fv20250606+) |
-//! | 56004 | Einspeisestelle — Ablehnung (ex-MPES, BK6-22-024)         | ✅ AHB validated (fv20250606+) |
+//! | 55016 | Kündigung Lieferbeginn (LFN → LFA)                       | ✅ Implemented |
 //!
 //! #### Outbound ANTWORT — derived by `GpkeSupplierChangeWorkflow`, NOT routed (NB role)
 //!
@@ -30,7 +26,8 @@
 //! | 55004 | Ablehnung Lieferbeginn (NB → LFN)               | 55001 rejected |
 //! | 55005 | Bestätigung Lieferende (NB → LFN)               | 55002 accepted |
 //! | 55006 | Ablehnung Lieferende (NB → LFN)                 | 55002 rejected |
-//! | 55018 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55017 always   |
+//! | 55017 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55016 accept  |
+//! | 55018 | Ablehnung Kündigung Lieferbeginn (LFA → LFN)    | 55016 reject  |
 //!
 //! #### Inbound ANTWORT — routed to `gpke-lf-anmeldung` (LF role)
 //!
@@ -44,13 +41,24 @@
 //! | 55004 | Ablehnung Lieferbeginn (NB → LFN)               | 55001 Anfrage  |
 //! | 55005 | Bestätigung Lieferende (NB → LFN)               | 55002 Anfrage  |
 //! | 55006 | Ablehnung Lieferende (NB → LFN)                 | 55002 Anfrage  |
-//! | 55018 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55017 Kündigung|
+//! | 55017 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55016 Kündigung|
+//! | 55018 | Ablehnung Kündigung Lieferbeginn (LFA → LFN)    | 55016 Kündigung|
 //!
-//! #### Sperrung — routed to `gpke-sperrung`
+//! #### Sperrung / Entsperrung — routed to `gpke-sperrung`
 //!
-//! | PID   | Process name (AHB)             | Status |
-//! |-------|--------------------------------|--------|
-//! | 55555 | Anweisung Sperrung (NB → LFN) | ✅ Implemented |
+//! | PID   | Process name (AWH)              | Status         |
+//! |-------|-------------------------------|----------------|
+//! | 17115 | Sperrauftrag (NB → LFN)        | ✅ Implemented |
+//! | 17116 | Anfrage Sperrung (NB → LFN)    | ✅ Implemented |
+//! | 17117 | Entsperrauftrag (NB → LFN)     | ✅ Implemented |
+//!
+//! #### Stornierung — routed to `gpke-stornierung`
+//!
+//! | PID   | Process name (AHB)                      | Status |
+//! |-------|-----------------------------------------|--------|
+//! | 55022 | Anfrage nach Stornierung (LFN → NB)     | ✅ Implemented |
+//! | 55023 | Bestätigung Stornierung (NB → LFN)      | ✅ Implemented |
+//! | 55024 | Ablehnung Stornierung (NB → LFN)        | ✅ Implemented |
 //!
 //! ### Neuanlage — routed to `gpke-neuanlage`
 //!
@@ -68,13 +76,14 @@
 //! PIDs 55008 (Bestätigung) and 55009 (Ablehnung) are outbound responses derived
 //! by `GpkeLfAbmeldungWorkflow` and never routed as inbound.
 //!
-//! **Note on pre-LFW24 PIDs:** PIDs 55010 (Lieferantenwechsel Stornierung) is not
-//! present in UTILMD AHB Strom 2.1 (FV2025-10-01) and receives CONTRL rejection.
+//! **Note on AHB coverage:** PIDs 55010–55015 (NB-initiated processes) are confirmed
+//! present in UTILMD AHB Strom 2.1 (FV2025-10-01) but require separate NB-side
+//! workflows that are not yet implemented.
 //!
-//! The 7 inbound ANFRAGE PIDs share [`GpkeSupplierChangeWorkflow`] (workflow name:
+//! The 3 inbound ANFRAGE PIDs share [`GpkeSupplierChangeWorkflow`] (workflow name:
 //! `"gpke-supplier-change"`). The `pruefidentifikator` stored in
 //! [`wechselprozesse::InitiatedData`] lets read-models distinguish variants.
-//! The derived ANTWORT PIDs (55003–55006, 55018) are recorded in the
+//! The derived ANTWORT PIDs (55003–55006, 55017, 55018) are recorded in the
 //! `AntwortGesendet` event but are not routed as inbound messages.
 //!
 //! ### INVOIC-based billing processes (GPKE Netznutzungsabrechnung / MMM Strom)
@@ -93,8 +102,8 @@
 //! `"gpke-abrechnung"`). The `pruefidentifikator` stored in
 //! [`abrechnung::AbrechnungData`] lets read-models distinguish variants.
 //! PIDs 31003 (WiM-Rechnung) and 31009 (MSB-Rechnung) belong to WiM domain and
-//! are handled separately. Former PIDs 56005–56010 (ex-MPES) do not appear in
-//! any extracted INVOIC AHB and are not registered.
+//! are handled separately. Former PIDs 56005–56010 (ex-MPES) do not exist in
+//! any INVOIC AHB and are not registered.
 //!
 //! ## Architecture
 //!
@@ -137,17 +146,24 @@
 #![deny(missing_docs)]
 
 pub mod abrechnung;
+pub mod anfrage_bestellung;
 pub mod konfiguration;
 pub mod lf_abmeldung;
 pub mod lf_anmeldung;
 pub mod neuanlage;
 pub mod post_acceptance;
 pub mod sperrung;
+pub mod stornierung;
 pub mod wechselprozesse;
 
 pub use abrechnung::{
     ABRECHNUNG_WINDOW_LABEL, AbrechnungCommand, AbrechnungData, AbrechnungEvent,
     AbrechnungProjection, AbrechnungRecord, AbrechnungState, GpkeAbrechnungWorkflow, INVOIC_PIDS,
+};
+pub use anfrage_bestellung::{
+    ANFRAGE_PID as ANFRAGE_BESTELLUNG_PID, ANFRAGE_WINDOW_LABEL, AnfrageBestellungCommand,
+    AnfrageBestellungEvent, AnfrageBestellungState, AnfrageData, GpkeAnfrageBestellungWorkflow,
+    WORKFLOW_NAME as ANFRAGE_BESTELLUNG_WORKFLOW_NAME,
 };
 pub use konfiguration::{
     BeauftragungData, GpkeKonfigurationWorkflow, KONFIGURATION_WINDOW_LABEL, KonfigurationCommand,
@@ -170,6 +186,12 @@ pub use sperrung::{
     GpkeSperrungWorkflow, SPERRUNG_PIDS, SPERRUNG_WINDOW_LABEL, SperrungCommand, SperrungData,
     SperrungEvent, SperrungState,
 };
+pub use stornierung::{
+    GpkeStornierungCommand, GpkeStornierungData, GpkeStornierungEvent, GpkeStornierungState,
+    GpkeStornierungWorkflow,
+    STORNIERUNG_APERAK_WINDOW_LABEL as STORNIERUNG_GPKE_APERAK_WINDOW_LABEL,
+    STORNIERUNG_PIDS as STORNIERUNG_GPKE_PIDS,
+};
 pub use wechselprozesse::{
     APERAK_WINDOW_LABEL, GpkeSupplierChangeWorkflow, IFTSTA_PIDS as IFTSTA_VOLLZUGS_PIDS,
     InitiatedData, InitiatedDetails, SupplierChangeCommand, SupplierChangeEvent,
@@ -181,10 +203,12 @@ pub use wechselprozesse::{
 /// Engine module for the GPKE process family.
 ///
 /// Registers all GPKE Prüfidentifikator values:
-/// - PIDs 55001–55002, 55017, 56001–56004 (inbound ANFRAGE, UTILMD) → `"gpke-supplier-change"`
+/// - PIDs 55001–55002, 55016 (inbound ANFRAGE, UTILMD) → `"gpke-supplier-change"`
+/// - PIDs 55022, 55023, 55024 (Stornierung Anfrage + Antwort, UTILMD) → `"gpke-stornierung"`
 /// - PIDs 55600, 55601 (Neuanlage ANFRAGE, UTILMD) → `"gpke-neuanlage"`
 /// - PID 55007 (NB-seitiges Lieferende, UTILMD) → `"gpke-lf-abmeldung"`
-/// - PID 55555 (Anweisung Sperrung, UTILMD) → `"gpke-sperrung"`
+/// - PIDs 17115/17116/17117 (Sperrung/Entsperrung, ORDERS) → `"gpke-sperrung"`
+/// - **PID 55555** (Anfrage Daten der individuellen Bestellung, UTILMD) → `"gpke-anfrage-bestellung"`
 /// - PIDs 31001, 31002, 31004–31008 (billing, INVOIC) → `"gpke-abrechnung"`
 /// - PIDs 19001, 19002 (inbound ORDRSP, NB role only) → `"gpke-konfiguration"`
 ///
@@ -204,17 +228,13 @@ pub use wechselprozesse::{
 /// to prevent both modules from claiming the same PIDs.
 ///
 /// **Not registered (outbound-only):**
-/// - PIDs 55003–55006, 55018 are outbound ANTWORT messages derived by
+/// - PIDs 55003–55006, 55017, 55018 are outbound ANTWORT messages derived by
 ///   `GpkeSupplierChangeWorkflow::handle`. They are never routed as inbound.
 /// - PIDs 17134, 17135 are outbound ORDERS messages dispatched via the outbox
 ///   by `GpkeKonfigurationWorkflow`. They are never routed as inbound.
 ///
 /// PIDs 55007–55009 (NB-seitiges Lieferende) are handled by `GpkeLfAbmeldungWorkflow`.
 /// PID 55010 (pre-LFW24 Stornierung) is not present in AHB Strom 2.1 and is CONTRL-rejected.
-///
-/// PIDs 56001–56004 were transferred from MPES to GPKE per BNetzA BK6-22-024
-/// (LFW24, effective 2025-06-06). Former PIDs 56005–56010 are not in any
-/// extracted INVOIC AHB — replaced by the INVOIC 31xxx range.
 ///
 /// [`DeploymentRoles`]: mako_engine::marktrolle::DeploymentRoles
 /// [`Marktrolle::Nb`]: mako_engine::marktrolle::Marktrolle::Nb
@@ -244,10 +264,12 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             "gpke-supplier-change",
             lf_anmeldung::WORKFLOW_NAME,
             "gpke-sperrung",
+            anfrage_bestellung::WORKFLOW_NAME,
             "gpke-abrechnung",
             "gpke-konfiguration",
             "gpke-neuanlage",
             "gpke-lf-abmeldung",
+            stornierung::WORKFLOW_NAME,
         ]
     }
 
@@ -258,7 +280,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
     ) {
         // UTILMD inbound ANFRAGE PIDs — routed to gpke-supplier-change.
         // Only inbound request PIDs are registered. The outbound ANTWORT PIDs
-        // (55003–55006, 55018) are derived internally and never routed as inbound.
+        // (55003–55006, 55017, 55018) are derived internally and never routed as inbound.
         for &pid in UTILMD_PIDS {
             router.register(pid, "gpke-supplier-change");
         }
@@ -274,7 +296,8 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             router.register(pid, "gpke-lf-abmeldung");
         }
 
-        // PID 55555 (Anweisung Sperrung) — separate workflow with its own state machine.
+        // ORDERS PIDs 17115/17116/17117 (Sperrung/Entsperrung) — separate workflow.
+        // Per BDEW PID overview: "AWH Sperrprozesse" applies to both Strom and Gas.
         for &pid in SPERRUNG_PIDS {
             router.register(pid, "gpke-sperrung");
         }
@@ -296,7 +319,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             }
         }
 
-        // LF-side Anmeldung: inbound NB/LFA response PIDs (55003–55006, 55018).
+        // LF-side Anmeldung: inbound NB/LFA response PIDs (55003–55006, 55017, 55018).
         // Registered so the AS4 inbound layer can route them by conversation ID
         // to the correct GpkeLfAnmeldungWorkflow instance (makod acting as LF).
         for &pid in ANTWORT_PIDS_LF {
@@ -311,6 +334,21 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         for &pid in wechselprozesse::IFTSTA_PIDS {
             router.register(pid, "gpke-supplier-change");
         }
+
+        // GPKE Stornierung PIDs 55022/55023/55024 (Anfrage + Antwort).
+        // NB role: NB receives 55022 inbound and dispatches 55023/55024.
+        // All three are registered so routing works for both inbound legs.
+        for &pid in stornierung::STORNIERUNG_PIDS {
+            router.register(pid, stornierung::WORKFLOW_NAME);
+        }
+
+        // PID 55555 — Anfrage Daten der individuellen Bestellung (GPKE Teil 4).
+        // LFN queries NB for data about a specific order. NB must respond
+        // within 24 wall-clock hours (BK6-22-024 §5). Governed by BK6-24-174.
+        router.register(
+            anfrage_bestellung::ANFRAGE_PID,
+            anfrage_bestellung::WORKFLOW_NAME,
+        );
     }
 
     fn profile_requirements(&self) -> &'static [mako_engine::profile::ProfileRequirement] {
@@ -346,6 +384,10 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             ("wechselprozesse::IFTSTA_PIDS", wechselprozesse::IFTSTA_PIDS),
             ("NEUANLAGE_PIDS", NEUANLAGE_PIDS),
             ("LF_ABMELDUNG_PIDS", LF_ABMELDUNG_PIDS),
+            (
+                "stornierung::STORNIERUNG_PIDS",
+                stornierung::STORNIERUNG_PIDS,
+            ),
         ];
         for (name, pids) in named {
             if pids.is_empty() {
@@ -354,6 +396,15 @@ impl mako_engine::builder::EngineModule for GpkeModule {
                      at least one PID must be registered for each workflow group",
                 ));
             }
+        }
+        // ANFRAGE_PID is a scalar constant (55555); verify it's in the valid
+        // Prüfidentifikator range as a sanity check.
+        if anfrage_bestellung::ANFRAGE_PID < 10_000 || anfrage_bestellung::ANFRAGE_PID > 99_999 {
+            return Err(format!(
+                "gpke: anfrage_bestellung::ANFRAGE_PID {} is outside the valid \
+                 Prüfidentifikator range 10000–99999",
+                anfrage_bestellung::ANFRAGE_PID,
+            ));
         }
         Ok(())
     }

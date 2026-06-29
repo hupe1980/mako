@@ -5,24 +5,7 @@
   "valid_from": "2026-04-01",
   "supersedes_directory": "fv20241001",
   "pid_source": "rff_z13",
-  "ordering_hint": [
-    "UNH",
-    "BGM",
-    "DTM",
-    "NAD",
-    "CTA",
-    "COM",
-    "IDE",
-    "LOC",
-    "STS",
-    "FTX",
-    "RFF",
-    "SEQ",
-    "CCI",
-    "CAV",
-    "QTY",
-    "UNT"
-  ],
+  "ordering_hint": [],
   "segments": [
     {
       "tag": "UNH",

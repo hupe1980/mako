@@ -25,11 +25,7 @@ market. The current version is **GaBi Gas 2.0** (BNetzA BK7-14-020).
 | Scope | Supplier switching (Lieferantenwechsel) | Gas balancing (Bilanzierung) |
 | Parties | LFN ↔ GNB | BKV ↔ FNB/VNB ↔ MGV |
 | EDIFACT | UTILMD G (PIDs 44xxx) | ALLOCAT, NOMINT, NOMRES, INVOIC |
-| INVOIC billing? | ❌ No | ✅ Yes — PIDs 31010–31011 |
-
-> **Gas MMM billing belongs here, not in GeLi Gas.**
-> PIDs 31010 (Kapazitätsrechnung) and 31011 (Rechnung sonstige Leistung)
-> are GaBi Gas INVOIC processes governed under BK7 Bilanzierung, not GeLi Gas.
+| INVOIC billing? | ❌ No | ✅ Yes — PIDs 31010, 31011 |
 
 ## Two-crate architecture
 

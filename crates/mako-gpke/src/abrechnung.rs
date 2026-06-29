@@ -19,14 +19,6 @@
 //! The stored `pruefidentifikator` field in [`AbrechnungData`] lets read-models
 //! distinguish process variants.
 //!
-//! ## Note on ex-MPES PIDs 56005–56010
-//!
-//! PIDs 56005–56010 were referenced in earlier implementations as ex-MPES
-//! billing PIDs transferred to GPKE per BK6-22-024. These PIDs **do not appear
-//! in any extracted INVOIC AHB profile** (neither 2.8e nor 1.0). The new
-//! INVOIC AHB 1.0a/1.0b PDFs exist in `docs/pdfs/` but have not yet been
-//! extracted. Run `cargo xtask extract-pdf` to generate updated profiles.
-//!
 //! # Regulatory basis
 //!
 //! - **BDEW GPKE** — Geschäftsprozesse zur Kundenbelieferung mit Elektrizität
@@ -50,20 +42,20 @@ use mako_engine::{
 
 /// All GPKE billing Prüfidentifikatoren handled by this workflow (INVOIC-based).
 ///
-/// These are the GPKE-domain PIDs from INVOIC AHB 2.8e (FV2025-10-01 / FV2026-04-01).
-/// PIDs 31003 (WiM-Rechnung) and 31009 (MSB-Rechnung) belong to the WiM domain and
-/// are NOT included here. Storno (31004) applies to GPKE invoices of any variant.
+/// These are the GPKE-domain PIDs from INVOIC AHB (FV2025-10-01 / FV2026-04-01).
+/// PID 31003 (WiM-Rechnung) belongs to WiM Gas (`mako-wim-gas`).
+/// PID 31004 (Stornorechnung WiM Gas) belongs to `mako-wim-gas` per `docs/pid-reference.md`.
 ///
 /// | PID   | Name                                         |
 /// |-------|----------------------------------------------|
 /// | 31001 | Abschlagsrechnung (Netznutzung)              |
 /// | 31002 | NN-Rechnung (Netznutzungsabrechnung)          |
-/// | 31004 | Stornorechnung                               |
 /// | 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo)        |
 /// | 31006 | MMM-Rechnung (selbst ausgestellt)            |
 /// | 31007 | Aggregierte Mehr-/Mindermenge Rechnung       |
 /// | 31008 | Aggregierte Mehr-/Mindermenge Rechnung (SA)  |
-pub const INVOIC_PIDS: &[u32] = &[31001, 31002, 31004, 31005, 31006, 31007, 31008];
+/// | 31009 | MSB-Rechnung (GPKE Teil 3 — NB/MSB settlement) |
+pub const INVOIC_PIDS: &[u32] = &[31001, 31002, 31005, 31006, 31007, 31008, 31009];
 
 /// Deadline label for the INVOIC settlement response window.
 ///

@@ -1,6 +1,6 @@
-//! End-to-end test: MSBN ↔ NB WiM Gas Anmeldung MSB Gas (PID 44039).
+//! End-to-end test: MSBN ↔ NB WiM Gas Anmeldung MSB Gas (PID 44042).
 //!
-//! A mock NB (Netzbetreiber) receives a UTILMD G 44039 from the MSBN
+//! A mock NB (Netzbetreiber) receives a UTILMD G 44042 from the MSBN
 //! (neuer Messstellenbetreiber Gas) and dispatches a positive or negative
 //! APERAK response within **10 Werktage** (BK7-24-01-009).
 //!
@@ -9,7 +9,7 @@
 //! ```text
 //!   MSBN ERP (wire fixture)                     NB ERP (MockNb)
 //!   ──────────────────────────────────────────────────────────────
-//!                        ──── UTILMD G 44039 ─►
+//!                        ──── UTILMD G 44042 ─►
 //!                                               receive_utilmd(wire)
 //!                                                 → adapter: ReceiveUtilmd
 //!                                                 → vacuous-validation guard
@@ -31,7 +31,7 @@
 //!
 //! # Regulatory context
 //!
-//! - **PID 44039**: Anmeldung MSB Gas (MSBN → NB, WiM Gas AWH V2.0)
+//! - **PID 44042**: Anmeldung MSB Gas (MSBN → NB, WiM Gas AWH V2.0)
 //! - **APERAK Frist**: **10 Werktage** (BNetzA BK7-24-01-009)
 //! - **Saturday counts as a Werktag**; Sunday and federal public holidays do not.
 //! - The NB state machine:
@@ -58,20 +58,20 @@ const NB_ID: &str = "9900357000004"; // Netzbetreiber (receiver)
 const MALO_GAS_ID: &str = "52695662085"; // Marktlokations-ID (Gas)
 const FV: &str = "FV2025-10-01";
 
-// ── UTILMD G 44039 wire fixture ────────────────────────────────────────────────
+// ── UTILMD G 44042 wire fixture ────────────────────────────────────────────────
 //
-// Minimal EDIFACT UTILMD G1.1 Anmeldung MSB Gas (PID 44039).
+// Minimal EDIFACT UTILMD G1.1 Anmeldung MSB Gas (PID 44042).
 // Direction: MSBN (sender NAD+MS) → NB (receiver NAD+MR).
 //
-// NOTE: WiM Gas PIDs (44039–44053) are not yet in the `fv*_gas` AHB profile
+// NOTE: WiM Gas PIDs (44042–44053) are not yet in the `fv*_gas` AHB profile
 // set. Until `cargo xtask import-xml-ahb` imports them, `msg.validate()` returns
 // a vacuous pass. The adapter applies the `pid_has_ahb_rules()` guard and sets
 // `validation_passed = false`, so this test bypasses validation explicitly
 // in `receive_utilmd()`.
-const UTILMD_44039_BYTES: &[u8] = b"\
+const UTILMD_44042_BYTES: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WG-2025-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:G1.1'\
-BGM+E01:::+00044039::+9'\
+BGM+E01:::+00044042::+9'\
 DTM+137:20250115:102'\
 RFF+Z13:WG-REF-001'\
 NAD+MS+4012345000023::293'\
@@ -103,7 +103,7 @@ impl MockNb {
         }
     }
 
-    /// ERP notification: receive MSBN's UTILMD G 44039 wire bytes, adapt,
+    /// ERP notification: receive MSBN's UTILMD G 44042 wire bytes, adapt,
     /// and execute.
     ///
     /// The vacuous-validation guard in the adapter sets `validation_passed = false`
@@ -127,7 +127,7 @@ impl MockNb {
 
         let cmd = wim_gas_anmeldung_registry()
             .dispatch(&raw as &dyn Any, &self.fv)
-            .expect("NB: adapt UTILMD G 44039 to WimGasAnmeldungCommand");
+            .expect("NB: adapt UTILMD G 44042 to WimGasAnmeldungCommand");
 
         let cmd = match cmd {
             WimGasAnmeldungCommand::ReceiveUtilmd {
@@ -139,7 +139,7 @@ impl MockNb {
                 message_ref,
                 ..
             } => {
-                assert_eq!(pid.as_u32(), 44039, "adapter must extract PID 44039");
+                assert_eq!(pid.as_u32(), 44042, "adapter must extract PID 44042");
                 assert_eq!(
                     sender.as_str(),
                     MSBN_ID,
@@ -179,7 +179,7 @@ impl MockNb {
         self.process
             .execute(cmd)
             .await
-            .expect("NB: execute ReceiveUtilmd 44039");
+            .expect("NB: execute ReceiveUtilmd 44042");
     }
 
     /// ERP action: dispatch positive or negative APERAK for the pending Anmeldung.
@@ -218,8 +218,8 @@ impl MockNb {
 async fn wim_gas_anmeldung_positive_aperak() {
     let nb = MockNb::new();
 
-    // Step 1: MSBN sends UTILMD G 44039 → NB adapts and executes.
-    nb.receive_utilmd(UTILMD_44039_BYTES).await;
+    // Step 1: MSBN sends UTILMD G 44042 → NB adapts and executes.
+    nb.receive_utilmd(UTILMD_44042_BYTES).await;
 
     let state = nb.state().await;
     assert!(
@@ -249,7 +249,7 @@ async fn wim_gas_anmeldung_positive_aperak() {
     let payload = &aperak.payload;
     assert_eq!(
         payload["pid"].as_u64().unwrap(),
-        44039,
+        44042,
         "outbox payload must contain the original PID"
     );
     assert_eq!(
@@ -289,7 +289,7 @@ async fn wim_gas_anmeldung_positive_aperak() {
 async fn wim_gas_anmeldung_negative_aperak() {
     let nb = MockNb::new();
 
-    nb.receive_utilmd(UTILMD_44039_BYTES).await;
+    nb.receive_utilmd(UTILMD_44042_BYTES).await;
 
     let outbox = nb
         .dispatch_aperak(false, Some("Messstelle nicht wechselbereit"))
@@ -324,12 +324,12 @@ async fn wim_gas_anmeldung_duplicate_receive_rejected() {
     let nb = MockNb::new();
 
     // First receive succeeds.
-    nb.receive_utilmd(UTILMD_44039_BYTES).await;
+    nb.receive_utilmd(UTILMD_44042_BYTES).await;
 
     // Second receive on non-New state must be an engine error (invalid state).
     let raw = nb
         .platform
-        .parse(UTILMD_44039_BYTES)
+        .parse(UTILMD_44042_BYTES)
         .expect("parse UTILMD G");
 
     let cmd = wim_gas_anmeldung_registry()

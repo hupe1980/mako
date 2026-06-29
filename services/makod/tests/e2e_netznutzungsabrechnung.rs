@@ -1,16 +1,23 @@
 //! End-to-end test: GPKE Netznutzungsabrechnung / Mehr-Mindermengen —
-//! INVOIC-based billing (PIDs 31001, 31002, 31004–31008).
+//! INVOIC-based billing (PIDs 31001, 31002, 31005–31009).
 //!
 //! Models the NB (Netzbetreiber) side of the GPKE billing workflow.  The NB
 //! processes an outbound INVOIC addressed to the supplier (LF) and tracks
 //! whether the billing was settled, disputed, or timed out.
+//!
+//! **Note**: PID 31004 ("Stornorechnung") belongs to WiM Gas per
+//! `docs/pid-reference.md`. It is NOT a GPKE PID.
+//! **Note**: PID 31009 ("MSB-Rechnung", GPKE Teil 3) was moved here from
+//! `mako-wim::rechnung` per `docs/pid-reference.md`.
 //!
 //! # Regulatory basis
 //!
 //! - **BK6-22-024 (LFW24)** — GPKE APERAK Frist: **24 wall-clock hours**
 //! - **INVOIC AHB 1.0 / MIG 2.8e** — German energy-market invoice format
 //! - **PIDs 31001/31002** — Abschlagsrechnung / NN-Rechnung (Netznutzungsabrechnung)
-//! - **PIDs 31004–31008** — Storno, Mehr-/Mindermengen billing variants
+//! - **PIDs 31005–31008** — Mehr-/Mindermengen billing variants
+//! - **PID 31009** — MSB-Rechnung (GPKE Teil 3, NB/MSB settlement)
+//! - **PID 31004** — Stornorechnung (WiM Gas — NOT GPKE)
 //!
 //! # Lifecycle trace (settle — happy path)
 //!
@@ -183,28 +190,6 @@ async fn e2e_gpke_abrechnung_31002_settle() {
     );
 }
 
-/// GPKE Abrechnung — happy path: Stornorechnung (PID 31004).
-///
-/// PID 31004 cancels a prior NN-Rechnung or MMM-Rechnung.  Same lifecycle
-/// as a regular INVOIC — received, validated, settled.
-#[tokio::test]
-async fn e2e_gpke_abrechnung_31004_storno_settle() {
-    let nb = MockNb::new();
-
-    nb.receive_invoic(31004, "INVOIC-STORNO-2025-001", true)
-        .await;
-
-    let state = nb.state().await;
-    assert!(
-        matches!(state, AbrechnungState::ValidationPassed(ref d) if d.pruefidentifikator.as_u32() == 31004),
-        "expected ValidationPassed(31004); got: {state:?}"
-    );
-
-    nb.settle_invoice().await;
-
-    assert!(matches!(nb.state().await, AbrechnungState::Settled(_)));
-}
-
 /// GPKE Abrechnung — happy path: MMM-Rechnung (PID 31005).
 ///
 /// PID 31005 covers Mehr-/Mindermengensaldo billing.  The state machine is
@@ -226,10 +211,11 @@ async fn e2e_gpke_abrechnung_31005_mmm_settle() {
     assert!(matches!(nb.state().await, AbrechnungState::Settled(_)));
 }
 
-/// GPKE Abrechnung — all 7 INVOIC PIDs are accepted by the workflow.
+/// GPKE Abrechnung — all active INVOIC PIDs are accepted by the workflow.
 ///
-/// Validates that `INVOIC_PIDS` = {31001, 31002, 31004, 31005, 31006, 31007,
-/// 31008} all produce `ValidationPassed` (no PID-guard rejections).
+/// Validates that `INVOIC_PIDS` = {31001, 31002, 31005, 31006, 31007,
+/// 31008, 31009} all produce `ValidationPassed` (no PID-guard rejections).
+/// PID 31004 was removed — it belongs to WiM Gas per `docs/pid-reference.md`.
 #[tokio::test]
 async fn e2e_gpke_abrechnung_all_pids_accepted() {
     for &pid in INVOIC_PIDS {

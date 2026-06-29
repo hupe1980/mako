@@ -2,7 +2,7 @@
 //!
 //! This test covers the full production dispatch path for a GPKE Lieferbeginn
 //! Strom (PID 55001) message and verifies the UTILMD PID guard accepts all
-//! LFW24 GPKE ANFRAGE PIDs (55001, 55002, 55017, 56001–56004)
+//! LFW24 GPKE ANFRAGE PIDs (55001, 55002, 55016)
 //! and rejects out-of-range or outbound response PIDs:
 //!
 //! ```text

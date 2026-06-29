@@ -136,13 +136,13 @@ impl malo_ident::MaloIdentHandler for MakodApiHandler {
                 "internal://malo-ident-callback",
                 payload,
             );
-            store
-                .enqueue(&[msg])
-                .await
-                .map_err(|e| energy_api::Error::Http {
+            store.enqueue(&[msg]).await.map_err(|e| {
+                tracing::error!("outbox enqueue error: {e}");
+                energy_api::Error::Http {
                     status: 500,
-                    body: format!("outbox enqueue error: {e}"),
-                })?;
+                    body: "internal error".to_string(),
+                }
+            })?;
 
             info!(
                 tx_id,

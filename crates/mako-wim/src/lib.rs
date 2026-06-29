@@ -9,9 +9,10 @@
 //!
 //! | Process | PIDs | Message | Module | Status |
 //! |---|---|---|---|---|
-//! | Gerätewechsel Anmeldung (neuer MSB) | 11001 | UTILMD | `geraetewechsel` | ✅ Implemented |
-//! | Gerätewechsel Abmeldung (alter MSB) | 11002 | UTILMD | `geraetewechsel` | ✅ Registered (shared workflow) |
-//! | Stammdatenänderung | 11003 | UTILMD | `geraetewechsel` | ✅ Registered (shared workflow) |
+//! | Anmeldung MSB (nMSB → NB) | 55042 | UTILMD | `geraetewechsel` | ✅ Implemented |
+//! | Kündigung MSB (nMSB → NB) | 55039 | UTILMD | `geraetewechsel` | ✅ Registered (shared workflow) |
+//! | Ende MSB / Abmeldung (NB → MSBN) | 55051 | UTILMD | `geraetewechsel` | ✅ Registered (shared workflow) |
+//! | Verpflichtungsanfrage (NB → MSBN) | 55168 | UTILMD | `geraetewechsel` | ✅ Registered (shared workflow) |
 //! | Bestellung Geräteübernahmeangebot | 17001–17011 | ORDERS | `geraeteubernahme` | ✅ Implemented |
 //! | Stammdaten Anfrage / Übermittlung | 17132 (req), 17102–17133 (resp) | ORDERS | `stammdaten` | ✅ Implemented |
 //! | Preisanfrage (REQOTE/QUOTES) | 35001–35005 (REQOTE in), 15001–15005 (QUOTES in) | REQOTE, QUOTES | `preisanfrage` | ✅ Implemented |
@@ -135,9 +136,10 @@ pub use stornierung::{
 ///
 /// | PID(s) | Workflow key | Module | Role |
 /// |---|---|---|---|
-/// | 11001 | `wim-device-change` | Gerätewechsel Anmeldung (nMSB → NB) | any |
-/// | 11002 | `wim-device-change` | Gerätewechsel Abmeldung / Kündigung (NB → aMSB) | any |
-/// | 11003 | `wim-device-change` | Stammdatenänderung (NB ↔ MSB) | any |
+/// | 55039 | `wim-device-change` | Kündigung MSB (MSBN → NB) | any |
+/// | 55042 | `wim-device-change` | Anmeldung MSB (MSBN → NB) | any |
+/// | 55051 | `wim-device-change` | Ende MSB / Abmeldung (NB → MSBN) | any |
+/// | 55168 | `wim-device-change` | Verpflichtungsanfrage (NB → MSBN) | any |
 /// | 17001–17011 | `wim-geraeteubernahme` | Geräteübernahme ORDERS (nMSB → NB) | any |
 /// | 17132 | `wim-stammdaten` | Stammdaten Anforderung Strom (NB → MSB), MSB role | any |
 /// | 17102–17133 | `wim-stammdaten` | Stammdatenübermittlung responses (MSB → NB), NB role | **Nb only** |
@@ -192,16 +194,16 @@ impl mako_engine::builder::EngineModule for WimModule {
         router: &mut mako_engine::pid_router::PidRouter,
         roles: &mako_engine::marktrolle::DeploymentRoles,
     ) {
-        // UTILMD WiM device-change family (PIDs 11001–11003).
+        // UTILMD WiM MSB-Wechsel family (PIDs 55039, 55042, 55051, 55168).
         //
-        // 11001 — Anmeldung Messstellenbetrieb (nMSB → NB): new MSB initiates change.
-        // 11002 — Abmeldung / Kündigung Messstellenbetrieb (NB → aMSB): NB terminates
-        //         the old MSB relationship.  makod in MSB role receives this inbound.
-        // 11003 — Stammdatenänderung (NB ↔ MSB): master-data update notification.
+        // 55039 — Kündigung MSB (MSBN → NB): incoming MSB initiates cancellation.
+        // 55042 — Anmeldung MSB (MSBN → NB): new MSB initiates change.
+        // 55051 — Ende MSB / Abmeldung (NB → MSBN): NB terminates MSB relationship.
+        // 55168 — Verpflichtungsanfrage (NB → MSBN): grid operator obligation request.
         //
-        // All three share WimDeviceChangeWorkflow; the PID is carried in the
+        // All four share WimDeviceChangeWorkflow; the PID is carried in the
         // DeviceChangeData and available for business-logic branching.
-        for pid in [11_001_u32, 11_002, 11_003] {
+        for pid in [55_039_u32, 55_042, 55_051, 55_168] {
             router.register(pid, "wim-device-change");
         }
 
@@ -349,10 +351,6 @@ impl mako_engine::builder::EngineModule for WimModule {
         // would silently mean the module registers no routes for an entire workflow
         // family, discoverable only on first inbound message.
         let named: &[(&str, &[u32])] = &[
-            (
-                "geraeteubernahme::ANFRAGE_PIDS",
-                geraeteubernahme::ANFRAGE_PIDS,
-            ),
             (
                 "geraeteubernahme::BESTELLUNG_PIDS",
                 geraeteubernahme::BESTELLUNG_PIDS,

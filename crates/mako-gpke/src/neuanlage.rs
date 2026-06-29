@@ -47,10 +47,14 @@ use mako_engine::{
 
 /// Inbound ANFRAGE PIDs for Neuanlage handled by [`GpkeNeuanlageWorkflow`].
 ///
-/// | PID   | Process (AHB name)                                  | AHB profile  |
-/// |-------|-----------------------------------------------------|--------------|
-/// | 55600 | Anmeldung neue verb. MaLo (LF → NB)                | S2.1–S2.2 ✅ |
-/// | 55601 | Anmeldung neue erz. MaLo (LF → NB)                 | S2.1–S2.2 ✅ |
+/// | PID   | Process (AHB name)                                  | AHB profile                    |
+/// |-------|-----------------------------------------------------|--------------------------------|
+/// | 55600 | Anmeldung neue verb. MaLo (LF → NB)                | S2.1–S2.2 — import pending ⚠  |
+/// | 55601 | Anmeldung neue erz. MaLo (LF → NB)                 | S2.1–S2.2 — import pending ⚠  |
+///
+/// **Action required:** Run `cargo xtask import-xml-ahb --message-type UTILMD --pid 55600 --pid 55601`
+/// to populate AHB rules. Until then, the adapter applies a vacuous-validation guard
+/// that forces `validation_passed = false` for all inbound 55600/55601 messages.
 ///
 /// Response PIDs (55602–55605) are derived internally and never routed.
 pub const NEUANLAGE_PIDS: &[u32] = &[55600, 55601];

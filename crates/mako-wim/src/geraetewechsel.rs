@@ -1,4 +1,4 @@
-//! WiM Gerätewechsel — meter operator change workflow (PID 11001).
+//! WiM Messstellenbetrieb — MSB change workflow (PIDs 55039, 55042, 55051, 55168).
 //!
 //! Covers the process by which an incoming metering point operator
 //! (neuer Messstellenbetreiber, nMSB) initiates a change of the MSB at a
@@ -51,23 +51,22 @@ pub const WORKFLOW_NAME: &str = "wim-device-change";
 /// ```
 pub const APERAK_WINDOW_LABEL: &str = "wim-aperak-5-werktage";
 
-/// WiM IFTSTA Prüfidentifikatoren present in IFTSTA AHB Strom 2.0g (FV2025-10-01).
+/// WiM Strom IFTSTA Prüfidentifikatoren (PIDs 21029–21032).
 ///
-/// These status messages are part of the WiM MSB-Wechsel nach MsbG process
-/// (BK6-18-032). They carry Vollzugsmeldungen and process-status updates.
-/// All are routed to `"wim-device-change"` for correlation.
+/// These status messages are part of the WiM MSB-Wechsel (WiM Strom Teil 1)
+/// process. All are routed to `"wim-device-change"` for correlation.
 ///
-/// WiM IFTSTA messages are informational: they do not drive state transitions
-/// in the WiM Gerätewechsel workflow but are recorded for audit purposes.
+/// **PIDs 21009/21010/21011/21012/21013/21015/21018** are "WiM Gas" per
+/// `docs/pid-reference.md`. They must be registered in `mako-wim-gas`,
+/// NOT here.
 ///
-/// # AHB coverage note
-///
-/// PIDs 21014, 21016, 21017 are **intentionally absent** — they do not appear
-/// in the IFTSTA AHB Strom 2.0g (confirmed against `profiles/iftsta/fv20251001/ahb.json`
-/// which was extracted directly from the BDEW AHB PDF). Any inbound IFTSTA
-/// with these PIDs would arrive from a non-conformant sender and correctly
-/// dead-letters with `UnknownPid`.
-pub const IFTSTA_PIDS: &[u32] = &[21_009, 21_010, 21_011, 21_012, 21_013, 21_015, 21_018];
+/// | PID   | Beschreibung |
+/// |-------|----------|
+/// | 21029 | Vorabinformation (WiM Strom Teil 1) |
+/// | 21030 | iMS-Ersteinbauzustand (WiM Strom Teil 1) |
+/// | 21031 | Bestandssituation / Eigenausbau iMS (WiM Strom Teil 1) |
+/// | 21032 | Antwort auf das Angebot (WiM Strom Teil 1) |
+pub const IFTSTA_PIDS: &[u32] = &[21_029, 21_030, 21_031, 21_032];
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
@@ -337,11 +336,11 @@ impl CommandPayload for DeviceChangeCommand {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
-/// WiM Gerätewechsel (PID 11001) workflow.
+/// WiM Messstellenbetrieb (PIDs 55039, 55042, 55051, 55168) workflow.
 ///
-/// Implements the BDEW WiM process for change of meter operator at a
-/// Messlokation. The grid operator receives a UTILMD Anmeldung from the
-/// incoming MSB and must respond with an APERAK within **5 Werktage**.
+/// Implements the BDEW WiM process for change and management of meter operators
+/// (MSB) at a Messlokation. The grid operator receives inbound UTILMD messages
+/// from the MSBN and must respond with an APERAK within **5 Werktage**.
 ///
 /// Spawn via [`mako_engine::process::Process`]:
 /// ```rust,ignore
@@ -497,13 +496,13 @@ impl Workflow for WimDeviceChangeWorkflow {
                 if !matches!(state, DeviceChangeState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
                 }
-                // PID guard: reject any PID that does not belong to the WiM
-                // UTILMD family (11000–11099). Such PIDs should never reach
-                // this workflow because the PID router only registers 11001;
-                // this guard is a defence-in-depth check for direct callers.
-                if !(11_000..=11_099).contains(&pid.as_u32()) {
+                // PID guard: reject any PID not in the WiM MSB-Wechsel family.
+                // Only PIDs 55039, 55042, 55051, 55168 are registered by WimModule;
+                // this guard is defence-in-depth for direct callers.
+                let valid_pids = [55_039_u32, 55_042, 55_051, 55_168];
+                if !valid_pids.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "PID {} is not a WiM Gerätewechsel PID (expected 11000–11099)",
+                        "PID {} is not a WiM Messstellenbetrieb PID (expected 55039, 55042, 55051, or 55168)",
                         pid.as_u32()
                     )));
                 }
@@ -813,11 +812,11 @@ mod tests {
     fn happy_path_new_to_completed() {
         let state = DeviceChangeState::default();
 
-        let events = WimDeviceChangeWorkflow::handle(&state, make_receive_cmd(11001, true))
-            .expect("should accept valid PID 11001");
+        let events = WimDeviceChangeWorkflow::handle(&state, make_receive_cmd(55042, true))
+            .expect("should accept valid PID 55042");
         assert_eq!(events.len(), 2);
         assert!(
-            matches!(&events[0], DeviceChangeEvent::Initiated { pruefidentifikator, .. } if pruefidentifikator.as_u32() == 11001)
+            matches!(&events[0], DeviceChangeEvent::Initiated { pruefidentifikator, .. } if pruefidentifikator.as_u32() == 55042)
         );
         assert!(matches!(
             &events[1],
@@ -874,7 +873,7 @@ mod tests {
     #[test]
     fn validation_failure_rejects_process() {
         let state = DeviceChangeState::default();
-        let events = WimDeviceChangeWorkflow::handle(&state, make_receive_cmd(11001, false))
+        let events = WimDeviceChangeWorkflow::handle(&state, make_receive_cmd(55042, false))
             .expect("should still produce events");
         assert!(matches!(&events[1], DeviceChangeEvent::Rejected { .. }));
         let state = events.iter().fold(state, WimDeviceChangeWorkflow::apply);

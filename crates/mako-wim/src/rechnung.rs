@@ -45,9 +45,11 @@ use mako_engine::{
 ///
 /// | PID   | Name                                          |
 /// |-------|-----------------------------------------------|
-/// | 31003 | WiM-Rechnung (nMSB/aMSB → NB)                |
 /// | 31009 | MSB-Rechnung (NB-MSB settlement)              |
-pub const WIM_INVOIC_PIDS: &[u32] = &[31003, 31009];
+///
+/// **PID 31003** (WiM-Rechnung) belongs to `mako-wim-gas` per
+/// `docs/pid-reference.md`. It must not be registered here.
+pub const WIM_INVOIC_PIDS: &[u32] = &[31009];
 
 /// Workflow key for WiM billing processes.
 pub const WORKFLOW_NAME: &str = "wim-rechnung";

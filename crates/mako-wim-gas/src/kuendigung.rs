@@ -1,22 +1,22 @@
-//! WiM Gas Kündigung MSB Gas — termination workflow (PIDs 44022–44024).
+//! WiM Gas Kündigung MSB Gas — termination workflow (PIDs 44039–44041).
 //!
-#![allow(missing_docs)]
-//! The grid operator (NB) sends a UTILMD G Kündigung to the existing gas
-//! metering-point operator (MSBA) announcing termination of the MSB service.
-//! The MSBA must respond with an APERAK within **10 Werktage** (BK7-24-01-009).
+//! The new gas metering-point operator (MSBN) or network operator (NB) sends a
+//! UTILMD G Kündigung to terminate the MSB service relationship.
+//! The receiver must respond with an APERAK within **10 Werktage** (BK7-24-01-009).
 //!
 //! # Regulatory basis
 //!
 //! - **BNetzA BK7-24-01-009** — GeLi Gas 3.0 / WiM Gas ruling
 //! - **BDEW/VKU/GEODE/FNBGas AWH WiM Gas V2.0** (2025-08-04)
+//! - **UTILMD AHB Gas 1.1** — PIDs 44039–44041 confirmed as WiM Gas (L15977–L15981)
 //!
 //! # PID table
 //!
 //! | PID | Process | Direction |
 //! |---|---|---|
-//! | 44022 | Kündigung MSB Gas (Anfrage NB) | NB → MSBA |
-//! | 44023 | Bestätigung Kündigung MSB Gas | MSBA → NB |
-//! | 44024 | Ablehnung Kündigung MSB Gas | MSBA → NB |
+//! | 44039 | Kündigung MSB Gas (Anfrage) | MSBN → NB |
+//! | 44040 | Bestätigung Kündigung MSB Gas | NB → MSBN |
+//! | 44041 | Ablehnung Kündigung MSB Gas | NB → MSBN |
 
 use std::collections::HashMap;
 
@@ -37,11 +37,14 @@ pub const WORKFLOW_NAME: &str = "wim-gas-kuendigung";
 /// Deadline label for the 10-Werktage APERAK window (BK7-24-01-009).
 pub const APERAK_WINDOW_LABEL: &str = "wim-gas-kuendigung-aperak-10-werktage";
 
-/// PIDs handled by this workflow (NB → MSBA Kündigung).
+/// PIDs handled by this workflow (WiM Gas Kündigung MSB Gas).
+///
+/// Confirmed as WiM Gas PIDs in UTILMD AHB Gas 1.1 (L15977–L15981).
+/// Note: PIDs 44022–44024 are GeLi Gas Stornierung — not WiM Gas.
 pub const KUENDIGUNG_PIDS: &[u32] = &[
-    44022, // Kündigung MSB Gas (Anfrage NB → MSBA)
-    44023, // Bestätigung Kündigung
-    44024, // Ablehnung Kündigung
+    44039, // Kündigung MSB Gas (Anfrage)
+    44040, // Bestätigung Kündigung MSB Gas
+    44041, // Ablehnung Kündigung MSB Gas
 ];
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -52,26 +55,43 @@ pub const KUENDIGUNG_PIDS: &[u32] = &[
 pub enum WimGasKuendigungEvent {
     /// Process initiated by a valid UTILMD G Kündigung message.
     Initiated {
+        /// Marktlokation EIC code from IDE+Z19.
         malo_id: MaLo,
+        /// GLN of the MSBN sender.
         sender: MarktpartnerCode,
+        /// GLN of the NB receiver.
         receiver: MarktpartnerCode,
+        /// EDIFACT document date string from DTM+137.
         document_date: String,
+        /// UNH message reference of the triggering ANFRAGE.
         message_ref: MessageRef,
+        /// BDEW Prüfidentifikator of the triggering message.
         pruefidentifikator: Pruefidentifikator,
     },
+    /// AHB validation confirmed conformant; APERAK timer starts.
     ValidationPassed {
+        /// UNH reference of the validated message.
         message_ref: MessageRef,
     },
+    /// NB ERP dispatched an APERAK response.
     AperakDispatched {
+        /// `true` = Bestätigung, `false` = Ablehnung.
         positive: bool,
+        /// Rejection reason when `positive` is `false`.
         reason: Option<String>,
     },
+    /// Process completed after positive APERAK acknowledged.
     Completed,
+    /// Process rejected due to validation failure or negative APERAK.
     Rejected {
+        /// Human-readable rejection reason.
         reason: String,
     },
+    /// APERAK deadline timer expired before the ERP responded.
     DeadlineExpired {
+        /// Unique deadline identifier.
         deadline_id: DeadlineId,
+        /// Deadline label (matches [`APERAK_WINDOW_LABEL`]).
         label: Box<str>,
     },
 }
@@ -91,14 +111,21 @@ impl EventPayload for WimGasKuendigungEvent {
 
 // ── Domain state ──────────────────────────────────────────────────────────────
 
+/// Persistent domain data for an in-flight WiM Gas Kündigung process.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WimGasKuendigungData {
+    /// Marktlokation EIC code (object of the termination request).
     pub malo_id: MaLo,
+    /// GLN of the initiating MSBN.
     pub sender: MarktpartnerCode,
+    /// GLN of the receiving NB.
     pub receiver: MarktpartnerCode,
+    /// EDIFACT document date string (YYYYMMDDHHMMZZZ from DTM+137).
     pub document_date: String,
+    /// BDEW Prüfidentifikator of the triggering ANFRAGE message.
     pub pruefidentifikator: Pruefidentifikator,
+    /// UNH message reference of the triggering ANFRAGE.
     #[serde(default)]
     pub message_ref: Option<MessageRef>,
 }
@@ -112,12 +139,21 @@ pub struct WimGasKuendigungData {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
 pub enum WimGasKuendigungState {
+    /// Initial state before any event is applied.
     New,
+    /// ANFRAGE received; APERAK deadline timer should now be started.
     Initiated(WimGasKuendigungData),
+    /// AHB validation passed; waiting for ERP to dispatch APERAK.
     ValidationPassed(WimGasKuendigungData),
+    /// APERAK dispatched; waiting for ERP to mark completed.
     AperakSent(WimGasKuendigungData),
+    /// Process ended normally after positive APERAK acknowledged.
     Completed(WimGasKuendigungData),
-    Rejected { reason: String },
+    /// Process ended abnormally (validation failure, deadline, or negative APERAK).
+    Rejected {
+        /// Human-readable rejection reason.
+        reason: String,
+    },
 }
 
 impl Default for WimGasKuendigungState {
@@ -127,6 +163,7 @@ impl Default for WimGasKuendigungState {
 }
 
 impl WimGasKuendigungState {
+    /// Current lifecycle status label, suitable for logging and serialisation.
     #[must_use]
     pub fn status_str(&self) -> &'static str {
         match self {
@@ -142,25 +179,42 @@ impl WimGasKuendigungState {
 
 // ── Domain commands ───────────────────────────────────────────────────────────
 
+/// Commands accepted by [`WimGasKuendigungWorkflow`].
 #[derive(Clone)]
 pub enum WimGasKuendigungCommand {
+    /// Inbound UTILMD G Kündigung received from the MSBN.
     ReceiveUtilmd {
+        /// BDEW Prüfidentifikator (one of [`KUENDIGUNG_PIDS`]).
         pid: Pruefidentifikator,
+        /// GLN of the MSBN sender.
         sender: MarktpartnerCode,
+        /// GLN of the NB receiver.
         receiver: MarktpartnerCode,
+        /// Marktlokation EIC code from IDE+Z19.
         malo_id: MaLo,
+        /// EDIFACT document date string from DTM+137.
         document_date: String,
+        /// UNH reference of the triggering message.
         message_ref: MessageRef,
+        /// `true` if AHB validation passed.
         validation_passed: bool,
+        /// Human-readable AHB rule violations (empty when `validation_passed` is `true`).
         validation_errors: Vec<String>,
     },
+    /// The NB ERP has decided to accept or reject the Kündigung.
     DispatchAperak {
+        /// `true` = Bestätigung, `false` = Ablehnung.
         positive: bool,
+        /// Optional rejection reason (populated when `positive` is `false`).
         reason: Option<String>,
     },
+    /// Mark the process as fully completed after the APERAK was acknowledged.
     Complete,
+    /// An APERAK deadline timer fired before the ERP responded.
     TimeoutExpired {
+        /// Unique deadline identifier.
         deadline_id: DeadlineId,
+        /// Deadline label (matches [`APERAK_WINDOW_LABEL`]).
         label: Box<str>,
     },
 }
@@ -169,7 +223,7 @@ impl CommandPayload for WimGasKuendigungCommand {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
-/// WiM Gas Kündigung MSB Gas workflow (PIDs 44022–44024).
+/// WiM Gas Kündigung MSB Gas workflow (PIDs 44039–44041).
 pub struct WimGasKuendigungWorkflow;
 
 impl Workflow for WimGasKuendigungWorkflow {
@@ -447,9 +501,14 @@ impl Default for WimGasKuendigungRecord {
     }
 }
 
+/// Read-model projection over all WiM Gas Kündigung streams.
+///
+/// Maintained by replaying [`WimGasKuendigungEvent`] envelopes in sequence.
 #[derive(Debug, Default)]
 pub struct WimGasKuendigungProjection {
+    /// Keyed by stream ID string.
     pub records: HashMap<String, WimGasKuendigungRecord>,
+    /// Highest event sequence number applied.
     pub last_seq: u64,
 }
 
@@ -553,7 +612,7 @@ mod tests {
     #[test]
     fn kuendigung_happy_path() {
         let state = WimGasKuendigungState::New;
-        let output = WimGasKuendigungWorkflow::handle(&state, kuendigung_cmd(44022, true)).unwrap();
+        let output = WimGasKuendigungWorkflow::handle(&state, kuendigung_cmd(44039, true)).unwrap();
         assert_eq!(output.events.len(), 2);
         assert!(matches!(
             output.events[0],
@@ -569,7 +628,7 @@ mod tests {
     fn kuendigung_validation_failure_rejects() {
         let state = WimGasKuendigungState::New;
         let output =
-            WimGasKuendigungWorkflow::handle(&state, kuendigung_cmd(44022, false)).unwrap();
+            WimGasKuendigungWorkflow::handle(&state, kuendigung_cmd(44039, false)).unwrap();
         assert!(matches!(
             output.events[1],
             WimGasKuendigungEvent::Rejected { .. }
@@ -579,10 +638,10 @@ mod tests {
     #[test]
     fn invalid_pid_rejected() {
         let state = WimGasKuendigungState::New;
-        let result = WimGasKuendigungWorkflow::handle(&state, kuendigung_cmd(44039, true));
+        let result = WimGasKuendigungWorkflow::handle(&state, kuendigung_cmd(44022, true));
         assert!(
             result.is_err(),
-            "PID 44039 belongs to WiM Gas Anmeldung, not Kündigung"
+            "PID 44022 is GeLi Gas Stornierung, not WiM Gas Kündigung"
         );
     }
 }

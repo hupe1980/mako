@@ -60,7 +60,7 @@
     },
     "ordering_hint": {
       "type": "array",
-      "description": "Optional explicit segment-tag ordering for segment-order validation. When absent, ordering is derived automatically.",
+      "description": "Explicit segment-tag ordering for segment-order validation. Only meaningful for multi-section messages that contain a UNS segment (e.g. MSCONS, ORDCHG, PARTIN, ORDERS): list all tags in the expected order including 'UNS' — segments before UNS form the header section and segments after form the repeating detail section. For profiles with segment_groups (any other message type) the codegen derives per-group expected order automatically from the MIG and this field is ignored — set it to [] or omit it.",
       "items": { "type": "string" }
     },
     "archived": {

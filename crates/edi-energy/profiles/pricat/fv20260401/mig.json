@@ -4,22 +4,7 @@
   "release": "2.1",
   "valid_from": "2026-04-01",
   "pid_source": "rff_z13",
-  "ordering_hint": [
-    "UNH",
-    "BGM",
-    "DTM",
-    "RFF",
-    "NAD",
-    "LOC",
-    "CUX",
-    "PGI",
-    "LIN",
-    "PIA",
-    "IMD",
-    "PRI",
-    "RNG",
-    "UNT"
-  ],
+  "ordering_hint": [],
   "segments": [
     {
       "tag": "UNH",

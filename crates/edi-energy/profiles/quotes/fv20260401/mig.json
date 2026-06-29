@@ -3,26 +3,7 @@
   "message_type": "QUOTES",
   "release": "1.3c",
   "valid_from": "2026-04-01",
-  "ordering_hint": [
-    "UNH",
-    "BGM",
-    "DTM",
-    "IMD",
-    "FTX",
-    "RFF",
-    "CUX",
-    "NAD",
-    "CTA",
-    "COM",
-    "LOC",
-    "LIN",
-    "PIA",
-    "GIN",
-    "CCI",
-    "CAV",
-    "PRI",
-    "UNT"
-  ],
+  "ordering_hint": [],
   "segments": [
     {
       "tag": "UNH",

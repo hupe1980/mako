@@ -5,7 +5,8 @@
 //! `EngineModule` also has a matching entry in the deadline-dispatch coverage table,
 //! catching missing `DISPATCH_TABLE` entries before they reach production.
 //!
-//! It instantiates the full module stack with in-memory stores and calls
+//! It instantiates the **full** production module stack with in-memory stores
+//! (matching `services/makod/src/main.rs` module registration) and calls
 //! `assert_dispatch_coverage`, which panics if any registered workflow is
 //! absent from the dispatch table.
 
@@ -19,13 +20,21 @@ use mako_geli_gas::GeliGasModule;
 use mako_gpke::GpkeModule;
 use mako_mabis::MabisModule;
 use mako_wim::WimModule;
+use mako_wim_gas::WimGasModule;
 
 use makod::deadline_dispatch;
 
-/// Every workflow declared by the four production modules must appear in
+/// Every workflow declared by all five production modules must appear in
 /// `deadline_dispatch::DISPATCH_TABLE`.  If a new module or workflow is added
 /// without a matching dispatch arm, this test panics with an actionable message
 /// before the bug can reach a production binary.
+///
+/// Module stack must match `services/makod/src/main.rs`:
+/// - `GpkeModule`    — PIDs 55001–55002, 55016 + INVOIC + IFTSTA
+/// - `WimModule`     — PIDs 55039/55042/55051/55168 (WiM Strom Messstellenbetrieb)
+/// - `GeliGasModule` — PIDs 44001–44006, 44017–44018, 44022–44024
+/// - `WimGasModule`  — PIDs 44039–44053, 44168–44170 (WiM Gas MSB-Wechsel)
+/// - `MabisModule`   — PID 13003 (Bilanzkreisabrechnung Strom)
 #[test]
 fn all_registered_workflows_covered_by_dispatch_table() {
     let ctx = EngineBuilder::new()
@@ -36,6 +45,7 @@ fn all_registered_workflows_covered_by_dispatch_table() {
         .register(Box::new(GpkeModule))
         .register(Box::new(WimModule))
         .register(Box::new(GeliGasModule))
+        .register(Box::new(WimGasModule))
         .register(Box::new(MabisModule))
         .build();
 

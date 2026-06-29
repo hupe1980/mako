@@ -77,11 +77,11 @@
 //! ```text
 //! makod
 //!   └── EngineContext (SlateDbStore — in-memory by default, local FS via --data-dir)
-//!         ├── GpkeModule    — UTILMD PIDs 55001–55002, 55017, 56001–56004 (`gpke-supplier-change`)
+//!         ├── GpkeModule    — UTILMD PIDs 55001–55002, 55016 (`gpke-supplier-change`)
 //!         │                   + INVOIC PIDs 31001–31002, 31004–31008 (`gpke-abrechnung`)
 //!         ├── WimModule     — PIDs 11001–11099 (WiM Gerätewechsel/-betrieb)
-//!         ├── GeliGasModule — PIDs 44001–44006, 44017–44018, 44555 (GeLi Gas Lieferbeginn/-ende)
-//!         ├── WimGasModule  — PIDs 44022–44024, 44039–44053, 44168–44170 (WiM Gas MSB-Wechsel)
+//!         ├── GeliGasModule — PIDs 44001–44006, 44017–44018, 44022–44024 (GeLi Gas)
+//!         ├── WimGasModule  — PIDs 44039–44053, 44168–44170 (WiM Gas MSB-Wechsel)
 //!         └── MabisModule   — PID 13003 only (MABIS Bilanzkreisabrechnung Strom, MSCONS Summenzeitreihe)
 //!
 //! Background tasks:
@@ -973,6 +973,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
             &known,
         );
+        let gpke_stornierung_check = adapters::gpke_stornierung_registry().validate_policy(
+            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
+            &known,
+        );
+        let gpke_anfrage_bestellung_check = adapters::gpke_anfrage_bestellung_registry()
+            .validate_policy(
+                &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
+                &known,
+            );
         let gpke_abrechnung_check = adapters::gpke_abrechnung_registry().validate_policy(
             &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
             &known,
@@ -1005,7 +1014,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
             &known,
         );
-        let geli_sperrung_check = adapters::geli_gas_sperrung_registry().validate_policy(
+        let geli_stornierung_check = adapters::geli_gas_stornierung_registry().validate_policy(
             &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
             &known,
         );
@@ -1033,6 +1042,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             ("gpke-neuanlage", gpke_neuanlage_check),
             ("gpke-lf-abmeldung", gpke_lf_abmeldung_check),
             ("gpke-sperrung", gpke_sperrung_check),
+            ("gpke-stornierung", gpke_stornierung_check),
+            ("gpke-anfrage-bestellung", gpke_anfrage_bestellung_check),
             ("gpke-abrechnung", gpke_abrechnung_check),
             ("gpke-konfiguration", gpke_konfiguration_check),
             ("wim-device-change", wim_check),
@@ -1041,7 +1052,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             ("wim-stornierung", wim_stornierung_check),
             ("wim-rechnung", wim_rechnung_check),
             ("geli-gas-supplier-change", geli_check),
-            ("geli-gas-sperrung", geli_sperrung_check),
+            ("geli-gas-stornierung", geli_stornierung_check),
             ("wim-gas-anmeldung", wim_gas_anmeldung_check),
             ("wim-gas-kuendigung", wim_gas_kuendigung_check),
             (

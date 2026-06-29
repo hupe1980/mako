@@ -1,6 +1,5 @@
 //! WiM Gas Verpflichtungsanfrage — obligation inquiry workflow (PIDs 44168–44170).
 //!
-#![allow(missing_docs)]
 //! The grid operator (NB) sends a UTILMD G Verpflichtungsanfrage to the gas
 //! metering-point operator (gMSB) to confirm or reject obligation to serve a
 //! Marktlokation. The gMSB must respond with an APERAK within **10 Werktage**.
@@ -46,30 +45,49 @@ pub const VERPFLICHTUNGSANFRAGE_PIDS: &[u32] = &[
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
+/// Domain events emitted by the WiM Gas Verpflichtungsanfrage workflow.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum WimGasVerpflichtungsanfrageEvent {
+    /// Process initiated by a valid UTILMD G Verpflichtungsanfrage message.
     Initiated {
+        /// Marktlokation EIC code from IDE+Z19.
         malo_id: MaLo,
+        /// GLN of the NB sender.
         sender: MarktpartnerCode,
+        /// GLN of the gMSB receiver.
         receiver: MarktpartnerCode,
+        /// EDIFACT document date string from DTM+137.
         document_date: String,
+        /// UNH message reference of the triggering ANFRAGE.
         message_ref: MessageRef,
+        /// BDEW Prüfidentifikator of the triggering message.
         pruefidentifikator: Pruefidentifikator,
     },
+    /// AHB validation confirmed conformant; APERAK timer starts.
     ValidationPassed {
+        /// UNH reference of the validated message.
         message_ref: MessageRef,
     },
+    /// NB ERP dispatched an APERAK response.
     AperakDispatched {
+        /// `true` = Bestätigung, `false` = Ablehnung.
         positive: bool,
+        /// Rejection reason when `positive` is `false`.
         reason: Option<String>,
     },
+    /// Process completed after positive APERAK acknowledged.
     Completed,
+    /// Process rejected due to validation failure or negative APERAK.
     Rejected {
+        /// Human-readable rejection reason.
         reason: String,
     },
+    /// APERAK deadline timer expired before the ERP responded.
     DeadlineExpired {
+        /// Unique deadline identifier.
         deadline_id: DeadlineId,
+        /// Deadline label (matches [`APERAK_WINDOW_LABEL`]).
         label: Box<str>,
     },
 }
@@ -89,14 +107,21 @@ impl EventPayload for WimGasVerpflichtungsanfrageEvent {
 
 // ── Domain state ──────────────────────────────────────────────────────────────
 
+/// Persistent domain data for an in-flight WiM Gas Verpflichtungsanfrage process.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WimGasVerpflichtungsanfrageData {
+    /// Marktlokation EIC code (object of the obligation inquiry).
     pub malo_id: MaLo,
+    /// GLN of the NB sender.
     pub sender: MarktpartnerCode,
+    /// GLN of the gMSB receiver.
     pub receiver: MarktpartnerCode,
+    /// EDIFACT document date string (YYYYMMDDHHMMZZZ from DTM+137).
     pub document_date: String,
+    /// BDEW Prüfidentifikator of the triggering ANFRAGE message.
     pub pruefidentifikator: Pruefidentifikator,
+    /// UNH message reference of the triggering ANFRAGE.
     #[serde(default)]
     pub message_ref: Option<MessageRef>,
 }
@@ -110,12 +135,21 @@ pub struct WimGasVerpflichtungsanfrageData {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
 pub enum WimGasVerpflichtungsanfrageState {
+    /// Initial state before any event is applied.
     New,
+    /// ANFRAGE received; APERAK deadline timer should now be started.
     Initiated(WimGasVerpflichtungsanfrageData),
+    /// AHB validation passed; waiting for ERP to dispatch APERAK.
     ValidationPassed(WimGasVerpflichtungsanfrageData),
+    /// APERAK dispatched; waiting for ERP to mark completed.
     AperakSent(WimGasVerpflichtungsanfrageData),
+    /// Process ended normally after positive APERAK acknowledged.
     Completed(WimGasVerpflichtungsanfrageData),
-    Rejected { reason: String },
+    /// Process ended abnormally (validation failure, deadline, or negative APERAK).
+    Rejected {
+        /// Human-readable rejection reason.
+        reason: String,
+    },
 }
 
 impl Default for WimGasVerpflichtungsanfrageState {
@@ -125,6 +159,7 @@ impl Default for WimGasVerpflichtungsanfrageState {
 }
 
 impl WimGasVerpflichtungsanfrageState {
+    /// Current lifecycle status label, suitable for logging and serialisation.
     #[must_use]
     pub fn status_str(&self) -> &'static str {
         match self {
@@ -140,25 +175,42 @@ impl WimGasVerpflichtungsanfrageState {
 
 // ── Domain commands ───────────────────────────────────────────────────────────
 
+/// Commands accepted by [`WimGasVerpflichtungsanfrageWorkflow`].
 #[derive(Clone)]
 pub enum WimGasVerpflichtungsanfrageCommand {
+    /// Inbound UTILMD G Verpflichtungsanfrage received from the NB.
     ReceiveUtilmd {
+        /// BDEW Prüfidentifikator (one of [`VERPFLICHTUNGSANFRAGE_PIDS`]).
         pid: Pruefidentifikator,
+        /// GLN of the NB sender.
         sender: MarktpartnerCode,
+        /// GLN of the gMSB receiver.
         receiver: MarktpartnerCode,
+        /// Marktlokation EIC code from IDE+Z19.
         malo_id: MaLo,
+        /// EDIFACT document date string from DTM+137.
         document_date: String,
+        /// UNH reference of the triggering message.
         message_ref: MessageRef,
+        /// `true` if AHB validation passed.
         validation_passed: bool,
+        /// Human-readable AHB rule violations (empty when `validation_passed` is `true`).
         validation_errors: Vec<String>,
     },
+    /// The gMSB ERP has decided to accept or reject the Verpflichtungsanfrage.
     DispatchAperak {
+        /// `true` = Bestätigung, `false` = Ablehnung.
         positive: bool,
+        /// Rejection reason when `positive` is `false`.
         reason: Option<String>,
     },
+    /// Mark the process as fully completed after the APERAK was acknowledged.
     Complete,
+    /// An APERAK deadline timer fired before the ERP responded.
     TimeoutExpired {
+        /// Unique deadline identifier.
         deadline_id: DeadlineId,
+        /// Deadline label (matches [`APERAK_WINDOW_LABEL`]).
         label: Box<str>,
     },
 }
@@ -448,9 +500,14 @@ impl Default for WimGasVerpflichtungsanfrageRecord {
     }
 }
 
+/// Read-model projection over all WiM Gas Verpflichtungsanfrage streams.
+///
+/// Maintained by replaying [`WimGasVerpflichtungsanfrageEvent`] envelopes in sequence.
 #[derive(Debug, Default)]
 pub struct WimGasVerpflichtungsanfrageProjection {
+    /// Keyed by stream ID string.
     pub records: HashMap<String, WimGasVerpflichtungsanfrageRecord>,
+    /// Highest event sequence number applied.
     pub last_seq: u64,
 }
 

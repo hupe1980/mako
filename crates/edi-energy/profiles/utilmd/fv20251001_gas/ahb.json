@@ -104,6 +104,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "FTX",
           "requirement": "C",
@@ -238,6 +261,29 @@
         }
       ],
       "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
         {
           "group_id": "SG4",
           "tag": "FTX",
@@ -374,6 +420,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "FTX",
           "requirement": "C",
@@ -509,6 +578,29 @@
         }
       ],
       "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
         {
           "group_id": "SG4",
           "tag": "DTM",
@@ -677,6 +769,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "DTM",
           "requirement": "C",
@@ -844,6 +959,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "DTM",
           "requirement": "C",
@@ -1010,6 +1148,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "FTX",
           "requirement": "C",
@@ -1132,6 +1293,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "FTX",
           "requirement": "C",
@@ -1151,6 +1335,1730 @@
             }
           ],
           "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+        }
+      ]
+    },
+    {
+      "code": 44022,
+      "name": "GeLi Gas / Anfrage nach Stornierung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01",
+              "E02",
+              "E35"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS Transaktionsgrund (9015=7) + Stornierung (9013=E05) — mandatory per AHB Gas 1.1"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — Kann per AHB Gas 1.1"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44023,
+      "name": "GeLi Gas / Bestätigung Stornierung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01",
+              "E02",
+              "E35"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS Transaktionsgrund (9015=7) + Stornierung (9013=E05) + Bestätigung (E01) — mandatory"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — Kann"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44024,
+      "name": "GeLi Gas / Ablehnung Stornierung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01",
+              "E02",
+              "E35"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS Transaktionsgrund (9015=7) + Stornierung (9013=E05) + Ablehnung — mandatory"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — Kann"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX — Ablehnungsgrund (Kann)"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44039,
+      "name": "Kündigung MSB Gas (Anfrage MSBN an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E35"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.1"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — mandatory per AHB Gas 1.1 §6.1"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann per AHB Gas 1.1 §6.1"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann per AHB Gas 1.1 §6.1"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44040,
+      "name": "Bestätigung Kündigung MSB Gas (NB an MSBN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E35"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.1"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — mandatory per AHB Gas 1.1 §6.1"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann per AHB Gas 1.1 §6.1"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann per AHB Gas 1.1 §6.1"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44041,
+      "name": "Ablehnung Kündigung MSB Gas (NB an MSBN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E35"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.1"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — mandatory per AHB Gas 1.1 §6.1"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann per AHB Gas 1.1 §6.1"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann per AHB Gas 1.1 §6.1"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44042,
+      "name": "Anmeldung neuer MSB Gas (Anfrage MSBN an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.2"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — mandatory per AHB Gas 1.1 §6.2"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann per AHB Gas 1.1 §6.2"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann per AHB Gas 1.1 §6.2"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44043,
+      "name": "Bestätigung Anmeldung neuer MSB Gas (NB an MSBN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.2"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — mandatory per AHB Gas 1.1 §6.2"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann per AHB Gas 1.1 §6.2"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann per AHB Gas 1.1 §6.2"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44044,
+      "name": "Ablehnung Anmeldung neuer MSB Gas (NB an MSBN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.2"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — mandatory per AHB Gas 1.1 §6.2"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann per AHB Gas 1.1 §6.2"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann per AHB Gas 1.1 §6.2"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44051,
+      "name": "Ende MSB Gas / Vorläufige Abmeldung (NB an MSBA)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E02"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.4"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — mandatory per AHB Gas 1.1 §6.4"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann per AHB Gas 1.1 §6.4"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann per AHB Gas 1.1 §6.4"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44052,
+      "name": "Bestätigung Ende MSB Gas (MSBA an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E02"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.4"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — mandatory per AHB Gas 1.1 §6.4"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann per AHB Gas 1.1 §6.4"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann per AHB Gas 1.1 §6.4"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44053,
+      "name": "Ablehnung Ende MSB Gas (MSBA an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E02"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.4"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — mandatory per AHB Gas 1.1 §6.4"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann per AHB Gas 1.1 §6.4"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann per AHB Gas 1.1 §6.4"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44168,
+      "name": "Verpflichtungsanfrage (NB an gMSB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01",
+              "Z40"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.5"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — mandatory per AHB Gas 1.1 §6.5"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann per AHB Gas 1.1 §6.5"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann per AHB Gas 1.1 §6.5"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44169,
+      "name": "Bestätigung Verpflichtungsanfrage (gMSB an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01",
+              "Z40"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.5"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — mandatory per AHB Gas 1.1 §6.5"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann per AHB Gas 1.1 §6.5"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann per AHB Gas 1.1 §6.5"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
+    },
+    {
+      "code": 44170,
+      "name": "Ablehnung Verpflichtungsanfrage (gMSB an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01",
+              "Z40"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.5"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — mandatory per AHB Gas 1.1 §6.5"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann per AHB Gas 1.1 §6.5"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann per AHB Gas 1.1 §6.5"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
         }
       ]
     },
@@ -1258,7 +3166,31 @@
           "_description": "LOC is optional per MIG G1.1 (no AHB constraint for PID 44555)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
     }
   ]
 }

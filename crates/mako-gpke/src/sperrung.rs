@@ -1,23 +1,21 @@
-//! GPKE Anweisung Sperrung (PID 55555) — disconnection/reconnection order workflow.
+//! GPKE Sperrung / Entsperrung workflow (ORDERS PIDs 17115–17117).
 //!
-//! Covers the GPKE Sperrung process for electricity supply disconnection and
-//! reconnection, as defined in the UTILMD AHB S2.1/S2.2 (EDI@Energy).
+//! Covers the GPKE disconnection and reconnection process for electricity supply,
+//! using the ORDERS format per "AWH Sperrprozesse" (same PID space as Gas Sperrung):
 //!
-//! This module implements the **receiving-party perspective** (Lieferant / LFN):
-//! the system receives an inbound Anweisung Sperrung (55555) from the
-//! Netzbetreiber (NB) and acknowledges execution.
+//! | PID   | Process name (AWH)              | Direction  |
+//! |-------|-------------------------------|------------|
+//! | 17115 | Sperrauftrag                    | NB → LFN   |
+//! | 17116 | Anfrage Sperrung                | NB → LFN   |
+//! | 17117 | Entsperrauftrag                 | NB → LFN   |
 //!
-//! # Prüfidentifikator
-//!
-//! | PID   | Process name (AHB)              | Direction |
-//! |-------|---------------------------------|-----------|
-//! | 55555 | Anweisung Sperrung (NB → LFN)   | NB → LFN  |
+//! ORDRSP responses (19116 Bestätigung / 19117 Ablehnung Sperr-/Entsperrauftrag)
+//! are dispatched by the workflow after validation.
 //!
 //! # Regulatory basis
 //!
 //! - **BDEW GPKE** — Geschäftsprozesse zur Kundenbelieferung mit Elektrizität
 //! - **BK6-22-024** — BNetzA ruling; APERAK within **24 wall-clock hours**
-//! - **UTILMD S2.1/S2.2** — EDI@Energy message format
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -29,8 +27,12 @@ use mako_engine::{
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
-/// GPKE Sperrung Prüfidentifikatoren handled by [`GpkeSperrungWorkflow`].
-pub const SPERRUNG_PIDS: &[u32] = &[55555];
+/// GPKE Sperrung/Entsperrung ORDERS Prüfidentifikatoren handled by [`GpkeSperrungWorkflow`].
+///
+/// - 17115: Sperrauftrag (NB → LFN)
+/// - 17116: Anfrage Sperrung (NB → LFN)
+/// - 17117: Entsperrauftrag (NB → LFN)
+pub const SPERRUNG_PIDS: &[u32] = &[17115, 17116, 17117];
 
 /// Deadline label for the 24-wall-clock-hour execution confirmation window.
 ///
@@ -50,7 +52,7 @@ pub const SPERRUNG_WINDOW_LABEL: &str = "gpke-sperrung-window";
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum SperrungEvent {
-    /// Anweisung Sperrung (55555) received from NB.
+    /// ORDERS Sperrung/Entsperrauftrag (17115/17116/17117) received from NB.
     AnweisungErhalten {
         /// Marktlokation EIC code.
         location_id: MaLo,
@@ -60,7 +62,7 @@ pub enum SperrungEvent {
         document_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
-        /// BDEW Prüfidentifikator (55555).
+        /// BDEW Prüfidentifikator (17115, 17116, or 17117).
         pruefidentifikator: Pruefidentifikator,
     },
     /// EDIFACT message passed profile validation.
@@ -113,7 +115,7 @@ pub struct SperrungData {
     pub sender: MarktpartnerCode,
     /// EDIFACT document date from the UTILMD.
     pub document_date: String,
-    /// BDEW Prüfidentifikator (always 55555 for Sperrung).
+    /// BDEW Prüfidentifikator (17115, 17116, or 17117).
     pub pruefidentifikator: Pruefidentifikator,
 }
 
@@ -131,7 +133,7 @@ pub struct SperrungData {
 pub enum SperrungState {
     /// No events yet.
     New,
-    /// UTILMD 55555 received; awaiting validation.
+    /// ORDERS Sperrauftrag/Entsperrauftrag (17115/17116/17117) received; awaiting validation.
     AnweisungErhalten(SperrungData),
     /// Validation passed; awaiting execution confirmation.
     ValidationPassed(SperrungData),
@@ -180,10 +182,10 @@ impl SperrungState {
 /// Commands for the GPKE Sperrung workflow.
 #[derive(Clone)]
 pub enum SperrungCommand {
-    /// Inbound UTILMD 55555 received from NB. Domain fields extracted and
+    /// Inbound ORDERS 17115/17116/17117 received from NB. Domain fields extracted and
     /// validation performed by the caller before constructing this command.
     ReceiveSperrung {
-        /// Prüfidentifikator of the inbound UTILMD (55555).
+        /// Prüfidentifikator of the inbound ORDERS (17115, 17116, or 17117).
         pid: Pruefidentifikator,
         /// GLN of the NB sending the Sperrungsanweisung.
         sender: MarktpartnerCode,
@@ -222,7 +224,7 @@ impl CommandPayload for SperrungCommand {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
-/// GPKE Anweisung Sperrung (PID 55555) workflow.
+/// GPKE Sperrung / Entsperrung workflow (ORDERS PIDs 17115–17117).
 ///
 /// Spawn via [`mako_engine::process::Process`]:
 /// ```rust,ignore
@@ -326,7 +328,7 @@ impl Workflow for GpkeSperrungWorkflow {
                 }
                 if !SPERRUNG_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected PID 55555 (Anweisung Sperrung), got {pid}",
+                        "expected a Sperrung PID (17115, 17116, or 17117), got {pid}",
                     )));
                 }
                 let mut events = vec![SperrungEvent::AnweisungErhalten {

@@ -4,20 +4,7 @@
   "release": "1.3c",
   "valid_from": "2026-04-01",
   "supersedes_directory": "fv20250401",
-  "ordering_hint": [
-    "UNH",
-    "BGM",
-    "DTM",
-    "IMD",
-    "FTX",
-    "RFF",
-    "NAD",
-    "CTA",
-    "COM",
-    "LOC",
-    "LIN",
-    "UNT"
-  ],
+  "ordering_hint": [],
   "segments": [
     {
       "tag": "UNH",

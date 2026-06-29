@@ -15,9 +15,9 @@
 //!
 //! | PID range | Workflow | Status |
 //! |---|---|---|
-//! | 44022–44024 | Kündigung MSB Gas | ✅ Registered |
-//! | 44039–44044 | Anmeldung / Ende MSB Gas | ✅ Registered |
-//! | 44051–44053 | Vorläufige Abmeldung / Ende MSB Gas | ✅ Registered |
+//! | 44039–44041 | Kündigung MSB Gas | ✅ Registered |
+//! | 44042–44044 | Anmeldung neuer MSB Gas | ✅ Registered |
+//! | 44051–44053 | Ende MSB Gas / Vorläufige Abmeldung | ✅ Registered |
 //! | 44168–44170 | Verpflichtungsanfrage | ✅ Registered |
 //!
 //! # Key boundaries
@@ -26,7 +26,7 @@
 //! |---|---|---|
 //! | Ruling | BK7-24-01-009 | BK7-24-01-009 (same umbrella) |
 //! | Scope | Supplier switching (Lieferbeginn/-ende) | MSB change (Anmeldung/Kündigung gMSB) |
-//! | EDIFACT | UTILMD G (44001–44018, 44555) | UTILMD G (44022–44053, 44168–44170) |
+//! | EDIFACT | UTILMD G (44001–44018, 44555) | UTILMD G (44039–44053, 44168–44170) |
 //! | APERAK Frist | 10 Werktage | 10 Werktage |
 //!
 //! | Aspect | WiM Strom (`mako-wim`) | WiM Gas (`mako-wim-gas`) |
@@ -37,11 +37,11 @@
 //!
 //! # AHB profile note
 //!
-//! WiM Gas PIDs (44022–44053, 44168–44170) are not yet present in the
+//! WiM Gas PIDs (44039–44053, 44168–44170) are not yet present in the
 //! `fv*_gas` UTILMD AHB profile set. Until `cargo xtask import-xml-ahb`
 //! imports these profiles, `msg.validate()` returns a vacuous pass for these
 //! PIDs. The adapter layer applies the `pid_has_ahb_rules()` guard to prevent
-//! false-positive validation — the same guard used for ex-MPES PIDs 56001–56004.
+//! false-positive validation.
 //!
 //! # Regulatory references
 //!
@@ -53,8 +53,11 @@
 
 #![deny(missing_docs)]
 
+/// WiM Gas Anmeldung / Abmeldung workflows (PIDs 44042–44053).
 pub mod anmeldung;
+/// WiM Gas Kündigung MSB Gas workflow (PIDs 44039–44041).
 pub mod kuendigung;
+/// WiM Gas Verpflichtungsanfrage workflow (PIDs 44168–44170).
 pub mod verpflichtungsanfrage;
 
 pub use anmeldung::{
@@ -85,12 +88,15 @@ pub use verpflichtungsanfrage::{
 /// Registers all WiM Gas UTILMD G `Prüfidentifikator` values into the
 /// [`mako_engine::pid_router::PidRouter`] at engine startup:
 ///
-/// - PIDs 44022–44024 → `"wim-gas-kuendigung"` (`WimGasKuendigungWorkflow`)
-/// - PIDs 44039–44053 → `"wim-gas-anmeldung"` (`WimGasAnmeldungWorkflow`)
+/// - PIDs 44039–44041 → `"wim-gas-kuendigung"` (`WimGasKuendigungWorkflow`)
+/// - PIDs 44042–44053 → `"wim-gas-anmeldung"` (`WimGasAnmeldungWorkflow`)
 /// - PIDs 44168–44170 → `"wim-gas-verpflichtungsanfrage"`
+/// - PIDs 44022–44024 → `"geli-gas-stornierung"` (re-exported from `mako-geli-gas`;
+///   PID ownership per `docs/pid-reference.md` is WiM Gas, routing pending full migration)
+/// - IFTSTA PIDs 21009/21010/21011/21012/21013/21015/21018 → `"wim-gas-device-change"`
+///   (informational status messages for WiM Gas MSB-Wechsel)
 ///
-/// Note: these are the **gas** UTILMD PIDs (44xxx WiM MSB switching).
-/// GeLi Gas PIDs 44001–44018 and 44555 belong to `mako-geli-gas`.
+/// Note: GeLi Gas PIDs 44001–44021 belong to `mako-geli-gas`.
 pub struct WimGasModule;
 
 impl mako_engine::builder::EngineModule for WimGasModule {
@@ -115,6 +121,16 @@ impl mako_engine::builder::EngineModule for WimGasModule {
         }
         for &pid in verpflichtungsanfrage::VERPFLICHTUNGSANFRAGE_PIDS {
             router.register(pid, "wim-gas-verpflichtungsanfrage");
+        }
+        // PIDs 44022–44024 (WiM Gas Stornierung per BDEW PID overview).
+        // Routing via geli-gas-stornierung workflow until a dedicated WiM Gas
+        // Stornierung workflow is implemented.
+        for pid in [44022_u32, 44023, 44024] {
+            router.register(pid, "geli-gas-stornierung");
+        }
+        // IFTSTA WiM Gas MSB-Wechsel status messages (informational).
+        for pid in [21009_u32, 21010, 21011, 21012, 21013, 21015, 21018] {
+            router.register(pid, "wim-gas-device-change");
         }
     }
 

@@ -15,8 +15,13 @@
 //! | Ablehnung Lieferbeginn Gas | 44004 | ✅ Registered |
 //! | Bestätigung Lieferende Gas | 44005 | ✅ Registered |
 //! | Ablehnung Lieferende Gas | 44006 | ✅ Registered |
+//! | Abmeldung NN vom NB | 44007–44009 | ✅ Registered |
+//! | Abmeldungsanfrage des NB | 44010–44012 | ✅ Registered |
+//! | Anmeldung/Abmeldung EoG | 44013–44015 | ✅ Registered |
+//! | Kündigung beim alten Lieferanten | 44016 | ✅ Registered |
 //! | Kündigung Lieferbeginn Gas (LFN ↔ LFA) | 44017–44018 | ✅ Registered |
-//! | Anweisung Sperrung Gas | 44555 | ✅ Registered (own workflow) |
+//! | Bestandsliste / Änderungsmeldung | 44019–44021 | ✅ Registered |
+//! | WiM Gas Stornierung | 44022–44024 | ⚠️ Belongs to `mako-wim-gas` per BDEW PID overview |
 //!
 //! ## Architecture
 //!
@@ -77,7 +82,7 @@
 #![deny(missing_docs)]
 
 pub mod lieferbeginn;
-pub mod sperrung;
+pub mod stornierung;
 
 pub use lieferbeginn::{
     APERAK_WINDOW_LABEL as LIEFERBEGINN_APERAK_WINDOW_LABEL, GasSupplierChangeCommand,
@@ -85,10 +90,10 @@ pub use lieferbeginn::{
     GasSupplierChangeRecord, GasSupplierChangeRecordData, GasSupplierChangeState,
     GeliGasSupplierChangeWorkflow, UTILMD_PIDS, WORKFLOW_NAME,
 };
-pub use sperrung::{
-    GasSperrungCommand, GasSperrungData, GasSperrungEvent, GasSperrungState,
-    GeliGasSperrungWorkflow, SPERRUNG_PIDS, SPERRUNG_WINDOW_LABEL,
-    WORKFLOW_NAME as SPERRUNG_WORKFLOW_NAME,
+pub use stornierung::{
+    GeliGasStornierungCommand, GeliGasStornierungData, GeliGasStornierungEvent,
+    GeliGasStornierungState, GeliGasStornierungWorkflow, STORNIERUNG_APERAK_WINDOW_LABEL,
+    STORNIERUNG_PIDS, WORKFLOW_NAME as STORNIERUNG_WORKFLOW_NAME,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
@@ -98,12 +103,14 @@ pub use sperrung::{
 /// Registers all GeLi Gas UTILMD G `Prüfidentifikator` values into the
 /// [`mako_engine::pid_router::PidRouter`] at engine startup:
 ///
-/// - PIDs 44001–44006, 44017–44018 → `"geli-gas-supplier-change"`
+/// - PIDs 44001–44021 → `"geli-gas-supplier-change"`
 ///   (`GeliGasSupplierChangeWorkflow`)
-/// - PID 44555 → `"geli-gas-sperrung"` (`GeliGasSperrungWorkflow`)
 ///
-/// Note: these are the **gas** UTILMD PIDs (44xxx range). The ORDERS 17xxx
-/// range belongs to WiM Messwesen commissioning processes, not GeLi Gas.
+/// Note: PIDs **44022–44024** (WiM Gas Stornierung) are registered by
+/// `WimGasModule` in `mako-wim-gas`, not here (per `docs/pid-reference.md`).
+///
+/// Note: the Gas Sperr-/Entsperrprozess (PIDs 17115/17116/17117, ORDERS
+/// format) is not yet implemented; see `docs/pid-reference.md`.
 pub struct GeliGasModule;
 
 impl mako_engine::builder::EngineModule for GeliGasModule {
@@ -112,19 +119,16 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
     }
 
     fn workflow_names(&self) -> &'static [&'static str] {
-        &["geli-gas-supplier-change", "geli-gas-sperrung"]
+        &["geli-gas-supplier-change"]
     }
 
     fn register_pids(&self, router: &mut mako_engine::pid_router::PidRouter) {
         // GeLi Gas Lieferantenwechsel Gas (BDEW GeLi Gas AHB — UTILMD G profiles)
-        // PIDs 44001–44006, 44017–44018 → supplier-change workflow
+        // PIDs 44001–44021 → supplier-change workflow
         for &pid in lieferbeginn::UTILMD_PIDS {
             router.register(pid, "geli-gas-supplier-change");
         }
-        // PID 44555 → dedicated Sperrung workflow (NB → LFN direction)
-        for &pid in sperrung::SPERRUNG_PIDS {
-            router.register(pid, "geli-gas-sperrung");
-        }
+        // PIDs 44022–44024 (WiM Gas Stornierung) are registered by WimGasModule.
     }
 
     fn profile_requirements(&self) -> &'static [mako_engine::profile::ProfileRequirement] {
@@ -147,10 +151,6 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         const _: () = assert!(
             !lieferbeginn::UTILMD_PIDS.is_empty(),
             "geli-gas: lieferbeginn::UTILMD_PIDS is empty — at least one PID must be registered"
-        );
-        const _: () = assert!(
-            !sperrung::SPERRUNG_PIDS.is_empty(),
-            "geli-gas: sperrung::SPERRUNG_PIDS is empty — PID 44555 must be registered"
         );
         Ok(())
     }

@@ -47,9 +47,12 @@
       "qualifier_restrictions": {
         "1001": [
           "E01",
+          "E02",
           "E03",
           "E0F",
-          "E1A"
+          "E1A",
+          "E35",
+          "Z40"
         ]
       }
     },
@@ -210,6 +213,7 @@
           ],
           "qualifier_restrictions": {
             "7495": [
+              "24",
               "Z18",
               "Z19",
               "Z31"
@@ -379,5 +383,6 @@
   ],
   "valid_until": "2026-09-30",
   "ahb_revision": "G1.1",
-  "source_document": "UTILMD MIG Gas G1.1 außerordentliche Veröffentlichung Stand 11.12.2025"
+  "source_document": "UTILMD MIG Gas G1.1 außerordentliche Veröffentlichung Stand 11.12.2025",
+  "ordering_hint": []
 }

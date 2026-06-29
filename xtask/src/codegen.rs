@@ -34,12 +34,18 @@ struct MigProfile {
     segment_groups: Vec<MigGroup>,
     /// Explicit segment-tag ordering for the generated `rule_segment_order`.
     ///
-    /// When present this list is used verbatim as `EXPECTED_ORDER`.  When absent
-    /// the codegen derives the order automatically from `segments` then
-    /// `segment_groups`.  Use this for multi-section messages (e.g. MSCONS) where
-    /// a section-control segment (UNS) appears between header and detail groups —
-    /// the automatic derivation always places top-level segments before groups,
-    /// which produces the wrong order for such messages.
+    /// **Only meaningful for UNS-split messages** (MSCONS, ORDCHG, PARTIN, ORDERS, …)
+    /// where a `UNS` section-control segment divides the message into a header and a
+    /// repeating detail section.  The list must include `"UNS"` to trigger the
+    /// UNS-split path.
+    ///
+    /// For all other profiles — i.e. those with `segment_groups` — this field is
+    /// **ignored**: the codegen derives per-group expected order directly from the
+    /// `segments` list of each `MigGroup` and uses `group_segments_indexed` at
+    /// runtime for correct, context-aware validation.  Set to `[]` or omit.
+    ///
+    /// For profiles with neither segment groups nor a UNS split the fallback flat
+    /// auto-derivation is used, which honours a non-UNS hint if provided.
     #[serde(default)]
     ordering_hint: Vec<String>,
     /// Where the Prüfidentifikator is located in this message type.
@@ -1782,6 +1788,9 @@ fn emit_directory_validator_fn(out: &mut String, message_type: &str, release: &s
 /// verbatim (the hint is the authoritative override for unusual message layouts,
 /// e.g. MSCONS where a `UNS` section-control segment appears between headers and
 /// detail groups).
+///
+/// NOTE: this function is only used for the flat/UNS-split fallback path.
+/// Profiles with segment groups use `collect_group_orders` instead.
 fn mig_segment_sequence(mig: &MigProfile) -> Vec<String> {
     // Use the explicit hint when provided.
     if !mig.ordering_hint.is_empty() {
@@ -2098,11 +2107,11 @@ fn emit_mig_rule_pack(out: &mut String, mig: &MigProfile) {
         emit_group_combined_min_rule_fn(out, trigger, *combined_min, &pack_name);
     }
 
-    // Emit segment-ordering rule (Layer 3.5)
-    // sequence now contains only top-level segments, preventing
-    // false "out-of-order" violations in messages with repeating groups.
-    let seq = mig_segment_sequence(mig);
-    emit_segment_order_rule_fn(out, &seq, &pack_name);
+    // Emit segment-ordering rule (Layer 3.5).
+    // For profiles with segment groups the group-aware path is selected automatically;
+    // for UNS-split messages the hint-driven path is used; otherwise the flat
+    // auto-derived sequence is used as a fallback.
+    emit_segment_order_rule_fn(out, mig, &pack_name);
 
     // Emit a LazyLock static that builds the MIG pack exactly once.
     let static_name = format!(
@@ -2642,8 +2651,62 @@ fn emit_group_window_rule_fn(out: &mut String, group: &MigGroup, pack_name: &str
     writeln!(out, "    }}").unwrap();
 }
 
-fn emit_segment_order_rule_fn(out: &mut String, sequence: &[String], pack_name: &str) {
+/// Collect `(group_name, [segment_tags])` pairs for the ROOT group and all
+/// nested segment groups in depth-first order.
+///
+/// Used by [`emit_segment_order_rule_fn`] to build the per-group expected-order
+/// table that the generated `group_order(name)` match function uses at runtime.
+///
+/// * `"ROOT"` → top-level segments declared in `mig.segments` (these are the
+///   direct structural segments; group triggers are NOT included here because
+///   they appear as the first member of their respective child groups).
+/// * Every group `G` → the segments listed in `G.segments` in declared order.
+fn collect_group_orders(mig: &MigProfile) -> Vec<(String, Vec<String>)> {
+    let mut orders: Vec<(String, Vec<String>)> = Vec::new();
+
+    // ROOT: structural top-level segments only (UNH, BGM, DTM, UNT, …).
+    // Group triggers (IDE, RFF, NAD, …) are NOT top-level; they live inside
+    // their group's segment list and will be covered by that group's match arm.
+    let root_tags: Vec<String> = mig.segments.iter().map(|s| s.tag.clone()).collect();
+    orders.push(("ROOT".to_owned(), root_tags));
+
+    // Depth-first traversal of all segment groups.
+    fn collect_inner(groups: &[MigGroup], out: &mut Vec<(String, Vec<String>)>) {
+        for group in groups {
+            let tags: Vec<String> = group.segments.iter().map(|s| s.tag.clone()).collect();
+            out.push((group.id.clone(), tags));
+            collect_inner(&group.groups, out);
+        }
+    }
+    collect_inner(&mig.segment_groups, &mut orders);
+
+    orders
+}
+
+fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &str) {
     let rule_id = format!("MIG-{pack_name}-ORDER");
+
+    // Determine which ordering strategy to generate.
+    //
+    // • UNS-split   — `ordering_hint` explicitly contains "UNS" (MSCONS, ORDCHG,
+    //                 PARTIN, …).  The hint is used verbatim; segments before UNS
+    //                 are the header section and segments after form the detail
+    //                 section (with group-repetition cursor reset).
+    //
+    // • Group-aware — The MIG defines segment groups and no UNS split is needed.
+    //                 `group_segments_indexed` partitions the flat segment slice
+    //                 into a tree and each group's direct segments are checked
+    //                 against the MIG-declared per-group order.  This is strictly
+    //                 correct: the same tag (DTM, NAD, RFF, …) can appear in
+    //                 multiple group contexts without causing false-positive
+    //                 ordering violations.
+    //
+    // • Flat        — Fallback for profiles with no segment groups (CONTRL, …).
+    //                 Uses `mig_segment_sequence(mig)` which honours an explicit
+    //                 non-UNS `ordering_hint` when provided or auto-derives the
+    //                 sequence from the top-level header + first-level triggers.
+    let has_uns_split = mig.ordering_hint.iter().any(|s| s == "UNS");
+    let use_group_aware = !mig.segment_groups.is_empty() && !has_uns_split;
 
     writeln!(out).unwrap();
     writeln!(
@@ -2664,9 +2727,14 @@ fn emit_segment_order_rule_fn(out: &mut String, sequence: &[String], pack_name: 
     .unwrap();
     writeln!(out, "    fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {{").unwrap();
 
-    // Detect two-section messages: ordering_hint contains "UNS"
-    if let Some(uns_pos) = sequence.iter().position(|s| s == "UNS") {
-        // Split into header (before UNS) and detail (after UNS)
+    if has_uns_split {
+        // ── UNS-split path ────────────────────────────────────────────────────
+        // Multi-section messages (MSCONS, ORDCHG, PARTIN, …) contain a UNS
+        // segment that divides the message into a header and a repeating detail
+        // section.  The ordering_hint captures the full expected sequence across
+        // both sections; we split at the UNS position here.
+        let sequence = &mig.ordering_hint;
+        let uns_pos = sequence.iter().position(|s| s == "UNS").unwrap(); // safe: has_uns_split
         let header: Vec<&str> = sequence[..uns_pos]
             .iter()
             .map(std::string::String::as_str)
@@ -2841,8 +2909,186 @@ fn emit_segment_order_rule_fn(out: &mut String, sequence: &[String], pack_name: 
             "        check_detail_section(detail_segs, EXPECTED_DETAIL_ORDER, {rule_id:?}, issues);"
         )
         .unwrap();
+    } else if use_group_aware {
+        // ── Group-aware path ──────────────────────────────────────────────────
+        // Uses `group_segments_indexed` to partition the flat segment slice into
+        // the group tree defined by GROUP_SCHEMA, then checks each group's direct
+        // segments (those not claimed by a child group) against the per-group
+        // expected order derived from the MIG.
+        //
+        // Key properties:
+        // • Each segment tag is checked only within its own group context, so a
+        //   tag like DTM that appears at root level AND inside SG4 is never
+        //   confused with itself across contexts.
+        // • Groups/segments not represented in GROUP_SCHEMA appear as direct
+        //   members of their nearest enclosing group and are "unknown" to that
+        //   group's expected-order list → they pass through without false alarms.
+        // • The check is strictly non-decreasing (cursor-advance): repeated groups
+        //   are handled naturally because `group_segments_indexed` creates a new
+        //   child node for each repetition.
+        let group_orders = collect_group_orders(mig);
+
+        // Merge groups whose segment lists are identical to avoid clippy::match_same_arms.
+        // Example: SG1 and SG6 both contain only [RFF] — emit "SG1" | "SG6" => &["RFF"].
+        // We preserve the original declaration order of the canonical (first-seen) entry.
+        let mut merged: Vec<(Vec<String>, Vec<String>)> = Vec::new(); // (names, tags)
+        for (name, tags) in &group_orders {
+            if let Some(entry) = merged.iter_mut().find(|(_, t)| t == tags) {
+                entry.0.push(name.clone());
+            } else {
+                merged.push((vec![name.clone()], tags.clone()));
+            }
+        }
+
+        // Emit the per-group expected-order look-up table.
+        writeln!(
+            out,
+            "        /// Per-group expected segment order derived from the MIG."
+        )
+        .unwrap();
+        writeln!(out, "        ///").unwrap();
+        writeln!(
+            out,
+            "        /// Returns an empty slice for groups not covered by the MIG or for the"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "        /// catch-all arm, which causes those groups to be skipped silently."
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "        fn group_order(name: &str) -> &'static [&'static str] {{"
+        )
+        .unwrap();
+        writeln!(out, "            match name {{").unwrap();
+        for (names, tags) in &merged {
+            let tags_lit: String = tags
+                .iter()
+                .map(|t| format!("{t:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let pattern = names
+                .iter()
+                .map(|n| format!("{n:?}"))
+                .collect::<Vec<_>>()
+                .join(" | ");
+            writeln!(out, "                {pattern} => &[{tags_lit}],").unwrap();
+        }
+        writeln!(out, "                _ => &[],").unwrap();
+        writeln!(out, "            }}").unwrap();
+        writeln!(out, "        }}").unwrap();
+        writeln!(out).unwrap();
+
+        // Emit the recursive per-group order checker.
+        writeln!(
+            out,
+            "        /// Recursively verify segment order within a group and all its children."
+        )
+        .unwrap();
+        writeln!(out, "        ///").unwrap();
+        writeln!(
+            out,
+            "        /// Only `direct_segment_indices()` — segments that belong directly to this"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "        /// group and are not claimed by any child group — are checked.  Child groups"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "        /// are then visited recursively, so every segment in the message is covered"
+        )
+        .unwrap();
+        writeln!(out, "        /// exactly once.").unwrap();
+        writeln!(out, "        fn check_order(").unwrap();
+        writeln!(
+            out,
+            "            group: &edifact_rs::group::SegmentGroupIndexed,"
+        )
+        .unwrap();
+        writeln!(out, "            all_segs: &[edifact_rs::Segment<'_>],").unwrap();
+        writeln!(out, "            rule_id: &str,").unwrap();
+        writeln!(out, "            issues: &mut Vec<ValidationIssue>,").unwrap();
+        writeln!(out, "        ) {{").unwrap();
+        writeln!(
+            out,
+            "            let expected = group_order(group.definition);"
+        )
+        .unwrap();
+        writeln!(out, "            if !expected.is_empty() {{").unwrap();
+        writeln!(out, "                let mut cursor: usize = 0;").unwrap();
+        writeln!(
+            out,
+            "                for idx in group.direct_segment_indices() {{"
+        )
+        .unwrap();
+        writeln!(out, "                    let seg = &all_segs[idx];").unwrap();
+        writeln!(out, "                    if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {{").unwrap();
+        writeln!(out, "                        cursor += pos;").unwrap();
+        writeln!(
+            out,
+            "                    }} else if expected.contains(&seg.tag) {{"
+        )
+        .unwrap();
+        writeln!(out, "                        // Tag is known for this group but already passed — ordering violation.").unwrap();
+        writeln!(out, "                        issues.push(").unwrap();
+        writeln!(out, "                            ValidationIssue::new(").unwrap();
+        writeln!(
+            out,
+            "                                ValidationSeverity::Error,"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "                                \"segment appears out of order\".to_owned(),"
+        )
+        .unwrap();
+        writeln!(out, "                            )").unwrap();
+        writeln!(out, "                            .with_rule_id(rule_id)").unwrap();
+        writeln!(
+            out,
+            "                            .with_segment(seg.tag.to_owned()),"
+        )
+        .unwrap();
+        writeln!(out, "                        );").unwrap();
+        writeln!(out, "                    }}").unwrap();
+        writeln!(
+            out,
+            "                    // Tags not in this group's expected order are unknown here;"
+        )
+        .unwrap();
+        writeln!(out, "                    // they are either in a child group (checked below) or caught by the DirectoryValidator.").unwrap();
+        writeln!(out, "                }}").unwrap();
+        writeln!(out, "            }}").unwrap();
+        writeln!(out, "            for child in &group.children {{").unwrap();
+        writeln!(
+            out,
+            "                check_order(child, all_segs, rule_id, issues);"
+        )
+        .unwrap();
+        writeln!(out, "            }}").unwrap();
+        writeln!(out, "        }}").unwrap();
+        writeln!(out).unwrap();
+        writeln!(
+            out,
+            "        let tree = edifact_rs::group::group_segments_indexed(segments, GROUP_SCHEMA, \"ROOT\");"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "        check_order(&tree, segments, {rule_id:?}, issues);"
+        )
+        .unwrap();
     } else {
-        // Single-section message (no UNS separator)
+        // ── Flat path (fallback) ───────────────────────────────────────────────
+        // Used for profiles with no segment groups (e.g. CONTRL).
+        // `mig_segment_sequence` honours an explicit `ordering_hint` when present
+        // or auto-derives the sequence from the MIG structure.
+        let sequence = mig_segment_sequence(mig);
         let seq_literal: String = sequence
             .iter()
             .map(|s| format!("{s:?}"))

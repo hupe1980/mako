@@ -2314,7 +2314,7 @@ impl crate::dead_letter::DeadLetterSink for SlateDbDeadLetterSink {
 
         // Metrics (sync, no I/O). Per-PID label for unknown-PID alerts.
         let metric_label: std::borrow::Cow<'static, str> = match reason {
-            crate::dead_letter::DeadLetterReason::UnknownPid(pid) => {
+            crate::dead_letter::DeadLetterReason::UnknownPid { pid, .. } => {
                 format!("unknown_pid:{pid}").into()
             }
             _ => label.into(),

@@ -15,12 +15,12 @@ communication (MaKo / BDEW EDI@Energy). Two distinct concerns:
 ```
 crates/edi-energy/        EDIFACT parse/validate/schema — stateless library
 crates/mako-engine/       Event-sourced runtime (EventStore, Workflow, Process, …)
-crates/mako-gpke/         GPKE — UTILMD Strom (55001–55018, 55555, 56001–56004) + INVOIC (31001–31008) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002)
-crates/mako-wim/          WiM Strom — Gerätewechsel (11001–11003) + ORDERS Geräteübernahme + Stammdaten
-crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44006, 44017–44018, 44555)
+crates/mako-gpke/         GPKE — UTILMD Strom (55001–55018, 55555) + INVOIC (31001, 31002, 31005–31009) + ORDERS Sperrung (17115–17117) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002)
+crates/mako-wim/          WiM Strom — Messstellenbetrieb (55039, 55042, 55051, 55168) + ORDERS Geräteübernahme + Stammdaten
+crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44021; 44022–44024 pending — listed as WiM Gas in BDEW PID overview) + ORDERS Sperrung Gas (17115–17117, not yet implemented)
 crates/mako-mabis/        MABIS — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB)
-crates/mako-wim-gas/      WiM Gas — UTILMD G (44022–44053) [placeholder]
-crates/mako-gabi-gas/     GaBi Gas — INVOIC (31010–31011) [placeholder]
+crates/mako-wim-gas/      WiM Gas — UTILMD G (44022–44024 pending + 44039–44053, 44168–44170) [placeholder]
+crates/mako-gabi-gas/     GaBi Gas — INVOIC 31010 (Kapazitätsrechnung), 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) [placeholder]
 crates/dvgw-edi/          DVGW EDIFACT formats — ALLOCAT, NOMINT, NOMRES [placeholder]
 crates/mako-nbw/          Netzbetreiberwechsel — PARTIN bulk DSO handover [placeholder]
 crates/energy-api/        BDEW API-Webdienste Strom REST/WebSocket client+server
@@ -136,30 +136,38 @@ Both coexist in the same engine instance simultaneously. A process started under
 | PID range | Crate | Source |
 |---|---|---|
 | 55001–55018, 55555 | `mako-gpke` | BK6-24-174 |
-| 56001–56004 | `mako-gpke` (ex-MPES, absorbed per BK6-22-024, eff. 2025-06-06) | BK6-22-024 |
-| 11001–11003 | `mako-wim` | BK6-24-174 |
+| 55039, 55042, 55051, 55168 | `mako-wim` | BK6-24-174 |
 | 13003 | `mako-mabis` | BK6-24-174 |
-| 44001–44006, 44017–44018, 44555 | `mako-geli-gas` | BK7-24-01-009 |
-| 44022–44053 | `mako-wim-gas` | BK7-24-01-009 |
-| 31001–31002, 31004–31008 | `mako-gpke` | BK6-24-174 |
-| 31003, 31009 | `mako-wim` (WiM-Rechnung / MSB-Rechnung) | BK6-24-174 |
-| 31010–31011 | `mako-gabi-gas` (GaBi Gas MMM INVOIC) | BK7 |
-| 17134–17135, 19001–19002 | `mako-gpke` (Konfiguration, BK6-22-024 Teil 4) | BK6-22-024 |
+| 44001–44021 | `mako-geli-gas` | BK7-24-01-009 |
+| 44022–44024 | `mako-geli-gas` *(pending — BDEW PID overview lists these as WiM Gas; ownership to be resolved)* | BK7-24-01-009 |
+| 17115–17117 (Sperrung Strom, ORDERS) | `mako-gpke` | BK6-22-024 |
+| 17115–17117 (Sperrung Gas, ORDERS) | `mako-geli-gas` *(pending)* | BK7-24-01-009 |
+| 44039–44041, 44042–44053, 44168–44170 | `mako-wim-gas` | BK7-24-01-009 |
+| 31001–31002, 31005–31009 | `mako-gpke` | BK6-24-174 |
+| 31003 | `mako-wim` (WiM-Rechnung) | BK6-24-174 |
+| 31004 | `mako-wim-gas` (Stornorechnung WiM Gas) | BK7-24-01-009 |
+| 31010 | `mako-gabi-gas` (Kapazitätsrechnung, Kapazitätsabrechnung Gas) | BK7 |
+| 31011 | `mako-gabi-gas` (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) | BK7 |
+| 17134–17135 | `mako-gpke` (ORDERS Konfiguration, GPKE Teil 3) | BK6-22-024 |
+| 19001–19002 | `mako-wim` *(ORDRSP Geräteübernahme, WiM Strom — ⚠️ docs/pid-reference.md lists process as "WiM Gas"; verify against ORDRSP AHB 1.1a)* | BK6-24-174 |
 
 **PIDs that do NOT exist — never register:**
-- 44007–44016: not defined in any GeLi Gas AHB
-- 56005–56010: former MPES PIDs, not in any current AHB
-- 13001: not defined in any MSCONS AHB
+- 56001–56010: former MPES PIDs, not in any current AHB (confirmed absent from PID 3.3, 3.3 KL, PID 4.0, and all UTILMD AHB PDFs)
+- 44555: does not exist in PID 3.3 or PID 4.0; Gas Sperrung process uses ORDERS PIDs 17115–17117
+- 11001–11003: legacy pre-reform PIDs, superseded by 55039/55042/55051/55168
 - 11004–11099: reserved but not in current WiM AHB
 
+**PIDs that exist but belong to WiM Gas, NOT GeLi Gas:**
+- 44022–44024: listed under WiM Gas in BDEW PID overview (PID 3.3 / PID 4.0) — currently implemented in `mako-geli-gas` pending ownership clarification
+
 ### MPES is dissolved
-PIDs 56001–56004 were transferred from MPES into **GPKE** per BK6-22-024 (LFW24),
-effective **2025-06-06**. There is no `mako-mpes` crate.
+PIDs 56001–56010 were **never transferred** into any other crate and do not appear in
+any BDEW document (PID 3.3, PID 3.3 KL, PID 4.0, or any UTILMD AHB PDF). There is no `mako-mpes` crate.
 
 ### GeLi Gas 3.0
 Governed by **BK7-24-01-009** (Beschluss 12.09.2025). Supersedes BK7-19-001 and BK7-06-067.
-Scope: UTILMD G (PIDs 44001–44006, 44017–44018, 44555) **only**.
-No INVOIC billing in GeLi Gas — gas MMM billing (31010–31011) belongs to `mako-gabi-gas`.
+Scope: UTILMD G (PIDs 44001–44021, with 44022–44024 pending ownership clarification) + ORDERS Sperrung Gas (17115–17117, not yet implemented).
+No INVOIC billing in GeLi Gas. PIDs 31010 (Kapazitätsrechnung) and 31011 (Rechnung sonstige Leistung — AWH Sperrprozesse Gas) belong to `mako-gabi-gas` (BK7), not GeLi Gas. They are Gas processes — 31011 is **not** a GPKE/Strom PID.
 
 ### MABIS vs Messwesen
 Only PID **13003** is MABIS (Bilanzkreisabrechnung Strom, BKV↔ÜNB).
@@ -172,6 +180,7 @@ PIDs 13002–13028 (excluding 13003) are Messwesen PIDs — do not register them
 | GPKE | **24 wall-clock hours** | `fristen::add_hours(t, 24)` | BK6-22-024 §5 |
 | WiM | **5 Werktage** | `fristen::add_werktage(d, 5, BdewMaKo)` | BK6-24-174 |
 | GeLi Gas | **10 Werktage** | `fristen::add_werktage(d, 10, BdewMaKo)` | BK7-24-01-009 |
+| WiM Gas | **10 Werktage** | `fristen::add_werktage(d, 10, BdewMaKo)` | BK7-24-01-009 |
 
 **Saturday = Werktag.** Sunday and public holidays do not count.
 All deadline arithmetic uses **German local time (CET/CEST)**, not UTC.

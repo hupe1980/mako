@@ -1,4 +1,4 @@
-//! Integration tests for the WiM Gerätewechsel (PID 11001) workflow.
+//! Integration tests for the WiM Messstellenbetrieb (PIDs 55039, 55042, 55051, 55168) workflow.
 //!
 //! Covers the full write→store→read cycle using `InMemoryEventStore` — no
 //! SlateDB required. Tests exercise the happy-path lifecycle, validation
@@ -43,7 +43,7 @@ fn make_process() -> Process<WimDeviceChangeWorkflow, InMemoryEventStore> {
 
 fn receive_utilmd_cmd(validation_passed: bool) -> DeviceChangeCommand {
     DeviceChangeCommand::ReceiveUtilmd {
-        pid: Pruefidentifikator::new(11_001).unwrap(),
+        pid: Pruefidentifikator::new(55_042).unwrap(),
         sender: MarktpartnerCode::new("4012345000023"),
         receiver: MarktpartnerCode::new("9900357000004"),
         melo_id: MeLo::new("DE00123456789012345678901234567890"),

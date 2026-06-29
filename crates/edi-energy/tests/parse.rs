@@ -4,9 +4,12 @@
 //! terminator and include a well-formed UNB/UNZ envelope so that
 //! `validate_envelope` can succeed.
 
-// Many imports and constants are only used inside feature-gated test fns.
-#![allow(dead_code, unused_imports)]
-
+// Some imports and constants are used exclusively inside feature-gated test
+// fns and will warn about dead-code under `--no-default-features`; they are
+// annotated with `#[allow(dead_code)]` individually below.
+// Some items (`EdiEnergyMessage`, `Error`, `MessageType`) are only used in
+// feature-gated test fns.
+#[allow(unused_imports)]
 use edi_energy::{
     AnyMessage, DEFAULT_MAX_SEGMENT_BYTES, EdiEnergyMessage, Error, MessageType, ParseConfig,
     Parser, Platform,
@@ -28,6 +31,7 @@ UNT+7+1'\
 UNZ+1+1'";
 
 /// Interchange with two UTILMD messages.
+#[cfg(feature = "utilmd")] // only used in utilmd-gated test fns
 const TWO_UTILMD: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
 UNH+1+UTILMD:D:11A:UN:5.5.3a'\
@@ -495,6 +499,7 @@ fn parse_interchange_multi_type_dispatch() {
 /// Serialized EDIFACT bytes must:
 /// - Contain no null bytes.
 /// - Contain no bytes outside ASCII 0x09 / 0x0A / 0x0D / 0x20–0x7E.
+#[allow(dead_code)] // called from feature-gated test fns
 fn assert_edifact_charset(bytes: &[u8], label: &str) {
     for (i, &b) in bytes.iter().enumerate() {
         assert!(

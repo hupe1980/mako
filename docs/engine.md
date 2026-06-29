@@ -308,15 +308,18 @@ Unroutable or permanently failing messages are sent to a `DeadLetterSink`:
 
 ```rust
 pub enum DeadLetterReason {
-    UnknownPid(u32),
-    UnknownConversation { conversation_id: String },
-    VersionMismatch { expected_fv: String, actual_fv: String },
-    DuplicateMessage { message_id: String },
-    ProcessingError(EngineError),
+    UnknownPid { pid: u32, context: AuditContext },
+    UnknownConversation { conversation_id: String, context: AuditContext },
+    VersionMismatch { expected: String, received: String, context: AuditContext },
+    DuplicateMessage { inbox_key: String, context: AuditContext },
+    ProcessingError { message: String, context: AuditContext },
+    OutboxExhausted { message_id: OutboxMessageId, message_type: String, recipient: String, last_error: String, attempts: u32 },
 }
 ```
 
-`LogDeadLetterSink` (default) emits `tracing::warn!`. `NoopDeadLetterSink` is available behind the `testing` feature. Implement `DeadLetterSink` to write to Prometheus, a database, or a page channel.
+`AuditContext` carries §22 MessZV structured audit fields (`message_type`, `pid`, `sender_eic`, `receiver_eic`, `message_ref`, `process_id`, `tenant_id`, `correlation_id`, `timestamp`). Build it with the builder methods on `AuditContext::now()`.
+
+`LogDeadLetterSink` (default) emits `tracing::warn!` with all available audit fields. `NoopDeadLetterSink` is available behind the `testing` feature. Implement `DeadLetterSink` to write to Prometheus, a database, or a page channel.
 
 The `#[non_exhaustive]` attribute on `DeadLetterReason` allows new variants to be added without breaking existing sink implementations.
 
@@ -511,7 +514,7 @@ Partners are managed at runtime via the REST admin API — see
 
 | Crate | Process family | PID range | APERAK Frist |
 |---|---|---|---|
-| `mako-gpke` | GPKE — Lieferbeginn/-ende Strom, Sperrung, ex-MPES feed-in, INVOIC billing, Konfiguration | 55001–55002, 55017, 55555, 56001–56004, 31001–31008, 17134/17135, 19001/19002 | **24 wall-clock hours** |
+| `mako-gpke` | GPKE — Lieferbeginn/-ende Strom, ORDERS Sperrung, INVOIC billing, Konfiguration | 55001–55002, 55016–55018, 17115–17117, 31001–31008, 17134/17135, 19001/19002 | **24 wall-clock hours** |
 | `mako-wim` | WiM — Messstellenwechsel Strom | 11001–11099 | **5 Werktage** |
 | `mako-geli-gas` | GeLi Gas — Lieferbeginn/-ende Gas | 17001–17099 | **10 Werktage** |
 | `mako-mabis` | MABIS — Bilanzkreisabrechnung | 13003 (MSCONS Summenzeitreihe) | n/a (batch, not saga) |

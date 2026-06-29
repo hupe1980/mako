@@ -1,6 +1,6 @@
-//! End-to-end test: nMSB → NB WiM Gerätewechsel (PID 11001).
+//! End-to-end test: nMSB → NB WiM Gerätewechsel (PID 55042).
 //!
-//! A mock NB (Netzbetreiber) receives a UTILMD S2.1 PID 11001 from the incoming
+//! A mock NB (Netzbetreiber) receives a UTILMD S2.1 PID 55042 from the incoming
 //! Messstellenbetreiber (nMSB) and dispatches a positive or negative APERAK.
 //!
 //! # Protocol trace
@@ -8,7 +8,7 @@
 //! ```text
 //!   nMSB ERP (wire fixture)                    NB ERP (MockNb)
 //!   ──────────────────────────────────────────────────────────
-//!                        ──── UTILMD 11001 ───►
+//!                        ──── UTILMD 55042 ───►
 //!                                               receive_utilmd(wire)
 //!                                                 → wim_registry adapter
 //!                                                 → state: ValidationPassed
@@ -30,7 +30,7 @@
 //!
 //! # Regulatory context
 //!
-//! - **PID 11001**: Anmeldung Messstellenbetrieb (nMSB → NB, WiM AHB S2.1)
+//! - **PID 55042**: Anmeldung Messstellenbetrieb (nMSB → NB, WiM AHB S2.1)
 //! - **APERAK Frist**: **5 Werktage** (BNetzA BK6-18-032, WiM)
 //! - **Saturday counts as a Werktag**; Sunday and federal public holidays
 //!   do not.  This is distinct from GPKE (24 wall-clock hours) and GeLi Gas
@@ -65,19 +65,19 @@ const MELO_ID: &str = "DE0001000001234567890000000000001"; // Messlokations-ID
 const DEVICE_ID: &str = "ZHR-12345678"; // Zählernummer / Geräte-ID
 const FV: &str = "FV2025-10-01";
 
-// ── UTILMD S2.1 PID 11001 wire fixture ────────────────────────────────────────
+// ── UTILMD S2.1 PID 55042 wire fixture ────────────────────────────────────────
 //
-// Minimal EDIFACT UTILMD S2.1 Anmeldung Messstellenbetrieb (PID 11001).
+// Minimal EDIFACT UTILMD S2.1 Anmeldung Messstellenbetrieb (PID 55042).
 // Direction: nMSB (sender NAD+MS) → NB (receiver NAD+MR).
 //
 // WiM uses Messlokationen (MeLo) rather than Marktlokationen (MaLo) as the
 // IDE object.  The LOC+172 segment carries the Zählernummer (device ID).
 //
 // Source: WiM AHB (BDEW), FV2025-10-01, UTILMD S2.1.
-const UTILMD_11001_BYTES: &[u8] = b"\
+const UTILMD_55042_BYTES: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WIM-2025-001'\
 UNH+MSG-WIM-001+UTILMD:D:11A:UN:S2.1'\
-BGM+E01:::+00011001::+9'\
+BGM+E01:::+00055042::+9'\
 DTM+137:20250115:102'\
 RFF+Z13:WIM-REF-001'\
 NAD+MS+4012345000023::293'\
@@ -112,21 +112,21 @@ impl MockNb {
         }
     }
 
-    /// ERP notification: receive nMSB's UTILMD 11001 wire bytes, adapt, and
+    /// ERP notification: receive nMSB's UTILMD 55042 wire bytes, adapt, and
     /// execute.
     ///
     /// AHB validation is forced to `true` — the minimal fixture does not satisfy
     /// all S2.1 profile rules; AHB conformance is tested separately.
     ///
     /// Asserts:
-    /// - The adapter correctly extracts PID 11001, sender (nMSB), receiver (NB),
+    /// - The adapter correctly extracts PID 55042, sender (nMSB), receiver (NB),
     ///   MeLo ID, and UNH message reference.
     /// - The UNH message reference is non-trivial (not empty, not `"1"`).
     async fn receive_utilmd(&self, wire: &[u8]) {
         let raw = self
             .platform
             .parse(wire)
-            .expect("NB: parse nMSB UTILMD 11001 wire");
+            .expect("NB: parse nMSB UTILMD 55042 wire");
 
         let unh_ref = raw.message_ref().to_owned();
         assert!(
@@ -136,7 +136,7 @@ impl MockNb {
 
         let cmd = wim_registry()
             .dispatch(&raw as &dyn Any, &self.fv)
-            .expect("NB: adapt UTILMD 11001 to DeviceChangeCommand");
+            .expect("NB: adapt UTILMD 55042 to DeviceChangeCommand");
 
         let cmd = match cmd {
             DeviceChangeCommand::ReceiveUtilmd {
@@ -150,8 +150,8 @@ impl MockNb {
             } => {
                 assert_eq!(
                     pid.as_u32(),
-                    11001,
-                    "adapter must extract PID 11001 from wire"
+                    55042,
+                    "adapter must extract PID 55042 from wire"
                 );
                 assert_eq!(
                     sender.as_str(),
@@ -192,7 +192,7 @@ impl MockNb {
         self.process
             .execute(cmd)
             .await
-            .expect("NB: execute ReceiveUtilmd 11001");
+            .expect("NB: execute ReceiveUtilmd 55042");
     }
 
     /// ERP action: dispatch positive or negative APERAK.
@@ -234,9 +234,9 @@ impl MockNb {
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
-/// WiM Gerätewechsel — positive APERAK path (PID 11001 → AperakSent → Completed).
+/// WiM Gerätewechsel — positive APERAK path (PID 55042 → AperakSent → Completed).
 ///
-/// NB receives the UTILMD 11001, dispatches a positive APERAK within 5 Werktage
+/// NB receives the UTILMD 55042, dispatches a positive APERAK within 5 Werktage
 /// (BNetzA BK6-18-032), then records physical completion of the device change.
 ///
 /// Per WiM AHB: Saturday counts as a Werktag; Sunday and federal public holidays
@@ -246,12 +246,12 @@ impl MockNb {
 async fn e2e_wim_geraetewechsel_positive_aperak() {
     let nb = MockNb::new();
 
-    // ── NB ERP: receive UTILMD 11001 ──────────────────────────────────────────
-    nb.receive_utilmd(UTILMD_11001_BYTES).await;
+    // ── NB ERP: receive UTILMD 55042 ──────────────────────────────────────────
+    nb.receive_utilmd(UTILMD_55042_BYTES).await;
     let state_after_receive = nb.state().await;
     assert!(
         matches!(state_after_receive, DeviceChangeState::ValidationPassed(_)),
-        "NB must be ValidationPassed after ReceiveUtilmd 11001; got: {state_after_receive:?}"
+        "NB must be ValidationPassed after ReceiveUtilmd 55042; got: {state_after_receive:?}"
     );
 
     // ── NB ERP: dispatch positive APERAK (within 5 Werktage per BK6-18-032) ──
@@ -273,7 +273,7 @@ async fn e2e_wim_geraetewechsel_positive_aperak() {
         .payload
         .as_object()
         .expect("Aperak payload must be a JSON object");
-    assert_eq!(payload["pid"].as_u64().unwrap(), 11001);
+    assert_eq!(payload["pid"].as_u64().unwrap(), 55042);
     assert_eq!(payload["melo"].as_str().unwrap(), MELO_ID);
     assert!(
         payload["positive"].as_bool().unwrap(),
@@ -304,15 +304,15 @@ async fn e2e_wim_geraetewechsel_positive_aperak() {
         assert_eq!(data.grid_operator.as_str(), NB_ID);
         assert_eq!(
             data.pruefidentifikator.as_u32(),
-            11001,
-            "persisted data must carry PID 11001"
+            55042,
+            "persisted data must carry PID 55042"
         );
     }
 }
 
-/// WiM Gerätewechsel — negative APERAK path (PID 11001 → Rejected).
+/// WiM Gerätewechsel — negative APERAK path (PID 55042 → Rejected).
 ///
-/// NB receives the UTILMD 11001 but rejects the Anmeldung (e.g. the Messlokation
+/// NB receives the UTILMD 55042 but rejects the Anmeldung (e.g. the Messlokation
 /// is unknown at the NB, or the nMSB is not authorized for this grid area).
 ///
 /// Per WiM AHB: the negative APERAK must also be dispatched within 5 Werktage.
@@ -320,11 +320,11 @@ async fn e2e_wim_geraetewechsel_positive_aperak() {
 async fn e2e_wim_geraetewechsel_negative_aperak() {
     let nb = MockNb::new();
 
-    // ── NB ERP: receive UTILMD 11001 ──────────────────────────────────────────
-    nb.receive_utilmd(UTILMD_11001_BYTES).await;
+    // ── NB ERP: receive UTILMD 55042 ──────────────────────────────────────────
+    nb.receive_utilmd(UTILMD_55042_BYTES).await;
     assert!(
         matches!(nb.state().await, DeviceChangeState::ValidationPassed(_)),
-        "NB must be ValidationPassed after ReceiveUtilmd 11001"
+        "NB must be ValidationPassed after ReceiveUtilmd 55042"
     );
 
     // ── NB ERP: dispatch negative APERAK (nMSB not authorized) ───────────────
@@ -365,9 +365,9 @@ async fn e2e_wim_geraetewechsel_negative_aperak() {
     );
 }
 
-/// WiM Gerätewechsel — AHB validation failure (PID 11001, malformed UTILMD).
+/// WiM Gerätewechsel — AHB validation failure (PID 55042, malformed UTILMD).
 ///
-/// If the received UTILMD 11001 fails AHB validation (e.g. missing mandatory
+/// If the received UTILMD 55042 fails AHB validation (e.g. missing mandatory
 /// segments), the workflow must immediately transition to `Rejected` without
 /// requiring a `DispatchAperak` step.
 ///
@@ -379,10 +379,10 @@ async fn e2e_wim_geraetewechsel_ahb_validation_failure() {
     let nb = MockNb::new();
 
     // Construct the ReceiveUtilmd command directly with validation_passed=false
-    // to simulate a malformed UTILMD 11001 that failed AHB profile checks.
+    // to simulate a malformed UTILMD 55042 that failed AHB profile checks.
     nb.process
         .execute(DeviceChangeCommand::ReceiveUtilmd {
-            pid: Pruefidentifikator::new(11001).unwrap(),
+            pid: Pruefidentifikator::new(55042).unwrap(),
             sender: MarktpartnerCode::new(NMSB_ID),
             receiver: MarktpartnerCode::new(NB_ID),
             melo_id: MeLo::new(MELO_ID),
@@ -400,6 +400,6 @@ async fn e2e_wim_geraetewechsel_ahb_validation_failure() {
     let final_state = nb.state().await;
     assert!(
         matches!(final_state, DeviceChangeState::Rejected { .. }),
-        "invalid UTILMD 11001 must reach Rejected without DispatchAperak; got: {final_state:?}"
+        "invalid UTILMD 55042 must reach Rejected without DispatchAperak; got: {final_state:?}"
     );
 }

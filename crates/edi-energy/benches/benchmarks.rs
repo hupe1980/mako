@@ -35,7 +35,23 @@ IDE+Z19+51238696781::'\
 UNT+7+1'\
 UNZ+1+1'";
 
-/// Minimal MSCONS interchange.
+/// Minimal UTILMD Gas interchange used as a baseline parse fixture.
+const UTILMD_GAS_MINIMAL: &[u8] = b"\
+UNB+UNOC:3+4012345000023:14+9907317000007:14+251001:0700+00001'\
+UNH+00001+UTILMD:D:11A:UN:G1.1'\
+BGM+E01:::+00044001::+9'\
+DTM+137:20251001:102'\
+RFF+Z13:REF001'\
+NAD+MS+4012345000023::293'\
+NAD+MR+9907317000007::293'\
+IDE+Z19+51238696781::'\
+UNT+8+00001'\
+UNZ+1+00001'";
+
+/// AHB-conformant UTILMD Gas G1.1 PID 44001 fixture (from tests/fixtures).
+/// Used to bench the full parse+validate pipeline with a real BDEW-shaped message.
+const UTILMD_44001_GAS_FIXTURE: &[u8] =
+    include_bytes!("../tests/fixtures/utilmd/valid/beispiel_44001_lieferbeginn_gas.edi");
 #[cfg(feature = "mscons")]
 const MSCONS_MINIMAL: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
@@ -468,10 +484,73 @@ fn bench_validate_multi_pid(c: &mut Criterion) {
                 .serialize()
                 .unwrap();
             let msg = Platform::with_all_profiles().parse(&bytes).unwrap();
-            group.bench_with_input(BenchmarkId::new("utilmd", pid), &msg, |b, msg| {
+            group.bench_with_input(BenchmarkId::new("utilmd_strom", pid), &msg, |b, msg| {
                 b.iter(|| black_box(msg).validate_on_date(black_box(date)))
             });
         }
+
+        // Gas PIDs — use the minimal Gas fixture (G1.1 release, FV2025-10-01).
+        let gas_date = date!(2025 - 10 - 15);
+        let gas_pids: &[u32] = &[44001, 44002, 44003, 44004];
+        let gas_msg = Platform::with_all_profiles()
+            .parse(UTILMD_GAS_MINIMAL)
+            .unwrap();
+        for &pid in gas_pids {
+            group.bench_with_input(BenchmarkId::new("utilmd_gas", pid), &gas_msg, |b, msg| {
+                b.iter(|| black_box(msg).validate_on_date(black_box(gas_date)))
+            });
+        }
+    }
+
+    group.finish();
+}
+
+// ── Validate fixture file (full pipeline with real BDEW-shaped messages) ──────
+
+/// Measures parse+validate throughput for real BDEW-shaped fixture files.
+///
+/// Unlike the synthetic fixtures in `bench_validate_multi_pid`, these are
+/// production-representative messages that include all mandatory AHB segments
+/// and have been verified against the published profile rules.
+fn bench_validate_fixture_file(c: &mut Criterion) {
+    use time::macros::date;
+    let mut group = c.benchmark_group("validate_fixture_file");
+
+    #[cfg(feature = "utilmd")]
+    {
+        // Strom fixture (S2.2, FV2026-10-01).
+        let strom_date = date!(2026 - 10 - 01);
+        let strom_msg = Platform::with_all_profiles().parse(UTILMD_MINIMAL).unwrap();
+        group.bench_function("utilmd_strom_55001", |b| {
+            b.iter(|| {
+                black_box(&strom_msg)
+                    .validate_on_date(black_box(strom_date))
+                    .unwrap()
+            })
+        });
+
+        // Gas fixture (G1.1, FV2025-10-01) — uses the real test fixture file.
+        let gas_date = date!(2025 - 10 - 01);
+        let gas_msg = Platform::with_all_profiles()
+            .parse(UTILMD_44001_GAS_FIXTURE)
+            .unwrap();
+        group.bench_function("utilmd_gas_44001", |b| {
+            b.iter(|| {
+                black_box(&gas_msg)
+                    .validate_on_date(black_box(gas_date))
+                    .unwrap()
+            })
+        });
+
+        // Full pipeline: parse + validate from raw bytes (no pre-parse caching).
+        group.bench_function("utilmd_gas_44001_full_pipeline", |b| {
+            b.iter(|| {
+                let msg = Platform::with_all_profiles()
+                    .parse(black_box(UTILMD_44001_GAS_FIXTURE))
+                    .unwrap();
+                msg.validate_on_date(black_box(gas_date)).unwrap()
+            })
+        });
     }
 
     group.finish();
@@ -489,5 +568,6 @@ criterion_group!(
     bench_interchange_throughput,
     bench_light_vs_full_parse,
     bench_validate_multi_pid,
+    bench_validate_fixture_file,
 );
 criterion_main!(benches);

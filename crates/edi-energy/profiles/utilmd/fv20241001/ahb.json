@@ -120,6 +120,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "DTM",
           "requirement": "C",
@@ -280,6 +303,29 @@
         }
       ],
       "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
         {
           "group_id": "SG4",
           "tag": "DTM",
@@ -442,6 +488,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "DTM",
           "requirement": "C",
@@ -602,6 +671,29 @@
         }
       ],
       "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
         {
           "group_id": "SG4",
           "tag": "DTM",
@@ -785,6 +877,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "DTM",
           "requirement": "C",
@@ -966,6 +1081,29 @@
         }
       ],
       "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
         {
           "group_id": "SG4",
           "tag": "DTM",
@@ -1149,6 +1287,29 @@
       ],
       "group_rules": [
         {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
+        {
           "group_id": "SG4",
           "tag": "DTM",
           "requirement": "C",
@@ -1289,6 +1450,29 @@
         }
       ],
       "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        },
         {
           "group_id": "SG4",
           "tag": "DTM",
@@ -1443,7 +1627,31 @@
           "_description": "SEQ is optional per MIG S2.1 (no AHB constraint for PID 55555)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+        }
+      ]
     }
   ]
 }

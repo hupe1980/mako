@@ -2,11 +2,12 @@
 //!
 //! Covers the processes by which:
 //! - **Anmeldung** (MSBN → NB): new gas metering-point operator (gMSB) announces
-//!   the start of service (PIDs 44039–44041).
-//! - **Ende** (NB → MSBN): grid operator terminates the MSB relationship
-//!   (PIDs 44042–44044).
-//! - **Vorläufige Abmeldung / Ende** (NB → MSBA): preliminary de-registration
-//!   and termination of the old MSB (PIDs 44051–44053).
+//!   the start of service (PIDs 44042–44044).
+//! - **Ende / Vorläufige Abmeldung** (NB → MSBA): grid operator terminates the
+//!   old MSB relationship (PIDs 44051–44053).
+//!
+//! Note: PIDs 44039–44041 (Kündigung MSB Gas) are handled by the separate
+//! `kuendigung` module (`WimGasKuendigungWorkflow`).
 //!
 //! In all three sub-processes the NB must respond with an APERAK within
 //! **10 Werktage** (business days) — the same Frist as GeLi Gas.
@@ -41,13 +42,10 @@
 //!
 //! | PID | Process | Direction |
 //! |---|---|---|
-//! | 44039 | Anmeldung MSB Gas (Anfrage MSBN) | MSBN → NB |
-//! | 44040 | Bestätigung Anmeldung MSB Gas | NB → MSBN |
-//! | 44041 | Ablehnung Anmeldung MSB Gas | NB → MSBN |
-//! | 44042 | Ende MSB Gas (Anfrage NB) | NB → MSBN |
-//! | 44043 | Bestätigung Ende MSB Gas | MSBN → NB |
-//! | 44044 | Ablehnung Ende MSB Gas | MSBN → NB |
-//! | 44051 | Vorläufige Abmeldung MSB Gas | NB → MSBA |
+//! | 44042 | Anmeldung neuer MSB Gas (Anfrage MSBN) | MSBN → NB |
+//! | 44043 | Bestätigung Anmeldung neuer MSB Gas | NB → MSBN |
+//! | 44044 | Ablehnung Anmeldung neuer MSB Gas | NB → MSBN |
+//! | 44051 | Ende MSB Gas / Vorläufige Abmeldung | NB → MSBA |
 //! | 44052 | Bestätigung Vorl. Abmeldung | MSBA → NB |
 //! | 44053 | Ablehnung Vorl. Abmeldung | MSBA → NB |
 
@@ -83,15 +81,17 @@ pub const APERAK_WINDOW_LABEL: &str = "wim-gas-aperak-10-werktage";
 
 /// PIDs handled by this workflow (UTILMD G — WiM Gas Anmeldung/Ende/Vorl. Abmeldung).
 ///
-/// Note: AHB profiles for WiM Gas PIDs (44022–44053, 44168–44170) are not yet
+/// Note: AHB profiles for WiM Gas PIDs (44039–44053, 44168–44170) are not yet
 /// in the `fv*_gas` profile set. Until `cargo xtask import-xml-ahb` imports them,
 /// `msg.validate()` returns a vacuous pass for these PIDs. The adapters apply the
-/// `pid_has_ahb_rules()` guard (same as ex-MPES PIDs 56001–56004) to prevent
+/// `pid_has_ahb_rules()` guard to prevent
 /// false-positive validation. This guard self-corrects once profiles are imported.
+///
+/// PIDs 44039–44041 (Kündigung MSB Gas) are owned by `kuendigung::KUENDIGUNG_PIDS`.
+/// PIDs 44022–44024 are GeLi Gas Stornierung — not WiM Gas.
 pub const ANMELDUNG_PIDS: &[u32] = &[
-    44039, 44040, 44041, // Anmeldung MSB Gas (MSBN ↔ NB)
-    44042, 44043, 44044, // Ende MSB Gas (NB ↔ MSBN)
-    44051, 44052, 44053, // Vorläufige Abmeldung / Ende MSB Gas (NB ↔ MSBA)
+    44042, 44043, 44044, // Anmeldung neuer MSB Gas (MSBN ↔ NB)
+    44051, 44052, 44053, // Ende MSB Gas / Vorläufige Abmeldung (NB ↔ MSBA)
 ];
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -684,9 +684,9 @@ mod tests {
     }
 
     #[test]
-    fn anmeldung_happy_path_pid_44039() {
+    fn anmeldung_happy_path_pid_44042() {
         let state = WimGasAnmeldungState::New;
-        let output = WimGasAnmeldungWorkflow::handle(&state, anmeldung_cmd(44039, true)).unwrap();
+        let output = WimGasAnmeldungWorkflow::handle(&state, anmeldung_cmd(44042, true)).unwrap();
         assert_eq!(output.events.len(), 2, "Initiated + ValidationPassed");
         assert!(matches!(
             output.events[0],
@@ -701,7 +701,7 @@ mod tests {
     #[test]
     fn anmeldung_validation_failure_rejects() {
         let state = WimGasAnmeldungState::New;
-        let output = WimGasAnmeldungWorkflow::handle(&state, anmeldung_cmd(44039, false)).unwrap();
+        let output = WimGasAnmeldungWorkflow::handle(&state, anmeldung_cmd(44042, false)).unwrap();
         assert_eq!(output.events.len(), 2, "Initiated + Rejected");
         assert!(matches!(
             output.events[1],
@@ -738,7 +738,7 @@ mod tests {
             sender: MarktpartnerCode::new(MSBN_GLN),
             receiver: MarktpartnerCode::new(NB_GLN),
             document_date: "20251001".to_owned(),
-            pruefidentifikator: Pruefidentifikator::new(44039).unwrap(),
+            pruefidentifikator: Pruefidentifikator::new(44042).unwrap(),
             message_ref: Some(MessageRef::new("00001")),
         };
         let state = WimGasAnmeldungState::ValidationPassed(data);
@@ -765,7 +765,7 @@ mod tests {
             sender: MarktpartnerCode::new(MSBN_GLN),
             receiver: MarktpartnerCode::new(NB_GLN),
             document_date: "20251001".to_owned(),
-            pruefidentifikator: Pruefidentifikator::new(44039).unwrap(),
+            pruefidentifikator: Pruefidentifikator::new(44042).unwrap(),
             message_ref: None,
         };
         let state = WimGasAnmeldungState::Initiated(data);
@@ -792,7 +792,7 @@ mod tests {
             sender: MarktpartnerCode::new(MSBN_GLN),
             receiver: MarktpartnerCode::new(NB_GLN),
             document_date: "20251001".to_owned(),
-            pruefidentifikator: Pruefidentifikator::new(44039).unwrap(),
+            pruefidentifikator: Pruefidentifikator::new(44042).unwrap(),
             message_ref: None,
         };
         let state = WimGasAnmeldungState::Active(data);

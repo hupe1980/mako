@@ -47,7 +47,8 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 - Lieferantenwechsel Strom (UTILMD E, PIDs 55001–55006, 55017–55018)
   — 55001/55002 Anfrage Lieferbeginn/Lieferende; 55003–55006 Bestätigung/Ablehnung;
     55017 Kündigung Lieferbeginn; 55018 Bestätigung Kündigung
-- Anweisung Sperrung Strom (UTILMD E, PID 55555)
+- Sperrauftrag / Entsperrauftrag Strom (ORDERS, PIDs 17115–17117)
+- Anfrage Daten der individuellen Bestellung (UTILMD, PID 55555) — GPKE Teil 4 data request
 - Einspeisestelle ex-MPES (UTILMD E, PIDs 56001–56004) — transferred from MPES per BK6-22-024 (LFW24), effective 06.06.2025
 - Konfigurationseinrichtung Rollenzuordnung MSB (ORDERS/ORDRSP, PIDs 17134–17135, 19001–19002) — via BK6-22-024 GPKE Teil 4
 - Abschlagsrechnung / NN-Rechnung Netz (INVOIC, PIDs 31001–31002)

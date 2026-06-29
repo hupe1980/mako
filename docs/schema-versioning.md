@@ -146,14 +146,6 @@ backward-compat handling for an old version, add a row to this table in the same
 commit.  The `MAX_SCHEMA_VERSION` constant lives in `xtask/src/codegen.rs`
 inside `discover_profiles()`.
 
-Include the following in your `CHANGELOG.md` entry:
-
-```
-### Added / Changed
-- Schema version N: `<field name>` — <description of purpose and semantics>.
-  Requires codegen ≥ <version that introduced support>.
-```
-
-This ensures a contributor bumping the schema in a fork or downstream tool
-has a clear audit trail of what each version boundary means.
+Document the new field in the commit message and PR description so there is a
+clear audit trail of what each version boundary means.
 

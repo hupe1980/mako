@@ -392,24 +392,63 @@ fn rule_group_sg4_ide_min_occurrences(
 /// The rule does NOT require every tag to be present (that is Layer 3's job);
 /// it only checks that tag positions are non-decreasing w.r.t. the expected order.
 fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
-    const EXPECTED_ORDER: &[&str] = &["UNH", "BGM", "DTM", "RFF", "NAD", "IDE", "UNT"];
-    let mut cursor: usize = 0;
-    for seg in segments {
-        if let Some(pos) = EXPECTED_ORDER[cursor..].iter().position(|&t| t == seg.tag) {
-            cursor += pos;
-        } else if EXPECTED_ORDER.contains(&seg.tag) {
-            // Tag is known but already passed — ordering violation.
-            issues.push(
-                ValidationIssue::new(
-                    ValidationSeverity::Error,
-                    "segment appears out of order".to_owned(),
-                )
-                .with_rule_id("MIG-UTILMD-MIG-G1.2-ORDER")
-                .with_segment(seg.tag.to_owned()),
-            );
+    /// Per-group expected segment order derived from the MIG.
+    ///
+    /// Returns an empty slice for groups not covered by the MIG or for the
+    /// catch-all arm, which causes those groups to be skipped silently.
+    fn group_order(name: &str) -> &'static [&'static str] {
+        match name {
+            "ROOT" => &["UNH", "BGM", "DTM", "UNT"],
+            "SG1" | "SG6" => &["RFF"],
+            "SG2" | "SG12" => &["NAD"],
+            "SG3" => &["CTA", "COM"],
+            "SG4" => &["IDE", "STS", "DTM", "FTX", "AGR"],
+            "SG5" => &["LOC"],
+            _ => &[],
         }
-        // Unknown tags are passed through — they get caught by the DirectoryValidator.
     }
+
+    /// Recursively verify segment order within a group and all its children.
+    ///
+    /// Only `direct_segment_indices()` — segments that belong directly to this
+    /// group and are not claimed by any child group — are checked.  Child groups
+    /// are then visited recursively, so every segment in the message is covered
+    /// exactly once.
+    fn check_order(
+        group: &edifact_rs::group::SegmentGroupIndexed,
+        all_segs: &[edifact_rs::Segment<'_>],
+        rule_id: &str,
+        issues: &mut Vec<ValidationIssue>,
+    ) {
+        let expected = group_order(group.definition);
+        if !expected.is_empty() {
+            let mut cursor: usize = 0;
+            for idx in group.direct_segment_indices() {
+                let seg = &all_segs[idx];
+                if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
+                    cursor += pos;
+                } else if expected.contains(&seg.tag) {
+                    // Tag is known for this group but already passed — ordering violation.
+                    issues.push(
+                        ValidationIssue::new(
+                            ValidationSeverity::Error,
+                            "segment appears out of order".to_owned(),
+                        )
+                        .with_rule_id(rule_id)
+                        .with_segment(seg.tag.to_owned()),
+                    );
+                }
+                // Tags not in this group's expected order are unknown here;
+                // they are either in a child group (checked below) or caught by the DirectoryValidator.
+            }
+        }
+        for child in &group.children {
+            check_order(child, all_segs, rule_id, issues);
+        }
+    }
+
+    let tree = edifact_rs::group::group_segments_indexed(segments, GROUP_SCHEMA, "ROOT");
+    check_order(&tree, segments, "MIG-UTILMD-MIG-G1.2-ORDER", issues);
 }
 
 static MIG_UTILMD_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
@@ -437,11 +476,22 @@ pub(crate) fn mig_rule_pack() -> Arc<ProfileRulePack> {
     Arc::clone(&MIG_UTILMD_PACK)
 }
 
-static GROUP_SCHEMA: &[GroupDef] = &[GroupDef {
-    name: "SG4",
-    trigger: "IDE",
-    children: &[],
-}];
+static GROUP_SCHEMA: &[GroupDef] = &[
+    GroupDef {
+        name: "SG2",
+        trigger: "NAD",
+        children: &[],
+    },
+    GroupDef {
+        name: "SG4",
+        trigger: "IDE",
+        children: &[GroupDef {
+            name: "SG6",
+            trigger: "RFF",
+            children: &[],
+        }],
+    },
+];
 #[allow(unused_imports)]
 use super::ahb_helpers::{
     ahb_check_conditional, ahb_check_field_value, ahb_check_mandatory, ahb_check_not_used,
@@ -481,6 +531,22 @@ static AHB_44001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
             })
             .with_named_stateless_rule_fn("AHB-44001-RFF-1153-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "RFF", "AHB-44001-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44001", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44001-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44001-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44001-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44001", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44001-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44001-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44001-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44001", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
             })
 
             // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="E14" is present in SG4 // [48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht
@@ -546,6 +612,22 @@ static AHB_44002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
             .with_named_stateless_rule_fn("AHB-44002-RFF-1153-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "RFF", "AHB-44002-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44002", issues);
             })
+            .require_segment_in_group("SG2", "NAD", "AHB-44002-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44002-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44002-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44002", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44002-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44002-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44002-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44002", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
 
             // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="E14" is present in SG4 // [48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht
             .with_scoped_group_rule_fn("SG4", "AHB-44002-SG4-FTX-I0", |group, segs, _ctx, issues| {
@@ -610,6 +692,22 @@ static AHB_44003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
             .with_named_stateless_rule_fn("AHB-44003-RFF-1153-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "RFF", "AHB-44003-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44003", issues);
             })
+            .require_segment_in_group("SG2", "NAD", "AHB-44003-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44003-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44003-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44003", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44003-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44003-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44003-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44003", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
 
             // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="E14" is present in SG4 // [48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht
             .with_scoped_group_rule_fn("SG4", "AHB-44003-SG4-FTX-I0", |group, segs, _ctx, issues| {
@@ -673,6 +771,22 @@ static AHB_44004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
             })
             .with_named_stateless_rule_fn("AHB-44004-RFF-1153-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "RFF", "AHB-44004-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44004", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44004-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44004-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44004-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44004", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44004-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44004-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44004-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44004", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
             })
 
             // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4 // [7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht
@@ -749,6 +863,22 @@ static AHB_44005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
             .with_named_stateless_rule_fn("AHB-44005-RFF-1153-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "RFF", "AHB-44005-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44005", issues);
             })
+            .require_segment_in_group("SG2", "NAD", "AHB-44005-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44005-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44005-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44005", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44005-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44005-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44005-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44005", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
 
             // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4 // [7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht
             .with_scoped_group_rule_fn("SG4", "AHB-44005-SG4-DTM-I0", |group, segs, _ctx, issues| {
@@ -823,6 +953,22 @@ static AHB_44006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
             })
             .with_named_stateless_rule_fn("AHB-44006-RFF-1153-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "RFF", "AHB-44006-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44006", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44006-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44006-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44006-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44006", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44006-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44006-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44006-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44006", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
             })
 
             // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4 // [7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht
@@ -899,6 +1045,22 @@ static AHB_44017_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
             .with_named_stateless_rule_fn("AHB-44017-RFF-1153-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "RFF", "AHB-44017-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44017", issues);
             })
+            .require_segment_in_group("SG2", "NAD", "AHB-44017-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44017-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44017-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44017", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44017-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44017-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44017-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44017", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
 
             // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="E14" is present in SG4 // [48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht
             .with_scoped_group_rule_fn("SG4", "AHB-44017-SG4-FTX-I0", |group, segs, _ctx, issues| {
@@ -952,6 +1114,22 @@ static AHB_44018_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
             .with_named_stateless_rule_fn("AHB-44018-RFF-1153-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "RFF", "AHB-44018-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44018", issues);
             })
+            .require_segment_in_group("SG2", "NAD", "AHB-44018-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44018-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44018-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44018", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44018-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44018-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44018-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44018", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
 
             // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="E14" is present in SG4 // [48] Wenn STS+E01++E14 (Status: Ablehnung Sonstiges) vorhanden, ist FTX Pflicht
             .with_scoped_group_rule_fn("SG4", "AHB-44018-SG4-FTX-I0", |group, segs, _ctx, issues| {
@@ -969,6 +1147,957 @@ static AHB_44018_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
 
 fn ahb_44018_pack() -> Arc<ProfileRulePack> {
     Arc::clone(&AHB_44018_PACK)
+}
+
+static AHB_44022_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44022")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44022-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44022-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44022", "44022", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44022-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44022-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E01', 'E02', 'E35']", |q| matches!(q, "E01" | "E02" | "E35"), "44022", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44022-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44022-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44022", "44022", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44022-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44022-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44022", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44022-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44022-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44022", "44022", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44022-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44022-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44022", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44022-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44022-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44022", "44022", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44022-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44022-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44022", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44022-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44022-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44022", "44022", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44022-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44022-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44022", "44022", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44022-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44022-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44022", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44022-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44022-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44022-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44022", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44022-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44022-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44022-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44022", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44022_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44022_PACK)
+}
+
+static AHB_44023_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44023")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44023-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44023-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44023", "44023", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44023-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44023-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E01', 'E02', 'E35']", |q| matches!(q, "E01" | "E02" | "E35"), "44023", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44023-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44023-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44023", "44023", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44023-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44023-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44023", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44023-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44023-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44023", "44023", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44023-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44023-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44023", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44023-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44023-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44023", "44023", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44023-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44023-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44023", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44023-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44023-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44023", "44023", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44023-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44023-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44023", "44023", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44023-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44023-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44023", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44023-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44023-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44023-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44023", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44023-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44023-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44023-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44023", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44023_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44023_PACK)
+}
+
+static AHB_44024_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44024")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44024-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44024-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44024", "44024", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44024-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44024-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E01', 'E02', 'E35']", |q| matches!(q, "E01" | "E02" | "E35"), "44024", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44024-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44024-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44024", "44024", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44024-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44024-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44024", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44024-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44024-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44024", "44024", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44024-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44024-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44024", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44024-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44024-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44024", "44024", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44024-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44024-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44024", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44024-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44024-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44024", "44024", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44024-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44024-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44024", "44024", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44024-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44024-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44024", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44024-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44024-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44024-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44024", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44024-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44024-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44024-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44024", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44024_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44024_PACK)
+}
+
+static AHB_44039_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44039")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44039-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44039-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44039", "44039", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44039-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44039-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E35']", |q| matches!(q, "E35"), "44039", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44039-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44039-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44039", "44039", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44039-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44039-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44039", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44039-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44039-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44039", "44039", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44039-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44039-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44039", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44039-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44039-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44039", "44039", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44039-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44039-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44039", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44039-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44039-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44039", "44039", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44039-LOC-M", |segs, issues| {
+                ahb_check_mandatory(segs, "LOC", "AHB-44039-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 44039", "44039", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44039-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44039-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44039", "44039", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44039-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44039-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44039", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44039-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44039-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44039-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44039", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44039-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44039-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44039-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44039", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44039_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44039_PACK)
+}
+
+static AHB_44040_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44040")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44040-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44040-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44040", "44040", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44040-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44040-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E35']", |q| matches!(q, "E35"), "44040", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44040-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44040-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44040", "44040", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44040-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44040-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44040", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44040-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44040-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44040", "44040", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44040-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44040-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44040", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44040-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44040-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44040", "44040", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44040-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44040-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44040", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44040-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44040-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44040", "44040", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44040-LOC-M", |segs, issues| {
+                ahb_check_mandatory(segs, "LOC", "AHB-44040-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 44040", "44040", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44040-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44040-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44040", "44040", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44040-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44040-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44040", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44040-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44040-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44040-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44040", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44040-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44040-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44040-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44040", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44040_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44040_PACK)
+}
+
+static AHB_44041_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44041")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44041-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44041-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44041", "44041", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44041-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44041-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E35']", |q| matches!(q, "E35"), "44041", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44041-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44041-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44041", "44041", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44041-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44041-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44041", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44041-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44041-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44041", "44041", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44041-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44041-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44041", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44041-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44041-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44041", "44041", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44041-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44041-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44041", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44041-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44041-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44041", "44041", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44041-LOC-M", |segs, issues| {
+                ahb_check_mandatory(segs, "LOC", "AHB-44041-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 44041", "44041", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44041-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44041-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44041", "44041", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44041-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44041-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44041", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44041-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44041-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44041-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44041", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44041-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44041-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44041-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44041", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44041_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44041_PACK)
+}
+
+static AHB_44042_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44042")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44042-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44042-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44042", "44042", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44042-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44042-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E01']", |q| matches!(q, "E01"), "44042", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44042-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44042-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44042", "44042", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44042-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44042-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44042", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44042-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44042-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44042", "44042", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44042-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44042-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44042", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44042-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44042-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44042", "44042", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44042-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44042-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44042", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44042-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44042-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44042", "44042", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44042-LOC-M", |segs, issues| {
+                ahb_check_mandatory(segs, "LOC", "AHB-44042-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 44042", "44042", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44042-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44042-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44042", "44042", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44042-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44042-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44042", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44042-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44042-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44042-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44042", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44042-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44042-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44042-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44042", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44042_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44042_PACK)
+}
+
+static AHB_44043_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44043")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44043-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44043-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44043", "44043", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44043-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44043-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E01']", |q| matches!(q, "E01"), "44043", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44043-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44043-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44043", "44043", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44043-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44043-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44043", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44043-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44043-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44043", "44043", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44043-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44043-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44043", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44043-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44043-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44043", "44043", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44043-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44043-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44043", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44043-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44043-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44043", "44043", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44043-LOC-M", |segs, issues| {
+                ahb_check_mandatory(segs, "LOC", "AHB-44043-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 44043", "44043", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44043-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44043-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44043", "44043", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44043-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44043-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44043", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44043-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44043-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44043-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44043", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44043-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44043-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44043-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44043", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44043_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44043_PACK)
+}
+
+static AHB_44044_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44044")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44044-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44044-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44044", "44044", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44044-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44044-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E01']", |q| matches!(q, "E01"), "44044", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44044-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44044-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44044", "44044", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44044-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44044-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44044", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44044-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44044-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44044", "44044", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44044-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44044-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44044", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44044-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44044-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44044", "44044", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44044-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44044-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44044", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44044-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44044-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44044", "44044", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44044-LOC-M", |segs, issues| {
+                ahb_check_mandatory(segs, "LOC", "AHB-44044-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 44044", "44044", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44044-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44044-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44044", "44044", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44044-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44044-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44044", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44044-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44044-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44044-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44044", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44044-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44044-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44044-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44044", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44044_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44044_PACK)
+}
+
+static AHB_44051_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44051")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44051-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44051-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44051", "44051", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44051-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44051-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E02']", |q| matches!(q, "E02"), "44051", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44051-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44051-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44051", "44051", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44051-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44051-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44051", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44051-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44051-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44051", "44051", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44051-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44051-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44051", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44051-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44051-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44051", "44051", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44051-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44051-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44051", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44051-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44051-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44051", "44051", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44051-LOC-M", |segs, issues| {
+                ahb_check_mandatory(segs, "LOC", "AHB-44051-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 44051", "44051", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44051-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44051-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44051", "44051", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44051-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44051-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44051", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44051-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44051-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44051-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44051", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44051-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44051-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44051-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44051", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44051_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44051_PACK)
+}
+
+static AHB_44052_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44052")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44052-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44052-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44052", "44052", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44052-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44052-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E02']", |q| matches!(q, "E02"), "44052", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44052-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44052-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44052", "44052", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44052-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44052-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44052", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44052-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44052-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44052", "44052", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44052-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44052-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44052", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44052-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44052-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44052", "44052", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44052-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44052-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44052", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44052-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44052-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44052", "44052", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44052-LOC-M", |segs, issues| {
+                ahb_check_mandatory(segs, "LOC", "AHB-44052-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 44052", "44052", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44052-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44052-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44052", "44052", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44052-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44052-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44052", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44052-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44052-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44052-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44052", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44052-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44052-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44052-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44052", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44052_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44052_PACK)
+}
+
+static AHB_44053_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44053")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44053-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44053-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44053", "44053", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44053-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44053-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E02']", |q| matches!(q, "E02"), "44053", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44053-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44053-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44053", "44053", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44053-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44053-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44053", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44053-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44053-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44053", "44053", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44053-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44053-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44053", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44053-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44053-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44053", "44053", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44053-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44053-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44053", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44053-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44053-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44053", "44053", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44053-LOC-M", |segs, issues| {
+                ahb_check_mandatory(segs, "LOC", "AHB-44053-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 44053", "44053", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44053-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44053-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44053", "44053", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44053-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44053-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44053", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44053-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44053-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44053-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44053", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44053-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44053-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44053-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44053", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44053_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44053_PACK)
+}
+
+static AHB_44168_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44168")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44168-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44168-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44168", "44168", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44168-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44168-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E01', 'Z40']", |q| matches!(q, "E01" | "Z40"), "44168", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44168-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44168-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44168", "44168", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44168-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44168-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44168", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44168-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44168-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44168", "44168", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44168-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44168-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44168", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44168-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44168-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44168", "44168", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44168-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44168-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44168", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44168-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44168-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44168", "44168", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44168-LOC-M", |segs, issues| {
+                ahb_check_mandatory(segs, "LOC", "AHB-44168-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 44168", "44168", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44168-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44168-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44168", "44168", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44168-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44168-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44168", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44168-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44168-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44168-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44168", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44168-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44168-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44168-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44168", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44168_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44168_PACK)
+}
+
+static AHB_44169_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44169")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44169-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44169-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44169", "44169", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44169-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44169-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E01', 'Z40']", |q| matches!(q, "E01" | "Z40"), "44169", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44169-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44169-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44169", "44169", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44169-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44169-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44169", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44169-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44169-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44169", "44169", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44169-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44169-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44169", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44169-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44169-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44169", "44169", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44169-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44169-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44169", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44169-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44169-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44169", "44169", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44169-LOC-M", |segs, issues| {
+                ahb_check_mandatory(segs, "LOC", "AHB-44169-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 44169", "44169", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44169-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44169-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44169", "44169", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44169-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44169-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44169", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44169-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44169-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44169-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44169", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44169-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44169-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44169-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44169", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44169_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44169_PACK)
+}
+
+static AHB_44170_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-G1.2-44170")
+            .for_message_type("UTILMD")
+            .for_release("G1.2")
+            .with_named_stateless_rule_fn("AHB-44170-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-44170-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 44170", "44170", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44170-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-44170-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E01', 'Z40']", |q| matches!(q, "E01" | "Z40"), "44170", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44170-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-44170-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 44170", "44170", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44170-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-44170-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "44170", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44170-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-44170-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 44170", "44170", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44170-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-44170-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44170", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44170-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-44170-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44170", "44170", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44170-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-44170-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44170", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44170-STS-M", |segs, issues| {
+                ahb_check_mandatory(segs, "STS", "AHB-44170-STS-M", "mandatory segment STS is missing for Pruefidentifikator 44170", "44170", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44170-LOC-M", |segs, issues| {
+                ahb_check_mandatory(segs, "LOC", "AHB-44170-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 44170", "44170", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44170-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-44170-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44170", "44170", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-44170-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-44170-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44170", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-44170-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44170-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44170-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44170", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44170-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44170-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44170-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44170", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_44170_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_44170_PACK)
 }
 
 static AHB_44555_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
@@ -1011,6 +2140,22 @@ static AHB_44555_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
             .with_named_stateless_rule_fn("AHB-44555-RFF-1153-Q", |segs, issues| {
                 ahb_check_qualifier(segs, "RFF", "AHB-44555-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "44555", issues);
             })
+            .require_segment_in_group("SG2", "NAD", "AHB-44555-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-44555-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-44555-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "44555", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-44555-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-44555-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-44555-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "44555", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
             .with_max_issues_per_rule(50)
         )
 });
@@ -1048,6 +2193,51 @@ static AHB_ALL_PACK_UTILMD_G1_2: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(
         .merge_with_override(ahb_44018_pack().as_ref().clone())
         .expect("AHB union pack merge_with_override failed");
     let pack = pack
+        .merge_with_override(ahb_44022_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44023_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44024_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44039_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44040_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44041_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44042_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44043_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44044_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44051_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44052_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44053_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44168_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44169_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_44170_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
         .merge_with_override(ahb_44555_pack().as_ref().clone())
         .expect("AHB union pack merge_with_override failed");
     Arc::new(pack)
@@ -1063,6 +2253,21 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             Some(44006) => ahb_44006_pack(),
             Some(44017) => ahb_44017_pack(),
             Some(44018) => ahb_44018_pack(),
+            Some(44022) => ahb_44022_pack(),
+            Some(44023) => ahb_44023_pack(),
+            Some(44024) => ahb_44024_pack(),
+            Some(44039) => ahb_44039_pack(),
+            Some(44040) => ahb_44040_pack(),
+            Some(44041) => ahb_44041_pack(),
+            Some(44042) => ahb_44042_pack(),
+            Some(44043) => ahb_44043_pack(),
+            Some(44044) => ahb_44044_pack(),
+            Some(44051) => ahb_44051_pack(),
+            Some(44052) => ahb_44052_pack(),
+            Some(44053) => ahb_44053_pack(),
+            Some(44168) => ahb_44168_pack(),
+            Some(44169) => ahb_44169_pack(),
+            Some(44170) => ahb_44170_pack(),
             Some(44555) => ahb_44555_pack(),
             None => Arc::clone(&AHB_ALL_PACK_UTILMD_G1_2),
             Some(_unknown) => Arc::new(ProfileRulePack::new("unknown-pid")

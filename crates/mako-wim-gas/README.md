@@ -2,8 +2,6 @@
 
 **WiM Gas — Wechselprozesse im Messwesen Gas**
 
-> **This crate is a name reservation. Implementation is pending.**
-
 Process engine workflows for the German gas metering-point operator change
 processes. Governed by the BDEW WiM Gas specification and the BNetzA ruling
 **BK7-24-01-009** ("GeLi Gas 3.0", same umbrella ruling as GeLi Gas supplier
@@ -20,7 +18,7 @@ Both live under BK7-24-01-009 but cover entirely different processes:
 |---|---|---|
 | Scope | Supplier switching (Lieferbeginn/-ende) | MSB change (Anmeldung/Kündigung gMSB) |
 | Parties | LFN ↔ GNB | MSBN / MSBA ↔ NB / gMSB |
-| EDIFACT PIDs | 44001–44018, 44555 | 44022–44053, 44168–44170 |
+| EDIFACT PIDs | 44001–44018, 44022–44024, 44555 | 44039–44053, 44168–44170 |
 | APERAK Frist | 10 Werktage | 10 Werktage |
 
 ### WiM Gas vs. WiM Strom
@@ -38,11 +36,10 @@ Both live under BK7-24-01-009 but cover entirely different processes:
 
 | PID range | Process | Status |
 |---|---|---|
-| 44022–44024 | Kündigung MSB Gas (NB → MSBA) | ✗ Not registered — placeholder |
-| 44039–44041 | Anmeldung MSB Gas (MSBN → NB) | ✗ Not registered — placeholder |
-| 44042–44044 | Ende MSB Gas (NB → MSBN) | ✗ Not registered — placeholder |
-| 44051–44053 | Vorläufige Abmeldung / Ende MSB Gas (NB → MSBA) | ✗ Not registered — placeholder |
-| 44168–44170 | Verpflichtungsanfrage (NB → gMSB) | ✗ Not registered — placeholder |
+| 44039–44041 | Kündigung MSB Gas (Anfrage / Bestätigung / Ablehnung) | ✅ Implemented (`WimGasKuendigungWorkflow`) |
+| 44042–44044 | Anmeldung neuer MSB Gas (MSBN ↔ NB) | ✅ Implemented (`WimGasAnmeldungWorkflow`) |
+| 44051–44053 | Ende MSB Gas / Vorläufige Abmeldung (NB ↔ MSBA) | ✅ Implemented (`WimGasAnmeldungWorkflow`) |
+| 44168–44170 | Verpflichtungsanfrage (NB → gMSB) | ✅ Implemented (`WimGasVerpflichtungsanfrageWorkflow`) |
 
 ## EDIFACT Format Versions
 

@@ -32,7 +32,7 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 | 55007–55010 | (removed in LFW24 — not in AHB S2.x)           | —           | ❌ Removed |
 | 55017 | Kündigung Lieferbeginn                                | LFN → LFA   | ✅ Implemented |
 | 55018 | Bestätigung Kündigung Lieferbeginn                    | LFA → LFN   | ↩ Derived from 55017 always |
-| 55555 | Anweisung Sperrung                                    | NB → LFN    | ✅ Implemented |
+| 55555 | Anfrage Daten der individuellen Bestellung            | LFN → NB    | ✅ Implemented (GPKE Teil 4, BK6-24-174) |
 | 56001 | Einspeisung Anmeldung (ex-MPES, BK6-22-024)           | LFE → NB    | ✅ AHB validated (fv20250606+) |
 | 56002 | Einspeisung Abmeldung / Kündigung (ex-MPES, BK6-22-024)| LFE → NB   | ✅ AHB validated (fv20250606+) |
 | 56003 | Einspeisung Bestätigung (ex-MPES, BK6-22-024)         | NB → LFE    | ✅ AHB validated (fv20250606+) |
@@ -84,8 +84,8 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 | Rust module         | Contents                                                |
 |---------------------|---------------------------------------------------------|
 | `wechselprozesse`   | PIDs 55001–55002, 55017, 56001–56004 (UTILMD supplier-switch + feed-in) |
-| `sperrung`          | PID 55555 (Anweisung Sperrung, NB → LFN)               |
 | `lf_anmeldung`      | PIDs 55003–55006, 55018 (LF-role: receive NB ANTWORT)   |
+| `anfrage_bestellung`| PID 55555 (Anfrage Daten der individuellen Bestellung, LFN → NB, GPKE Teil 4) |
 | `abrechnung`        | PIDs 31001–31008 (INVOIC Netznutzungsabrechnung)        |
 | `konfiguration`     | PIDs 17134/17135 (ORDERS outbound) + 19001/19002 (ORDRSP inbound) — GPKE Teil 4 |
 

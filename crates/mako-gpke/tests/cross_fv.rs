@@ -300,7 +300,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
     // The LFN process receives HandleAntwort — this is the cross-FV routing step.
     // Under ForwardCompatible policy, the process accepts the response regardless
     // of which FV window the response was encoded in.
-    let accepted = matches!(antwort_pid.as_u32(), 55003 | 55005 | 55018);
+    let accepted = matches!(antwort_pid.as_u32(), 55003 | 55005 | 55017);
     let reason = utilmd_antwort
         .transactions()
         .first()

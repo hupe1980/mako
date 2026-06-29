@@ -2,10 +2,13 @@
 //!
 //! Usage:
 //!   cargo xtask release-diff --message-type UTILMD --from fv20251001 --to fv20261001
+//!   cargo xtask release-diff --message-type UTILMD --from FV2025-10-01 --to FV2026-10-01
 //!   cargo xtask release-diff --message-type UTILMD --from 5.5.3a --to 5.5.4a
 //!
 //! The `--from` and `--to` arguments accept either profile folder names
-//! (e.g. `fv20251001`) or wire release codes (e.g. `5.5.3a`).  When a wire
+//! (e.g. `fv20251001`) or the `FV<YYYY>-<MM>-<DD>` canonical format version key
+//! (e.g. `FV2025-10-01`, which is normalised to `fv20251001` automatically),
+//! or wire release codes (e.g. `5.5.3a`).  When a wire
 //! release code is given, the most-recently-published folder whose `mig.json`
 //! carries that release code is selected automatically.  If the wire code is
 //! ambiguous (two folders share the same release code), a warning is printed and
@@ -19,13 +22,19 @@ use serde_json::Value;
 
 /// Resolve a `--from` / `--to` argument to a profile folder name.
 ///
-/// Accepts either a folder name (`fv20251001`) or a wire release code
-/// (`5.5.3a`).  For wire codes, scans the type directory for `mig.json` files
-/// whose `"release"` field matches the code and returns the folder with the
-/// latest `"valid_from"` date (or lexicographically last folder name as
-/// tie-breaker).  Returns `None` when no match is found.
+/// Accepts either a profile folder name (`fv20251001`), the canonical format
+/// version key (`FV2025-10-01` — dashes stripped and lowercased automatically),
+/// or a wire release code (`5.5.3a`).  For wire codes, scans the type
+/// directory for `mig.json` files whose `"release"` field matches the code and
+/// returns the folder with the latest `"valid_from"` date (or
+/// lexicographically last folder name as tie-breaker).  Returns `None` when no
+/// match is found.
 fn resolve_release_arg(profiles_dir: &str, msg_type: &str, arg: &str) -> Option<String> {
     let type_dir = format!("{profiles_dir}/{msg_type}");
+
+    // Normalise `FV2025-10-01` → `fv20251001` so both spellings work.
+    let normalised: String = arg.to_lowercase().replace('-', "");
+    let arg = normalised.as_str();
 
     // Fast path: if the argument is already a folder name, validate it exists.
     let direct = format!("{type_dir}/{arg}");

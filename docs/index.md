@@ -164,7 +164,7 @@ permalink: /
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.2", features = ["utilmd", "mscons", "aperak"] }
+edi-energy = { version = "0.3", features = ["utilmd", "mscons", "aperak"] }
 ```
 
 ```rust
@@ -179,7 +179,7 @@ println!("PID {}", msg.detect_pruefidentifikator()?.as_u32()); // → 55001
 
 ```toml
 [dependencies]
-mako-engine = { version = "0.2", features = ["testing"] }
+mako-engine = { version = "0.3", features = ["testing"] }
 mako-gpke   = "0.2"
 ```
 
