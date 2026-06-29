@@ -15,20 +15,21 @@ communication (MaKo / BDEW EDI@Energy). Two distinct concerns:
 ```
 crates/edi-energy/        EDIFACT parse/validate/schema — stateless library
 crates/mako-engine/       Event-sourced runtime (EventStore, Workflow, Process, …)
-crates/mako-gpke/         GPKE domain workflows — UTILMD supplier-switch/Sperrung (55001–55002, 55017, 55555, 56001–56004) + INVOIC billing (31001–31008) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002)
-crates/mako-wim/          WiM domain workflows (PIDs 11001–11099)
-crates/mako-geli-gas/     GeLi Gas domain workflows (PIDs 44001–44006, 44017–44018, 44555)
-crates/mako-mabis/        MABIS domain workflows (PID 13003 — Bilanzkreisabrechnung Strom)
-crates/mako-gabi-gas/     GaBi Gas domain workflows — Allokation, Nominierung, MMM Gas (placeholder)
-crates/dvgw-edi/          DVGW EDIFACT formats — ALLOCAT, NOMINT, NOMRES (placeholder)
-crates/mako-nbw/          Netzbetreiberwechsel — PARTIN bulk DSO handover (placeholder)
+crates/mako-gpke/         GPKE — UTILMD Strom (55001–55018, 55555, 56001–56004) + INVOIC (31001–31008) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002)
+crates/mako-wim/          WiM Strom — Gerätewechsel (11001–11003) + ORDERS Geräteübernahme + Stammdaten
+crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44006, 44017–44018, 44555)
+crates/mako-mabis/        MABIS — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB)
+crates/mako-wim-gas/      WiM Gas — UTILMD G (44022–44053) [placeholder]
+crates/mako-gabi-gas/     GaBi Gas — INVOIC (31010–31011) [placeholder]
+crates/dvgw-edi/          DVGW EDIFACT formats — ALLOCAT, NOMINT, NOMRES [placeholder]
+crates/mako-nbw/          Netzbetreiberwechsel — PARTIN bulk DSO handover [placeholder]
 crates/energy-api/        BDEW API-Webdienste Strom REST/WebSocket client+server
-crates/mako-as4/          AS4 transport (placeholder)
-crates/mako-redispatch/   Redispatch 2.0 (placeholder)
+crates/mako-as4/          AS4 transport [placeholder]
+crates/mako-redispatch/   Redispatch 2.0 [placeholder]
 crates/redispatch-xml/    Redispatch 2.0 XML/XSD format parsing
 services/makod/           Production daemon — assembles all modules
 xtask/                    Build/codegen/validation tasks
-docs/                     Architecture docs (builders.md, parsing.md, bnetza.md, …)
+docs/                     Architecture docs
 ```
 
 ---
@@ -36,43 +37,35 @@ docs/                     Architecture docs (builders.md, parsing.md, bnetza.md,
 ## Build and Test
 
 ```bash
-# Check all targets (the minimum gate before any commit):
+# Full CI gate — run before every commit:
+just ci
+
+# Individual gates:
 cargo check --all-targets --all-features
-
-# Run all tests:
 cargo test --all-features
-
-# Run tests for a single crate:
 cargo test -p mako-engine --all-features
-
-# Run a specific integration test:
 cargo test --test <name> --all-features
-
-# Build the production binary:
 cargo build -p makod --release --features slatedb
-
-# Lint:
 cargo clippy --all-targets --all-features -- -D warnings
-
-# Format:
 cargo fmt --all
-
-# Dependency audit (license + security):
 cargo deny check
 
-# xtask dev tasks:
-cargo xtask bump-version X.Y.Z # bump [workspace.package].version in root Cargo.toml
-cargo xtask codegen            # regenerate profile Rust code from YAML schemas
-cargo xtask validate-profiles  # validate all profiles against EDIFACT specs
-cargo xtask validate-pruefids  # validate Prüfidentifikatoren (AHB check)
-cargo xtask audit-ahb          # audit Application Handbooks
-cargo xtask check-release-coverage  # verify format-version coverage
-cargo xtask generate-fixtures  # regenerate EDIFACT test fixtures
-cargo xtask extract-pdf        # extract tables from BDEW PDFs (in docs/pdfs/)
-cargo xtask import-codelists   # import BDEW code lists
-cargo xtask import-xml-ahb     # import AHB rules from official BDEW XML (requires BDEW subscription)
-cargo xtask release-diff       # diff between format versions
+# xtask tasks:
+cargo xtask bump-version X.Y.Z       # bump [workspace.package].version
+cargo xtask codegen                   # regenerate profile Rust code from YAML
+cargo xtask validate-profiles         # validate all profiles against EDIFACT specs
+cargo xtask validate-pruefids         # validate Prüfidentifikatoren (AHB check)
+cargo xtask audit-ahb                 # audit Application Handbooks
+cargo xtask check-release-coverage    # verify format-version coverage
+cargo xtask generate-fixtures         # regenerate EDIFACT test fixtures
+cargo xtask extract-pdf               # extract tables from BDEW PDFs (docs/pdfs/)
+cargo xtask import-codelists          # import BDEW code lists
+cargo xtask import-xml-ahb            # import AHB rules from BDEW XML
+cargo xtask release-diff              # diff between format versions
 ```
+
+**`just ci` is the minimum gate before any commit.** It runs check + test + clippy
++ fmt-check + deny + codegen-check + validate-profiles-strict + validate-pruefids-strict.
 
 **MSRV: 1.88** — do not use language features or stdlib APIs introduced after 1.88.
 
@@ -81,8 +74,21 @@ cargo xtask release-diff       # diff between format versions
 ## Toolchain and Edition
 
 - Rust edition: **2024** (all crates)
-- Toolchain: **stable** (see `rust-toolchain.toml`)
+- Toolchain: **1.88** (pinned in `rust-toolchain.toml` — do not change to `stable`)
 - Components: `rustfmt`, `clippy`
+
+---
+
+## Active Format Versions
+
+| Format version | Valid period | Status |
+|---|---|---|
+| `FV2025-10-01` | 2025-10-01 through 2026-09-30 | **Current production** |
+| `FV2026-10-01` | from 2026-10-01 | **Next release — profiles must exist** |
+
+Both coexist in the same engine instance simultaneously. A process started under
+`FV2025-10-01` continues under those rules until it completes, even after the
+`FV2026-10-01` cutover.
 
 ---
 
@@ -92,10 +98,11 @@ cargo xtask release-diff       # diff between format versions
 - All public APIs return `Result<_, EngineError>` or `Result<_, WorkflowError>`.
 - Use `thiserror` for error type definitions. Do not use `anyhow` inside library crates.
 - `anyhow` is acceptable in `xtask` and `makod` (binary crates).
+- Every `Result`-returning function must be annotated `#[must_use]`.
 
 ### Async
 - All async code targets **Tokio** (version 1).
-- Use async-fn-in-trait (AFIT) — available on MSRV 1.85.
+- Use async-fn-in-trait (AFIT) — stabilised at Rust 1.75, available on MSRV 1.88.
 - Do not use `tokio::runtime::Handle::try_current()` as a runtime-detection backdoor.
 
 ### Types
@@ -107,66 +114,83 @@ cargo xtask release-diff       # diff between format versions
 ### Workflow determinism
 - `Workflow::handle` and `Workflow::apply` must be **pure functions**: no I/O,
   no clock access, no global state mutation.
-- All parsing, validation, and external calls happen before the command is constructed,
-  at the transport boundary.
+- All parsing, validation, and external calls happen before the command is
+  constructed, at the transport boundary.
 
 ### Feature flags
-- `slatedb` — opt in at the binary level only; never enable in library crate `[features]` defaults.
+- `slatedb` — opt in at the binary level only; never enable in library crate defaults.
 - `testing` — enables `InMemoryXxx`/`NoopXxx` stores; must never appear in production builds.
 - `tracing` — optional instrumentation; off by default.
 
 ### Versioning
 - Use **BDEW format versions** (`FV<YYYY>-<MM>-<DD>`) as version keys, not SemVer.
-- Always use `FormatVersion::parse(...)` for user-supplied or deserialized strings;
-  `FormatVersion::new(...)` is unchecked and only for known-valid compile-time literals.
+- Always use `FormatVersion::parse(...)` for user-supplied or deserialized strings.
+- `FormatVersion::new(...)` is unchecked — only for known-valid compile-time literals.
 
 ---
 
 ## Domain Rules — Do Not Get Wrong
 
+### PID ownership — authoritative table
+
+| PID range | Crate | Source |
+|---|---|---|
+| 55001–55018, 55555 | `mako-gpke` | BK6-24-174 |
+| 56001–56004 | `mako-gpke` (ex-MPES, absorbed per BK6-22-024, eff. 2025-06-06) | BK6-22-024 |
+| 11001–11003 | `mako-wim` | BK6-24-174 |
+| 13003 | `mako-mabis` | BK6-24-174 |
+| 44001–44006, 44017–44018, 44555 | `mako-geli-gas` | BK7-24-01-009 |
+| 44022–44053 | `mako-wim-gas` | BK7-24-01-009 |
+| 31001–31002, 31004–31008 | `mako-gpke` | BK6-24-174 |
+| 31003, 31009 | `mako-wim` (WiM-Rechnung / MSB-Rechnung) | BK6-24-174 |
+| 31010–31011 | `mako-gabi-gas` (GaBi Gas MMM INVOIC) | BK7 |
+| 17134–17135, 19001–19002 | `mako-gpke` (Konfiguration, BK6-22-024 Teil 4) | BK6-22-024 |
+
+**PIDs that do NOT exist — never register:**
+- 44007–44016: not defined in any GeLi Gas AHB
+- 56005–56010: former MPES PIDs, not in any current AHB
+- 13001: not defined in any MSCONS AHB
+- 11004–11099: reserved but not in current WiM AHB
+
 ### MPES is dissolved
-PIDs 56001–56004 (Einspeisestelle) were transferred from MPES into **GPKE** per BNetzA BK6-22-024 (LFW24),
-effective **2025-06-06**. Former PIDs 56005–56010 do not exist in any current AHB.
-There is no `mako-mpes` crate. All ex-MPES processes live in `mako-gpke`.
+PIDs 56001–56004 were transferred from MPES into **GPKE** per BK6-22-024 (LFW24),
+effective **2025-06-06**. There is no `mako-mpes` crate.
 
 ### GeLi Gas 3.0
-The gas supplier-switch process is governed by **BK7-24-01-009** ("GeLi Gas 3.0"),
-Beschluss 12.09.2025, abgeschlossen 24.09.2025. This supersedes BK7-19-001 and BK7-06-067.
-Scope: UTILMD G (PIDs 44001–44018, 44555) **only** — no INVOIC billing in GeLi Gas.
-Gas MMM billing (INVOIC PIDs 31010–31011) belongs to the GaBi Gas domain (`mako-gabi-gas`).
+Governed by **BK7-24-01-009** (Beschluss 12.09.2025). Supersedes BK7-19-001 and BK7-06-067.
+Scope: UTILMD G (PIDs 44001–44006, 44017–44018, 44555) **only**.
+No INVOIC billing in GeLi Gas — gas MMM billing (31010–31011) belongs to `mako-gabi-gas`.
 
-### MABIS vs. Messwesen PIDs
-Only PID **13003** is MABIS (Bilanzkreisabrechnung Strom, MSCONS Summenzeitreihen und
-Ausfallarbeitssummen, BKV↔ÜNB). PID 13001 does not exist in any MSCONS AHB version.
-PIDs 13002–13028 (excluding 13003) are **Messwerten-PIDs** (MSCONS meter data exchange)
-and do **not** belong to MABIS. Never register any PID other than 13003 under a
-`"mabis-billing"` workflow.
+### MABIS vs Messwesen
+Only PID **13003** is MABIS (Bilanzkreisabrechnung Strom, BKV↔ÜNB).
+PIDs 13002–13028 (excluding 13003) are Messwesen PIDs — do not register them under MABIS.
 
 ### APERAK Fristen — never mix these up
-| Process family | Deadline unit | Calculation |
-|---|---|---|
-| GPKE | **24 wall-clock hours** (BK6-22-024) | `fristen::add_hours(t, 24)` |
-| WiM | **5 Werktage** | `fristen::add_werktage(d, 5, BdewMaKo)` |
-| GeLi Gas | **10 Werktage** | `fristen::add_werktage(d, 10, BdewMaKo)` |
 
-**Saturday counts as a Werktag.** Sunday and public holidays do not. This is a common mistake.
+| Process | Deadline | Function | Source |
+|---|---|---|---|
+| GPKE | **24 wall-clock hours** | `fristen::add_hours(t, 24)` | BK6-22-024 §5 |
+| WiM | **5 Werktage** | `fristen::add_werktage(d, 5, BdewMaKo)` | BK6-24-174 |
+| GeLi Gas | **10 Werktage** | `fristen::add_werktage(d, 10, BdewMaKo)` | BK7-24-01-009 |
+
+**Saturday = Werktag.** Sunday and public holidays do not count.
+All deadline arithmetic uses **German local time (CET/CEST)**, not UTC.
+An off-by-one-hour error at DST transitions is a regulatory deadline violation.
 
 ### Format-version coexistence
-A process started under `FV2025-10-01` continues executing under those rules until it
-completes, even after the `FV2026-10-01` cutover. Both coexist in the same engine instance
-simultaneously. `WorkflowVersionPolicy::ForwardCompatible` is the correct default for all
-MaKo workflows — **do not default to `Pinned`**.
+`WorkflowVersionPolicy::ForwardCompatible` is the correct default for **all** MaKo
+workflows. Do not default to `Pinned`.
 
 ### Dual-write atomicity
 Events and outbox entries must be written in a single `WriteBatch` via
-`SlateDbStore::append_with_outbox`. Never write events first and outbox second — a crash
-between the two produces a lost APERAK.
+`AtomicAppend::append_with_outbox`. Never write events first and outbox second —
+a crash between the two produces a lost APERAK with no recovery path.
 
 ---
 
 ## Licenses
 
-Only these licenses are allowed (enforced by `cargo deny`):
+Only these SPDX identifiers are allowed (enforced by `cargo deny`):
 MIT, Apache-2.0, Apache-2.0 WITH LLVM-exception, BSD-2-Clause, BSD-3-Clause,
 ISC, Unicode-3.0, Zlib, CDLA-Permissive-2.0, MIT-0.
 
@@ -178,6 +202,7 @@ ISC, Unicode-3.0, Zlib, CDLA-Permissive-2.0, MIT-0.
 |---|---|
 | Process engine guide | [docs/engine.md](../docs/engine.md) |
 | `makod` operator guide | [docs/makod.md](../docs/makod.md) |
+| ERP integration (Command API, webhooks) | [docs/erp-integration.md](../docs/erp-integration.md) |
 | Parsing guide | [docs/parsing.md](../docs/parsing.md) |
 | Validation guide | [docs/validation.md](../docs/validation.md) |
 | Builder patterns | [docs/builders.md](../docs/builders.md) |
@@ -186,3 +211,4 @@ ISC, Unicode-3.0, Zlib, CDLA-Permissive-2.0, MIT-0.
 | API-Webdienste Strom | [docs/api-webdienste.md](../docs/api-webdienste.md) |
 | Release lifecycle | [docs/release-lifecycle.md](../docs/release-lifecycle.md) |
 | BNetzA regulatory reference | [docs/bnetza.md](../docs/bnetza.md) |
+| PID reference | [docs/pid-reference.md](../docs/pid-reference.md) |
