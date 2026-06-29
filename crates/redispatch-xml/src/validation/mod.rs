@@ -104,7 +104,7 @@ pub fn validate(doc: &Document) -> ValidationResult {
 /// Validate the structural integrity of a specific document without a
 /// [`Document`] enum wrapper.
 ///
-/// Convenience wrapper around [`structural::validate_raw`].
+/// Validates structural rules (presence of required fields, value ranges).
 pub fn validate_structural<T>(doc: &T) -> Result<(), RedispatchXmlError>
 where
     T: structural::ValidateStructural,

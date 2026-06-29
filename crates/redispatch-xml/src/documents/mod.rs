@@ -20,7 +20,7 @@ pub use unavailability::UnavailabilityMarketDocument;
 
 /// The set of all supported Redispatch 2.0 document types.
 ///
-/// Used by [`crate::DocumentType::detect`] to identify the type of a document
+/// Used by [`crate::detect`] to identify the type of a document
 /// from its root element name, and as the variant discriminant for
 /// [`crate::Document`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
