@@ -1325,7 +1325,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                 .unwrap_or_else(|| cert_pem.clone());
             SessionContextBuilder::new(&session_id, &party_id)
                 .with_signing_cert_pem(cert_pem.clone())
-                .with_signing_key_pem(key_pem.expose_secret().clone())
+                .with_signing_key_pem(key_pem.expose_secret())
                 .with_trust_anchor_pem(trust_anchor)
                 .build()
                 .map_err(|e| anyhow::anyhow!("AS4 SessionContext build failed: {e}"))?
