@@ -802,10 +802,8 @@ impl Projection for GeraeteubernahmeProjection {
                 }
             }
             GeraeteubernahmeEvent::BestellungOrdrspDispatched { positive, .. } => {
-                if !positive {
-                    if let GeraeteubernahmeRecord::Active { status, .. } = record {
-                        *status = "Abgelehnt";
-                    }
+                if !positive && let GeraeteubernahmeRecord::Active { status, .. } = record {
+                    *status = "Abgelehnt";
                 }
             }
             GeraeteubernahmeEvent::Abgeschlossen { device_id } => {

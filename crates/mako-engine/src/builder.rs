@@ -1012,14 +1012,12 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
                         true
                     }
                 };
-                if should_cancel {
-                    if let Err(e) = self.store.cancel(id).await {
-                        tracing::error!(
-                            deadline_id = %id,
-                            error       = %e,
-                            "deadline scheduler: cancel failed; deadline may fire again",
-                        );
-                    }
+                if should_cancel && let Err(e) = self.store.cancel(id).await {
+                    tracing::error!(
+                        deadline_id = %id,
+                        error       = %e,
+                        "deadline scheduler: cancel failed; deadline may fire again",
+                    );
                 }
             }
 

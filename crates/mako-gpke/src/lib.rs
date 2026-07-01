@@ -422,7 +422,10 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // and route to `wim-geraeteubernahme` — controlled via DeploymentRoles.
         if roles.contains(mako_engine::marktrolle::Marktrolle::Nb) {
             for &pid in ORDRSP_PIDS {
-                router.register(pid, "gpke-konfiguration");
+                // register_with_module enforces the documented guarantee: if both NB
+                // and nMSB roles are active simultaneously, build() panics before any
+                // message is processed instead of silently routing to the wrong workflow.
+                router.register_with_module(pid, "gpke-konfiguration", "gpke");
             }
         }
 

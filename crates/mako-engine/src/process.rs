@@ -1444,11 +1444,12 @@ mod tests {
             from_version: u32,
             mut payload: serde_json::Value,
         ) -> Result<serde_json::Value, EngineError> {
-            if event_type == "Tagged" && from_version == 1 {
-                if let Some(obj) = payload.as_object_mut() {
-                    obj.entry("label")
-                        .or_insert_with(|| serde_json::Value::String(String::new()));
-                }
+            if event_type == "Tagged"
+                && from_version == 1
+                && let Some(obj) = payload.as_object_mut()
+            {
+                obj.entry("label")
+                    .or_insert_with(|| serde_json::Value::String(String::new()));
             }
             Ok(payload)
         }

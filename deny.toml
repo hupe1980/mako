@@ -115,11 +115,6 @@ version = "0.6"
 reason  = "Companion to rand 0.8; three-way split (0.6/0.9/0.10)."
 
 [[bans.skip]]
-name    = "rand_chacha"
-version = "0.3"
-reason  = "Companion to rand 0.8 (phf_generator via time-tz, tungstenite); rand 0.9 pulls 0.9. Resolves when all deps align on rand 0.9+."
-
-[[bans.skip]]
 name    = "rand_core"
 version = "0.9"
 reason  = "Companion to rand 0.9; same root cause."
@@ -220,20 +215,6 @@ reason  = "Windows crate ecosystem version skew (slatedb 0.14.1 update added 0.5
 name    = "itertools"
 version = "0.14"
 reason  = "foyer-memory (via slatedb) depends on itertools 0.14.x while rest of workspace uses 0.15."
-
-# webpki-roots version split: tokio-tungstenite (energy-api WebSocket) depends on
-# webpki-roots 0.26; reqwest 0.13 (via object_store/slatedb) and hyper-rustls pull
-# webpki-roots 1.0. Resolve when tokio-tungstenite updates to rustls 0.23+.
-[[bans.skip]]
-name    = "webpki-roots"
-version = "0.26"
-reason  = "tokio-tungstenite (energy-api) depends on webpki-roots 0.26; reqwest 0.13/slatedb pull 1.0."
-
-# miette 7.x pulls both unicode-width 0.1.14 (direct) and 0.2.2 (via textwrap).
-[[bans.skip]]
-name    = "unicode-width"
-version = "0.1"
-reason  = "miette 7.x depends on both unicode-width 0.1 (direct) and 0.2 (via textwrap 0.16)."
 
 [advisories]
 ignore = [

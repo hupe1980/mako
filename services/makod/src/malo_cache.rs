@@ -256,25 +256,25 @@ impl MaloRegistry for SlateDbMaloCache {
         params: &IdentificationParameter,
     ) -> Result<Option<MaloIdentResultPositive>, energy_api::Error> {
         // 1. Try direct lookup by MaLo-ID (most common path).
-        if let Some(id_params) = &params.identification_parameter_id {
-            if let Some(malo_id) = &id_params.malo_id {
-                let suffix = malo_suffix(tenant_id, &malo_id.0);
-                match self.store.kv_get(MC, &suffix).await {
-                    Ok(Some(bytes)) => {
-                        return serde_json::from_slice(&bytes).map(Some).map_err(|e| {
-                            energy_api::Error::Http {
-                                status: 500,
-                                body: format!("MaLo cache deserialization error: {e}"),
-                            }
-                        });
-                    }
-                    Ok(None) => return Ok(None),
-                    Err(e) => {
-                        return Err(energy_api::Error::Http {
+        if let Some(id_params) = &params.identification_parameter_id
+            && let Some(malo_id) = &id_params.malo_id
+        {
+            let suffix = malo_suffix(tenant_id, &malo_id.0);
+            match self.store.kv_get(MC, &suffix).await {
+                Ok(Some(bytes)) => {
+                    return serde_json::from_slice(&bytes).map(Some).map_err(|e| {
+                        energy_api::Error::Http {
                             status: 500,
-                            body: format!("MaLo cache storage error: {e}"),
-                        });
-                    }
+                            body: format!("MaLo cache deserialization error: {e}"),
+                        }
+                    });
+                }
+                Ok(None) => return Ok(None),
+                Err(e) => {
+                    return Err(energy_api::Error::Http {
+                        status: 500,
+                        body: format!("MaLo cache storage error: {e}"),
+                    });
                 }
             }
         }

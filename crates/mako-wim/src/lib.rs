@@ -249,7 +249,11 @@ impl mako_engine::builder::EngineModule for WimModule {
         //   → response to ORDERS 17009 (Ankündigung Gerätewechselabsicht, §14a EnWG)
         if !roles.is_all() && roles.contains(mako_engine::marktrolle::Marktrolle::Nmsb) {
             for pid in [19_001_u32, 19_002, 19_015, 19_016] {
-                router.register(pid, "wim-geraeteubernahme");
+                // register_with_module enforces the documented guarantee: if both NB
+                // (GPKE Konfiguration) and nMSB (WiM Geräteübernahme) roles are active
+                // simultaneously, build() panics instead of silently overwriting the
+                // conflicting registration.
+                router.register_with_module(pid, "wim-geraeteubernahme", "wim");
             }
         }
 

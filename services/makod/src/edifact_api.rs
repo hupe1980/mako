@@ -396,26 +396,25 @@ async fn ingest_edifact(
                 // Phase 2: execute workflow command if dispatcher is wired.
                 if let (Some(pid_val), Some(wf_name), Some(dispatcher)) =
                     (pid, workflow.as_deref(), state.dispatcher.as_deref())
+                    && matches!(status, MessageStatus::Routed)
                 {
-                    if matches!(status, MessageStatus::Routed) {
-                        match dispatcher.dispatch(&msg, wf_name, pid_val).await {
-                            Ok(outcome) => {
-                                tracing::debug!(
-                                    workflow = %wf_name,
-                                    pid      = pid_val,
-                                    outcome  = ?outcome,
-                                    "EDIFACT REST ingest: Phase 2 command dispatched",
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    workflow = %wf_name,
-                                    pid      = pid_val,
-                                    error    = %e,
-                                    "EDIFACT REST ingest: Phase 2 command dispatch failed \
-                                     (non-fatal — message was routed)",
-                                );
-                            }
+                    match dispatcher.dispatch(&msg, wf_name, pid_val).await {
+                        Ok(outcome) => {
+                            tracing::debug!(
+                                workflow = %wf_name,
+                                pid      = pid_val,
+                                outcome  = ?outcome,
+                                "EDIFACT REST ingest: Phase 2 command dispatched",
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                workflow = %wf_name,
+                                pid      = pid_val,
+                                error    = %e,
+                                "EDIFACT REST ingest: Phase 2 command dispatch failed \
+                                 (non-fatal — message was routed)",
+                            );
                         }
                     }
                 }

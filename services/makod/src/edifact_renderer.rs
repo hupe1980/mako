@@ -303,10 +303,10 @@ fn render_aperak(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
         .receiver(receiver)
         .message_ref(message_ref);
 
-    if let Some(pv) = pid {
-        if let Ok(ep) = Pruefidentifikator::new(pv) {
-            builder = builder.pruefidentifikator(ep);
-        }
+    if let Some(pv) = pid
+        && let Ok(ep) = Pruefidentifikator::new(pv)
+    {
+        builder = builder.pruefidentifikator(ep);
     }
     if let Some(r) = acw_ref {
         builder = builder.acw_ref(r);

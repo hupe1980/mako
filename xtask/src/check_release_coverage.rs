@@ -43,11 +43,13 @@ struct ProfileSpan {
     pid_exempt: bool,
 }
 
-/// Message types that are exempt from coverage checks because they do not
-/// follow the standard BDEW annual release cycle:
-/// - `CONTRL`: protocol-level acknowledgement, not domain-versioned
-/// - `INSRPT`: follows an irregular release schedule
-const EXEMPT_TYPES: &[&str] = &["CONTRL", "INSRPT"];
+// No hardcoded EXEMPT_TYPES: exemption is handled through the `pid_exempt` field
+// in each profile's mig.json (e.g. CONTRL, which is a protocol-level acknowledgement
+// format whose profiles all carry `"pid_exempt": true`).
+//
+// Extraordinary publications (e.g. INSRPT 1.1a fv20260101, CONTRL 2.0b fv20260101)
+// are handled by their `valid_from` / `valid_until` dates exactly like annual profiles —
+// they are NOT exempt from date-coverage verification.
 
 pub fn check_release_coverage() {
     let args: Vec<String> = std::env::args().skip(2).collect();
@@ -144,13 +146,10 @@ pub fn check_release_coverage() {
     let mut skip_count = 0u32;
 
     for (msg_type, spans) in &by_type {
-        // Skip protocol-level types that do not follow the BDEW annual cycle.
-        if EXEMPT_TYPES.contains(&msg_type.as_str()) {
-            skip_count += 1;
-            continue;
-        }
-        // Skip if all profiles for this type are pid_exempt.
+        // Skip if all profiles for this type are pid_exempt
+        // (e.g. CONTRL — protocol-level acknowledgement, not domain-FV-tracked).
         if spans.iter().all(|s| s.pid_exempt) {
+            println!("  -  {msg_type}: skipped (all profiles pid_exempt — protocol-level format)");
             skip_count += 1;
             continue;
         }
@@ -201,7 +200,7 @@ pub fn check_release_coverage() {
 
     println!();
     println!(
-        "Summary: {ok_count} covered, {} gap(s), {skip_count} skipped",
+        "Summary: {ok_count} covered, {} gap(s), {skip_count} skipped (pid_exempt)",
         errors.len()
     );
 

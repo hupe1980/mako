@@ -190,14 +190,15 @@ impl PidRouter {
         module: &str,
     ) {
         let wf = workflow_name.into();
-        if let Some(existing_wf) = self.table.get(&pid) {
-            if *existing_wf != wf {
-                let existing_mod = self
-                    .registered_by
-                    .get(&pid)
-                    .map_or("<unknown>", Box::as_ref);
-                panic!(
-                    "PID {pid} routing conflict:\n  \
+        if let Some(existing_wf) = self.table.get(&pid)
+            && *existing_wf != wf
+        {
+            let existing_mod = self
+                .registered_by
+                .get(&pid)
+                .map_or("<unknown>", Box::as_ref);
+            panic!(
+                "PID {pid} routing conflict:\n  \
                      module '{module}' tried to register PID {pid} → '{wf}'\n  \
                      but it was already registered → '{existing_wf}' by module '{existing_mod}'\n  \
                      Hint: use DeploymentRoles to prevent conflicting modules from \
@@ -205,8 +206,7 @@ impl PidRouter {
                      gpke-konfiguration for NB role and wim-geraeteubernahme for nMSB role).\n  \
                      Set EngineBuilder::with_deployment_roles(DeploymentRoles::nb()) to keep \
                      only the NB-role registration."
-                );
-            }
+            );
         }
         self.table.insert(pid, wf);
         self.registered_by.insert(pid, module.into());

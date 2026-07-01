@@ -396,7 +396,7 @@ ack_forward_workflow!(
 );
 
 ack_forward_workflow!(
-    /// Kaskade workflow — emergency measures per § 13 Abs. 2 EnWG.
+    /// Kaskade workflow — emergency measures per § 13 Abs. 2 `EnWG`.
     ///
     /// ÜNB → VNB → ANB. Receiver acknowledges within 6h (BK6-20-059 §4.3).
     /// Only active for `Marktrolle::Nb` and `Marktrolle::Unb` deployments.

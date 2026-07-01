@@ -1816,27 +1816,27 @@ fn apply_config_file(
 
     // ── Logging ───────────────────────────────────────────────────────────────
     if let Some(logging) = cfg.logging {
-        if is_default("log_level") {
-            if let Some(s) = logging.level {
-                cli.log_level = LogLevel::from_str(&s, true)
-                    .map_err(|e| anyhow::anyhow!("config: logging.level: {e}"))?;
-            }
+        if is_default("log_level")
+            && let Some(s) = logging.level
+        {
+            cli.log_level = LogLevel::from_str(&s, true)
+                .map_err(|e| anyhow::anyhow!("config: logging.level: {e}"))?;
         }
-        if is_default("log_format") {
-            if let Some(s) = logging.format {
-                cli.log_format = LogFormat::from_str(&s, true)
-                    .map_err(|e| anyhow::anyhow!("config: logging.format: {e}"))?;
-            }
+        if is_default("log_format")
+            && let Some(s) = logging.format
+        {
+            cli.log_format = LogFormat::from_str(&s, true)
+                .map_err(|e| anyhow::anyhow!("config: logging.format: {e}"))?;
         }
     }
 
     // ── Storage ───────────────────────────────────────────────────────────────
     if let Some(storage) = cfg.storage {
-        if is_default("object_store") {
-            if let Some(s) = storage.backend {
-                cli.object_store = ObjectStoreBackend::from_str(&s, true)
-                    .map_err(|e| anyhow::anyhow!("config: storage.backend: {e}"))?;
-            }
+        if is_default("object_store")
+            && let Some(s) = storage.backend
+        {
+            cli.object_store = ObjectStoreBackend::from_str(&s, true)
+                .map_err(|e| anyhow::anyhow!("config: storage.backend: {e}"))?;
         }
         if cli.data_dir.is_none() {
             cli.data_dir = storage.data_dir;
@@ -1851,20 +1851,20 @@ fn apply_config_file(
             if cli.s3_endpoint.is_none() {
                 cli.s3_endpoint = s3.endpoint;
             }
-            if is_default("s3_prefix") {
-                if let Some(p) = s3.prefix {
-                    cli.s3_prefix = p;
-                }
+            if is_default("s3_prefix")
+                && let Some(p) = s3.prefix
+            {
+                cli.s3_prefix = p;
             }
         }
         if let Some(gcs) = storage.gcs {
             if cli.gcs_bucket.is_none() {
                 cli.gcs_bucket = gcs.bucket;
             }
-            if is_default("gcs_prefix") {
-                if let Some(p) = gcs.prefix {
-                    cli.gcs_prefix = p;
-                }
+            if is_default("gcs_prefix")
+                && let Some(p) = gcs.prefix
+            {
+                cli.gcs_prefix = p;
             }
         }
         if let Some(azure) = storage.azure {
@@ -1874,10 +1874,10 @@ fn apply_config_file(
             if cli.azure_account.is_none() {
                 cli.azure_account = azure.account;
             }
-            if is_default("azure_prefix") {
-                if let Some(p) = azure.prefix {
-                    cli.azure_prefix = p;
-                }
+            if is_default("azure_prefix")
+                && let Some(p) = azure.prefix
+            {
+                cli.azure_prefix = p;
             }
         }
     }
@@ -1890,31 +1890,31 @@ fn apply_config_file(
         if cli.http_api_token.is_none() {
             cli.http_api_token = http.api_token.map(SecretString::new);
         }
-        if is_default("http_max_body_bytes") {
-            if let Some(n) = http.max_body_bytes {
-                cli.http_max_body_bytes = n;
-            }
+        if is_default("http_max_body_bytes")
+            && let Some(n) = http.max_body_bytes
+        {
+            cli.http_max_body_bytes = n;
         }
     }
 
     // ── API-Webdienste ────────────────────────────────────────────────────────
-    if let Some(wd) = cfg.webdienste {
-        if cli.api_webdienste_addr.is_none() {
-            cli.api_webdienste_addr = wd.addr;
-        }
+    if let Some(wd) = cfg.webdienste
+        && cli.api_webdienste_addr.is_none()
+    {
+        cli.api_webdienste_addr = wd.addr;
     }
 
     // ── Engine ────────────────────────────────────────────────────────────────
     if let Some(engine) = cfg.engine {
-        if is_default("tenant_id") {
-            if let Some(id) = engine.tenant_id {
-                cli.tenant_id = id;
-            }
+        if is_default("tenant_id")
+            && let Some(id) = engine.tenant_id
+        {
+            cli.tenant_id = id;
         }
-        if is_default("shutdown_timeout_secs") {
-            if let Some(secs) = engine.shutdown_timeout_secs {
-                cli.shutdown_timeout_secs = secs;
-            }
+        if is_default("shutdown_timeout_secs")
+            && let Some(secs) = engine.shutdown_timeout_secs
+        {
+            cli.shutdown_timeout_secs = secs;
         }
     }
 
@@ -1949,10 +1949,10 @@ fn apply_config_file(
         }
         // CLI partners take full precedence; config partners are used only
         // when the CLI list is empty (no --as4-partner flags were passed).
-        if cli.as4_partner.is_empty() {
-            if let Some(partners) = as4.partners {
-                cli.as4_partner = partners;
-            }
+        if cli.as4_partner.is_empty()
+            && let Some(partners) = as4.partners
+        {
+            cli.as4_partner = partners;
         }
     }
 

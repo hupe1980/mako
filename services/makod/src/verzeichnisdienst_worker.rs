@@ -101,16 +101,16 @@ impl VerzeichnisdienstLookup {
         let gln_code = MarktpartnerCode::new(gln);
 
         // 1. Check the partner store for a cached AW channel.
-        if let Some(record) = self.partner_store.get(self.tenant_id, &gln_code).await? {
-            if let Some(url_str) = record.api_webdienste_endpoint() {
-                match Url::parse(url_str) {
-                    Ok(url) => {
-                        debug!(gln, url = %url, "Verzeichnisdienst: cache hit in partner store");
-                        return Ok(Some(url));
-                    }
-                    Err(e) => {
-                        warn!(gln, url = url_str, error = %e, "Verzeichnisdienst: stored URL is invalid — re-fetching");
-                    }
+        if let Some(record) = self.partner_store.get(self.tenant_id, &gln_code).await?
+            && let Some(url_str) = record.api_webdienste_endpoint()
+        {
+            match Url::parse(url_str) {
+                Ok(url) => {
+                    debug!(gln, url = %url, "Verzeichnisdienst: cache hit in partner store");
+                    return Ok(Some(url));
+                }
+                Err(e) => {
+                    warn!(gln, url = url_str, error = %e, "Verzeichnisdienst: stored URL is invalid — re-fetching");
                 }
             }
         }
