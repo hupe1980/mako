@@ -115,6 +115,11 @@ version = "0.6"
 reason  = "Companion to rand 0.8; three-way split (0.6/0.9/0.10)."
 
 [[bans.skip]]
+name    = "rand_chacha"
+version = "0.3"
+reason  = "Companion to rand 0.8 (phf_generator via time-tz, tungstenite); rand 0.9 pulls 0.9. Resolves when all deps align on rand 0.9+."
+
+[[bans.skip]]
 name    = "rand_core"
 version = "0.9"
 reason  = "Companion to rand 0.9; same root cause."
