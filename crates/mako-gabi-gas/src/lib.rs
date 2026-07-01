@@ -6,7 +6,14 @@
 //! | Process | PIDs | Messages |
 //! |---|---|---|
 //! | Kapazitätsrechnung (capacity billing) | 31010 | INVOIC |
-//! | Rechnung sonstige Leistung (AWH) | 31011 | INVOIC |
+//!
+//! # Note on PID 31011
+//!
+//! PID 31011 (Rechnung sonstige Leistung / AWH Sperrprozesse Gas, VNB → LFN/LFA)
+//! belongs to the **GeLi Gas** domain (BK7-24-01-009) and is implemented in
+//! `mako-geli-gas` (`geli-gas-sperrprozesse-invoic` workflow). It is NOT a GaBi
+//! Gas (balancing/capacity) process; the direction NB → LF (not NB → BKV)
+//! confirms the GeLi Gas context.
 //!
 //! # Two-crate architecture for GaBi Gas
 //!
@@ -66,10 +73,11 @@ pub use invoic::{
 /// [`mako_engine::pid_router::PidRouter`] at engine startup:
 ///
 /// - PID 31010 → `"gabi-gas-invoic"` ([`GaBiGasInvoicWorkflow`], Kapazitätsrechnung)
-/// - PID 31011 → `"gabi-gas-invoic"` ([`GaBiGasInvoicWorkflow`], Rechnung sonstige Leistung)
 /// - PID 33001 → `"gabi-gas-invoic"` (REMADV Zahlungsavis, invoicer role)
 /// - PID 29001 → `"gabi-gas-invoic"` (COMDIS Ablehnung REMADV, payer role)
 ///
+/// Note: PID 31011 (Rechnung sonstige Leistung / AWH Sperrprozesse Gas) is
+/// handled by `mako-geli-gas` (`geli-gas-sperrprozesse-invoic`), not here.
 pub struct GaBiGasModule;
 
 impl mako_engine::builder::EngineModule for GaBiGasModule {
@@ -89,7 +97,7 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
 
         // REMADV 33001 — inbound payment confirmation (invoicer role).
         //
-        // After the FNB/VNB sends INVOIC 31010/31011, the BKV sends REMADV
+        // After the FNB/VNB sends INVOIC 31010, the BKV sends REMADV
         // 33001 (Zahlungsavis Bestätigung vollständige Zahlung) to confirm
         // payment. Without this registration, REMADV is silently dropped.
         //

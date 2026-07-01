@@ -80,9 +80,9 @@
 //!         ├── GpkeModule    — UTILMD PIDs 55001–55002, 55016 (`gpke-supplier-change`)
 //!         │                   + INVOIC PIDs 31001–31002, 31005–31008 (`gpke-abrechnung`)
 //!         ├── WimModule     — PIDs 55039, 55042, 55051, 55168 (WiM Strom, BK6-24-174)
-//!         ├── GeliGasModule — PIDs 44001–44021 (GeLi Gas; 44022–44024 registered by WimGasModule)
+//!         ├── GeliGasModule — PIDs 44001–44021 (GeLi Gas; 44022–44024 registered by WimGasModule) + PID 31011 (AWH Rechnung)
 //!         ├── WimGasModule      — PIDs 44022–44024, 44039–44053, 44168–44170, 31003, 31004 (WiM Gas MSB-Wechsel + INVOIC billing)
-//!         ├── GaBiGasModule     — PIDs 31010, 31011 (GaBi Gas INVOIC billing; BK7-14-020)
+//!         ├── GaBiGasModule     — PID 31010 (GaBi Gas Kapazitätsrechnung, BK7-14-020)
 //!         ├── MabisModule       — PID 13003 only (MABIS Bilanzkreisabrechnung Strom, MSCONS Summenzeitreihe)
 //!         └── RedispatchModule  — Redispatch 2.0 (§§ 13/13a/14 EnWG); XML routing + IFTSTA PIDs 21037/21038
 //!                                 Only registered when roles include Nb, Unb, or Anb.
@@ -1054,6 +1054,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
             &known,
         );
+        let geli_gas_sperrprozesse_invoic_check =
+            adapters::geli_gas_sperrprozesse_invoic_registry().validate_policy(
+                &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
+                &known,
+            );
+        let geli_gas_sperrung_nb_check = adapters::geli_gas_sperrung_nb_registry().validate_policy(
+            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
+            &known,
+        );
         let wim_insrpt_check = adapters::wim_insrpt_registry().validate_policy(
             &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
             &known,
@@ -1094,6 +1103,11 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             ("wim-gas-invoic", wim_gas_invoic_check),
             ("wim-gas-insrpt", wim_gas_insrpt_check),
             ("gabi-gas-invoic", gabi_gas_invoic_check),
+            (
+                "geli-gas-sperrprozesse-invoic",
+                geli_gas_sperrprozesse_invoic_check,
+            ),
+            ("geli-gas-sperrung-nb", geli_gas_sperrung_nb_check),
             // mabis-billing: IFTSTA adapter is registered (PIDs 21000–21007).
             // MSCONS PID 13003 billing commands are constructed by the
             // aggregation layer; this check validates IFTSTA coverage only.

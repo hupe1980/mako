@@ -17,10 +17,10 @@ crates/edi-energy/        EDIFACT parse/validate/schema — stateless library
 crates/mako-engine/       Event-sourced runtime (EventStore, Workflow, Process, …)
 crates/mako-gpke/         GPKE — UTILMD Strom (55001–55018, 55555) + INVOIC (31001, 31002, 31005–31008) + ORDERS Sperrung (17115–17117) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) + PARTIN Strom (37000–37006)
 crates/mako-wim/          WiM Strom — Messstellenbetrieb (55039, 55042, 55051, 55168) + ORDERS Geräteübernahme + Stammdaten + INSRPT (23001–23012)
-crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44021; 44022–44024 pending — listed as WiM Gas in BDEW PID overview) + ORDERS Sperrung Gas (17115–17117) + PARTIN Gas (37008–37014)
+crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44021; 44022–44024 pending) + ORDERS Sperrung Gas (17115–17117) + PARTIN Gas (37008–37014) + INVOIC 31011 (AWH Sperrprozesse Gas)
 crates/mako-mabis/        MABIS — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB)
-crates/mako-wim-gas/      WiM Gas — UTILMD G (44022–44024 pending + 44039–44053, 44168–44170) + INSRPT Gas-only (23005, 23009)
-crates/mako-gabi-gas/     GaBi Gas — INVOIC 31010 (Kapazitätsrechnung), 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) [placeholder]
+crates/mako-wim-gas/      WiM Gas — UTILMD G (44022–44024 + 44039–44053, 44168–44170) + INVOIC (31003, 31004) + INSRPT Gas-only (23005, 23009)
+crates/mako-gabi-gas/     GaBi Gas — INVOIC 31010 (Kapazitätsrechnung) [placeholder]
 crates/dvgw-edi/          DVGW EDIFACT formats — ALLOCAT, NOMINT, NOMRES [placeholder]
 crates/mako-nbw/          Netzbetreiberwechsel — PARTIN bulk DSO handover [placeholder]
 crates/energy-api/        BDEW API-Webdienste Strom REST/WebSocket client+server
@@ -139,7 +139,7 @@ Both coexist in the same engine instance simultaneously. A process started under
 | 55039, 55042, 55051, 55168 | `mako-wim` | BK6-24-174 |
 | 13003 | `mako-mabis` | BK6-24-174 |
 | 44001–44021 | `mako-geli-gas` | BK7-24-01-009 |
-| 44022–44024 | `mako-geli-gas` *(pending — BDEW PID overview lists these as WiM Gas; ownership to be resolved)* | BK7-24-01-009 |
+| 44022–44024 | `mako-wim-gas` `wim-gas-stornierung` (multi-domain: WiM Gas / GeLi Gas 2.0; GeLi Gas LFN/LFA role routing is a TODO) | BK7-24-01-009 |
 | 37000–37006 | `mako-gpke` (PARTIN Strom Kommunikationsdaten) | PARTIN AHB 1.0f |
 | 37008–37014 | `mako-geli-gas` (PARTIN Gas Kommunikationsdaten) | PARTIN AHB 1.0f |
 | 17115–17117 (Sperrung Strom, ORDERS) | `mako-gpke` | BK6-22-024 |
@@ -150,7 +150,7 @@ Both coexist in the same engine instance simultaneously. A process started under
 | 31003 | `mako-wim-gas` (WiM-Rechnung) | BK7 billing |
 | 31004 | `mako-wim-gas` (Stornorechnung WiM Gas) | BK7-24-01-009 |
 | 31010 | `mako-gabi-gas` (Kapazitätsrechnung, Kapazitätsabrechnung Gas) | BK7 |
-| 31011 | `mako-gabi-gas` (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) | BK7 |
+| 31011 | `mako-geli-gas` (Rechnung sonstige Leistung, AWH Sperrprozesse Gas, NB → LF) | BK7-24-01-009 |
 | 17134–17135 | `mako-gpke` (ORDERS Konfiguration, GPKE Teil 3) | BK6-22-024 |
 | 19001–19002 | `mako-wim` (ORDRSP Geräteübernahme, WiM Strom) **and** `mako-gpke` (ORDRSP Konfiguration, NB role) — multi-domain: both "WiM Gas" and "WiM Strom Teil 1" per BDEW PID 3.3/4.0 xlsx | BK6-24-174 |
 | 23001, 23003, 23004, 23008 | `mako-wim` `wim-insrpt` (Strom 5WT · combined) · `mako-wim-gas` `wim-gas-insrpt` (Gas-only 10WT) | BK6-24-174 / BK7-24-01-009 |
@@ -163,12 +163,13 @@ Both coexist in the same engine instance simultaneously. A process started under
 - 11004–11099: reserved but not in current WiM AHB
 
 **PIDs that exist but belong to WiM Gas, NOT GeLi Gas:**
-- 44022–44024: listed under WiM Gas in BDEW PID overview (PID 3.3 / PID 4.0) — currently implemented in `mako-geli-gas` pending ownership clarification
+- 44022–44024: currently routed to `mako-wim-gas` `wim-gas-stornierung` (BDEW PID 3.3/4.0 lists them as WiM Gas). GeLi Gas Stornierung role routing (LFN/LFA context) is a TODO in `mako-geli-gas`.
 
 ### GeLi Gas 3.0
 Governed by **BK7-24-01-009** (Beschluss 12.09.2025). Supersedes BK7-19-001 and BK7-06-067.
-Scope: UTILMD G (PIDs 44001–44021, with 44022–44024 pending ownership clarification) + ORDERS Sperrung Gas (17115–17117) + PARTIN Gas Kommunikationsdaten (37008–37014).
-No INVOIC billing in GeLi Gas. PIDs 31010 (Kapazitätsrechnung) and 31011 (Rechnung sonstige Leistung — AWH Sperrprozesse Gas) belong to `mako-gabi-gas` (BK7), not GeLi Gas. Per BDEW xlsx, 31011 also appears in GPKE Teil 2 context (multi-domain); routing in `mako-gabi-gas` is correct for Gas deployments — a Strom-only routing gap is a known TODO.
+Scope: UTILMD G (PIDs 44001–44021; PIDs 44022–44024 currently routed to `mako-wim-gas` `wim-gas-stornierung`, GeLi Gas LFN/LFA routing is a TODO) + ORDERS Sperrung Gas (17115–17117) + PARTIN Gas Kommunikationsdaten (37008–37014) + INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas, NB → LF).
+PID 31010 (Kapazitätsrechnung, NB → BKV) is a GaBi Gas (BK7-14-020) billing process and belongs to `mako-gabi-gas`.
+PID 31011 (Rechnung sonstige Leistung, NB → LF) is billed by the GNB/VNB to the LFN/LFA for performing AWH (abrechnungswürdige Handlungen) during the Sperrprozess — it is a GeLi Gas (BK7-24-01-009) billing, NOT GaBi Gas.
 
 ### MABIS vs Messwesen
 Only PID **13003** is MABIS (Bilanzkreisabrechnung Strom, BKV↔ÜNB).

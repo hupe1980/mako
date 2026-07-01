@@ -1,11 +1,14 @@
-//! Integration tests for mako-gabi-gas INVOIC billing (PIDs 31010, 31011).
+//! Integration tests for mako-gabi-gas INVOIC billing (PID 31010 only).
 //!
 //! Verifies:
-//! - PID routing: 31010 and 31011 both route to `"gabi-gas-invoic"`.
+//! - PID routing: 31010 routes to `"gabi-gas-invoic"`.
 //! - Happy path: INVOIC received → ValidationPassed → Settled.
 //! - Validation failure leads to `Rejected`.
 //! - Timeout fires `DeadlineExpired` and transitions to `Rejected`.
 //! - The settlement deadline label matches the exported constant.
+//!
+//! Note: PID 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) belongs
+//! to `mako-geli-gas`, not `mako-gabi-gas`.
 
 use mako_engine::{
     event_store::InMemoryEventStore,
@@ -71,21 +74,6 @@ fn pid_31010_routes_to_gabi_gas_invoic() {
     );
 }
 
-/// PID 31011 (Rechnung sonstige Leistung) routes to `"gabi-gas-invoic"`.
-#[test]
-fn pid_31011_routes_to_gabi_gas_invoic() {
-    use mako_engine::{builder::EngineModule, marktrolle::DeploymentRoles, pid_router::PidRouter};
-    use mako_gabi_gas::GaBiGasModule;
-
-    let mut router = PidRouter::new();
-    GaBiGasModule.register_pids_with_roles(&mut router, &DeploymentRoles::all());
-    assert_eq!(
-        router.route(31011),
-        Some("gabi-gas-invoic"),
-        "31011 must route to gabi-gas-invoic"
-    );
-}
-
 /// All `GABI_GAS_INVOIC_PIDS` route to `"gabi-gas-invoic"`.
 #[test]
 fn all_invoic_pids_route_to_gabi_gas_invoic() {
@@ -130,21 +118,6 @@ async fn happy_path_invoic_31010() {
     assert!(
         matches!(state, GaBiGasInvoicState::Settled(_)),
         "must be Settled after SettleInvoice, got: {state:?}"
-    );
-}
-
-/// PID 31011 also reaches ValidationPassed on success.
-#[tokio::test]
-async fn pid_31011_reaches_validation_passed() {
-    let process = make_process();
-    process
-        .execute(receive_invoic(31011, true))
-        .await
-        .expect("ReceiveInvoic 31011 should succeed");
-    let state = process.state().await.expect("state");
-    assert!(
-        matches!(state, GaBiGasInvoicState::ValidationPassed(_)),
-        "31011: must be ValidationPassed, got: {state:?}"
     );
 }
 

@@ -82,10 +82,12 @@
 #![deny(missing_docs)]
 
 pub mod datenabruf;
+pub mod invoic;
 pub mod lieferbeginn;
 pub mod mscons;
 pub mod partin;
 pub mod sperrung_lf;
+pub mod sperrung_nb;
 pub mod stornierung;
 
 pub use datenabruf::{
@@ -93,6 +95,14 @@ pub use datenabruf::{
     GeliGasDatanabrufWorkflow, ORDERS_ANFRAGE_PIDS as GELI_GAS_DATENABRUF_ORDERS_PIDS,
     ORDRSP_ABLEHNUNG_PIDS as GELI_GAS_DATENABRUF_ORDRSP_PIDS,
     WORKFLOW_NAME as GELI_GAS_DATENABRUF_WORKFLOW_NAME,
+};
+pub use invoic::{
+    GeliGasSperrprozesseInvoicCommand, GeliGasSperrprozesseInvoicData,
+    GeliGasSperrprozesseInvoicEvent, GeliGasSperrprozesseInvoicProjection,
+    GeliGasSperrprozesseInvoicRecord, GeliGasSperrprozesseInvoicState,
+    GeliGasSperrprozesseInvoicWorkflow,
+    SETTLEMENT_WINDOW_LABEL as SPERRPROZESSE_INVOIC_SETTLEMENT_LABEL, SPERRPROZESSE_INVOIC_PID,
+    WORKFLOW_NAME as GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME,
 };
 pub use lieferbeginn::{
     ANFRAGE_PIDS as LIEFERBEGINN_ANFRAGE_PIDS, ANTWORT_PIDS as LIEFERBEGINN_ANTWORT_PIDS,
@@ -119,6 +129,14 @@ pub use sperrung_lf::{
     SPERRUNG_ANFRAGE_PIDS as GELI_GAS_SPERRUNG_ANFRAGE_PIDS,
     WORKFLOW_NAME as GELI_GAS_SPERRUNG_LF_WORKFLOW_NAME,
 };
+pub use sperrung_nb::{
+    ANTWORT_WINDOW_LABEL as GELI_GAS_SPERRUNG_NB_ANTWORT_WINDOW_LABEL, GasSperrungNbCommand,
+    GasSperrungNbData, GasSperrungNbEvent, GasSperrungNbState, GeliGasSperrungNbWorkflow,
+    MSB_ANTWORT_PIDS as GELI_GAS_SPERRUNG_NB_MSB_ANTWORT_PIDS,
+    ORDCHG_STORNIERUNG_PIDS as GELI_GAS_SPERRUNG_NB_ORDCHG_PIDS,
+    SPERRUNG_PIDS as GELI_GAS_SPERRUNG_NB_PIDS,
+    WORKFLOW_NAME as GELI_GAS_SPERRUNG_NB_WORKFLOW_NAME,
+};
 pub use stornierung::{
     GeliGasStornierungCommand, GeliGasStornierungData, GeliGasStornierungEvent,
     GeliGasStornierungState, GeliGasStornierungWorkflow, STORNIERUNG_APERAK_WINDOW_LABEL,
@@ -129,11 +147,13 @@ pub use stornierung::{
 
 /// Engine module for the GeLi Gas process family.
 ///
-/// Registers all GeLi Gas UTILMD G `Prüfidentifikator` values into the
+/// Registers all GeLi Gas `Prüfidentifikator` values into the
 /// [`mako_engine::pid_router::PidRouter`] at engine startup:
 ///
 /// - PIDs 44001–44021 → `"geli-gas-supplier-change"`
 ///   (`GeliGasSupplierChangeWorkflow`)
+/// - PID 31011 → `"geli-gas-sperrprozesse-invoic"`
+///   (`GeliGasSperrprozesseInvoicWorkflow`, Rechnung sonstige Leistung AWH, VNB → LFN/LFA)
 ///
 /// Note: PIDs **44022–44024** are multi-domain (GeLi Gas 2.0 + WiM Gas per BDEW PID
 /// 3.3/4.0 xlsx) and currently routed by `WimGasModule` in `mako-wim-gas`.
@@ -157,7 +177,11 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
             mscons::WORKFLOW_NAME,
             datenabruf::WORKFLOW_NAME,
             sperrung_lf::WORKFLOW_NAME,
+            sperrung_nb::WORKFLOW_NAME,
             partin::WORKFLOW_NAME,
+            // PID 31011 — Rechnung sonstige Leistung / AWH Sperrprozesse Gas (VNB → LFN/LFA).
+            // GeLi Gas (BK7-24-01-009) billing for disconnection services; NOT GaBi Gas.
+            invoic::WORKFLOW_NAME,
         ]
     }
 
@@ -210,6 +234,29 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         for &pid in sperrung_lf::ORDRSP_STORNO_PIDS {
             router.register(pid, sperrung_lf::WORKFLOW_NAME);
         }
+
+        // Gas Sperrung / Entsperrung (GNB-side / NB-role) — inbound ORDERS 17115/17117
+        // from LF, plus ORDCHG 39000/39001 (Stornierung) and ORDRSP 19118/19119 from gMSB.
+        // PIDs 17115/17116/17117 are shared with GPKE Sperrung Strom (NB-role); process
+        // context is resolved by commodity (Gas vs. Strom) at runtime.
+        // Regulatory basis: BK7-24-01-009 (AWH Sperrprozesse Gas).
+        // APERAK Frist: 10 Werktage.
+        for &pid in sperrung_nb::SPERRUNG_PIDS {
+            router.register(pid, sperrung_nb::WORKFLOW_NAME);
+        }
+        for &pid in sperrung_nb::ORDCHG_STORNIERUNG_PIDS {
+            router.register(pid, sperrung_nb::WORKFLOW_NAME);
+        }
+        for &pid in sperrung_nb::MSB_ANTWORT_PIDS {
+            router.register(pid, sperrung_nb::WORKFLOW_NAME);
+        }
+
+        // INVOIC 31011 — Rechnung sonstige Leistung / AWH Sperrprozesse Gas (VNB → LFN/LFA).
+        // The GNB/VNB bills the LFN/LFA for performing disconnection/reconnection services
+        // (Abrechnungswürdige Handlungen from the gas Sperrprozess).
+        // Regulatory basis: BK7-24-01-009 (GeLi Gas 3.0, same ruling as Sperrprozesse).
+        // This is NOT GaBi Gas (BK7-14-020); direction is NB → LF, not NB → BKV.
+        router.register(invoic::SPERRPROZESSE_INVOIC_PID, invoic::WORKFLOW_NAME);
     }
 
     fn profile_requirements(&self) -> &'static [mako_engine::profile::ProfileRequirement] {

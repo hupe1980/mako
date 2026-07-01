@@ -193,13 +193,46 @@ reason  = "Windows crate ecosystem version skew."
 
 [[bans.skip]]
 name    = "windows-sys"
+version = "0.52"
+reason  = "Windows crate ecosystem version skew."
+
+[[bans.skip]]
+name    = "windows-sys"
 version = "0.59"
 reason  = "Windows crate ecosystem version skew."
+
+[[bans.skip]]
+name    = "windows-sys"
+version = "0.60"
+reason  = "Windows crate ecosystem version skew (slatedb 0.14.1 update added 0.60.2)."
+
+[[bans.skip]]
+name    = "windows-core"
+version = "0.61"
+reason  = "Windows crate ecosystem version skew (slatedb 0.14.1 update added 0.62.2)."
+
+[[bans.skip]]
+name    = "windows-result"
+version = "0.3"
+reason  = "Windows crate ecosystem version skew (slatedb 0.14.1 update added 0.4.1)."
+
+[[bans.skip]]
+name    = "windows-strings"
+version = "0.4"
+reason  = "Windows crate ecosystem version skew (slatedb 0.14.1 update added 0.5.1)."
 
 [[bans.skip]]
 name    = "itertools"
 version = "0.14"
 reason  = "foyer-memory (via slatedb) depends on itertools 0.14.x while rest of workspace uses 0.15."
+
+# webpki-roots version split: tokio-tungstenite (energy-api WebSocket) depends on
+# webpki-roots 0.26; reqwest 0.13 (via object_store/slatedb) and hyper-rustls pull
+# webpki-roots 1.0. Resolve when tokio-tungstenite updates to rustls 0.23+.
+[[bans.skip]]
+name    = "webpki-roots"
+version = "0.26"
+reason  = "tokio-tungstenite (energy-api) depends on webpki-roots 0.26; reqwest 0.13/slatedb pull 1.0."
 
 # unicode-width 0.1 skip removed: dependency tree now uses only 0.2.
 

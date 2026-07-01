@@ -24,12 +24,13 @@ Two distinct concerns live here:
 | `mako-engine` | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
 | `mako-gpke` | GPKE workflows — UTILMD Strom supplier-switch (55001–55018) + Anfrage Daten (55555, GPKE Teil 4) + Sperrung ORDERS (17115–17117) + INVOIC (31001–31002, 31005–31009) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) |
 | `mako-wim` | WiM Strom workflows — UTILMD (55039, 55042, 55051, 55168) + MSB-Rechnung INVOIC (31009) + ORDERS/ORDRSP (various) |
-| `mako-geli-gas` | GeLi Gas 3.0 workflows — UTILMD G supplier-switch Gas (44001–44021); PIDs 44022–44024 pending ownership clarification |
+| `mako-geli-gas` | GeLi Gas 3.0 workflows — UTILMD G supplier-switch Gas (44001–44021) + INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) |
 | `mako-mabis` | MABIS workflows — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB) |
-| `mako-gabi-gas` | GaBi Gas workflows — INVOIC (31010 Kapazitätsrechnung, 31011 AWH Sperrprozesse Gas); Allokation/Nominierung via `dvgw-edi` — placeholder |
+| `mako-wim-gas` | WiM Gas workflows — UTILMD G MSB-change (44022–44024, 44039–44053, 44168–44170) + INSRPT Gas (23005, 23009) + WiM-Rechnung INVOIC (31003, 31004) |
+| `mako-gabi-gas` | GaBi Gas workflows — INVOIC 31010 (Kapazitätsrechnung, FNB/VNB → BKV); DVGW ALOCAT/NOMINT/NOMRES parsing via `dvgw-edi` |
 | `mako-nbw` | Netzbetreiberwechsel — PARTIN bulk DSO concession handover (PIDs 37000–37014) — placeholder |
-| `mako-as4` | BDEW AS4 profile constants and P-Mode configuration |
-| `dvgw-edi` | DVGW EDIFACT formats — ALLOCAT, NOMINT, NOMRES parsing — placeholder |
+| `mako-as4` | BDEW AS4 profile constants, P-Mode registry, partner directory, and inbound routing config |
+| `dvgw-edi` | DVGW EDIFACT formats — ALOCAT, NOMINT, NOMRES parsing for GaBi Gas 2.0 (BK7-14-020) |
 | `mako-redispatch` | Redispatch 2.0 workflows — XML document types (`ActivationDocument`, `Stammdaten`, `NetworkConstraintDocument`, …) + IFTSTA PIDs 21037/21038 |
 | `redispatch-xml` | Redispatch 2.0 XML/XSD format parsing |
 | `energy-api` | BDEW API-Webdienste Strom — REST/WebSocket client + Axum server for iMS processes |
@@ -261,13 +262,13 @@ mako/
 │   │
 │   ├── mako-gpke/           # GPKE domain (55001–55018, 55555 Anfrage, 17115–17117 Sperrung, INVOIC 31001–31002/31005–31008, ORDERS 17134/17135; PARTIN Strom 37000–37006)
 │   ├── mako-wim/            # WiM Strom domain (55039, 55042, 55051, 55168, INVOIC 31009, INSRPT 23001–23012)
-│   ├── mako-geli-gas/       # GeLi Gas 3.0 domain (44001–44021; PARTIN Gas 37008–37014; 44022–44024 pending)
+│   ├── mako-geli-gas/       # GeLi Gas 3.0 domain (44001–44021; PARTIN Gas 37008–37014; INVOIC 31011)
 │   ├── mako-mabis/          # MABIS domain (13003 — Bilanzkreisabrechnung Strom)
-│   ├── mako-gabi-gas/       # GaBi Gas domain — INVOIC 31010/31011; Allokation/Nominierung (placeholder)
-│   ├── mako-wim-gas/        # WiM Gas domain (44039–44053, 44168–44170, INSRPT Gas-only 23005/23009)
+│   ├── mako-gabi-gas/       # GaBi Gas domain — INVOIC 31010 (Kapazitätsrechnung); DVGW ALOCAT/NOMINT/NOMRES via dvgw-edi
+│   ├── mako-wim-gas/        # WiM Gas domain (44022–44024 Stornierung, 44039–44053, 44168–44170, INSRPT Gas 23005/23009, INVOIC 31003/31004)
 │   ├── mako-nbw/            # Netzbetreiberwechsel — PARTIN DSO handover (placeholder)
-│   ├── mako-as4/            # BDEW AS4 profile constants, P-Modes, security policy
-│   ├── dvgw-edi/            # DVGW EDIFACT formats — ALLOCAT, NOMINT, NOMRES (placeholder)
+│   ├── mako-as4/            # BDEW AS4 profile constants, P-Modes, partner directory, routing config
+│   ├── dvgw-edi/            # DVGW EDIFACT formats — ALOCAT, NOMINT, NOMRES parsing (GaBi Gas 2.0)
 │   ├── energy-api/          # BDEW REST/WebSocket API client + Axum server (iMS)
 │   ├── mako-redispatch/     # Redispatch 2.0 process engine — 8 XML-document-driven workflows
 │   └── redispatch-xml/      # Redispatch 2.0 XML/XSD parsing — all 9 document types

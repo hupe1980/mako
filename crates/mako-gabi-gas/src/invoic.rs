@@ -1,16 +1,20 @@
-//! GaBi Gas INVOIC billing — PIDs 31010 (Kapazitätsrechnung) and 31011
-//! (Rechnung sonstige Leistung / AWH Sperrprozesse Gas).
+//! GaBi Gas INVOIC billing — PID 31010 (Kapazitätsrechnung).
 //!
-//! Handles INVOIC-based billing processes in the GaBi Gas domain where capacity
-//! invoices and supplementary service invoices are exchanged between the gas
-//! network operator (FNB/VNB) and balance responsible parties (BKV).
+//! Handles INVOIC-based capacity billing in the GaBi Gas domain where the gas
+//! network operator (FNB/VNB) invoices the balance responsible party (BKV) for
+//! transmission capacity.
 //!
-//! # Covered Prüfidentifikatoren (INVOIC AHB / FV2025-10-01, BK7 GaBi Gas)
+//! # Covered Prüfidentifikatoren (INVOIC AHB / FV2025-10-01, BK7-14-020)
 //!
-//! | PID   | Process                                          | Direction   |
-//! |-------|--------------------------------------------------|-------------|
-//! | 31010 | Kapazitätsrechnung (capacity billing)            | FNB/VNB → BKV |
-//! | 31011 | Rechnung sonstige Leistung (AWH Sperrprozesse)   | VNB → BKV   |
+//! | PID   | Process                               | Direction   |
+//! |-------|---------------------------------------|-------------|
+//! | 31010 | Kapazitätsrechnung (capacity billing) | FNB/VNB → BKV |
+//!
+//! # Not covered here — see `mako-geli-gas`
+//!
+//! PID 31011 (Rechnung sonstige Leistung / AWH Sperrprozesse Gas, VNB → LFN/LFA)
+//! belongs to the GeLi Gas domain (BK7-24-01-009) and is handled by the
+//! `geli-gas-sperrprozesse-invoic` workflow in `mako-geli-gas`.
 //!
 //! # State machine
 //!
@@ -50,13 +54,11 @@ use mako_engine::{
 
 /// GaBi Gas billing Prüfidentifikatoren handled by this workflow (INVOIC AHB).
 ///
-/// | PID   | Name                                                          |
-/// |-------|---------------------------------------------------------------|
-/// | 31010 | Kapazitätsrechnung (capacity invoice, FNB/VNB → BKV)          |
-/// | 31011 | Rechnung sonstige Leistung (AWH Sperrprozesse Gas, VNB → BKV) |
+/// | PID   | Name                                         |
+/// |-------|----------------------------------------------|
+/// | 31010 | Kapazitätsrechnung (capacity invoice, FNB/VNB → BKV) |
 pub const GABI_GAS_INVOIC_PIDS: &[u32] = &[
     31010, // Kapazitätsrechnung (capacity billing)
-    31011, // Rechnung sonstige Leistung / AWH Sperrprozesse Gas
 ];
 
 /// Workflow key used for PID router registration.
@@ -72,7 +74,7 @@ pub const SETTLEMENT_WINDOW_LABEL: &str = "gabi-gas-invoic-settlement-deadline";
 
 /// REMADV PID for GaBi Gas billing (inbound Zahlungsavis, invoicer role).
 ///
-/// After the FNB/VNB sends INVOIC 31010/31011, the BKV sends back REMADV 33001
+/// After the FNB/VNB sends INVOIC 31010, the BKV sends back REMADV 33001
 /// to confirm payment.
 ///
 /// Source: REMADV AHB 1.0, GaBi Gas, BK7.
@@ -81,7 +83,6 @@ pub const GABI_GAS_REMADV_PID: u32 = 33001;
 /// COMDIS PID for GaBi Gas billing (inbound Ablehnung REMADV, payer role).
 ///
 /// The invoicer (FNB/VNB) can reject a BKV REMADV via COMDIS 29001.
-///
 /// Source: COMDIS AHB 1.0, GaBi Gas, BK7.
 pub const GABI_GAS_COMDIS_ABLEHNUNG_PID: u32 = 29001;
 
@@ -91,7 +92,7 @@ pub const GABI_GAS_COMDIS_ABLEHNUNG_PID: u32 = 29001;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GaBiGasInvoicData {
-    /// BDEW Prüfidentifikator (31010 = Kapazitätsrechnung, 31011 = sonstige Leistung).
+    /// BDEW Prüfidentifikator (always 31010 = Kapazitätsrechnung).
     pub pruefidentifikator: Pruefidentifikator,
     /// GLN of the invoice issuer (FNB/VNB).
     pub sender: MarktpartnerCode,
@@ -174,7 +175,7 @@ pub enum GaBiGasInvoicEvent {
         recipient: MarktpartnerCode,
         /// EDIFACT document date (YYYYMMDD).
         document_date: String,
-        /// BDEW Prüfidentifikator (31010 or 31011).
+        /// BDEW Prüfidentifikator (always 31010 for this workflow).
         pruefidentifikator: Pruefidentifikator,
     },
     /// INVOIC passed AHB profile validation — no rule violations found.
@@ -250,7 +251,7 @@ pub enum GaBiGasInvoicCommand {
     /// AHB check found rule violations; the workflow will emit `Rejected` and
     /// enqueue a negative CONTRL.
     ReceiveInvoic {
-        /// BDEW Prüfidentifikator (31010 = Kapazitätsrechnung, 31011 = sonstige Leistung).
+        /// BDEW Prüfidentifikator (must be 31010 = Kapazitätsrechnung for this workflow).
         pid: Pruefidentifikator,
         /// GLN of the sender (FNB/VNB).
         sender: MarktpartnerCode,
@@ -305,11 +306,10 @@ impl CommandPayload for GaBiGasInvoicCommand {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
-/// GaBi Gas INVOIC billing workflow (PIDs 31010 and 31011).
+/// GaBi Gas INVOIC billing workflow (PID 31010, Kapazitätsrechnung).
 ///
 /// Implements the complete BKV-side receive → validate → settle/dispute state
-/// machine for GaBi Gas capacity and supplementary service billing under
-/// BK7-14-020 (GaBi Gas 2.0).
+/// machine for GaBi Gas capacity billing under BK7-14-020 (GaBi Gas 2.0).
 ///
 /// # Deadline
 ///
@@ -433,7 +433,7 @@ impl Workflow for GaBiGasInvoicWorkflow {
                 }
                 if !GABI_GAS_INVOIC_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected a GaBi Gas INVOIC PID (31010 or 31011), got {pid}",
+                        "expected GaBi Gas INVOIC PID 31010 (Kapazitätsrechnung), got {pid}",
                     )));
                 }
                 let mut events = vec![GaBiGasInvoicEvent::InvoicReceived {
@@ -642,22 +642,6 @@ mod tests {
         let state = GaBiGasInvoicState::default();
         let out = GaBiGasInvoicWorkflow::handle(&state, receive_cmd(31010, true))
             .expect("valid 31010 must succeed");
-        assert_eq!(out.events.len(), 2);
-        assert!(matches!(
-            out.events[0],
-            GaBiGasInvoicEvent::InvoicReceived { .. }
-        ));
-        assert!(matches!(
-            out.events[1],
-            GaBiGasInvoicEvent::ValidationPassed { .. }
-        ));
-    }
-
-    #[test]
-    fn receive_31011_valid_emits_received_and_validation_passed() {
-        let state = GaBiGasInvoicState::default();
-        let out = GaBiGasInvoicWorkflow::handle(&state, receive_cmd(31011, true))
-            .expect("valid 31011 must succeed");
         assert_eq!(out.events.len(), 2);
         assert!(matches!(
             out.events[0],

@@ -27,7 +27,8 @@ All three ports are optional and independently enabled via CLI flags or environm
 | `GeliGasModule` | GeLi Gas 3.0 — Lieferantenwechsel Gas, Sperrung Gas, PARTIN Gas | 44001–44021, 17115–17117 (Gas NB), 37008–37014 |
 | `WimGasModule` | WiM Gas — Messstellenbetrieb Gas, INVOIC Gas billing | 44022–44024, 44039–44053, 44168–44170, 31003/31004, 23005/23009 |
 | `MabisModule` | MABIS — Bilanzkreisabrechnung Strom (BKV↔ÜNB) | 13003 |
-| `GaBiGasModule` | GaBi Gas — Kapazitätsrechnung, Sperrprozess Gas billing | 31010/31011 |
+| `GaBiGasModule` | GaBi Gas — Kapazitätsrechnung | 31010 |
+| `GeliGasModule` | GeLi Gas 3.0 — Lieferantenwechsel Gas, Sperrung Gas, PARTIN Gas + AWH-Rechnung | 44001–44021, 17115–17117 (Gas NB), 37008–37014, 31011 |
 | `RedispatchModule` | Redispatch 2.0 — congestion management (§§ 13/13a/14 EnWG) | 21037/21038 (NB/ÜNB/ANB roles only) |
 
 ---

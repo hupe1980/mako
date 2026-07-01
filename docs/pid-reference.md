@@ -24,28 +24,28 @@ and one business context (GPKE, WiM, GeLi Gas, …). The routing layer
 (`mako_engine::pid_router::PidRouter`) dispatches inbound messages to the correct
 workflow by PID.
 
-> **Legend — columns**
->
-> | Column | Meaning |
-> |--------|---------|
-> | **Von → An** | Communication direction from BDEW xlsx. Multi-occurrence PIDs (same PID, different process contexts) show all unique role pairs separated by ` · `. |
-> | **Reaktion** | PID that this message _reacts to_ (i.e. is a response/follow-up to). `—` if the column is empty in the source xlsx. |
-> | **⚡ / 🔥** | Sparte: ✅ = covered; — = not applicable. |
-> | **3.3 / 4.0** | ✅ = present in BDEW PID overview for that format version; ⚠️ = absent (sunset or not-yet-added). |
-> | **Crate / Workflow** | The `mako-*` crate and `workflow-name` that registers this PID in `PidRouter`. `—` = not yet implemented. ⁽ᴺᴮ⁾ = NB-role conditional registration only. Multiple entries separated by ` · ` = same PID registered independently in different crates (commodity-isolated; each crate is loaded only in the relevant Strom or Gas deployment). |
->
-> **Commodity isolation:** Strom crates (`mako-gpke`, `mako-wim`, `mako-mabis`)
-> and Gas crates (`mako-geli-gas`, `mako-wim-gas`, `mako-gabi-gas`) are fully
-> independent. A Strom-only makod instance loads only Strom crates; a Gas-only
-> instance loads only Gas crates. Running separate instances per commodity is
-> a standard and supported deployment topology.
->
-> **Multi-commodity PIDs:** Where the same BDEW PID number is used in both Strom
-> and Gas contexts (e.g. ORDERS 17115/17117, ORDRSP 19116/19117), each commodity
-> crate handles it independently. In a combined Strom+Gas instance the `PidRouter`
-> dispatches by `DeploymentRoles` / `Marktrolle`.
->
-> Source: BDEW PID 3.3 xlsx (Fehlerkorrektur 27.03.2026) and PID 4.0 xlsx (01.04.2026).
+**Legend — columns**
+
+| Column | Meaning |
+|--------|---------|
+| **Von → An** | Communication direction from BDEW xlsx. Multi-occurrence PIDs (same PID, different process contexts) show all unique role pairs separated by ` · `. |
+| **Reaktion** | PID that this message _reacts to_ (i.e. is a response/follow-up to). `—` if the column is empty in the source xlsx. |
+| **⚡ / 🔥** | Sparte: ✅ = covered; — = not applicable. |
+| **3.3 / 4.0** | ✅ = present in BDEW PID overview for that format version; ⚠️ = absent (sunset or not-yet-added). |
+| **Crate / Workflow** | The `mako-*` crate and `workflow-name` that registers this PID in `PidRouter`. `—` = not yet implemented. ⁽ᴺᴮ⁾ = NB-role conditional registration only. Multiple entries separated by ` · ` = same PID registered independently in different crates (commodity-isolated; each crate is loaded only in the relevant Strom or Gas deployment). |
+
+**Commodity isolation:** Strom crates (`mako-gpke`, `mako-wim`, `mako-mabis`)
+and Gas crates (`mako-geli-gas`, `mako-wim-gas`, `mako-gabi-gas`) are fully
+independent. A Strom-only makod instance loads only Strom crates; a Gas-only
+instance loads only Gas crates. Running separate instances per commodity is
+a standard and supported deployment topology.
+
+**Multi-commodity PIDs:** Where the same BDEW PID number is used in both Strom
+and Gas contexts (e.g. ORDERS 17115/17117, ORDRSP 19116/19117), each commodity
+crate handles it independently. In a combined Strom+Gas instance the `PidRouter`
+dispatches by `DeploymentRoles` / `Marktrolle`.
+
+Source: BDEW PID 3.3 xlsx (Fehlerkorrektur 27.03.2026) and PID 4.0 xlsx (01.04.2026).
 
 ---
 
@@ -411,9 +411,9 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 17110 | Anforderung der Allokationsliste | MMM Strom/Gas | LF → NB | — | — | ✅ | ✅ | ✅ | — |
 | 17113 | Reklamation von Werten | WiM Gas / WiM Strom Teil 2 | LF → NB · NB → MSB · MSB → MSB · LF → MSB · ÜNB → MSB | — | ✅ | ✅ | ✅ | ✅ | — |
 | 17114 | Anforderung bilanzierte Menge | MMM Strom/Gas | NB → ÜNB | — | ✅ | — | ✅ | ⚠️ | — |
-| 17115 | Sperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` (Strom inbound NB-role) · `mako-geli-gas` `geli-gas-sperrung-lf` (Gas outbound LF-role) |
-| 17116 | Anfrage Sperrung | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` |
-| 17117 | Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` (Strom inbound NB-role) · `mako-geli-gas` `geli-gas-sperrung-lf` (Gas outbound LF-role) |
+| 17115 | Sperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` (Strom inbound NB-role) · `mako-geli-gas` `geli-gas-sperrung-lf` (Gas outbound LF-role) · `mako-geli-gas` `geli-gas-sperrung-nb` (Gas inbound GNB-role) |
+| 17116 | Anfrage Sperrung | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` · `mako-geli-gas` `geli-gas-sperrung-nb` (Gas GNB→gMSB role) |
+| 17117 | Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` (Strom inbound NB-role) · `mako-geli-gas` `geli-gas-sperrung-lf` (Gas outbound LF-role) · `mako-geli-gas` `geli-gas-sperrung-nb` (Gas inbound GNB-role) |
 | 17118 | Bestellung einer Konfigurationsänderung | GPKE Teil 3 | MSB → MSB | — | ✅ | — | ✅ | ✅ | — |
 | 17120 | Bestellung Änderung Prognosegrundlage | GPKE Teil 3 | LF → NB | — | ✅ | — | ✅ | ✅ | — |
 | 17121 | Bestellung Änderung | GPKE Teil 3 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
@@ -469,8 +469,8 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 19115 | Ablehnung der Anforderung bilanzierte Menge | MMM Strom/Gas | ÜNB → NB | — | ✅ | — | ✅ | ⚠️ | — |
 | 19116 | Bestätigung Sperr-/Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung-lf` · `mako-geli-gas` `geli-gas-sperrung-lf` |
 | 19117 | Ablehnung Sperr-/Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung-lf` · `mako-geli-gas` `geli-gas-sperrung-lf` |
-| 19118 | Bestätigung Anfrage Sperrung | AWH Sperrprozesse Gas / GPKE Teil 2 | MSB → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` |
-| 19119 | Ablehnung Anfrage Sperrung | AWH Sperrprozesse Gas / GPKE Teil 2 | MSB → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` |
+| 19118 | Bestätigung Anfrage Sperrung | AWH Sperrprozesse Gas / GPKE Teil 2 | MSB → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` · `mako-geli-gas` `geli-gas-sperrung-nb` |
+| 19119 | Ablehnung Anfrage Sperrung | AWH Sperrprozesse Gas / GPKE Teil 2 | MSB → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` · `mako-geli-gas` `geli-gas-sperrung-nb` |
 | 19120 | Mitteilung zur Änderung | GPKE Teil 3 | MSB → NB | 17121 | ✅ | — | ✅ | ✅ | — |
 | 19121 | Mitteilung zur Änderung Prognosegrundlage | GPKE Teil 3 | NB → LF | 17120 | ✅ | — | ✅ | ✅ | — |
 | 19123 | Ablehnung Reklamation einer Definition | GPKE Teil 3 | NB → LF · NB → MSB · LF → NB · LF → MSB | — | ✅ | — | ✅ | ✅ | — |
@@ -578,7 +578,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 31008 | Aggreg. MMM-selbst ausgest. Rechnung | MMM Strom/Gas | NB → MGV | — | — | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 | 31009 | MSB-Rechnung | GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | MSB → NB · MSB → LF · MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnung` |
 | 31010 | Kapazitätsrechnung | Kapazitätsabrechnung | NB → KN | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-invoic` |
-| 31011 | Rechnung sonstige Leistung | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-invoic` |
+| 31011 | Rechnung sonstige Leistung | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-sperrprozesse-invoic` |
 
 ## REMADV AHB
 

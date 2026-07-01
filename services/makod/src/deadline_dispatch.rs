@@ -41,9 +41,10 @@ use mako_engine::{
 };
 use mako_gabi_gas::{GaBiGasInvoicCommand, GaBiGasInvoicWorkflow};
 use mako_geli_gas::{
-    GasSperrungLfCommand, GasSupplierChangeCommand, GeliGasDatanabrufCommand,
-    GeliGasDatanabrufWorkflow, GeliGasSperrungLfWorkflow, GeliGasStornierungCommand,
-    GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
+    GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand, GeliGasDatanabrufCommand,
+    GeliGasDatanabrufWorkflow, GeliGasSperrprozesseInvoicCommand,
+    GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow,
+    GeliGasStornierungCommand, GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
 };
 use mako_gpke::{
     AbrechnungCommand, AllokationslisteCommand, AnfrageBestellungCommand, DatanabrufCommand,
@@ -326,6 +327,20 @@ pub async fn dispatch_deadline(
                 .await
                 .map(|_| ())
         }
+        "geli-gas-sperrung-nb" => {
+            let p = Process::<GeliGasSperrungNbWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                GasSperrungNbCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
         "geli-gas-partin" => {
             // Gas PARTIN processes are simple receipts with no deadline obligation.
             // This arm exists solely to satisfy assert_dispatch_coverage.
@@ -528,6 +543,20 @@ pub async fn dispatch_deadline(
             );
             p.execute_and_enqueue_with_retry(
                 GaBiGasInvoicCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "geli-gas-sperrprozesse-invoic" => {
+            let p = Process::<GeliGasSperrprozesseInvoicWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                GeliGasSperrprozesseInvoicCommand::TimeoutExpired { deadline_id, label },
                 3,
             )
             .await?;
@@ -789,6 +818,7 @@ pub const DISPATCH_TABLE: &[&str] = &[
     mako_geli_gas::GAS_MSCONS_WORKFLOW_NAME,
     mako_geli_gas::GELI_GAS_DATENABRUF_WORKFLOW_NAME,
     mako_geli_gas::GELI_GAS_SPERRUNG_LF_WORKFLOW_NAME,
+    "geli-gas-sperrung-nb",
     "geli-gas-supplier-change",
     "geli-gas-stornierung",
     "geli-gas-partin",
@@ -800,6 +830,7 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "wim-gas-stornierung",
     "wim-gas-insrpt",
     "gabi-gas-invoic",
+    "geli-gas-sperrprozesse-invoic",
     // ── Redispatch 2.0 ───────────────────────────────────────────────────────
     STAMMDATEN_WORKFLOW,
     AKTIVIERUNG_WORKFLOW,

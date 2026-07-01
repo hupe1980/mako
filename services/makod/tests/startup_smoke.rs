@@ -32,7 +32,7 @@ use makod::deadline_dispatch;
 /// Module stack must match `services/makod/src/main.rs`:
 /// - `GpkeModule`    — PIDs 55001–55002, 55016 + INVOIC + IFTSTA
 /// - `WimModule`     — PIDs 55039/55042/55051/55168 (WiM Strom Messstellenbetrieb)
-/// - `GeliGasModule` — PIDs 44001–44006, 44017–44018, 44022–44024
+/// - `GeliGasModule` — PIDs 44001–44021 (GeLi Gas; 44022–44024 registered by WimGasModule) + PID 31011 (AWH Rechnung)
 /// - `WimGasModule`  — PIDs 44039–44053, 44168–44170 (WiM Gas MSB-Wechsel)
 /// - `MabisModule`   — PID 13003 (Bilanzkreisabrechnung Strom)
 #[test]

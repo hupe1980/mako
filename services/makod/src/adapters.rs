@@ -47,8 +47,9 @@ fn convert_pid(p: edi_energy::Pruefidentifikator) -> Result<Pruefidentifikator, 
 }
 use mako_gabi_gas::{GaBiGasInvoicCommand, GaBiGasInvoicWorkflow};
 use mako_geli_gas::{
-    GasSupplierChangeCommand, GeliGasStornierungCommand, GeliGasStornierungWorkflow,
-    GeliGasSupplierChangeWorkflow,
+    GasSperrungNbCommand, GasSupplierChangeCommand, GeliGasSperrprozesseInvoicCommand,
+    GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungNbWorkflow, GeliGasStornierungCommand,
+    GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
 };
 use mako_gpke::{
     AbrechnungCommand, AnfrageBestellungCommand, GpkeAbrechnungWorkflow,
@@ -216,6 +217,83 @@ pub fn gpke_sperrung_registry() -> AdapterRegistry<GpkeSperrungWorkflow> {
             );
 
             Ok(SperrungCommand::ReceiveSperrung {
+                pid,
+                sender: mako_engine::types::MarktpartnerCode::new(
+                    o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                location_id,
+                document_date: o
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: mako_engine::types::MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GeLi Gas ORDERS Sperrung NB-side (PIDs 17115, 17116, 17117) ──────────────
+
+/// Build an [`AdapterRegistry`] for [`GeliGasSperrungNbWorkflow`].
+///
+/// Extracts ORDERS fields from an inbound Gas-Sperrauftrag / Gas-Entsperrauftrag
+/// (PIDs 17115/17116/17117) to construct a [`GasSperrungNbCommand::ReceiveSperrung`].
+///
+/// **Message format**: ORDERS (AWH Sperrprozesse Gas, BK7-24-01-009).
+/// **APERAK Frist:** 10 Werktage.
+#[must_use]
+pub fn geli_gas_sperrung_nb_registry() -> AdapterRegistry<GeliGasSperrungNbWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas Sperrung NB adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Orders(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas Sperrung NB adapter: expected ORDERS message (PIDs 17115/17116/17117)"
+                        .into(),
+                ));
+            };
+
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas Sperrung NB adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+
+            // Marktlokation from the LOC segment (element 1, component 0).
+            let location_id = mako_engine::types::MaLo::new(
+                o.segments()
+                    .iter()
+                    .find(|s| s.tag == "LOC")
+                    .and_then(|s| s.component_str(1, 0))
+                    .unwrap_or(""),
+            );
+
+            Ok(GasSperrungNbCommand::ReceiveSperrung {
                 pid,
                 sender: mako_engine::types::MarktpartnerCode::new(
                     o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
@@ -2073,13 +2151,16 @@ pub fn geli_gas_stornierung_registry() -> AdapterRegistry<GeliGasStornierungWork
     registry
 }
 
-// ── GaBi Gas INVOIC billing (PIDs 31010, 31011) ───────────────────────────────
+// ── GaBi Gas INVOIC billing (PID 31010 Kapazitätsrechnung) ───────────────────
 
 /// Build an [`AdapterRegistry`] for [`GaBiGasInvoicWorkflow`].
 ///
 /// Extracts INVOIC fields to construct a [`GaBiGasInvoicCommand::ReceiveInvoic`]
-/// for GaBi Gas billing PIDs 31010 (Kapazitätsrechnung) and 31011 (Rechnung
-/// sonstige Leistung / AWH Sperrprozesse Gas).
+/// for GaBi Gas billing PID 31010 (Kapazitätsrechnung, FNB/VNB → BKV).
+///
+/// Note: PID 31011 (Rechnung sonstige Leistung / AWH Sperrprozesse Gas, NB → LF)
+/// belongs to GeLi Gas (BK7-24-01-009) and is handled by
+/// `geli_gas_sperrprozesse_invoic_registry()` in `mako-geli-gas`.
 ///
 /// Regulatory basis: BK7-14-020 (GaBi Gas 2.0).
 #[must_use]
@@ -2124,6 +2205,85 @@ pub fn gabi_gas_invoic_registry() -> AdapterRegistry<GaBiGasInvoicWorkflow> {
                 .unwrap_or(msg.message_ref());
 
             Ok(GaBiGasInvoicCommand::ReceiveInvoic {
+                pid,
+                sender: MarktpartnerCode::new(
+                    inv.sender()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                recipient: MarktpartnerCode::new(
+                    inv.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                invoice_ref: MessageRef::new(invoice_ref),
+                document_date: inv
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GeLi Gas INVOIC billing (PID 31011 Rechnung sonstige Leistung) ───────────
+
+/// Build an [`AdapterRegistry`] for [`GeliGasSperrprozesseInvoicWorkflow`].
+///
+/// Extracts INVOIC fields to construct a
+/// [`GeliGasSperrprozesseInvoicCommand::ReceiveInvoic`] for GeLi Gas AWH
+/// billing PID 31011 (Rechnung sonstige Leistung, VNB → LFN/LFA).
+///
+/// Regulatory basis: BK7-24-01-009 (GeLi Gas 3.0).
+#[must_use]
+pub fn geli_gas_sperrprozesse_invoic_registry()
+-> AdapterRegistry<GeliGasSperrprozesseInvoicWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas Sperrprozesse INVOIC adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Invoic(inv) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas Sperrprozesse INVOIC adapter: expected INVOIC message".into(),
+                ));
+            };
+
+            let pid = inv
+                .bgm()
+                .and_then(|b| b.pruefidentifikator())
+                .ok_or_else(|| {
+                    EngineError::Deserialization(
+                        "GeLi Gas Sperrprozesse INVOIC adapter: PID not found in BGM".into(),
+                    )
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+            let invoice_ref = inv
+                .bgm()
+                .and_then(|b| b.document_id.as_deref())
+                .unwrap_or(msg.message_ref());
+
+            Ok(GeliGasSperrprozesseInvoicCommand::ReceiveInvoic {
                 pid,
                 sender: MarktpartnerCode::new(
                     inv.sender()

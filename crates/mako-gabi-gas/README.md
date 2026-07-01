@@ -12,7 +12,6 @@ billing between balance responsible parties (BKV), network operators
 | Process | PIDs | Messages | Governing document |
 |---|---|---|---|
 | Kapazitätsrechnung (capacity billing) | 31010 | INVOIC | INVOIC AHB, BK7-14-020 |
-| Rechnung sonstige Leistung (AWH) | 31011 | INVOIC | INVOIC AHB, BK7-14-020 |
 
 ## Domain background
 
@@ -28,13 +27,12 @@ DVGW-format electronic exchange for all balancing processes.
 | Aspect | GeLi Gas (`mako-geli-gas`) | GaBi Gas (`mako-gabi-gas`) |
 |---|---|---|
 | Governing document | BK7-24-01-009 | BK7-14-020 |
-| Scope | Supplier switching (Lieferantenwechsel Gas) | Gas balancing (Bilanzierung) |
+| Scope | Supplier switching (Lieferantenwechsel Gas) + AWH billing | Gas balancing (Bilanzierung) |
 | Parties | LFN ↔ GNB | BKV ↔ FNB/VNB ↔ MGV |
-| Primary formats | UTILMD G (PIDs 44xxx) | ALOCAT, NOMINT, NOMRES, INVOIC |
-| INVOIC billing | ❌ | ✅ PIDs 31010, 31011 |
+| Primary formats | UTILMD G (PIDs 44xxx), INVOIC 31011 | ALOCAT, NOMINT, NOMRES, INVOIC 31010 |
+| INVOIC billing | ✅ PID 31011 (NB → LF, AWH Sperrprozesse) | ✅ PID 31010 (NB → BKV, Kapazität) |
 
-Gas Mehr-/Mindermengen billing (PIDs 31010–31011) is **not** part of GeLi Gas.
-It falls under BK7 Bilanzierung (this crate), governed separately.
+GaBi Gas capacity billing (PID 31010) is in this crate; AWH Sperrprozesse billing (PID 31011) is in `mako-geli-gas`.
 
 ## Two-crate architecture
 
