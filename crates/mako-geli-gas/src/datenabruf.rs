@@ -67,6 +67,12 @@ pub enum GeliGasDatanabrufEvent {
         /// Message reference of the rejection.
         message_ref: MessageRef,
     },
+    /// MSCONS data delivery confirmed — marks the Datenabruf process as complete.
+    ///
+    /// Emitted by `NotifyDatenGeliefert` when the MSCONS carrier arrives and the
+    /// adapter signals that the requested data has been delivered. Transitions the
+    /// process from `AnfrageGesendet` to the terminal `DatenErhalten` state.
+    DatenGeliefert,
     /// Deadline expired without a response.
     DeadlineExpired {
         /// Unique ID of the expired deadline.
@@ -81,6 +87,7 @@ impl EventPayload for GeliGasDatanabrufEvent {
         match self {
             Self::AnfrageErhalten { .. } => "GeliGasDatanabrufAnfrageErhalten",
             Self::AbgelehntErhalten { .. } => "GeliGasDatanabrufAbgelehnt",
+            Self::DatenGeliefert => "GeliGasDatanabrufDatenGeliefert",
             Self::DeadlineExpired { .. } => "GeliGasDatanabrufDeadlineExpired",
         }
     }
@@ -190,6 +197,7 @@ impl Workflow for GeliGasDatanabrufWorkflow {
                 }
             }
             GeliGasDatanabrufEvent::AbgelehntErhalten { .. } => GeliGasDatanabrufState::Abgelehnt,
+            GeliGasDatanabrufEvent::DatenGeliefert => GeliGasDatanabrufState::DatenErhalten,
             GeliGasDatanabrufEvent::DeadlineExpired { .. } => {
                 if matches!(
                     state,
@@ -251,8 +259,13 @@ impl Workflow for GeliGasDatanabrufWorkflow {
                 .into())
             }
             GeliGasDatanabrufCommand::NotifyDatenGeliefert => {
-                // Data was delivered via MSCONS — mark as done.
-                Ok(WorkflowOutput::events(vec![]))
+                // Data was delivered via MSCONS — transition to DatenErhalten.
+                if matches!(state, GeliGasDatanabrufState::AnfrageGesendet { .. }) {
+                    Ok(vec![GeliGasDatanabrufEvent::DatenGeliefert].into())
+                } else {
+                    // Already resolved (Abgelehnt, DatenErhalten, DeadlineExpired) — no-op.
+                    Ok(WorkflowOutput::events(vec![]))
+                }
             }
             GeliGasDatanabrufCommand::TimeoutExpired { deadline_id, label } => {
                 if matches!(

@@ -866,13 +866,13 @@ WiM Strom, but with Gas-specific qualifier codes and a **10-Werktage deadline**
 
 **Regulatory basis:** BK7 (Kapazitätsabrechnung Gas / AWH Sperrprozesse Gas) + DVGW G685/G2000
 
-**Implementation status:** `mako-gabi-gas` ✅ for BK7 billing (INVOIC 31010/31011 — full state machine with validation, happy-path, timeout, and dead-letter handling). DVGW transport processes (NOMINT, NOMRES, ALOCAT, SCHEDL, …) remain placeholder 🔄 — see DVGW section.
+**Implementation status:** `mako-gabi-gas` ✅ for BK7 billing (INVOIC 31010 — full state machine with validation, happy-path, timeout, and dead-letter handling). DVGW transport processes (NOMINT, NOMRES, ALOCAT, SCHEDL, …) remain placeholder 🔄 — see DVGW section.
 
 > **Crate layering:** `dvgw-edi` is the **format library** (parses NOMINT, NOMRES,
 > ALOCAT, SCHEDL, …) — analogous to `edi-energy` for EDI@Energy messages.
 > `mako-gabi-gas` is the **process layer** built on top of it, handling both
 > DVGW transport workflows (nominations, allocations) and BK7 billing (INVOIC
-> 31010/31011) — analogous to `mako-gpke` sitting on top of `edi-energy`.
+> 31010) — analogous to `mako-gpke` sitting on top of `edi-energy`.
 
 **DVGW transport processes** (placeholder — see [DVGW — Gas Transport](#dvgw--gas-transport) for message list):
 
