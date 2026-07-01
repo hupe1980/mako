@@ -92,27 +92,32 @@ reason  = "Companion to hashbrown 0.15; resolves with hashbrown 0.15 dedup."
 [[bans.skip]]
 name    = "getrandom"
 version = "0.2"
-reason  = "rand 0.8 (pulled by slatedb/foyer ecosystem) depends on getrandom 0.2. Workspace uses rand 0.9."
+reason  = "Some transitive deps still pull getrandom 0.2. Resolve with broader getrandom 0.3/0.4 adoption."
 
 [[bans.skip]]
 name    = "getrandom"
 version = "0.3"
-reason  = "rand 0.9 depends on getrandom 0.3. Resolves when getrandom 0.4 adoption is complete."
+reason  = "rand 0.9 depends on getrandom 0.3; rand 0.10 pulls 0.4. Resolves when getrandom 0.4 adoption is complete."
 
 [[bans.skip]]
 name    = "rand"
 version = "0.8"
-reason  = "slatedb ecosystem pulls rand 0.8. Workspace uses rand 0.9. Resolve when slatedb updates."
+reason  = "slatedb/foyer ecosystem pulls rand 0.8. Three-way split (0.8/0.9/0.10) until all deps align."
 
 [[bans.skip]]
-name    = "rand_chacha"
-version = "0.3"
-reason  = "Companion to rand 0.8 (pulled by slatedb/foyer); workspace uses rand_chacha 0.9 via rand 0.9. Resolve when slatedb updates."
+name    = "rand"
+version = "0.9"
+reason  = "Some deps pull rand 0.9 while workspace moves to rand 0.10. Resolve when all deps align."
 
 [[bans.skip]]
 name    = "rand_core"
 version = "0.6"
-reason  = "Companion to rand 0.8; same root cause."
+reason  = "Companion to rand 0.8; three-way split (0.6/0.9/0.10)."
+
+[[bans.skip]]
+name    = "rand_core"
+version = "0.9"
+reason  = "Companion to rand 0.9; same root cause."
 
 [[bans.skip]]
 name    = "rustix"
@@ -135,14 +140,44 @@ version = "0.6"
 reason  = "toml_edit (build-time dep of cargo) pulls winnow 0.6. Workspace direct deps use 0.7."
 
 [[bans.skip]]
-name    = "quick-xml"
-version = "0.38"
-reason  = "asx-rs / SOAP deps pull quick-xml 0.38. Direct deps use 0.40."
-
-[[bans.skip]]
 name    = "lru"
 version = "0.12"
 reason  = "asx-rs pulls lru 0.12. Resolve when asx-rs updates."
+
+# object_store 0.14 pulls digest 0.11 / md-5 0.11 / block-buffer 0.12 / cpufeatures 0.3 /
+# crypto-common 0.2; xtask's pdf-extract (lopdf chain) pins the 0.10 generation.
+# Safe to coexist — no shared serialization state across the version boundary.
+[[bans.skip]]
+name    = "digest"
+version = "0.10"
+reason  = "lopdf/pdf-extract (xtask) depends on digest 0.10; object_store 0.14 pulls digest 0.11. No shared state."
+
+[[bans.skip]]
+name    = "md-5"
+version = "0.10"
+reason  = "Companion to digest 0.10 (lopdf chain); object_store 0.14 pulls md-5 0.11."
+
+[[bans.skip]]
+name    = "block-buffer"
+version = "0.10"
+reason  = "Companion to digest 0.10 (lopdf chain); object_store 0.14 pulls block-buffer 0.12."
+
+[[bans.skip]]
+name    = "crypto-common"
+version = "0.1"
+reason  = "Companion to digest 0.10 (lopdf chain); object_store 0.14 pulls crypto-common 0.2."
+
+[[bans.skip]]
+name    = "cpufeatures"
+version = "0.2"
+reason  = "Companion to digest 0.10 (lopdf chain); object_store 0.14 pulls cpufeatures 0.3."
+
+# reqwest version split: energy-api and newer HTTP clients use reqwest 0.13;
+# asx-rs (AS4 transport) still depends on reqwest 0.12. Resolve when asx-rs updates.
+[[bans.skip]]
+name    = "reqwest"
+version = "0.12"
+reason  = "asx-rs depends on reqwest 0.12; energy-api and direct workspace deps use reqwest 0.13."
 
 [[bans.skip]]
 name    = "heck"
@@ -152,23 +187,8 @@ reason  = "proc-macro crates (clap_derive, enum-iterator-derive) still depend on
 # Windows crates version-skew: Microsoft publishes rapid minor bumps; ecosystem
 # convergence lags. These are safe to skip — they do not share serialization state.
 [[bans.skip]]
-name    = "windows-core"
-version = "0.61"
-reason  = "Windows crate ecosystem version skew; no serialization or ABI shared state."
-
-[[bans.skip]]
 name    = "windows-link"
 version = "0.1"
-reason  = "Windows crate ecosystem version skew."
-
-[[bans.skip]]
-name    = "windows-result"
-version = "0.3"
-reason  = "Windows crate ecosystem version skew."
-
-[[bans.skip]]
-name    = "windows-strings"
-version = "0.4"
 reason  = "Windows crate ecosystem version skew."
 
 [[bans.skip]]
@@ -181,15 +201,7 @@ name    = "itertools"
 version = "0.14"
 reason  = "foyer-memory (via slatedb) depends on itertools 0.14.x while rest of workspace uses 0.15."
 
-[[bans.skip]]
-name    = "webpki-roots"
-version = "0.26"
-reason  = "tokio-tungstenite 0.24 (via energy-api WebSocket) pulls webpki-roots 0.26; reqwest/hyper-rustls pull 1.x. Resolve when tokio-tungstenite bumps its rustls peer deps."
-
-[[bans.skip]]
-name    = "unicode-width"
-version = "0.1"
-reason  = "miette 7.x depends on both unicode-width 0.1 (direct) and 0.2 (via textwrap 0.16). Resolves when miette or textwrap aligns on a single version."
+# unicode-width 0.1 skip removed: dependency tree now uses only 0.2.
 
 [advisories]
 ignore = [
@@ -203,18 +215,6 @@ ignore = [
     # The crate is syntactically stable; no security surface. Used by slatedb
     # proc-macro machinery. Resolve when slatedb migrates away.
     { id = "RUSTSEC-2024-0436", reason = "paste macro pulled by slatedb; no CVE, compile-time only, no runtime security surface" },
-    # RUSTSEC-2025-0134: rustls-pemfile unmaintained (thin wrapper around
-    # rustls-pki-types). Pulled transitively by object_store or slatedb.
-    # Migration path: update dependent to use rustls-pki-types ≥ 1.9.0 directly.
-    # Resolve on next annual dependency update pass.
-    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile pulled by slatedb/object_store; thin wrapper around rustls-pki-types, no security regression" },
-    # RUSTSEC-2026-0187: lopdf stack-overflow via deeply nested PDF objects.
-    # Affects `xtask extract-pdf` which processes BDEW specification PDFs from
-    # docs/pdfs/ on developer machines — not untrusted/attacker-controlled input.
-    # Impact: developer-machine SIGABRT only; no production code path.
-    # Resolution: bump pdf-extract to a version that depends on lopdf ≥ 0.42.0
-    # once such a release is published upstream (pdf-extract 0.10 pins 0.38).
-    { id = "RUSTSEC-2026-0187", reason = "lopdf DoS only reachable via xtask extract-pdf on BDEW PDFs (trusted developer input). Resolve when pdf-extract ships a release requiring lopdf ≥ 0.42." },
     # RUSTSEC-2026-0192: ttf-parser unmaintained (harfbuzz team migrating to skrifa).
     # No CVE, no security vulnerability — maintenance announcement only.
     # Pulled transitively by xtask → pdf-extract → lopdf → ttf-parser.

@@ -21,7 +21,7 @@
 //! | Kündigung beim alten Lieferanten | 44016 | ✅ Registered |
 //! | Kündigung Lieferbeginn Gas (LFN ↔ LFA) | 44017–44018 | ✅ Registered |
 //! | Bestandsliste / Änderungsmeldung | 44019–44021 | ✅ Registered |
-//! | WiM Gas Stornierung | 44022–44024 | ⚠️ Belongs to `mako-wim-gas` per BDEW PID overview |
+//! | Stornierung (multi-domain) | 44022–44024 | GeLi Gas 2.0 + WiM Gas; routed by `WimGasModule` (GeLi Gas role routing: TODO) |
 //!
 //! ## Architecture
 //!
@@ -81,14 +81,43 @@
 
 #![deny(missing_docs)]
 
+pub mod datenabruf;
 pub mod lieferbeginn;
+pub mod mscons;
+pub mod partin;
+pub mod sperrung_lf;
 pub mod stornierung;
 
+pub use datenabruf::{
+    GeliGasDatanabrufCommand, GeliGasDatanabrufEvent, GeliGasDatanabrufState,
+    GeliGasDatanabrufWorkflow, ORDERS_ANFRAGE_PIDS as GELI_GAS_DATENABRUF_ORDERS_PIDS,
+    ORDRSP_ABLEHNUNG_PIDS as GELI_GAS_DATENABRUF_ORDRSP_PIDS,
+    WORKFLOW_NAME as GELI_GAS_DATENABRUF_WORKFLOW_NAME,
+};
 pub use lieferbeginn::{
-    APERAK_WINDOW_LABEL as LIEFERBEGINN_APERAK_WINDOW_LABEL, GasSupplierChangeCommand,
-    GasSupplierChangeData, GasSupplierChangeEvent, GasSupplierChangeProjection,
-    GasSupplierChangeRecord, GasSupplierChangeRecordData, GasSupplierChangeState,
-    GeliGasSupplierChangeWorkflow, UTILMD_PIDS, WORKFLOW_NAME,
+    ANFRAGE_PIDS as LIEFERBEGINN_ANFRAGE_PIDS, ANTWORT_PIDS as LIEFERBEGINN_ANTWORT_PIDS,
+    APERAK_WINDOW_LABEL as LIEFERBEGINN_APERAK_WINDOW_LABEL, GasProcessVariant,
+    GasSupplierChangeCommand, GasSupplierChangeData, GasSupplierChangeEvent,
+    GasSupplierChangeProjection, GasSupplierChangeRecord, GasSupplierChangeRecordData,
+    GasSupplierChangeState, GeliGasSupplierChangeWorkflow, UTILMD_PIDS, WORKFLOW_NAME,
+    response_pid_for,
+};
+pub use mscons::{
+    GasMsconsDatenCommand, GasMsconsDatenEvent, GasMsconsDatenState, GeliGasMsconsWorkflow,
+    MSCONS_PIDS as GELI_GAS_MSCONS_PIDS, WORKFLOW_NAME as GAS_MSCONS_WORKFLOW_NAME,
+};
+pub use partin::{
+    GasKommunikationsdatenCommand, GasKommunikationsdatenData, GasKommunikationsdatenEvent,
+    GasKommunikationsdatenState, GeliGasPartinWorkflow, PARTIN_GAS_PIDS as GELI_GAS_PARTIN_PIDS,
+    WORKFLOW_NAME as GELI_GAS_PARTIN_WORKFLOW_NAME,
+};
+pub use sperrung_lf::{
+    ANTWORT_WINDOW_LABEL as GELI_GAS_SPERRUNG_LF_ANTWORT_WINDOW_LABEL, GasSperrungAuftragData,
+    GasSperrungLfCommand, GasSperrungLfEvent, GasSperrungLfState, GeliGasSperrungLfWorkflow,
+    ORDRSP_SPERRUNG_PIDS as GELI_GAS_SPERRUNG_LF_ORDRSP_PIDS,
+    ORDRSP_STORNO_PIDS as GELI_GAS_SPERRUNG_LF_ORDRSP_STORNO_PIDS,
+    SPERRUNG_ANFRAGE_PIDS as GELI_GAS_SPERRUNG_ANFRAGE_PIDS,
+    WORKFLOW_NAME as GELI_GAS_SPERRUNG_LF_WORKFLOW_NAME,
 };
 pub use stornierung::{
     GeliGasStornierungCommand, GeliGasStornierungData, GeliGasStornierungEvent,
@@ -106,11 +135,9 @@ pub use stornierung::{
 /// - PIDs 44001–44021 → `"geli-gas-supplier-change"`
 ///   (`GeliGasSupplierChangeWorkflow`)
 ///
-/// Note: PIDs **44022–44024** (WiM Gas Stornierung) are registered by
-/// `WimGasModule` in `mako-wim-gas`, not here (per `docs/pid-reference.md`).
-///
-/// Note: the Gas Sperr-/Entsperrprozess (PIDs 17115/17116/17117, ORDERS
-/// format) is not yet implemented; see `docs/pid-reference.md`.
+/// Note: PIDs **44022–44024** are multi-domain (GeLi Gas 2.0 + WiM Gas per BDEW PID
+/// 3.3/4.0 xlsx) and currently routed by `WimGasModule` in `mako-wim-gas`.
+/// Role-based routing for LFN/LFA contexts (GeLi Gas Stornierung) is a TODO.
 pub struct GeliGasModule;
 
 impl mako_engine::builder::EngineModule for GeliGasModule {
@@ -119,7 +146,19 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
     }
 
     fn workflow_names(&self) -> &'static [&'static str] {
-        &["geli-gas-supplier-change"]
+        &[
+            "geli-gas-supplier-change",
+            // "geli-gas-stornierung" is registered here so `assert_dispatch_coverage`
+            // enforces its presence in the dispatch table.  PIDs 44022–44024 are
+            // currently routed by `WimGasModule` (wim-gas-stornierung) pending
+            // role-conditional routing for the LFN/LFA context.  Adding the name
+            // here ensures the dispatch arm can never be silently removed.
+            stornierung::WORKFLOW_NAME,
+            mscons::WORKFLOW_NAME,
+            datenabruf::WORKFLOW_NAME,
+            sperrung_lf::WORKFLOW_NAME,
+            partin::WORKFLOW_NAME,
+        ]
     }
 
     fn register_pids(&self, router: &mut mako_engine::pid_router::PidRouter) {
@@ -128,7 +167,49 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         for &pid in lieferbeginn::UTILMD_PIDS {
             router.register(pid, "geli-gas-supplier-change");
         }
-        // PIDs 44022–44024 (WiM Gas Stornierung) are registered by WimGasModule.
+        // PIDs 44022–44024 are multi-domain (GeLi Gas 2.0 + WiM Gas) and currently
+        // registered by WimGasModule only. GeLi Gas role routing is a TODO.
+
+        // Gas MSCONS data delivery PIDs (NB/MSB → LF, GeLi Gas Teil 2).
+        //
+        // Inbound gas metered values, load profiles, and allocation data.
+        // Registered unconditionally for LF deployments.
+        for &pid in mscons::MSCONS_PIDS {
+            router.register(pid, mscons::WORKFLOW_NAME);
+        }
+
+        // Gas Datenabruf — LF/MSB Gas requests Gas-specific metered values.
+        //
+        // ORDERS 17103 (Anfrage Abrechnungsbrennwert/Zustandszahl) and 17104
+        // (MSB Gas Anfrage an NB Strom). Rejections via ORDRSP 19103/19104.
+        for &pid in datenabruf::ORDERS_ANFRAGE_PIDS {
+            router.register(pid, datenabruf::WORKFLOW_NAME);
+        }
+        for &pid in datenabruf::ORDRSP_ABLEHNUNG_PIDS {
+            router.register(pid, datenabruf::WORKFLOW_NAME);
+        }
+
+        // PARTIN Gas Kommunikationsdaten (GeLi Gas, BK7-24-01-009).
+        //
+        // Gas party GLNs (GNB, gMSB, LF Gas, MGV) differ from Strom party GLNs.
+        // Registered here so Gas-only deployments receive Gas PARTIN independently.
+        // Strom PARTIN (37000–37006) is handled by mako-gpke gpke-partin.
+        for &pid in partin::PARTIN_GAS_PIDS {
+            router.register(pid, partin::WORKFLOW_NAME);
+        }
+
+        // Gas Sperrung / Entsperrung (LF-side) — PIDs 17115/17117 outbound (LF → GNB),
+        // inbound ORDRSP 19116/19117 (Bestätigung/Ablehnung), Storno ORDRSP 19128/19129.
+        // PIDs 19116/19117 are shared with GPKE Sperrung Strom; process context is
+        // resolved by correlation ID at runtime in mixed Strom+Gas deployments.
+        // Regulatory basis: BK7-24-01-009 (GeLi Gas 3.0).
+        // APERAK Frist: 10 Werktage.
+        for &pid in sperrung_lf::ORDRSP_SPERRUNG_PIDS {
+            router.register(pid, sperrung_lf::WORKFLOW_NAME);
+        }
+        for &pid in sperrung_lf::ORDRSP_STORNO_PIDS {
+            router.register(pid, sperrung_lf::WORKFLOW_NAME);
+        }
     }
 
     fn profile_requirements(&self) -> &'static [mako_engine::profile::ProfileRequirement] {
@@ -142,15 +223,51 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
                 message_type: "APERAK",
                 label: "APERAK (GeLi Gas)",
             },
+            ProfileRequirement {
+                message_type: "MSCONS",
+                label: "MSCONS Gas Messdaten (13002, 13007–13009, 13013–13014)",
+            },
+            ProfileRequirement {
+                message_type: "ORDERS",
+                label: "ORDERS Gas Datenabruf (17103, 17104)",
+            },
+            ProfileRequirement {
+                message_type: "ORDERS",
+                label: "ORDERS Gas Sperrung / Entsperrung (17115, 17117)",
+            },
+            ProfileRequirement {
+                message_type: "PARTIN",
+                label: "PARTIN Gas Kommunikationsdaten (37008–37014)",
+            },
         ]
     }
 
     fn configure(&self) -> Result<(), String> {
-        // Verify that all static PID slices referenced by register_pids() are
-        // non-empty so a codegen regression is caught at startup.
+        // Verify that all static PID slices are non-empty so a codegen regression
+        // is caught at startup before any messages are processed.
         const _: () = assert!(
             !lieferbeginn::UTILMD_PIDS.is_empty(),
             "geli-gas: lieferbeginn::UTILMD_PIDS is empty — at least one PID must be registered"
+        );
+        const _: () = assert!(
+            !stornierung::STORNIERUNG_PIDS.is_empty(),
+            "geli-gas: stornierung::STORNIERUNG_PIDS is empty — 44022/44023/44024 must be present"
+        );
+        const _: () = assert!(
+            !mscons::MSCONS_PIDS.is_empty(),
+            "geli-gas: mscons::MSCONS_PIDS is empty — at least one Gas MSCONS PID must be registered"
+        );
+        const _: () = assert!(
+            !datenabruf::ORDERS_ANFRAGE_PIDS.is_empty(),
+            "geli-gas: datenabruf::ORDERS_ANFRAGE_PIDS is empty"
+        );
+        const _: () = assert!(
+            !sperrung_lf::SPERRUNG_ANFRAGE_PIDS.is_empty(),
+            "geli-gas: sperrung_lf::SPERRUNG_ANFRAGE_PIDS is empty — 17115/17117 must be present"
+        );
+        const _: () = assert!(
+            !partin::PARTIN_GAS_PIDS.is_empty(),
+            "geli-gas: partin::PARTIN_GAS_PIDS is empty — 37008–37014 must be present"
         );
         Ok(())
     }

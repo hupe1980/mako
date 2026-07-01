@@ -40,11 +40,13 @@ use std::sync::Arc;
 
 use axum::{
     Router,
+    body::Bytes,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{delete, get, post, put},
 };
+use edi_energy::{AnyMessage, EdiEnergyMessage as _, Platform};
 use mako_engine::{
     ids::TenantId,
     partner::{PartnerRecord, PartnerStore as _},
@@ -63,6 +65,9 @@ pub struct PartnerAdminState {
     pub store: SlateDbPartnerStore,
     pub tenant_id: TenantId,
     pub optional_token: Option<SecretString>,
+    /// Shared EDIFACT platform for parsing PARTIN interchanges submitted to
+    /// `POST /admin/partners/import`.
+    pub platform: Arc<Platform>,
 }
 
 // ── Request / response types ──────────────────────────────────────────────────
@@ -94,6 +99,16 @@ struct ListResponse {
 struct DeleteResponse {
     gln: String,
     deleted: bool,
+}
+
+#[derive(Serialize)]
+struct ImportResponse {
+    /// Number of PARTIN records successfully upserted.
+    upserted: usize,
+    /// Number of PARTIN messages that had no extractable GLN.
+    skipped: usize,
+    /// GLNs that were upserted.
+    glns: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -255,24 +270,84 @@ async fn handle_delete(
 /// `POST /admin/partners/import` — import partners from a raw PARTIN EDIFACT
 /// interchange.
 ///
-/// **Currently returns `501 Not Implemented`** — full PARTIN segment extraction
-/// will be added once the PARTIN parser is complete.  The PARTIN profile files
-/// exist at `crates/edi-energy/profiles/partin/` and will be used to populate
-/// [`PartnerRecord`] fields from `NAD`, `COM`, `DTM`, and `CTA` segments.
+/// Accepts a raw EDIFACT interchange (`Content-Type: text/plain; charset=utf-8`
+/// or `application/edifact`). Each PARTIN message in the interchange is parsed,
+/// the sender's communication data (GLN, AS4 endpoint, email, phone) is
+/// extracted, and the result is upserted into the [`PartnerStore`].
+///
+/// This endpoint is idempotent — reimporting the same interchange is safe and
+/// will update existing records according to the `valid_from` merge rules of
+/// [`PartnerRecord::merge_from_partin`].
+///
+/// Returns a JSON summary of how many records were upserted/skipped.
 async fn handle_import(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
+    body: Bytes,
 ) -> Response {
     if !check_auth(&headers, &state.optional_token) {
         return unauthorized();
     }
-    let _ = &state; // suppress unused warning until implemented
+    if body.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "request body is empty".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let mut upserted = 0usize;
+    let mut skipped = 0usize;
+    let mut glns = Vec::new();
+
+    for result in state
+        .platform
+        .parse_interchange(std::io::Cursor::new(&body[..]))
+    {
+        let msg = match result {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(error = %e, "PARTIN import: parse error — skipping message");
+                skipped += 1;
+                continue;
+            }
+        };
+        if let AnyMessage::Partin(partin) = msg {
+            let pid = partin.detect_pruefidentifikator().ok().map(|p| p.as_u32());
+            match crate::edifact_api::partin_to_partner_record(&partin, pid) {
+                Some(record) => {
+                    let gln_str = record.gln.to_string();
+                    match state.store.upsert(state.tenant_id, &record).await {
+                        Ok(()) => {
+                            info!(gln = %gln_str, "PARTIN import: partner upserted");
+                            glns.push(gln_str);
+                            upserted += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!(gln = %gln_str, error = %e, "PARTIN import: upsert failed");
+                            skipped += 1;
+                        }
+                    }
+                }
+                None => {
+                    tracing::debug!("PARTIN import: no sender GLN — skipping");
+                    skipped += 1;
+                }
+            }
+        } else {
+            // Non-PARTIN message in interchange — ignore
+            skipped += 1;
+        }
+    }
+
     (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(ErrorResponse {
-            error: "PARTIN import not yet implemented; \
-                    use PUT /admin/partners/{gln} to create records manually"
-                .into(),
+        StatusCode::OK,
+        Json(ImportResponse {
+            upserted,
+            skipped,
+            glns,
         }),
     )
         .into_response()

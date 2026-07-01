@@ -741,7 +741,7 @@ impl SlateDbStore {
         let prefix = ns.as_str();
         let mut iter = self
             .db
-            .scan_prefix(prefix.as_bytes())
+            .scan_prefix(prefix.as_bytes(), ..)
             .await
             .map_err(to_store_err)?;
         let mut results = Vec::new();
@@ -1032,7 +1032,7 @@ impl EventStore for SlateDbStore {
         };
         let mut iter = self
             .db
-            .scan_prefix(scan_prefix.as_bytes())
+            .scan_prefix(scan_prefix.as_bytes(), ..)
             .await
             .map_err(to_store_err)?;
         let mut streams = Vec::new();
@@ -1717,7 +1717,7 @@ impl DeadlineStore for SlateDbDeadlineStore {
         let prefix = ds_stream_prefix(stream_id);
         let mut iter = self
             .db
-            .scan_prefix(prefix.as_bytes())
+            .scan_prefix(prefix.as_bytes(), ..)
             .await
             .map_err(to_deadline_err)?;
         let mut result = Vec::new();
@@ -1766,7 +1766,11 @@ impl DeadlineStore for SlateDbDeadlineStore {
             _ => {} // not yet initialised — fall through to bootstrap scan
         }
         // One-time bootstrap: scan all dl/ keys and persist the counter.
-        let mut iter = self.db.scan_prefix(b"dl/").await.map_err(to_deadline_err)?;
+        let mut iter = self
+            .db
+            .scan_prefix(b"dl/", ..)
+            .await
+            .map_err(to_deadline_err)?;
         let mut count = 0u64;
         while iter.next().await.map_err(to_deadline_err)?.is_some() {
             count += 1;
@@ -1895,7 +1899,11 @@ impl ProcessRegistry for SlateDbProcessRegistry {
             _ => {} // not yet initialised — fall through to bootstrap scan
         }
         // One-time bootstrap: scan all pr/ keys and persist the counter.
-        let mut iter = self.db.scan_prefix(b"pr/").await.map_err(to_registry_err)?;
+        let mut iter = self
+            .db
+            .scan_prefix(b"pr/", ..)
+            .await
+            .map_err(to_registry_err)?;
         let mut count = 0u64;
         while iter.next().await.map_err(to_registry_err)?.is_some() {
             count += 1;
@@ -1941,7 +1949,7 @@ impl ProcessRegistry for SlateDbProcessRegistry {
         let prefix = ci_tag_prefix(tenant_id, tag);
         let mut iter = self
             .db
-            .scan_prefix(prefix.as_bytes())
+            .scan_prefix(prefix.as_bytes(), ..)
             .await
             .map_err(to_registry_err)?;
 
@@ -2112,7 +2120,11 @@ impl SlateDbInboxStore {
     /// Returns [`EngineError::Inbox`] on storage failure.
     pub async fn purge_expired(&self, before: OffsetDateTime) -> Result<usize, EngineError> {
         let cutoff_nanos = u64::try_from(before.unix_timestamp_nanos().max(0)).unwrap_or(0);
-        let mut iter = self.db.scan_prefix(b"it/").await.map_err(to_inbox_err)?;
+        let mut iter = self
+            .db
+            .scan_prefix(b"it/", ..)
+            .await
+            .map_err(to_inbox_err)?;
         let mut purged = 0usize;
         // Collect all deletions into a single batch per 1000 entries to avoid
         // O(n) round-trips.
@@ -2490,7 +2502,7 @@ impl SlateDbStore {
         // Keys sort chronologically; reverse to give most-recent-first ordering.
         let mut iter = self
             .db
-            .scan_prefix(b"dr/")
+            .scan_prefix(b"dr/", ..)
             .await
             .map_err(|e| EngineError::dead_letter(slatedb_error_kind_str(&e)))?;
 
@@ -2651,7 +2663,7 @@ impl crate::partner::PartnerStore for SlateDbPartnerStore {
         let prefix = pt_tenant_prefix(tenant_id);
         let mut iter = self
             .db
-            .scan_prefix(prefix.as_bytes())
+            .scan_prefix(prefix.as_bytes(), ..)
             .await
             .map_err(|e| to_partner_err(&e))?;
 

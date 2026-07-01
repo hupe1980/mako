@@ -101,11 +101,16 @@ impl mako_engine::builder::EngineModule for MabisModule {
         //
         // MSCONS AHB 2.4c/2.5 §5: "Summenzeitreihen und Ausfallarbeitssummen".
         // Confirmed absent: PID 13001 does not exist in any MSCONS AHB version.
-        // PIDs 13002, 13004–13028 are Messwesen (meter data exchange) PIDs and
-        // must not be registered under any mabis-billing workflow identifier.
+        // Gas/WiM meter PIDs (13002, 13005–13009, 13013–13019, 13020–13028) are
+        // Messwesen or Redispatch PIDs and are registered in their respective crates.
+        // Exception: PIDs 13010/13011/13012 (normiertes Profil / Profilschar / TEP)
+        // are BK-Treue/MaBiS settlement profile data and are registered here.
         router.register(13003, "mabis-billing");
+        router.register(13010, "mabis-billing");
+        router.register(13011, "mabis-billing");
+        router.register(13012, "mabis-billing");
 
-        // IFTSTA MaBiS PIDs 21000–21007.
+        // IFTSTA MaBiS PIDs 21000–21005.
         //
         // All MaBiS IFTSTA status messages are routed to the same
         // `mabis-billing` workflow so they can be correlated with their
@@ -114,6 +119,9 @@ impl mako_engine::builder::EngineModule for MabisModule {
         // PID 21004 ("Statusmeldung vom BIKO an BKV/NB") is the Datenstatus
         // confirmation that drives the PruefmitteilungSent → Settled transition.
         // All other MaBiS IFTSTA PIDs are informational status notifications.
+        //
+        // Note: PID 21006 does not exist. PID 21007 is WiM Strom Teil 1 /
+        // WiM Gas and is registered in `mako-wim` (`wim-device-change`).
         for &pid in bilanzkreisabrechnung::IFTSTA_PIDS {
             router.register(pid, "mabis-billing");
         }
@@ -128,7 +136,7 @@ impl mako_engine::builder::EngineModule for MabisModule {
             },
             ProfileRequirement {
                 message_type: "IFTSTA",
-                label: "IFTSTA Statusmeldung (MaBiS 21000–21007)",
+                label: "IFTSTA Statusmeldung (MaBiS 21000–21005)",
             },
         ]
     }

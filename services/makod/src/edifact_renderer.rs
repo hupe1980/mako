@@ -169,7 +169,7 @@ fn render_utilmd(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
         .unwrap_or(msg.recipient.as_ref());
 
     // WiM PIDs (55039, 55042, 55051, 55168) refer to Messlokationen; all other UTILMD PIDs
-    // (GPKE 55xxx, ex-MPES 56xxx, GeLi Gas 44xxx) refer to Marktlokationen.
+    // (GPKE 55xxx, GeLi Gas 44xxx) refer to Marktlokationen.
     let (object_type, location_id_key) = if matches!(pid, 55_039 | 55_042 | 55_051 | 55_168) {
         (ObjectType::Messlokation, "melo")
     } else {
@@ -234,17 +234,19 @@ fn render_utilmd(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
 /// | 55001, 44001   | Lieferbeginn      | 163       | Delivery start      |
 /// | 55002, 44002   | Lieferende        | 164       | Delivery end        |
 /// | 55016          | Kündigung         | 163       | Cancellation date   |
-/// | 56001–56004    | ex-MPES feed-in   | 163       | Delivery start      |
 /// | 55039, 55042, 55051, 55168 | WiM Messstellenbetrieb | 163       | Execution date      |
 /// | 44003–44006    | GeLi Gas Antwort  | 163       | Confirmation date   |
 /// | _              | fallback          | 163       | Delivery start      |
+///
+/// Note: PIDs 56001–56010 do not appear in any current BDEW AHB (PID 3.3, PID 4.0)
+/// and must never be rendered.
+/// See `crates/edi-energy/tests/registry.rs` for the authoritative phantom-PID guard.
 fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
     match pid {
         55001 | 44001 => "163",                 // Lieferbeginn
         55002 | 44002 => "164",                 // Lieferende
         55016 => "163",                         // Kündigung Lieferbeginn (inbound, LFN → LFA)
         55017 | 55018 => "163",                 // Bestätigung/Ablehnung Kündigung (LFA → LFN)
-        56001..=56004 => "163",                 // ex-MPES feed-in
         55039 | 55042 | 55051 | 55168 => "163", // WiM Messstellenbetrieb
         44003..=44006 => "163",                 // GeLi Gas confirmation/rejection
         _ => "163",

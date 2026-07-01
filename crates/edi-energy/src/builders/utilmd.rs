@@ -63,7 +63,7 @@ struct UtilmdBuilderInner {
 /// use edi_energy::builders::UtilmdBuilder;
 ///
 /// let msg = UtilmdBuilder::new(Release::new("5.5.3a"))
-///     .pruefidentifikator(Pruefidentifikator::new(11001).unwrap())
+///     .pruefidentifikator(Pruefidentifikator::new(55001).unwrap())
 ///     .sender("9900987654321")
 ///     .receiver("9900123456789")
 ///     .build()?;
@@ -137,7 +137,7 @@ impl<S, R> UtilmdBuilder<S, R> {
         self
     }
 
-    /// Set the Pruefidentifikator (process-variant code, e.g. `11001`).
+    /// Set the Pruefidentifikator (process-variant code, e.g. `55001`).
     pub fn pruefidentifikator(mut self, pid: Pruefidentifikator) -> Self {
         self.inner.pruefidentifikator = Some(pid);
         self
@@ -174,7 +174,7 @@ impl<S, R> UtilmdBuilder<S, R> {
     /// # use edi_energy::{Release, Pruefidentifikator};
     /// # use edi_energy::builders::UtilmdBuilder;
     /// let msg = UtilmdBuilder::new(Release::new("5.5.3a"))
-    ///     .pruefidentifikator(Pruefidentifikator::new(11001).unwrap())
+    ///     .pruefidentifikator(Pruefidentifikator::new(55001).unwrap())
     ///     .sender("9900987654321")
     ///     .receiver("9900123456789")
     ///     .rff("ACE", "20230701")

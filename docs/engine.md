@@ -276,8 +276,10 @@ Within a single process the store uses a per-key `DashMap<_, Arc<Mutex<()>>>` to
 | Process family | Unit | Function |
 |---|---|---|
 | GPKE | 24 wall-clock hours | `fristen::add_hours(t, 24)` |
-| WiM | 5 Werktage | `fristen::add_werktage(d, 5, BdewMaKo)` |
+| WiM Strom | 5 Werktage | `fristen::add_werktage(d, 5, BdewMaKo)` |
 | GeLi Gas | 10 Werktage | `fristen::add_werktage(d, 10, BdewMaKo)` |
+| WiM Gas | 10 Werktage | `fristen::add_werktage(d, 10, BdewMaKo)` |
+| MABIS | 1 Werktag (Prüfmitteilung) | `fristen::add_werktage(d, 1, BdewMaKo)` |
 
 **Saturday counts as a Werktag.** Sunday and public holidays do not.
 
@@ -512,16 +514,14 @@ Partners are managed at runtime via the REST admin API — see
 
 ## Domain crates
 
-| Crate | Process family | PID range | APERAK Frist |
+| Crate | Process family | Key inbound PIDs | APERAK Frist |
 |---|---|---|---|
-| `mako-gpke` | GPKE — Lieferbeginn/-ende Strom, ORDERS Sperrung, INVOIC billing, Konfiguration | 55001–55002, 55016–55018, 17115–17117, 31001–31008, 17134/17135, 19001/19002 | **24 wall-clock hours** |
-| `mako-wim` | WiM — Messstellenwechsel Strom | 11001–11099 | **5 Werktage** |
-| `mako-geli-gas` | GeLi Gas — Lieferbeginn/-ende Gas | 17001–17099 | **10 Werktage** |
-| `mako-mabis` | MABIS — Bilanzkreisabrechnung | 13003 (MSCONS Summenzeitreihe) | n/a (batch, not saga) |
-
-### Ex-MPES processes in `mako-gpke`
-
-PIDs 56001–56010 (previously MPES feed-in processes) were transferred into **GPKE** per BNetzA BK6-22-024 (LFW24), effective **2025-06-06**. There is no `mako-mpes` crate; all ex-MPES processes live in `mako-gpke`.
+| `mako-gpke` | GPKE — Lieferbeginn/-ende Strom, ORDERS Sperrung (NB role), INVOIC billing, Konfiguration | 55001–55002, 55016–55018, 55555, 17115–17117 (NB inbound), 31001–31008, 17134/17135, 19001/19002 | **24 wall-clock hours** |
+| `mako-wim` | WiM Strom — Messstellenwechsel, INSRPT Strom, WiM-Rechnung | 55039, 55042, 55051, 55168, 19001/19002, 23001/23003/23004/23008 | **5 Werktage** |
+| `mako-geli-gas` | GeLi Gas — Lieferbeginn/-ende Gas, Gas Sperrung (LF role), Gas Datenabruf | 44001–44021, 17103, 17104, 19103, 19104, 19116, 19117, 19128, 19129 | **10 Werktage** |
+| `mako-wim-gas` | WiM Gas — Messstellenwechsel Gas, INSRPT Gas | 44039–44053, 44168–44170, 23005, 23009 | **10 Werktage** |
+| `mako-mabis` | MABIS — Bilanzkreisabrechnung | 13003 (MSCONS Summenzeitreihe, IFTSTA 21000–21005) | n/a (batch, not saga) |
+| `mako-gabi-gas` | GaBi Gas — Kapazitätsabrechnung Gas | INVOIC 31010, 31011 | n/a (billing, calendar-driven) |
 
 ### MABIS architecture note
 

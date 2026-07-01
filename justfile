@@ -45,11 +45,18 @@ fmt-check:
     cargo fmt --all -- --check
 
 # Dependency audit: licenses + advisories
+# cargo deny does not accept --all-features; it always resolves the full
+# workspace graph from Cargo.lock. Stale skip entries (previously gated on
+# slatedb/energy-api features) have been cleaned up; deny check now runs clean.
 deny:
     cargo deny check
 
+# Build and check rustdoc (--all-features, warnings as errors)
+doc-check:
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+
 # Full CI suite (minimum gate + tests + quality + release-lifecycle checks)
-ci: check test clippy fmt-check deny codegen-check validate-profiles-strict validate-pruefids-strict-ci
+ci: check test clippy fmt-check deny doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 

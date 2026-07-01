@@ -40,7 +40,39 @@ pub fn validate(doc: &Document, result: &mut ValidationResult) {
                 ));
             }
         }
-        // Other document types: no additional semantic rules at this time.
+        Document::Stammdaten(d) => {
+            // A Stammdaten document must describe at least one SR_Objekt
+            // (controllable resource) unless it is a deactivation/withdrawal.
+            use crate::documents::stammdaten::Meldungsstatus;
+            if d.meldungsstatus != Meldungsstatus::Deactivation && d.sr_objekte.is_empty() {
+                result.errors.push(ValidationError::Semantic(
+                    "Stammdaten (creation/update) must contain at least one SR_Objekt".to_string(),
+                ));
+            }
+        }
+        Document::NetworkConstraint(d) => {
+            // A NetworkConstraintDocument without a withdrawal status must carry
+            // at least one time series.
+            if d.doc_status.is_none() && d.time_series.is_empty() {
+                result.errors.push(ValidationError::Semantic(
+                    "NetworkConstraintDocument must contain at least one NetworkConstraintTimeSeries \
+                     (or carry a DocStatus withdrawal)"
+                        .to_string(),
+                ));
+            }
+        }
+        Document::Unavailability(d) => {
+            // An unavailability document without a docStatus must carry at least
+            // one TimeSeries.
+            if d.doc_status.is_none() && d.time_series.is_empty() {
+                result.errors.push(ValidationError::Semantic(
+                    "Unavailability_MarketDocument must contain at least one TimeSeries \
+                     (or carry a docStatus withdrawal)"
+                        .to_string(),
+                ));
+            }
+        }
+        // Acknowledgement, StatusRequest, Kaskade: no additional semantic rules.
         _ => {}
     }
 }

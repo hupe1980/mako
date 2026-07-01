@@ -51,22 +51,32 @@ pub const WORKFLOW_NAME: &str = "wim-device-change";
 /// ```
 pub const APERAK_WINDOW_LABEL: &str = "wim-aperak-5-werktage";
 
-/// WiM Strom IFTSTA Prüfidentifikatoren (PIDs 21029–21032).
+/// WiM Strom IFTSTA Prüfidentifikatoren (PIDs 21007, 21009–21015, 21018, 21029–21032).
 ///
 /// These status messages are part of the WiM MSB-Wechsel (WiM Strom Teil 1)
 /// process. All are routed to `"wim-device-change"` for correlation.
 ///
-/// **PIDs 21009/21010/21011/21012/21013/21015/21018** are "WiM Gas" per
-/// `docs/pid-reference.md`. They must be registered in `mako-wim-gas`,
-/// NOT here.
+/// Per IFTSTA AHB, these PIDs are "WiM / Statusmeldung MSB-Wechsel nach MsbG"
+/// (not WiM Gas). The previously documented "WiM Gas" attribution was incorrect;
+/// the AHB profile data is authoritative.
 ///
-/// | PID   | Beschreibung |
-/// |-------|----------|
-/// | 21029 | Vorabinformation (WiM Strom Teil 1) |
-/// | 21030 | iMS-Ersteinbauzustand (WiM Strom Teil 1) |
-/// | 21031 | Bestandssituation / Eigenausbau iMS (WiM Strom Teil 1) |
-/// | 21032 | Antwort auf das Angebot (WiM Strom Teil 1) |
-pub const IFTSTA_PIDS: &[u32] = &[21_029, 21_030, 21_031, 21_032];
+/// | PID   | Beschreibung | Richtung |
+/// |-------|---|---|
+/// | 21007 | Statusmeldung NB→LF / NB→MSBA | WiM Strom Teil 1 / WiM Gas |
+/// | 21009 | Statusmeldung MSB-Wechsel nach MsbG an LF | NB → LF |
+/// | 21010 | Statusmeldung MSB-Wechsel nach MsbG an NB | MSB alt → NB |
+/// | 21011 | Statusmeldung MSB-Wechsel nach MsbG an NB | MSB neu → NB |
+/// | 21012 | Statusmeldung MSB-Wechsel nach MsbG an BKV | NB → BKV |
+/// | 21013 | Statusmeldung MSB-Wechsel nach MsbG an ÜNB | NB → ÜNB |
+/// | 21015 | Statusmeldung Einbau iMS | wMSB → gMSB |
+/// | 21018 | Statusmeldung Anforderung Datenzugang | MSB → LF |
+/// | 21029 | Vorabinformation | wMSB → NB |
+/// | 21030 | iMS-Ersteinbauzustand | wMSB → gMSB |
+/// | 21031 | Bestandssituation / Eigenausbau iMS | wMSB → gMSB |
+/// | 21032 | Antwort auf das Angebot | LF → MSB |
+pub const IFTSTA_PIDS: &[u32] = &[
+    21_007, 21_009, 21_010, 21_011, 21_012, 21_013, 21_015, 21_018, 21_029, 21_030, 21_031, 21_032,
+];
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 

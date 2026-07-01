@@ -1259,16 +1259,16 @@ async fn dispatch_geli_gas_antwort(
         .and_then(|v| v.as_str())
         .map(str::to_owned);
 
-    // GeLi Gas uses DispatchAperak (not HandleAntwort) — the GNB dispatches
-    // an APERAK to the LFG, which is the positive/negative response.
-    let _ = response_pid_code; // recorded in audit log, not in DispatchAperak
+    // GeLi Gas uses SendAntwort — the GNB/LFA sends the UTILMD G Antwort.
+    let _ = response_pid_code; // recorded in audit log, not in SendAntwort
     dispatch_to_process::<GeliGasSupplierChangeWorkflow, _>(
         state,
         &malo_id,
         mako_geli_gas::WORKFLOW_NAME,
-        move || GasSupplierChangeCommand::DispatchAperak {
-            positive,
+        move || GasSupplierChangeCommand::SendAntwort {
+            accepted: positive,
             reason: reason.clone(),
+            obligations: vec![],
         },
     )
     .await

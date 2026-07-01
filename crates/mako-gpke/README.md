@@ -83,7 +83,7 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 ## Usage
 
 ```rust
-use mako_gpke::{GpkeSupplierChangeWorkflow, SupplierChangeCommand};
+use mako_gpke::wechselprozesse::{GpkeSupplierChangeWorkflow, SupplierChangeCommand};
 use mako_engine::{builder::EngineBuilder, event_store::InMemoryEventStore};
 
 // In tests (requires `testing` feature or `#[cfg(test)]`):

@@ -173,6 +173,7 @@ impl MockGnb {
                     receiver,
                     malo_id,
                     document_date,
+                    process_date: String::new(),
                     message_ref,
                     validation_passed: true, // bypass AHB profile check
                     validation_errors: vec![],
@@ -187,28 +188,29 @@ impl MockGnb {
             .expect("GNB: execute ReceiveUtilmd 44001");
     }
 
-    /// ERP action: dispatch positive or negative APERAK.
+    /// ERP action: dispatch positive or negative Antwort.
     ///
     /// Returns the `OutboxMessage` entries queued atomically with the
-    /// `AperakDispatched` event so callers can assert on the outbox payload.
+    /// `AntwortGesendet` event so callers can assert on the outbox payload.
     ///
-    /// `positive = true`  → APERAK accepted → state `AperakSent`
-    /// `positive = false` → APERAK rejected → state `Rejected`
+    /// `positive = true`  → Antwort accepted → state `AntwortGesendet`
+    /// `positive = false` → Antwort rejected → state `Rejected`
     async fn dispatch_aperak(&self, positive: bool, reason: Option<&str>) -> Vec<OutboxMessage> {
         let (_, outbox) = self
             .process
-            .execute_and_collect(GasSupplierChangeCommand::DispatchAperak {
-                positive,
+            .execute_and_collect(GasSupplierChangeCommand::SendAntwort {
+                accepted: positive,
                 reason: reason.map(str::to_owned),
+                obligations: vec![],
             })
             .await
-            .expect("GNB: execute DispatchAperak");
+            .expect("GNB: execute SendAntwort");
         outbox
     }
 
-    /// ERP action: activate the supply relationship (after positive APERAK).
+    /// ERP action: activate the supply relationship (after positive Antwort).
     ///
-    /// Transitions state from `AperakSent` to `Active`.
+    /// Transitions state from `AntwortGesendet` to `Active`.
     async fn activate(&self) {
         self.process
             .execute(GasSupplierChangeCommand::Activate)
@@ -223,7 +225,7 @@ impl MockGnb {
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
-/// GeLi Gas Lieferbeginn — positive APERAK path (PID 44001 → AperakSent → Active).
+/// GeLi Gas Lieferbeginn — positive Antwort path (PID 44001 → AntwortGesendet → Active).
 ///
 /// GNB receives the UTILMD G 44001 from the LFN, dispatches a positive APERAK,
 /// then activates the supply relationship.
@@ -247,28 +249,28 @@ async fn e2e_lieferbeginn_gas_positive_aperak() {
 
     // ── GNB ERP: dispatch positive APERAK (within 10 Werktage per BK7) ───────
     let aperak_outbox = gnb.dispatch_aperak(true, None).await;
-    // ── Assert APERAK outbox entry ─────────────────────────────────────────────
+    // ── Assert Antwort outbox entry ───────────────────────────────────────────
     assert_eq!(
         aperak_outbox.len(),
         1,
-        "positive DispatchAperak must enqueue exactly one Aperak outbox entry"
+        "positive SendAntwort must enqueue exactly one UtilmdAntwort outbox entry"
     );
     let aperak = &aperak_outbox[0];
-    assert_eq!(aperak.message_type.as_ref(), "Aperak");
+    assert_eq!(aperak.message_type.as_ref(), "UtilmdAntwort");
     assert_eq!(
         aperak.recipient.as_ref(),
         LFN_GAS_ID,
-        "Aperak must be addressed to the LFN Gas sender"
+        "UtilmdAntwort must be addressed to the LFN Gas sender"
     );
     let payload = aperak
         .payload
         .as_object()
-        .expect("Aperak payload must be a JSON object");
-    assert_eq!(payload["pid"].as_u64().unwrap(), 44001);
-    assert_eq!(payload["malo"].as_str().unwrap(), MALO_GAS_ID);
+        .expect("UtilmdAntwort payload must be a JSON object");
+    assert_eq!(payload["anfrage_pid"].as_u64().unwrap(), 44001);
+    assert_eq!(payload["malo_id"].as_str().unwrap(), MALO_GAS_ID);
     assert!(
-        payload["positive"].as_bool().unwrap(),
-        "positive flag must be true"
+        payload["accepted"].as_bool().unwrap(),
+        "accepted flag must be true"
     );
     assert_eq!(
         payload["orig_message_ref"].as_str().unwrap(),
@@ -277,8 +279,11 @@ async fn e2e_lieferbeginn_gas_positive_aperak() {
     );
     let state_after_aperak = gnb.state().await;
     assert!(
-        matches!(state_after_aperak, GasSupplierChangeState::AperakSent(_)),
-        "GNB must be AperakSent after positive DispatchAperak; got: {state_after_aperak:?}"
+        matches!(
+            state_after_aperak,
+            GasSupplierChangeState::AntwortGesendet { .. }
+        ),
+        "GNB must be AntwortGesendet after positive SendAntwort; got: {state_after_aperak:?}"
     );
 
     // ── GNB ERP: activate supply relationship ─────────────────────────────────
@@ -291,7 +296,7 @@ async fn e2e_lieferbeginn_gas_positive_aperak() {
     );
     if let GasSupplierChangeState::Active(data) = final_state {
         assert_eq!(data.malo_id.as_str(), MALO_GAS_ID);
-        assert_eq!(data.new_supplier.as_str(), LFN_GAS_ID);
+        assert_eq!(data.sender.as_str(), LFN_GAS_ID);
         assert_eq!(
             data.pruefidentifikator.as_u32(),
             44001,
@@ -331,18 +336,18 @@ async fn e2e_lieferbeginn_gas_negative_aperak() {
     assert_eq!(
         aperak_outbox.len(),
         1,
-        "negative DispatchAperak must also enqueue one Aperak outbox entry"
+        "negative SendAntwort must also enqueue one UtilmdAntwort outbox entry"
     );
     let aperak = &aperak_outbox[0];
-    assert_eq!(aperak.message_type.as_ref(), "Aperak");
+    assert_eq!(aperak.message_type.as_ref(), "UtilmdAntwort");
     assert_eq!(aperak.recipient.as_ref(), LFN_GAS_ID);
     let payload = aperak
         .payload
         .as_object()
-        .expect("Aperak payload must be a JSON object");
+        .expect("UtilmdAntwort payload must be a JSON object");
     assert!(
-        !payload["positive"].as_bool().unwrap(),
-        "positive flag must be false for rejection"
+        !payload["accepted"].as_bool().unwrap(),
+        "accepted flag must be false for rejection"
     );
     assert!(
         payload["reason"]
@@ -378,6 +383,7 @@ async fn e2e_lieferbeginn_gas_ahb_validation_failure() {
             receiver: mako_engine::types::MarktpartnerCode::new(GNB_ID),
             malo_id: mako_engine::types::MaLo::new(MALO_GAS_ID),
             document_date: "2025-01-15".to_owned(),
+            process_date: String::new(),
             message_ref: mako_engine::types::MessageRef::new("MSG-GAS-002"),
             validation_passed: false,
             validation_errors: vec![
@@ -423,6 +429,7 @@ async fn e2e_lieferbeginn_gas_duplicate_message_rejected() {
             receiver: mako_engine::types::MarktpartnerCode::new(GNB_ID),
             malo_id: mako_engine::types::MaLo::new(MALO_GAS_ID),
             document_date: "2025-01-15".to_owned(),
+            process_date: String::new(),
             message_ref: mako_engine::types::MessageRef::new("MSG-GAS-DUP"),
             validation_passed: true,
             validation_errors: vec![],

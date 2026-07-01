@@ -39,31 +39,50 @@ use mako_engine::{
     ids::ProcessIdentity,
     process::Process,
 };
+use mako_gabi_gas::{GaBiGasInvoicCommand, GaBiGasInvoicWorkflow};
 use mako_geli_gas::{
-    GasSupplierChangeCommand, GeliGasStornierungCommand, GeliGasStornierungWorkflow,
-    GeliGasSupplierChangeWorkflow,
+    GasSperrungLfCommand, GasSupplierChangeCommand, GeliGasDatanabrufCommand,
+    GeliGasDatanabrufWorkflow, GeliGasSperrungLfWorkflow, GeliGasStornierungCommand,
+    GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
 };
 use mako_gpke::{
-    AbrechnungCommand, AnfrageBestellungCommand, GpkeAbrechnungWorkflow,
-    GpkeAnfrageBestellungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
-    GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand,
-    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow, KonfigurationCommand, LfAbmeldungCommand,
-    LfAnmeldungCommand, NeuanlageCommand, SperrungCommand, SupplierChangeCommand,
-    anfrage_bestellung::WORKFLOW_NAME as ANFRAGE_BESTELLUNG_WORKFLOW,
+    AbrechnungCommand, AllokationslisteCommand, AnfrageBestellungCommand, DatanabrufCommand,
+    GpkeAbrechnungWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
+    GpkeDatanabrufWorkflow, GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow,
+    GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow,
+    GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand, GpkeStornierungWorkflow,
+    GpkeSupplierChangeWorkflow, KonfigurationAenderungCommand, KonfigurationCommand,
+    LfAbmeldungCommand, LfAnmeldungCommand, NeuanlageCommand, SperrungCommand, SperrungLfCommand,
+    SupplierChangeCommand, anfrage_bestellung::WORKFLOW_NAME as ANFRAGE_BESTELLUNG_WORKFLOW,
     lf_anmeldung::WORKFLOW_NAME as LF_ANMELDUNG_WORKFLOW,
+    sperrung_lf::WORKFLOW_NAME as SPERRUNG_LF_WORKFLOW,
 };
 use mako_mabis::{BillingCommand, MabisBillingWorkflow};
+use mako_redispatch::{
+    ack_forward::{
+        AckForwardCommand, KaskadeWorkflow, KostenblattWorkflow, NetzengpassWorkflow,
+        PlanungsdatenWorkflow, StatusanfrageWorkflow, VerfuegbarkeitWorkflow,
+        names::{KASKADE, KOSTENBLATT, NETZENGPASS, PLANUNGSDATEN, STATUSANFRAGE, VERFUEGBARKEIT},
+    },
+    aktivierung::{AktivierungCommand, AktivierungWorkflow, WORKFLOW_NAME as AKTIVIERUNG_WORKFLOW},
+    stammdaten::{
+        StammdatenCommand as RedispatchStammdatenCommand,
+        StammdatenWorkflow as RedispatchStammdatenWorkflow, WORKFLOW_NAME as STAMMDATEN_WORKFLOW,
+    },
+};
 use mako_wim::{
-    DeviceChangeCommand, GeraeteubernahmeCommand, PreisanfrageCommand, PreislisteCommand,
-    StammdatenCommand, SteuerungsauftragCommand, StornierungCommand, WimDeviceChangeWorkflow,
-    WimGeraeteubernahmeWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow,
+    DeviceChangeCommand, GeraeteubernahmeCommand, INSRPT_WORKFLOW_NAME as WIM_INSRPT_WORKFLOW,
+    PreisanfrageCommand, PreislisteCommand, StammdatenCommand, SteuerungsauftragCommand,
+    StornierungCommand, StorungsmeldungCommand, TechnikAenderungCommand, WimDeviceChangeWorkflow,
+    WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow,
     WimRechnungCommand, WimRechnungWorkflow, WimStammdatenWorkflow, WimSteuerungsauftragWorkflow,
-    WimStornierungWorkflow,
+    WimStornierungWorkflow, WimTechnikAenderungWorkflow,
 };
 use mako_wim_gas::{
-    WimGasAnmeldungCommand, WimGasAnmeldungWorkflow, WimGasKuendigungCommand,
-    WimGasKuendigungWorkflow, WimGasVerpflichtungsanfrageCommand,
-    WimGasVerpflichtungsanfrageWorkflow,
+    WimGasAnmeldungCommand, WimGasAnmeldungWorkflow, WimGasInsrptWorkflow, WimGasInvoicCommand,
+    WimGasInvoicWorkflow, WimGasKuendigungCommand, WimGasKuendigungWorkflow,
+    WimGasStornierungCommand, WimGasStornierungWorkflow, WimGasVerpflichtungsanfrageCommand,
+    WimGasVerpflichtungsanfrageWorkflow, insrpt::GasStorungsmeldungCommand,
 };
 
 use mako_engine::metrics::EngineMetrics;
@@ -279,6 +298,43 @@ pub async fn dispatch_deadline(
                 .await
                 .map(|_| ())
         }
+        "geli-gas-datenabruf" => {
+            let p = Process::<GeliGasDatanabrufWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                GeliGasDatanabrufCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "geli-gas-sperrung-lf" => {
+            let p = Process::<GeliGasSperrungLfWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                GasSperrungLfCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "geli-gas-partin" => {
+            // Gas PARTIN processes are simple receipts with no deadline obligation.
+            // This arm exists solely to satisfy assert_dispatch_coverage.
+            tracing::debug!(
+                deadline_id = %deadline_id,
+                "geli-gas-partin: no deadline action (simple receipt workflow)",
+            );
+            Ok(())
+        }
         "mabis-billing" => {
             let p = Process::<MabisBillingWorkflow, _>::from_identity(
                 Arc::clone(&event_store),
@@ -419,6 +475,261 @@ pub async fn dispatch_deadline(
                 .await
                 .map(|_| ())
         }
+        "wim-gas-invoic" => {
+            let p = Process::<WimGasInvoicWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                WimGasInvoicCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "wim-gas-stornierung" => {
+            let p = Process::<WimGasStornierungWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                WimGasStornierungCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "wim-gas-insrpt" => {
+            let p = Process::<WimGasInsrptWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                GasStorungsmeldungCommand::TimeoutExpired {
+                    deadline_id,
+                    label,
+                    outbox: None,
+                },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "gabi-gas-invoic" => {
+            let p = Process::<GaBiGasInvoicWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                GaBiGasInvoicCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        // ── Redispatch 2.0 workflows ──────────────────────────────────────────
+        // Clocks: ACK/Activation windows are UTC wall-clock hours.
+        // Stammdaten-forwarding and Kostenblatt use German local time (Werktage).
+        STAMMDATEN_WORKFLOW => {
+            let p = Process::<RedispatchStammdatenWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                RedispatchStammdatenCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        AKTIVIERUNG_WORKFLOW => {
+            let p = Process::<AktivierungWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                AktivierungCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        VERFUEGBARKEIT => {
+            let p = Process::<VerfuegbarkeitWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                AckForwardCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        NETZENGPASS => {
+            let p = Process::<NetzengpassWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                AckForwardCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        KASKADE => {
+            let p =
+                Process::<KaskadeWorkflow, _>::from_identity(Arc::clone(&event_store), identity);
+            p.execute_and_enqueue_with_retry(
+                AckForwardCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        PLANUNGSDATEN => {
+            let p = Process::<PlanungsdatenWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                AckForwardCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        STATUSANFRAGE => {
+            let p = Process::<StatusanfrageWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                AckForwardCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        KOSTENBLATT => {
+            let p = Process::<KostenblattWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                AckForwardCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        SPERRUNG_LF_WORKFLOW => {
+            let p = Process::<GpkeSperrungLfWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                SperrungLfCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        WIM_INSRPT_WORKFLOW => {
+            let p =
+                Process::<WimInsrptWorkflow, _>::from_identity(Arc::clone(&event_store), identity);
+            p.execute_and_enqueue_with_retry(
+                StorungsmeldungCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "gpke-konfiguration-aenderung" => {
+            let p = Process::<GpkeKonfigurationAenderungWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                KonfigurationAenderungCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "gpke-datenabruf" => {
+            let p = Process::<GpkeDatanabrufWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                DatanabrufCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "gpke-allokationsliste" => {
+            let p = Process::<GpkeAllokationslisteWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                AllokationslisteCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "wim-technik-aenderung" => {
+            let p = Process::<WimTechnikAenderungWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                TechnikAenderungCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
         unknown => {
             tracing::error!(
                 deadline_id  = %deadline_id,
@@ -448,6 +759,7 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "gpke-supplier-change",
     LF_ANMELDUNG_WORKFLOW,
     "gpke-sperrung",
+    SPERRUNG_LF_WORKFLOW,
     "gpke-stornierung",
     "gpke-abrechnung",
     "gpke-konfiguration",
@@ -462,12 +774,41 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "wim-preisanfrage",
     "wim-preisliste",
     "wim-rechnung",
+    WIM_INSRPT_WORKFLOW,
+    "gpke-konfiguration-aenderung",
+    "gpke-datenabruf",
+    "gpke-allokationsliste",
+    "wim-technik-aenderung",
+    // Simple-receipt workflows (no deadline; in DISPATCH_TABLE to satisfy assert_dispatch_coverage)
+    mako_gpke::messwerte::WORKFLOW_NAME,
+    mako_gpke::partin::WORKFLOW_NAME,
+    mako_gpke::utilts::WORKFLOW_NAME,
+    // Note: gpke-enfg has been removed; EnFG IFTSTA PIDs 21043/21044 now route to
+    // gpke-konfiguration-aenderung (already in DISPATCH_TABLE above with a deadline),
+    // and 21045/21047 route to gpke-supplier-change (also has a deadline).
+    mako_geli_gas::GAS_MSCONS_WORKFLOW_NAME,
+    mako_geli_gas::GELI_GAS_DATENABRUF_WORKFLOW_NAME,
+    mako_geli_gas::GELI_GAS_SPERRUNG_LF_WORKFLOW_NAME,
     "geli-gas-supplier-change",
     "geli-gas-stornierung",
+    "geli-gas-partin",
     "mabis-billing",
     "wim-gas-anmeldung",
     "wim-gas-kuendigung",
     "wim-gas-verpflichtungsanfrage",
+    "wim-gas-invoic",
+    "wim-gas-stornierung",
+    "wim-gas-insrpt",
+    "gabi-gas-invoic",
+    // ── Redispatch 2.0 ───────────────────────────────────────────────────────
+    STAMMDATEN_WORKFLOW,
+    AKTIVIERUNG_WORKFLOW,
+    VERFUEGBARKEIT,
+    NETZENGPASS,
+    KASKADE,
+    PLANUNGSDATEN,
+    STATUSANFRAGE,
+    KOSTENBLATT,
 ];
 
 /// Assert that every workflow in `registered` has a dispatch-table entry.

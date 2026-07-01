@@ -240,6 +240,89 @@ Before merging:
 - [ ] `cargo xtask validate-release-codes` exits 0 — every profile `release` field matches a UNH 0057 value in a fixture (F-033)
 - [ ] `cargo test --all-features` exits 0
 - [ ] At least one `.edi` fixture added for newly introduced PIDs
+- [ ] If any workflow state schema changed: bespoke `StateMigration` impl added
+  in the domain crate and dispatch table in `services/makod/src/migration_api.rs`
+  updated with the new concrete migration type (replacing the `identity!` entry).
+- [ ] If any `#[ignore = "... until FVYYYYMMDD"]` tests exist past their date,
+  un-ignore them.
+- [ ] PIDs marked ⚠️ in the new PID overview (absent from next FV) removed from
+  their owning `*_PIDS` arrays and any generated FV profiles updated.
+
+---
+
+## Step 12 — Deploy new binary with both FVs active (zero-downtime rollout)
+
+Deploy the new binary so that **both** format versions are registered in the
+adapter registry simultaneously. The new binary can accept both old-FV and new-FV
+inbound messages; in-flight processes continue under their originating FV.
+
+```bash
+# Kubernetes example — rolling restart with the new image:
+kubectl set image deployment/makod makod=registry.example/makod:FV2026-10-01
+kubectl rollout status deployment/makod
+```
+
+Do **not** remove the old FV from the adapter config yet.
+
+---
+
+## Step 13 — Run in-flight process migration (online, no downtime)
+
+While the daemon is running, call the migration endpoint to advance all
+in-flight processes from the old FV snapshot to the new FV.
+
+> **Why online?**  `makod` holds an exclusive lock on its data directory via
+> SlateDB. A separate `makod migrate` binary cannot open the same path while
+> the daemon is live. The HTTP endpoint runs migration in-process using the
+> daemon's own open store handles, avoiding the lock entirely.
+
+```bash
+# Replace FV dates as appropriate for the current release cycle.
+curl -s -X POST \
+     -H "Authorization: Bearer ${MAKOD_HTTP_API_TOKEN}" \
+     -H "Content-Type: application/json" \
+     -d '{"from":"FV2025-10-01","to":"FV2026-10-01"}' \
+     http://makod-admin:8080/admin/migrations | jq .
+```
+
+Expected response (success):
+
+```json
+{
+  "from": "FV2025-10-01",
+  "to": "FV2026-10-01",
+  "migrated": 47,
+  "skipped": 18234,
+  "errors": [],
+  "runners_executed": 34
+}
+```
+
+**Assert `errors == []` before proceeding.** Non-empty `errors` means some
+process streams could not be migrated (deserialization failure, missing state
+data, etc.) — investigate each failure before retiring the old FV.
+
+If a workflow's state schema changed between FVs, add a bespoke `StateMigration`
+implementation in the domain crate (see
+[`mako_engine::migration::StateMigration`](../crates/mako-engine/src/migration.rs))
+and update `services/makod/src/migration_api.rs` to use it.
+
+---
+
+## Step 14 — Retire old FV from adapter registry and redeploy
+
+After a successful migration (Step 13, `errors == []`), remove the old FV from
+the adapter config and do a final rolling restart:
+
+```bash
+# Remove old FV profile registration from makod.toml or deployment config,
+# then redeploy:
+kubectl set image deployment/makod makod=registry.example/makod:FV2026-10-01-final
+kubectl rollout status deployment/makod
+```
+
+New inbound messages now exclusively use the new FV. Old-FV streams have been
+migrated; new events for those processes are written under the new `workflow_id`.
 
 ---
 
@@ -299,7 +382,7 @@ The `archive` meta-feature activates all per-type archive features:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.3", features = ["archive"] }
+edi-energy = { version = "0.5", features = ["archive"] }
 ```
 
 Archive features always imply their base type feature (`mscons-archive` implies

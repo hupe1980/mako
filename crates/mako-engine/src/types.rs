@@ -210,6 +210,33 @@ domain_id!(
 /// that identify the business process variant of an EDI@Energy message
 /// (e.g. `55001` for GPKE Lieferbeginn, `11001` for WiM Zählerstand).
 ///
+/// Energy commodity — used for commodity-aware PID routing.
+///
+/// INSRPT PIDs 23001/23003/23004/23008 are shared between WiM Strom (5 Werktage
+/// APERAK Frist) and WiM Gas (10 Werktage APERAK Frist). When the ingest layer
+/// can determine the commodity of an incoming message — for example from the
+/// MaLo cache — it supplies a `Sparte` to [`PidRouter::route_with_sparte`] so
+/// that the correct workflow is selected.
+///
+/// [`PidRouter::route_with_sparte`]: crate::pid_router::PidRouter::route_with_sparte
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Sparte {
+    /// Electricity (Strom) — APERAK Frist 5 Werktage (WiM Strom, BK6-24-174).
+    Strom,
+    /// Natural gas (Gas) — APERAK Frist 10 Werktage (WiM Gas, BK7-24-01-009).
+    Gas,
+}
+
+impl fmt::Display for Sparte {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Strom => write!(f, "Strom"),
+            Self::Gas => write!(f, "Gas"),
+        }
+    }
+}
+
 /// # Serde representation
 ///
 /// Serialises as a plain JSON number (`u32`), matching the wire format of

@@ -1187,11 +1187,25 @@ mod comdis_roundtrip {
 
     /// fv20261001 (AHB 1.0g, placeholder) — Ablehnung IFTSTA (PID 29002).
     ///
-    /// Ignored until the profile becomes active on 2026-10-01: `Platform::parse`
-    /// uses today's date and `ProfileNotYetActive` is returned before that date.
+    /// Skipped at runtime until the profile becomes active on 2026-10-01 so that
+    /// CI always counts the test (it shows as `ok` with a skipped message) rather
+    /// than disappearing under `#[ignore]` indefinitely.
     #[test]
-    #[ignore = "COMDIS AHB 1.0g (fv20261001) not yet active until 2026-10-01"]
     fn comdis_fv20261001_parses_ablehnung_iftsta() {
+        // Runtime gate: FV2026-10-01 activates on 2026-10-01.
+        // This check replaces a static #[ignore] so the test transitions
+        // automatically without any manual code change.
+        if !time::OffsetDateTime::now_utc()
+            .date()
+            .ge(&time::Date::from_calendar_date(2026, time::Month::October, 1).unwrap())
+        {
+            println!(
+                "skipping: COMDIS AHB 1.0g (FV2026-10-01) not yet active \
+                 (activates 2026-10-01, today is {})",
+                time::OffsetDateTime::now_utc().date()
+            );
+            return;
+        }
         let bytes = ComdisBuilder::new(Release::new("1.0g"))
             .sender("4012345000023")
             .receiver("9900357000004")

@@ -84,6 +84,10 @@ let doc: ActivationDocument = parse_as(xml_bytes)?;
 | `serialize(doc)` | Serialize `Document` enum to XML bytes |
 | `serialize_as(doc, decl)` | Serialize any `Serialize` type to XML bytes |
 | `validate(doc)` | Run structural + semantic validation, return `ValidationResult` |
+| `Document::mrid(&self)` | Primary document identifier — correlation key for process routing |
+| `Document::sender_id(&self)` | Sender GLN / EIC (13 digits) |
+| `Document::receiver_id(&self)` | Receiver GLN / EIC (13 digits) |
+| `ValidationResult::into_errors()` | Consume result — `Ok(warnings)` or `Err(errors)` with the full list |
 
 ---
 
@@ -118,6 +122,6 @@ let doc: ActivationDocument = parse_as(xml_bytes)?;
 | Crate | Role |
 |---|---|
 | `redispatch-xml` ← **this crate** | XML format layer (parse / serialize / validate) |
-| `mako-redispatch` | Workflow / process engine (placeholder) |
-| `edi-energy` | IFTSTA status messages (EDIFACT) |
-| `mako-engine` | Event-sourced runtime |
+| `mako-redispatch` | Event-sourced process engine — 8 workflows, `RedispatchRouter`, `RedispatchModule` |
+| `edi-energy` | IFTSTA status messages (EDIFACT, PIDs 21037/21038) |
+| `mako-engine` | Event-sourced workflow runtime (`Workflow`, `Process`, `EventStore`) |

@@ -141,6 +141,7 @@ impl MockGnb {
                     receiver,
                     malo_id,
                     document_date,
+                    process_date: String::new(),
                     message_ref,
                     validation_passed: true,
                     validation_errors: vec![],
@@ -155,25 +156,18 @@ impl MockGnb {
             .expect("GNB: execute ReceiveUtilmd 44002");
     }
 
-    /// ERP action: dispatch APERAK (positive or negative) for the received Lieferende.
+    /// ERP action: send Antwort (positive or negative) for the received Lieferende.
     async fn dispatch_aperak(&self, positive: bool, reason: Option<&str>) -> Vec<OutboxMessage> {
         let (_, outbox) = self
             .process
-            .execute_and_collect(GasSupplierChangeCommand::DispatchAperak {
-                positive,
+            .execute_and_collect(GasSupplierChangeCommand::SendAntwort {
+                accepted: positive,
                 reason: reason.map(str::to_owned),
+                obligations: vec![],
             })
             .await
-            .expect("GNB: execute DispatchAperak");
+            .expect("GNB: execute SendAntwort");
         outbox
-    }
-
-    /// ERP action: activate supply relationship (after positive APERAK).
-    async fn activate(&self) {
-        self.process
-            .execute(GasSupplierChangeCommand::Activate)
-            .await
-            .expect("GNB: execute Activate");
     }
 
     async fn state(&self) -> GasSupplierChangeState {
@@ -183,12 +177,12 @@ impl MockGnb {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-/// GeLi Gas Lieferende — positive APERAK path (PID 44002 → AperakSent → Active).
+/// GeLi Gas Lieferende — positive Antwort path (PID 44002 → AntwortGesendet → Completed).
 ///
 /// The GNB receives a 44002 Anfrage Lieferende, validates it, sends a positive
-/// APERAK (44005 Bestätigung), and transitions to Active.
+/// Antwort (44005 Bestätigung), and the workflow completes.
 ///
-/// BNetzA BK7 GeLi Gas: APERAK must be sent within **10 Werktage**.
+/// BNetzA BK7 GeLi Gas: Antwort must be sent within **10 Werktage**.
 /// Saturday counts as a Werktag; Sunday and federal holidays do not.
 #[tokio::test]
 async fn e2e_lieferende_gas_positive_aperak() {
@@ -207,49 +201,52 @@ async fn e2e_lieferende_gas_positive_aperak() {
     assert_eq!(
         aperak_outbox.len(),
         1,
-        "positive DispatchAperak must enqueue exactly one Aperak outbox entry"
+        "positive SendAntwort must enqueue exactly one UtilmdAntwort outbox entry"
     );
     let aperak = &aperak_outbox[0];
-    assert_eq!(aperak.message_type.as_ref(), "Aperak");
+    assert_eq!(aperak.message_type.as_ref(), "UtilmdAntwort");
     assert_eq!(
         aperak.recipient.as_ref(),
         LFN_GAS_ID,
-        "APERAK must be addressed to LFN Gas sender"
+        "Antwort must be addressed to LFN Gas sender"
     );
     let payload = aperak
         .payload
         .as_object()
-        .expect("Aperak payload must be a JSON object");
+        .expect("UtilmdAntwort payload must be a JSON object");
     assert!(
-        payload["positive"].as_bool().unwrap(),
-        "positive flag must be true for acceptance"
+        payload["accepted"].as_bool().unwrap(),
+        "accepted flag must be true for acceptance"
     );
     assert_eq!(
-        payload["pid"].as_u64().unwrap(),
+        payload["anfrage_pid"].as_u64().unwrap(),
         44002_u64,
-        "outbox payload must carry PID 44002"
+        "outbox payload must carry anfrage_pid 44002"
     );
-    assert_eq!(payload["malo"].as_str().unwrap(), MALO_GAS_ID);
+    assert_eq!(payload["malo_id"].as_str().unwrap(), MALO_GAS_ID);
 
     assert!(
-        matches!(gnb.state().await, GasSupplierChangeState::AperakSent(_)),
-        "GNB must be AperakSent after positive DispatchAperak"
+        matches!(
+            gnb.state().await,
+            GasSupplierChangeState::AntwortGesendet { .. }
+        ),
+        "GNB must be AntwortGesendet after positive SendAntwort"
     );
 
-    gnb.activate().await;
+    // Lieferende Gas ends after Antwort is sent — no Activate step.
     let final_state = gnb.state().await;
     assert!(
-        matches!(final_state, GasSupplierChangeState::Active(_)),
-        "GNB must be Active after Activate; got: {final_state:?}"
+        matches!(final_state, GasSupplierChangeState::AntwortGesendet { .. }),
+        "GNB must stay in AntwortGesendet (terminal for LieferendeGas); got: {final_state:?}"
     );
-    if let GasSupplierChangeState::Active(data) = final_state {
+    if let GasSupplierChangeState::AntwortGesendet { data, .. } = final_state {
         assert_eq!(
             data.pruefidentifikator.as_u32(),
             44002,
             "persisted data must carry PID 44002"
         );
-        assert_eq!(data.new_supplier.as_str(), LFN_GAS_ID);
-        assert_eq!(data.gas_operator.as_str(), GNB_ID);
+        assert_eq!(data.sender.as_str(), LFN_GAS_ID);
+        assert_eq!(data.receiver.as_str(), GNB_ID);
         assert_eq!(data.malo_id.as_str(), MALO_GAS_ID);
     }
 }
@@ -280,18 +277,18 @@ async fn e2e_lieferende_gas_negative_aperak() {
     assert_eq!(
         aperak_outbox.len(),
         1,
-        "negative DispatchAperak must enqueue one Aperak outbox entry"
+        "negative SendAntwort must enqueue one UtilmdAntwort outbox entry"
     );
     let aperak = &aperak_outbox[0];
-    assert_eq!(aperak.message_type.as_ref(), "Aperak");
+    assert_eq!(aperak.message_type.as_ref(), "UtilmdAntwort");
     assert_eq!(aperak.recipient.as_ref(), LFN_GAS_ID);
     let payload = aperak
         .payload
         .as_object()
-        .expect("Aperak payload must be a JSON object");
+        .expect("UtilmdAntwort payload must be a JSON object");
     assert!(
-        !payload["positive"].as_bool().unwrap(),
-        "positive flag must be false for rejection"
+        !payload["accepted"].as_bool().unwrap(),
+        "accepted flag must be false for rejection"
     );
     assert!(
         payload["reason"]
@@ -323,6 +320,7 @@ async fn e2e_lieferende_gas_ahb_validation_failure() {
             receiver: mako_engine::types::MarktpartnerCode::new(GNB_ID),
             malo_id: mako_engine::types::MaLo::new(MALO_GAS_ID),
             document_date: "2025-01-15".to_owned(),
+            process_date: String::new(),
             message_ref: mako_engine::types::MessageRef::new("MSG-GAS-003"),
             validation_passed: false,
             validation_errors: vec![

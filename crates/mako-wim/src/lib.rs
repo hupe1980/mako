@@ -80,12 +80,14 @@
 
 pub mod geraeteubernahme;
 pub mod geraetewechsel;
+pub mod insrpt;
 pub mod preisanfrage;
 pub mod preisliste;
 pub mod rechnung;
 pub mod stammdaten;
 pub mod steuerungsauftrag;
 pub mod stornierung;
+pub mod technik_aenderung;
 
 pub use geraeteubernahme::{
     ANFRAGE_PIDS, BESTELLUNG_PIDS, GeraeteubernahmeCommand, GeraeteubernahmeData,
@@ -99,6 +101,11 @@ pub use geraetewechsel::{
     DeviceChangeData, DeviceChangeEvent, DeviceChangeProjection, DeviceChangeRecord,
     DeviceChangeState, WORKFLOW_NAME, WimDeviceChangeWorkflow,
 };
+pub use insrpt::{
+    ANTWORT_WINDOW_LABEL as INSRPT_ANTWORT_WINDOW_LABEL, INSRPT_ANFRAGE_PIDS, INSRPT_ANTWORT_PIDS,
+    StorungsmeldungCommand, StorungsmeldungData, StorungsmeldungEvent, StorungsmeldungState,
+    WORKFLOW_NAME as INSRPT_WORKFLOW_NAME, WimInsrptWorkflow,
+};
 pub use preisanfrage::{
     PREISANFRAGE_DEADLINE_LABEL, PreisanfrageCommand, PreisanfrageData, PreisanfrageEvent,
     PreisanfrageState, QUOTES_PIDS, REQOTE_PIDS, WimPreisanfrageWorkflow,
@@ -108,8 +115,9 @@ pub use preisliste::{
     WimPreislisteWorkflow,
 };
 pub use rechnung::{
-    WIM_INVOIC_PIDS, WIM_RECHNUNG_WINDOW_LABEL, WORKFLOW_NAME as RECHNUNG_WORKFLOW_NAME,
-    WimRechnungCommand, WimRechnungEvent, WimRechnungState, WimRechnungWorkflow,
+    WIM_COMDIS_ABLEHNUNG_PID, WIM_INVOIC_PIDS, WIM_RECHNUNG_WINDOW_LABEL, WIM_REMADV_PIDS,
+    WORKFLOW_NAME as RECHNUNG_WORKFLOW_NAME, WimRechnungCommand, WimRechnungEvent,
+    WimRechnungState, WimRechnungWorkflow,
 };
 pub use stammdaten::{
     ANFORDERUNG_PID, STAMMDATEN_DEADLINE_LABEL, StammdatenCommand, StammdatenData, StammdatenEvent,
@@ -125,6 +133,12 @@ pub use stornierung::{
     ABLEHNUNG_PID, BESTAETIGUNG_PID, STORNIERUNG_DEADLINE_LABEL, STORNIERUNG_PID,
     StornierungCommand, StornierungData, StornierungEvent, StornierungProjection,
     StornierungRecord, StornierungRecordData, StornierungState, WimStornierungWorkflow,
+};
+pub use technik_aenderung::{
+    AuftragData as TechnikAenderungAuftragData, ORDERS_PIDS as TECHNIK_AENDERUNG_ORDERS_PIDS,
+    ORDRSP_PIDS as TECHNIK_AENDERUNG_ORDRSP_PIDS, TechnikAenderungCommand, TechnikAenderungEvent,
+    TechnikAenderungState, WORKFLOW_NAME as TECHNIK_AENDERUNG_WORKFLOW_NAME,
+    WimTechnikAenderungWorkflow,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
@@ -186,6 +200,8 @@ impl mako_engine::builder::EngineModule for WimModule {
             "wim-preisanfrage",
             "wim-preisliste",
             "wim-rechnung",
+            insrpt::WORKFLOW_NAME,
+            technik_aenderung::WORKFLOW_NAME,
         ]
     }
 
@@ -256,8 +272,48 @@ impl mako_engine::builder::EngineModule for WimModule {
         //
         // PIDs 17134/17135 are excluded: they are GPKE Konfiguration PIDs owned by
         // mako-gpke and must not be claimed by the WiM Stammdaten module.
+        //
+        // PIDs 17115–17117 are excluded: GPKE/AWH Sperrprozesse ORDERS PIDs
+        // (Sperrauftrag / Aufhebung Sperrauftrag / Sperrung nicht möglich) owned by
+        // mako-gpke as "gpke-sperrung".
+        //
+        // The following GPKE-owned PIDs fall inside the 17102–17133 range and must
+        // not be claimed by wim-stammdaten to avoid ownership conflicts on combined NB
+        // deployments (both GpkeModule and WimModule active):
+        //
+        //   17102 (gpke-datenabruf, Datenabruf Anfrage LF→NB)
+        //   17110 (gpke-allokationsliste, Anforderung Allokationsliste)
+        //   17113 (gpke-datenabruf, Weitere Datenabruf Anfrage)
+        //   17114 (gpke-allokationsliste, Abmeldung Allokationsliste)
+        //   17120 (gpke-konfiguration-aenderung, Bestellung Konfiguration LF→NB)
+        //   17121 (gpke-konfiguration-aenderung, Bestellung Konfiguration LF→NB)
+        //   17122 (gpke-konfiguration-aenderung, Bestellung Konfigurationsänderung)
+        //   17123 (gpke-konfiguration-aenderung, Stornierung Konfigurationsbestellung)
+        //   17128 (gpke-konfiguration-aenderung, Bestellung Konfiguration LF→MSB)
+        //   17129 (gpke-konfiguration-aenderung, Bestellung Konfiguration LF→MSB)
+        //   17130 (gpke-konfiguration-aenderung, Bestellung Konfigurationsänderung LF→MSB)
+        //   17131 (gpke-konfiguration-aenderung, Stornierung Konfigurationsbestellung LF→MSB)
+        //   17133 (gpke-konfiguration-aenderung, Bestellung Konfiguration Reklamation)
+        //
+        // Source: docs/pid-reference.md (generated from BDEW xlsx PID 3.3 + PID 4.0).
+        #[rustfmt::skip]
+        const GPKE_OWNED_IN_RANGE: &[u32] = &[
+            17102, 17113,                        // gpke-datenabruf
+            17110, 17114,                        // gpke-allokationsliste
+            17120, 17121, 17122, 17123,          // gpke-konfiguration-aenderung (LF→NB)
+            17128, 17129, 17130, 17131, 17133,   // gpke-konfiguration-aenderung (LF→MSB)
+            // 17115, 17116, 17117 already excluded by the matches!() guard below
+        ];
         if !roles.is_all() && roles.contains(mako_engine::marktrolle::Marktrolle::Nb) {
             for pid in stammdaten::UEBERMITTLUNG_PIDS {
+                if matches!(pid, 17115..=17117) {
+                    // Sperrung PIDs — owned by mako-gpke (gpke-sperrung).
+                    continue;
+                }
+                if GPKE_OWNED_IN_RANGE.contains(&pid) {
+                    // GPKE-owned PIDs — must not be claimed by wim-stammdaten.
+                    continue;
+                }
                 router.register(pid, "wim-stammdaten");
             }
         }
@@ -292,6 +348,30 @@ impl mako_engine::builder::EngineModule for WimModule {
             router.register(pid, "wim-rechnung");
         }
 
+        // REMADV 33001–33002 — inbound payment advice for WiM billing (invoicer role).
+        //
+        // After the NB sends INVOIC 31009 (MSB-Rechnung), the payer (MSB) sends
+        // back a REMADV (33001 = Bestätigung, 33002 = Ablehnung). Without this
+        // registration, all REMADV messages for WiM billing are silently dropped.
+        //
+        // GPKE billing also registers 33003/33004 (Mehr-/Mindermenge REMADV);
+        // WiM Strom only needs 33001/33002 — the others belong to GPKE Teil 2/3.
+        // Both registrations coexist: the makod router checks the workflow context
+        // (conversation ID) when routing to the correct process stream instance.
+        //
+        // Source: REMADV AHB 1.0, WiM Strom Teil 1, BK6-24-174.
+        for &pid in rechnung::WIM_REMADV_PIDS {
+            router.register(pid, "wim-rechnung");
+        }
+
+        // COMDIS 29001 — inbound Ablehnung REMADV (invoicer rejects payer's REMADV).
+        //
+        // Shared PID with GPKE billing. The router dispatches to the correct
+        // workflow instance via conversation ID correlation.
+        //
+        // Source: COMDIS AHB 1.0, WiM Strom Teil 1, BK6-24-174.
+        router.register(rechnung::WIM_COMDIS_ABLEHNUNG_PID, "wim-rechnung");
+
         // IFTSTA WiM PIDs 21009–21018 (MSB-Wechsel status messages).
         //
         // These are Vollzugsmeldungen and process-status notifications that
@@ -309,6 +389,49 @@ impl mako_engine::builder::EngineModule for WimModule {
         // workflow; it receives no inbound PID dispatch from the `PidRouter`.
         // The REST adapter (`energy-api`) creates process commands directly.
         // Do not add EDIFACT PID registrations for this workflow.
+
+        // INSRPT Störungsmeldungen (WiM Strom Teil 2).
+        //
+        // 23001: Störungsmeldung (LF → MSB) — APERAK Frist 5 Werktage (BK6-24-174).
+        // 23003–23012: Antwort/Ergebnisbericht/Informationsmeldung (MSB → LF).
+        //
+        // PIDs 23001/23003/23004/23008 are shared with WiM Gas (10 WT).  In a combined
+        // Strom+Gas deployment both WimModule and WimGasModule register these PIDs — each
+        // with their respective Sparte so that `route_with_sparte` can select the correct
+        // workflow at ingest time:
+        //
+        //   route_with_sparte(23001, Sparte::Strom) → "wim-insrpt"        (5 WT)
+        //   route_with_sparte(23001, Sparte::Gas)   → "wim-gas-insrpt"    (10 WT)
+        //
+        // The unambiguous `register` entry (Strom default) is the fallback for callers
+        // that do not supply a Sparte (e.g. logging in the REST ingest endpoint).
+        for &pid in insrpt::INSRPT_ANFRAGE_PIDS {
+            router.register(pid, insrpt::WORKFLOW_NAME);
+            router.register_with_sparte(
+                pid,
+                mako_engine::types::Sparte::Strom,
+                insrpt::WORKFLOW_NAME,
+            );
+        }
+        for &pid in insrpt::INSRPT_ANTWORT_PIDS {
+            router.register(pid, insrpt::WORKFLOW_NAME);
+            router.register_with_sparte(
+                pid,
+                mako_engine::types::Sparte::Strom,
+                insrpt::WORKFLOW_NAME,
+            );
+        }
+
+        // WiM Technikänderung — device/config change requests (ORDERS/ORDRSP).
+        //
+        // Covers LF→MSB (17003), ESA orders (17007/17008), MSB→MSB (17118).
+        // ORDRSP: Bestätigung (19003/19005/19011) and Ablehnung (19004/19006/19007/19012).
+        for &pid in technik_aenderung::ORDERS_PIDS {
+            router.register(pid, technik_aenderung::WORKFLOW_NAME);
+        }
+        for &pid in technik_aenderung::ORDRSP_PIDS {
+            router.register(pid, technik_aenderung::WORKFLOW_NAME);
+        }
     }
 
     fn profile_requirements(&self) -> &'static [mako_engine::profile::ProfileRequirement] {
@@ -336,11 +459,23 @@ impl mako_engine::builder::EngineModule for WimModule {
             },
             ProfileRequirement {
                 message_type: "IFTSTA",
-                label: "IFTSTA Statusmeldung (WiM 21009–21018)",
+                label: "IFTSTA Statusmeldung (WiM 21007, 21009–21015, 21018, 21029–21032)",
             },
             ProfileRequirement {
                 message_type: "INVOIC",
                 label: "INVOIC WiM-Rechnung/MSB-Rechnung (31003, 31009)",
+            },
+            ProfileRequirement {
+                message_type: "REMADV",
+                label: "REMADV Zahlungsavis (WiM 33001/33002)",
+            },
+            ProfileRequirement {
+                message_type: "COMDIS",
+                label: "COMDIS Ablehnung REMADV (WiM 29001)",
+            },
+            ProfileRequirement {
+                message_type: "INSRPT",
+                label: "INSRPT Störungsmeldung (WiM Strom/Gas, 23001–23012)",
             },
         ]
     }
@@ -360,6 +495,18 @@ impl mako_engine::builder::EngineModule for WimModule {
                 geraeteubernahme::STORNIERUNG_PIDS,
             ),
             ("geraetewechsel::IFTSTA_PIDS", geraetewechsel::IFTSTA_PIDS),
+            ("rechnung::WIM_INVOIC_PIDS", rechnung::WIM_INVOIC_PIDS),
+            ("rechnung::WIM_REMADV_PIDS", rechnung::WIM_REMADV_PIDS),
+            ("insrpt::INSRPT_ANFRAGE_PIDS", insrpt::INSRPT_ANFRAGE_PIDS),
+            ("insrpt::INSRPT_ANTWORT_PIDS", insrpt::INSRPT_ANTWORT_PIDS),
+            (
+                "technik_aenderung::ORDERS_PIDS",
+                technik_aenderung::ORDERS_PIDS,
+            ),
+            (
+                "technik_aenderung::ORDRSP_PIDS",
+                technik_aenderung::ORDRSP_PIDS,
+            ),
         ];
         for (name, pids) in named {
             if pids.is_empty() {
@@ -376,5 +523,139 @@ impl mako_engine::builder::EngineModule for WimModule {
                 .to_owned());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mako_engine::{
+        builder::EngineModule,
+        marktrolle::{DeploymentRoles, Marktrolle},
+        pid_router::PidRouter,
+    };
+
+    /// Regression test for the NB-role PID conflict between WiM Stammdaten
+    /// UEBERMITTLUNG_PIDS (17102..=17133) and GPKE-owned PIDs in that range.
+    ///
+    /// Before the fix, `!roles.is_all() && roles.contains(Nb)` caused WiM to
+    /// register GPKE PIDs → "wim-stammdaten", overwriting GPKE's entries and
+    /// silently misrouting messages.
+    #[test]
+    fn nb_role_sperrung_not_overwritten_by_stammdaten_range() {
+        let nb = DeploymentRoles::from_roles([Marktrolle::Nb]);
+        let mut router = PidRouter::new();
+        // Simulate GPKE registration first (as it happens in makod startup order).
+        router.register(17115, "gpke-sperrung");
+        router.register(17116, "gpke-sperrung");
+        router.register(17117, "gpke-sperrung");
+        // GPKE-owned PIDs in the 17102..=17133 range
+        router.register(17102, "gpke-datenabruf");
+        router.register(17113, "gpke-datenabruf");
+        router.register(17110, "gpke-allokationsliste");
+        router.register(17114, "gpke-allokationsliste");
+        router.register(17120, "gpke-konfiguration-aenderung");
+        router.register(17121, "gpke-konfiguration-aenderung");
+        router.register(17122, "gpke-konfiguration-aenderung");
+        router.register(17123, "gpke-konfiguration-aenderung");
+        router.register(17128, "gpke-konfiguration-aenderung");
+        router.register(17129, "gpke-konfiguration-aenderung");
+        router.register(17130, "gpke-konfiguration-aenderung");
+        router.register(17131, "gpke-konfiguration-aenderung");
+        router.register(17133, "gpke-konfiguration-aenderung");
+
+        // WiM registration must NOT overwrite GPKE entries.
+        WimModule.register_pids_with_roles(&mut router, &nb);
+
+        // Sperrung PIDs must still route to gpke-sperrung, not wim-stammdaten.
+        assert_eq!(
+            router.route(17115),
+            Some("gpke-sperrung"),
+            "17115 must route to gpke-sperrung"
+        );
+        assert_eq!(
+            router.route(17116),
+            Some("gpke-sperrung"),
+            "17116 must route to gpke-sperrung"
+        );
+        assert_eq!(
+            router.route(17117),
+            Some("gpke-sperrung"),
+            "17117 must route to gpke-sperrung"
+        );
+
+        // GPKE-owned PIDs in range must not be overwritten by wim-stammdaten.
+        assert_eq!(
+            router.route(17102),
+            Some("gpke-datenabruf"),
+            "17102 must route to gpke-datenabruf"
+        );
+        assert_eq!(
+            router.route(17113),
+            Some("gpke-datenabruf"),
+            "17113 must route to gpke-datenabruf"
+        );
+        assert_eq!(
+            router.route(17110),
+            Some("gpke-allokationsliste"),
+            "17110 must route to gpke-allokationsliste"
+        );
+        assert_eq!(
+            router.route(17114),
+            Some("gpke-allokationsliste"),
+            "17114 must route to gpke-allokationsliste"
+        );
+        assert_eq!(
+            router.route(17120),
+            Some("gpke-konfiguration-aenderung"),
+            "17120 must route to gpke-konfiguration-aenderung"
+        );
+        assert_eq!(
+            router.route(17122),
+            Some("gpke-konfiguration-aenderung"),
+            "17122 must route to gpke-konfiguration-aenderung"
+        );
+        assert_eq!(
+            router.route(17128),
+            Some("gpke-konfiguration-aenderung"),
+            "17128 must route to gpke-konfiguration-aenderung"
+        );
+        assert_eq!(
+            router.route(17133),
+            Some("gpke-konfiguration-aenderung"),
+            "17133 must route to gpke-konfiguration-aenderung"
+        );
+
+        // True WiM Stammdaten PIDs in the range must still resolve to wim-stammdaten.
+        assert_eq!(
+            router.route(17132),
+            Some("wim-stammdaten"),
+            "17132 (ANFORDERUNG_PID) must route to wim-stammdaten"
+        );
+        // 17103 is a genuine wim-stammdaten PID (not GPKE-owned).
+        assert_eq!(
+            router.route(17103),
+            Some("wim-stammdaten"),
+            "17103 must route to wim-stammdaten"
+        );
+    }
+
+    /// Sanity: with DeploymentRoles::all() (default/dev), the NB gate does not
+    /// fire at all, so the UEBERMITTLUNG range is not registered and any prior
+    /// sperrung registration is undisturbed.
+    #[test]
+    fn all_roles_uebermittlung_gate_does_not_fire() {
+        let all = DeploymentRoles::all();
+        let mut router = PidRouter::new();
+        router.register(17115, "gpke-sperrung");
+        router.register(17116, "gpke-sperrung");
+        router.register(17117, "gpke-sperrung");
+        WimModule.register_pids_with_roles(&mut router, &all);
+
+        assert_eq!(router.route(17115), Some("gpke-sperrung"));
+        assert_eq!(router.route(17116), Some("gpke-sperrung"));
+        assert_eq!(router.route(17117), Some("gpke-sperrung"));
+        // 17132 ANFORDERUNG_PID should also be registered by the non-role-gated path.
+        assert_eq!(router.route(17132), Some("wim-stammdaten"));
     }
 }

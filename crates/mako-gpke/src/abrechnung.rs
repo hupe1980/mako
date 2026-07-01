@@ -13,10 +13,12 @@
 //! | 31006 | MMM-Rechnung (selbst ausgestellt)                    | 2.8e ✅     |
 //! | 31007 | Aggregierte Mehr-/Mindermenge Rechnung               | 2.8e ✅     |
 //! | 31008 | Aggregierte Mehr-/Mindermenge Rechnung (SA)          | 2.8e ✅     |
-//! | 31009 | MSB-Rechnung (GPKE Teil 3, NB/MSB settlement)        | 2.8e ✅     |
 //!
-//! All 7 PIDs share the same INVOIC-receive → settle/dispute state machine.
-//! PID 31004 (Stornorechnung WiM Gas) belongs to `mako-wim-gas`; not listed here.
+//! All 6 PIDs share the same INVOIC-receive → settle/dispute state machine.
+//! PID 31003 (WiM-Rechnung) belongs to `mako-wim-gas`; not listed here.
+//! PID 31009 (MSB-Rechnung, multi-domain: GPKE Teil 3 / WiM Strom Teil 1) belongs to
+//! `mako-wim` (`wim-rechnung` workflow) per `crates/mako-wim/src/rechnung.rs`. It must
+//! not be registered here to avoid double-registration with `WIM_INVOIC_PIDS`.
 //! The stored `pruefidentifikator` field in [`AbrechnungData`] lets read-models
 //! distinguish process variants.
 //!
@@ -46,6 +48,8 @@ use mako_engine::{
 /// These are the GPKE-domain PIDs from INVOIC AHB (FV2025-10-01 / FV2026-04-01).
 /// PID 31003 (WiM-Rechnung) belongs to WiM Gas (`mako-wim-gas`).
 /// PID 31004 (Stornorechnung WiM Gas) belongs to `mako-wim-gas` per `docs/pid-reference.md`.
+/// PID 31009 (MSB-Rechnung, multi-domain: GPKE Teil 3 / WiM Strom Teil 1) belongs to
+/// `mako-wim` to avoid double-registration; see `crates/mako-wim/src/rechnung.rs`.
 ///
 /// | PID   | Name                                         |
 /// |-------|----------------------------------------------|
@@ -55,8 +59,31 @@ use mako_engine::{
 /// | 31006 | MMM-Rechnung (selbst ausgestellt)            |
 /// | 31007 | Aggregierte Mehr-/Mindermenge Rechnung       |
 /// | 31008 | Aggregierte Mehr-/Mindermenge Rechnung (SA)  |
-/// | 31009 | MSB-Rechnung (GPKE Teil 3 — NB/MSB settlement) |
-pub const INVOIC_PIDS: &[u32] = &[31001, 31002, 31005, 31006, 31007, 31008, 31009];
+pub const INVOIC_PIDS: &[u32] = &[31001, 31002, 31005, 31006, 31007, 31008];
+
+/// REMADV Prüfidentifikatoren handled by this workflow (inbound payment advice).
+///
+/// These are received by the **invoicer** (NB/MSB) after sending an INVOIC.
+/// The PAYER (LF/NB) sends one of these as payment confirmation or partial rejection.
+///
+/// | PID   | Name                                                                |
+/// |-------|---------------------------------------------------------------------|
+/// | 33001 | Zahlungsavis (Bestätigung vollständige Zahlung)                     |
+/// | 33002 | Zahlungsavis (Ablehnung Zahlung)                                    |
+/// | 33003 | Zahlungsavis (Bestätigung Teilzahlung Netznutzungsentgelt)          |
+/// | 33004 | Zahlungsavis (Bestätigung Teilzahlung Mehr-/Mindermengen)           |
+///
+/// Source: REMADV AHB 1.0, GPKE Teil 2/Teil 3, BK6-24-174.
+pub const REMADV_PIDS: &[u32] = &[33001, 33002, 33003, 33004];
+
+/// COMDIS Prüfidentifikator for inbound Ablehnung REMADV (payer side).
+///
+/// Received by the **payer** (LF/NB) after the invoicer rejects the payer's
+/// REMADV (e.g. incorrect payment amount). The invoicer sends COMDIS 29001
+/// outbound; the payer receives it inbound.
+///
+/// Source: COMDIS AHB 1.0, GPKE Teil 2/Teil 3, BK6-24-174.
+pub const COMDIS_ABLEHNUNG_REMADV_PID: u32 = 29001;
 
 /// Deadline label for the INVOIC settlement response window.
 ///
@@ -108,6 +135,37 @@ pub enum AbrechnungEvent {
         /// Label identifying the deadline type.
         label: Box<str>,
     },
+    /// INVOIC was sent by this party (invoicer role — NB/MSB sent INVOIC, waiting for REMADV).
+    InvoicSent {
+        /// Prüfidentifikator of the outbound INVOIC.
+        pruefidentifikator: Pruefidentifikator,
+        /// GLN of the sender (invoicer: NB/MSB).
+        sender: MarktpartnerCode,
+        /// GLN of the recipient (payer: LF/NB).
+        recipient: MarktpartnerCode,
+        /// EDIFACT document date (YYYYMMDD).
+        document_date: String,
+        /// EDIFACT message reference of the outbound INVOIC.
+        invoice_ref: MessageRef,
+    },
+    /// Inbound REMADV received (invoicer role — payer confirms or partially disputes).
+    ///
+    /// PID 33001 = payment confirmed; 33002/33003/33004 = disputed / partial.
+    RemadvReceived {
+        /// REMADV Prüfidentifikator (33001–33004).
+        pid: Pruefidentifikator,
+        /// EDIFACT message reference of the REMADV.
+        remadv_ref: MessageRef,
+        /// GLN of the REMADV sender (payer).
+        sender: MarktpartnerCode,
+        /// `true` when PID 33001 (full payment confirmed), `false` for 33002–33004.
+        is_confirmed: bool,
+    },
+    /// Inbound COMDIS 29001 received (payer role — invoicer rejected our sent REMADV).
+    ComdisAbLehnungReceived {
+        /// EDIFACT message reference of the COMDIS.
+        comdis_ref: MessageRef,
+    },
 }
 
 impl EventPayload for AbrechnungEvent {
@@ -119,6 +177,9 @@ impl EventPayload for AbrechnungEvent {
             Self::InvoiceDisputed { .. } => "AbrechnungInvoiceDisputed",
             Self::Rejected { .. } => "AbrechnungRejected",
             Self::DeadlineExpired { .. } => "AbrechnungDeadlineExpired",
+            Self::InvoicSent { .. } => "AbrechnungInvoicSent",
+            Self::RemadvReceived { .. } => "AbrechnungRemadvReceived",
+            Self::ComdisAbLehnungReceived { .. } => "AbrechnungComdisAbLehnungReceived",
         }
     }
 }
@@ -165,6 +226,19 @@ pub enum AbrechnungState {
         /// Human-readable rejection reason.
         reason: String,
     },
+    /// INVOIC was sent (invoicer role); awaiting REMADV from payer.
+    InvoicSent(AbrechnungData),
+    /// REMADV received confirming full payment (PID 33001).
+    PaymentConfirmed(AbrechnungData),
+    /// REMADV received with partial or rejected payment (PIDs 33002/33003/33004).
+    PaymentDisputed {
+        /// Billing data.
+        data: AbrechnungData,
+        /// REMADV Prüfidentifikator indicating the dispute type.
+        remadv_pid: Pruefidentifikator,
+    },
+    /// COMDIS 29001 received — invoicer rejected our REMADV (payer role).
+    ComdisRejected(AbrechnungData),
 }
 
 impl Default for AbrechnungState {
@@ -184,6 +258,10 @@ impl AbrechnungState {
             Self::Settled(_) => "Settled",
             Self::Disputed { .. } => "Disputed",
             Self::Rejected { .. } => "Rejected",
+            Self::InvoicSent(_) => "InvoicSent",
+            Self::PaymentConfirmed(_) => "PaymentConfirmed",
+            Self::PaymentDisputed { .. } => "PaymentDisputed",
+            Self::ComdisRejected(_) => "ComdisRejected",
         }
     }
 
@@ -191,8 +269,13 @@ impl AbrechnungState {
     #[must_use]
     pub fn abrechnung_data(&self) -> Option<&AbrechnungData> {
         match self {
-            Self::InvoicReceived(d) | Self::ValidationPassed(d) | Self::Settled(d) => Some(d),
-            Self::Disputed { data, .. } => Some(data),
+            Self::InvoicReceived(d)
+            | Self::ValidationPassed(d)
+            | Self::Settled(d)
+            | Self::InvoicSent(d)
+            | Self::PaymentConfirmed(d)
+            | Self::ComdisRejected(d) => Some(d),
+            Self::Disputed { data, .. } | Self::PaymentDisputed { data, .. } => Some(data),
             Self::New | Self::Rejected { .. } => None,
         }
     }
@@ -240,6 +323,42 @@ pub enum AbrechnungCommand {
         deadline_id: DeadlineId,
         /// Label identifying the deadline type.
         label: Box<str>,
+    },
+    /// Invoicer role: record an outbound INVOIC that was sent to the payer.
+    ///
+    /// After recording this command the process waits in `InvoicSent` state
+    /// until a REMADV (33001–33004) arrives from the payer.
+    SendInvoic {
+        /// Prüfidentifikator of the outbound INVOIC (31001–31008).
+        pid: Pruefidentifikator,
+        /// GLN of the sender (invoicer: NB/MSB).
+        sender: MarktpartnerCode,
+        /// GLN of the recipient (payer: LF/NB).
+        recipient: MarktpartnerCode,
+        /// EDIFACT document date (YYYYMMDD).
+        document_date: String,
+        /// EDIFACT message reference of the outbound INVOIC.
+        invoice_ref: MessageRef,
+    },
+    /// Invoicer role: inbound REMADV received from the payer.
+    ///
+    /// PIDs 33001–33004 (REMADV AHB 1.0, GPKE Teil 2/3, BK6-24-174).
+    /// - 33001 = full payment confirmed
+    /// - 33002/33003/33004 = partial payment / rejection
+    ReceiveRemadv {
+        /// REMADV Prüfidentifikator (33001–33004).
+        pid: Pruefidentifikator,
+        /// EDIFACT message reference of the REMADV.
+        remadv_ref: MessageRef,
+        /// GLN of the REMADV sender (payer).
+        sender: MarktpartnerCode,
+    },
+    /// Payer role: inbound COMDIS 29001 received — invoicer rejected our REMADV.
+    ///
+    /// COMDIS PID 29001 (Ablehnung REMADV, COMDIS AHB 1.0, BK6-24-174).
+    ReceiveComdis {
+        /// EDIFACT message reference of the COMDIS.
+        comdis_ref: MessageRef,
     },
 }
 
@@ -329,10 +448,50 @@ impl Workflow for GpkeAbrechnungWorkflow {
             AbrechnungEvent::DeadlineExpired { label, .. } => match state {
                 AbrechnungState::Settled(_)
                 | AbrechnungState::Disputed { .. }
-                | AbrechnungState::Rejected { .. } => state,
+                | AbrechnungState::Rejected { .. }
+                | AbrechnungState::PaymentConfirmed(_)
+                | AbrechnungState::PaymentDisputed { .. }
+                | AbrechnungState::ComdisRejected(_) => state,
                 _ => AbrechnungState::Rejected {
                     reason: format!("deadline expired: {label}"),
                 },
+            },
+
+            AbrechnungEvent::InvoicSent {
+                pruefidentifikator,
+                sender,
+                recipient,
+                document_date,
+                invoice_ref,
+            } => AbrechnungState::InvoicSent(AbrechnungData {
+                pruefidentifikator: *pruefidentifikator,
+                sender: sender.clone(),
+                recipient: recipient.clone(),
+                document_date: document_date.clone(),
+                invoice_ref: invoice_ref.clone(),
+            }),
+
+            AbrechnungEvent::RemadvReceived {
+                pid, is_confirmed, ..
+            } => match state {
+                AbrechnungState::InvoicSent(data) => {
+                    if *is_confirmed {
+                        AbrechnungState::PaymentConfirmed(data)
+                    } else {
+                        AbrechnungState::PaymentDisputed {
+                            remadv_pid: *pid,
+                            data,
+                        }
+                    }
+                }
+                other => other,
+            },
+
+            AbrechnungEvent::ComdisAbLehnungReceived { .. } => match state {
+                AbrechnungState::ValidationPassed(data)
+                | AbrechnungState::InvoicSent(data)
+                | AbrechnungState::Settled(data) => AbrechnungState::ComdisRejected(data),
+                other => other,
             },
         }
     }
@@ -356,7 +515,7 @@ impl Workflow for GpkeAbrechnungWorkflow {
                 }
                 if !INVOIC_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected a GPKE INVOIC PID (31001/31002/31005–31009), got {pid}",
+                        "expected a GPKE INVOIC PID (31001/31002/31005–31008), got {pid}",
                     )));
                 }
                 let mut events = vec![AbrechnungEvent::InvoicReceived {
@@ -402,10 +561,79 @@ impl Workflow for GpkeAbrechnungWorkflow {
                     AbrechnungState::Settled(_)
                         | AbrechnungState::Disputed { .. }
                         | AbrechnungState::Rejected { .. }
+                        | AbrechnungState::PaymentConfirmed(_)
+                        | AbrechnungState::PaymentDisputed { .. }
+                        | AbrechnungState::ComdisRejected(_)
                 ) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
                 Ok(vec![AbrechnungEvent::DeadlineExpired { deadline_id, label }].into())
+            }
+
+            AbrechnungCommand::SendInvoic {
+                pid,
+                sender,
+                recipient,
+                document_date,
+                invoice_ref,
+            } => {
+                if !matches!(state, AbrechnungState::New) {
+                    return Err(WorkflowError::invalid_state("New", state.label()));
+                }
+                if !INVOIC_PIDS.contains(&pid.as_u32()) {
+                    return Err(WorkflowError::rejected(format!(
+                        "expected a GPKE INVOIC PID (31001/31002/31005–31008), got {pid}",
+                    )));
+                }
+                Ok(vec![AbrechnungEvent::InvoicSent {
+                    pruefidentifikator: pid,
+                    sender,
+                    recipient,
+                    document_date,
+                    invoice_ref,
+                }]
+                .into())
+            }
+
+            AbrechnungCommand::ReceiveRemadv {
+                pid,
+                remadv_ref,
+                sender,
+            } => {
+                if !matches!(state, AbrechnungState::InvoicSent(_)) {
+                    return Err(WorkflowError::invalid_state("InvoicSent", state.label()));
+                }
+                if !REMADV_PIDS.contains(&pid.as_u32()) {
+                    return Err(WorkflowError::rejected(format!(
+                        "expected a GPKE REMADV PID (33001–33004), got {pid}",
+                    )));
+                }
+                let is_confirmed = pid.as_u32() == 33001;
+                Ok(vec![AbrechnungEvent::RemadvReceived {
+                    pid,
+                    remadv_ref,
+                    sender,
+                    is_confirmed,
+                }]
+                .into())
+            }
+
+            AbrechnungCommand::ReceiveComdis { comdis_ref } => {
+                // COMDIS 29001 can arrive after validation (payer role) or after
+                // settlement; guard only against terminal states.
+                if matches!(
+                    state,
+                    AbrechnungState::New
+                        | AbrechnungState::InvoicReceived(_)
+                        | AbrechnungState::Rejected { .. }
+                        | AbrechnungState::ComdisRejected(_)
+                ) {
+                    return Err(WorkflowError::invalid_state(
+                        "ValidationPassed|Settled",
+                        state.label(),
+                    ));
+                }
+                Ok(vec![AbrechnungEvent::ComdisAbLehnungReceived { comdis_ref }].into())
             }
         }
     }
@@ -482,6 +710,22 @@ impl Projection for AbrechnungProjection {
             }
             AbrechnungEvent::DeadlineExpired { .. } => {
                 record.status = "Rejected";
+            }
+            AbrechnungEvent::InvoicSent {
+                pruefidentifikator, ..
+            } => {
+                record.status = "InvoicSent";
+                record.pruefidentifikator = Some(pruefidentifikator);
+            }
+            AbrechnungEvent::RemadvReceived { is_confirmed, .. } => {
+                record.status = if is_confirmed {
+                    "PaymentConfirmed"
+                } else {
+                    "PaymentDisputed"
+                };
+            }
+            AbrechnungEvent::ComdisAbLehnungReceived { .. } => {
+                record.status = "ComdisRejected";
             }
         }
     }

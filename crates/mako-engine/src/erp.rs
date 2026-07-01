@@ -14,26 +14,36 @@
 //! ## Outbound: mako → ERP
 //!
 //! Implement [`ErpAdapter`] and register it at startup.  Every domain event
-//! that requires ERP action is delivered as an [`ErpEvent`] with a BO4E-typed
-//! JSON payload.
+//! that requires ERP action is delivered as an [`ErpEvent`].  The production
+//! `WebhookErpAdapter` (in `makod`) serialises events as
+//! **[CloudEvents 1.0](https://cloudevents.io) structured-mode JSON** and POSTs
+//! them to the configured ERP endpoint.
 //!
-//! ```rust,ignore
-//! struct MyErpAdapter { client: reqwest::Client, base_url: String }
+//! ```text
+//! POST <erp_webhook_url>
+//! Content-Type: application/cloudevents+json
+//! X-Idempotency-Key: <event.idempotency_key>
+//! X-Mako-Signature: <hmac-sha256-hex>   ← only when secret is configured
 //!
-//! impl ErpAdapter for MyErpAdapter {
-//!     async fn notify(&self, event: ErpEvent) -> Result<(), ErpAdapterError> {
-//!         let malo: serde_json::Value = event.payload;
-//!         self.client
-//!             .post(format!("{}/mako/events", self.base_url))
-//!             .header("X-Idempotency-Key", &event.idempotency_key)
-//!             .json(&event)
-//!             .send()
-//!             .await
-//!             .map_err(ErpAdapterError::transport)?;
-//!         Ok(())
-//!     }
+//! {
+//!   "specversion": "1.0",
+//!   "id": "<idempotency_key>",
+//!   "source": "urn:mako:tenant:<tenant_id>",
+//!   "type": "de.mako.aperak.accepted",
+//!   "time": "2026-10-01T10:15:00+02:00",
+//!   "subject": "<process_id>",
+//!   "dataschema": "https://.../Marktlokation.json",
+//!   "datacontenttype": "application/json",
+//!   "makoconvid": "<conversation_id>",
+//!   "makocausationid": "<causation_id>",
+//!   "makopid": 55001,
+//!   "data": { "_typ": "MARKTLOKATION", ... }
 //! }
 //! ```
+//!
+//! See [`ErpEventType::cloud_event_type`] for the full type → CE type mapping.
+//! The BO4E payload is always in the `data` field; the `payload_schema` URL
+//! maps to the CloudEvents `dataschema` attribute.
 //!
 //! ## Inbound: ERP → mako (event-driven)
 //!
@@ -178,6 +188,25 @@ impl ErpEventType {
             Self::ProcessFailed { .. } => "process_failed",
         }
     }
+
+    /// CloudEvents 1.0 `type` attribute for this event.
+    ///
+    /// Follows the reverse-DNS prefix convention (`de.mako.<domain>.<action>`).
+    /// Used by the `WebhookErpAdapter` to populate the `type` field of the
+    /// CloudEvents envelope.
+    #[must_use]
+    pub fn cloud_event_type(&self) -> &'static str {
+        match self {
+            Self::ProcessInitiated => "de.mako.process.initiated",
+            Self::AperakAccepted => "de.mako.aperak.accepted",
+            Self::AperakRejected => "de.mako.aperak.rejected",
+            Self::AperakTimeout => "de.mako.aperak.timeout",
+            Self::ContrlReceived => "de.mako.contrl.received",
+            Self::ProcessCompleted => "de.mako.process.completed",
+            Self::MaloIdentified => "de.mako.malo.identified",
+            Self::ProcessFailed { .. } => "de.mako.process.failed",
+        }
+    }
 }
 
 // ── ErpEvent ──────────────────────────────────────────────────────────────────
@@ -187,11 +216,17 @@ impl ErpEventType {
 /// The payload is always a **BO4E-typed JSON object** — the ERP adapter never
 /// receives raw EDIFACT bytes or EDIFACT format-version identifiers.
 ///
+/// On the wire (via `WebhookErpAdapter`) this struct is serialised as a
+/// **[CloudEvents 1.0](https://cloudevents.io) structured-mode JSON** envelope
+/// with `Content-Type: application/cloudevents+json`.  The BO4E payload lives
+/// in the CloudEvents `data` field; `payload_schema` maps to `dataschema`;
+/// `event_type` maps to the `type` attribute via [`ErpEventType::cloud_event_type`].
+///
 /// ## Idempotency
 ///
-/// `idempotency_key` is a stable dedup identifier.  The ERP **must** persist
-/// this key and reject duplicate deliveries with `HTTP 200 OK` (not `409`) so
-/// the adapter does not retry indefinitely.
+/// `idempotency_key` maps to the CloudEvents `id` attribute and is also sent
+/// as `X-Idempotency-Key` for ERP middleware that keys on headers.  The ERP
+/// **must** persist this key and return `HTTP 200 OK` for duplicate deliveries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErpEvent {
     /// Stable dedup key — store in the ERP to reject duplicate deliveries.

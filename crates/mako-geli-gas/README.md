@@ -40,13 +40,28 @@ families. Saturday counts as a Werktag; Sunday and public holidays do not.
 | 44006   | Ablehnung Lieferende Gas — NB → LFN                 | UTILMD G1/G2  | ⚠️ Registered — partial handling |
 | 44017   | Kündigung Lieferbeginn Gas — LFN → LFA              | UTILMD G1/G2  | ⚠️ Registered — partial handling |
 | 44018   | Bestätigung Kündigung Lieferbeginn Gas — LFA → LFN  | UTILMD G1/G2  | ⚠️ Registered — partial handling |
-| 17003   | Beauftragung Änderung Technik (MeLo Gas)            | ORDERS 1.4b   | ✗ Not registered          |
-| 17101   | Anfrage Übermittlung Stammdaten Gas                 | ORDERS 1.4b   | ✗ Not registered          |
-| 17103   | Anfrage Abrechnungsbrennwert und Zustandszahl       | ORDERS 1.4b   | ✗ Not registered          |
-| 17104   | Anfrage MSB Gas an NB Strom                         | ORDERS 1.4b   | ✗ Not registered          |
-| 39000   | Stornierung Sperr-/Entsperrauftrag                  | ORDCHG 1.1    | ✗ Not registered          |
-| 39001   | Weiterleitung der Stornierung                       | ORDCHG 1.1    | ✗ Not registered          |
-| 39002   | Stornierung der Bestellung von Werten               | ORDCHG 1.1    | ✗ Not registered          |
+| 17103   | Anfrage Abrechnungsbrennwert / Zustandszahl         | ORDERS 1.4b   | ✅ Implemented                    |
+| 17104   | Anfrage MSB Gas an NB Strom                         | ORDERS 1.4b   | ✅ Implemented                    |
+| 19103   | Ablehnung Anfrage Brennwert / Zustandszahl          | ORDRSP 1.4    | ✅ Implemented                    |
+| 19104   | Ablehnung Anfrage vom MSB Gas                       | ORDRSP 1.4    | ✅ Implemented                    |
+| 17115   | Gas-Sperrauftrag (LF → GNB) — outbound             | ORDERS 1.4b   | ✅ Implemented                    |
+| 17117   | Gas-Entsperrauftrag (LF → GNB) — outbound          | ORDERS 1.4b   | ✅ Implemented                    |
+| 19116   | Bestätigung Sperr-/Entsperrauftrag (GNB → LF)      | ORDRSP 1.4    | ✅ Implemented                    |
+| 19117   | Ablehnung Sperr-/Entsperrauftrag (GNB → LF)        | ORDRSP 1.4    | ✅ Implemented                    |
+| 19128   | Bestätigung Stornierung Sperr-/Entsperrauftrag      | ORDRSP 1.4    | ✅ Implemented                    |
+| 19129   | Ablehnung Stornierung Sperr-/Entsperrauftrag        | ORDRSP 1.4    | ✅ Implemented                    |
+| 39000   | Stornierung Sperr-/Entsperrauftrag (LF → GNB)      | ORDCHG 1.1    | ✅ Implemented — outbound          |
+| 37008   | Kommunikationsdaten des LF Gas                      | PARTIN 1.1    | ✅ Implemented                   |
+| 37009   | Kommunikationsdaten des GNB Gas                     | PARTIN 1.1    | ✅ Implemented                   |
+| 37010   | Kommunikationsdaten des gMSB Gas                    | PARTIN 1.1    | ✅ Implemented                   |
+| 37011   | Kommunikationsdaten des MGV Gas                     | PARTIN 1.1    | ✅ Implemented                   |
+| 37012   | Spartenübergreifende Kommunikationsdaten des GNB    | PARTIN 1.1    | ✅ Implemented                   |
+| 37013   | Spartenübergreifende Kommunikationsdaten des gMSB   | PARTIN 1.1    | ✅ Implemented                   |
+| 37014   | Spartenübergreifende Kommunikationsdaten des MSB Strom | PARTIN 1.1 | ✅ Implemented                   |
+| 17003   | Beauftragung Änderung Technik (MeLo Gas)            | ORDERS 1.4b   | ✗ Not registered                 |
+| 17101   | Anfrage Übermittlung Stammdaten Gas                 | ORDERS 1.4b   | ✗ Not registered                 |
+| 39001   | Weiterleitung der Stornierung                       | ORDCHG 1.1    | ✗ Not registered                 |
+| 39002   | Stornierung der Bestellung von Werten               | ORDCHG 1.1    | ✗ Not registered                 |
 
 > **PIDs 44002–44006, 44017–44018** are registered under
 > `geli-gas-supplier-change` and share the same `GeliGasSupplierChangeWorkflow`
@@ -54,16 +69,24 @@ families. Saturday counts as a Werktag; Sunday and public holidays do not.
 > the same transition logic; separate state machines for Lieferende and
 > Kündigung are planned but not yet implemented.
 >
-> **ORDERS PIDs 17003, 17101, 17103, 17104** are Gas-specific Stammdaten and
-> Zählpunktverwaltung Gas processes defined in ORDERS AHB 1.4b. They share the
-> same 17xxx PID range with WiM Messwesen processes (which is exclusively
-> Strom-oriented) but relate to Gas MeLo commissioning and master-data exchange.
-> None are currently registered in `mako-geli-gas`; inbound messages are
-> dead-lettered.
+> **ORDERS PIDs 17003, 17101** are Gas-specific Stammdaten and
+> Zählpunktverwaltung Gas processes defined in ORDERS AHB 1.4b. None are
+> currently registered in `mako-geli-gas`; inbound messages are dead-lettered.
 >
-> **ORDCHG PIDs 39000–39002** are cancellation processes applicable to both Gas
-> and Electricity (Stornierung). They are unregistered in all current domain
-> crates.
+> **ORDERS PIDs 17103, 17104** are the Gas Datenabruf processes
+> (Abrechnungsbrennwert / Zustandszahl and MSB Gas → NB Strom). They are fully
+> implemented in `GeliGasDatanabrufWorkflow` with corresponding rejection
+> responses via ORDRSP 19103/19104.
+>
+> **ORDERS PIDs 17115, 17117** are the outbound Gas Sperrung / Entsperrung
+> requests (LF → GNB). They are initiated by `GeliGasSperrungLfWorkflow` and
+> NOT registered in the inbound PID router (the LF never receives these).
+> The same PID numbers are used for the analogous Strom process in GPKE
+> (NB-role inbound); routing is determined by market context and deployment
+> role.
+>
+> **ORDRSP PIDs 39001, 39002** are cancellation processes (Weiterleitung,
+> Bestellung) applicable to other Gas processes and are unregistered.
 
 ## EDIFACT Format Versions
 
@@ -75,32 +98,86 @@ families. Saturday counts as a Werktag; Sunday and public holidays do not.
 
 ## Modules
 
-| Rust module    | Contents                                      |
-|----------------|-----------------------------------------------|
-| `lieferbeginn` | PIDs 44001–44006, 44017–44018 workflow + proj |
+| Rust module    | Contents                                                                  |
+|----------------|-----------------------------------------------------------------------|
+| `lieferbeginn` | PIDs 44001–44006, 44007–44021 Lieferantenwechsel workflow + projections  |
+| `datenabruf`   | PIDs 17103, 17104 Gas Datenabruf (ORDERS) + ORDRSP 19103, 19104           |
+| `sperrung_lf`  | PIDs 17115, 17117 Gas Sperrung LF-initiated; ORDRSP 19116, 19117, 19128, 19129; ORDCHG 39000 (outbound Stornierung) |
+| `partin`       | PIDs 37008–37014 Gas Kommunikationsdaten (LF, GNB, gMSB, MGV, ÜNB) — auto-upsert into `PartnerStore` |
 
 ## Usage
+
+### Lieferantenwechsel Gas
 
 ```rust
 use mako_geli_gas::{GeliGasSupplierChangeWorkflow, GasSupplierChangeCommand};
 use mako_engine::{builder::EngineBuilder, event_store::InMemoryEventStore};
 
-// In tests (requires `testing` feature or `#[cfg(test)]`):
-#[cfg(test)]
-let ctx = EngineBuilder::new()
-    .with_event_store(InMemoryEventStore::new())
+// In production, explicitly provide all stores:
+let ctx = EngineBuilder::with_stores(outbox, deadline, registry)
+    .with_event_store(my_slatedb_store)
     .build();
 
-// In production, explicitly provide all stores:
-// let ctx = EngineBuilder::with_stores(outbox, deadline, registry)
-//     .with_event_store(my_slatedb_store)
-//     .build();
-
 let process = ctx.spawn::<GeliGasSupplierChangeWorkflow>(tenant_id, workflow_id);
-let events = process.execute(GasSupplierChangeCommand::ReceiveUtilmd {
-    pid: 44001,
+let out = process.execute(GasSupplierChangeCommand::ReceiveUtilmd {
+    pid: Pruefidentifikator::new(44001).expect("valid PID"),
     // …
 }).await?;
+```
+
+### Gas Sperrung / Entsperrung (LF-initiated)
+
+The `GeliGasSperrungLfWorkflow` models the LF-side of the gas disconnection /
+reconnection process per BK7-24-01-009. The LF initiates the process by sending
+an ORDERS 17115 (Sperrauftrag) or 17117 (Entsperrauftrag) to the GNB and then
+waits up to **10 Werktage** for the GNB's ORDRSP response.
+
+```rust
+use mako_geli_gas::{
+    GeliGasSperrungLfWorkflow, GasSperrungLfCommand, GasSperrungAuftragData,
+};
+use mako_engine::ids::{MaloId, GlnId};
+
+// Initiate a gas disconnection order (LF → GNB):
+let cmd = GasSperrungLfCommand::InitiateSperrung {
+    pid: Pruefidentifikator::new(17115).expect("Sperrauftrag"),
+    gnb_gln: GlnId::parse("9900357000004").expect("valid GLN"),
+    location_id: MaloId::parse("50123456789").expect("valid MaLo"),
+    message_ref: MessageRef::from("MSG-2025-001"),
+};
+let out = process.execute(cmd).await?;
+// out.outbox[0] carries the ORDERS 17115 message for AS4 dispatch.
+
+// When the GNB confirms (ORDRSP 19116):
+let confirmed = GasSperrungLfCommand::ReceiveOrdrsp {
+    pid: Pruefidentifikator::new(19116).expect("Bestätigung"),
+    is_confirmed: true,
+    message_ref: MessageRef::from("MSG-GNB-001"),
+};
+let out = process.execute(confirmed).await?;
+// Process transitions to OrdrspBestaetigt (terminal).
+```
+
+State transitions:
+
+```
+New ──InitiateSperrung──► AuftragGesendet ──ReceiveOrdrsp(confirm)──► OrdrspBestaetigt
+                                          └──ReceiveOrdrsp(reject)──► OrdrspAbgelehnt
+                                          └──SendStornierung──► StornierungGesendet ──ReceiveOrdrspStorno(confirm)──► StornoBestaetigt
+                                                                                     └──ReceiveOrdrspStorno(reject)──► StornoAbgelehnt
+                                          └──TimeoutExpired──► DeadlineExpired
+```
+
+### Gas Datenabruf (Brennwert / Zustandszahl)
+
+```rust
+use mako_geli_gas::{GeliGasDatanabrufWorkflow, DatanabrufCommand};
+
+// Request billing combustion values (LF → NB/MSB, ORDERS 17103):
+let cmd = DatanabrufCommand::InitiateAnfrage {
+    pid: Pruefidentifikator::new(17103).expect("valid PID"),
+    // …
+};
 ```
 
 ## Regulatory references
@@ -110,4 +187,5 @@ let events = process.execute(GasSupplierChangeCommand::ReceiveUtilmd {
 - BNetzA BK7-19-001 — previous ruling (superseded)
 - BNetzA BK7-06-067 — original GeLi Gas ruling 2007 (superseded)
 - EDI@Energy UTILMD Gas AHB G2.x (`FV2026-10-01`)
+- EDI@Energy ORDERS/ORDRSP/ORDCHG AHB 1.4b (`FV2026-10-01`)
 - EDI@Energy APERAK AHB 2.2 (`FV2026-10-01`)

@@ -1,11 +1,31 @@
 [package]
 name         = "dvgw-edi"
 version.workspace     = true
-description  = "DVGW EDIFACT format parser and validator for the German gas market (ALLOCAT, NOMINT, NOMRES)"
+description  = "DVGW EDIFACT format parser and validator for the German gas market (ALOCAT, NOMINT, NOMRES)"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
 repository.workspace  = true
 rust-version.workspace = true
-keywords     = ["dvgw", "edifact", "gas", "allocat", "nomint"]
+keywords     = ["dvgw", "edifact", "gas", "alocat", "nomint"]
 categories   = ["parser-implementations", "encoding"]
+
+[dependencies]
+edifact-rs = { workspace = true }
+serde      = { workspace = true, optional = true }
+thiserror  = { workspace = true }
+tracing    = { version = "0.1", default-features = false, features = ["log", "attributes"], optional = true }
+
+[features]
+## Enables ALOCAT (Allokationsnachricht) message support.
+alocat   = []
+## Enables NOMINT (Nominierungsintegration) message support.
+nomint   = []
+## Enables NOMRES (Nominierungsantwort) message support.
+nomres   = []
+## Enables `serde::Serialize` / `Deserialize` on all public value types.
+serde    = ["dep:serde"]
+## Default: all Phase-1 message types enabled.
+default  = ["alocat", "nomint", "nomres"]
+## Enables structured tracing spans via the `tracing` crate.
+tracing  = ["dep:tracing"]

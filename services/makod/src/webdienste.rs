@@ -411,12 +411,14 @@ async fn spawn_device_change(
         .await?;
 
     // Register 5-Werktage response deadline (BDEW WiM BK6-18-032).
-    let due_date = mako_engine::fristen::add_werktage(
-        time::OffsetDateTime::now_utc().date(),
+    // deadline_at_werktage computes 17:00 Europe/Berlin on the due Werktag,
+    // correctly handling CET/CEST transitions and using the Berlin calendar
+    // date of now_utc() as the start (not the UTC calendar date).
+    let due_at = mako_engine::fristen::deadline_at_werktage(
+        time::OffsetDateTime::now_utc(),
         5,
         mako_engine::fristen::HolidayCalendar::BdewMaKo,
     );
-    let due_at = due_date.with_time(time::Time::MIDNIGHT).assume_utc();
     let deadline = mako_engine::deadline::Deadline::new(
         stream_id,
         process_id,
@@ -489,14 +491,14 @@ async fn spawn_steuerungsauftrag(
         .await?;
 
     // Register 5-Werktage response deadline (BDEW WiM BK6-18-032).
-    let due_date = mako_engine::fristen::add_werktage(
-        time::OffsetDateTime::now_utc().date(),
+    // deadline_at_werktage computes 17:00 Europe/Berlin on the due Werktag,
+    // correctly handling CET/CEST transitions and using the Berlin calendar
+    // date of now_utc() as the start (not the UTC calendar date).
+    let due_at = mako_engine::fristen::deadline_at_werktage(
+        time::OffsetDateTime::now_utc(),
         5,
         mako_engine::fristen::HolidayCalendar::BdewMaKo,
     );
-    // Convert Date to OffsetDateTime at end-of-day CET/CEST (17:00 Berlin)
-    // per BDEW convention — use midnight UTC as a conservative proxy.
-    let due_at = due_date.with_time(time::Time::MIDNIGHT).assume_utc();
     let deadline = mako_engine::deadline::Deadline::new(
         stream_id,
         process_id,

@@ -1,15 +1,19 @@
 //! `mako-gabi-gas` — GaBi Gas process engine for the German gas market
 //! (Gasbilanzierung Gas).
 //!
-//! **This crate is a name reservation. Implementation is pending until
-//! `dvgw-edi` (the DVGW format layer) is complete.**
+//! # Implemented processes
+//!
+//! | Process | PIDs | Messages |
+//! |---|---|---|
+//! | Kapazitätsrechnung (capacity billing) | 31010 | INVOIC |
+//! | Rechnung sonstige Leistung (AWH) | 31011 | INVOIC |
 //!
 //! # Two-crate architecture for GaBi Gas
 //!
-//! | Crate | Responsibility | Status |
-//! |---|---|---|
-//! | `dvgw-edi` | ALLOCAT, NOMINT, NOMRES parsing and validation | ⏳ Placeholder |
-//! | `mako-gabi-gas` | Process engine — Workflow impls, PID routing, deadline handling | ⏳ **This crate** |
+//! | Crate | Responsibility |
+//! |---|---|
+//! | `dvgw-edi` | EDIFACT parsing — ALOCAT, NOMINT, NOMRES (parse at transport boundary in `makod`) |
+//! | `mako-gabi-gas` | Process engine — Workflow state machines, PID routing, deadline handling |
 //!
 //! # Domain background
 //!
@@ -21,15 +25,6 @@
 //! The framework governs the exchange of gas quantity data between balance
 //! responsible parties (BKV), network operators (FNB/VNB), and market area
 //! managers (MGV) via standardised EDIFACT messages.
-//!
-//! # Process families (planned)
-//!
-//! | Process | Primary messages | Governing document |
-//! |---|---|---|
-//! | Allokation (gas quantity allocation) | ALLOCAT | DVGW AHB ALLOCAT |
-//! | Nominierung (gas nominations) | NOMINT / NOMRES | DVGW AHB NOMINT |
-//! | Mehr-/Mindermengenabrechnung (reconciliation billing) | INVOIC / REMADV | BDEW/DVGW MIG |
-//! | Tagesbilanz / Monatsbilanz (balance reporting) | ALLOCAT | DVGW AHB |
 //!
 //! # Market roles
 //!
@@ -48,12 +43,64 @@
 //! - **BNetzA BK7-14-020** — GaBi Gas 2.0 ruling (current)
 //! - Note: BK7-06-067 is the original **GeLi Gas** ruling, not GaBi Gas
 //! - **DVGW G 685** — technical rules for gas metering and allocation
-//!
-//! # Dependencies (planned)
-//!
-//! When implemented this crate will depend on:
-//! - `mako-engine` — event-sourced workflow runtime
-//! - `dvgw-edi` — DVGW EDIFACT format layer (ALLOCAT, NOMINT, NOMRES)
 
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
+
+/// GaBi Gas INVOIC billing workflow — PIDs 31010 and 31011.
+pub mod invoic;
+
+pub use invoic::{
+    GABI_GAS_COMDIS_ABLEHNUNG_PID, GABI_GAS_INVOIC_PIDS, GABI_GAS_REMADV_PID, GaBiGasInvoicCommand,
+    GaBiGasInvoicData, GaBiGasInvoicEvent, GaBiGasInvoicProjection, GaBiGasInvoicRecord,
+    GaBiGasInvoicState, GaBiGasInvoicWorkflow,
+    SETTLEMENT_WINDOW_LABEL as INVOIC_SETTLEMENT_WINDOW_LABEL,
+    WORKFLOW_NAME as INVOIC_WORKFLOW_NAME,
+};
+
+// ── EngineModule ──────────────────────────────────────────────────────────────
+
+/// Engine module for the GaBi Gas process family.
+///
+/// Registers all GaBi Gas INVOIC `Prüfidentifikator` values into the
+/// [`mako_engine::pid_router::PidRouter`] at engine startup:
+///
+/// - PID 31010 → `"gabi-gas-invoic"` ([`GaBiGasInvoicWorkflow`], Kapazitätsrechnung)
+/// - PID 31011 → `"gabi-gas-invoic"` ([`GaBiGasInvoicWorkflow`], Rechnung sonstige Leistung)
+/// - PID 33001 → `"gabi-gas-invoic"` (REMADV Zahlungsavis, invoicer role)
+/// - PID 29001 → `"gabi-gas-invoic"` (COMDIS Ablehnung REMADV, payer role)
+///
+pub struct GaBiGasModule;
+
+impl mako_engine::builder::EngineModule for GaBiGasModule {
+    fn name(&self) -> &'static str {
+        "mako-gabi-gas"
+    }
+
+    fn workflow_names(&self) -> &'static [&'static str] {
+        &["gabi-gas-invoic"]
+    }
+
+    fn register_pids(&self, router: &mut mako_engine::pid_router::PidRouter) {
+        // INVOIC billing PIDs — independent of dvgw-edi.
+        for &pid in invoic::GABI_GAS_INVOIC_PIDS {
+            router.register(pid, "gabi-gas-invoic");
+        }
+
+        // REMADV 33001 — inbound payment confirmation (invoicer role).
+        //
+        // After the FNB/VNB sends INVOIC 31010/31011, the BKV sends REMADV
+        // 33001 (Zahlungsavis Bestätigung vollständige Zahlung) to confirm
+        // payment. Without this registration, REMADV is silently dropped.
+        //
+        // Source: REMADV AHB 1.0, GaBi Gas, BK7.
+        router.register(invoic::GABI_GAS_REMADV_PID, "gabi-gas-invoic");
+
+        // COMDIS 29001 — inbound Ablehnung REMADV (payer role).
+        //
+        // The FNB/VNB can reject the BKV's REMADV via COMDIS 29001.
+        //
+        // Source: COMDIS AHB 1.0, GaBi Gas, BK7.
+        router.register(invoic::GABI_GAS_COMDIS_ABLEHNUNG_PID, "gabi-gas-invoic");
+    }
+}

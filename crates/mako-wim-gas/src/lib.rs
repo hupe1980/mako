@@ -55,8 +55,27 @@
 
 /// WiM Gas Anmeldung / Abmeldung workflows (PIDs 44042–44053).
 pub mod anmeldung;
+/// WiM Gas INSRPT Störungsmeldung workflow (PIDs 23005/23009 Gas-only;
+/// 23001/23003/23004/23008 shared with WiM Strom).
+///
+/// Gas-only PIDs 23005 and 23009 are unconditionally registered here.
+/// Shared PIDs 23001/23003/23004/23008 are registered with `Sparte::Gas` via
+/// `PidRouter::register_with_sparte` so that `route_with_sparte(pid, Sparte::Gas)`
+/// resolves to `"wim-gas-insrpt"` (10 WT) in combined Strom+Gas deployments,
+/// while `route_with_sparte(pid, Sparte::Strom)` resolves to `"wim-insrpt"` (5 WT)
+/// via `WimModule`'s `Sparte::Strom` entry. APERAK Frist: 10 Werktage (BK7-24-01-009).
+pub mod insrpt;
+/// WiM Gas INVOIC billing stub (PIDs 31003, 31004).
+///
+/// ⚠️ Stub — settlement workflow pending. Records receipt and emits `tracing::warn!`.
+pub mod invoic;
 /// WiM Gas Kündigung MSB Gas workflow (PIDs 44039–44041).
 pub mod kuendigung;
+/// WiM Gas Stornierung workflow (PIDs 44022–44024).
+///
+/// Per BDEW PID overview (PID 3.3 / PID 4.0), PIDs 44022–44024 belong to the
+/// WiM Gas process family. This module is the canonical owner (BK7-24-01-009).
+pub mod stornierung;
 /// WiM Gas Verpflichtungsanfrage workflow (PIDs 44168–44170).
 pub mod verpflichtungsanfrage;
 
@@ -66,11 +85,27 @@ pub use anmeldung::{
     WimGasAnmeldungEvent, WimGasAnmeldungProjection, WimGasAnmeldungRecord,
     WimGasAnmeldungRecordData, WimGasAnmeldungState, WimGasAnmeldungWorkflow,
 };
+pub use insrpt::{
+    ANTWORT_WINDOW_LABEL as INSRPT_GAS_ANTWORT_WINDOW_LABEL, GasStorungsmeldungCommand,
+    GasStorungsmeldungData, GasStorungsmeldungEvent, GasStorungsmeldungState, INSRPT_GAS_ONLY_PIDS,
+    INSRPT_SHARED_PIDS, WORKFLOW_NAME as INSRPT_GAS_WORKFLOW_NAME, WimGasInsrptWorkflow,
+};
+pub use invoic::{
+    SETTLEMENT_WINDOW_LABEL as INVOIC_SETTLEMENT_WINDOW_LABEL, WIM_GAS_COMDIS_ABLEHNUNG_PID,
+    WIM_GAS_INVOIC_PIDS, WIM_GAS_REMADV_PIDS, WORKFLOW_NAME as INVOIC_WORKFLOW_NAME,
+    WimGasInvoicCommand, WimGasInvoicData, WimGasInvoicEvent, WimGasInvoicProjection,
+    WimGasInvoicRecord, WimGasInvoicState, WimGasInvoicWorkflow,
+};
 pub use kuendigung::{
     APERAK_WINDOW_LABEL as KUENDIGUNG_APERAK_WINDOW_LABEL, KUENDIGUNG_PIDS,
     WORKFLOW_NAME as KUENDIGUNG_WORKFLOW_NAME, WimGasKuendigungCommand, WimGasKuendigungData,
     WimGasKuendigungEvent, WimGasKuendigungProjection, WimGasKuendigungRecord,
     WimGasKuendigungRecordData, WimGasKuendigungState, WimGasKuendigungWorkflow,
+};
+pub use stornierung::{
+    STORNIERUNG_APERAK_WINDOW_LABEL, STORNIERUNG_PIDS, WORKFLOW_NAME as STORNIERUNG_WORKFLOW_NAME,
+    WimGasStornierungCommand, WimGasStornierungData, WimGasStornierungEvent,
+    WimGasStornierungState, WimGasStornierungWorkflow,
 };
 pub use verpflichtungsanfrage::{
     APERAK_WINDOW_LABEL as VERPFLICHTUNGSANFRAGE_APERAK_WINDOW_LABEL, VERPFLICHTUNGSANFRAGE_PIDS,
@@ -91,10 +126,12 @@ pub use verpflichtungsanfrage::{
 /// - PIDs 44039–44041 → `"wim-gas-kuendigung"` (`WimGasKuendigungWorkflow`)
 /// - PIDs 44042–44053 → `"wim-gas-anmeldung"` (`WimGasAnmeldungWorkflow`)
 /// - PIDs 44168–44170 → `"wim-gas-verpflichtungsanfrage"`
-/// - PIDs 44022–44024 → `"geli-gas-stornierung"` (re-exported from `mako-geli-gas`;
-///   PID ownership per `docs/pid-reference.md` is WiM Gas, routing pending full migration)
-/// - IFTSTA PIDs 21009/21010/21011/21012/21013/21015/21018 → `"wim-gas-device-change"`
-///   (informational status messages for WiM Gas MSB-Wechsel)
+/// - PIDs 31003, 31004 → `"wim-gas-invoic"` (INVOIC billing stub; settlement pending)
+/// - PIDs 44022–44024 → `"wim-gas-stornierung"` (WiM Gas Stornierung; canonical per BDEW PID 3.3/4.0)
+///
+/// IFTSTA PIDs 21009/21010/21011/21012/21013/21015/21018 carry informational
+/// WiM Gas MSB-Wechsel status messages. Per WiM Gas AWH V2.0 there is no APERAK
+/// obligation for these messages; they are not routed to any workflow.
 ///
 /// Note: GeLi Gas PIDs 44001–44021 belong to `mako-geli-gas`.
 pub struct WimGasModule;
@@ -109,6 +146,9 @@ impl mako_engine::builder::EngineModule for WimGasModule {
             "wim-gas-anmeldung",
             "wim-gas-kuendigung",
             "wim-gas-verpflichtungsanfrage",
+            "wim-gas-invoic",
+            "wim-gas-stornierung",
+            insrpt::WORKFLOW_NAME,
         ]
     }
 
@@ -122,15 +162,66 @@ impl mako_engine::builder::EngineModule for WimGasModule {
         for &pid in verpflichtungsanfrage::VERPFLICHTUNGSANFRAGE_PIDS {
             router.register(pid, "wim-gas-verpflichtungsanfrage");
         }
-        // PIDs 44022–44024 (WiM Gas Stornierung per BDEW PID overview).
-        // Routing via geli-gas-stornierung workflow until a dedicated WiM Gas
-        // Stornierung workflow is implemented.
+        // PIDs 44022–44024: WiM Gas Stornierung per BDEW PID overview (PID 3.3 / PID 4.0).
+        // Canonical implementation lives in `mako-wim-gas::stornierung`.
         for pid in [44022_u32, 44023, 44024] {
-            router.register(pid, "geli-gas-stornierung");
+            router.register(pid, "wim-gas-stornierung");
         }
-        // IFTSTA WiM Gas MSB-Wechsel status messages (informational).
-        for pid in [21009_u32, 21010, 21011, 21012, 21013, 21015, 21018] {
-            router.register(pid, "wim-gas-device-change");
+        // IFTSTA PIDs 21009/21010/21011/21012/21013/21015/21018 carry informational
+        // WiM Gas MSB-Wechsel status messages. Per WiM Gas AWH V2.0, there is no
+        // APERAK obligation for these messages; they are not routed to any workflow.
+        // PIDs 31003 (WiM-Rechnung) and 31004 (Stornorechnung) — WiM Gas INVOIC
+        // billing.  Routes to the stub workflow until full settlement is implemented.
+        for &pid in invoic::WIM_GAS_INVOIC_PIDS {
+            router.register(pid, "wim-gas-invoic");
+        }
+
+        // REMADV 33001–33002 — inbound payment advice (gMSB invoicer role).
+        //
+        // After the gMSB sends INVOIC 31003/31004, the NB (payer) sends REMADV
+        // back to confirm or dispute payment. The gMSB receives these inbound.
+        // Without registration they are silently dropped by the AS4 ingest layer.
+        //
+        // Source: REMADV AHB 1.0, WiM Gas, BK7-24-01-009.
+        for &pid in invoic::WIM_GAS_REMADV_PIDS {
+            router.register(pid, "wim-gas-invoic");
+        }
+
+        // COMDIS 29001 — inbound Ablehnung REMADV (gMSB rejects NB's REMADV).
+        //
+        // Source: COMDIS AHB 1.0, WiM Gas, BK7-24-01-009.
+        router.register(invoic::WIM_GAS_COMDIS_ABLEHNUNG_PID, "wim-gas-invoic");
+
+        // INSRPT Störungsmeldungen (WiM Gas).
+        //
+        // APERAK Frist: 10 Werktage per BK7-24-01-009 — applies to ALL Gas INSRPT PIDs.
+        //
+        // Gas-only PIDs 23005 (Ablehnung Gas) and 23009 (Ergebnisbericht Gas) are never
+        // shared with WiM Strom and are always unconditionally owned by this module.
+        //
+        // Shared PIDs 23001/23003/23004/23008 also appear in the WiM Strom AHB with a
+        // shorter 5 WT Frist.  Both WimModule (Strom) and WimGasModule (Gas) register
+        // these PIDs using commodity-qualified entries so that `route_with_sparte` selects
+        // the correct workflow at ingest time:
+        //
+        //   route_with_sparte(23001, Sparte::Gas)   → "wim-gas-insrpt"   (10 WT)  ← this module
+        //   route_with_sparte(23001, Sparte::Strom) → "wim-insrpt"       (5 WT)   ← WimModule
+        //
+        // In a Gas-standalone deployment (no WimModule) we also set the unambiguous
+        // fallback entry so that plain `route(pid)` resolves to "wim-gas-insrpt".
+        for &pid in insrpt::INSRPT_GAS_ONLY_PIDS {
+            router.register(pid, insrpt::WORKFLOW_NAME);
+        }
+        for &pid in insrpt::INSRPT_SHARED_PIDS {
+            // Unambiguous entry — Gas-standalone fallback; overwritten by WimModule in
+            // combined deployments (last-write-wins), but commodity entry always wins for
+            // callers that supply Sparte::Gas.
+            router.register(pid, insrpt::WORKFLOW_NAME);
+            router.register_with_sparte(
+                pid,
+                mako_engine::types::Sparte::Gas,
+                insrpt::WORKFLOW_NAME,
+            );
         }
     }
 
@@ -144,6 +235,18 @@ impl mako_engine::builder::EngineModule for WimGasModule {
             ProfileRequirement {
                 message_type: "APERAK",
                 label: "APERAK (WiM Gas)",
+            },
+            ProfileRequirement {
+                message_type: "INVOIC",
+                label: "INVOIC WiM Gas (31003/31004)",
+            },
+            ProfileRequirement {
+                message_type: "REMADV",
+                label: "REMADV Zahlungsavis (WiM Gas 33001/33002)",
+            },
+            ProfileRequirement {
+                message_type: "COMDIS",
+                label: "COMDIS Ablehnung REMADV (WiM Gas 29001)",
             },
         ]
     }

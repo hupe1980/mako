@@ -1,85 +1,111 @@
 # mako-redispatch
 
-**Status: ⏳ Placeholder — pending `redispatch-xml` format layer.**
-
 Event-sourced process engine for **Redispatch 2.0** congestion-management
 workflows under §§ 13, 13a, 14 EnWG. Part of the `mako` workspace.
 
----
+## Regulatory scope
 
-## Regulatory scope clarification
+Redispatch 2.0 is mandatory for all German grid operators (ÜNB and VNB) and
+their connected asset operators (ANB) under BNetzA rulings BK6-20-059,
+BK6-20-060, and BK6-20-061, effective 2021-10-01. Suppliers (LF) and metering
+operators (MSB) are out of scope.
 
-**This platform does not currently implement a certified Redispatch 2.0
-participant role.** This crate is a placeholder for future implementation.
+**Market roles in scope:** ANB (Anlagenbetreiber), VNB (Verteilnetzbetreiber),
+ÜNB (Übertragungsnetzbetreiber), BKV (Bilanzkreisverantwortlicher).
 
-The regulatory facts are:
-- Redispatch 2.0 is **mandatory for ÜNBs (TSOs) and VNBs (DSOs)** under
-  BNetzA rulings BK6-20-059/060/061, effective 2021-10-01.
-- It is **not mandatory for suppliers (LF) or metering operators (MSB)**
-  in isolation.
-- The MaKo market roles in scope for Redispatch 2.0 are:
-  **ANB (Anschlussnetzbetreiber), VNB (Verteilnetzbetreiber), ÜNB
-  (Übertragungsnetzbetreiber)**, and the technical/market resource operators
-  for CIM-XML data exchange.
+## Three-crate architecture
 
-If this platform operates **only in supplier or MSB role**, Redispatch 2.0
-is out of scope. If the platform intends to operate as a VNB or ÜNB, this
-crate must be fully implemented before production deployment. See the
-`CONCEPT.md` or your BDEW Marktteilnehmer role definition for scope
-clarification.
+| Crate | Responsibility |
+|---|---|
+| `edi-energy` | IFTSTA status messages (EDIFACT, PIDs 21037/21038) |
+| `redispatch-xml` | XML/XSD format parsing (ActivationDocument, Stammdaten, …) |
+| `mako-redispatch` | Process engine — workflows, routing, deadlines |
 
----
+## Workflows
 
-## Architecture
-
-Redispatch 2.0 spans three crates:
-
-| Crate | Responsibility | Status |
+| Workflow name | Document type | Direction |
 |---|---|---|
-| `edi-energy` | IFTSTA status messages (EDIFACT) | ✅ Implemented |
-| `redispatch-xml` | XML/XSD format parsing and validation | ✅ Implemented |
-| `mako-redispatch` ← **this crate** | Workflow impls, PID routing, deadline handling | ⏳ Planned |
+| `redispatch-aktivierung` | `ActivationDocument` (ACO/ACR/AAR) | ÜNB → VNB → ANB |
+| `redispatch-stammdaten` | `Stammdaten` | ANB → VNB → ÜNB |
+| `redispatch-planungsdaten` | `PlannedResourceScheduleDocument` | ÜNB → VNB → ANB |
+| `redispatch-verfuegbarkeit` | `UnavailabilityMarketDocument` | ANB → VNB |
+| `redispatch-netzengpass` | `NetworkConstraintDocument` | ÜNB ↔ VNB |
+| `redispatch-kaskade` | `Kaskade` (§ 13 Abs. 2 EnWG) | ÜNB → VNB → ANB |
+| `redispatch-statusanfrage` | `StatusRequest_MarketDocument` | bidirectional |
+| `redispatch-kostenblatt` | `Kostenblatt` | VNB → ÜNB |
 
-`makod` will activate Redispatch 2.0 handling once this crate provides a
-`RedispatchModule` that implements `EngineModule`.
+## Regulatory deadlines
 
----
+| Obligation | Deadline | Clock |
+|---|---|---|
+| `AcknowledgementDocument` | 6 wall-clock hours | **UTC** |
+| `StatusRequest` response | 24 wall-clock hours | **UTC** |
+| Stammdaten forward (VNB→ÜNB) | 1 Werktag | German local time |
+| Activation (ACO) response | **5 minutes** | **UTC** |
+| Kostenblatt submission | 15th of following month | German local time |
+
+> **5-minute hard real-time constraint:** The `makod` Redispatch deadline
+> scheduler must poll at ≤ 30-second intervals. Configure a dedicated
+> `DeadlineScheduler` instance for Redispatch workflows — the standard
+> Werktage-based scheduler used for GPKE/WiM is not sufficient.
+
+## IFTSTA PIDs
+
+Redispatch 2.0 IFTSTA messages (confirmed from IFTSTA AHB 2.1 + PID 4.0):
+
+| PID | Perspective | Description |
+|-----|-------------|-------------|
+| 21037 | NB (VNB) | Kommunikationsprozesse Redispatch — Ansicht NB |
+| 21038 | BTR | Kommunikationsprozesse Redispatch — Ansicht BTR |
+
+These PIDs route to the `redispatch-aktivierung` workflow via `PidRouter` and
+are registered by `RedispatchModule` in `makod`.
+
+## Routing
+
+Unlike GPKE/WiM/GeLi Gas (EDIFACT `RFF+Z13` Prüfidentifikatoren), Redispatch
+2.0 XML documents are routed by `RedispatchRouter` based on XML document type,
+not EDIFACT PID. The `makod` inbound dispatcher detects `application/xml`
+content and calls `redispatch_xml::detect(bytes)` before routing.
 
 ## Regulatory basis
 
-Redispatch 2.0 entered into force on **1 October 2021** under the NABEG and
-applies to all German transmission and distribution system operators. It is
-the mandatory protocol for coordinating curtailment of generation units to
-resolve grid congestion.
-
-Key rulings:
-
-| BNetzA decision | Topic |
+| Document | Topic |
 |---|---|
-| BK6-20-059 | Abrechnungsbilanzkreis |
-| BK6-20-060 | Netzbetreiber-Koordination |
-| BK6-20-061 | Informationsbereitstellung |
-
-The XML schemas are published by BDEW at
-[bdew-mako.de](https://www.bdew-mako.de/market_communication/documents)
-(topicGroupId 25).
+| BK6-20-059 | AcknowledgementDocument (6h), StatusRequest (24h) |
+| BK6-20-060 | Stammdaten (1 Werktag), Activation (5 min) |
+| BK6-20-061 | Kostenblatt (15th of following month) |
 
 ---
 
-## Process scope
+## Engine module
 
-Unlike GPKE/WiM/GeLi Gas (UTILMD/APERAK-based), Redispatch 2.0 uses:
-- **CIM/IEC 62325 XML** for primary data exchange (handled by `redispatch-xml`)
-- **IFTSTA (EDIFACT)** for status confirmations (handled by `edi-energy`)
+`RedispatchModule` implements `EngineModule` and is registered in `makod` when
+`DeploymentRoles` contains at least one of `Marktrolle::Nb`, `Marktrolle::Unb`,
+or `Marktrolle::Anb`:
 
-Planned workflows:
+```rust,ignore
+if roles.contains_any(&[Marktrolle::Nb, Marktrolle::Unb, Marktrolle::Anb]) {
+    builder.register(Box::new(RedispatchModule));
+}
+```
 
-| Process | Parties | Direction |
-|---|---|---|
-| Stammdatenübermittlung | ANB → VNB → ÜNB | ANB sends asset master data |
-| Planungsdaten (Abruffahrplan) | ÜNB → VNB → ANB | TSO sends dispatch schedule |
-| Verfügbarkeitsmeldung | ANB → VNB | ANB reports availability |
-| Redispatch-Abrechnung (Kostenblatt) | VNB → ÜNB | Cost reconciliation |
+`RedispatchModule::configure()` wires all 8 workflows into a `RedispatchRouter`
+and registers IFTSTA PIDs 21037 / 21038 into the `PidRouter`.
+
+### AcknowledgementDocument routing
+
+`AcknowledgementDocument` is **not** registered in the type-based router.
+Inbound ACKs carry a `ReceivingDocumentIdentification` field identifying the
+workflow instance they belong to. The `makod` dispatcher resolves that
+correlation key against the `ProcessRegistry` and delivers the ACK directly to
+the originating workflow.
+
+### Deadline scheduler note
+
+The 5-minute Activation (ACO) deadline requires the `DeadlineScheduler` to poll
+at ≤ 30-second intervals. Use a dedicated scheduler instance for Redispatch
+workflows — the standard Werktage-based GPKE/WiM scheduler is insufficient.
 
 ---
 
@@ -87,7 +113,7 @@ Planned workflows:
 
 | Crate | Role |
 |---|---|
-| `redispatch-xml` | XML format layer (required by this crate) |
-| `mako-redispatch` ← **this crate** | Process engine |
-| `edi-energy` | IFTSTA status messages |
-| `mako-engine` | Event-sourced workflow runtime |
+| `redispatch-xml` | XML format layer — parse · serialize · validate (required by this crate) |
+| `mako-redispatch` ← **this crate** | Event-sourced process engine — 8 workflows, `RedispatchRouter`, `RedispatchModule` |
+| `edi-energy` | IFTSTA status messages (EDIFACT, PIDs 21037/21038) |
+| `mako-engine` | Event-sourced workflow runtime (`Workflow`, `Process`, `EventStore`) |

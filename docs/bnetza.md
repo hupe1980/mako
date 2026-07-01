@@ -5,8 +5,7 @@ nav_order: 40
 parent: Regulatory
 description: >
   Complete BNetzA ruling index for German energy market communication:
-  BK6 GPKE/WiM/MaBiS, BK7 GeLi Gas, current rulings, Fristen, and
-  MPES dissolution timeline.
+  BK6 GPKE/WiM/MaBiS, BK7 GeLi Gas, current rulings, and Fristen.
 ---
 
 # BNetzA Regulatory Reference
@@ -36,6 +35,7 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 - **Gültig seit: 06.06.2025**
 
 **Process documents (Lesefassungen):**
+
 | Document | Content |
 |---|---|
 | Anlage 1a, GPKE Teil 1 | Einführende Prozessbeschreibung |
@@ -47,9 +47,9 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 - Lieferantenwechsel Strom (UTILMD E, PIDs 55001–55006, 55017–55018)
   — 55001/55002 Anfrage Lieferbeginn/Lieferende; 55003–55006 Bestätigung/Ablehnung;
     55017 Kündigung Lieferbeginn; 55018 Bestätigung Kündigung
+- Neuanlage MaLo (UTILMD E, PIDs 55600–55605)
 - Sperrauftrag / Entsperrauftrag Strom (ORDERS, PIDs 17115–17117)
 - Anfrage Daten der individuellen Bestellung (UTILMD, PID 55555) — GPKE Teil 4 data request
-- Einspeisestelle ex-MPES (UTILMD E, PIDs 56001–56004) — transferred from MPES per BK6-22-024 (LFW24), effective 06.06.2025
 - Konfigurationseinrichtung Rollenzuordnung MSB (ORDERS/ORDRSP, PIDs 17134–17135, 19001–19002) — via BK6-22-024 GPKE Teil 4
 - Abschlagsrechnung / NN-Rechnung Netz (INVOIC, PIDs 31001–31002)
 - Stornorechnung Netz (INVOIC, PID 31004)
@@ -58,11 +58,13 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 **APERAK Frist (GPKE):** **24 Stunden** (wall-clock hours) — festgelegt in BK6-22-024
 
 **Laufende Verfahren:**
+
 | Az. | Gegenstand | Eröffnet |
 |---|---|---|
 | BK6-24-210 | Festlegungsverfahren MaBiS-Hub (Aggregation und Abrechnung bilanzierungsrelevanter Daten) | 02.10.2024 |
 
 **Selected Mitteilungen:**
+
 | Nr. | Gegenstand | Datum |
 |---|---|---|
 | 72 | Empfehlung zur Anwendung der BDEW-Anwendungshilfe „Ermittlung des Mehr-/Mindermengenpreises **Strom**" | 05.02.2026 |
@@ -93,11 +95,13 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 - Not supplier-switch; not network billing
 
 **Laufende Verfahren:**
+
 | Az. | Gegenstand | Eröffnet |
 |---|---|---|
 | BK6-24-210 | Festlegungsverfahren MaBiS-Hub | 02.10.2024 |
 
 **Selected Mitteilungen:**
+
 | Nr. | Gegenstand | Datum |
 |---|---|---|
 | 10 | Veröffentlichung BDEW-Anwendungshilfe „Fallsammlung MaBiS" | 09.05.2019 |
@@ -115,15 +119,16 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 - **Gültig seit: 06.06.2025**
 
 **Process documents:**
+
 | Document | Content |
 |---|---|
 | Anlage 2a, WiM Teil 1 | Fokus Basis Prozesse (Lesefassung) |
 | Anlage 2b, WiM Teil 2 | Fokus Übermittlung von Werten (Lesefassung) |
 
 **Scope:**
-- Gerätewechsel / Messstellenbetreiberwechsel (UTILMD, PIDs 11001–11003)
-  — 11001 Anmeldung (nMSB → NB), 11002 Abmeldung (NB → aMSB), 11003 Stammdatenänderung;
-    range 11001–11099 reserved by BK6-24-174 but only 11001–11003 are defined in the current AHB
+- Messstellenbetreiberwechsel (UTILMD, PIDs 55039, 55042, 55051, 55168)
+  — 55039 Kündigung MSB, 55042 Anmeldung MSB, 55051 Ende MSB, 55168 Verpflichtungsanfrage;
+    legacy PIDs 11001–11003 are superseded and not in the current AHB
 - Geräteübernahme ORDERS (PIDs 17001–17002, 17005, 17009–17011)
 - Stammdaten ORDERS (PIDs 17101–17135; 17101 inbound Anforderung, 17102–17135 outbound Übermittlung)
 - Stornierung ORDCHG (PID 39000; 39001–39002 outbound responses)
@@ -133,16 +138,43 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 **APERAK Frist (WiM):** **5 Werktage** (Samstag zählt als Werktag; Sonntag und gesetzliche Feiertage nicht)
 
 **Laufende Verfahren:**
+
 | Az. | Gegenstand | Eröffnet |
 |---|---|---|
 | BK6-24-210 | Festlegungsverfahren MaBiS-Hub | 02.10.2024 |
 
 **Selected Mitteilungen:**
+
 | Nr. | Gegenstand | Datum |
 |---|---|---|
 | 3 | Erweiterung Aufgabenumfang MSB: Pflicht zur Übermittlung von Messwerten an ESA | 07.02.2024 |
 | 2 | Ergänzung Wertetabelle aufgrund EEG 2021 | 02.07.2021 |
 | 1 | Fehlerkorrekturen | 19.01.2017 |
+
+---
+
+### Redispatch 2.0 — Koordination von Einspeisungen
+
+**Page:** <https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/836_Redispatch/Redispatch_node.html>
+
+**Current rulings:**
+
+| Az. | Topic | Effective |
+|---|---|---|
+| **BK6-20-059** | `AcknowledgementDocument` (6 h), `StatusRequest` (24 h) | 2021-10-01 |
+| **BK6-20-060** | `Stammdaten` forwarding (1 Werktag), Activation (5 min) | 2021-10-01 |
+| **BK6-20-061** | `Kostenblatt` submission (15th of following month) | 2021-10-01 |
+
+**Scope:**
+- All German TSOs (ÜNB) and DSOs (VNB) plus connected asset operators (ANB)
+- Redispatch 2.0 uses **CIM/IEC 62325 XML** documents — not EDIFACT (except IFTSTA)
+- IFTSTA status confirmations: PIDs 21037 (Ansicht NB) and 21038 (Ansicht BTR)
+- Handled by the `mako-redispatch` + `redispatch-xml` crates
+- See [Redispatch 2.0]({{ '/redispatch' | relative_url }}) for full documentation
+
+**Regulatory context:** Mandatory since NABEG 2019, § 13 ff. EnWG.
+Covers renewable (EE) and combined heat-and-power (KWK) plants ≥ 100 kW,
+plus all installations permanently remote-controllable by a grid operator.
 
 ---
 
@@ -161,6 +193,7 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
   - [Anlage PDF](https://www.bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK7-GZ/2024/BK7-24-0009/Anlagen/BK7-24-01-0009_Anlage_Download_BF.pdf)
 
 **Previous rulings:**
+
 | Az. | Gegenstand | Datum |
 |---|---|---|
 | BK7-19-001 | Anpassung GeLi Gas inkl. Messstellenbetreiberrahmenvertrag | 22.11.2023 |
@@ -172,7 +205,7 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 - Lieferbeginn Gas / Lieferende Gas (UTILMD G, PIDs 44001–44006, 44017–44018)
   — 44001–44002 Anmeldung/Abmeldung (LFN → GNB); 44003–44006 Bestätigung/Ablehnung;
     44017–44018 Kündigung Lieferbeginn (LFN ↔ LFA); PIDs 44007–44016 do not exist
-- Anweisung Sperrung Gas (UTILMD G, PID 44555)
+- Sperr-/Entsperrprozess Gas (ORDERS, PIDs 17115–17117) — *not yet implemented in `mako-geli-gas`; same PID numbers as Strom Sperrung but separate Gas process under BK7-24-01-009*
 - APERAK / CONTRL acknowledgements
 - **Does NOT cover** INVOIC billing or Mehr-/Mindermengen Gas — these belong to GaBi Gas (BK7 Bilanzierung)
 
@@ -203,7 +236,7 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 - Mehr-/Mindermengenbilanzierung Gas
 - Konvertierung im qualitätsübergreifenden Gasmarktgebiet
 - INVOIC Gas billing: Kapazitätsrechnung (PID 31010), Rechnung sonstige Leistung (PID 31011)
-- DVGW message types: ALLOCAT, NOMINT, NOMRES
+- DVGW message types: ALOCAT, NOMINT, NOMRES
 
 ---
 
@@ -217,6 +250,10 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 
 > **Werktag rule:** Saturday counts as a Werktag. Sunday and public holidays do not.
 
+> **Redispatch 2.0 deadlines are separate** — they use UTC wall-clock hours, not Werktage:
+> 6 h (`AcknowledgementDocument`), 24 h (`StatusRequest`), and 5 min (Activation response).
+> See [Redispatch 2.0]({{ '/redispatch' | relative_url }}) for full deadline table.
+
 ---
 
 ## Domain Boundary Summary
@@ -227,7 +264,7 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 | MaBiS Bilanzkreisabrechnung | BK6 | `mako-mabis` | PID 13003 (MSCONS) |
 | WiM Messwesen / MSB | BK6 | `mako-wim` | PIDs 31003, 31009 ✅ |
 | GeLi Gas Lieferantenwechsel | BK7 | `mako-geli-gas` | ❌ No INVOIC |
-| GaBi Gas Bilanzierung / MMM Gas | BK7 | `mako-gabi-gas` | PIDs 31010–31011 (placeholder) |
+| GaBi Gas Bilanzierung / MMM Gas | BK7 | `mako-gabi-gas` | PIDs 31010–31011 ✅ |
 | Netzbetreiberwechsel Strom | BK6 | `mako-nbw` | ❌ PARTIN only |
 
 > Gas Mehr-/Mindermengen billing (PIDs 31010–31011) is NOT part of GeLi Gas.

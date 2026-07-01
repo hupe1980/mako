@@ -506,7 +506,7 @@ For multi-role commands, `marktrolle` selects the EDIFACT qualifier
 | `GET` | `/admin/partners/{gln}` | Retrieve a single partner record |
 | `PUT` | `/admin/partners/{gln}` | Create or update a partner record |
 | `DELETE` | `/admin/partners/{gln}` | Remove a partner record |
-| `POST` | `/admin/partners/import` | Import from a raw PARTIN EDIFACT interchange *(501 — coming soon)* |
+| `POST` | `/admin/partners/import` | Import from a raw PARTIN EDIFACT interchange |
 
 **`PUT /admin/partners/{gln}` request body:**
 ```json
@@ -686,7 +686,7 @@ Enable the `tracing` feature in `edi-energy` to get per-message parse/validate
 spans:
 
 ```toml
-edi-energy = { version = "0.3", features = ["tracing"] }
+edi-energy = { version = "0.5", features = ["tracing"] }
 ```
 
 These integrate with OpenTelemetry exporters when a global subscriber is
@@ -804,6 +804,6 @@ Omit the `[otel]` section entirely to disable telemetry with zero overhead — t
 
 - [Getting Started](./getting-started.md) — first workflow in 5 minutes
 - [Process Engine Guide](./engine.md) — event-sourcing architecture
-- [ERP Integration](./erp-integration.md) — Command API and webhooks
+- [ERP Integration](./erp-integration.md) — CloudEvents 1.0 webhooks, Command API, receiver implementation guide
 - [API-Webdienste Strom](./api-webdienste.md) — REST/JSON channel for iMS processes
 - [Annual Release Workflow](./annual-release-workflow.md) — incorporating new BDEW specs

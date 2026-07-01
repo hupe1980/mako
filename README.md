@@ -23,14 +23,14 @@ Two distinct concerns live here:
 | `edi-energy` | Parse · validate · build all 17 EDI@Energy EDIFACT message types |
 | `mako-engine` | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
 | `mako-gpke` | GPKE workflows — UTILMD Strom supplier-switch (55001–55018) + Anfrage Daten (55555, GPKE Teil 4) + Sperrung ORDERS (17115–17117) + INVOIC (31001–31002, 31005–31009) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) |
-| `mako-wim` | WiM Strom workflows — UTILMD (55039, 55042, 55051, 55168) + WiM-Rechnung INVOIC (31003) + ORDERS/ORDRSP (various) |
+| `mako-wim` | WiM Strom workflows — UTILMD (55039, 55042, 55051, 55168) + MSB-Rechnung INVOIC (31009) + ORDERS/ORDRSP (various) |
 | `mako-geli-gas` | GeLi Gas 3.0 workflows — UTILMD G supplier-switch Gas (44001–44021); PIDs 44022–44024 pending ownership clarification |
 | `mako-mabis` | MABIS workflows — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB) |
 | `mako-gabi-gas` | GaBi Gas workflows — INVOIC (31010 Kapazitätsrechnung, 31011 AWH Sperrprozesse Gas); Allokation/Nominierung via `dvgw-edi` — placeholder |
 | `mako-nbw` | Netzbetreiberwechsel — PARTIN bulk DSO concession handover (PIDs 37000–37014) — placeholder |
 | `mako-as4` | BDEW AS4 profile constants and P-Mode configuration |
 | `dvgw-edi` | DVGW EDIFACT formats — ALLOCAT, NOMINT, NOMRES parsing — placeholder |
-| `mako-redispatch` | Redispatch 2.0 process workflows — placeholder |
+| `mako-redispatch` | Redispatch 2.0 workflows — XML document types (`ActivationDocument`, `Stammdaten`, `NetworkConstraintDocument`, …) + IFTSTA PIDs 21037/21038 |
 | `redispatch-xml` | Redispatch 2.0 XML/XSD format parsing |
 | `energy-api` | BDEW API-Webdienste Strom — REST/WebSocket client + Axum server for iMS processes |
 | `makod` | Production daemon — assembles all modules, AS4 inbound server, deadline scheduler |
@@ -46,7 +46,7 @@ Two distinct concerns live here:
 | 📦 **17 message types** | UTILMD, MSCONS, APERAK, CONTRL, INVOIC, REMADV, ORDERS, IFTSTA, INSRPT, REQOTE, PARTIN, ORDCHG, ORDRSP, QUOTES, COMDIS, PRICAT, UTILTS |
 | 🔍 **5-layer validation** | MIG structural rules, AHB Pruefidentifikator-specific rules, semantic cross-field rules |
 | 📅 **Annual release lifecycle** | Multi-version profile registry with 7-day transition grace windows (BDEW-compliant) |
-| 🔒 **Security by default** | DoS limits (max 10 MB, 10 000 segments), log-injection sanitisation, fuzz-tested with 1 100+ corpus entries |
+| 🔒 **Security by default** | DoS limits (max 10 MB, 10 000 segments), log-injection sanitisation, fuzz-tested with 1 329+ corpus entries |
 | 🛠️ **Fluent message builders** | Type-state builder API with compile-time mandatory field enforcement |
 | 🔁 **Round-trip serialisation** | Parse → validate → serialize with byte-exact EDIFACT output |
 | 🧪 **Code-generated profiles** | 36 profiles across 17 types, regenerated annually via `cargo xtask codegen` |
@@ -59,7 +59,8 @@ Two distinct concerns live here:
 | ⚛️ **Atomic dual-write** | Events and outbox messages written in a single `WriteBatch` via `AtomicAppend` |
 | ⏰ **Regulatory deadlines** | `DeadlineStore` with GPKE 24h / WiM 5-Werktage / GeLi Gas 10-Werktage Fristen |
 | 📨 **AS4 inbound transport** | `makod` receives BDEW AS4 pushes via `asx-rs`, deduplicates with `SlateDbInboxStore`, routes by Pruefidentifikator |
-| 🔄 **Format-version coexistence** | Processes started under `FV2025-10-01` run to completion under those rules even after `FV2026-10-01` cutover |
+| � **CloudEvents 1.0 ERP webhooks** | Outbound ERP notifications as [CloudEvents 1.0](https://cloudevents.io) structured-mode JSON (`application/cloudevents+json`), HMAC-SHA256 signed; natively routable by SAP BTP, AWS EventBridge, Azure Event Grid, Google Eventarc |
+| �🔄 **Format-version coexistence** | Processes started under `FV2025-10-01` run to completion under those rules even after `FV2026-10-01` cutover |
 | 🪦 **Dead-letter sink** | Structured `DeadLetterReason` variants — `UnknownPid`, `DuplicateMessage`, `VersionMismatch`, … |
 
 ---
@@ -68,7 +69,7 @@ Two distinct concerns live here:
 
 ```toml
 [dependencies]
-edi-energy = "0.3"
+edi-energy = "0.5"
 ```
 
 ```rust
@@ -86,8 +87,8 @@ println!("Valid: {}", report.is_valid());
 
 ```toml
 [dependencies]
-mako-engine = { version = "0.3", features = ["testing"] }
-mako-gpke   = "0.3"
+mako-engine = { version = "0.5", features = ["testing"] }
+mako-gpke   = "0.5"
 ```
 
 ```rust
@@ -97,14 +98,14 @@ use mako_engine::{
     version::WorkflowId,
     event_store::InMemoryEventStore,
 };
-use mako_gpke::lieferbeginn::SupplierChangeWorkflow;
+use mako_gpke::lf_anmeldung::GpkeLfAnmeldungWorkflow;
 
 let ctx = EngineBuilder::new()
     .with_event_store(InMemoryEventStore::new())
     .build();
 
 // Spawn a new process for one delivery point.
-let process   = ctx.spawn::<SupplierChangeWorkflow>(TenantId::new(), wf_id);
+let process   = ctx.spawn::<GpkeLfAnmeldungWorkflow>(TenantId::new(), wf_id);
 let envelopes = process.execute(initiate_cmd).await?;
 
 // Reconstruct typed state by replaying all persisted events.
@@ -143,7 +144,9 @@ let state = process.state().await?;
 | Document | Description |
 |---|---|
 | [Getting Started](./docs/getting-started.md) | Installation, first parse, first workflow |
+| [Architecture](./docs/architecture.md) | System layers, data flows, SlateDB key schema, testing strategy |
 | [Process Engine Guide](./docs/engine.md) | `mako-engine` concepts, stores, deadlines, outbox |
+| [ERP Integration](./docs/erp-integration.md) | CloudEvents 1.0 webhooks, Command API, HMAC signing, receiver examples |
 | [Parsing Guide](./docs/parsing.md) | Single message, interchange, streaming |
 | [Validation Guide](./docs/validation.md) | Layers, reports, Pruefidentifikator |
 | [Builder Guide](./docs/builders.md) | Constructing messages programmatically |
@@ -151,6 +154,7 @@ let state = process.state().await?;
 | [API-Webdienste Strom](./docs/api-webdienste.md) | REST/JSON channel for iMS processes (`energy-api`) |
 | [Release Lifecycle](./docs/release-lifecycle.md) | Annual BDEW profile updates, codegen pipeline |
 | [Schema Versioning](./docs/schema-versioning.md) | Profile JSON schema evolution and archive lifecycle |
+| [PID Reference](./docs/pid-reference.md) | Prüfidentifikatoren — authoritative crate ownership table |
 | [API Reference](https://docs.rs/edi-energy) | Full rustdoc |
 
 ---
@@ -255,17 +259,17 @@ mako/
 │   │   └── src/             # Workflow, Process, EngineBuilder, all store traits
 │   │                        # + SlateDB implementations, fristen, dead-letter
 │   │
-│   ├── mako-gpke/           # GPKE domain (55001–55018, 55555 Anfrage, 17115–17117 Sperrung, INVOIC 31001–31002/31005–31009, ORDERS 17134/17135)
-│   ├── mako-wim/            # WiM Strom domain (55039, 55042, 55051, 55168, INVOIC 31003)
-│   ├── mako-geli-gas/       # GeLi Gas 3.0 domain (44001–44021; 44022–44024 pending)
+│   ├── mako-gpke/           # GPKE domain (55001–55018, 55555 Anfrage, 17115–17117 Sperrung, INVOIC 31001–31002/31005–31008, ORDERS 17134/17135; PARTIN Strom 37000–37006)
+│   ├── mako-wim/            # WiM Strom domain (55039, 55042, 55051, 55168, INVOIC 31009, INSRPT 23001–23012)
+│   ├── mako-geli-gas/       # GeLi Gas 3.0 domain (44001–44021; PARTIN Gas 37008–37014; 44022–44024 pending)
 │   ├── mako-mabis/          # MABIS domain (13003 — Bilanzkreisabrechnung Strom)
 │   ├── mako-gabi-gas/       # GaBi Gas domain — INVOIC 31010/31011; Allokation/Nominierung (placeholder)
-│   ├── mako-wim-gas/        # WiM Gas domain (44039–44053, 44168–44170)
+│   ├── mako-wim-gas/        # WiM Gas domain (44039–44053, 44168–44170, INSRPT Gas-only 23005/23009)
 │   ├── mako-nbw/            # Netzbetreiberwechsel — PARTIN DSO handover (placeholder)
 │   ├── mako-as4/            # BDEW AS4 profile constants, P-Modes, security policy
 │   ├── dvgw-edi/            # DVGW EDIFACT formats — ALLOCAT, NOMINT, NOMRES (placeholder)
 │   ├── energy-api/          # BDEW REST/WebSocket API client + Axum server (iMS)
-│   ├── mako-redispatch/     # Redispatch 2.0 process engine (placeholder)
+│   ├── mako-redispatch/     # Redispatch 2.0 process engine — 8 XML-document-driven workflows
 │   └── redispatch-xml/      # Redispatch 2.0 XML/XSD parsing — all 9 document types
 │
 ├── services/
@@ -298,8 +302,9 @@ PidRouter::route  ──  selects domain handler (GPKE / WiM / GeLi Gas / MABIS)
 Process::execute_and_enqueue  ──  replay state · Workflow::handle · AtomicAppend
        │
        ├─ EventStore (SlateDB)
-       ├─ OutboxStore  ──►  delivery worker  ──►  AS4 send
-       └─ DeadlineStore  ──►  scheduler  ──►  TimeoutExpired command
+       ├─ OutboxStore  ──►  OutboxErpWorker  ──►  ERP (CloudEvents 1.0, HMAC-SHA256)
+       ├─ OutboxStore  ──►  OutboxWorker     ──►  AS4 send → BDEW counterparty
+       └─ DeadlineStore ──►  scheduler  ──►  TimeoutExpired → de.mako.aperak.timeout
 ```
 
 ---
@@ -387,7 +392,7 @@ cargo xtask codegen
 cargo xtask codegen --check
 
 # Compute a diff between two annual releases
-cargo xtask release-diff --from utilmd/fv20241001 --to utilmd/fv20261001
+cargo xtask release-diff --from utilmd/fv20251001 --to utilmd/fv20261001
 
 # Run fuzz target (requires nightly + cargo-fuzz)
 cargo +nightly fuzz run fuzz_parse_validate

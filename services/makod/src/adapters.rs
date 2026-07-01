@@ -45,6 +45,7 @@ fn convert_pid(p: edi_energy::Pruefidentifikator) -> Result<Pruefidentifikator, 
     Pruefidentifikator::new(p.as_u32())
         .map_err(|e| EngineError::Deserialization(format!("PID out of range: {e}")))
 }
+use mako_gabi_gas::{GaBiGasInvoicCommand, GaBiGasInvoicWorkflow};
 use mako_geli_gas::{
     GasSupplierChangeCommand, GeliGasStornierungCommand, GeliGasStornierungWorkflow,
     GeliGasSupplierChangeWorkflow,
@@ -59,13 +60,15 @@ use mako_gpke::{
 use mako_mabis::{BillingCommand, DataStatus, IFTSTA_DATENSTATUS_PID, MabisBillingWorkflow};
 use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, StammdatenCommand, StornierungCommand,
-    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimRechnungCommand, WimRechnungWorkflow,
-    WimStammdatenWorkflow, WimStornierungWorkflow,
+    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimRechnungCommand,
+    WimRechnungWorkflow, WimStammdatenWorkflow, WimStornierungWorkflow,
+    insrpt::StorungsmeldungCommand,
 };
 use mako_wim_gas::{
-    WimGasAnmeldungCommand, WimGasAnmeldungWorkflow, WimGasKuendigungCommand,
-    WimGasKuendigungWorkflow, WimGasVerpflichtungsanfrageCommand,
-    WimGasVerpflichtungsanfrageWorkflow,
+    WimGasAnmeldungCommand, WimGasAnmeldungWorkflow, WimGasInsrptWorkflow, WimGasInvoicCommand,
+    WimGasInvoicWorkflow, WimGasKuendigungCommand, WimGasKuendigungWorkflow,
+    WimGasVerpflichtungsanfrageCommand, WimGasVerpflichtungsanfrageWorkflow,
+    insrpt::GasStorungsmeldungCommand,
 };
 
 // ── GPKE UTILMD Anfrage (PIDs 55001, 55002, 55016) ──────────────────────────────
@@ -358,6 +361,83 @@ pub fn wim_rechnung_registry() -> AdapterRegistry<WimRechnungWorkflow> {
 
             Ok(WimRechnungCommand::ReceiveInvoic {
                 pruefidentifikator: pid,
+                sender: MarktpartnerCode::new(
+                    inv.sender()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                recipient: MarktpartnerCode::new(
+                    inv.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                invoice_ref: MessageRef::new(invoice_ref),
+                document_date: inv
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── WiM Gas INVOIC billing (PIDs 31003, 31004) ───────────────────────────────
+
+/// Build an [`AdapterRegistry`] for [`WimGasInvoicWorkflow`].
+///
+/// Extracts INVOIC fields to construct a [`WimGasInvoicCommand::ReceiveInvoic`]
+/// for WiM Gas billing PIDs 31003 (WiM-Rechnung) and 31004 (Stornorechnung).
+///
+/// Deadline: 10 Werktage per BK7-24-01-009 §5.
+#[must_use]
+pub fn wim_gas_invoic_registry() -> AdapterRegistry<WimGasInvoicWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Gas INVOIC adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Invoic(inv) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM Gas INVOIC adapter: expected INVOIC message".into(),
+                ));
+            };
+
+            let pid = inv
+                .bgm()
+                .and_then(|b| b.pruefidentifikator())
+                .ok_or_else(|| {
+                    EngineError::Deserialization(
+                        "WiM Gas INVOIC adapter: PID not found in INVOIC BGM".into(),
+                    )
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+            let invoice_ref = inv
+                .bgm()
+                .and_then(|b| b.document_id.as_deref())
+                .unwrap_or(msg.message_ref());
+
+            Ok(WimGasInvoicCommand::ReceiveInvoic {
+                pid,
                 sender: MarktpartnerCode::new(
                     inv.sender()
                         .and_then(|n| n.party_id.as_deref())
@@ -822,6 +902,13 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                     .dtm()
                     .iter()
                     .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                process_date: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.dtm.iter().find(|d| d.is_period_start()))
                     .and_then(|d| d.value_str())
                     .unwrap_or("")
                     .to_owned(),
@@ -1520,7 +1607,8 @@ pub fn wim_gas_anmeldung_registry() -> AdapterRegistry<WimGasAnmeldungWorkflow> 
 /// Build an [`AdapterRegistry`] for [`WimGasKuendigungWorkflow`].
 ///
 /// Routes UTILMD G messages with PIDs 44039–44041 (WiM Gas Kündigung MSB Gas).
-/// Note: PIDs 44022–44024 are GeLi Gas Stornierung, not WiM Gas.
+/// Note: PIDs 44022–44024 are WiM Gas Stornierung (routed by `WimGasModule` → `wim-gas-stornierung`);
+/// the `GeliGasStornierungWorkflow` is only used for the startup policy-coverage check.
 ///
 /// **APERAK Frist:** 10 Werktage (BNetzA BK7-24-01-009).
 #[must_use]
@@ -1617,7 +1705,7 @@ pub fn wim_gas_verpflichtungsanfrage_registry()
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
+        |raw: &dyn Any, fv: &FormatVersion| {
             let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
                 EngineError::Deserialization(
                     "expected AnyMessage for WiM Gas Verpflichtungsanfrage adapter".into(),
@@ -1636,6 +1724,15 @@ pub fn wim_gas_verpflichtungsanfrage_registry()
                     ))
                 })
                 .and_then(convert_pid)?;
+            // PID 44170 (Ablehnung Verpflichtungsanfrage) was removed in PID 4.0
+            // (FV2026-10-01). Reject it for any format version other than FV2025-10-01.
+            if pid.as_u32() == 44170 && fv != &FormatVersion::new("FV2025-10-01") {
+                return Err(EngineError::Deserialization(format!(
+                    "PID 44170 (Ablehnung Verpflichtungsanfrage) is not valid under \
+                     format version {fv} — it was removed in FV2026-10-01 (PID 4.0 \u{26a0}\u{fe0f}). \
+                     Only FV2025-10-01 messages may carry this PID."
+                )));
+            }
             let validation_result = msg.validate().ok();
             let mut validation_passed = validation_result
                 .as_ref()
@@ -1970,6 +2067,207 @@ pub fn geli_gas_stornierung_registry() -> AdapterRegistry<GeliGasStornierungWork
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GaBi Gas INVOIC billing (PIDs 31010, 31011) ───────────────────────────────
+
+/// Build an [`AdapterRegistry`] for [`GaBiGasInvoicWorkflow`].
+///
+/// Extracts INVOIC fields to construct a [`GaBiGasInvoicCommand::ReceiveInvoic`]
+/// for GaBi Gas billing PIDs 31010 (Kapazitätsrechnung) and 31011 (Rechnung
+/// sonstige Leistung / AWH Sperrprozesse Gas).
+///
+/// Regulatory basis: BK7-14-020 (GaBi Gas 2.0).
+#[must_use]
+pub fn gabi_gas_invoic_registry() -> AdapterRegistry<GaBiGasInvoicWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GaBi Gas INVOIC adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Invoic(inv) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GaBi Gas INVOIC adapter: expected INVOIC message".into(),
+                ));
+            };
+
+            let pid = inv
+                .bgm()
+                .and_then(|b| b.pruefidentifikator())
+                .ok_or_else(|| {
+                    EngineError::Deserialization(
+                        "GaBi Gas INVOIC adapter: PID not found in INVOIC BGM".into(),
+                    )
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+            let invoice_ref = inv
+                .bgm()
+                .and_then(|b| b.document_id.as_deref())
+                .unwrap_or(msg.message_ref());
+
+            Ok(GaBiGasInvoicCommand::ReceiveInvoic {
+                pid,
+                sender: MarktpartnerCode::new(
+                    inv.sender()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                recipient: MarktpartnerCode::new(
+                    inv.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                invoice_ref: MessageRef::new(invoice_ref),
+                document_date: inv
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── WiM Strom INSRPT (PIDs 23001/23003/23004/23008/23011/23012) ──────────────
+
+/// Build an [`AdapterRegistry`] for [`WimInsrptWorkflow`] (WiM Strom, 5 WT).
+///
+/// Handles inbound INSRPT messages for fault/inspection reporting between LF
+/// and MSB in the WiM Strom Teil 2 process.  Covers both the outbound
+/// Störungsmeldung (23001) and all inbound MSB responses
+/// (23003/23004/23008/23011/23012).
+///
+/// In combined Strom+Gas deployments the ingest layer must supply
+/// `Sparte::Strom` when calling [`PidRouter::route_with_sparte`] to reach this
+/// workflow instead of [`wim_gas_insrpt_registry`].
+///
+/// [`PidRouter::route_with_sparte`]: mako_engine::pid_router::PidRouter::route_with_sparte
+#[must_use]
+pub fn wim_insrpt_registry() -> AdapterRegistry<WimInsrptWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Strom INSRPT adapter".into(),
+                )
+            })?;
+            let AnyMessage::Insrpt(insrpt) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM Strom INSRPT adapter: expected INSRPT message".into(),
+                ));
+            };
+            let pid = insrpt
+                .bgm()
+                .and_then(|b| b.pruefidentifikator())
+                .ok_or_else(|| {
+                    EngineError::Deserialization(
+                        "WiM Strom INSRPT adapter: PID not found in INSRPT BGM".into(),
+                    )
+                })
+                .and_then(convert_pid)?;
+            let sender = MarktpartnerCode::new(
+                insrpt
+                    .sender()
+                    .and_then(|n| n.party_id.as_deref())
+                    .unwrap_or(""),
+            );
+            let message_ref = MessageRef::new(
+                insrpt
+                    .bgm()
+                    .and_then(|b| b.document_id.as_deref())
+                    .unwrap_or(msg.message_ref()),
+            );
+            match pid.as_u32() {
+                23011 | 23012 => Ok(StorungsmeldungCommand::ReceiveInformationsmeldung {
+                    pid,
+                    sender,
+                    message_ref,
+                }),
+                _ => Ok(StorungsmeldungCommand::ReceiveAntwort {
+                    pid,
+                    sender,
+                    message_ref,
+                }),
+            }
+        },
+    ));
+    registry
+}
+
+// ── WiM Gas INSRPT (PIDs 23001/23003/23004/23005/23008/23009) ─────────────────
+
+/// Build an [`AdapterRegistry`] for [`WimGasInsrptWorkflow`] (WiM Gas, 10 WT).
+///
+/// Handles inbound INSRPT messages for fault/inspection reporting between LF
+/// and gMSB in the WiM Gas process.  Covers both the outbound Störungsmeldung
+/// (23001) and all inbound gMSB responses, including Gas-only variants:
+/// 23005 (Ablehnung Gas) and 23009 (Ergebnisbericht Gas).
+///
+/// In combined Strom+Gas deployments the ingest layer must supply `Sparte::Gas`
+/// when calling [`PidRouter::route_with_sparte`] so that this workflow is
+/// selected instead of [`wim_insrpt_registry`] (5 WT).
+///
+/// [`PidRouter::route_with_sparte`]: mako_engine::pid_router::PidRouter::route_with_sparte
+#[must_use]
+pub fn wim_gas_insrpt_registry() -> AdapterRegistry<WimGasInsrptWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Gas INSRPT adapter".into(),
+                )
+            })?;
+            let AnyMessage::Insrpt(insrpt) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM Gas INSRPT adapter: expected INSRPT message".into(),
+                ));
+            };
+            let pid = insrpt
+                .bgm()
+                .and_then(|b| b.pruefidentifikator())
+                .ok_or_else(|| {
+                    EngineError::Deserialization(
+                        "WiM Gas INSRPT adapter: PID not found in INSRPT BGM".into(),
+                    )
+                })
+                .and_then(convert_pid)?;
+            let message_ref = MessageRef::new(
+                insrpt
+                    .bgm()
+                    .and_then(|b| b.document_id.as_deref())
+                    .unwrap_or(msg.message_ref()),
+            );
+            Ok(GasStorungsmeldungCommand::ReceiveResponse {
+                pid,
+                response_ref: message_ref,
+                reason: None,
             })
         },
     ));

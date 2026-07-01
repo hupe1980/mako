@@ -36,7 +36,7 @@
 //! use edi_energy::builders::UtilmdBuilder;
 //!
 //! let msg = UtilmdBuilder::new(Release::new("S2.1"))
-//!     .pruefidentifikator(Pruefidentifikator::new(11001).unwrap())
+//!     .pruefidentifikator(Pruefidentifikator::new(55001).unwrap())
 //!     .sender("9900987654321")
 //!     .receiver("9900123456789")
 //!     .build()?;

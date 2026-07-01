@@ -1,9 +1,11 @@
-//! WiM Gas Stornierung — cancellation of supply-change requests (PIDs 44022–44024).
+//! GeLi Gas / WiM Gas Stornierung — cancellation of supply-change and MSB-change
+//! requests (PIDs 44022–44024).
 //!
-//! Per BDEW PID overview (PID 3.3 / PID 4.0), PIDs 44022–44024 are listed under
-//! the **"WiM Gas"** process. The workflow implementation lives in `mako-geli-gas`
-//! for historical reasons, but PID routing is performed by `WimGasModule` in
-//! `mako-wim-gas`. Do not register these PIDs in `GeliGasModule`.
+//! Per BDEW PID 3.3 xlsx: PIDs 44022–44024 are multi-domain — both **"GeLi Gas 2.0"**
+//! (supply-change cancellation, LFN/LFA role) and **"WiM Gas"** (MSB-change cancellation,
+//! MSB role). Per PID 4.0 xlsx: both **"GeLi Gas 2.0"** and **"AWH WiM Gas 2.0"**.
+//! PID routing is currently performed by `WimGasModule` in `mako-wim-gas`.
+//! Role-based routing for the GeLi Gas context (LFN/LFA roles) is a TODO.
 //!
 //! A market participant (LFN / LFA / GNB) may request cancellation of a previously
 //! submitted Anmeldung, Abmeldung, or Kündigung by sending a UTILMD G message with

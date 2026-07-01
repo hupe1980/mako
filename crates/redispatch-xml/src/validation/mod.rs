@@ -55,11 +55,29 @@ impl ValidationResult {
     }
 
     /// Convert to a [`Result`], returning the first error on failure.
+    ///
+    /// If you need **all** errors, use [`Self::into_errors`] instead.
     pub fn into_result(mut self) -> Result<Vec<ValidationWarning>, ValidationError> {
         if self.errors.is_empty() {
             Ok(self.warnings)
         } else {
             Err(self.errors.remove(0))
+        }
+    }
+
+    /// Convert to a [`Result`], returning **all** validation errors on failure.
+    ///
+    /// Prefer this over [`Self::into_result`] when you need a complete error
+    /// report rather than stopping at the first problem.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(errors)` when one or more validation errors were found.
+    pub fn into_errors(self) -> Result<Vec<ValidationWarning>, Vec<ValidationError>> {
+        if self.errors.is_empty() {
+            Ok(self.warnings)
+        } else {
+            Err(self.errors)
         }
     }
 }

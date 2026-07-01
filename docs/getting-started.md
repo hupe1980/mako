@@ -62,9 +62,10 @@ graph TB
 
     subgraph Domain["Domain Crates"]
         GPKE["mako-gpke<br/>PIDs 55001–55018, 55555"]
-        WIM["mako-wim<br/>PIDs 11001–11099"]
+        WIM["mako-wim<br/>PIDs 55039, 55042, 55051, 55168"]
         GAS["mako-geli-gas<br/>PIDs 44001–44021"]
         MABIS["mako-mabis<br/>PID 13003"]
+        RDSP["mako-redispatch<br/>Redispatch 2.0 (XML)"]
     end
 
     subgraph Store["SlateDB (Object Store)"]
@@ -111,7 +112,7 @@ graph TB
 
 ```toml
 [dependencies]
-edi-energy = "0.3"
+edi-energy = "0.5"
 ```
 
 By default this enables the four most common message types: **UTILMD**, **MSCONS**, **APERAK**, **CONTRL**.
@@ -119,7 +120,7 @@ By default this enables the four most common message types: **UTILMD**, **MSCONS
 Enable additional types:
 
 ```toml
-edi-energy = { version = "0.3", features = ["invoic", "remadv", "orders"] }
+edi-energy = { version = "0.5", features = ["invoic", "remadv", "orders"] }
 ```
 
 ### Feature flags
@@ -231,7 +232,7 @@ sequenceDiagram
     participant inbox as InboxStore (dedup)
     participant parse as edi-energy parse+validate
     participant router as PidRouter
-    participant process as "Process(SupplierChangeWorkflow)"
+    participant process as "Process(GpkeLfAnmeldungWorkflow)"
     participant store as "SlateDB (EventStore+OutboxStore)"
     participant outbox as OutboxWorker
     participant partner as Partner MSH
@@ -248,8 +249,8 @@ sequenceDiagram
     makod->>parse: validate()
     parse-->>makod: EdiEnergyReport (valid)
     makod->>router: route(pid=55001)
-    router-->>makod: SupplierChangeWorkflow handler
-    makod->>process: execute(InitiateSupplierChange { … })
+    router-->>makod: GpkeLfAnmeldungWorkflow handler
+    makod->>process: execute(InitiateAnmeldung { … })
     Note over process: replay state via EventStore fold_stream,<br/>Workflow handle (pure) produces events + PendingOutbox
     process->>store: append_with_outbox(events, outbox) ← single WriteBatch
     store-->>process: Ok(envelopes)
@@ -290,13 +291,13 @@ sequenceDiagram
 ```toml
 [dependencies]
 # Core runtime
-mako-engine = { version = "0.3", features = ["testing"] }  # add "slatedb" for production
+mako-engine = { version = "0.5", features = ["testing"] }  # add "slatedb" for production
 
 # One or more domain crates depending on the market role:
-mako-gpke     = "0.2"   # GPKE — Lieferbeginn/-ende Strom (PIDs 55001–56010)
-mako-wim      = "0.2"   # WiM  — Messstellenwechsel Strom (PIDs 11001–11099)
-mako-geli-gas = "0.2"   # GeLi Gas — Lieferbeginn/-ende Gas (PIDs 17001–17099)
-mako-mabis    = "0.2"   # MABIS — Bilanzkreisabrechnung Strom (PID 13003)
+mako-gpke     = "0.5"   # GPKE — Lieferbeginn/-ende Strom (PIDs 55001–55018, 55555)
+mako-wim      = "0.5"   # WiM  — Messstellenwechsel Strom (PIDs 55039, 55042, 55051, 55168)
+mako-geli-gas = "0.5"   # GeLi Gas — Lieferbeginn/-ende Gas (PIDs 44001–44021)
+mako-mabis    = "0.5"   # MABIS — Bilanzkreisabrechnung Strom (PID 13003)
 ```
 
 For the **production daemon** (`makod`) that wires everything together, see [Part 3](#part-3--running-makod) below.
@@ -332,16 +333,16 @@ let ctx = EngineBuilder::new()
 
 ```rust
 use mako_engine::{ids::TenantId, version::WorkflowId};
-use mako_gpke::lieferbeginn::{SupplierChangeWorkflow, SupplierChangeCommand};
+use mako_gpke::lf_anmeldung::{GpkeLfAnmeldungWorkflow, LfAnmeldungCommand};
 
 let tenant = TenantId::new();
-let wf_id  = WorkflowId::new("supplier-change", "FV2025-10-01");
+let wf_id  = WorkflowId::new("gpke-lf-anmeldung", "FV2025-10-01");
 
 // Spawn starts an empty process — no events yet.
-let process = ctx.spawn::<SupplierChangeWorkflow>(tenant, wf_id);
+let process = ctx.spawn::<GpkeLfAnmeldungWorkflow>(tenant, wf_id);
 
 // execute() replays state, calls Workflow::handle, and appends events.
-let envelopes = process.execute(SupplierChangeCommand::Initiate { .. }).await?;
+let envelopes = process.execute(LfAnmeldungCommand::InitiateAnmeldung { .. }).await?;
 
 // Reconstruct current state by replaying all persisted events.
 let state = process.state().await?;
@@ -361,8 +362,8 @@ let identity = ctx.registry()
     .await?
     .expect("process not found");
 
-let resumed = ctx.resume::<SupplierChangeWorkflow>(identity);
-let envelopes = resumed.execute(SupplierChangeCommand::ReceiveAperak { .. }).await?;
+let resumed = ctx.resume::<GpkeLfAnmeldungWorkflow>(identity);
+let envelopes = resumed.execute(LfAnmeldungCommand::HandleAntwort { .. }).await?;
 ```
 
 ### Dispatching inbound AS4 messages

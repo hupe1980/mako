@@ -482,6 +482,7 @@ async fn ahb_44001_lieferbeginn_gas_validates_and_dispatches() {
         receiver: cmd_receiver,
         malo_id: cmd_malo,
         document_date: String::new(),
+        process_date: String::new(),
         message_ref: cmd_ref,
         validation_passed: report.is_valid(), // ← authoritative AHB result, no bypass
         validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),

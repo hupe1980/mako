@@ -436,6 +436,19 @@ pub(crate) fn find_rff(segments: &[edifact_rs::Segment<'_>], qualifier: &str) ->
         .and_then(|seg| Rff::edifact_deserialize(std::slice::from_ref(seg)).ok())
 }
 
+/// Collect all `COM` segments from a segment slice.
+///
+/// Used by `PartinMessage` to extract communication channels
+/// (AS4 endpoint, email, phone) declared by the described party.
+#[cfg(feature = "partin")]
+pub(crate) fn collect_com(segments: &[edifact_rs::Segment<'_>]) -> Vec<Com> {
+    segments
+        .iter()
+        .filter(|s| s.tag == "COM")
+        .filter_map(|seg| Com::edifact_deserialize(std::slice::from_ref(seg)).ok())
+        .collect()
+}
+
 // ── UCM ───────────────────────────────────────────────────────────────────────
 
 /// `UCM` — Message Response (CONTRL SG1).

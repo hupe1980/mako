@@ -1,43 +1,42 @@
-//! GeLi Gas Lieferbeginn / Lieferende — gas supplier switch workflow.
+//! GeLi Gas Lieferantenwechsel — full gas supplier-change workflow.
 //!
-//! Covers the process by which a new gas supplier (Gaslieferant) initiates a
-//! supply start (Lieferbeginn Gas, PID 44001) by sending a UTILMD G message
-//! to the gas grid operator (Gasnetzbetreiber, GNB). The GNB validates the
-//! message and dispatches an APERAK within **10 Werktage** (business days).
+//! Covers all eight GeLi Gas process variants (PIDs 44001–44021):
+//!
+//! | Process | Anfrage PID | Antwort OK | Antwort NG | Initiator |
+//! |---|---|---|---|---|
+//! | Lieferbeginn Gas | 44001 | 44003 | 44004 | LFN → GNB |
+//! | Lieferende Gas | 44002 | 44005 | 44006 | LFN → GNB |
+//! | Abmeldung NN | 44007 | 44008 | 44009 | GNB → LFN |
+//! | Abmeldungsanfrage | 44010 | 44011 | 44012 | GNB → LFA |
+//! | EoG Anmeldung | 44013 | 44014 | 44015 | GNB → LF |
+//! | Kündigung beim alten LF | 44016 | 44017 | 44018 | LFN → LFA |
+//! | Bestandsliste | 44019 | — | — | GNB → LF |
+//! | Änderungsmeldung Bestandsliste | 44020 | 44021 | — | LF → GNB |
+//!
+//! # Roles
+//!
+//! The same workflow code runs in GNB and LFN/LFA deployments. The role is
+//! determined at the process-creation point:
+//!
+//! - **Responder role** (GNB/LFA receives the Anfrage): `ReceiveUtilmd` → `SendAntwort`.
+//! - **Initiator role** (GNB sends the Anfrage, awaits response): `InitiateGnbProcess` → `ReceiveGnbAntwort`.
+//!
+//! # APERAK Frist
+//!
+//! **10 Werktage** (BNetzA BK7-24-01-009). Saturday counts as a Werktag;
+//! Sunday and public holidays do not.
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW GeLi Gas** — Geschäftsprozesse Lieferantenwechsel Gas
-//! - **BNetzA BK7** — ruling governing GeLi Gas timeline obligations
-//! - **UTILMD G** — EDI@Energy UTILMD message format for gas processes
-//! - **APERAK 2.x** — Application error acknowledgement (**10 Werktage** Frist)
-//!
-//! # Key differences from electricity processes
-//!
-//! | Aspect | GPKE (Strom) | WiM (Strom) | GeLi Gas |
-//! |---|---|---|---|
-//! | Market | Electricity | Electricity | **Gas** |
-//! | Object | Messlokation (MeLo) | Messlokation (MeLo) | **Marktlokation (MaLo)** |
-//! | Grid operator | Netzbetreiber (NB) | Netzbetreiber (NB) | **Gasnetzbetreiber (GNB)** |
-//! | APERAK Frist | 24 h wall-clock | 5 Werktage | **10 Werktage** |
-//! | Frist helper | `add_hours(24)` | `add_werktage(5, BdewMaKo)` | **`add_werktage(10, BdewMaKo)`** |
-//!
-//! # PID range
-//!
-//! | PID   | Process                                              | Profile              |
-//! |-------|------------------------------------------------------|----------------------|
-//! | 44001 | Lieferbeginn Gas (Anfrage LFN an NB)                 | ✅ fv20251001_gas+  |
-//! | 44002 | Lieferende Gas (Anfrage LFN an NB)                   | ✅ fv20251001_gas+  |
-//! | 44003 | Bestätigung Lieferbeginn Gas (NB an LFN)             | ✅ fv20251001_gas+  |
-//! | 44004 | Ablehnung Lieferbeginn Gas (NB an LFN)               | ✅ fv20251001_gas+  |
-//! | 44005 | Bestätigung Lieferende Gas (NB an LFN)               | ✅ fv20251001_gas+  |
-//! | 44006 | Ablehnung Lieferende Gas (NB an LFN)                 | ✅ fv20251001_gas+  |
-//! | 44017 | Kündigung Lieferbeginn Gas (LFN an LFA)              | ✅ fv20251001_gas+  |
+//! - **BDEW GeLi Gas 3.0** — BK7-24-01-009 (Beschluss 12.09.2025)
+//! - **UTILMD G AHB 1.1 / 1.2** — EDI@Energy UTILMD Gas profiles
+//! - **APERAK AHB** — 10-Werktage Frist for all GeLi Gas processes
 
 use std::collections::HashMap;
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
+    deadline::Deadline,
     envelope::EventEnvelope,
     error::WorkflowError,
     ids::DeadlineId,
@@ -47,21 +46,189 @@ use mako_engine::{
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 
+// ── Stable names ──────────────────────────────────────────────────────────────
+
 /// Stable workflow name used as the `WorkflowId.name` and in the `ProcessRegistry`.
 pub const WORKFLOW_NAME: &str = "geli-gas-supplier-change";
 
-/// Deadline label for the 10-Werktage APERAK response window (GeLi Gas BNetzA ruling).
-///
-/// Register a `Deadline` with this label immediately after `ValidationPassed`:
-///
-/// ```rust,ignore
-/// let due = mako_engine::fristen::deadline_at_werktage(
-///     received_at, 10, HolidayCalendar::BdewMaKo,
-/// );
-/// let deadline = Deadline::new(process.stream_id().clone(), ..., APERAK_WINDOW_LABEL, due);
-/// deadline_store.register(&deadline).await?;
-/// ```
+/// Deadline label for the 10-Werktage response window (GeLi Gas BK7-24-01-009).
 pub const APERAK_WINDOW_LABEL: &str = "geli-gas-aperak-10-werktage";
+
+// ── PID sets ──────────────────────────────────────────────────────────────────
+
+/// All inbound **Anfrage** PIDs that start a new GeLi Gas process stream.
+pub const ANFRAGE_PIDS: &[u32] = &[44001, 44002, 44007, 44010, 44013, 44016, 44019, 44020];
+
+/// All **Antwort** PIDs that update an existing GeLi Gas process stream.
+pub const ANTWORT_PIDS: &[u32] = &[
+    44003, 44004, // Bestätigung/Ablehnung Lieferbeginn
+    44005, 44006, // Bestätigung/Ablehnung Lieferende
+    44008, 44009, // Bestätigung/Ablehnung Abmeldung NN
+    44011, 44012, // Bestätigung/Ablehnung Abmeldungsanfrage
+    44014, 44015, // Bestätigung/Ablehnung EoG Anmeldung
+    44017, 44018, // Bestätigung/Ablehnung Kündigung
+    44021, // Antwort auf Änderungsmeldung
+];
+
+/// All UTILMD G PIDs handled by this workflow (union of ANFRAGE and ANTWORT).
+pub const UTILMD_PIDS: &[u32] = &[
+    44001, 44002, 44003, 44004, 44005, 44006, 44007, 44008, 44009, 44010, 44011, 44012, 44013,
+    44014, 44015, 44016, 44017, 44018, 44019, 44020, 44021,
+];
+
+// ── Process variant ───────────────────────────────────────────────────────────
+
+/// Classification of the GeLi Gas process type, derived from the Anfrage PID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GasProcessVariant {
+    /// PID 44001 — Lieferbeginn Gas, LFN → GNB. Response: 44003/44004.
+    LieferbeginnGas,
+    /// PID 44002 — Lieferende Gas, LFN → GNB. Response: 44005/44006.
+    LieferendeGas,
+    /// PID 44007 — Abmeldung NN vom GNB, GNB → LFN. Response: 44008/44009.
+    AbmeldungNn,
+    /// PID 44010 — Abmeldungsanfrage des GNB, GNB → LFA. Response: 44011/44012.
+    Abmeldungsanfrage,
+    /// PID 44013 — EoG Anmeldung, GNB → LF. Response: 44014/44015.
+    EogAnmeldung,
+    /// PID 44016 — Kündigung beim alten Lieferanten, LFN → LFA. Response: 44017/44018.
+    KuendigungLfa,
+    /// PID 44019 — Bestandsliste zugeordnete Marktlokationen, GNB → LF. No response.
+    Bestandsliste,
+    /// PID 44020 — Änderungsmeldung zur Bestandsliste, LF → GNB. Response: 44021.
+    Aenderungsmeldung,
+}
+
+impl GasProcessVariant {
+    /// Derive the process variant from the inbound Anfrage PID.
+    #[must_use]
+    pub fn from_anfrage_pid(pid: u32) -> Option<Self> {
+        Some(match pid {
+            44001 => Self::LieferbeginnGas,
+            44002 => Self::LieferendeGas,
+            44007 => Self::AbmeldungNn,
+            44010 => Self::Abmeldungsanfrage,
+            44013 => Self::EogAnmeldung,
+            44016 => Self::KuendigungLfa,
+            44019 => Self::Bestandsliste,
+            44020 => Self::Aenderungsmeldung,
+            _ => return None,
+        })
+    }
+
+    /// `true` if no Antwort is expected.
+    #[must_use]
+    pub fn is_one_way(&self) -> bool {
+        matches!(self, Self::Bestandsliste)
+    }
+
+    /// `true` if the GNB is the initiator (sends the Anfrage via outbox).
+    #[must_use]
+    pub fn gnb_is_initiator(&self) -> bool {
+        matches!(
+            self,
+            Self::AbmeldungNn | Self::Abmeldungsanfrage | Self::EogAnmeldung | Self::Bestandsliste
+        )
+    }
+}
+
+// ── Response PID derivation ───────────────────────────────────────────────────
+
+/// Derive the outbound UTILMD G **Antwort** PID from the Anfrage PID.
+///
+/// | Anfrage | accepted=true | accepted=false |
+/// |---------|---------------|----------------|
+/// | 44001   | 44003         | 44004          |
+/// | 44002   | 44005         | 44006          |
+/// | 44007   | 44008         | 44009          |
+/// | 44010   | 44011         | 44012          |
+/// | 44013   | 44014         | 44015          |
+/// | 44016   | 44017         | 44018          |
+/// | 44019   | (none)        | (none)         |
+/// | 44020   | 44021         | (none)         |
+#[must_use]
+pub fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruefidentifikator> {
+    let code: u32 = match anfrage_pid {
+        44001 => {
+            if accepted {
+                44003
+            } else {
+                44004
+            }
+        }
+        44002 => {
+            if accepted {
+                44005
+            } else {
+                44006
+            }
+        }
+        44007 => {
+            if accepted {
+                44008
+            } else {
+                44009
+            }
+        }
+        44010 => {
+            if accepted {
+                44011
+            } else {
+                44012
+            }
+        }
+        44013 => {
+            if accepted {
+                44014
+            } else {
+                44015
+            }
+        }
+        44016 => {
+            if accepted {
+                44017
+            } else {
+                44018
+            }
+        }
+        44019 => return None,
+        44020 => {
+            if accepted {
+                44021
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+    Pruefidentifikator::new(code).ok()
+}
+
+// ── Domain data ───────────────────────────────────────────────────────────────
+
+/// Business data recorded at process initiation and carried through every state.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GasSupplierChangeData {
+    /// Process variant (derived from the Anfrage PID).
+    pub variant: GasProcessVariant,
+    /// Marktlokation EIC code.
+    pub malo_id: MaLo,
+    /// GLN of the message sender.
+    pub sender: MarktpartnerCode,
+    /// GLN of the message receiver.
+    pub receiver: MarktpartnerCode,
+    /// EDIFACT document date (DTM+137, `YYYYMMDD`).
+    pub document_date: String,
+    /// Process-specific date (e.g. Lieferbeginn-Datum, `YYYYMMDD`).
+    #[serde(default)]
+    pub process_date: String,
+    /// BDEW Prüfidentifikator of the initial Anfrage message.
+    pub pruefidentifikator: Pruefidentifikator,
+    /// EDIFACT message reference of the initial Anfrage.
+    #[serde(default)]
+    pub message_ref: Option<MessageRef>,
+}
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
@@ -69,41 +236,77 @@ pub const APERAK_WINDOW_LABEL: &str = "geli-gas-aperak-10-werktage";
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum GasSupplierChangeEvent {
-    /// Process initiated by a valid UTILMD G Lieferbeginn message.
+    /// Process initiated by a valid inbound UTILMD G Anfrage (responder role).
     Initiated {
+        /// Classified process variant.
+        variant: GasProcessVariant,
+        /// GLN of the message sender.
+        sender: MarktpartnerCode,
+        /// GLN of the message receiver.
+        receiver: MarktpartnerCode,
         /// Marktlokation EIC code.
         malo_id: MaLo,
-        /// GLN of the new gas supplier (nLFN).
-        new_supplier: MarktpartnerCode,
-        /// GLN of the gas network operator (GNB).
-        gas_operator: MarktpartnerCode,
-        /// EDIFACT document date (YYYYMMDD).
+        /// EDIFACT document date (`YYYYMMDD`).
         document_date: String,
+        /// Process-specific date (`YYYYMMDD`).
+        #[serde(default)]
+        process_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
-        /// BDEW Prüfidentifikator.
+        /// BDEW Prüfidentifikator of the Anfrage message.
         pruefidentifikator: Pruefidentifikator,
     },
-    /// EDIFACT message passed profile validation (no rule violations).
+    /// AHB profile validation passed.
     ValidationPassed {
         /// Reference of the validated message.
         message_ref: MessageRef,
     },
-    /// A positive or negative APERAK was dispatched within 10 Werktage.
-    AperakDispatched {
-        /// `true` for positive APERAK, `false` for negative.
-        positive: bool,
-        /// Rejection reason (only set when `positive = false`).
+    /// Local party sent the outbound UTILMD G Antwort.
+    AntwortGesendet {
+        /// Derived Antwort PID (None for one-way processes).
+        response_pid: Option<Pruefidentifikator>,
+        /// `true` = Bestätigung, `false` = Ablehnung.
+        accepted: bool,
+        /// Rejection reason (only set when `accepted = false`).
         reason: Option<String>,
     },
-    /// Gas supply relationship became active.
+    /// GNB initiated a process by sending the Anfrage via outbox.
+    GnbProcessInitiated {
+        /// Classified process variant.
+        variant: GasProcessVariant,
+        /// GLN of the GNB (sender).
+        sender: MarktpartnerCode,
+        /// GLN of the counterparty (LFN, LFA, or LF).
+        receiver: MarktpartnerCode,
+        /// Marktlokation EIC code.
+        malo_id: MaLo,
+        /// EDIFACT document date.
+        document_date: String,
+        /// Process-specific date.
+        #[serde(default)]
+        process_date: String,
+        /// EDIFACT message reference of the outbound Anfrage.
+        message_ref: MessageRef,
+        /// BDEW Prüfidentifikator of the outbound Anfrage.
+        pruefidentifikator: Pruefidentifikator,
+    },
+    /// GNB received the Antwort to its initiated Anfrage.
+    GnbAntwortErhalten {
+        /// Prüfidentifikator of the inbound Antwort message.
+        response_pid: Pruefidentifikator,
+        /// `true` = Bestätigung, `false` = Ablehnung.
+        accepted: bool,
+        /// Rejection reason (only when `accepted = false`).
+        reason: Option<String>,
+    },
+    /// Gas supply became active (Lieferbeginn Gas 44001 only).
     Activated,
-    /// Process was rejected and closed.
+    /// Process rejected.
     Rejected {
         /// Human-readable rejection reason.
         reason: String,
     },
-    /// A registered deadline expired before the process completed.
+    /// Deadline expired.
     DeadlineExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -117,66 +320,57 @@ impl EventPayload for GasSupplierChangeEvent {
         match self {
             Self::Initiated { .. } => "GasSupplierChangeInitiated",
             Self::ValidationPassed { .. } => "GasSupplierChangeValidationPassed",
-            Self::AperakDispatched { .. } => "GasSupplierChangeAperakDispatched",
+            Self::AntwortGesendet { .. } => "GasSupplierChangeAntwortGesendet",
+            Self::GnbProcessInitiated { .. } => "GasSupplierChangeGnbProcessInitiated",
+            Self::GnbAntwortErhalten { .. } => "GasSupplierChangeGnbAntwortErhalten",
             Self::Activated => "GasSupplierChangeActivated",
             Self::Rejected { .. } => "GasSupplierChangeRejected",
             Self::DeadlineExpired { .. } => "GasSupplierChangeDeadlineExpired",
         }
     }
-    // schema_version defaults to 1; increment and add an upcast arm on next
-    // backward-incompatible payload layout change.
 }
 
 // ── Domain state ──────────────────────────────────────────────────────────────
 
-/// Business data set at `Initiated` time and carried through every later state.
-///
-/// All fields are structurally guaranteed to be present once the process moves
-/// past `New` — no `unwrap()` required downstream.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GasSupplierChangeData {
-    /// EIC/MaLo code for the gas supply location.
-    pub malo_id: MaLo,
-    /// Market partner code (GLN) of the new gas supplier.
-    pub new_supplier: MarktpartnerCode,
-    /// Market partner code (GLN) of the gas network operator.
-    pub gas_operator: MarktpartnerCode,
-    /// EDIFACT document date string from the UTILMD G.
-    pub document_date: String,
-    /// BDEW Prüfidentifikator.
-    pub pruefidentifikator: Pruefidentifikator,
-    /// Original UTILMD G message reference, preserved for APERAK construction.
-    /// `None` only for processes initiated before this field was added (old snapshots).
-    #[serde(default)]
-    pub message_ref: Option<MessageRef>,
-}
-
 /// Current state of a GeLi Gas supplier-change process stream.
 ///
-/// Modelled as an enum-per-variant to eliminate all `Option`-unwraps.
-///
-/// # Lifecycle
+/// # Lifecycle (responder role — GNB/LFA receives the Anfrage)
 ///
 /// ```text
-/// New → Initiated → ValidationPassed → AperakSent → Active
+/// New → Initiated → ValidationPassed → AntwortGesendet → Active (44001)
+///                                                       → Completed (others)
 ///                                    ↘ Rejected
-///     ↘ Rejected (failed validation at Initiated step)
+///     ↘ Rejected (validation failure)
+/// ```
+///
+/// # Lifecycle (initiator role — GNB sends the Anfrage)
+///
+/// ```text
+/// New → GnbPending → Completed | Rejected
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
 pub enum GasSupplierChangeState {
     /// No events yet; stream exists but process has not started.
     New,
-    /// UTILMD G received and `Initiated` event applied.
+    /// Inbound Anfrage received; AHB validation in progress.
     Initiated(GasSupplierChangeData),
-    /// EDIFACT validation passed; APERAK not yet dispatched.
+    /// AHB validation passed; outbound Antwort not yet dispatched.
     ValidationPassed(GasSupplierChangeData),
-    /// Positive APERAK dispatched; awaiting supply activation.
-    AperakSent(GasSupplierChangeData),
-    /// Gas supply relationship is active.
+    /// Local party sent the outbound UTILMD G Antwort.
+    AntwortGesendet {
+        /// Process data.
+        data: GasSupplierChangeData,
+        /// Derived Antwort PID (None for 44019 Bestandsliste).
+        response_pid: Option<Pruefidentifikator>,
+    },
+    /// GNB sent the Anfrage; awaiting counterpart response within 10 Werktage.
+    GnbPending(GasSupplierChangeData),
+    /// Gas supply relationship is active (Lieferbeginn Gas 44001 only).
     Active(GasSupplierChangeData),
-    /// Process rejected (validation failure or negative APERAK).
+    /// Process completed successfully (all variants except Lieferbeginn Active).
+    Completed(GasSupplierChangeData),
+    /// Process rejected — validation failure, negative Antwort, or timeout.
     Rejected {
         /// Human-readable rejection reason.
         reason: String,
@@ -190,68 +384,119 @@ impl Default for GasSupplierChangeState {
 }
 
 impl GasSupplierChangeState {
-    /// Stable string label for the current variant.
+    /// Stable status label.
     #[must_use]
     pub fn status_str(&self) -> &'static str {
         match self {
             Self::New => "New",
             Self::Initiated(_) => "Initiated",
             Self::ValidationPassed(_) => "ValidationPassed",
-            Self::AperakSent(_) => "AperakSent",
+            Self::AntwortGesendet { .. } => "AntwortGesendet",
+            Self::GnbPending(_) => "GnbPending",
             Self::Active(_) => "Active",
+            Self::Completed(_) => "Completed",
             Self::Rejected { .. } => "Rejected",
         }
+    }
+
+    /// Return process data if the process has been initiated; `None` otherwise.
+    #[must_use]
+    pub fn data(&self) -> Option<&GasSupplierChangeData> {
+        match self {
+            Self::Initiated(d)
+            | Self::ValidationPassed(d)
+            | Self::GnbPending(d)
+            | Self::Active(d)
+            | Self::Completed(d) => Some(d),
+            Self::AntwortGesendet { data, .. } => Some(data),
+            Self::New | Self::Rejected { .. } => None,
+        }
+    }
+
+    /// `true` if the process is in a terminal state.
+    #[must_use]
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Active(_) | Self::Completed(_) | Self::Rejected { .. }
+        )
     }
 }
 
 // ── Domain commands ───────────────────────────────────────────────────────────
 
 /// Commands for the GeLi Gas supplier-change workflow.
-///
-/// **All domain values must be pre-extracted by the transport layer** before
-/// constructing a command. `Workflow::handle()` is pure — no I/O, no EDIFACT
-/// parsing, no external calls. See the crate-level doc for a construction
-/// example.
 #[derive(Clone)]
 pub enum GasSupplierChangeCommand {
-    /// Inbound UTILMD G accepted from the AS4 layer. Domain fields extracted
-    /// and validation performed by the caller before constructing this command.
+    /// Inbound UTILMD G Anfrage received (responder role — GNB or LFA).
+    ///
+    /// Valid Anfrage PIDs: 44001, 44002, 44007, 44010, 44013, 44016, 44019, 44020.
     ReceiveUtilmd {
-        /// BDEW Prüfidentifikator.
+        /// BDEW Prüfidentifikator (must be in `ANFRAGE_PIDS`).
         pid: Pruefidentifikator,
-        /// GLN of the message sender (nLFN).
+        /// GLN of the message sender.
         sender: MarktpartnerCode,
-        /// GLN of the message receiver (GNB).
+        /// GLN of the message receiver.
         receiver: MarktpartnerCode,
         /// Marktlokation EIC code.
         malo_id: MaLo,
-        /// EDIFACT document date (YYYYMMDD).
+        /// EDIFACT document date (`YYYYMMDD` from DTM+137).
         document_date: String,
-        /// EDIFACT message reference.
+        /// Process-specific date (`YYYYMMDD` from DTM+92 or DTM+163).
+        process_date: String,
+        /// EDIFACT message reference (UNH 0062).
         message_ref: MessageRef,
-        /// `true` if `msg.validate()` returned a report with no errors.
+        /// `true` if AHB profile validation passed with no errors.
         validation_passed: bool,
-        /// Human-readable validation issue strings for the `Rejected` event.
+        /// Human-readable validation error strings (empty when `validation_passed = true`).
         validation_errors: Vec<String>,
     },
-    /// Dispatch a positive or negative APERAK.
+    /// Send the outbound UTILMD G Antwort (responder role).
     ///
-    /// **BDEW GeLi Gas / BNetzA BK7**: APERAK must be sent within
-    /// **10 Werktage** of receiving the UTILMD G (not wall-clock hours).
-    /// Use `fristen::add_werktage(10, HolidayCalendar::BdewMaKo)` to compute
-    /// the deadline.
-    DispatchAperak {
-        /// `true` for positive APERAK, `false` for negative.
-        positive: bool,
-        /// Rejection reason (only set when `positive = false`).
+    /// Derives the Antwort PID via `response_pid_for()`. The Antwort UTILMD G
+    /// is placed in the outbox atomically with `AntwortGesendet`.
+    ///
+    /// **APERAK Frist:** 10 Werktage (BK7-24-01-009).
+    SendAntwort {
+        /// `true` = Bestätigung (accept), `false` = Ablehnung (reject).
+        accepted: bool,
+        /// Rejection reason (required when `accepted = false`).
+        reason: Option<String>,
+        /// Post-acceptance downstream obligations (co-persisted atomically).
+        obligations: Vec<PendingOutbox>,
+    },
+    /// GNB initiates a GNB-side process (initiator role).
+    ///
+    /// Valid for: 44007 (Abmeldung NN), 44010 (Abmeldungsanfrage),
+    /// 44013 (EoG Anmeldung), 44019 (Bestandsliste).
+    InitiateGnbProcess {
+        /// Anfrage PID (must be 44007, 44010, 44013, or 44019).
+        pid: Pruefidentifikator,
+        /// GLN of the GNB (sender).
+        sender: MarktpartnerCode,
+        /// GLN of the counterparty (LFN, LFA, or LF).
+        receiver: MarktpartnerCode,
+        /// Marktlokation EIC code.
+        malo_id: MaLo,
+        /// EDIFACT document date.
+        document_date: String,
+        /// Process-specific date.
+        process_date: String,
+        /// EDIFACT message reference of the outbound Anfrage.
+        message_ref: MessageRef,
+    },
+    /// GNB received the Antwort to its initiated Anfrage.
+    ReceiveGnbAntwort {
+        /// Prüfidentifikator of the inbound Antwort message.
+        response_pid: Pruefidentifikator,
+        /// `true` = Bestätigung, `false` = Ablehnung.
+        accepted: bool,
+        /// Rejection reason (only when `accepted = false`).
         reason: Option<String>,
     },
-    /// Mark the gas supply relationship as active after all checks pass.
+    /// Mark supply as active (Lieferbeginn Gas 44001 only).
     Activate,
-    /// A registered deadline fired and was dispatched by the scheduler.
-    ///
-    /// Transitions the process to `Rejected` unless it has already reached
-    /// a terminal state (`Active` or `Rejected`), in which case this is a no-op.
+    /// A registered 10-Werktage deadline fired.
     TimeoutExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -264,59 +509,24 @@ impl CommandPayload for GasSupplierChangeCommand {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
-/// PIDs handled by this module (UTILMD G — gas Lieferantenwechsel, GeLi Gas 2.0/3.0).
-///
-/// These are the BDEW EDI@Energy UTILMD Gas `Prüfidentifikator` values
-/// as defined in the GeLi Gas AHB profiles per `docs/pid-reference.md`.
-///
-/// **PIDs 44022–44024** (WiM Gas Stornierung) are NOT registered here \u2014
-/// they belong to `mako-wim-gas` per `docs/pid-reference.md`.
-pub const UTILMD_PIDS: &[u32] = &[
-    44001, 44002, 44003, 44004, 44005, 44006, // Lieferbeginn / Lieferende (LFN ↔ NB)
-    44007, 44008, 44009, // Abmeldung NN vom NB (NB → LFN)
-    44010, 44011, 44012, // Abmeldungsanfrage des NB (NB → LFN)
-    44013, 44014, 44015, // Anmeldung/Abmeldung EoG
-    44016, // Kündigung beim alten Lieferanten
-    44017, 44018, // Kündigung Lieferbeginn (LFN ↔ LFA)
-    44019, 44020, 44021, // Bestandsliste / Änderungsmeldung
-];
-
-/// GeLi Gas supplier-change workflow (PIDs 44001–44006, 44017–44018).
-///
-/// Implements the BDEW GeLi Gas process for supplier change at a
-/// Marktlokation (MaLo). The gas grid operator (GNB) receives a UTILMD G
-/// Anmeldung from the new supplier and must respond with an APERAK within
-/// **10 Werktage**.
-///
-/// Spawn via [`mako_engine::process::Process`]:
-/// ```rust,ignore
-/// let process = ctx.spawn::<GeliGasSupplierChangeWorkflow>(
-///     tenant_id,
-///     WorkflowId::new("geli-gas-supplier-change", "FV2025-10-01"),
-/// );
-/// ```
+/// GeLi Gas supplier-change workflow (PIDs 44001–44021).
 pub struct GeliGasSupplierChangeWorkflow;
+
+const GNB_INITIATOR_PIDS: &[u32] = &[44007, 44010, 44013, 44019];
 
 impl Workflow for GeliGasSupplierChangeWorkflow {
     type State = GasSupplierChangeState;
     type Event = GasSupplierChangeEvent;
     type Command = GasSupplierChangeCommand;
 
-    /// Deadline compensation for the GeLi Gas 10-Werktage APERAK window.
-    ///
-    /// | Label | State guard | Command emitted | Regulatory basis |
-    /// |---|---|---|---|
-    /// | `"geli-gas-aperak-10-werktage"` | `Initiated`, `ValidationPassed`, or `AperakSent` | `TimeoutExpired` | GeLi Gas — 10 Werktage APERAK Frist |
-    fn on_deadline(
-        deadline: &mako_engine::deadline::Deadline,
-        state: &Self::State,
-    ) -> Option<Self::Command> {
+    fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         match (deadline.label(), state) {
             (
                 APERAK_WINDOW_LABEL,
                 GasSupplierChangeState::Initiated(_)
                 | GasSupplierChangeState::ValidationPassed(_)
-                | GasSupplierChangeState::AperakSent(_),
+                | GasSupplierChangeState::AntwortGesendet { .. }
+                | GasSupplierChangeState::GnbPending(_),
             ) => Some(GasSupplierChangeCommand::TimeoutExpired {
                 deadline_id: deadline.deadline_id(),
                 label: deadline.label().into(),
@@ -328,60 +538,128 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         match event {
             GasSupplierChangeEvent::Initiated {
+                variant,
+                sender,
+                receiver,
                 malo_id,
-                new_supplier,
-                gas_operator,
                 document_date,
+                process_date,
                 message_ref,
                 pruefidentifikator,
             } => GasSupplierChangeState::Initiated(GasSupplierChangeData {
+                variant: *variant,
                 malo_id: malo_id.clone(),
-                new_supplier: new_supplier.clone(),
-                gas_operator: gas_operator.clone(),
+                sender: sender.clone(),
+                receiver: receiver.clone(),
                 document_date: document_date.clone(),
+                process_date: process_date.clone(),
                 pruefidentifikator: *pruefidentifikator,
                 message_ref: Some(message_ref.clone()),
             }),
+
             GasSupplierChangeEvent::ValidationPassed { .. } => {
                 if let GasSupplierChangeState::Initiated(data) = state {
-                    GasSupplierChangeState::ValidationPassed(data)
+                    if data.variant.is_one_way() {
+                        GasSupplierChangeState::Completed(data)
+                    } else {
+                        GasSupplierChangeState::ValidationPassed(data)
+                    }
                 } else {
                     state
                 }
             }
-            GasSupplierChangeEvent::AperakDispatched { positive, .. } => match state {
+
+            GasSupplierChangeEvent::AntwortGesendet {
+                response_pid,
+                accepted,
+                reason,
+            } => match state {
                 GasSupplierChangeState::ValidationPassed(data) => {
-                    if *positive {
-                        GasSupplierChangeState::AperakSent(data)
+                    if *accepted {
+                        GasSupplierChangeState::AntwortGesendet {
+                            data,
+                            response_pid: *response_pid,
+                        }
                     } else {
                         GasSupplierChangeState::Rejected {
-                            reason: "negative APERAK".to_owned(),
+                            reason: reason
+                                .clone()
+                                .unwrap_or_else(|| "negative Antwort".to_owned()),
                         }
                     }
                 }
                 _ => state,
             },
+
+            GasSupplierChangeEvent::GnbProcessInitiated {
+                variant,
+                sender,
+                receiver,
+                malo_id,
+                document_date,
+                process_date,
+                message_ref,
+                pruefidentifikator,
+            } => {
+                let data = GasSupplierChangeData {
+                    variant: *variant,
+                    malo_id: malo_id.clone(),
+                    sender: sender.clone(),
+                    receiver: receiver.clone(),
+                    document_date: document_date.clone(),
+                    process_date: process_date.clone(),
+                    pruefidentifikator: *pruefidentifikator,
+                    message_ref: Some(message_ref.clone()),
+                };
+                if variant.is_one_way() {
+                    GasSupplierChangeState::Completed(data)
+                } else {
+                    GasSupplierChangeState::GnbPending(data)
+                }
+            }
+
+            GasSupplierChangeEvent::GnbAntwortErhalten {
+                accepted, reason, ..
+            } => match state {
+                GasSupplierChangeState::GnbPending(data) => {
+                    if *accepted {
+                        GasSupplierChangeState::Completed(data)
+                    } else {
+                        GasSupplierChangeState::Rejected {
+                            reason: reason
+                                .clone()
+                                .unwrap_or_else(|| "negative Antwort".to_owned()),
+                        }
+                    }
+                }
+                _ => state,
+            },
+
             GasSupplierChangeEvent::Activated => {
-                if let GasSupplierChangeState::AperakSent(data) = state {
+                if let GasSupplierChangeState::AntwortGesendet { data, .. } = state {
                     GasSupplierChangeState::Active(data)
                 } else {
                     state
                 }
             }
+
             GasSupplierChangeEvent::Rejected { reason } => GasSupplierChangeState::Rejected {
                 reason: reason.clone(),
             },
-            GasSupplierChangeEvent::DeadlineExpired { label, .. } => match state {
-                GasSupplierChangeState::Active(_) | GasSupplierChangeState::Rejected { .. } => {
+
+            GasSupplierChangeEvent::DeadlineExpired { label, .. } => {
+                if state.is_terminal() {
                     state
+                } else {
+                    GasSupplierChangeState::Rejected {
+                        reason: format!("deadline expired: {label}"),
+                    }
                 }
-                _ => GasSupplierChangeState::Rejected {
-                    reason: format!("deadline expired: {label}"),
-                },
-            },
+            }
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle(
         state: &Self::State,
         command: Self::Command,
@@ -393,6 +671,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 receiver,
                 malo_id,
                 document_date,
+                process_date,
                 message_ref,
                 validation_passed,
                 validation_errors,
@@ -400,17 +679,21 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 if !matches!(state, GasSupplierChangeState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
                 }
-                // PID guard — domain rule, no I/O required.
-                if !UTILMD_PIDS.contains(&pid.as_u32()) {
-                    return Err(WorkflowError::rejected(format!(
-                        "unsupported GeLi Gas PID {pid} (expected one of: {UTILMD_PIDS:?})",
-                    )));
-                }
+                let variant =
+                    GasProcessVariant::from_anfrage_pid(pid.as_u32()).ok_or_else(|| {
+                        WorkflowError::rejected(format!(
+                            "PID {pid} is not a valid GeLi Gas Anfrage PID \
+                             (expected one of: {ANFRAGE_PIDS:?})"
+                        ))
+                    })?;
+
                 let mut events = vec![GasSupplierChangeEvent::Initiated {
+                    variant,
+                    sender,
+                    receiver,
                     malo_id,
-                    new_supplier: sender,
-                    gas_operator: receiver,
                     document_date,
+                    process_date,
                     message_ref: message_ref.clone(),
                     pruefidentifikator: pid,
                 }];
@@ -418,13 +701,21 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     events.push(GasSupplierChangeEvent::ValidationPassed { message_ref });
                 } else {
                     events.push(GasSupplierChangeEvent::Rejected {
-                        reason: validation_errors.join("; "),
+                        reason: if validation_errors.is_empty() {
+                            "AHB validation failed".to_owned()
+                        } else {
+                            validation_errors.join("; ")
+                        },
                     });
                 }
-                Ok(events.into())
+                Ok(WorkflowOutput::events(events))
             }
 
-            GasSupplierChangeCommand::DispatchAperak { positive, reason } => {
+            GasSupplierChangeCommand::SendAntwort {
+                accepted,
+                reason,
+                obligations,
+            } => {
                 let data = match state {
                     GasSupplierChangeState::ValidationPassed(d) => d,
                     _ => {
@@ -434,74 +725,173 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         ));
                     }
                 };
-                let mut payload = serde_json::json!({
-                    "pid":          data.pruefidentifikator.as_u32(),
-                    "malo":         data.malo_id.as_str(),
-                    "new_supplier": data.new_supplier.as_str(),
-                    "gas_operator": data.gas_operator.as_str(),
-                    "positive":     positive,
+                let anfrage_pid = data.pruefidentifikator.as_u32();
+                let response_pid = response_pid_for(anfrage_pid, accepted);
+
+                let mut outbox_payload = serde_json::json!({
+                    "anfrage_pid": anfrage_pid,
+                    "accepted":    accepted,
+                    "malo_id":     data.malo_id.as_str(),
+                    "sender":      data.sender.as_str(),
+                    "receiver":    data.receiver.as_str(),
+                    "variant":     format!("{:?}", data.variant),
                 });
-                if let Some(ref mr) = data.message_ref {
-                    payload["orig_message_ref"] = serde_json::Value::String(mr.as_str().to_owned());
-                }
                 if let Some(ref r) = reason {
-                    payload["reason"] = serde_json::Value::String(r.clone());
+                    outbox_payload["reason"] = serde_json::Value::String(r.clone());
                 }
-                let outbox_entry =
-                    PendingOutbox::new("Aperak", data.new_supplier.as_str(), payload);
-                Ok(WorkflowOutput::with_outbox(
-                    vec![GasSupplierChangeEvent::AperakDispatched { positive, reason }],
-                    vec![outbox_entry],
-                ))
+                if let Some(rpid) = response_pid {
+                    outbox_payload["response_pid"] =
+                        serde_json::Value::Number(rpid.as_u32().into());
+                }
+                if let Some(ref mr) = data.message_ref {
+                    outbox_payload["orig_message_ref"] =
+                        serde_json::Value::String(mr.as_str().to_owned());
+                }
+
+                let mut all_outbox = vec![PendingOutbox::new(
+                    "UtilmdAntwort",
+                    data.sender.as_str(),
+                    outbox_payload,
+                )];
+                if accepted {
+                    all_outbox.extend(obligations);
+                }
+
+                let event = GasSupplierChangeEvent::AntwortGesendet {
+                    response_pid,
+                    accepted,
+                    reason,
+                };
+                Ok(WorkflowOutput::with_outbox(vec![event], all_outbox))
             }
 
-            GasSupplierChangeCommand::Activate => {
-                if !matches!(state, GasSupplierChangeState::AperakSent(_)) {
-                    return Err(WorkflowError::invalid_state(
-                        "AperakSent",
-                        state.status_str(),
-                    ));
+            GasSupplierChangeCommand::InitiateGnbProcess {
+                pid,
+                sender,
+                receiver,
+                malo_id,
+                document_date,
+                process_date,
+                message_ref,
+            } => {
+                if !matches!(state, GasSupplierChangeState::New) {
+                    return Err(WorkflowError::invalid_state("New", state.status_str()));
                 }
-                Ok(vec![GasSupplierChangeEvent::Activated].into())
+                if !GNB_INITIATOR_PIDS.contains(&pid.as_u32()) {
+                    return Err(WorkflowError::rejected(format!(
+                        "PID {pid} is not a valid GNB-initiator PID \
+                         (expected one of: {GNB_INITIATOR_PIDS:?})"
+                    )));
+                }
+                let variant = GasProcessVariant::from_anfrage_pid(pid.as_u32())
+                    .expect("GNB_INITIATOR_PIDS are all valid Anfrage PIDs");
+
+                let outbox_payload = serde_json::json!({
+                    "anfrage_pid":   pid.as_u32(),
+                    "variant":       format!("{variant:?}"),
+                    "malo_id":       malo_id.as_str(),
+                    "sender":        sender.as_str(),
+                    "receiver":      receiver.as_str(),
+                    "document_date": document_date,
+                    "process_date":  process_date,
+                    "message_ref":   message_ref.as_str(),
+                });
+                let outbox = vec![PendingOutbox::new(
+                    "UtilmdAnfrage",
+                    receiver.as_str(),
+                    outbox_payload,
+                )];
+
+                let event = GasSupplierChangeEvent::GnbProcessInitiated {
+                    variant,
+                    sender,
+                    receiver,
+                    malo_id,
+                    document_date,
+                    process_date,
+                    message_ref,
+                    pruefidentifikator: pid,
+                };
+                Ok(WorkflowOutput::with_outbox(vec![event], outbox))
             }
+
+            GasSupplierChangeCommand::ReceiveGnbAntwort {
+                response_pid,
+                accepted,
+                reason,
+            } => {
+                let data = match state {
+                    GasSupplierChangeState::GnbPending(d) => d,
+                    _ => {
+                        return Err(WorkflowError::invalid_state(
+                            "GnbPending",
+                            state.status_str(),
+                        ));
+                    }
+                };
+                let anfrage_pid = data.pruefidentifikator.as_u32();
+                let expected_ok = response_pid_for(anfrage_pid, true);
+                let expected_ng = response_pid_for(anfrage_pid, false);
+                let valid = expected_ok.map(|p| p == response_pid).unwrap_or(false)
+                    || expected_ng.map(|p| p == response_pid).unwrap_or(false);
+                if !valid {
+                    return Err(WorkflowError::rejected(format!(
+                        "response PID {response_pid} does not match anfrage PID {anfrage_pid}"
+                    )));
+                }
+                Ok(WorkflowOutput::events(vec![
+                    GasSupplierChangeEvent::GnbAntwortErhalten {
+                        response_pid,
+                        accepted,
+                        reason,
+                    },
+                ]))
+            }
+
+            GasSupplierChangeCommand::Activate => match state {
+                GasSupplierChangeState::AntwortGesendet { data, .. }
+                    if data.variant == GasProcessVariant::LieferbeginnGas =>
+                {
+                    Ok(WorkflowOutput::events(vec![
+                        GasSupplierChangeEvent::Activated,
+                    ]))
+                }
+                GasSupplierChangeState::AntwortGesendet { data, .. } => {
+                    Err(WorkflowError::rejected(format!(
+                        "Activate is only valid for LieferbeginnGas (44001); \
+                         this process is {:?} (PID {})",
+                        data.variant, data.pruefidentifikator
+                    )))
+                }
+                _ => Err(WorkflowError::invalid_state(
+                    "AntwortGesendet",
+                    state.status_str(),
+                )),
+            },
 
             GasSupplierChangeCommand::TimeoutExpired { deadline_id, label } => {
-                if matches!(
-                    state,
-                    GasSupplierChangeState::Active(_) | GasSupplierChangeState::Rejected { .. }
-                ) {
+                if state.is_terminal() {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
-
-                // Compensation: enqueue an AperakTimeout outbox entry so the
-                // OutboxErpWorker notifies the ERP that no APERAK was received
-                // within the 10-Werktage regulatory window (BK7 GeLi Gas).
-                // Persisted atomically with DeadlineExpired via WriteBatch.
                 let mut outbox: Vec<PendingOutbox> = vec![];
-                let data_opt = match &state {
-                    GasSupplierChangeState::Initiated(d)
-                    | GasSupplierChangeState::ValidationPassed(d)
-                    | GasSupplierChangeState::AperakSent(d) => Some(d),
-                    _ => None,
-                };
-                if let Some(data) = data_opt {
+                if let Some(data) = state.data() {
                     outbox.push(PendingOutbox::new(
                         "AperakTimeout",
-                        data.new_supplier.as_str(),
+                        data.sender.as_str(),
                         serde_json::json!({
-                            "pid":          data.pruefidentifikator.as_u32(),
-                            "malo":         data.malo_id.as_str(),
-                            "new_supplier": data.new_supplier.as_str(),
-                            "gas_operator": data.gas_operator.as_str(),
+                            "pid":            data.pruefidentifikator.as_u32(),
+                            "variant":        format!("{:?}", data.variant),
+                            "malo_id":        data.malo_id.as_str(),
+                            "sender":         data.sender.as_str(),
+                            "receiver":       data.receiver.as_str(),
                             "deadline_label": label.as_ref(),
-                            "deadline_id":  deadline_id,
+                            "deadline_id":    deadline_id,
                         }),
                     ));
                 }
-
                 let event = GasSupplierChangeEvent::DeadlineExpired { deadline_id, label };
                 if outbox.is_empty() {
-                    Ok(vec![event].into())
+                    Ok(WorkflowOutput::events(vec![event]))
                 } else {
                     Ok(WorkflowOutput::with_outbox(vec![event], outbox))
                 }
@@ -512,28 +902,26 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
 
 // ── Read-model projection ─────────────────────────────────────────────────────
 
-/// Read-model record for a single GeLi Gas supplier-change process stream.
-///
-/// Uses a type-state design so field access never requires `Option::unwrap`:
-/// the `Active` variant carries all domain fields that are structurally
-/// guaranteed to exist once the process moves past `New`.
+/// Read-model record for a single GeLi Gas process stream.
 #[derive(Debug)]
 pub enum GasSupplierChangeRecord {
     /// No `Initiated` event applied yet.
     New {
-        /// Total events applied so far (should be 0).
+        /// Total events applied so far.
         event_count: usize,
     },
     /// `Initiated` event applied; process fields now available.
     Active {
         /// Current lifecycle stage.
         status: &'static str,
+        /// Process variant.
+        variant: GasProcessVariant,
         /// Marktlokation EIC code.
         malo_id: MaLo,
-        /// GLN of the new gas supplier.
-        new_supplier: MarktpartnerCode,
-        /// GLN of the gas network operator.
-        gas_operator: MarktpartnerCode,
+        /// GLN of the sender.
+        sender: MarktpartnerCode,
+        /// GLN of the receiver.
+        receiver: MarktpartnerCode,
         /// BDEW Prüfidentifikator.
         pruefidentifikator: Pruefidentifikator,
         /// Total events applied.
@@ -542,7 +930,7 @@ pub enum GasSupplierChangeRecord {
 }
 
 impl GasSupplierChangeRecord {
-    /// Current lifecycle status label, suitable for logging and serialisation.
+    /// Current lifecycle status label.
     #[must_use]
     pub fn status(&self) -> &'static str {
         match self {
@@ -551,7 +939,7 @@ impl GasSupplierChangeRecord {
         }
     }
 
-    /// Total events applied to this stream.
+    /// Total events applied.
     #[must_use]
     pub fn event_count(&self) -> usize {
         match self {
@@ -559,38 +947,27 @@ impl GasSupplierChangeRecord {
         }
     }
 
-    /// Domain data for this record if it has been initiated, or `None` if `New`.
+    /// Return domain data if active.
     #[must_use]
     pub fn active_data(&self) -> Option<GasSupplierChangeRecordData<'_>> {
         match self {
             Self::New { .. } => None,
             Self::Active {
+                variant,
                 malo_id,
-                new_supplier,
-                gas_operator,
+                sender,
+                receiver,
                 pruefidentifikator,
                 ..
             } => Some(GasSupplierChangeRecordData {
+                variant: *variant,
                 malo_id,
-                new_supplier,
-                gas_operator,
+                sender,
+                receiver,
                 pruefidentifikator,
             }),
         }
     }
-}
-
-/// Borrowed view of the domain fields in an `Active` [`GasSupplierChangeRecord`].
-#[derive(Debug, Clone, Copy)]
-pub struct GasSupplierChangeRecordData<'a> {
-    /// Marktlokation EIC code.
-    pub malo_id: &'a MaLo,
-    /// GLN of the new gas supplier.
-    pub new_supplier: &'a MarktpartnerCode,
-    /// GLN of the gas network operator.
-    pub gas_operator: &'a MarktpartnerCode,
-    /// BDEW Prüfidentifikator.
-    pub pruefidentifikator: &'a Pruefidentifikator,
 }
 
 impl Default for GasSupplierChangeRecord {
@@ -599,8 +976,22 @@ impl Default for GasSupplierChangeRecord {
     }
 }
 
-/// In-process read model that tracks status across all GeLi Gas
-/// supplier-change streams. Feed via [`mako_engine::projection::ProjectionRunner`].
+/// Borrowed view of `Active` record fields.
+#[derive(Debug, Clone, Copy)]
+pub struct GasSupplierChangeRecordData<'a> {
+    /// Process variant.
+    pub variant: GasProcessVariant,
+    /// Marktlokation EIC code.
+    pub malo_id: &'a MaLo,
+    /// GLN of the sender.
+    pub sender: &'a MarktpartnerCode,
+    /// GLN of the receiver.
+    pub receiver: &'a MarktpartnerCode,
+    /// BDEW Prüfidentifikator.
+    pub pruefidentifikator: &'a Pruefidentifikator,
+}
+
+/// In-process read model for all GeLi Gas process streams.
 #[derive(Debug, Default)]
 pub struct GasSupplierChangeProjection {
     /// Map of stream ID → record.
@@ -616,17 +1007,14 @@ impl Projection for GasSupplierChangeProjection {
 
     fn handle_event(&mut self, envelope: &EventEnvelope) {
         self.last_seq = self.last_seq.max(envelope.sequence_number);
-
         let record = self
             .records
             .entry(envelope.stream_id.as_str().to_owned())
             .or_default();
-
         let Ok(event) = envelope.decode::<GasSupplierChangeEvent>() else {
             return;
         };
 
-        // Increment event count on every decoded event.
         match record {
             GasSupplierChangeRecord::New { event_count }
             | GasSupplierChangeRecord::Active { event_count, .. } => *event_count += 1,
@@ -634,18 +1022,28 @@ impl Projection for GasSupplierChangeProjection {
 
         match event {
             GasSupplierChangeEvent::Initiated {
+                variant,
                 malo_id,
-                new_supplier,
-                gas_operator,
+                sender,
+                receiver,
+                pruefidentifikator,
+                ..
+            }
+            | GasSupplierChangeEvent::GnbProcessInitiated {
+                variant,
+                malo_id,
+                sender,
+                receiver,
                 pruefidentifikator,
                 ..
             } => {
                 let count = record.event_count();
                 *record = GasSupplierChangeRecord::Active {
                     status: "Initiated",
+                    variant,
                     malo_id,
-                    new_supplier,
-                    gas_operator,
+                    sender,
+                    receiver,
                     pruefidentifikator,
                     event_count: count,
                 };
@@ -655,9 +1053,18 @@ impl Projection for GasSupplierChangeProjection {
                     *status = "ValidationPassed";
                 }
             }
-            GasSupplierChangeEvent::AperakDispatched { positive, .. } => {
+            GasSupplierChangeEvent::AntwortGesendet { accepted, .. } => {
                 if let GasSupplierChangeRecord::Active { status, .. } = record {
-                    *status = if positive { "AperakSent" } else { "Rejected" };
+                    *status = if accepted {
+                        "AntwortGesendet"
+                    } else {
+                        "Rejected"
+                    };
+                }
+            }
+            GasSupplierChangeEvent::GnbAntwortErhalten { accepted, .. } => {
+                if let GasSupplierChangeRecord::Active { status, .. } = record {
+                    *status = if accepted { "Completed" } else { "Rejected" };
                 }
             }
             GasSupplierChangeEvent::Activated => {
@@ -665,12 +1072,8 @@ impl Projection for GasSupplierChangeProjection {
                     *status = "Active";
                 }
             }
-            GasSupplierChangeEvent::Rejected { .. } => {
-                if let GasSupplierChangeRecord::Active { status, .. } = record {
-                    *status = "Rejected";
-                }
-            }
-            GasSupplierChangeEvent::DeadlineExpired { .. } => {
+            GasSupplierChangeEvent::Rejected { .. }
+            | GasSupplierChangeEvent::DeadlineExpired { .. } => {
                 if let GasSupplierChangeRecord::Active { status, .. } = record {
                     *status = "Rejected";
                 }
@@ -683,144 +1086,523 @@ impl Projection for GasSupplierChangeProjection {
 
 #[cfg(test)]
 mod tests {
+    use mako_engine::ids::DeadlineId;
+
     use super::*;
 
-    fn make_receive_cmd(pid: u32, validation_passed: bool) -> GasSupplierChangeCommand {
+    fn pid(n: u32) -> Pruefidentifikator {
+        Pruefidentifikator::new(n).expect("test PID")
+    }
+    fn malo() -> MaLo {
+        MaLo::new("DE0000000001234567890000000000001")
+    }
+    fn sender() -> MarktpartnerCode {
+        MarktpartnerCode::new("4012345000023")
+    }
+    fn receiver() -> MarktpartnerCode {
+        MarktpartnerCode::new("9900357000004")
+    }
+
+    fn receive_cmd(p: u32, valid: bool) -> GasSupplierChangeCommand {
         GasSupplierChangeCommand::ReceiveUtilmd {
-            pid: Pruefidentifikator::new(pid).expect("test pid must be in range"),
-            sender: MarktpartnerCode::new("4012345000023"),
-            receiver: MarktpartnerCode::new("9900357000004"),
-            malo_id: MaLo::new("DE0000000001234567890000000000001"),
+            pid: pid(p),
+            sender: sender(),
+            receiver: receiver(),
+            malo_id: malo(),
             document_date: "20250115".to_owned(),
+            process_date: "20250301".to_owned(),
             message_ref: MessageRef::new("MSG-GELI-001"),
-            validation_passed,
-            validation_errors: if validation_passed {
+            validation_passed: valid,
+            validation_errors: if valid {
                 vec![]
             } else {
-                vec!["AHB rule violation".to_owned()]
+                vec!["AHB violation".to_owned()]
             },
         }
     }
 
-    #[test]
-    fn happy_path_new_to_active() {
-        let state = GasSupplierChangeState::default();
+    fn gnb_cmd(p: u32) -> GasSupplierChangeCommand {
+        GasSupplierChangeCommand::InitiateGnbProcess {
+            pid: pid(p),
+            sender: sender(),
+            receiver: receiver(),
+            malo_id: malo(),
+            document_date: "20250115".to_owned(),
+            process_date: "20250301".to_owned(),
+            message_ref: MessageRef::new("MSG-GNB-001"),
+        }
+    }
 
-        let events = GeliGasSupplierChangeWorkflow::handle(&state, make_receive_cmd(44001, true))
-            .expect("should accept valid PID 44001");
-        assert_eq!(events.len(), 2);
+    fn apply_all(
+        state: GasSupplierChangeState,
+        events: &[GasSupplierChangeEvent],
+    ) -> GasSupplierChangeState {
+        events
+            .iter()
+            .fold(state, GeliGasSupplierChangeWorkflow::apply)
+    }
+
+    // ── response_pid_for coverage ─────────────────────────────────────────────
+
+    #[test]
+    fn response_pid_table_is_correct() {
+        let pairs: &[(u32, u32, u32)] = &[
+            (44001, 44003, 44004),
+            (44002, 44005, 44006),
+            (44007, 44008, 44009),
+            (44010, 44011, 44012),
+            (44013, 44014, 44015),
+            (44016, 44017, 44018),
+        ];
+        for &(anfrage, ok, ng) in pairs {
+            assert_eq!(
+                response_pid_for(anfrage, true).map(|p| p.as_u32()),
+                Some(ok),
+                "anfrage {anfrage} -> ok {ok}"
+            );
+            assert_eq!(
+                response_pid_for(anfrage, false).map(|p| p.as_u32()),
+                Some(ng),
+                "anfrage {anfrage} -> ng {ng}"
+            );
+        }
+        assert_eq!(response_pid_for(44019, true), None);
+        assert_eq!(response_pid_for(44019, false), None);
+        assert_eq!(
+            response_pid_for(44020, true).map(|p| p.as_u32()),
+            Some(44021)
+        );
+        assert_eq!(response_pid_for(44020, false), None);
+    }
+
+    // ── Lieferbeginn Gas (44001) ──────────────────────────────────────────────
+
+    #[test]
+    fn lieferbeginn_happy_path_to_active() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44001, true)).unwrap();
+        assert_eq!(out.events.len(), 2);
+        assert!(matches!(
+            out.events[0],
+            GasSupplierChangeEvent::Initiated {
+                variant: GasProcessVariant::LieferbeginnGas,
+                ..
+            }
+        ));
+        let state = apply_all(state, &out.events);
+        assert!(matches!(state, GasSupplierChangeState::ValidationPassed(_)));
+
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::SendAntwort {
+                accepted: true,
+                reason: None,
+                obligations: vec![],
+            },
+        )
+        .unwrap();
         assert!(
-            matches!(&events[0], GasSupplierChangeEvent::Initiated { pruefidentifikator, .. } if pruefidentifikator.as_u32() == 44001)
+            !out.outbox.is_empty(),
+            "must include UtilmdAntwort outbox entry"
         );
         assert!(matches!(
-            &events[1],
-            GasSupplierChangeEvent::ValidationPassed { .. }
+            &out.events[0],
+            GasSupplierChangeEvent::AntwortGesendet { response_pid: Some(p), accepted: true, .. }
+            if p.as_u32() == 44003
+        ));
+        let state = apply_all(state, &out.events);
+        assert!(matches!(
+            state,
+            GasSupplierChangeState::AntwortGesendet { .. }
         ));
 
-        let state = events
-            .iter()
-            .fold(state, GeliGasSupplierChangeWorkflow::apply);
-        assert!(
-            matches!(&state, GasSupplierChangeState::ValidationPassed(_)),
-            "expected ValidationPassed, got {}",
-            state.status_str()
-        );
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, GasSupplierChangeCommand::Activate)
+            .unwrap();
+        let state = apply_all(state, &out.events);
+        assert!(matches!(state, GasSupplierChangeState::Active(d) if d.malo_id == malo()));
+    }
 
-        let events = GeliGasSupplierChangeWorkflow::handle(
+    #[test]
+    fn lieferbeginn_negative_antwort_rejects() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44001, true)).unwrap();
+        let state = apply_all(state, &out.events);
+        let out = GeliGasSupplierChangeWorkflow::handle(
             &state,
-            GasSupplierChangeCommand::DispatchAperak {
-                positive: true,
+            GasSupplierChangeCommand::SendAntwort {
+                accepted: false,
+                reason: Some("MaLo nicht bekannt".to_owned()),
+                obligations: vec![],
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            &out.events[0],
+            GasSupplierChangeEvent::AntwortGesendet { response_pid: Some(p), accepted: false, .. }
+            if p.as_u32() == 44004
+        ));
+        let state = apply_all(state, &out.events);
+        assert!(matches!(state, GasSupplierChangeState::Rejected { .. }));
+    }
+
+    // ── Lieferende Gas (44002) ────────────────────────────────────────────────
+
+    #[test]
+    fn lieferende_positive_antwort_is_pid_44005() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44002, true)).unwrap();
+        let state = apply_all(state, &out.events);
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::SendAntwort {
+                accepted: true,
+                reason: None,
+                obligations: vec![],
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            &out.events[0],
+            GasSupplierChangeEvent::AntwortGesendet { response_pid: Some(p), accepted: true, .. }
+            if p.as_u32() == 44005
+        ));
+    }
+
+    // ── Abmeldung NN (44007) — responder (LFN) ───────────────────────────────
+
+    #[test]
+    fn abmeldung_nn_responder_positive_antwort_is_pid_44008() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44007, true)).unwrap();
+        let state = apply_all(state, &out.events);
+        assert!(matches!(
+            &state,
+            GasSupplierChangeState::ValidationPassed(d)
+            if d.variant == GasProcessVariant::AbmeldungNn
+        ));
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::SendAntwort {
+                accepted: true,
+                reason: None,
+                obligations: vec![],
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            &out.events[0],
+            GasSupplierChangeEvent::AntwortGesendet { response_pid: Some(p), accepted: true, .. }
+            if p.as_u32() == 44008
+        ));
+    }
+
+    // ── Abmeldung NN (44007) — initiator (GNB) ───────────────────────────────
+
+    #[test]
+    fn abmeldung_nn_gnb_initiator_positive_completes() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, gnb_cmd(44007)).unwrap();
+        assert!(!out.outbox.is_empty());
+        let state = apply_all(state, &out.events);
+        assert!(matches!(state, GasSupplierChangeState::GnbPending(_)));
+
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::ReceiveGnbAntwort {
+                response_pid: pid(44008),
+                accepted: true,
                 reason: None,
             },
         )
-        .expect("dispatch APERAK");
-        let state = events
-            .iter()
-            .fold(state, GeliGasSupplierChangeWorkflow::apply);
-        assert!(
-            matches!(&state, GasSupplierChangeState::AperakSent(_)),
-            "expected AperakSent"
-        );
-
-        let events =
-            GeliGasSupplierChangeWorkflow::handle(&state, GasSupplierChangeCommand::Activate)
-                .expect("activate");
-        let state = events
-            .iter()
-            .fold(state, GeliGasSupplierChangeWorkflow::apply);
-        assert!(
-            matches!(&state, GasSupplierChangeState::Active(d) if d.malo_id == MaLo::new("DE0000000001234567890000000000001")),
-            "expected Active with malo_id",
-        );
+        .unwrap();
+        let state = apply_all(state, &out.events);
+        assert!(matches!(state, GasSupplierChangeState::Completed(_)));
     }
 
     #[test]
-    fn wrong_pid_is_rejected() {
+    fn abmeldung_nn_gnb_initiator_negative_rejects() {
         let state = GasSupplierChangeState::default();
-        let err = GeliGasSupplierChangeWorkflow::handle(&state, make_receive_cmd(55001, true))
-            .expect_err("should reject wrong PID");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("55001"),
-            "error should mention the unexpected PID: {msg}"
-        );
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, gnb_cmd(44007)).unwrap();
+        let state = apply_all(state, &out.events);
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::ReceiveGnbAntwort {
+                response_pid: pid(44009),
+                accepted: false,
+                reason: Some("abgelehnt".to_owned()),
+            },
+        )
+        .unwrap();
+        let state = apply_all(state, &out.events);
+        assert!(matches!(state, GasSupplierChangeState::Rejected { .. }));
     }
 
     #[test]
-    fn validation_failure_rejects_process() {
+    fn gnb_antwort_wrong_pid_is_rejected() {
         let state = GasSupplierChangeState::default();
-        let events = GeliGasSupplierChangeWorkflow::handle(&state, make_receive_cmd(44001, false))
-            .expect("should still produce events");
-        assert!(matches!(
-            &events[1],
-            GasSupplierChangeEvent::Rejected { .. }
-        ));
-        let state = events
-            .iter()
-            .fold(state, GeliGasSupplierChangeWorkflow::apply);
-        assert!(
-            matches!(&state, GasSupplierChangeState::Rejected { .. }),
-            "expected Rejected"
-        );
-    }
-
-    #[test]
-    fn dispatch_aperak_in_wrong_state_is_rejected() {
-        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, gnb_cmd(44007)).unwrap();
+        let state = apply_all(state, &out.events);
         let err = GeliGasSupplierChangeWorkflow::handle(
             &state,
-            GasSupplierChangeCommand::DispatchAperak {
-                positive: true,
+            GasSupplierChangeCommand::ReceiveGnbAntwort {
+                response_pid: pid(44011),
+                accepted: true,
                 reason: None,
             },
         )
-        .expect_err("should reject dispatch in wrong state");
-        assert!(err.to_string().contains("ValidationPassed"), "{err}");
+        .expect_err("PID mismatch must be rejected");
+        assert!(
+            err.to_string().contains("44011") || err.to_string().contains("44007"),
+            "{err}"
+        );
+    }
+
+    // ── Abmeldungsanfrage (44010) and EoG Anmeldung (44013) ──────────────────
+
+    #[test]
+    fn abmeldungsanfrage_gnb_initiator_completes() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, gnb_cmd(44010)).unwrap();
+        let state = apply_all(state, &out.events);
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::ReceiveGnbAntwort {
+                response_pid: pid(44011),
+                accepted: true,
+                reason: None,
+            },
+        )
+        .unwrap();
+        let state = apply_all(state, &out.events);
+        assert!(matches!(state, GasSupplierChangeState::Completed(_)));
     }
 
     #[test]
-    fn negative_aperak_sets_rejected_status() {
+    fn eog_anmeldung_gnb_initiator_completes() {
         let state = GasSupplierChangeState::default();
-        let events =
-            GeliGasSupplierChangeWorkflow::handle(&state, make_receive_cmd(44001, true)).unwrap();
-        let state = events
-            .iter()
-            .fold(state, GeliGasSupplierChangeWorkflow::apply);
-
-        let events = GeliGasSupplierChangeWorkflow::handle(
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, gnb_cmd(44013)).unwrap();
+        let state = apply_all(state, &out.events);
+        let out = GeliGasSupplierChangeWorkflow::handle(
             &state,
-            GasSupplierChangeCommand::DispatchAperak {
-                positive: false,
-                reason: Some("MaLo not found".to_owned()),
+            GasSupplierChangeCommand::ReceiveGnbAntwort {
+                response_pid: pid(44014),
+                accepted: true,
+                reason: None,
             },
         )
-        .expect("dispatch negative APERAK");
-        let state = events
-            .iter()
-            .fold(state, GeliGasSupplierChangeWorkflow::apply);
+        .unwrap();
+        let state = apply_all(state, &out.events);
+        assert!(matches!(state, GasSupplierChangeState::Completed(_)));
+    }
+
+    // ── Kündigung beim alten LF (44016) ──────────────────────────────────────
+
+    #[test]
+    fn kuendigung_lfa_positive_antwort_is_pid_44017() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44016, true)).unwrap();
+        let state = apply_all(state, &out.events);
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::SendAntwort {
+                accepted: true,
+                reason: None,
+                obligations: vec![],
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            &out.events[0],
+            GasSupplierChangeEvent::AntwortGesendet { response_pid: Some(p), accepted: true, .. }
+            if p.as_u32() == 44017
+        ));
+    }
+
+    // ── Bestandsliste (44019) — one-way ──────────────────────────────────────
+
+    #[test]
+    fn bestandsliste_initiator_completes_immediately() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, gnb_cmd(44019)).unwrap();
+        assert!(!out.outbox.is_empty());
+        let state = apply_all(state, &out.events);
         assert!(
-            matches!(&state, GasSupplierChangeState::Rejected { .. }),
-            "expected Rejected after negative APERAK"
+            matches!(state, GasSupplierChangeState::Completed(_)),
+            "Bestandsliste (one-way) must complete immediately"
         );
+    }
+
+    #[test]
+    fn bestandsliste_responder_completes_after_validation() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44019, true)).unwrap();
+        assert_eq!(out.events.len(), 2, "Initiated + ValidationPassed");
+        let state = apply_all(state, &out.events);
+        assert!(
+            matches!(state, GasSupplierChangeState::Completed(_)),
+            "Bestandsliste receipt must auto-complete; got: {state:?}"
+        );
+    }
+
+    // ── Änderungsmeldung (44020) ──────────────────────────────────────────────
+
+    #[test]
+    fn aenderungsmeldung_positive_antwort_is_pid_44021() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44020, true)).unwrap();
+        let state = apply_all(state, &out.events);
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::SendAntwort {
+                accepted: true,
+                reason: None,
+                obligations: vec![],
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            &out.events[0],
+            GasSupplierChangeEvent::AntwortGesendet { response_pid: Some(p), accepted: true, .. }
+            if p.as_u32() == 44021
+        ));
+    }
+
+    // ── Validation failure across all Anfrage PIDs ────────────────────────────
+
+    #[test]
+    fn validation_failure_rejects_for_all_anfrage_pids() {
+        for &anfrage_pid in ANFRAGE_PIDS {
+            let state = GasSupplierChangeState::default();
+            let out =
+                GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(anfrage_pid, false))
+                    .unwrap_or_else(|e| panic!("PID {anfrage_pid}: {e}"));
+            let state = apply_all(state, &out.events);
+            assert!(
+                matches!(state, GasSupplierChangeState::Rejected { .. }),
+                "PID {anfrage_pid}: expected Rejected after validation failure"
+            );
+        }
+    }
+
+    // ── PID guards ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn antwort_pids_cannot_start_a_process_via_receive_utilmd() {
+        for &antwort_pid in ANTWORT_PIDS {
+            let state = GasSupplierChangeState::default();
+            GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(antwort_pid, true))
+                .expect_err(&format!("Antwort PID {antwort_pid} must be rejected"));
+        }
+    }
+
+    #[test]
+    fn non_gnb_pid_for_initiate_gnb_is_rejected() {
+        let state = GasSupplierChangeState::default();
+        let err = GeliGasSupplierChangeWorkflow::handle(&state, gnb_cmd(44001))
+            .expect_err("44001 is not a GNB-initiator PID");
+        assert!(err.to_string().contains("44001"), "{err}");
+    }
+
+    // ── Activate guard ────────────────────────────────────────────────────────
+
+    #[test]
+    fn activate_rejected_for_non_lieferbeginn_variant() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44002, true)).unwrap();
+        let state = apply_all(state, &out.events);
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::SendAntwort {
+                accepted: true,
+                reason: None,
+                obligations: vec![],
+            },
+        )
+        .unwrap();
+        let state = apply_all(state, &out.events);
+        let err = GeliGasSupplierChangeWorkflow::handle(&state, GasSupplierChangeCommand::Activate)
+            .expect_err("Activate must fail for LieferendeGas (44002)");
+        assert!(
+            err.to_string().contains("LieferbeginnGas") || err.to_string().contains("44002"),
+            "{err}"
+        );
+    }
+
+    // ── Deadline handling ─────────────────────────────────────────────────────
+
+    #[test]
+    fn deadline_rejects_validation_passed_state() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44001, true)).unwrap();
+        let state = apply_all(state, &out.events);
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::TimeoutExpired {
+                deadline_id: DeadlineId::new(),
+                label: APERAK_WINDOW_LABEL.into(),
+            },
+        )
+        .unwrap();
+        let state = apply_all(state, &out.events);
+        assert!(matches!(state, GasSupplierChangeState::Rejected { .. }));
+    }
+
+    #[test]
+    fn deadline_is_noop_for_active_state() {
+        let state = GasSupplierChangeState::default();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44001, true)).unwrap();
+        let state = apply_all(state, &out.events);
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::SendAntwort {
+                accepted: true,
+                reason: None,
+                obligations: vec![],
+            },
+        )
+        .unwrap();
+        let state = apply_all(state, &out.events);
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, GasSupplierChangeCommand::Activate)
+            .unwrap();
+        let state = apply_all(state, &out.events);
+        assert!(matches!(state, GasSupplierChangeState::Active(_)));
+
+        let out = GeliGasSupplierChangeWorkflow::handle(
+            &state,
+            GasSupplierChangeCommand::TimeoutExpired {
+                deadline_id: DeadlineId::new(),
+                label: APERAK_WINDOW_LABEL.into(),
+            },
+        )
+        .unwrap();
+        assert!(
+            out.events.is_empty(),
+            "deadline must be no-op for Active state"
+        );
+    }
+
+    // ── PID set coverage ──────────────────────────────────────────────────────
+
+    #[test]
+    fn anfrage_and_antwort_pids_are_subsets_of_utilmd_pids() {
+        for &p in ANFRAGE_PIDS {
+            assert!(
+                UTILMD_PIDS.contains(&p),
+                "ANFRAGE_PID {p} missing from UTILMD_PIDS"
+            );
+        }
+        for &p in ANTWORT_PIDS {
+            assert!(
+                UTILMD_PIDS.contains(&p),
+                "ANTWORT_PID {p} missing from UTILMD_PIDS"
+            );
+        }
+    }
+
+    #[test]
+    fn utilmd_pids_covers_44001_to_44021() {
+        for p in 44001..=44021u32 {
+            assert!(UTILMD_PIDS.contains(&p), "PID {p} missing from UTILMD_PIDS");
+        }
     }
 }

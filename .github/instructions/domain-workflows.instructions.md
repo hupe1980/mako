@@ -10,7 +10,6 @@ applyTo: "crates/mako-gpke/**, crates/mako-wim/**, crates/mako-geli-gas/**, crat
 | PID range | Crate | Governing ruling |
 |---|---|---|
 | 55001–55018, 55555 | `mako-gpke` | BK6-24-174 |
-| 56001–56004 | `mako-gpke` (ex-MPES, absorbed 2025-06-06) | BK6-22-024 |
 | 17134–17135, 19001–19002 | `mako-gpke` (Konfiguration Teil 4) | BK6-22-024 |
 | 31001–31002, 31004–31008 | `mako-gpke` (INVOIC) | BK6-24-174 |
 | 11001–11003 | `mako-wim` | BK6-24-174 |
@@ -23,7 +22,7 @@ applyTo: "crates/mako-gpke/**, crates/mako-wim/**, crates/mako-geli-gas/**, crat
 | 31010–31011 | `mako-gabi-gas` | BK7 |
 
 **PIDs that do NOT exist — never register:**
-44007–44016, 56005–56010, 13001, 11004–11099.
+44007–44016, 56001–56010, 13001, 11004–11099.
 
 **PIDs that belong to GeLi Gas, NOT WiM Gas:**
 44022–44024 (GeLi Gas Stornierung). Do not register these in `mako-wim-gas`.
@@ -40,9 +39,8 @@ Saturday = Werktag. Sundays and German public holidays do not count. All deadlin
 
 ## crates/mako-gpke
 
-- Governed by **BK6-24-174** (Teil 1–3, eff. 2025-06-06) and **BK6-22-024** (Teil 4 Konfiguration + ex-MPES PIDs).
+- Governed by **BK6-24-174** (Teil 1–3, eff. 2025-06-06) and **BK6-22-024** (Teil 4 Konfiguration).
 - Source modules: `wechselprozesse`, `lf_anmeldung`, `lf_abmeldung`, `neuanlage`, `abrechnung`, `sperrung`, `konfiguration`, `post_acceptance`.
-- MPES is **dissolved** — PIDs 56001–56004 live in this crate, not in any `mako-mpes` crate.
 - The `ForwardCompatible` version policy is mandatory for all GPKE workflows.
 
 ## crates/mako-wim

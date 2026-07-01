@@ -78,11 +78,14 @@
 //! makod
 //!   └── EngineContext (SlateDbStore — in-memory by default, local FS via --data-dir)
 //!         ├── GpkeModule    — UTILMD PIDs 55001–55002, 55016 (`gpke-supplier-change`)
-//!         │                   + INVOIC PIDs 31001–31002, 31004–31008 (`gpke-abrechnung`)
+//!         │                   + INVOIC PIDs 31001–31002, 31005–31008 (`gpke-abrechnung`)
 //!         ├── WimModule     — PIDs 55039, 55042, 55051, 55168 (WiM Strom, BK6-24-174)
-//!         ├── GeliGasModule — PIDs 44001–44006, 44017–44018, 44022–44024 (GeLi Gas)
-//!         ├── WimGasModule  — PIDs 44039–44053, 44168–44170 (WiM Gas MSB-Wechsel)
-//!         └── MabisModule   — PID 13003 only (MABIS Bilanzkreisabrechnung Strom, MSCONS Summenzeitreihe)
+//!         ├── GeliGasModule — PIDs 44001–44021 (GeLi Gas; 44022–44024 registered by WimGasModule)
+//!         ├── WimGasModule      — PIDs 44022–44024, 44039–44053, 44168–44170, 31003, 31004 (WiM Gas MSB-Wechsel + INVOIC billing)
+//!         ├── GaBiGasModule     — PIDs 31010, 31011 (GaBi Gas INVOIC billing; BK7-14-020)
+//!         ├── MabisModule       — PID 13003 only (MABIS Bilanzkreisabrechnung Strom, MSCONS Summenzeitreihe)
+//!         └── RedispatchModule  — Redispatch 2.0 (§§ 13/13a/14 EnWG); XML routing + IFTSTA PIDs 21037/21038
+//!                                 Only registered when roles include Nb, Unb, or Anb.
 //!
 //! Background tasks:
 //!   ├── OutboxWorker      — drains pending outbox messages via MaloIdentSender
@@ -108,6 +111,7 @@ mod malo_admin_api;
 mod malo_cache;
 mod malo_ident_sender;
 mod metrics_api;
+mod migration_api;
 mod partner_api;
 mod projection_worker;
 mod verzeichnisdienst_worker;
@@ -126,9 +130,11 @@ use mako_engine::{
     marktrolle::{DeploymentRoles, Marktrolle},
     store_slatedb::SlateDbStore,
 };
+use mako_gabi_gas::GaBiGasModule;
 use mako_geli_gas::GeliGasModule;
 use mako_gpke::GpkeModule;
 use mako_mabis::MabisModule;
+use mako_redispatch::RedispatchModule;
 use mako_wim::WimModule;
 use mako_wim_gas::WimGasModule;
 use secrecy::{ExposeSecret as _, SecretString};
@@ -302,7 +308,10 @@ struct Cli {
     ///
     /// When set, every request to `POST /edifact` must include
     /// `Authorization: Bearer <TOKEN>`. `GET /health` is always public.
-    /// When omitted, the API runs unauthenticated — a warning is logged.
+    /// When omitted and `--http-addr` is set, makod refuses to start. The HTTP REST
+    /// API and `/admin/migrations` endpoint perform privileged operations and must
+    /// not be exposed unauthenticated. Generate a token with
+    /// `openssl rand -hex 32`.
     ///
     /// Can also be set via the `MAKOD_HTTP_API_TOKEN` environment variable.
     #[arg(
@@ -900,7 +909,12 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     .register(Box::new(WimModule))
     .register(Box::new(GeliGasModule))
     .register(Box::new(WimGasModule))
+    .register(Box::new(GaBiGasModule))
     .register(Box::new(MabisModule))
+    // Redispatch 2.0: XML document-type routing + IFTSTA PIDs 21037/21038.
+    // Role-specific behaviour (NB vs ÜNB vs ANB) is handled inside each
+    // workflow via `register_pids_with_roles`. Safe to register for all roles.
+    .register(Box::new(RedispatchModule))
     .with_deployment_roles(parse_deployment_roles(&cli.deployment_roles))
     .build();
 
@@ -1032,6 +1046,22 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                 &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
                 &known,
             );
+        let wim_gas_invoic_check = adapters::wim_gas_invoic_registry().validate_policy(
+            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
+            &known,
+        );
+        let gabi_gas_invoic_check = adapters::gabi_gas_invoic_registry().validate_policy(
+            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
+            &known,
+        );
+        let wim_insrpt_check = adapters::wim_insrpt_registry().validate_policy(
+            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
+            &known,
+        );
+        let wim_gas_insrpt_check = adapters::wim_gas_insrpt_registry().validate_policy(
+            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
+            &known,
+        );
         let mabis_check = adapters::mabis_registry().validate_policy(
             &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
             &known,
@@ -1052,6 +1082,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             ("wim-stammdaten", wim_stammdaten_check),
             ("wim-stornierung", wim_stornierung_check),
             ("wim-rechnung", wim_rechnung_check),
+            ("wim-insrpt", wim_insrpt_check),
             ("geli-gas-supplier-change", geli_check),
             ("geli-gas-stornierung", geli_stornierung_check),
             ("wim-gas-anmeldung", wim_gas_anmeldung_check),
@@ -1060,6 +1091,9 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                 "wim-gas-verpflichtungsanfrage",
                 wim_gas_verpflichtungsanfrage_check,
             ),
+            ("wim-gas-invoic", wim_gas_invoic_check),
+            ("wim-gas-insrpt", wim_gas_insrpt_check),
+            ("gabi-gas-invoic", gabi_gas_invoic_check),
             // mabis-billing: IFTSTA adapter is registered (PIDs 21000–21007).
             // MSCONS PID 13003 billing commands are constructed by the
             // aggregation layer; this check validates IFTSTA coverage only.
@@ -1131,9 +1165,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
 
     if let Some(addr) = cli.http_addr {
         if cli.http_api_token.is_none() {
-            tracing::warn!(
-                "HTTP REST API is running WITHOUT authentication — \
-                 set --http-api-token / MAKOD_HTTP_API_TOKEN for production"
+            anyhow::bail!(
+                "--http-api-token / MAKOD_HTTP_API_TOKEN is required when \
+                 --http-addr is set.\n\
+                 The HTTP REST API and /admin/migrations endpoint perform \
+                 privileged operations (submitting commands, triggering \
+                 migrations) and must not be exposed unauthenticated.\n\
+                 Set a strong random token (e.g. `openssl rand -hex 32`) via \
+                 the environment variable MAKOD_HTTP_API_TOKEN or the \
+                 --http-api-token flag."
             );
         }
         let api_state = Arc::new(edifact_api::EdifactApiState {
@@ -1141,6 +1181,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             pid_router: ctx.pid_router().clone(),
             optional_token: cli.http_api_token.clone(),
             max_body_bytes: cli.http_max_body_bytes,
+            partner_store: Some(Arc::new(store.as_partner_store())),
+            tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
         });
         let admin_state = Arc::new(malo_admin_api::MaloAdminState {
             cache: malo_cache::SlateDbMaloCache::new(store.clone()),
@@ -1155,6 +1197,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             store: partner_store,
             tenant_id: partner_tenant_id,
             optional_token: cli.http_api_token.clone(),
+            platform: Arc::clone(&platform),
         });
         let commands_state = Arc::new(commands_api::CommandsApiState {
             tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
@@ -1172,11 +1215,16 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             store.clone(),
             cli.http_api_token.clone(),
         ));
+        let migration_state = Arc::new(migration_api::MigrationApiState {
+            store: Arc::new(store.clone()),
+            optional_token: cli.http_api_token.clone(),
+        });
         let app = edifact_api::router(api_state)
             .merge(malo_admin_api::router(admin_state))
             .merge(partner_api::router(partner_admin_state))
             .merge(commands_api::router(commands_state))
             .merge(metrics_api::router(metrics_state))
+            .merge(migration_api::router(migration_state))
             .merge(health::router(health_state.clone()));
         let listener = tokio::net::TcpListener::bind(addr)
             .await
@@ -1273,6 +1321,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             pid_router: ctx.pid_router().clone(),
             optional_token: None,
             max_body_bytes: mako_as4::bdew_router_config().max_body_bytes,
+            partner_store: Some(Arc::new(store.as_partner_store())),
+            tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
         });
 
         let handler = Arc::new(as4_ingest::BdewAs4IngestHandler::new(

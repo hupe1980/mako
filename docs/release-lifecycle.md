@@ -33,13 +33,19 @@ The library enforces this via `valid_from` / `valid_until` metadata in each prof
 ```
 crates/edi-energy/profiles/
 └── utilmd/
-    ├── fv20241001/        # Strom, valid Oct 2024 → Sep 2025
+    ├── fv20241001/        # Strom, valid Oct 2024 → Sep 2025 (archived)
     │   ├── mig.json       # Message structure rules
     │   ├── ahb.json       # AHB Pruefidentifikator rules
     │   └── codelists.json # Code list values
-    ├── fv20241001_gas/    # Gas variant, same window
+    ├── fv20241001_gas/    # Gas variant, same window (archived)
     │   └── ...
-    └── fv20261001/        # Strom, valid Oct 2026 → Sep 2027
+    ├── fv20251001/        # Strom, valid Oct 2025 → Sep 2026 (⭐ current production)
+    │   └── ...
+    ├── fv20251001_gas/    # Gas variant, same window (⭐ current production)
+    │   └── ...
+    ├── fv20261001/        # Strom, valid Oct 2026 → Sep 2027 (🛠 next release)
+    │   └── ...
+    └── fv20261001_gas/    # Gas variant, same window (🛠 next release)
         └── ...
 ```
 
@@ -140,7 +146,7 @@ cargo xtask validate-pruefids --message-type utilmd
 To see a human-readable diff between two annual releases (useful for release notes and reviewing spec changes):
 
 ```bash
-cargo xtask release-diff --from utilmd/fv20241001 --to utilmd/fv20261001
+cargo xtask release-diff --from utilmd/fv20251001 --to utilmd/fv20261001
 ```
 
 Output shows:

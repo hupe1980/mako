@@ -64,7 +64,7 @@
 //! ```
 
 use time::{Date, Duration, OffsetDateTime, PrimitiveDateTime, Time, Weekday};
-use time_tz::{OffsetResult, PrimitiveDateTimeExt, timezones};
+use time_tz::{OffsetDateTimeExt, OffsetResult, PrimitiveDateTimeExt, timezones};
 
 // ── CONTRL Übertragungsquittung ───────────────────────────────────────────────
 
@@ -293,7 +293,15 @@ pub fn deadline_at_werktage(
     werktage: u32,
     cal: HolidayCalendar,
 ) -> OffsetDateTime {
-    let due_date = add_werktage(from.date(), werktage, cal);
+    let berlin = timezones::db::europe::BERLIN;
+    // Convert to Berlin local time before extracting the calendar date.
+    // `from.date()` returns the UTC date which is wrong for messages arriving
+    // between 23:00–00:00 UTC (= 00:00–01:00 CET next day in winter, or
+    // 00:00–02:00 CEST in summer).  Using the UTC date would count Werktage
+    // starting from yesterday's calendar date, yielding a deadline that is one
+    // calendar day — and potentially one Werktag — too early.
+    let start_date = from.to_timezone(berlin).date();
+    let due_date = add_werktage(start_date, werktage, cal);
     // Construct 17:00 as a PrimitiveDateTime in local (Europe/Berlin) time, then
     // obtain the correct UTC offset for that moment.  17:00 is never inside a
     // DST gap or fold for Europe/Berlin, so assume_timezone always returns Some.
@@ -301,7 +309,6 @@ pub fn deadline_at_werktage(
         due_date,
         Time::from_hms(17, 0, 0).expect("17:00:00 is valid"),
     );
-    let berlin = timezones::db::europe::BERLIN;
     match local_17.assume_timezone(berlin) {
         OffsetResult::Some(dt) => dt,
         // 17:00 is unambiguous for Europe/Berlin; these branches are unreachable
@@ -722,5 +729,48 @@ mod tests {
             "CET: 17:00 local = 16:00 UTC (fall-back already happened)"
         );
         assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
+    }
+
+    /// Regression test for the UTC-date edge case (F-005).
+    ///
+    /// A message arriving at 23:30 UTC on 2025-01-06 (Monday) is already
+    /// 00:30 CET on 2025-01-07 (Tuesday) in Berlin local time.  The deadline
+    /// must be counted from 2025-01-07 (Tuesday), not 2025-01-06 (Monday).
+    ///
+    /// Counting from Monday: Tue 07, Wed 08, Thu 09, Fri 10, Sat 11 → 2025-01-11
+    /// Counting from Tuesday: Wed 08, Thu 09, Fri 10, Sat 11, Mon 13 → 2025-01-13
+    ///   (2025-01-12 is Sunday; 2025-01-13 is Monday)
+    #[test]
+    fn deadline_at_werktage_uses_berlin_date_not_utc_date() {
+        use time::Time;
+        // 23:30 UTC on 2025-01-06 (Monday) = 00:30 CET on 2025-01-07 (Tuesday)
+        let received =
+            OffsetDateTime::new_utc(date(2025, 1, 6), Time::from_hms(23, 30, 0).unwrap());
+        let due = deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo);
+        // Should start from 2025-01-07 (Tuesday Berlin date), not 2025-01-06
+        assert_eq!(
+            due.date(),
+            date(2025, 1, 13),
+            "5 WT from Tuesday 2025-01-07: Wed 08 (+1), Thu 09 (+2), Fri 10 (+3), \
+             Sat 11 (+4), Mon 13 (+5) — Sunday 12 skipped"
+        );
+    }
+
+    /// Edge case: message at 23:59 UTC on 2025-01-10 (Friday) is already
+    /// Saturday 00:59 CET in Berlin.  Saturday is a Werktag, so 1 WT after
+    /// Saturday is Monday (Sunday skipped).
+    #[test]
+    fn deadline_at_werktage_friday_night_utc_is_saturday_berlin() {
+        use time::Time;
+        // 23:59 UTC on Friday 2025-01-10 = 00:59 CET on Saturday 2025-01-11
+        let received =
+            OffsetDateTime::new_utc(date(2025, 1, 10), Time::from_hms(23, 59, 0).unwrap());
+        let due = deadline_at_werktage(received, 1, HolidayCalendar::BdewMaKo);
+        // Starting from Saturday 2025-01-11: 1 WT = Monday 2025-01-13 (Sunday skipped)
+        assert_eq!(
+            due.date(),
+            date(2025, 1, 13),
+            "1 WT from Saturday 2025-01-11 is Monday 2025-01-13 (Sunday not a Werktag)"
+        );
     }
 }

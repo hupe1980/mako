@@ -51,11 +51,16 @@ holidays do not.
 | PID(s)                 | Process name                          | EDIFACT         | Module             | Status         |
 |------------------------|---------------------------------------|-----------------|--------------------|----------------|
 | 39000                  | Stornierung (ORDCHG)                  | ORDCHG 1.1      | `stornierung`      | ✅ Implemented |
-| 31003, 31009           | WiM-Rechnung / MSB-Rechnung           | INVOIC 2.8e     | `rechnung`         | ✅ Implemented (stub, settlement pending) |
+| 31009                  | MSB-Rechnung                          | INVOIC 2.8e     | `rechnung`         | ✅ Implemented (stub, settlement pending) |
 | 35001–35005 (REQOTE)   | Preisanfrage — Anfrage (NB → MSB)     | REQOTE 1.3c     | `preisanfrage`     | ✅ Implemented |
 | 15001–15005 (QUOTES)   | Preisanfrage — Antwort (MSB → NB)     | QUOTES 1.3c     | `preisanfrage`     | ✅ Implemented |
 | 27001–27003            | Preisliste (PRICAT)                   | PRICAT 2.1      | `preisliste`       | ✅ Implemented |
+| 23001, 23003, 23004, 23008 | Störungsmeldung (INSRPT, gemeinsam) | INSRPT 1.1a  | `insrpt`           | ✅ Implemented (5 WT Frist) |
+| 23011, 23012           | Ergebnisbericht Strom-Variante        | INSRPT 1.1a     | `insrpt`           | ✅ Implemented |
 | 11021–11023            | iMS Bestellung (Universalbestellprozess) | REST/JSON    | `steuerungsauftrag`| ✅ Implemented (API-Webdienste channel) |
+
+> PIDs 23005 and 23009 (Gas-only INSRPT variants) always belong to `mako-wim-gas`
+> `wim-gas-insrpt` with a 10-Werktage deadline. Never register them in `mako-wim`.
 
 ## EDIFACT Format Versions
 

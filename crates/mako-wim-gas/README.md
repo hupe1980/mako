@@ -40,6 +40,21 @@ Both live under BK7-24-01-009 but cover entirely different processes:
 | 44042–44044 | Anmeldung neuer MSB Gas (MSBN ↔ NB) | ✅ Implemented (`WimGasAnmeldungWorkflow`) |
 | 44051–44053 | Ende MSB Gas / Vorläufige Abmeldung (NB ↔ MSBA) | ✅ Implemented (`WimGasAnmeldungWorkflow`) |
 | 44168–44170 | Verpflichtungsanfrage (NB → gMSB) | ✅ Implemented (`WimGasVerpflichtungsanfrageWorkflow`) |
+| 23005 | Ablehnung Störungsmeldung Gas-Variante — **Gas-only** | ✅ Implemented (`WimGasInsrptWorkflow`) |
+| 23009 | Ergebnisbericht Störungsmeldung Gas-Variante — **Gas-only** | ✅ Implemented (`WimGasInsrptWorkflow`) |
+
+### INSRPT Störungsmeldungen — Gas-only PIDs
+
+PIDs 23005 and 23009 carry Gas-specific fault message qualifiers used exclusively
+in the gas metering-point context. They are always owned by `mako-wim-gas` — even
+in combined Strom+Gas deployments. The shared PIDs (23001, 23003, 23004, 23008)
+are registered by `mako-wim` in a combined deployment and by this crate in a
+Gas-only deployment.
+
+| PID | Role in process | APERAK Frist | Notes |
+|---|---|---|---|
+| **23005** | Ablehnung (Gas-Variante) | 10 Werktage | Gas-only; always routed to `wim-gas-insrpt` |
+| **23009** | Ergebnisbericht (Gas-Variante) | 10 Werktage | Gas-only; always routed to `wim-gas-insrpt` |
 
 ## EDIFACT Format Versions
 

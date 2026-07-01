@@ -49,6 +49,54 @@ impl Document {
             Self::Kostenblatt(_) => DocumentType::Kostenblatt,
         }
     }
+
+    /// Return the document's primary identifier (mRID or `DocumentIdentification`).
+    ///
+    /// This is the correlation key used by the process engine to route inbound
+    /// documents to the correct workflow instance.
+    pub fn mrid(&self) -> &str {
+        match self {
+            Self::Activation(d) => d.document_identification.v.as_str(),
+            Self::PlannedResourceSchedule(d) => d.document_identification.v.as_str(),
+            Self::Acknowledgement(d) => d.document_identification.v.as_str(),
+            Self::Stammdaten(d) => d.document_identification.as_str(),
+            Self::StatusRequest(d) => d.m_rid.as_str(),
+            Self::Unavailability(d) => d.m_rid.as_str(),
+            Self::Kaskade(d) => d.m_rid.as_str(),
+            Self::NetworkConstraint(d) => d.document_identification.v.as_str(),
+            Self::Kostenblatt(d) => d.document_identification.v.as_str(),
+        }
+    }
+
+    /// Return the 13-digit GLN / EIC of the document sender.
+    pub fn sender_id(&self) -> &str {
+        match self {
+            Self::Activation(d) => d.sender_identification.v.as_str(),
+            Self::PlannedResourceSchedule(d) => d.sender_identification.v.as_str(),
+            Self::Acknowledgement(d) => d.sender_identification.v.as_str(),
+            Self::Stammdaten(d) => d.sender.code.as_str(),
+            Self::StatusRequest(d) => d.sender_market_participant.m_rid.value.as_str(),
+            Self::Unavailability(d) => d.sender_market_participant.m_rid.value.as_str(),
+            Self::Kaskade(d) => d.sender_market_participant.m_rid.value.as_str(),
+            Self::NetworkConstraint(d) => d.sender_identification.v.as_str(),
+            Self::Kostenblatt(d) => d.sender_identification.v.as_str(),
+        }
+    }
+
+    /// Return the 13-digit GLN / EIC of the document receiver.
+    pub fn receiver_id(&self) -> &str {
+        match self {
+            Self::Activation(d) => d.receiver_identification.v.as_str(),
+            Self::PlannedResourceSchedule(d) => d.receiver_identification.v.as_str(),
+            Self::Acknowledgement(d) => d.receiver_identification.v.as_str(),
+            Self::Stammdaten(d) => d.empfaenger.code.as_str(),
+            Self::StatusRequest(d) => d.receiver_market_participant.m_rid.value.as_str(),
+            Self::Unavailability(d) => d.receiver_market_participant.m_rid.value.as_str(),
+            Self::Kaskade(d) => d.receiver_market_participant.m_rid.value.as_str(),
+            Self::NetworkConstraint(d) => d.receiver_identification.v.as_str(),
+            Self::Kostenblatt(d) => d.receiver_identification.v.as_str(),
+        }
+    }
 }
 
 // ── From<T> for Document ──────────────────────────────────────────────────────
@@ -107,6 +155,9 @@ impl From<documents::Kostenblatt> for Document {
 /// This is intentionally a lightweight byte scan — not a full XML parse — so
 /// that detection is fast even for large documents.
 fn detect_root(xml: &[u8]) -> (String, Option<String>) {
+    // Strip UTF-8 BOM (U+FEFF, encoded as EF BB BF) if present.
+    let xml = xml.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(xml);
+
     // Work with only the first 4096 bytes.
     let window = &xml[..xml.len().min(4096)];
     let text = String::from_utf8_lossy(window);

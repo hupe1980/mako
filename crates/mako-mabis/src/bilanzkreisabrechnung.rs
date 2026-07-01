@@ -106,7 +106,7 @@ pub enum BillingEvent {
     /// drives the `DatenstatusReceived` event instead. Recorded for audit
     /// and read-model purposes; does not change the billing state.
     IftstaStatusReceived {
-        /// IFTSTA Prüfidentifikator (21000–21007, ≠ 21004).
+        /// IFTSTA Prüfidentifikator (21000–21005, ≠ 21004).
         pid: Pruefidentifikator,
         /// Sender party code (GLN).
         sender: MarktpartnerCode,
@@ -285,18 +285,21 @@ pub enum BillingCommand {
         /// Label identifying the deadline type.
         label: Box<str>,
     },
-    /// Received an IFTSTA MaBiS status message (PIDs 21000–21007).
+    /// Received an IFTSTA MaBiS status message (PIDs 21000–21005).
     ///
     /// PID 21004 ("Statusmeldung vom BIKO an BKV/NB") drives the `Settled`
     /// state transition — the `data_status` field must be `Some` in that case.
     /// All other MaBiS IFTSTA PIDs are informational: they are accepted and
     /// recorded in the event log but do not change the billing state.
     ///
+    /// **Note:** PID 21006 does not exist. PID 21007 is WiM Strom Teil 1 /
+    /// WiM Gas and is NOT a MaBiS PID — it is registered in `mako-wim`.
+    ///
     /// This command is constructed by the IFTSTA adapter in `makod` when an
     /// inbound AS4 IFTSTA message with a MaBiS PID arrives, or via the
     /// `"mabis.datenstatus.empfangen"` / `"mabis.iftsta.empfangen"` REST command.
     ReceiveIftsta {
-        /// IFTSTA Prüfidentifikator (21000–21007).
+        /// IFTSTA Prüfidentifikator (21000–21005).
         pid: Pruefidentifikator,
         /// Sender party code (GLN).
         sender: MarktpartnerCode,
@@ -348,7 +351,7 @@ pub struct MabisBillingWorkflow;
 /// ```
 pub const PRUEFMITTEILUNG_DEADLINE_LABEL: &str = "mabis-pruefmitteilung-1-werktag";
 
-/// All MaBiS IFTSTA Prüfidentifikatoren (21000–21007).
+/// All MaBiS IFTSTA Prüfidentifikatoren (21000–21005).
 ///
 /// These are exchanged between LF, NB/ÜNB, BIKO, and BKV in the MaBiS process.
 /// All are routed to `"mabis-billing"` so inbound messages can be correlated
@@ -356,7 +359,11 @@ pub const PRUEFMITTEILUNG_DEADLINE_LABEL: &str = "mabis-pruefmitteilung-1-werkta
 ///
 /// PID [`IFTSTA_DATENSTATUS_PID`] (21004) drives the `PruefmitteilungSent` →
 /// `Settled` transition. All others are informational.
-pub const IFTSTA_PIDS: &[u32] = &[21_000, 21_001, 21_002, 21_003, 21_004, 21_005, 21_007];
+///
+/// **Note:** PID 21006 does not exist in any BDEW AHB. PID 21007 belongs to
+/// WiM Strom Teil 1 / WiM Gas (NB→LF / NB→MSBA) and is registered in
+/// `mako-wim` (`wim-device-change`), not here.
+pub const IFTSTA_PIDS: &[u32] = &[21_000, 21_001, 21_002, 21_003, 21_004, 21_005];
 
 /// IFTSTA PID 21004: "MaBiS / Statusmeldung vom BIKO an BKV/NB".
 ///

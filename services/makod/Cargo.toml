@@ -18,12 +18,14 @@ name = "makod"
 path = "src/lib.rs"
 
 [dependencies]
-mako-engine  = { path = "../../crates/mako-engine", features = ["slatedb"] }
-mako-gpke    = { path = "../../crates/mako-gpke" }
-mako-wim     = { path = "../../crates/mako-wim" }
-mako-geli-gas = { path = "../../crates/mako-geli-gas" }
-mako-wim-gas = { path = "../../crates/mako-wim-gas" }
-mako-mabis   = { path = "../../crates/mako-mabis" }
+mako-engine      = { path = "../../crates/mako-engine", features = ["slatedb"] }
+mako-gpke        = { path = "../../crates/mako-gpke" }
+mako-wim         = { path = "../../crates/mako-wim" }
+mako-geli-gas    = { path = "../../crates/mako-geli-gas" }
+mako-wim-gas     = { path = "../../crates/mako-wim-gas" }
+mako-gabi-gas    = { path = "../../crates/mako-gabi-gas" }
+mako-mabis       = { path = "../../crates/mako-mabis" }
+mako-redispatch  = { path = "../../crates/mako-redispatch" }
 mako-as4     = { path = "../../crates/mako-as4", features = ["server"] }
 energy-api   = { path = "../../crates/energy-api", features = ["server", "client"] }
 asx-rs       = { version = "0.3", features = ["as4", "client", "interop-strict", "server"] }
@@ -37,7 +39,7 @@ anyhow             = { workspace = true }
 axum               = { version = "0.8", features = [] }
 clap               = { version = "4", features = ["derive", "env"] }
 fd-lock            = "4"
-object_store       = { version = "0.12", features = ["aws", "gcp", "azure"] }
+object_store       = { version = "0.14", features = ["aws", "gcp", "azure"] }
 serde              = { version = "1", features = ["derive"] }
 toml               = { version = "0.8", default-features = false, features = ["parse"] }
 serde_json         = { workspace = true }

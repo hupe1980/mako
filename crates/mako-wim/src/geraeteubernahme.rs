@@ -47,35 +47,40 @@ use mako_engine::{
 
 // ── PID constants ─────────────────────────────────────────────────────────────
 
-/// All ORDERS PIDs for the Geräteübernahme process family (WiM Strom Teil 1/Teil 2).
+/// All ORDERS PIDs for the Geräteübernahme process family (WiM Strom Teil 1).
 ///
-/// **PIDs removed (WiM Gas, belong to `mako-wim-gas` per `docs/pid-reference.md`):**
-/// - 17001 (Bestellung Geräteübernahmeangebot — WiM Gas)
-/// - 17002 (Weiterverpflichtung — WiM Gas)
-/// - 17009 (Anzeige Gerätewechselabsicht — WiM Gas)
+/// Per BDEW PID 3.3/4.0 xlsx (sheet "Prüf-ID Prozessschritt"):
+/// - 17001 (Bestellung Geräteübernahmeangebot): **WiM Strom Teil 1 and WiM Gas** — multi-domain.
+/// - 17002 (Weiterverpflichtung): **WiM Strom Teil 1 and WiM Gas** — multi-domain.
+/// - 17005 (Bestellung Rechnungsabwicklung MSB über LF): WiM Strom Teil 1 only.
+/// - 17009 (Anzeige Gerätewechselabsicht): **WiM Strom Teil 1 and WiM Gas** — multi-domain.
+/// - 17011 (Bestellung Angebot Änderung Technik): WiM Strom Teil 1 only.
+///
+/// WiM Gas Geräteübernahme routing is not yet implemented in `mako-wim-gas`;
+/// role-based disambiguation for the Gas context is a future TODO.
 pub const GERAETEUBERNAHME_PIDS: &[u32] = &[
+    17001, // Bestellung Geräteübernahmeangebot (WiM Strom Teil 1 + WiM Gas)
+    17002, // Weiterverpflichtung (WiM Strom Teil 1 + WiM Gas)
     17005, // Bestellung Rechnungsabwicklung MSB über LF (WiM Strom Teil 1)
+    17009, // Anzeige Gerätewechselabsicht (WiM Strom Teil 1 + WiM Gas)
     17011, // Bestellung Angebot Änderung Technik (WiM Strom Teil 1)
 ];
 
 /// Anfrage PIDs — trigger a new `WimGeraeteubernahmeWorkflow` process.
 ///
-/// **PIDs 17001/17002 were removed** — they belong to WiM Gas (`mako-wim-gas`).
-pub const ANFRAGE_PIDS: &[u32] = &[];
-
-/// All ORDERS PIDs that route to `ReceiveAnfrage` across all domains using this workflow.
-///
-/// WiM Strom `ANFRAGE_PIDS` is empty; WiM Gas PIDs 17001/17002 are routed here by
-/// `WimGasModule`. This union set is used by the `handle()` PID guard.
-const ANFRAGE_PIDS_ALL: &[u32] = &[17001, 17002];
+/// Per BDEW PID 3.3/4.0 xlsx: 17001/17002 are multi-domain (WiM Strom Teil 1 and
+/// WiM Gas). Registering them here covers WiM Strom NB deployments.
+/// WiM Gas Geräteübernahme routing is a future TODO in `mako-wim-gas`.
+pub const ANFRAGE_PIDS: &[u32] = &[17001, 17002];
 
 /// Bestellung PIDs — continue an existing process (confirm the takeover offer).
 pub const BESTELLUNG_PIDS: &[u32] = &[17005];
 
-/// Stornierung PIDs — cancel an in-progress request or bestellung.
+/// Stornierung PIDs — cancel an in-progress Anfrage or Bestellung.
 ///
-/// **PID 17009 was removed** — it belongs to WiM Gas (`mako-wim-gas`).
-pub const STORNIERUNG_PIDS: &[u32] = &[17011];
+/// Per BDEW PID 3.3/4.0 xlsx: 17009 (Anzeige Gerätewechselabsicht) is multi-domain
+/// (WiM Strom Teil 1 + WiM Gas). Registering it here covers WiM Strom NB deployments.
+pub const STORNIERUNG_PIDS: &[u32] = &[17009, 17011];
 
 /// Deadline label for the ORDRSP response window (5 Werktage, BK6-18-032).
 ///
@@ -505,12 +510,12 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
                 if !matches!(state, GeraeteubernahmeState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
                 }
-                // PID guard — must be a known Anfrage PID from any domain using this workflow.
-                if !ANFRAGE_PIDS_ALL.contains(&pid.as_u32()) {
+                // PID guard — must be a known Anfrage PID for this workflow.
+                if !ANFRAGE_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
                         "PID {} is not a Geräteübernahme-Anfrage PID (expected {:?})",
                         pid.as_u32(),
-                        ANFRAGE_PIDS_ALL,
+                        ANFRAGE_PIDS,
                     )));
                 }
                 let mut events = vec![GeraeteubernahmeEvent::AnfrageReceived {
@@ -837,9 +842,8 @@ mod tests {
     use mako_engine::types::MessageRef;
 
     // Helper: build a minimal ReceiveAnfrage command with the given PID.
-    // NOTE: WiM Strom has no ANFRAGE_PIDS (they moved to WiM Gas).
-    // These test helpers use WiM Gas PIDs (17001) directly to exercise
-    // the AnfrageReceived workflow path, which is still valid workflow logic.
+    // ANFRAGE_PIDS = &[17001, 17002] (multi-domain: WiM Strom Teil 1 + WiM Gas).
+    // These are valid inbound PIDs on both NB (WiM Strom) and NB (WiM Gas) deployments.
     fn anfrage_cmd(pid: u32) -> GeraeteubernahmeCommand {
         GeraeteubernahmeCommand::ReceiveAnfrage {
             pid: Pruefidentifikator::new(pid).unwrap(),
@@ -856,14 +860,13 @@ mod tests {
 
     #[test]
     fn happy_path_phase1_to_phase2_to_abgeschlossen() {
-        // Phase 1 (WiM Gas Anfrage path — PID 17001) still exercises the workflow
-        // logic even though WiM Gas PIDs are routed by WimGasModule in mako-wim-gas.
-        // WiM Strom ANFRAGE_PIDS is empty; the Anfrage path is only used from Gas.
+        // Phase 1: PID 17001 (Bestellung Geräteübernahmeangebot) — multi-domain:
+        // WiM Strom Teil 1 and WiM Gas. Registered in ANFRAGE_PIDS = &[17001, 17002].
         let state = GeraeteubernahmeState::default();
 
-        // Phase 1: Anfrage received (WiM Gas PID 17001 — bypasses ANFRAGE_PIDS guard in tests)
+        // Phase 1: Anfrage received (PID 17001 — in ANFRAGE_PIDS, no bypass needed)
         let events = WimGeraeteubernahmeWorkflow::handle(&state, anfrage_cmd(17001))
-            .expect("Anfrage 17001 must succeed — bypassing PID guard for test");
+            .expect("Anfrage 17001 must succeed — 17001 is in ANFRAGE_PIDS");
         assert_eq!(events.len(), 2); // AnfrageReceived + ValidationPassed
         let state = events
             .iter()
@@ -960,7 +963,7 @@ mod tests {
 
     #[test]
     fn validation_failure_rejects() {
-        // WiM Gas PID 17001 directly — bypasses ANFRAGE_PIDS guard.
+        // PID 17001 is in ANFRAGE_PIDS = &[17001, 17002] (multi-domain).
         let state = GeraeteubernahmeState::default();
         let events = WimGeraeteubernahmeWorkflow::handle(
             &state,
@@ -1044,9 +1047,8 @@ mod tests {
 
     #[test]
     fn all_anfrage_pids_accepted() {
-        // ANFRAGE_PIDS is empty (all moved to WiM Gas); this test is now a no-op.
-        // WiM Gas PIDs (17001/17002) are accepted by the same workflow when routed
-        // by WimGasModule — tested in integration/E2E tests.
+        // ANFRAGE_PIDS = &[17001, 17002] — both multi-domain (WiM Strom Teil 1 + WiM Gas).
+        // Each must be accepted as a valid Anfrage trigger.
         for &pid in ANFRAGE_PIDS {
             let state = GeraeteubernahmeState::default();
             assert!(

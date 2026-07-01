@@ -37,10 +37,17 @@ pub const WORKFLOW_NAME: &str = "wim-gas-verpflichtungsanfrage";
 pub const APERAK_WINDOW_LABEL: &str = "wim-gas-verpflichtungsanfrage-aperak-10-werktage";
 
 /// PIDs handled by this workflow (NB → gMSB Verpflichtungsanfrage).
+///
+// FV2026-10-01: PID 44170 was removed from BDEW PID 4.0 (confirmed absent from
+// `crates/edi-energy/profiles/utilmd/fv20261001_gas/ahb.json`). It remains valid
+// under FV2025-10-01 (PID 3.3). The engine's FV-aware profile validation rejects
+// 44170 messages once FV2026-10-01 becomes the active version.
 pub const VERPFLICHTUNGSANFRAGE_PIDS: &[u32] = &[
     44168, // Verpflichtungsanfrage (NB → gMSB)
-    44169, // Bestätigung
-    44170, // Ablehnung
+    44169, // Bestätigung (gMSB → NB)
+    44170, // Ablehnung   (gMSB → NB) — ⚠️ only valid under FV2025-10-01 (PID 3.3);
+           //              absent from FV2026-10-01 (PID 4.0). Keep in router so
+           //              in-flight FV2025 processes can complete after the cutover.
 ];
 
 // ── Domain events ─────────────────────────────────────────────────────────────

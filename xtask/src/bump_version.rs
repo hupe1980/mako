@@ -1,14 +1,17 @@
 /// Bump the workspace version in the root `Cargo.toml`.
 ///
-/// Updates exactly two fields atomically:
+/// Updates the following fields atomically:
 ///
 /// 1. `[workspace.package].version = "X.Y.Z"`
-/// 2. `[workspace.dependencies].mako-engine` version → `"X.Y"` (major.minor,
-///    so patch bumps of `mako-engine` don't require republishing dependents)
+/// 2. `[workspace.dependencies].mako-engine` version → `"X.Y"` (major.minor)
+///
+/// `dvgw-edi` and `redispatch-xml` are **not** in `[workspace.dependencies]`
+/// because their consumers reference them with direct `path` entries (no
+/// `workspace = true`), so no workspace-level version entry is needed.
 ///
 /// Usage:
 /// ```text
-/// cargo xtask bump-version 0.2.0
+/// cargo xtask bump-version 0.5.0
 /// ```
 pub fn run(workspace_root: &str, args: &[String]) -> bool {
     let new_version = match args.first() {
@@ -48,14 +51,18 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         }
     };
 
-    // Step 2: replace version inside `mako-engine = { …, version = "X.Y" }`.
-    let updated = match replace_dep_version(&updated, "mako-engine", &major_minor) {
-        Some(s) => s,
-        None => {
-            eprintln!("error: could not find mako-engine dep version in [workspace.dependencies]");
-            return false;
+    // Step 2: replace version inside `mako-engine` workspace dep.
+    let internal_deps = ["mako-engine"];
+    let mut updated = updated;
+    for dep in &internal_deps {
+        match replace_dep_version(&updated, dep, &major_minor) {
+            Some(s) => updated = s,
+            None => {
+                eprintln!("error: could not find {dep} dep version in [workspace.dependencies]");
+                return false;
+            }
         }
-    };
+    }
 
     match std::fs::write(&cargo_toml_path, &updated) {
         Ok(()) => {}
@@ -66,8 +73,10 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
     }
 
     println!("bumped workspace version -> {new_version}");
-    println!("  [workspace.package] version             = \"{new_version}\"");
-    println!("  [workspace.dependencies] mako-engine version = \"{major_minor}\"");
+    println!("  [workspace.package] version = \"{new_version}\"");
+    for dep in &internal_deps {
+        println!("  [workspace.dependencies] {dep} version = \"{major_minor}\"");
+    }
     true
 }
 
@@ -108,19 +117,25 @@ fn replace_first_version_field(src: &str, new_version: &str) -> Option<String> {
     replaced.then_some(result)
 }
 
-/// Find the line starting with `<dep_name> = {` and replace the `version =
-/// "…"` value within it.
+/// Find the line starting with `<dep_name>` (optionally followed by alignment
+/// spaces) then `= {` and replace the `version = "…"` value within it.
 fn replace_dep_version(src: &str, dep_name: &str, new_version: &str) -> Option<String> {
-    let needle = format!("{dep_name} = {{");
     let mut result = String::with_capacity(src.len());
     let mut replaced = false;
     for line in src.lines() {
-        if !replaced && line.trim_start().starts_with(&needle) {
-            if let Some(updated) = replace_version_in_inline_table(line, new_version) {
-                result.push_str(&updated);
-                result.push('\n');
-                replaced = true;
-                continue;
+        if !replaced {
+            let trimmed = line.trim_start();
+            let after_name = trimmed
+                .strip_prefix(dep_name)
+                .map(str::trim_start)
+                .unwrap_or("");
+            if after_name.starts_with("= {") {
+                if let Some(updated) = replace_version_in_inline_table(line, new_version) {
+                    result.push_str(&updated);
+                    result.push('\n');
+                    replaced = true;
+                    continue;
+                }
             }
         }
         result.push_str(line);
@@ -156,7 +171,7 @@ version     = \"0.1.0\"
 authors     = [\"hupe1980\"]
 
 [workspace.dependencies]
-mako-engine = { path = \"crates/mako-engine\", version = \"0.1\" }
+mako-engine      = { path = \"crates/mako-engine\", version = \"0.1\" }
 serde       = { version = \"1\", features = [\"derive\"] }
 ";
 
@@ -168,7 +183,8 @@ serde       = { version = \"1\", features = [\"derive\"] }
     }
 
     #[test]
-    fn bumps_dep_version() {
+    fn bumps_dep_version_aligned() {
+        // mako-engine has alignment padding in the real Cargo.toml
         let out = replace_dep_version(SAMPLE, "mako-engine", "0.2").unwrap();
         assert!(out.contains("version = \"0.2\""), "{out}");
         assert!(out.contains("serde       = { version = \"1\""));
@@ -179,7 +195,10 @@ serde       = { version = \"1\", features = [\"derive\"] }
         let v1 = replace_first_version_field(SAMPLE, "0.2.0").unwrap();
         let v2 = replace_dep_version(&v1, "mako-engine", "0.2").unwrap();
         assert!(v2.contains("version     = \"0.2.0\""), "{v2}");
-        assert!(v2.contains("version = \"0.2\""), "{v2}");
+        assert!(
+            v2.contains("mako-engine      = { path = \"crates/mako-engine\", version = \"0.2\""),
+            "{v2}"
+        );
         assert!(v2.contains("serde       = { version = \"1\""));
     }
 

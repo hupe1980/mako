@@ -51,6 +51,19 @@ use mako_engine::{
 /// `docs/pid-reference.md`. It must not be registered here.
 pub const WIM_INVOIC_PIDS: &[u32] = &[31009];
 
+/// REMADV PIDs for WiM billing (inbound payment advice, invoicer role).
+///
+/// WiM billing uses the same REMADV format as GPKE. Only 33001 (Bestätigung)
+/// and 33002 (Ablehnung) are relevant for WiM MSB-Rechnung 31009.
+///
+/// Source: REMADV AHB 1.0, WiM Strom Teil 1, BK6-24-174.
+pub const WIM_REMADV_PIDS: &[u32] = &[33001, 33002];
+
+/// COMDIS PID for inbound Ablehnung REMADV in WiM (payer role).
+///
+/// Source: COMDIS AHB 1.0, WiM Strom Teil 1, BK6-24-174.
+pub const WIM_COMDIS_ABLEHNUNG_PID: u32 = 29001;
+
 /// Workflow key for WiM billing processes.
 pub const WORKFLOW_NAME: &str = "wim-rechnung";
 
@@ -75,7 +88,9 @@ pub enum WimRechnungEvent {
         recipient: MarktpartnerCode,
         /// EDIFACT document date (YYYYMMDD).
         document_date: String,
-        /// BDEW Prüfidentifikator (31003 or 31009).
+        /// BDEW Prüfidentifikator (31009 — MSB-Rechnung).
+        ///
+        /// PID 31003 (WiM-Rechnung) belongs to `mako-wim-gas`; it is not handled here.
         pruefidentifikator: Pruefidentifikator,
     },
     /// INVOIC rejected immediately due to AHB validation failure.
@@ -99,6 +114,24 @@ pub enum WimRechnungEvent {
         /// Human-readable dispute reason.
         reason: String,
     },
+    /// Inbound REMADV received (invoicer role — payer confirms or disputes).
+    ///
+    /// PID 33001 = full payment confirmed; 33002 = disputed.
+    RemadvReceived {
+        /// REMADV Prüfidentifikator (33001 or 33002).
+        pid: Pruefidentifikator,
+        /// EDIFACT message reference of the REMADV.
+        remadv_ref: MessageRef,
+        /// GLN of the REMADV sender (payer).
+        sender: MarktpartnerCode,
+        /// `true` for 33001 (full payment confirmed).
+        is_confirmed: bool,
+    },
+    /// Inbound COMDIS 29001 received (payer role — invoicer rejects our REMADV).
+    ComdisAbLehnungReceived {
+        /// EDIFACT message reference of the COMDIS.
+        comdis_ref: MessageRef,
+    },
 }
 
 impl EventPayload for WimRechnungEvent {
@@ -109,6 +142,8 @@ impl EventPayload for WimRechnungEvent {
             Self::DeadlineExpired { .. } => "WimRechnungDeadlineExpired",
             Self::Settled => "WimRechnungSettled",
             Self::Disputed { .. } => "WimRechnungDisputed",
+            Self::RemadvReceived { .. } => "WimRechnungRemadvReceived",
+            Self::ComdisAbLehnungReceived { .. } => "WimRechnungComdisAbLehnungReceived",
         }
     }
 }
@@ -135,7 +170,9 @@ pub enum WimRechnungCommand {
         recipient: MarktpartnerCode,
         /// EDIFACT document date (YYYYMMDD from BGM+DTM).
         document_date: String,
-        /// BDEW Prüfidentifikator (31003 or 31009).
+        /// BDEW Prüfidentifikator (31009 — MSB-Rechnung).
+        ///
+        /// PID 31003 (WiM-Rechnung) belongs to `mako-wim-gas`; it is not handled here.
         pruefidentifikator: Pruefidentifikator,
         /// `true` if AHB profile validation found no errors.
         validation_passed: bool,
@@ -159,6 +196,24 @@ pub enum WimRechnungCommand {
         deadline_id: DeadlineId,
         /// Label of the expired deadline.
         label: Box<str>,
+    },
+    /// Invoicer role: inbound REMADV received from the payer.
+    ///
+    /// PIDs 33001–33002 (REMADV AHB 1.0, WiM Strom Teil 1, BK6-24-174).
+    ReceiveRemadv {
+        /// REMADV Prüfidentifikator (33001 or 33002).
+        pid: Pruefidentifikator,
+        /// EDIFACT message reference of the REMADV.
+        remadv_ref: MessageRef,
+        /// GLN of the REMADV sender (payer).
+        sender: MarktpartnerCode,
+    },
+    /// Payer role: inbound COMDIS 29001 received (invoicer rejects our REMADV).
+    ///
+    /// COMDIS PID 29001 (Ablehnung REMADV, COMDIS AHB 1.0, WiM BK6-24-174).
+    ReceiveComdis {
+        /// EDIFACT message reference of the COMDIS.
+        comdis_ref: MessageRef,
     },
 }
 
@@ -191,6 +246,15 @@ pub enum WimRechnungState {
         /// Human-readable rejection reason.
         reason: String,
     },
+    /// Payment confirmed by payer (REMADV 33001 received).
+    PaymentConfirmed,
+    /// Payment disputed by payer (REMADV 33002 received).
+    PaymentDisputed {
+        /// REMADV PID (33002).
+        remadv_pid: Pruefidentifikator,
+    },
+    /// Invoicer rejected our REMADV (COMDIS 29001 received, payer role).
+    ComdisRejected,
 }
 
 // ── Workflow implementation ───────────────────────────────────────────────────
@@ -224,11 +288,24 @@ impl Workflow for WimRechnungWorkflow {
                 // Terminal states — do not overwrite with deadline expiry.
                 WimRechnungState::Settled
                 | WimRechnungState::Disputed { .. }
-                | WimRechnungState::Rejected { .. } => state,
+                | WimRechnungState::Rejected { .. }
+                | WimRechnungState::PaymentConfirmed
+                | WimRechnungState::PaymentDisputed { .. }
+                | WimRechnungState::ComdisRejected => state,
                 _ => WimRechnungState::Rejected {
                     reason: format!("settlement deadline expired: {label}"),
                 },
             },
+            WimRechnungEvent::RemadvReceived {
+                pid, is_confirmed, ..
+            } => {
+                if *is_confirmed {
+                    WimRechnungState::PaymentConfirmed
+                } else {
+                    WimRechnungState::PaymentDisputed { remadv_pid: *pid }
+                }
+            }
+            WimRechnungEvent::ComdisAbLehnungReceived { .. } => WimRechnungState::ComdisRejected,
         }
     }
 
@@ -301,6 +378,53 @@ impl Workflow for WimRechnungWorkflow {
                 }
                 Ok(WorkflowOutput::events(vec![
                     WimRechnungEvent::DeadlineExpired { deadline_id, label },
+                ]))
+            }
+
+            WimRechnungCommand::ReceiveRemadv {
+                pid,
+                remadv_ref,
+                sender,
+            } => {
+                if !matches!(
+                    state,
+                    WimRechnungState::Settled | WimRechnungState::PendingSettlement { .. }
+                ) {
+                    return Err(WorkflowError::invalid_state(
+                        "Settled|PendingSettlement",
+                        format!("{state:?}"),
+                    ));
+                }
+                if !WIM_REMADV_PIDS.contains(&pid.as_u32()) {
+                    return Err(WorkflowError::rejected(format!(
+                        "expected a WiM REMADV PID (33001 or 33002), got {pid}",
+                    )));
+                }
+                let is_confirmed = pid.as_u32() == 33001;
+                Ok(WorkflowOutput::events(vec![
+                    WimRechnungEvent::RemadvReceived {
+                        pid,
+                        remadv_ref,
+                        sender,
+                        is_confirmed,
+                    },
+                ]))
+            }
+
+            WimRechnungCommand::ReceiveComdis { comdis_ref } => {
+                if matches!(
+                    state,
+                    WimRechnungState::New
+                        | WimRechnungState::Rejected { .. }
+                        | WimRechnungState::ComdisRejected
+                ) {
+                    return Err(WorkflowError::invalid_state(
+                        "Settled|PendingSettlement",
+                        format!("{state:?}"),
+                    ));
+                }
+                Ok(WorkflowOutput::events(vec![
+                    WimRechnungEvent::ComdisAbLehnungReceived { comdis_ref },
                 ]))
             }
         }

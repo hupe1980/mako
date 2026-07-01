@@ -1,4 +1,4 @@
-//! Integration tests for the GeLi Gas Lieferbeginn (PID 44001) workflow.
+//! Integration tests for the GeLi Gas supplier-change workflow (PIDs 44001–44021).
 //!
 //! Covers the full write→store→read cycle using `InMemoryEventStore` — no
 //! SlateDB required. Tests exercise the happy-path lifecycle, validation
@@ -8,17 +8,16 @@
 //! # State machine under test
 //!
 //! ```text
-//! New → Initiated → ValidationPassed → AperakSent → Active
+//! New → Initiated → ValidationPassed → AntwortGesendet → Active (44001)
 //!                 ↘ Rejected (validation failure)
-//!                                    ↘ Rejected (negative APERAK)
+//!                                    ↘ Rejected (negative Antwort)
 //!      ↘ Rejected (deadline fired on any non-terminal state)
 //! ```
 //!
 //! # Regulatory context
 //!
-//! APERAK Frist: **10 Werktage** (GeLi Gas BNetzA BK7).
+//! APERAK Frist: **10 Werktage** (GeLi Gas BNetzA BK7-24-01-009).
 //! Saturday counts as a Werktag; Sunday and federal holidays do not.
-//! This is distinct from both GPKE (24h wall-clock) and WiM (5 Werktage).
 
 use mako_engine::{
     event_store::InMemoryEventStore,
@@ -49,7 +48,8 @@ fn receive_utilmd_cmd(validation_passed: bool) -> GasSupplierChangeCommand {
         sender: MarktpartnerCode::new("4012345000023"),
         receiver: MarktpartnerCode::new("9900357000004"),
         malo_id: MaLo::new("DE00123456789012345678901234567890"),
-        document_date: "2025-01-15".to_owned(),
+        document_date: "20250115".to_owned(),
+        process_date: "20250301".to_owned(),
         message_ref: MessageRef::new("MSG-GAS-001"),
         validation_passed,
         validation_errors: if validation_passed {
@@ -62,11 +62,8 @@ fn receive_utilmd_cmd(validation_passed: bool) -> GasSupplierChangeCommand {
 
 // ── Happy-path lifecycle ───────────────────────────────────────────────────────
 
-/// Full GeLi Gas lifecycle:
-/// New → Initiated → ValidationPassed → AperakSent → Active.
-///
-/// Verifies that each `execute()` call persists events and subsequent `state()`
-/// calls reconstruct the correct variant from the in-memory store.
+/// Full GeLi Gas Lieferbeginn lifecycle:
+/// New → Initiated → ValidationPassed → AntwortGesendet → Active.
 #[tokio::test]
 async fn happy_path_full_lifecycle() {
     let p = make_process();
@@ -82,24 +79,25 @@ async fn happy_path_full_lifecycle() {
         "process must be ValidationPassed after valid UTILMD G, got: {state:?}",
     );
 
-    // Step 2: Dispatch positive APERAK → AperakSent
-    p.execute(GasSupplierChangeCommand::DispatchAperak {
-        positive: true,
+    // Step 2: Send positive Antwort → AntwortGesendet
+    p.execute(GasSupplierChangeCommand::SendAntwort {
+        accepted: true,
         reason: None,
+        obligations: vec![],
     })
     .await
-    .expect("DispatchAperak must succeed from ValidationPassed");
+    .expect("SendAntwort accepted must succeed from ValidationPassed");
 
-    let state = p.state().await.expect("state after DispatchAperak");
+    let state = p.state().await.expect("state after SendAntwort");
     assert!(
-        matches!(state, GasSupplierChangeState::AperakSent(_)),
-        "process must be AperakSent after positive APERAK, got: {state:?}",
+        matches!(state, GasSupplierChangeState::AntwortGesendet { .. }),
+        "process must be AntwortGesendet after positive Antwort, got: {state:?}",
     );
 
     // Step 3: Activate → Active
     p.execute(GasSupplierChangeCommand::Activate)
         .await
-        .expect("Activate must succeed from AperakSent");
+        .expect("Activate must succeed from AntwortGesendet(LieferbeginnGas)");
 
     let state = p.state().await.expect("state after Activate");
     assert!(
@@ -110,11 +108,7 @@ async fn happy_path_full_lifecycle() {
 
 // ── Validation failure ─────────────────────────────────────────────────────────
 
-/// When the UTILMD G fails EDIFACT profile validation, the workflow must
-/// transition to `Rejected`.
-///
-/// Regulatory context: GNB must send a negative CONTRL within the GeLi Gas
-/// acceptance window (10 Werktage) — processing an invalid message is not allowed.
+/// When the UTILMD G fails validation, the workflow transitions to `Rejected`.
 #[tokio::test]
 async fn validation_failure_rejects_process() {
     let p = make_process();
@@ -130,33 +124,33 @@ async fn validation_failure_rejects_process() {
     );
 }
 
-// ── Negative APERAK ────────────────────────────────────────────────────────────
+// ── Negative Antwort ───────────────────────────────────────────────────────────
 
-/// A negative APERAK from `ValidationPassed` transitions to `Rejected`.
+/// A negative `SendAntwort` from `ValidationPassed` transitions to `Rejected`.
 #[tokio::test]
-async fn negative_aperak_rejects_process() {
+async fn negative_antwort_rejects_process() {
     let p = make_process();
 
     p.execute(receive_utilmd_cmd(true)).await.unwrap();
 
-    p.execute(GasSupplierChangeCommand::DispatchAperak {
-        positive: false,
+    p.execute(GasSupplierChangeCommand::SendAntwort {
+        accepted: false,
         reason: Some("Marktlokation nicht im Versorgungsgebiet".to_owned()),
+        obligations: vec![],
     })
     .await
-    .expect("Negative DispatchAperak must succeed from ValidationPassed");
+    .expect("Negative SendAntwort must succeed from ValidationPassed");
 
-    let state = p.state().await.expect("state after negative APERAK");
+    let state = p.state().await.expect("state after negative Antwort");
     assert!(
         matches!(state, GasSupplierChangeState::Rejected { .. }),
-        "process must be Rejected after negative APERAK, got: {state:?}",
+        "process must be Rejected after negative Antwort, got: {state:?}",
     );
 }
 
 // ── PID guard ─────────────────────────────────────────────────────────────────
 
-/// An unsupported PID (e.g. 55001 — GPKE, not GeLi Gas) must be rejected
-/// by the PID guard in `GeliGasSupplierChangeWorkflow::handle`.
+/// An unsupported PID (e.g. 55001 — GPKE, not GeLi Gas) must be rejected.
 #[tokio::test]
 async fn unsupported_pid_is_rejected() {
     let p = make_process();
@@ -167,7 +161,8 @@ async fn unsupported_pid_is_rejected() {
             sender: MarktpartnerCode::new("4012345000023"),
             receiver: MarktpartnerCode::new("9900357000004"),
             malo_id: MaLo::new("DE00123456789012345678901234567890"),
-            document_date: "2025-01-15".to_owned(),
+            document_date: "20250115".to_owned(),
+            process_date: "".to_owned(),
             message_ref: MessageRef::new("MSG-001"),
             validation_passed: true,
             validation_errors: vec![],
@@ -176,17 +171,14 @@ async fn unsupported_pid_is_rejected() {
 
     assert!(
         result.is_err(),
-        "GPKE PID 55001 must be rejected by GeLi Gas PID guard",
+        "GPKE PID 55001 must be rejected by GeLi Gas PID guard"
     );
 }
 
 // ── Deadline wiring ────────────────────────────────────────────────────────────
 
-/// When the 10-Werktage APERAK deadline fires on a `ValidationPassed` process,
+/// When the 10-Werktage deadline fires on a `ValidationPassed` process,
 /// the workflow must transition to `Rejected`.
-///
-/// This validates the core regulatory path: if the GNB does not dispatch an
-/// APERAK within 10 Werktage of the UTILMD G receipt, the process self-closes.
 #[tokio::test]
 async fn aperak_deadline_timeout_rejects_process() {
     let p = make_process();
@@ -208,8 +200,7 @@ async fn aperak_deadline_timeout_rejects_process() {
     );
 }
 
-/// A deadline firing on an already-`Rejected` process must be absorbed
-/// harmlessly (idempotent-deadline contract).
+/// A deadline firing on an already-`Rejected` process must be absorbed harmlessly.
 #[tokio::test]
 async fn deadline_on_rejected_is_absorbed() {
     let p = make_process();
@@ -231,16 +222,16 @@ async fn deadline_on_rejected_is_absorbed() {
     );
 }
 
-/// A deadline firing on an already-`Active` process must be absorbed
-/// harmlessly.
+/// A deadline firing on an already-`Active` process must be absorbed harmlessly.
 #[tokio::test]
 async fn deadline_on_active_is_absorbed() {
     let p = make_process();
 
     p.execute(receive_utilmd_cmd(true)).await.unwrap();
-    p.execute(GasSupplierChangeCommand::DispatchAperak {
-        positive: true,
+    p.execute(GasSupplierChangeCommand::SendAntwort {
+        accepted: true,
         reason: None,
+        obligations: vec![],
     })
     .await
     .unwrap();
@@ -266,25 +257,25 @@ async fn deadline_on_active_is_absorbed() {
 
 // ── Invalid state transitions ──────────────────────────────────────────────────
 
-/// Dispatching an APERAK from `New` state must return an `InvalidState` error.
+/// `SendAntwort` from `New` state must return an `InvalidState` error.
 #[tokio::test]
-async fn aperak_from_new_is_rejected() {
+async fn send_antwort_from_new_is_rejected() {
     let p = make_process();
 
     let result = p
-        .execute(GasSupplierChangeCommand::DispatchAperak {
-            positive: true,
+        .execute(GasSupplierChangeCommand::SendAntwort {
+            accepted: true,
             reason: None,
+            obligations: vec![],
         })
         .await;
 
-    assert!(result.is_err(), "DispatchAperak on New must return Err");
+    assert!(result.is_err(), "SendAntwort on New must return Err");
 }
 
 // ── Read-model projection ──────────────────────────────────────────────────────
 
-/// Verify that `GasSupplierChangeProjection` correctly tracks a full
-/// lifecycle and that event counts and field values are accurate.
+/// Verify that `GasSupplierChangeProjection` correctly tracks a full lifecycle.
 #[tokio::test]
 async fn projection_tracks_full_lifecycle() {
     let store = InMemoryEventStore::new();
@@ -295,9 +286,10 @@ async fn projection_tracks_full_lifecycle() {
     );
 
     p.execute(receive_utilmd_cmd(true)).await.unwrap();
-    p.execute(GasSupplierChangeCommand::DispatchAperak {
-        positive: true,
+    p.execute(GasSupplierChangeCommand::SendAntwort {
+        accepted: true,
         reason: None,
+        obligations: vec![],
     })
     .await
     .unwrap();
@@ -319,11 +311,11 @@ async fn projection_tracks_full_lifecycle() {
         "Active",
         "projection status must be Active"
     );
-    // Initiated + ValidationPassed + AperakDispatched + Activated = 4 events
+    // Initiated + ValidationPassed + AntwortGesendet + Activated = 4 events
     assert_eq!(record.event_count(), 4, "4 events in the stream");
     let data = record.active_data().expect("record must be Active");
     let _ = data.malo_id;
-    let _ = data.new_supplier;
+    let _ = data.sender;
     let _ = data.pruefidentifikator;
 }
 

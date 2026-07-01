@@ -187,6 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             receiver: receiver.clone(),
             malo_id: malo_id.clone(),
             document_date: document_date.clone(),
+            process_date: String::new(),
             message_ref: msg_ref.clone(),
             validation_passed,
             validation_errors: validation_errors.clone(),
@@ -243,9 +244,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &utilmd_conversation_id.to_string()[..8]
     );
 
-    // ── Step 4: DispatchAperak ────────────────────────────────────────────────
+    // ── Step 4: SendAntwort ───────────────────────────────────────────────────
     println!();
-    println!("[4/6] Dispatching positive APERAK (same conversation as UTILMD)...");
+    println!("[4/6] Sending positive Antwort (same conversation as UTILMD)...");
 
     let aperak_ctx = CommandContext::new(
         envs[0].tenant_id,
@@ -257,9 +258,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let aperak_envs = process
         .execute_with(
-            GasSupplierChangeCommand::DispatchAperak {
-                positive: true,
+            GasSupplierChangeCommand::SendAntwort {
+                accepted: true,
                 reason: None,
+                obligations: vec![],
             },
             aperak_ctx,
         )
@@ -324,13 +326,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Status               : {}", state.status_str());
     // Access typed data from the enum variant — no unwrap() required.
     if let mako_geli_gas::GasSupplierChangeState::ValidationPassed(ref data)
-    | mako_geli_gas::GasSupplierChangeState::AperakSent(ref data)
+    | mako_geli_gas::GasSupplierChangeState::AntwortGesendet { ref data, .. }
     | mako_geli_gas::GasSupplierChangeState::Active(ref data)
     | mako_geli_gas::GasSupplierChangeState::Initiated(ref data) = state
     {
         println!("  MaLo (Marktlok.)     : {}", data.malo_id);
-        println!("  New supplier (GLN)   : {}", data.new_supplier);
-        println!("  Gas operator (GLN)   : {}", data.gas_operator);
+        println!("  Sender (GLN)         : {}", data.sender);
+        println!("  Receiver (GLN)       : {}", data.receiver);
         println!("  Prüfidentifikator    : {}", data.pruefidentifikator);
     }
 
@@ -375,6 +377,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             receiver: receiver.clone(),
             malo_id: malo_id.clone(),
             document_date: document_date.clone(),
+            process_date: String::new(),
             message_ref: msg_ref.clone(),
             validation_passed: true,
             validation_errors: vec![],

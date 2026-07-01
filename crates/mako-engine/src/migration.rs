@@ -198,6 +198,13 @@ impl MigrationReport {
     pub fn is_ok(&self) -> bool {
         self.errors.is_empty()
     }
+
+    /// Merge another report into this one (accumulate counts and errors).
+    pub fn merge(&mut self, other: MigrationReport) {
+        self.migrated += other.migrated;
+        self.skipped += other.skipped;
+        self.errors.extend(other.errors);
+    }
 }
 
 impl std::fmt::Display for MigrationReport {
@@ -209,6 +216,67 @@ impl std::fmt::Display for MigrationReport {
             self.skipped,
             self.errors.len(),
         )
+    }
+}
+
+// ── IdentityMigration ─────────────────────────────────────────────────────────
+
+/// A no-op [`StateMigration`] for workflows whose state schema did **not** change
+/// between two BDEW format versions.
+///
+/// Use this when the FV transition only added new optional AHB rules, segment
+/// cardinality changes, or code-list entries — no field was renamed, removed,
+/// or made mandatory. The migrated snapshot repoints `workflow_id` to the new
+/// FV while keeping the state value identical.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use mako_engine::migration::IdentityMigration;
+/// use mako_engine::version::WorkflowId;
+/// use mako_gpke::lf_anmeldung::{GpkeLfAnmeldungWorkflow, WORKFLOW_NAME};
+///
+/// let migration = IdentityMigration::<GpkeLfAnmeldungWorkflow>::new(
+///     WorkflowId::new(WORKFLOW_NAME, "FV2025-10-01"),
+///     WorkflowId::new(WORKFLOW_NAME, "FV2026-10-01"),
+/// );
+/// ```
+pub struct IdentityMigration<W> {
+    source: WorkflowId,
+    target: WorkflowId,
+    _w: std::marker::PhantomData<fn() -> W>,
+}
+
+impl<W: Workflow> IdentityMigration<W> {
+    /// Construct a new identity migration between two format versions.
+    #[must_use]
+    pub fn new(source: WorkflowId, target: WorkflowId) -> Self {
+        Self {
+            source,
+            target,
+            _w: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<W> StateMigration for IdentityMigration<W>
+where
+    W: Workflow + Send + Sync + 'static,
+    W::State: Clone,
+{
+    type FromWorkflow = W;
+    type ToWorkflow = W;
+
+    fn source_workflow_id(&self) -> &WorkflowId {
+        &self.source
+    }
+
+    fn target_workflow_id(&self) -> &WorkflowId {
+        &self.target
+    }
+
+    fn migrate(&self, state: W::State) -> Result<W::State, String> {
+        Ok(state)
     }
 }
 

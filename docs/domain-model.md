@@ -77,10 +77,12 @@ required for each role per commodity (Strom / Gas).
 | GPKE Lieferbeginn / Lieferende | LF | NB | `mako-gpke` |
 | GPKE Kündigung Lieferbeginn | LF | LFA (outgoing supplier) | `mako-gpke` |
 | GPKE Antwort Lieferbeginn | NB | LF | `mako-gpke` |
-| GPKE Sperrung | NB | MSB | `mako-gpke` |
+| GPKE Sperrung / Entsperrung (NB-initiated) | NB | MSB | `mako-gpke` |
+| GPKE Sperrung / Entsperrung (LF-initiated, Strom) | LF | NB | `mako-gpke` |
 | WiM Gerätewechsel | MSB | NB | `mako-wim` |
 | WiM Stammdaten | NB | LF / MSB | `mako-wim` |
-| GeLi Gas Lieferbeginn / Lieferende | LF | NB (gas) | `mako-geli-gas` |
+| GeLi Gas Lieferbeginn / Lieferende | LF | GNB (gas DSO) | `mako-geli-gas` |
+| GeLi Gas Sperrung / Entsperrung (LF-initiated, Gas) | LF | GNB | `mako-geli-gas` |
 | WiM Gas Anmeldung / Kündigung gMSB | MSB (gas) | NB (gas) | `mako-wim-gas` |
 | MABIS Summenzeitreihe | ÜNB | BKV | `mako-mabis` |
 | INVOIC Abrechnung | NB | LF | `mako-gpke` |

@@ -74,16 +74,17 @@ use mako_engine::{
 /// | 55016          | Kündigung Lieferbeginn (LFN → LFA)         | S2.1–S2.2 ✅ |
 ///
 /// ORDERS Sperrung (PIDs 17115/17116/17117) is handled by `GpkeSperrungWorkflow`
-/// (see `sperrung` module). **PID 55555** is "Anfrage Daten der individuellen
-/// Bestellung" (GPKE Teil 4) — a separate UTILMD data-request process.
-/// **PIDs 55007–55015** are NB-initiated processes; routing is handled by
-/// `GpkeLfAbmeldungWorkflow` for PIDs 55007–55009.
+/// (see `sperrung` module). **PID 55555** and **PID 55557** are GPKE Teil 4
+/// UTILMD data-request processes ("Anfrage Daten der individuellen Bestellung"
+/// / "Änderung MSB-Abr.-Daten der MaLo"). **PIDs 55007–55015** are NB-initiated
+/// processes; routing is handled by `GpkeLfAbmeldungWorkflow` for PIDs 55007–55009.
 pub const UTILMD_PIDS: &[u32] = &[
     55001, 55002, // Anfrage Lieferbeginn/Lieferende (LFN → NB)
     55016, // Kündigung Lieferbeginn (LFN → LFA)
+    55557, // Änderung MSB-Abr.-Daten der MaLo (GPKE Teil 4, PID 3.3 + PID 4.0)
 ];
 
-/// IFTSTA GPKE Prüfidentifikator (PID 21033 only — Ablehnung GPKE Teil 3).
+/// IFTSTA GPKE Prüfidentifikatoren — PIDs 21024–21028, 21033, 21035.
 ///
 /// These are the Vollzugsmeldung and Statusmeldung messages exchanged by LF,
 /// NB/LFA in the GPKE supplier-change (Wechsel) process (BK6-22-024 LFW24).
@@ -95,24 +96,28 @@ pub const UTILMD_PIDS: &[u32] = &[
 /// They do not drive state transitions in the supplier-change state machine
 /// but are recorded in the event log for audit purposes.
 ///
-/// | PID   | Beschreibung |
-/// |-------|--------------|
-/// | 21024 | Vollzugsmeldung LFN → NB |
-/// | 21025 | Vollzugsmeldung LFN → LFA |
-/// | 21026 | Statusmeldung NB → LFN |
-/// | 21027 | Statusmeldung NB → LFA |
-/// | 21028 | Statusmeldung LFA → LFN |
-/// | 21029 | Statusmeldung LFA → NB |
-/// | 21030 | Vollzugsmeldung IFTSTA |
-/// | 21031 | Vollzugsmeldung IFTSTA |
-/// | 21033 | Ablehnung der Anfrage (GPKE Teil 3) |
+/// **AHB-authoritative routing (IFTSTA AHB fv20251001/fv20261001):**
+/// PIDs 21024–21028 are labeled "GPKE / Vollzugsmeldung" in the AHB.
+/// Earlier pid-reference.md entries attributing them to WiM Gas / GeLi Gas
+/// were incorrect. The AHB profile is the single source of truth.
 ///
-/// **Ownership note (per `docs/pid-reference.md`):**
-/// - 21024–21027 → WiM Gas (`mako-wim-gas`)
-/// - 21028 → GeLi Gas 2.0 (`mako-geli-gas`)
-/// - 21029–21032 → WiM Strom Teil 1 (`mako-wim`)
-/// - 21033 → GPKE Teil 3 (here)
-pub const IFTSTA_PIDS: &[u32] = &[21_033];
+/// | PID   | AHB-Name | Richtung |
+/// |-------|---|---|
+/// | 21024 | GPKE / Vollzugsmeldung Lieferantenwechsel | NB → LF |
+/// | 21025 | GPKE / Vollzugsmeldung Einzug | NB → LF |
+/// | 21026 | GPKE / Vollzugsmeldung Auszug | NB → LF |
+/// | 21027 | GPKE / Vollzugsmeldung Netznutzung | NB → LF |
+/// | 21028 | GPKE / Vollzugsmeldung | NB → LF |
+/// | 21033 | GPKE / Statusmeldung Kündigung (Ablehnung GPKE Teil 3) | MSB → NB/LF |
+/// | 21035 | GPKE Teil 2 / Rückmeldung an Lieferstelle | MSB → LF |
+/// | 21045 | EnFG Informationen (GPKE Teil 4) | LF → NB |
+/// | 21047 | Bearbeitungsstandsmeldung (GPKE Teil 2/4) | NB → LF · NB → ÜNB · MSB → NB |
+pub const IFTSTA_PIDS: &[u32] = &[
+    21_024, 21_025, 21_026, 21_027, 21_028, 21_033,
+    21_035, // Rückmeldung an Lieferstelle (GPKE Teil 2, MSB → LF) — pid-reference.md
+    21_045, // EnFG Informationen (GPKE Teil 4, LF → NB)
+    21_047, // Bearbeitungsstandsmeldung (GPKE Teil 2/4) — pid-reference.md
+];
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
@@ -186,13 +191,13 @@ pub enum SupplierChangeEvent {
         /// Label identifying the deadline type.
         label: Box<str>,
     },
-    /// Received a GPKE IFTSTA Statusmeldung (PID 21033 — Ablehnung GPKE Teil 3).
+    /// Received a GPKE IFTSTA Vollzugsmeldung or Statusmeldung (PIDs 21024–21028, 21033).
     ///
-    /// PID 21033 is the single GPKE-owned IFTSTA PID. PIDs 21024–21032 belong to
-    /// WiM Strom / WiM Gas / GeLi Gas and are not handled here.
-    /// Does not drive state transitions; recorded for audit purposes.
+    /// These PIDs carry GPKE-domain completion confirmations (Vollzugsmeldungen)
+    /// and status notifications. Informational — does not drive state transitions;
+    /// recorded for audit purposes.
     VollzugsmeldungReceived {
-        /// IFTSTA Prüfidentifikator (21033).
+        /// IFTSTA Prüfidentifikator (21024–21028 or 21033).
         pid: Pruefidentifikator,
         /// Sender party code (GLN).
         sender: MarktpartnerCode,
@@ -417,13 +422,13 @@ pub enum SupplierChangeCommand {
         /// Label identifying the deadline type.
         label: Box<str>,
     },
-    /// Received a GPKE IFTSTA Statusmeldung (PID 21033 — Ablehnung GPKE Teil 3).
+    /// Received a GPKE IFTSTA Vollzugsmeldung or Statusmeldung (PIDs 21024–21028, 21033).
     ///
     /// Constructed by the IFTSTA adapter in `makod` when an inbound AS4
-    /// IFTSTA message with PID 21033 arrives, or via the
+    /// IFTSTA message with a GPKE-domain PID arrives, or via the
     /// `"gpke.vollzugsmeldung.empfangen"` REST command.
     ReceiveVollzugsmeldung {
-        /// IFTSTA Prüfidentifikator (21033).
+        /// IFTSTA Prüfidentifikator (21024–21028 or 21033).
         pid: Pruefidentifikator,
         /// Sender party code (GLN).
         sender: MarktpartnerCode,

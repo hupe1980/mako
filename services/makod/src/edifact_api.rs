@@ -58,8 +58,14 @@ use axum::{
     response::{IntoResponse, Json, Response},
     routing::post,
 };
-use edi_energy::{EdiEnergyMessage, Platform};
-use mako_engine::pid_router::PidRouter;
+use edi_energy::{AnyMessage, EdiEnergyMessage as _, Platform};
+use mako_engine::{
+    ids::TenantId,
+    partner::{CommunicationChannel, MarketRole, PartnerRecord, PartnerStore as _},
+    pid_router::PidRouter,
+    store_slatedb::SlateDbPartnerStore,
+    types::MarktpartnerCode,
+};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
 use subtle::ConstantTimeEq;
@@ -77,6 +83,16 @@ pub struct EdifactApiState {
     /// Maximum allowed request body size in bytes.
     /// Applied to `POST /edifact` via [`DefaultBodyLimit`].
     pub max_body_bytes: usize,
+    /// Partner store for automatic PARTIN upserts.
+    ///
+    /// When `Some`, every valid inbound PARTIN message (PIDs 37000–37014) is
+    /// automatically extracted and upserted into the partner directory — no ERP
+    /// integration or manual `PUT /admin/partners/{gln}` required.
+    ///
+    /// `None` disables auto-upsert (e.g. in unit tests or read-only contexts).
+    pub partner_store: Option<Arc<SlateDbPartnerStore>>,
+    /// Tenant identifier for partner store writes.
+    pub tenant_id: TenantId,
 }
 
 // ── Response types ────────────────────────────────────────────────────────────
@@ -195,6 +211,49 @@ pub fn router(state: Arc<EdifactApiState>) -> Router {
         .with_state(state)
 }
 
+// ── PARTIN partner extraction ─────────────────────────────────────────────────
+
+/// Build a [`PartnerRecord`] from a parsed `PartinMessage`.
+///
+/// Extracts the sender's GLN from `NAD+MS` and maps all `COM` segments to
+/// [`CommunicationChannel`] entries.  The market role is derived from the
+/// BDEW Prüfidentifikator using [`MarketRole::from_pid`].
+///
+/// Returns `None` when the message has no sender GLN (malformed PARTIN).
+pub(crate) fn partin_to_partner_record(
+    msg: &edi_energy::messages::partin::PartinMessage,
+    pid: Option<u32>,
+) -> Option<PartnerRecord> {
+    let sender = msg.sender()?;
+    let gln_str = sender.party_id.as_deref().filter(|s| !s.is_empty())?;
+
+    let channels: Vec<CommunicationChannel> = msg
+        .com_segments()
+        .iter()
+        .filter_map(|c| {
+            let number = c.number.as_deref()?.to_owned();
+            let qualifier = c.channel.as_deref()?.to_owned();
+            Some(CommunicationChannel::new(qualifier, number))
+        })
+        .collect();
+
+    let roles = pid
+        .and_then(MarketRole::from_pid)
+        .map(|r| vec![r])
+        .unwrap_or_default();
+
+    Some(PartnerRecord {
+        gln: MarktpartnerCode::from(gln_str),
+        display_name: sender.party_name.as_deref().map(Into::into),
+        channels,
+        roles,
+        valid_from: None,
+        contacts: vec![],
+        country_code: None,
+        updated_at: time::OffsetDateTime::now_utc(),
+    })
+}
+
 // ── Handler ───────────────────────────────────────────────────────────────────
 
 /// Accepted EDIFACT `Content-Type` values.
@@ -286,6 +345,37 @@ async fn ingest_edifact(
                     (Some(_), Some(_)) => MessageStatus::Routed,
                     (Some(_), None) => MessageStatus::UnknownPid,
                 };
+
+                // Auto-upsert PARTIN: when we receive a PARTIN message and a
+                // PartnerStore is wired, extract the sender's communication data
+                // and store it immediately — no ERP integration needed.
+                if let (AnyMessage::Partin(partin), Some(ps)) =
+                    (&msg, state.partner_store.as_deref())
+                {
+                    match partin_to_partner_record(partin, pid) {
+                        Some(record) => {
+                            if let Err(e) = ps.upsert(state.tenant_id, &record).await {
+                                tracing::warn!(
+                                    gln = %record.gln,
+                                    error = %e,
+                                    "PARTIN auto-upsert failed — partner data not stored",
+                                );
+                            } else {
+                                tracing::info!(
+                                    gln = %record.gln,
+                                    pid,
+                                    "PARTIN auto-upsert: partner record stored",
+                                );
+                            }
+                        }
+                        None => {
+                            tracing::warn!(
+                                pid,
+                                "PARTIN received but sender GLN missing — skipping auto-upsert",
+                            );
+                        }
+                    }
+                }
 
                 tracing::info!(
                     message_type = ?message_type,

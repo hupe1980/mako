@@ -57,6 +57,8 @@
 
 use std::collections::HashMap;
 
+use crate::types::Sparte;
+
 // ── PidRouter ─────────────────────────────────────────────────────────────────
 
 /// A static mapping from `Prüfidentifikator` (PID) values to workflow names.
@@ -106,6 +108,24 @@ use std::collections::HashMap;
 #[derive(Debug, Default, Clone)]
 pub struct PidRouter {
     table: HashMap<u32, Box<str>>,
+    /// Commodity-qualified routing table: `(pid, Sparte) → workflow_name`.
+    ///
+    /// Checked first by [`route_with_sparte`]; falls back to the unambiguous
+    /// [`table`] when no commodity-specific entry exists.
+    ///
+    /// Use this for PIDs shared between Strom and Gas process families where
+    /// the APERAK Frist differs:
+    ///
+    /// | PID   | Strom workflow  | Gas workflow      |
+    /// |-------|-----------------|-------------------|
+    /// | 23001 | `wim-insrpt`    | `wim-gas-insrpt`  |
+    /// | 23003 | `wim-insrpt`    | `wim-gas-insrpt`  |
+    /// | 23004 | `wim-insrpt`    | `wim-gas-insrpt`  |
+    /// | 23008 | `wim-insrpt`    | `wim-gas-insrpt`  |
+    ///
+    /// [`route_with_sparte`]: PidRouter::route_with_sparte
+    /// [`table`]: PidRouter::table
+    commodity_table: HashMap<(u32, Sparte), Box<str>>,
     /// Tracks which module registered each PID for conflict detection.
     ///
     /// Populated by [`register_with_module`]; used to produce actionable
@@ -192,6 +212,72 @@ impl PidRouter {
         self.registered_by.insert(pid, module.into());
     }
 
+    /// Register `pid` → `workflow_name` for a specific commodity ([`Sparte`]).
+    ///
+    /// Use this for PIDs that map to **different workflows depending on whether
+    /// the message concerns electricity (Strom) or gas (Gas)**. At runtime call
+    /// [`route_with_sparte`] to prefer the commodity-specific entry over the
+    /// unambiguous fallback registered via [`register`].
+    ///
+    /// # INSRPT shared PIDs (23001/23003/23004/23008)
+    ///
+    /// These PIDs appear in both WiM Strom (5 WT) and WiM Gas (10 WT) AHBs:
+    ///
+    /// ```rust,ignore
+    /// // In WimModule (Strom):
+    /// router.register_with_sparte(23001, Sparte::Strom, "wim-insrpt");
+    ///
+    /// // In WimGasModule (Gas):
+    /// router.register_with_sparte(23001, Sparte::Gas, "wim-gas-insrpt");
+    /// ```
+    ///
+    /// [`route_with_sparte`]: PidRouter::route_with_sparte
+    /// [`register`]: PidRouter::register
+    pub fn register_with_sparte(
+        &mut self,
+        pid: u32,
+        sparte: Sparte,
+        workflow_name: impl Into<Box<str>>,
+    ) {
+        self.commodity_table
+            .insert((pid, sparte), workflow_name.into());
+    }
+
+    /// Look up the workflow name for `pid`, preferring the commodity-qualified
+    /// entry for `sparte` over the unambiguous fallback.
+    ///
+    /// Resolution order:
+    /// 1. `commodity_table[(pid, sparte)]` — registered via [`register_with_sparte`]
+    /// 2. `table[pid]` — registered via [`register`] (unambiguous fallback)
+    ///
+    /// Returns `None` when neither table has an entry for `pid`.
+    ///
+    /// # INSRPT routing example
+    ///
+    /// ```rust
+    /// use mako_engine::pid_router::PidRouter;
+    /// use mako_engine::types::Sparte;
+    ///
+    /// let mut r = PidRouter::new();
+    /// r.register(23001, "wim-insrpt");                            // Strom fallback
+    /// r.register_with_sparte(23001, Sparte::Strom, "wim-insrpt");
+    /// r.register_with_sparte(23001, Sparte::Gas,   "wim-gas-insrpt");
+    ///
+    /// assert_eq!(r.route_with_sparte(23001, Sparte::Strom), Some("wim-insrpt"));
+    /// assert_eq!(r.route_with_sparte(23001, Sparte::Gas),   Some("wim-gas-insrpt"));
+    /// assert_eq!(r.route(23001),                             Some("wim-insrpt"));
+    /// ```
+    ///
+    /// [`register_with_sparte`]: PidRouter::register_with_sparte
+    /// [`register`]: PidRouter::register
+    #[must_use]
+    pub fn route_with_sparte(&self, pid: u32, sparte: Sparte) -> Option<&str> {
+        self.commodity_table
+            .get(&(pid, sparte))
+            .or_else(|| self.table.get(&pid))
+            .map(Box::as_ref)
+    }
+
     /// Look up the workflow name for `pid`.
     ///
     /// Returns `None` when `pid` has not been registered. The caller should
@@ -233,7 +319,6 @@ mod tests {
         r.register(55001, "GpkeSupplierChange");
         assert_eq!(r.route(55001), Some("GpkeSupplierChange"));
     }
-
     #[test]
     fn route_unregistered_pid_returns_none() {
         let r = PidRouter::new();
@@ -281,5 +366,99 @@ mod tests {
         r.register(55001, "W");
         assert!(!r.is_empty());
         assert_eq!(r.len(), 1);
+    }
+
+    // ── Commodity-aware routing ───────────────────────────────────────────────
+
+    #[test]
+    fn route_with_sparte_prefers_commodity_entry() {
+        use crate::types::Sparte;
+        let mut r = PidRouter::new();
+        r.register(23001, "wim-insrpt"); // unambiguous fallback
+        r.register_with_sparte(23001, Sparte::Strom, "wim-insrpt");
+        r.register_with_sparte(23001, Sparte::Gas, "wim-gas-insrpt");
+
+        assert_eq!(
+            r.route_with_sparte(23001, Sparte::Strom),
+            Some("wim-insrpt")
+        );
+        assert_eq!(
+            r.route_with_sparte(23001, Sparte::Gas),
+            Some("wim-gas-insrpt")
+        );
+        // Unambiguous route() is unaffected by commodity table.
+        assert_eq!(r.route(23001), Some("wim-insrpt"));
+    }
+
+    #[test]
+    fn route_with_sparte_falls_back_to_unambiguous() {
+        use crate::types::Sparte;
+        let mut r = PidRouter::new();
+        // No commodity entry — only unambiguous.
+        r.register(55001, "GpkeSupplierChange");
+
+        assert_eq!(
+            r.route_with_sparte(55001, Sparte::Strom),
+            Some("GpkeSupplierChange")
+        );
+        assert_eq!(
+            r.route_with_sparte(55001, Sparte::Gas),
+            Some("GpkeSupplierChange")
+        );
+    }
+
+    #[test]
+    fn route_with_sparte_returns_none_for_unregistered() {
+        use crate::types::Sparte;
+        let r = PidRouter::new();
+        assert_eq!(r.route_with_sparte(23001, Sparte::Strom), None);
+        assert_eq!(r.route_with_sparte(23001, Sparte::Gas), None);
+    }
+
+    #[test]
+    fn route_with_sparte_gas_only_deployment() {
+        use crate::types::Sparte;
+        // Gas-standalone: only Gas entries; no WimModule Strom fallback.
+        let mut r = PidRouter::new();
+        r.register(23001, "wim-gas-insrpt"); // unambiguous (Gas-standalone)
+        r.register_with_sparte(23001, Sparte::Gas, "wim-gas-insrpt");
+
+        assert_eq!(
+            r.route_with_sparte(23001, Sparte::Gas),
+            Some("wim-gas-insrpt")
+        );
+        // Strom falls back to unambiguous (no Strom-specific entry exists).
+        assert_eq!(
+            r.route_with_sparte(23001, Sparte::Strom),
+            Some("wim-gas-insrpt")
+        );
+    }
+
+    #[test]
+    fn route_with_sparte_combined_deployment_all_shared_insrpt_pids() {
+        use crate::types::Sparte;
+        let mut r = PidRouter::new();
+        // WimModule registers shared PIDs as Strom:
+        for pid in [23001_u32, 23003, 23004, 23008] {
+            r.register(pid, "wim-insrpt");
+            r.register_with_sparte(pid, Sparte::Strom, "wim-insrpt");
+        }
+        // WimGasModule registers shared PIDs as Gas:
+        for pid in [23001_u32, 23003, 23004, 23008] {
+            r.register_with_sparte(pid, Sparte::Gas, "wim-gas-insrpt");
+        }
+
+        for pid in [23001_u32, 23003, 23004, 23008] {
+            assert_eq!(
+                r.route_with_sparte(pid, Sparte::Strom),
+                Some("wim-insrpt"),
+                "PID {pid} Strom should route to wim-insrpt"
+            );
+            assert_eq!(
+                r.route_with_sparte(pid, Sparte::Gas),
+                Some("wim-gas-insrpt"),
+                "PID {pid} Gas should route to wim-gas-insrpt"
+            );
+        }
     }
 }

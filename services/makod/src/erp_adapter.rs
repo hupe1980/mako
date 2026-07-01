@@ -5,7 +5,34 @@
 //! | Type | Use case |
 //! |------|---------|
 //! | [`LogErpAdapter`] | Re-export from `mako-engine`; log-only, no delivery |
-//! | [`WebhookErpAdapter`] | HTTP POST BO4E JSON to a configurable ERP endpoint |
+//! | [`WebhookErpAdapter`] | HTTP POST CloudEvents 1.0 JSON to a configurable ERP endpoint |
+//!
+//! ## Wire format
+//!
+//! `WebhookErpAdapter` delivers every [`ErpEvent`] as a
+//! **[CloudEvents 1.0](https://cloudevents.io) structured-mode JSON** message:
+//!
+//! ```text
+//! POST <erp_url>
+//! Content-Type: application/cloudevents+json
+//! X-Idempotency-Key: <event.idempotency_key>
+//! X-Mako-Signature: <hmac-sha256-hex>   ← only when secret is configured
+//!
+//! {
+//!   "specversion": "1.0",
+//!   "id": "<idempotency_key>",
+//!   "source": "urn:mako:tenant:<tenant_id>",
+//!   "type": "de.mako.aperak.accepted",
+//!   "time": "2026-10-01T10:15:00+02:00",
+//!   "subject": "<process_id>",
+//!   "dataschema": "https://.../Marktlokation.json",
+//!   "datacontenttype": "application/json",
+//!   "makoconvid": "<conversation_id>",
+//!   "makocausationid": "<causation_id>",
+//!   "makopid": 55001,
+//!   "data": { "_typ": "MARKTLOKATION", ... }
+//! }
+//! ```
 //!
 //! ## Wiring
 //!
@@ -19,33 +46,100 @@
 //! tokio::spawn(async move { outbox_erp_worker(store, erp).await });
 //! ```
 
-use mako_engine::erp::{ErpAdapter, ErpAdapterError, ErpEvent};
+use mako_engine::erp::{ErpAdapter, ErpAdapterError, ErpEvent, ErpEventType};
 use secrecy::{ExposeSecret as _, SecretString};
+use serde::Serialize;
 use tracing::{info, warn};
+
+// ── CloudEventEnvelope ────────────────────────────────────────────────────────
+
+/// CloudEvents 1.0 structured-mode JSON envelope.
+///
+/// Produced by `WebhookErpAdapter` from an [`ErpEvent`].  All mako-specific
+/// metadata is carried as extension attributes (`makoconvid`, `makocausationid`,
+/// `makopid`, `makofailreason`).  Extension attribute names must be lowercase
+/// alphanumeric only (CloudEvents spec §3.3).
+#[derive(Serialize)]
+struct CloudEventEnvelope<'a> {
+    specversion: &'static str,
+    id: &'a str,
+    source: String,
+    #[serde(rename = "type")]
+    ce_type: &'static str,
+    #[serde(with = "time::serde::rfc3339")]
+    time: time::OffsetDateTime,
+    subject: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dataschema: Option<&'a str>,
+    datacontenttype: &'static str,
+    // mako extension attributes
+    makoconvid: String,
+    makocausationid: String,
+    makopid: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    makofailreason: Option<&'a str>,
+    data: &'a serde_json::Value,
+}
+
+impl<'a> CloudEventEnvelope<'a> {
+    fn from_erp_event(event: &'a ErpEvent) -> Self {
+        let fail_reason = match &event.event_type {
+            ErpEventType::ProcessFailed { reason } => Some(reason.as_ref()),
+            _ => None,
+        };
+        Self {
+            specversion: "1.0",
+            id: &event.idempotency_key,
+            source: format!("urn:mako:tenant:{}", event.tenant_id),
+            ce_type: event.event_type.cloud_event_type(),
+            time: event.occurred_at,
+            subject: event.process_id.to_string(),
+            dataschema: event.payload_schema.as_deref(),
+            datacontenttype: "application/json",
+            makoconvid: event.conversation_id.to_string(),
+            makocausationid: event.causation_id.to_string(),
+            makopid: event.pid,
+            makofailreason: fail_reason,
+            data: &event.payload,
+        }
+    }
+}
 
 // ── WebhookErpAdapter ─────────────────────────────────────────────────────────
 
 /// An [`ErpAdapter`] that delivers every [`ErpEvent`] as an HTTP POST to a
-/// configurable ERP endpoint.
+/// configurable ERP endpoint using the
+/// **[CloudEvents 1.0](https://cloudevents.io) structured-mode JSON** format.
 ///
 /// ## Request format
 ///
 /// ```text
 /// POST <erp_url>
-/// Content-Type: application/json
+/// Content-Type: application/cloudevents+json
 /// X-Idempotency-Key: <event.idempotency_key>
 /// X-Mako-Signature: HMAC-SHA256(<secret>, <body>)   ← only if secret is set
 ///
-/// { "idempotency_key": "…", "event_type": "aperak_accepted", "pid": 55001,
-///   "payload_schema": "https://…/Marktlokation.json",
-///   "payload": { "_typ": "MARKTLOKATION", "marktlokationsId": "…", … },
-///   "occurred_at": "2026-10-01T10:15:00+02:00" }
+/// {
+///   "specversion": "1.0",
+///   "id": "<idempotency_key>",
+///   "source": "urn:mako:tenant:<tenant_id>",
+///   "type": "de.mako.aperak.accepted",
+///   "time": "2026-10-01T10:15:00+02:00",
+///   "subject": "<process_id>",
+///   "dataschema": "https://.../Marktlokation.json",
+///   "datacontenttype": "application/json",
+///   "makoconvid": "<conversation_id>",
+///   "makocausationid": "<causation_id>",
+///   "makopid": 55001,
+///   "data": { "_typ": "MARKTLOKATION", ... }
+/// }
 /// ```
 ///
 /// ## Idempotency
 ///
-/// The ERP endpoint **must** persist `X-Idempotency-Key` and return `HTTP 200`
-/// for duplicate deliveries without re-processing.
+/// `id` (CloudEvents) and `X-Idempotency-Key` (header) carry the same stable
+/// dedup key.  The ERP endpoint **must** persist it and return `HTTP 200` for
+/// duplicate deliveries without re-processing.
 ///
 /// ## Authentication
 ///
@@ -112,13 +206,14 @@ impl WebhookErpAdapter {
 
 impl ErpAdapter for WebhookErpAdapter {
     async fn notify(&self, event: ErpEvent) -> Result<(), ErpAdapterError> {
-        let body = serde_json::to_vec(&event)
-            .map_err(|e| ErpAdapterError::payload(format!("serialise ErpEvent: {e}")))?;
+        let envelope = CloudEventEnvelope::from_erp_event(&event);
+        let body = serde_json::to_vec(&envelope)
+            .map_err(|e| ErpAdapterError::payload(format!("serialise CloudEvent: {e}")))?;
 
         let mut builder = self
             .client
             .post(&self.erp_url)
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/cloudevents+json")
             .header("X-Idempotency-Key", &event.idempotency_key);
 
         if let Some(secret) = &self.shared_secret {
