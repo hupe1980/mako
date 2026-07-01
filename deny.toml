@@ -193,18 +193,8 @@ reason  = "Windows crate ecosystem version skew."
 
 [[bans.skip]]
 name    = "windows-sys"
-version = "0.52"
-reason  = "Windows crate ecosystem version skew."
-
-[[bans.skip]]
-name    = "windows-sys"
 version = "0.59"
 reason  = "Windows crate ecosystem version skew."
-
-[[bans.skip]]
-name    = "windows-sys"
-version = "0.60"
-reason  = "Windows crate ecosystem version skew (slatedb 0.14.1 update added 0.60.2)."
 
 [[bans.skip]]
 name    = "windows-core"
@@ -234,7 +224,11 @@ name    = "webpki-roots"
 version = "0.26"
 reason  = "tokio-tungstenite (energy-api) depends on webpki-roots 0.26; reqwest 0.13/slatedb pull 1.0."
 
-# unicode-width 0.1 skip removed: dependency tree now uses only 0.2.
+# miette 7.x pulls both unicode-width 0.1.14 (direct) and 0.2.2 (via textwrap).
+[[bans.skip]]
+name    = "unicode-width"
+version = "0.1"
+reason  = "miette 7.x depends on both unicode-width 0.1 (direct) and 0.2 (via textwrap 0.16)."
 
 [advisories]
 ignore = [
