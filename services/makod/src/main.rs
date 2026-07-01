@@ -107,6 +107,7 @@ mod edifact_api;
 mod edifact_renderer;
 mod erp_adapter;
 mod health;
+mod ingest_dispatcher;
 mod malo_admin_api;
 mod malo_cache;
 mod malo_ident_sender;
@@ -1169,6 +1170,18 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // to avoid registering all ~40 generated profile modules twice.
     let platform = Arc::new(Platform::with_all_profiles());
 
+    // ── Phase 2 ingest dispatcher ─────────────────────────────────────────────
+    //
+    // Shared across HTTP REST and AS4 ingest — translates parsed EDIFACT
+    // messages to typed domain commands and executes them on workflow processes.
+    // Also used by the AS4 loopback path for combined-role deployments.
+    let ingest_dispatcher = Arc::new(ingest_dispatcher::EdifactIngestDispatcher::new(
+        Arc::new(store.clone()),
+        store.as_snapshot_store(),
+        cli.snapshot_interval,
+        mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
+    ));
+
     // ── Shared health state ───────────────────────────────────────────────────
     //
     // GET /health is mounted on every exposed port so that container
@@ -1197,6 +1210,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             max_body_bytes: cli.http_max_body_bytes,
             partner_store: Some(Arc::new(store.as_partner_store())),
             tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
+            dispatcher: Some(Arc::clone(&ingest_dispatcher)),
         });
         let admin_state = Arc::new(malo_admin_api::MaloAdminState {
             cache: malo_cache::SlateDbMaloCache::new(store.clone()),
@@ -1337,6 +1351,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             max_body_bytes: mako_as4::bdew_router_config().max_body_bytes,
             partner_store: Some(Arc::new(store.as_partner_store())),
             tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
+            dispatcher: Some(Arc::clone(&ingest_dispatcher)),
         });
 
         let handler = Arc::new(as4_ingest::BdewAs4IngestHandler::new(
@@ -1535,6 +1550,17 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             Arc::new(partners),
             malo_sender,
             cli.tenant_id.as_str(),
+            // Loopback: enables in-process delivery for combined-role deployments
+            // (NB+MSB, GNB+gMSB, NB+LF) where recipient == own GLN.
+            Some(Arc::new(edifact_api::EdifactApiState {
+                platform: Arc::clone(&platform),
+                pid_router: ctx.pid_router().clone(),
+                optional_token: None,
+                max_body_bytes: usize::MAX,
+                partner_store: None,
+                tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
+                dispatcher: Some(Arc::clone(&ingest_dispatcher)),
+            })),
         )?;
 
         info!(

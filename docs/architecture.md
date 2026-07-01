@@ -81,12 +81,12 @@ Platform::parse_interchange (edi-energy)
     │  structured messages, detected PID per message
     ▼
 PidRouter::route       ← selects domain module by Prüfidentifikator
-    │  typed Command (e.g. ReceiveAperak { conversation_id, … })
+    │  workflow_name + PID
     ▼
-EngineContext::resume  ← reloads ProcessIdentity from ProcessRegistry
-    │
+EdifactIngestDispatcher::dispatch   ← spawns or resumes process by MaLo business key
+    │  typed Command (via AdapterRegistry → MessageAdapter)
     ▼
-Process::execute_and_enqueue
+Process::execute_and_enqueue_with_snapshot_and_retry
     ├── replay EventStore → rebuild State   (Workflow::apply — pure)
     ├── Workflow::handle(state, command)     (pure, returns events + outbox)
     └── AtomicAppend::append_with_outbox    (single WriteBatch)
@@ -107,6 +107,13 @@ Process::execute_and_enqueue
 3. Sign with operator PKCS#12 credential.
 4. POST via `asx-rs` AS4 sender.
 5. On HTTP 200: delete outbox entry. On 4xx/5xx: back-off and retry.
+
+**Self-addressed messages** (`recipient == tenant_party_id`) bypass the AS4
+transport entirely.  `BdewAs4Sender` renders the EDIFACT bytes, re-parses
+them via `Platform::parse_interchange`, and passes each message to
+`EdifactIngestDispatcher::dispatch` for in-process delivery to the correct
+workflow.  See [Integrated operators](./makod.md#integrated-operators-nb--msb-same-gln)
+for the full dispatch table and configuration notes.
 
 ### ERP CloudEvents delivery
 
@@ -138,18 +145,25 @@ Each domain crate is a thin wrapper that:
 - Implements `Workflow` with pure `handle` and `apply` functions.
 - Registers itself in the `PidRouter` via a `register_*` function called from `makod`.
 
+`makod` wires the domain modules, transport adapters, and the ingest dispatcher
+at startup:
+
 ```
 makod (binary)
-├── registers mako-gpke    → PIDs 55001–55018, 55555, 17115–17117, 31001–31009
+├── registers mako-gpke    → PIDs 55001–55018, 55555, 17115–17117 (Strom NB), 31001–31009
 ├── registers mako-wim     → PIDs 55039, 55042, 55051, 55168, 23001–23012
-├── registers mako-geli-gas → PIDs 44001–44021, 44022–44024*, 37008–37014
+├── registers mako-geli-gas → PIDs 44001–44021, 44022–44024*, 37008–37014, 31011
 ├── registers mako-mabis   → PID 13003
 ├── registers mako-wim-gas → PIDs 44039–44053, 44168–44170, 23005, 23009
-└── registers mako-redispatch → Redispatch 2.0 XML workflows
+├── registers mako-redispatch → Redispatch 2.0 XML workflows
+│
+└── wires EdifactIngestDispatcher
+         ├── called by: AS4 inbound (as4_ingest), REST ingest (edifact_api)
+         └── called by: AS4 sender loopback (BdewAs4Sender, recipient == own GLN)
 ```
 
-`*` PIDs 44022–44024 are implemented in `mako-geli-gas` pending BDEW PID
-ownership clarification (see [PID Reference](./pid-reference.md)).
+`*` PIDs 44022–44024 are currently routed to `mako-wim-gas` `wim-gas-stornierung`
+(see [PID Reference](./pid-reference.md)).
 
 ---
 

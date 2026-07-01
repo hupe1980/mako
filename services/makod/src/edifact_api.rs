@@ -40,9 +40,11 @@
 //!
 //! ## Notes
 //!
-//! - The endpoint parses and routes but does **not** yet execute the workflow.
-//!   Workflow dispatch requires the full `EngineContext` which is wired in a
-//!   later phase (see `ERP.md` §13 Phase 2).
+//! - When an [`EdifactIngestDispatcher`][crate::ingest_dispatcher::EdifactIngestDispatcher]
+//!   is wired into `EdifactApiState::dispatcher`, workflow dispatch is executed
+//!   immediately after routing for every `Routed` message.  Dispatch failures
+//!   are non-fatal and logged at `warn` level — the HTTP response still returns
+//!   `"status": "routed"` so the caller knows the message was accepted.
 //! - A `pid` of `null` means the message was parsed successfully but carries no
 //!   recognised Prüfidentifikator (e.g. CONTRL, APERAK without BGM).
 //! - An unknown `pid` (not registered in the `PidRouter`) returns `status:
@@ -93,6 +95,12 @@ pub struct EdifactApiState {
     pub partner_store: Option<Arc<SlateDbPartnerStore>>,
     /// Tenant identifier for partner store writes.
     pub tenant_id: TenantId,
+    /// Phase 2 ingest dispatcher.
+    ///
+    /// When `Some`, every routed message is forwarded to the domain workflow
+    /// process after classification.  When `None`, ingest stops at classification
+    /// (Phase 1 only — useful in read-only / test contexts).
+    pub dispatcher: Option<Arc<crate::ingest_dispatcher::EdifactIngestDispatcher>>,
 }
 
 // ── Response types ────────────────────────────────────────────────────────────
@@ -384,6 +392,33 @@ async fn ingest_edifact(
                     status   = ?status,
                     "EDIFACT message received via REST",
                 );
+
+                // Phase 2: execute workflow command if dispatcher is wired.
+                if let (Some(pid_val), Some(wf_name), Some(dispatcher)) =
+                    (pid, workflow.as_deref(), state.dispatcher.as_deref())
+                {
+                    if matches!(status, MessageStatus::Routed) {
+                        match dispatcher.dispatch(&msg, wf_name, pid_val).await {
+                            Ok(outcome) => {
+                                tracing::debug!(
+                                    workflow = %wf_name,
+                                    pid      = pid_val,
+                                    outcome  = ?outcome,
+                                    "EDIFACT REST ingest: Phase 2 command dispatched",
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    workflow = %wf_name,
+                                    pid      = pid_val,
+                                    error    = %e,
+                                    "EDIFACT REST ingest: Phase 2 command dispatch failed \
+                                     (non-fatal — message was routed)",
+                                );
+                            }
+                        }
+                    }
+                }
 
                 messages.push(MessageResult {
                     message_type,

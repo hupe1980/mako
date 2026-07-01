@@ -246,6 +246,27 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                                 status         = ?status,
                                 "AS4 ingest: EDIFACT message dispatched",
                             );
+
+                            // Phase 2: execute workflow command if dispatcher is wired.
+                            if let (Some(pid_val), Some(wf_name)) = (pid, workflow.as_deref()) {
+                                if let Some(dispatcher) = self.ingest.dispatcher.as_deref() {
+                                    match dispatcher.dispatch(&msg, wf_name, pid_val).await {
+                                        Ok(outcome) => tracing::debug!(
+                                            as4_message_id = %msg_id,
+                                            workflow       = %wf_name,
+                                            outcome        = ?outcome,
+                                            "AS4 ingest: Phase 2 command dispatched",
+                                        ),
+                                        Err(e) => tracing::warn!(
+                                            as4_message_id = %msg_id,
+                                            workflow       = %wf_name,
+                                            error          = %e,
+                                            "AS4 ingest: Phase 2 command dispatch failed (non-fatal)",
+                                        ),
+                                    }
+                                }
+                            }
+
                             accepted += 1;
                         }
                     }

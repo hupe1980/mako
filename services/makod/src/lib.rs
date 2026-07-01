@@ -19,3 +19,4 @@ pub mod adapters;
 pub mod api_bridge;
 pub mod deadline_dispatch;
 pub mod edifact_renderer;
+pub mod ingest_dispatcher;

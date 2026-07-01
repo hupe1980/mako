@@ -49,6 +49,7 @@ use asx_rs::as4::{As4SendPolicy, As4SendRequest};
 use asx_rs::core::SessionContext;
 use asx_rs::observability::EventBus;
 use asx_rs::transport::{As4HttpTransport, TransportConfig};
+use edi_energy::EdiEnergyMessage as _;
 use mako_as4::{BdewAction, constants};
 use mako_engine::builder::As4Sender;
 use mako_engine::error::EngineError;
@@ -88,6 +89,13 @@ pub struct BdewAs4Sender {
     /// Used by the EDIFACT renderer as the sender for ORDERS and similar
     /// messages where the payload does not carry an explicit sender party ID.
     tenant_party_id: Box<str>,
+    /// Optional in-process loopback handle for combined-role deployments.
+    ///
+    /// When `Some`, outbox messages addressed to `tenant_party_id` (own GLN)
+    /// are delivered in-process via [`crate::edifact_api::EdifactApiState`]
+    /// instead of being dead-lettered.  Required for NB+MSB, GNB+gMSB, and
+    /// NB+LF deployments sharing a single GLN.
+    loopback: Option<Arc<crate::edifact_api::EdifactApiState>>,
 }
 
 impl BdewAs4Sender {
@@ -104,6 +112,7 @@ impl BdewAs4Sender {
         partners: Arc<PartnerDirectory>,
         malo_sender: MaloIdentSender,
         tenant_party_id: impl Into<Box<str>>,
+        loopback: Option<Arc<crate::edifact_api::EdifactApiState>>,
     ) -> anyhow::Result<Self> {
         let transport = As4HttpTransport::new(TransportConfig::default())
             .map_err(|e| anyhow::anyhow!("AS4 HTTP transport init failed: {e}"))?;
@@ -114,6 +123,7 @@ impl BdewAs4Sender {
             partners,
             malo_sender,
             tenant_party_id: tenant_party_id.into(),
+            loopback,
         })
     }
 }
@@ -130,6 +140,7 @@ impl As4Sender for BdewAs4Sender {
         let transport = Arc::clone(&self.transport);
         let partners = Arc::clone(&self.partners);
         let malo_sender = self.malo_sender.clone();
+        let loopback = self.loopback.clone();
 
         // Clone all needed fields out of the reference so the returned future
         // is `'static` (required by the `As4Sender` bound).
@@ -143,6 +154,135 @@ impl As4Sender for BdewAs4Sender {
             // Route MaloIdentCallback to the existing cache-lookup path.
             if message_type.as_ref() == "MaloIdentCallback" {
                 return malo_sender.send(&msg_owned).await;
+            }
+
+            // Detect self-addressed messages (combined-role deployments).
+            //
+            // In integrated deployments (e.g. Stadtwerke operating as both NB and
+            // MSB, or GNB and gMSB under the same GLN), the NB-side workflow emits
+            // outbox messages addressed to the same GLN as the operator itself:
+            //
+            //   • ORDERS 17116 (Anfrage Sperrung, NB → MSB / GNB → gMSB)
+            //   • ORDERS 17134/17135 (Konfiguration, NB → MSB)
+            //   • ORDERS 17001/17009 (Geräteübernahme, MSBN → MSBA)
+            //
+            // When a loopback handle is wired (combined-role deployment with
+            // EdifactApiState carrying a dispatcher), the message is rendered to
+            // EDIFACT wire bytes, re-parsed, and dispatched in-process — zero AS4
+            // round-trip, zero network latency.
+            //
+            // When no loopback handle is wired (single-role deployment), the
+            // message is dead-lettered with an actionable error log.
+            if recipient.as_ref() == tenant_party_id.as_ref() {
+                if let Some(ref loopback_state) = loopback {
+                    // ── In-process loopback delivery ──────────────────────────
+                    let payload_bytes = match edifact_renderer::render_to_wire_bytes(
+                        &msg_owned,
+                        &tenant_party_id,
+                    ) {
+                        Ok(bytes) => bytes,
+                        Err(ref e) if edifact_renderer::is_insufficient_payload(e) => {
+                            tracing::error!(
+                                message_id   = %message_id_str,
+                                message_type = %message_type,
+                                own_gln      = %tenant_party_id,
+                                "BdewAs4Sender loopback: no renderer registered — dead-lettering",
+                            );
+                            return Err(EngineError::RendererNotImplemented {
+                                message_type: message_type.as_ref().into(),
+                                message_id: message_id_str.as_str().into(),
+                            });
+                        }
+                        Err(e) => {
+                            return Err(EngineError::Serialization(format!(
+                                "loopback render failed for {message_id_str}: {e}"
+                            )));
+                        }
+                    };
+
+                    let mut any_dispatched = false;
+                    for parse_result in loopback_state
+                        .platform
+                        .parse_interchange(std::io::Cursor::new(&payload_bytes[..]))
+                    {
+                        let Ok(parsed_msg) = parse_result else {
+                            continue;
+                        };
+                        let pid_opt = parsed_msg
+                            .detect_pruefidentifikator()
+                            .ok()
+                            .map(|p| p.as_u32());
+                        let workflow_opt = pid_opt.and_then(|p| loopback_state.pid_router.route(p));
+
+                        match (pid_opt, workflow_opt, loopback_state.dispatcher.as_deref()) {
+                            (Some(pid_val), Some(wf_name), Some(dispatcher)) => {
+                                match dispatcher.dispatch(&parsed_msg, wf_name, pid_val).await {
+                                    Ok(outcome) => {
+                                        tracing::info!(
+                                            message_id   = %message_id_str,
+                                            message_type = %message_type,
+                                            workflow     = %wf_name,
+                                            outcome      = ?outcome,
+                                            own_gln      = %tenant_party_id,
+                                            "BdewAs4Sender loopback: in-process delivery succeeded",
+                                        );
+                                        any_dispatched = true;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            message_id = %message_id_str,
+                                            workflow   = %wf_name,
+                                            error      = %e,
+                                            "BdewAs4Sender loopback: dispatch failed",
+                                        );
+                                        return Err(e);
+                                    }
+                                }
+                            }
+                            (Some(_), None, _) => {
+                                // PID not in dispatch table — e.g. ORDERS 17116 (Anfrage Sperrung,
+                                // NB → MSB) when no MSB-side workflow is registered.
+                                // Acknowledge the outbox entry (return Ok) so the outbox worker
+                                // does not retry indefinitely.  The MSB confirmation must be
+                                // provided via the ERP command API.
+                                tracing::warn!(
+                                    message_id   = %message_id_str,
+                                    message_type = %message_type,
+                                    pid          = ?pid_opt,
+                                    own_gln      = %tenant_party_id,
+                                    "BdewAs4Sender loopback: PID not in dispatch table — \
+                                     no MSB-side workflow registered; use ERP command API \
+                                     (e.g. gpke.sperrung.bestaetigen) to confirm",
+                                );
+                                return Ok(());
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    if !any_dispatched {
+                        tracing::warn!(
+                            message_id   = %message_id_str,
+                            message_type = %message_type,
+                            own_gln      = %tenant_party_id,
+                            "BdewAs4Sender loopback: rendered message produced no \
+                             dispatchable messages (no dispatcher wired or parse yielded nothing)",
+                        );
+                    }
+                    return Ok(());
+                }
+
+                // ── No loopback configured — dead-letter ──────────────────────
+                tracing::error!(
+                    message_id   = %message_id_str,
+                    message_type = %message_type,
+                    own_gln      = %tenant_party_id,
+                    "BdewAs4Sender: outbox message addressed to own GLN \
+                     (combined-role deployment — NB+MSB or GNB+gMSB sharing one GLN). \
+                     No loopback handle configured. \
+                     See docs/makod.md §Integrated operators for details.",
+                );
+                return Err(EngineError::PartnerUnknown { recipient });
             }
 
             // Look up the recipient's AS4 endpoint URL.

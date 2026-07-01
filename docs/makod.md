@@ -496,6 +496,64 @@ For multi-role commands, `marktrolle` selects the EDIFACT qualifier
 (`DDM` for NB, `MS` for MSB) and the correct workflow variant — it is a
 **dispatch hint**, not an identity claim.
 
+#### In-process loopback for self-addressed outbox messages
+
+Several workflows emit outbox messages addressed to a co-located role's GLN
+as part of their normal process flow:
+
+| Message | Workflow | Sender → Recipient |
+|---|---|---|
+| ORDERS 17116 (Anfrage Sperrung Strom) | `gpke-sperrung` | NB → MSB |
+| ORDERS 17116 (Anfrage Gas-Sperrung) | `geli-gas-sperrung-nb` | GNB → gMSB |
+| ORDERS 17134/17135 (Konfiguration) | `gpke-konfiguration` | NB → MSB |
+| ORDERS 17001/17009 (Geräteübernahme) | `wim-geraeteubernahme` | NB → MSBA |
+
+When NB and MSB (or GNB and gMSB) share the same `tenant_party_id` — the
+typical configuration for an integrated Stadtwerke deployment — `BdewAs4Sender`
+detects this automatically and delivers the message via an **in-process
+loopback** instead of an AS4 round-trip:
+
+1. Renders the EDIFACT interchange (identical to external delivery).
+2. Re-parses it via `Platform::parse_interchange`.
+3. Passes each parsed message to `EdifactIngestDispatcher::dispatch`, which
+   spawns or resumes the correct workflow process with zero network overhead.
+
+No `--as4-partner OWN_GLN=...` registration is required.  `--marktrollen
+NB,MSB` (or `GNB,gMSB`) is still required so the Command API accepts
+multi-role ERP commands.
+
+**Dispatch table for loopback-delivered messages:**
+
+| PID(s) received via loopback | Action | Workflow |
+|---|---|---|
+| 17115, 17117 (ORDERS Strom) | spawn by MaLo | `gpke-sperrung` — `ReceiveSperrauftrag` |
+| 17115, 17117 (ORDERS Gas) | spawn by MaLo | `geli-gas-sperrung-nb` — `ReceiveSperrung` |
+| 19118, 19119 (ORDRSP) | resume by MaLo | `gpke-sperrung` — `ReceiveMsbAntwort` |
+| 19116, 19117 (ORDRSP) | resume by MaLo | `gpke-sperrung-lf` — `ReceiveOrdrsp` |
+| 19116, 19117 (ORDRSP Gas) | resume by MaLo | `geli-gas-sperrung-lf` — `ReceiveOrdrsp` |
+| 55001, 55002, 55016 | spawn by MaLo | `gpke-supplier-change` — `ReceiveUtilmd` |
+| 55003–55006, 55017, 55018 | resume by MaLo | `gpke-lf-anmeldung` — `ReceiveAntwort` |
+| 44001–44021 | spawn by MaLo | `geli-gas-supplier-change` — `ReceiveUtilmd` |
+
+**PIDs without a registered handler** — for example, ORDERS 17116 when no
+autonomous gMSB-side workflow is running — are **acknowledged immediately** with
+a `warn!` log.  The outbox entry is not retried.  The waiting NB/GNB workflow
+continues until the APERAK deadline fires or the ERP delivers a confirmation
+via the Command API:
+
+```bash
+# Confirm disconnection execution for an NB workflow (no gMSB workflow running):
+curl -X POST http://localhost:8080/api/v1/commands \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "gpke.sperrung.bestaetigen",
+    "marktrolle": "NB",
+    "malo_id": "DE0000000000000000000000000000001",
+    "ausfuehrungsdatum": "2025-11-01"
+  }'
+```
+
 ---
 
 ### Partner management (`/admin/partners/`)

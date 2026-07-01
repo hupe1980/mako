@@ -47,16 +47,18 @@ fn convert_pid(p: edi_energy::Pruefidentifikator) -> Result<Pruefidentifikator, 
 }
 use mako_gabi_gas::{GaBiGasInvoicCommand, GaBiGasInvoicWorkflow};
 use mako_geli_gas::{
-    GasSperrungNbCommand, GasSupplierChangeCommand, GeliGasSperrprozesseInvoicCommand,
-    GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungNbWorkflow, GeliGasStornierungCommand,
+    GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand,
+    GeliGasSperrprozesseInvoicCommand, GeliGasSperrprozesseInvoicWorkflow,
+    GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow, GeliGasStornierungCommand,
     GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
 };
 use mako_gpke::{
     AbrechnungCommand, AnfrageBestellungCommand, GpkeAbrechnungWorkflow,
     GpkeAnfrageBestellungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
-    GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand,
-    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow, KonfigurationCommand, LfAbmeldungCommand,
-    LfAnmeldungCommand, NeuanlageCommand, SperrungCommand, SupplierChangeCommand,
+    GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow,
+    GpkeStornierungCommand, GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow,
+    KonfigurationCommand, LfAbmeldungCommand, LfAnmeldungCommand, NeuanlageCommand,
+    SperrungCommand, SperrungLfCommand, SupplierChangeCommand,
 };
 use mako_mabis::{BillingCommand, DataStatus, IFTSTA_DATENSTATUS_PID, MabisBillingWorkflow};
 use mako_wim::{
@@ -2427,6 +2429,183 @@ pub fn wim_gas_insrpt_registry() -> AdapterRegistry<WimGasInsrptWorkflow> {
             Ok(GasStorungsmeldungCommand::ReceiveResponse {
                 pid,
                 response_ref: message_ref,
+                reason: None,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE Sperrung NB — MSB response (ORDRSP 19118/19119) ─────────────────────
+
+/// Build an [`AdapterRegistry`] for [`GpkeSperrungWorkflow`] (MSB → NB direction).
+///
+/// Routes ORDRSP 19118 (Bestätigung Anfrage Sperrung) and 19119 (Ablehnung
+/// Anfrage Sperrung) from the MSB to the NB-side `gpke-sperrung` workflow via
+/// [`SperrungCommand::ReceiveMsbAntwort`].
+///
+/// This is a **response adapter** — it is only used by the ingest dispatcher
+/// to continue an existing NB-side process once the MSB answers the Anfrage
+/// Sperrung (PID 17116).  It is distinct from [`gpke_sperrung_registry`] which
+/// handles the inbound Sperrauftrag (PIDs 17115/17117).
+///
+/// **Loopback use**: in an integrated NB+MSB deployment (same GLN), the
+/// outbox ORDRSP 19118/19119 emitted by the MSB side loops back via the
+/// [`crate::ingest_dispatcher`] to complete the NB process.
+#[must_use]
+pub fn gpke_sperrung_msb_response_registry() -> AdapterRegistry<GpkeSperrungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Sperrung MSB-response adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Ordrsp(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Sperrung MSB-response adapter: expected ORDRSP message \
+                     (PIDs 19118/19119)"
+                        .into(),
+                ));
+            };
+            let _ = o; // sender extracted below
+
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Sperrung MSB-response adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            // 19118 = Bestätigung (MSB confirms meter access).
+            // 19119 = Ablehnung  (MSB cannot confirm meter access).
+            let is_confirmed = pid.as_u32() == 19118;
+
+            Ok(SperrungCommand::ReceiveMsbAntwort {
+                pid,
+                is_confirmed,
+                message_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE Sperrung LF side (ORDRSP 19116/19117 — NB → LF) ────────────────────
+
+/// Build an [`AdapterRegistry`] for [`GpkeSperrungLfWorkflow`].
+///
+/// Routes ORDRSP 19116 (Bestätigung Sperr-/Entsperrauftrag, NB → LF) and
+/// 19117 (Ablehnung) to [`SperrungLfCommand::ReceiveOrdrsp`].
+///
+/// This is a **response adapter** used by the ingest dispatcher to continue
+/// the LF-side process once the NB responds to the Sperrauftrag.
+///
+/// **Loopback use**: in an integrated NB+LF deployment (same GLN), the
+/// outbox ORDRSP 19116/19117 emitted by the NB side loops back via the
+/// [`crate::ingest_dispatcher`] to complete the LF process.
+#[must_use]
+pub fn gpke_sperrung_lf_registry() -> AdapterRegistry<GpkeSperrungLfWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Sperrung LF adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Ordrsp(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Sperrung LF adapter: expected ORDRSP message (PIDs 19116/19117)".into(),
+                ));
+            };
+
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Sperrung LF adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            // 19116 = Bestätigung (NB will execute the Sperrung).
+            // 19117 = Ablehnung  (NB rejects the Sperrauftrag).
+            let is_confirmed = pid.as_u32() == 19116;
+
+            Ok(SperrungLfCommand::ReceiveOrdrsp {
+                pid,
+                is_confirmed,
+                message_ref: MessageRef::new(msg.message_ref()),
+                sender: MarktpartnerCode::new(
+                    o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                reason: None,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GeLi Gas Sperrung LF side (ORDRSP 19116/19117 — GNB → LFG) ──────────────
+
+/// Build an [`AdapterRegistry`] for [`GeliGasSperrungLfWorkflow`].
+///
+/// Routes ORDRSP 19116 (Bestätigung Gas-Sperr-/Entsperrauftrag, GNB → LFG)
+/// and 19117 (Ablehnung) to [`GasSperrungLfCommand::ReceiveOrdrsp`].
+///
+/// This is a **response adapter** used by the ingest dispatcher to continue
+/// the LFG-side process once the GNB responds to the Gas-Sperrauftrag.
+///
+/// **Loopback use**: in an integrated GNB+LFG deployment (same GLN), the
+/// outbox ORDRSP 19116/19117 emitted by the GNB side loops back via the
+/// [`crate::ingest_dispatcher`] to complete the LFG process.
+#[must_use]
+pub fn geli_gas_sperrung_lf_registry() -> AdapterRegistry<GeliGasSperrungLfWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas Sperrung LF adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Ordrsp(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas Sperrung LF adapter: expected ORDRSP message (PIDs 19116/19117)"
+                        .into(),
+                ));
+            };
+
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas Sperrung LF adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            // 19116 = Bestätigung (GNB accepts and will execute the Gas-Sperrung).
+            // 19117 = Ablehnung  (GNB rejects the Gas-Sperrauftrag).
+            let is_confirmed = pid.as_u32() == 19116;
+
+            Ok(GasSperrungLfCommand::ReceiveOrdrsp {
+                pid,
+                is_confirmed,
+                message_ref: MessageRef::new(msg.message_ref()),
+                sender: MarktpartnerCode::new(
+                    o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
                 reason: None,
             })
         },
