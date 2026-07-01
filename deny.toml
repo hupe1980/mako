@@ -172,6 +172,14 @@ name    = "cpufeatures"
 version = "0.2"
 reason  = "Companion to digest 0.10 (lopdf chain); object_store 0.14 pulls cpufeatures 0.3."
 
+# webpki-roots version split: tokio-tungstenite 0.24 (used by energy-api) still depends on
+# webpki-roots 0.26; reqwest/hyper-rustls use webpki-roots 1.x. Resolve when
+# tokio-tungstenite bumps its TLS root certificate dependency.
+[[bans.skip]]
+name    = "webpki-roots"
+version = "0.26"
+reason  = "tokio-tungstenite ≤0.29 depends on webpki-roots 0.26 (a re-export shim for 1.x) via rustls-tls-webpki-roots feature; reqwest/hyper-rustls use 1.x directly. Harmless — 0.26 just re-exports 1.0.x. Resolve when tungstenite drops the shim."
+
 # reqwest version split: energy-api and newer HTTP clients use reqwest 0.13;
 # asx-rs (AS4 transport) still depends on reqwest 0.12. Resolve when asx-rs updates.
 [[bans.skip]]

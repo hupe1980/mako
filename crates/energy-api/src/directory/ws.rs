@@ -108,7 +108,7 @@ impl DirectoryWsClient {
             while let Some(req) = sub_rx.recv().await {
                 match serde_json::to_string(&req) {
                     Ok(json) => {
-                        if ws_sink.send(Message::Text(json)).await.is_err() {
+                        if ws_sink.send(Message::Text(json.into())).await.is_err() {
                             break;
                         }
                     }
