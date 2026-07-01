@@ -67,7 +67,7 @@ cargo xtask release-diff              # diff between format versions
 **`just ci` is the minimum gate before any commit.** It runs check + test + clippy
 + fmt-check + deny + codegen-check + validate-profiles-strict + validate-pruefids-strict.
 
-**MSRV: 1.88** — do not use language features or stdlib APIs introduced after 1.88.
+**MSRV: 1.89** — do not use language features or stdlib APIs introduced after 1.89.
 
 ---
 
