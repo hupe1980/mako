@@ -1157,7 +1157,7 @@ dependencies = [
  "futures-util",
  "http",
  "p256",
- "reqwest 0.12.28",
+ "reqwest 0.13.4",
  "serde",
  "serde_jcs",
  "serde_json",
@@ -2369,7 +2369,7 @@ name = "mako-engine"
 version = "0.5.0"
 dependencies = [
  "criterion",
- "rand 0.9.4",
+ "rand 0.10.1",
  "serde",
  "serde_json",
  "slatedb",
@@ -2501,7 +2501,7 @@ dependencies = [
  "mako-wim",
  "mako-wim-gas",
  "object_store",
- "reqwest 0.12.28",
+ "reqwest 0.13.4",
  "secrecy",
  "serde",
  "serde_json",
@@ -3654,6 +3654,9 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -3910,9 +3913,9 @@ dependencies = [
 
 [[package]]
 name = "secrecy"
-version = "0.8.0"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bd1c54ea06cfd2f6b63219704de0b9b4f72dcc2b8fdef820be6cd799780e91e"
+checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
 dependencies = [
  "zeroize",
 ]

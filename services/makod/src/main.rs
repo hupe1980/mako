@@ -320,7 +320,7 @@ struct Cli {
         value_name = "TOKEN",
         env = "MAKOD_HTTP_API_TOKEN",
         hide_env_values = true,
-        value_parser = |s: &str| Ok::<SecretString, std::convert::Infallible>(SecretString::new(s.to_owned())),
+        value_parser = |s: &str| Ok::<SecretString, std::convert::Infallible>(SecretString::new(s.into())),
     )]
     http_api_token: Option<SecretString>,
 
@@ -443,7 +443,7 @@ struct Cli {
         value_name = "PEM",
         env = "MAKOD_AS4_SIGNING_KEY_PEM",
         hide_env_values = true,
-        value_parser = |s: &str| Ok::<SecretString, std::convert::Infallible>(SecretString::new(s.to_owned())),
+        value_parser = |s: &str| Ok::<SecretString, std::convert::Infallible>(SecretString::new(s.into())),
     )]
     as4_signing_key_pem: Option<SecretString>,
 
@@ -644,7 +644,7 @@ struct Cli {
         value_name = "SECRET",
         env = "MAKOD_ERP_WEBHOOK_SECRET",
         hide_env_values = true,
-        value_parser = |s: &str| Ok::<SecretString, std::convert::Infallible>(SecretString::new(s.to_owned())),
+        value_parser = |s: &str| Ok::<SecretString, std::convert::Infallible>(SecretString::new(s.into())),
     )]
     erp_webhook_secret: Option<SecretString>,
 
@@ -1514,9 +1514,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // different concrete types, so the worker is spawned inside each branch
     // rather than assigned to a shared variable.
     if let (Some(key_pem), Some(cert_pem)) = (
-        cli.as4_signing_key_pem
-            .as_ref()
-            .map(|s| s.expose_secret().as_str()),
+        cli.as4_signing_key_pem.as_ref().map(|s| s.expose_secret()),
         cli.as4_signing_cert_pem.as_deref(),
     ) {
         let party_id = cli
@@ -1888,7 +1886,7 @@ fn apply_config_file(
             cli.http_addr = http.addr;
         }
         if cli.http_api_token.is_none() {
-            cli.http_api_token = http.api_token.map(SecretString::new);
+            cli.http_api_token = http.api_token.map(|s| SecretString::new(s.into()));
         }
         if is_default("http_max_body_bytes")
             && let Some(n) = http.max_body_bytes
@@ -1929,11 +1927,12 @@ fn apply_config_file(
         // Inline PEM takes precedence over a file reference.
         if cli.as4_signing_key_pem.is_none() {
             if let Some(pem) = as4.signing_key_pem {
-                cli.as4_signing_key_pem = Some(SecretString::new(pem));
+                cli.as4_signing_key_pem = Some(SecretString::new(pem.into()));
             } else if let Some(ref path) = as4.signing_key_pem_file {
                 cli.as4_signing_key_pem = Some(SecretString::new(
                     std::fs::read_to_string(path)
-                        .with_context(|| format!("reading AS4 signing key: {}", path.display()))?,
+                        .with_context(|| format!("reading AS4 signing key: {}", path.display()))?
+                        .into(),
                 ));
             }
         }
@@ -1962,7 +1961,7 @@ fn apply_config_file(
             cli.erp_webhook_url = erp.webhook_url;
         }
         if cli.erp_webhook_secret.is_none() {
-            cli.erp_webhook_secret = erp.webhook_secret.map(SecretString::new);
+            cli.erp_webhook_secret = erp.webhook_secret.map(|s| SecretString::new(s.into()));
         }
     }
 

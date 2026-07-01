@@ -135,6 +135,11 @@ version = "7"
 reason  = "edifact-rs (edi-energy grammar layer) depends on nom 7. Resolve when edifact-rs migrates to nom 8."
 
 [[bans.skip]]
+name    = "unicode-width"
+version = "0.1"
+reason  = "miette 7.x depends directly on unicode-width 0.1 AND pulls 0.2 via textwrap 0.16. Both are pulled by the same miette version. Resolve when miette migrates fully to unicode-width 0.2."
+
+[[bans.skip]]
 name    = "winnow"
 version = "0.6"
 reason  = "toml_edit (build-time dep of cargo) pulls winnow 0.6. Workspace direct deps use 0.7."
