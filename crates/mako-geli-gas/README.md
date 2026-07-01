@@ -44,13 +44,17 @@ families. Saturday counts as a Werktag; Sunday and public holidays do not.
 | 17104   | Anfrage MSB Gas an NB Strom                         | ORDERS 1.4b   | ✅ Implemented                    |
 | 19103   | Ablehnung Anfrage Brennwert / Zustandszahl          | ORDRSP 1.4    | ✅ Implemented                    |
 | 19104   | Ablehnung Anfrage vom MSB Gas                       | ORDRSP 1.4    | ✅ Implemented                    |
-| 17115   | Gas-Sperrauftrag (LF → GNB) — outbound             | ORDERS 1.4b   | ✅ Implemented                    |
-| 17117   | Gas-Entsperrauftrag (LF → GNB) — outbound          | ORDERS 1.4b   | ✅ Implemented                    |
+| 17115   | Gas-Sperrauftrag — outbound (LF → GNB) · inbound (GNB receives from LF) | ORDERS 1.4b   | ✅ Implemented (both roles)          |
+| 17116   | Anfrage Sperrung (GNB → gMSB) — outbound GNB-side                         | ORDERS 1.4b   | ✅ Implemented                    |
+| 17117   | Gas-Entsperrauftrag — outbound (LF → GNB) · inbound (GNB receives from LF) | ORDERS 1.4b   | ✅ Implemented (both roles)          |
 | 19116   | Bestätigung Sperr-/Entsperrauftrag (GNB → LF)      | ORDRSP 1.4    | ✅ Implemented                    |
 | 19117   | Ablehnung Sperr-/Entsperrauftrag (GNB → LF)        | ORDRSP 1.4    | ✅ Implemented                    |
+| 19118   | Bestätigung Anfrage Sperrung (gMSB → GNB)           | ORDRSP 1.4    | ✅ Implemented                    |
+| 19119   | Ablehnung Anfrage Sperrung (gMSB → GNB)             | ORDRSP 1.4    | ✅ Implemented                    |
 | 19128   | Bestätigung Stornierung Sperr-/Entsperrauftrag      | ORDRSP 1.4    | ✅ Implemented                    |
 | 19129   | Ablehnung Stornierung Sperr-/Entsperrauftrag        | ORDRSP 1.4    | ✅ Implemented                    |
-| 39000   | Stornierung Sperr-/Entsperrauftrag (LF → GNB)      | ORDCHG 1.1    | ✅ Implemented — outbound          |
+| 39000   | Stornierung Sperr-/Entsperrauftrag (LF → GNB)      | ORDCHG 1.1    | ✅ Implemented                    |
+| 39001   | Weiterleitung Stornierung (GNB → gMSB) — outbound  | ORDCHG 1.1    | ✅ Implemented                    |
 | 37008   | Kommunikationsdaten des LF Gas                      | PARTIN 1.1    | ✅ Implemented                   |
 | 37009   | Kommunikationsdaten des GNB Gas                     | PARTIN 1.1    | ✅ Implemented                   |
 | 37010   | Kommunikationsdaten des gMSB Gas                    | PARTIN 1.1    | ✅ Implemented                   |
@@ -60,8 +64,6 @@ families. Saturday counts as a Werktag; Sunday and public holidays do not.
 | 37014   | Spartenübergreifende Kommunikationsdaten des MSB Strom | PARTIN 1.1 | ✅ Implemented                   |
 | 17003   | Beauftragung Änderung Technik (MeLo Gas)            | ORDERS 1.4b   | ✗ Not registered                 |
 | 17101   | Anfrage Übermittlung Stammdaten Gas                 | ORDERS 1.4b   | ✗ Not registered                 |
-| 39001   | Weiterleitung der Stornierung                       | ORDCHG 1.1    | ✗ Not registered                 |
-| 39002   | Stornierung der Bestellung von Werten               | ORDCHG 1.1    | ✗ Not registered                 |
 
 > **PIDs 44002–44006, 44017–44018** are registered under
 > `geli-gas-supplier-change` and share the same `GeliGasSupplierChangeWorkflow`
@@ -73,20 +75,30 @@ families. Saturday counts as a Werktag; Sunday and public holidays do not.
 > Zählpunktverwaltung Gas processes defined in ORDERS AHB 1.4b. None are
 > currently registered in `mako-geli-gas`; inbound messages are dead-lettered.
 >
+> **ORDCHG PID 39002** (Stornierung der Bestellung von Werten) is not
+> currently registered. PID 39001 (Weiterleitung Stornierung, GNB → gMSB)
+> is now outbound from `geli-gas-sperrung-nb`.
+>
+> **ORDERS PIDs 17115, 17116, 17117** are fully dual-role:
+> - **LF-Sicht** (`geli-gas-sperrung-lf`): LF sends 17115/17117 outbound; receives
+>   ORDRSP 19116/19117 and Storno-ORDRSP 19128/19129 inbound.
+> - **GNB-Sicht** (`geli-gas-sperrung-nb`): GNB receives 17115/17117 inbound from LF;
+>   sends 17116 outbound to gMSB; receives ORDRSP 19118/19119 inbound from gMSB.
+>   After gMSB confirms, GNB sends ORDRSP 19116/19117 back to LF via outbox.
+> **ORDERS PIDs 17115, 17116, 17117** serve two deployment roles:
+> - **LF-Sicht** (`geli-gas-sperrung-lf`): PIDs 17115/17117 are **outbound** (LF
+>   initiates the Sperrauftrag). The same PID numbers appear in GPKE (NB inbound);
+>   routing is determined by market context and deployment role.
+> - **GNB-Sicht** (`geli-gas-sperrung-nb`): PIDs 17115/17117 are **inbound** (GNB
+>   receives the Sperrauftrag from LF). PID 17116 is **outbound** (GNB forwards the
+>   Anfrage Sperrung to gMSB). This role is only active when the deployment operates
+>   as a Gasnetzbetreiber.
+>
 > **ORDERS PIDs 17103, 17104** are the Gas Datenabruf processes
 > (Abrechnungsbrennwert / Zustandszahl and MSB Gas → NB Strom). They are fully
 > implemented in `GeliGasDatanabrufWorkflow` with corresponding rejection
 > responses via ORDRSP 19103/19104.
 >
-> **ORDERS PIDs 17115, 17117** are the outbound Gas Sperrung / Entsperrung
-> requests (LF → GNB). They are initiated by `GeliGasSperrungLfWorkflow` and
-> NOT registered in the inbound PID router (the LF never receives these).
-> The same PID numbers are used for the analogous Strom process in GPKE
-> (NB-role inbound); routing is determined by market context and deployment
-> role.
->
-> **ORDRSP PIDs 39001, 39002** are cancellation processes (Weiterleitung,
-> Bestellung) applicable to other Gas processes and are unregistered.
 
 ## EDIFACT Format Versions
 
@@ -102,7 +114,8 @@ families. Saturday counts as a Werktag; Sunday and public holidays do not.
 |----------------|-----------------------------------------------------------------------|
 | `lieferbeginn` | PIDs 44001–44006, 44007–44021 Lieferantenwechsel workflow + projections  |
 | `datenabruf`   | PIDs 17103, 17104 Gas Datenabruf (ORDERS) + ORDRSP 19103, 19104           |
-| `sperrung_lf`  | PIDs 17115, 17117 Gas Sperrung LF-initiated; ORDRSP 19116, 19117, 19128, 19129; ORDCHG 39000 (outbound Stornierung) |
+| `sperrung_lf`  | PIDs 17115, 17117 Gas Sperrung LF-initiated (outbound); ORDRSP 19116, 19117, 19128, 19129 (inbound); ORDCHG 39000 (outbound Stornierung) |
+| `sperrung_nb`  | PIDs 17115, 17116, 17117 (inbound GNB receives from LF); ORDERS 17116 (outbound GNB → gMSB); ORDRSP 19118, 19119 (inbound gMSB → GNB response); ORDCHG 39000 (inbound Stornierung from LF); ORDCHG 39001 (outbound Weiterleitung to gMSB) — 10 WT deadline |
 | `partin`       | PIDs 37008–37014 Gas Kommunikationsdaten (LF, GNB, gMSB, MGV, ÜNB) — auto-upsert into `PartnerStore` |
 
 ## Usage
@@ -163,9 +176,62 @@ State transitions:
 ```
 New ──InitiateSperrung──► AuftragGesendet ──ReceiveOrdrsp(confirm)──► OrdrspBestaetigt
                                           └──ReceiveOrdrsp(reject)──► OrdrspAbgelehnt
-                                          └──SendStornierung──► StornierungGesendet ──ReceiveOrdrspStorno(confirm)──► StornoBestaetigt
-                                                                                     └──ReceiveOrdrspStorno(reject)──► StornoAbgelehnt
+                                          └──SendStornierung──► StornierungGesendet ──ReceiveStornoOrdrsp(confirm)──► StornoBestaetigt
+                                                                                     └──ReceiveStornoOrdrsp(reject)──► StornoAbgelehnt
                                           └──TimeoutExpired──► DeadlineExpired
+```
+
+### Gas Sperrung / Entsperrung (GNB-side)
+
+The `GeliGasSperrungNbWorkflow` models the GNB-side of the gas disconnection /
+reconnection process per BK7-24-01-009. The GNB receives the Anweisung from the
+LF (ORDERS 17115/17117), optionally forwards a meter-access request to the gMSB
+(ORDERS 17116), waits for the gMSB's ORDRSP (19118/19119), and then confirms
+or rejects execution to the LF. Deadline: **10 Werktage**.
+
+```rust
+use mako_geli_gas::{
+    GeliGasSperrungNbWorkflow, GasSperrungNbCommand,
+};
+
+// AS4 adapter receives ORDERS 17115 from LF:
+let cmd = GasSperrungNbCommand::ReceiveSperrung {
+    pid: Pruefidentifikator::new(17115).expect("Sperrauftrag"),
+    sender: MarktpartnerCode::new("4012345000023"),
+    location_id: MaLo::new("DE00123456789012345678901234567890"),
+    document_date: "20250601".to_owned(),
+    message_ref: MessageRef::new("MSG-LF-001"),
+    validation_passed: true,
+    validation_errors: vec![],
+};
+let out = process.execute(cmd).await?;
+// out.deadlines[0] registers the 10-WT response window.
+
+// gMSB confirms access (ORDRSP 19118):
+let msb = GasSperrungNbCommand::ReceiveMsbAntwort {
+    pid: Pruefidentifikator::new(19118).expect("gMSB Bestätigung"),
+    is_confirmed: true,
+    message_ref: MessageRef::new("MSG-MSB-001"),
+};
+let _ = process.execute(msb).await?;
+
+// GNB confirms execution to LF:
+let confirm = GasSperrungNbCommand::BestaetigueSperrung {
+    durchgefuehrt: true,
+    reason: None,
+};
+let out = process.execute(confirm).await?;
+// out.outbox carries the ORDRSP 19116 back to LF via AS4.
+// Process transitions to Ausgefuehrt (terminal).
+```
+
+State transitions:
+
+```
+New ──ReceiveSperrung(valid)──► ValidationPassed ──BestaetigueSperrung──► Ausgefuehrt
+                                                  └──ReceiveStornierung──► Storniert
+                                                  └──TimeoutExpired──► (terminal)
+    └──ReceiveSperrung(invalid)──► Rejected
 ```
 
 ### Gas Datenabruf (Brennwert / Zustandszahl)

@@ -17,7 +17,7 @@ crates/edi-energy/        EDIFACT parse/validate/schema — stateless library
 crates/mako-engine/       Event-sourced runtime (EventStore, Workflow, Process, …)
 crates/mako-gpke/         GPKE — UTILMD Strom (55001–55018, 55555) + INVOIC (31001, 31002, 31005–31008) + ORDERS Sperrung (17115–17117) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) + PARTIN Strom (37000–37006)
 crates/mako-wim/          WiM Strom — Messstellenbetrieb (55039, 55042, 55051, 55168) + ORDERS Geräteübernahme + Stammdaten + INSRPT (23001–23012)
-crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44021; 44022–44024 pending) + ORDERS Sperrung Gas (17115–17117) + PARTIN Gas (37008–37014) + INVOIC 31011 (AWH Sperrprozesse Gas)
+crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44021; 44022–44024 pending) + ORDERS Sperrung Gas (17115–17117, LF-role `geli-gas-sperrung-lf` + GNB-role `geli-gas-sperrung-nb`) + PARTIN Gas (37008–37014) + INVOIC 31011 (AWH Sperrprozesse Gas)
 crates/mako-mabis/        MABIS — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB)
 crates/mako-wim-gas/      WiM Gas — UTILMD G (44022–44024 + 44039–44053, 44168–44170) + INVOIC (31003, 31004) + INSRPT Gas-only (23005, 23009)
 crates/mako-gabi-gas/     GaBi Gas — INVOIC 31010 (Kapazitätsrechnung) [placeholder]

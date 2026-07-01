@@ -79,10 +79,12 @@ Quick reference across all process families. Each row is a top-level domain.
 | **WiM Strom Abrechnung** | ⚡ | `mako-wim` | INVOIC 31009 | 5 WT | BK6-24-174 |
 | **MaBiS Bilanzkreisabrechnung** | ⚡ | `mako-mabis` | MSCONS 13003; IFTSTA 21000–21005 | — (calendar) | BK6-24-174 |
 | **GeLi Gas Lieferantenwechsel** | 🔥 | `mako-geli-gas` | UTILMD G 44001–44021 | 10 WT | BK7-24-01-009 |
-| **GeLi Gas Sperrung/Entsperrung** | 🔥 | `mako-geli-gas` | ORDERS 17115, 17117 → ORDRSP 19116/19117 | 10 WT | BK7-24-01-009 |
+| **GeLi Gas Sperrung/Entsperrung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-lf` ✅ | ORDERS 17115/17117 · ORDCHG 39000 | 10 WT | BK7-24-01-009 |
+| **GeLi Gas Sperrung/Entsperrung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ | ORDERS 17115–17117 · ORDCHG 39000/39001 · ORDRSP 19118/19119 | 10 WT | BK7-24-01-009 |
+| **GeLi Gas AWH-Abrechnung** | 🔥 | `mako-geli-gas` `geli-gas-sperrprozesse-invoic` ✅ | INVOIC 31011 | — | BK7-24-01-009 |
 | **GeLi Gas Datenabruf** | 🔥 | `mako-geli-gas` | ORDERS 17103, 17104 | 10 WT | BK7-24-01-009 |
 | **WiM Gas MSB-Wechsel** | 🔥 | `mako-wim-gas` ⚠️ | UTILMD G 44039–44053, 44168–44170 | 10 WT | BK7-24-01-009 |
-| **GaBi Gas Kapazitätsabrechnung** | 🔥 | `mako-gabi-gas` ✅ | INVOIC 31010, 31011 | — | BK7 |
+| **GaBi Gas Kapazitätsabrechnung** | 🔥 | `mako-gabi-gas` ✅ | INVOIC 31010 | — | BK7 |
 | **PARTIN Partnerstammdaten** | ⚡🔥 | `mako-gpke` / `mako-geli-gas` | PARTIN 37000–37014 | — | PARTIN AHB 1.0f |
 | **Redispatch 2.0** | ⚡ | `mako-redispatch` | IFTSTA 21037/21038; XML documents | — | BK6-20-160 |
 | **DVGW Gas Transport** | 🔥 | `mako-gabi-gas` 🔄 | Synthetic PIDs 90001–90062 | — | DVGW G685/G2000 |
@@ -667,11 +669,23 @@ The gas disconnection / reconnection process (LF-initiated) follows the same PID
 numbers as the Strom Sperrung, but runs between the LF and the GNB on a Gas MaLo
 and is governed by BK7-24-01-009 with a **10-Werktage deadline** instead of 24 h.
 
+**LF-Seite** — `geli-gas-sperrung-lf` (LF initiates, awaits GNB response)
+
 | Process | Initiator → Responder | Anfrage PID | Antwort OK | Antwort NG | Crate |
 |---|---|---|---|---|---|
-| Gas-Sperrauftrag (LF-initiiert) | LF → GNB | ORDERS **17115** | ORDRSP 19116 | ORDRSP 19117 | `mako-geli-gas` ✅ |
-| Gas-Entsperrauftrag (LF-initiiert) | LF → GNB | ORDERS **17117** | ORDRSP 19116 | ORDRSP 19117 | `mako-geli-gas` ✅ |
-| Stornierung Gas-Sperrauftrag | LF → GNB | ORDCHG **39000** | ORDRSP 19128 | ORDRSP 19129 | `mako-geli-gas` ✅ |
+| Gas-Sperrauftrag senden | LF → GNB | ORDERS **17115** | ORDRSP 19116 | ORDRSP 19117 | `mako-geli-gas` `geli-gas-sperrung-lf` ✅ |
+| Gas-Entsperrauftrag senden | LF → GNB | ORDERS **17117** | ORDRSP 19116 | ORDRSP 19117 | `mako-geli-gas` `geli-gas-sperrung-lf` ✅ |
+| Stornierung Sperrauftrag senden | LF → GNB | ORDCHG **39000** | ORDRSP 19128 | ORDRSP 19129 | `mako-geli-gas` `geli-gas-sperrung-lf` ✅ |
+
+**GNB-Seite** — `geli-gas-sperrung-nb` (GNB receives, forwards to gMSB, confirms to LF)
+
+| Process | Initiator → Responder | Anfrage PID | Antwort OK | Antwort NG | Crate |
+|---|---|---|---|---|---|
+| Sperrauftrag empfangen (GNB) | LF → GNB | ORDERS **17115** | ORDRSP 19116 | ORDRSP 19117 | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ |
+| Entsperrauftrag empfangen (GNB) | LF → GNB | ORDERS **17117** | ORDRSP 19116 | ORDRSP 19117 | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ |
+| Anfrage Sperrung an gMSB | GNB → gMSB | ORDERS **17116** | ORDRSP **19118** | ORDRSP **19119** | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ |
+| Stornierung empfangen (GNB) | LF → GNB | ORDCHG **39000** | ORDRSP 19128 | ORDRSP 19129 | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ |
+| Weiterleitung Stornierung (GNB → gMSB) | GNB → gMSB | ORDCHG **39001** | — | — | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ |
 
 > **Same PIDs, different market.** ORDERS 17115 and 17117 are used for both
 > **Strom Sperrung** (routed to `mako-gpke`) and **Gas Sperrung** (routed to
@@ -679,6 +693,8 @@ and is governed by BK7-24-01-009 with a **10-Werktage deadline** instead of 24 h
 > field in the ORDERS message header and the deployment role of the receiving party.
 
 **Message flow — Gas-Sperrauftrag (LF-initiiert):**
+
+**LF-Sicht** (LF initiates, `geli-gas-sperrung-lf`):
 
 ```mermaid
 sequenceDiagram
@@ -700,23 +716,53 @@ sequenceDiagram
     end
 ```
 
+**GNB-Sicht** (GNB receives, forwards to gMSB, `geli-gas-sperrung-nb`):
+
+```mermaid
+sequenceDiagram
+    participant LF
+    participant GNB as Gasnetzbetreiber (GNB)
+    participant gMSB
+
+    LF->>GNB:  ORDERS 17115 (Gas-Sperrauftrag)
+    GNB->>gMSB: ORDERS 17116 (Anfrage Sperrung)
+    gMSB-->>GNB: ORDRSP 19118 (Bestätigung) oder 19119 (Ablehnung)
+
+    alt gMSB bestätigt
+        GNB-->>LF: ORDRSP 19116 (Bestätigung Gas-Sperrauftrag)
+    else gMSB lehnt ab
+        GNB-->>LF: ORDRSP 19117 (Ablehnung Gas-Sperrauftrag)
+    end
+
+    opt Stornierung
+        LF->>GNB:  ORDCHG 39000 (Stornierung)
+        GNB->>gMSB: ORDCHG 39001 (Weiterleitung Stornierung)
+        GNB-->>LF: ORDRSP 19128 (Bestätigung) oder 19129 (Ablehnung)
+    end
+```
+
 ---
 
 ### Gas Abrechnung — Billing Scope
 
-GeLi Gas (BK7-24-01-009) governs **supplier switching only**. The BK7 regulator
-did not mandate EDI@Energy INVOIC messages for GNB→LF gas network access charges;
-that billing is settled via bilateral contracts outside the EDIFACT/AS4 channel.
+GeLi Gas (BK7-24-01-009) governs supplier switching **and** AWH billing.
+The BK7 regulator did not mandate EDI@Energy INVOIC messages for GNB→LF gas
+network access charges; that billing is settled via bilateral contracts outside
+the EDIFACT/AS4 channel.
 
-Gas billing that is mandated under BK7 belongs to two separate crates:
+Gas billing mandated under BK7 belongs to **three** crates by domain:
 
 | INVOIC PID | Content | Sender → Empfänger | Crate |
 |---|---|---|---|
 | **31003** | WiM Gas Rechnung (gMSB-Gerätewechsel) | gMSB → NB | `mako-wim-gas` ⚠️ |
 | **31004** | Stornorechnung WiM Gas | gMSB → NB | `mako-wim-gas` ⚠️ |
-| **31010** | Kapazitätsabrechnung Gas | GNB → KN | `mako-gabi-gas` ✅ |
-| **31011** | Rechnung sonstige Leistung (Sperrprozesse) | GNB → LF | `mako-gabi-gas` ✅ |
+| **31010** | Kapazitätsabrechnung Gas (Kapazitätsnutzer) | GNB → KN | `mako-gabi-gas` ✅ |
+| **31011** | Rechnung sonstige Leistung (AWH Sperrprozesse Gas) | GNB/VNB → LF | `mako-geli-gas` `geli-gas-sperrprozesse-invoic` ✅ |
 
+> **PID 31011** belongs to GeLi Gas (BK7-24-01-009): the GNB/VNB bills the
+> LFN/LFA for AWH (abrechnungswürdige Handlungen) during Sperrprozesse.
+> Direction is NB → LF — not NB → BKV. This is not a GaBi Gas process.
+>
 > A Gas-only deployment never sees INVOIC PIDs from the Strom range (31001, 31002,
 > 31005–31008, 31009). Those are not registered and will be dead-lettered.
 
@@ -842,11 +888,10 @@ WiM Strom, but with Gas-specific qualifier codes and a **10-Werktage deadline**
 | Process | Sender → Empfänger | INVOIC PID | Content | Crate |
 |---|---|---|---|---|
 | Kapazitätsrechnung | GNB → KN (Kapazitätsnutzer) | INVOIC **31010** | Kapazitätsabrechnung Gas | `mako-gabi-gas` ✅ |
-| Rechnung sonstige Leistung | GNB → LF | INVOIC **31011** | AWH Sperrprozesse Gas | `mako-gabi-gas` ✅ |
 
-> Note: PID 31011 also appears in the GPKE Teil 2 context for Strom deployments
-> (AWH Sperrprozesse Strom). Routing `mako-gabi-gas` is correct for Gas; a
-> Strom-only routing path is a known TODO.
+> **PID 31011** (Rechnung sonstige Leistung / AWH Sperrprozesse Gas, NB → LF) belongs to
+> `mako-geli-gas` (BK7-24-01-009), not GaBi Gas. See
+> [Gas Abrechnung — Billing Scope](#gas-abrechnung--billing-scope).
 
 ---
 
@@ -993,8 +1038,11 @@ only the PIDs it owns; a Strom-only instance never loads any Gas crate and vice 
 
 | PID | Strom usage | Gas usage | Routing |
 |---|---|---|---|
-| 17115 (Sperrauftrag) | Inbound NB receives from LF (`mako-gpke`) | **Outbound** LF sends to GNB (`mako-geli-gas` outbox) | Commodity in ORDERS header |
-| 17117 (Entsperrauftrag) | Inbound NB receives from LF (`mako-gpke`) | **Outbound** LF sends to GNB (`mako-geli-gas` outbox) | Commodity in ORDERS header |
+| 17115 (Sperrauftrag) | Inbound NB receives from LF (`mako-gpke` `gpke-sperrung`) | **Outbound** LF→GNB (`geli-gas-sperrung-lf`) · **Inbound** GNB receives from LF (`geli-gas-sperrung-nb`) | Commodity + `DeploymentRoles` |
+| 17117 (Entsperrauftrag) | Inbound NB receives from LF (`mako-gpke` `gpke-sperrung`) | **Outbound** LF→GNB (`geli-gas-sperrung-lf`) · **Inbound** GNB receives from LF (`geli-gas-sperrung-nb`) | Commodity + `DeploymentRoles` |
+| 17116 (Anfrage Sperrung) | NB→MSB outbox (`mako-gpke` `gpke-sperrung`) · **Inbound** MSB→NB response via 19118/19119 | GNB→gMSB outbox (`geli-gas-sperrung-nb`) · **Inbound** gMSB→GNB response via 19118/19119 | Commodity |
+| 19118 (Best. Anfrage Sperr.) | Inbound NB receives from MSB (`mako-gpke` `gpke-sperrung`) | Inbound GNB receives from gMSB (`geli-gas-sperrung-nb`) | Commodity + `DeploymentRoles` |
+| 19119 (Abl. Anfrage Sperr.) | Inbound NB receives from MSB (`mako-gpke` `gpke-sperrung`) | Inbound GNB receives from gMSB (`geli-gas-sperrung-nb`) | Commodity + `DeploymentRoles` |
 | 19116 (Bestätigung Sperrung) | Inbound LF receives from NB (`mako-gpke`) | Inbound LF receives from GNB (`mako-geli-gas`) | `DeploymentRoles` / `Marktrolle` |
 | 19117 (Ablehnung Sperrung) | Inbound LF receives from NB (`mako-gpke`) | Inbound LF receives from GNB (`mako-geli-gas`) | `DeploymentRoles` / `Marktrolle` |
 | 19128/19129 (Storno ORDRSP) | `mako-gpke` | `mako-geli-gas` | `DeploymentRoles` / `Marktrolle` |
