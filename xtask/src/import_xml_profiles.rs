@@ -560,21 +560,22 @@ fn parse_mig_structure(xml: &str) -> (Vec<Value>, Vec<Value>) {
             Ok(Event::Empty(ref e)) => {
                 depth += 1;
                 let local = local_name_owned(e.name().as_ref());
-                if root_depth.is_some() && local == "Segment" {
-                    let rd = root_depth.unwrap();
-                    let rel_depth = depth.saturating_sub(rd);
-                    let id = attr_value(e, "id").unwrap_or_default();
-                    let name = attr_value(e, "name").unwrap_or_default();
-                    let status_raw = attr_value(e, "status")
-                        .or_else(|| attr_value(e, "ahb_status"))
-                        .unwrap_or_default();
-                    let mandatory = status_raw.trim().eq_ignore_ascii_case("m")
-                        || status_raw.trim().to_ascii_lowercase().starts_with("muss");
-                    let max_rep = attr_value(e, "max_rep")
-                        .and_then(|v| v.replace('.', "").parse().ok())
-                        .unwrap_or(1u64);
-                    if !id.is_empty() {
-                        flat.push((rel_depth, false, id, name, mandatory, max_rep));
+                if let Some(rd) = root_depth {
+                    if local == "Segment" {
+                        let rel_depth = depth.saturating_sub(rd);
+                        let id = attr_value(e, "id").unwrap_or_default();
+                        let name = attr_value(e, "name").unwrap_or_default();
+                        let status_raw = attr_value(e, "status")
+                            .or_else(|| attr_value(e, "ahb_status"))
+                            .unwrap_or_default();
+                        let mandatory = status_raw.trim().eq_ignore_ascii_case("m")
+                            || status_raw.trim().to_ascii_lowercase().starts_with("muss");
+                        let max_rep = attr_value(e, "max_rep")
+                            .and_then(|v| v.replace('.', "").parse().ok())
+                            .unwrap_or(1u64);
+                        if !id.is_empty() {
+                            flat.push((rel_depth, false, id, name, mandatory, max_rep));
+                        }
                     }
                 }
                 depth = depth.saturating_sub(1);
