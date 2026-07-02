@@ -64,11 +64,15 @@ struct PruefidentifikatorEntry {
 ///
 /// `message_type_filter` — when `Some("INVOIC")` (case-insensitive), only
 /// checks PIDs for that message type and ignores all others.
+///
+/// When `json_output == true`, a machine-readable JSON report is written to
+/// stdout after the human-readable output.
 pub fn run(
     workspace_root: &str,
     message_type_filter: Option<&str>,
     strict: bool,
     min_coverage_pct: u32,
+    json_output: bool,
 ) -> bool {
     let profiles_dir = format!("{workspace_root}/crates/edi-energy/profiles");
     let tests_dir = format!("{workspace_root}/crates/edi-energy/tests");
@@ -96,6 +100,10 @@ pub fn run(
     let mut covered_count: usize = 0;
     let filter_lower = message_type_filter.map(str::to_lowercase);
 
+    // Track per-PID results for optional JSON output.
+    let mut json_covered: Vec<serde_json::Value> = Vec::new();
+    let mut json_missing: Vec<serde_json::Value> = Vec::new();
+
     for (message_type, pid_list) in &pids {
         // Skip types not matching the filter (if one was given).
         if let Some(ref f) = filter_lower
@@ -107,9 +115,17 @@ pub fn run(
             if covered_pids.contains(&pid) {
                 println!("COVERED   {message_type:<8}  {pid}");
                 covered_count += 1;
+                if json_output {
+                    json_covered
+                        .push(serde_json::json!({ "pid": pid, "message_type": message_type }));
+                }
             } else {
                 println!("MISSING   {message_type:<8}  {pid}  — no .edi fixture BGM segment found");
                 missing_count += 1;
+                if json_output {
+                    json_missing
+                        .push(serde_json::json!({ "pid": pid, "message_type": message_type }));
+                }
             }
         }
     }
@@ -182,7 +198,28 @@ pub fn run(
     };
 
     // Pass when: no ORPHANED fixtures AND (not strict OR no MISSING) AND coverage >= min.
-    orphaned.is_empty() && (!strict || missing_count == 0) && coverage_ok
+    let pass = orphaned.is_empty() && (!strict || missing_count == 0) && coverage_ok;
+
+    // ── Optional JSON report ──────────────────────────────────────────────────
+    if json_output {
+        let json_orphaned: Vec<serde_json::Value> = orphaned
+            .iter()
+            .map(|(path, pid)| serde_json::json!({ "pid": pid, "fixture": path }))
+            .collect();
+        let report = serde_json::json!({
+            "covered":      json_covered,
+            "missing":      json_missing,
+            "orphaned":     json_orphaned,
+            "coverage_pct": coverage_pct,
+            "ok":           pass,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
+    }
+
+    pass
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

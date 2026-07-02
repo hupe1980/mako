@@ -21,15 +21,18 @@ crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44021; 44022–4402
 crates/mako-mabis/        MABIS — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB)
 crates/mako-wim-gas/      WiM Gas — UTILMD G (44022–44024 + 44039–44053, 44168–44170) + INVOIC (31003, 31004) + INSRPT Gas-only (23005, 23009)
 crates/mako-gabi-gas/     GaBi Gas — INVOIC 31010 (Kapazitätsrechnung) [placeholder]
-crates/dvgw-edi/          DVGW EDIFACT formats — ALLOCAT, NOMINT, NOMRES [placeholder]
+crates/dvgw-edi/          DVGW EDIFACT formats — ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES
 crates/mako-nbw/          Netzbetreiberwechsel — PARTIN bulk DSO handover [placeholder]
 crates/energy-api/        BDEW API-Webdienste Strom REST/WebSocket client+server
 crates/mako-as4/          AS4 transport [placeholder]
 crates/mako-redispatch/   Redispatch 2.0 [placeholder]
 crates/redispatch-xml/    Redispatch 2.0 XML/XSD format parsing
 services/makod/           Production daemon — assembles all modules
+  services/makod/src/mcp_server.rs  MCP server (tools, resources, prompts) at /mcp
 xtask/                    Build/codegen/validation tasks
 docs/                     Architecture docs
+Dockerfile                Multi-stage cargo-chef + distroless image for makod
+.dockerignore             Docker build context filter
 ```
 
 ---
@@ -45,7 +48,7 @@ cargo check --all-targets --all-features
 cargo test --all-features
 cargo test -p mako-engine --all-features
 cargo test --test <name> --all-features
-cargo build -p makod --release --features slatedb
+cargo build -p makod --release
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all
 cargo deny check
@@ -74,7 +77,7 @@ cargo xtask release-diff              # diff between format versions
 ## Toolchain and Edition
 
 - Rust edition: **2024** (all crates)
-- Toolchain: **1.88** (pinned in `rust-toolchain.toml` — do not change to `stable`)
+- Toolchain: **1.89** (pinned in `rust-toolchain.toml` — do not change to `stable`)
 - Components: `rustfmt`, `clippy`
 
 ---
@@ -102,7 +105,7 @@ Both coexist in the same engine instance simultaneously. A process started under
 
 ### Async
 - All async code targets **Tokio** (version 1).
-- Use async-fn-in-trait (AFIT) — stabilised at Rust 1.75, available on MSRV 1.88.
+- Use async-fn-in-trait (AFIT) — stabilised at Rust 1.75, available on MSRV 1.89.
 - Do not use `tokio::runtime::Handle::try_current()` as a runtime-detection backdoor.
 
 ### Types
@@ -139,7 +142,7 @@ Both coexist in the same engine instance simultaneously. A process started under
 | 55039, 55042, 55051, 55168 | `mako-wim` | BK6-24-174 |
 | 13003 | `mako-mabis` | BK6-24-174 |
 | 44001–44021 | `mako-geli-gas` | BK7-24-01-009 |
-| 44022–44024 | `mako-wim-gas` `wim-gas-stornierung` (multi-domain: WiM Gas / GeLi Gas 2.0; GeLi Gas LFN/LFA role routing is a TODO) | BK7-24-01-009 |
+| 44022–44024 | `mako-wim-gas` `wim-gas-stornierung` (Msb/Nmsb/all roles) **and** `mako-geli-gas` `geli-gas-stornierung` (Nb-only: 44022 inbound) / `geli-gas-stornierung-lf` (Lf: 44023/44024 inbound) | BK7-24-01-009 |
 | 37000–37006 | `mako-gpke` (PARTIN Strom Kommunikationsdaten) | PARTIN AHB 1.0f |
 | 37008–37014 | `mako-geli-gas` (PARTIN Gas Kommunikationsdaten) | PARTIN AHB 1.0f |
 | 17115–17117 (Sperrung Strom, ORDERS) | `mako-gpke` | BK6-22-024 |
@@ -163,11 +166,14 @@ Both coexist in the same engine instance simultaneously. A process started under
 - 11004–11099: reserved but not in current WiM AHB
 
 **PIDs that exist but belong to WiM Gas, NOT GeLi Gas:**
-- 44022–44024: currently routed to `mako-wim-gas` `wim-gas-stornierung` (BDEW PID 3.3/4.0 lists them as WiM Gas). GeLi Gas Stornierung role routing (LFN/LFA context) is a TODO in `mako-geli-gas`.
+- 44022–44024: role-conditional routing implemented in `mako-geli-gas`:
+  - `Nb`-only: PID 44022 → `geli-gas-stornierung` (GNB receives Anfrage)
+  - `Lf`-only: PIDs 44023/44024 → `geli-gas-stornierung-lf` (LF receives GNB response)
+  - `Msb`/`Nmsb`/`all()`: `mako-wim-gas` `wim-gas-stornierung` handles all three (default for WiM Gas / combined deployments)
 
 ### GeLi Gas 3.0
 Governed by **BK7-24-01-009** (Beschluss 12.09.2025). Supersedes BK7-19-001 and BK7-06-067.
-Scope: UTILMD G (PIDs 44001–44021; PIDs 44022–44024 currently routed to `mako-wim-gas` `wim-gas-stornierung`, GeLi Gas LFN/LFA routing is a TODO) + ORDERS Sperrung Gas (17115–17117) + PARTIN Gas Kommunikationsdaten (37008–37014) + INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas, NB → LF).
+Scope: UTILMD G (PIDs 44001–44021) + UTILMD G PIDs 44022–44024 (role-conditional: `geli-gas-stornierung` for Nb, `geli-gas-stornierung-lf` for Lf) + ORDERS Sperrung Gas (17115–17117) + PARTIN Gas Kommunikationsdaten (37008–37014) + INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas, NB → LF).
 PID 31010 (Kapazitätsrechnung, NB → BKV) is a GaBi Gas (BK7-14-020) billing process and belongs to `mako-gabi-gas`.
 PID 31011 (Rechnung sonstige Leistung, NB → LF) is billed by the GNB/VNB to the LFN/LFA for performing AWH (abrechnungswürdige Handlungen) during the Sperrprozess — it is a GeLi Gas (BK7-24-01-009) billing, NOT GaBi Gas.
 
@@ -216,6 +222,7 @@ ISC, Unicode-3.0, Zlib, CDLA-Permissive-2.0, MIT-0.
 | Architecture overview | [docs/architecture.md](../docs/architecture.md) |
 | Process engine guide | [docs/engine.md](../docs/engine.md) |
 | `makod` operator guide | [docs/makod.md](../docs/makod.md) |
+| MCP server (LLM tooling) | [services/makod/src/mcp_server.rs](../services/makod/src/mcp_server.rs) · [docs/makod.md#mcp-server](../docs/makod.md) |
 | ERP integration (CloudEvents 1.0 webhooks, Command API) | [docs/erp-integration.md](../docs/erp-integration.md) |
 | Parsing guide | [docs/parsing.md](../docs/parsing.md) |
 | Validation guide | [docs/validation.md](../docs/validation.md) |

@@ -141,6 +141,20 @@ permalink: /
   </div>
 
   <div class="mako-feature">
+    <div class="mako-feature__icon">🔐</div>
+    <h3>Security &amp; Auth</h3>
+    <p>
+      All HTTP endpoints gated by <a href="https://cedarpolicy.com">Cedar</a>
+      attribute-based access control (ABAC). Named API-key principals for
+      audit-trail identity. OIDC/JWT authentication from Azure AD, Keycloak,
+      Okta, and Kubernetes workload identity — asymmetric algorithms only,
+      JWKS cached with background refresh. HMAC tokens unconditionally
+      rejected.
+    </p>
+    <a href="{{ '/makod' | relative_url }}#authorization">Authorization →</a>
+  </div>
+
+  <div class="mako-feature">
     <div class="mako-feature__icon">🏭</div>
     <h3>Production Daemon</h3>
     <p>
@@ -150,6 +164,19 @@ permalink: /
       backends for cloud deployments.
     </p>
     <a href="{{ '/makod' | relative_url }}">Operator guide →</a>
+  </div>
+
+  <div class="mako-feature">
+    <div class="mako-feature__icon">🤖</div>
+    <h3>LLM / MCP Integration</h3>
+    <p>
+      Built-in <a href="https://modelcontextprotocol.io">MCP server</a> at
+      <code>/mcp</code> exposes tools, resources, and guided prompts to Claude
+      Desktop, VS Code Copilot, and any MCP-capable LLM client. Dynamic
+      server instructions include the instance's Marktrollen, available
+      commands, and regulatory deadlines — no extra configuration.
+    </p>
+    <a href="{{ '/makod' | relative_url }}#mcp-server">MCP guide →</a>
   </div>
 </div>
 
@@ -164,7 +191,7 @@ permalink: /
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.5", features = ["utilmd", "mscons", "aperak"] }
+edi-energy = { version = "0.6", features = ["utilmd", "mscons", "aperak"] }
 ```
 
 ```rust
@@ -179,8 +206,8 @@ println!("PID {}", msg.detect_pruefidentifikator()?.as_u32()); // → 55001
 
 ```toml
 [dependencies]
-mako-engine = { version = "0.5", features = ["testing"] }
-mako-gpke   = "0.5"
+mako-engine = { version = "0.6", features = ["testing"] }
+mako-gpke   = "0.6"
 ```
 
 ```rust
@@ -206,14 +233,14 @@ let envelopes = process.execute_and_enqueue(SupplierChangeCommand::ReceiveUtilmd
 |---|---|
 | [`edi-energy`](https://crates.io/crates/edi-energy) | Parse · validate · build all 17 EDI@Energy EDIFACT types |
 | [`mako-engine`](https://crates.io/crates/mako-engine) | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines, OpenTelemetry |
-| `mako-gpke` | GPKE — UTILMD Strom (55001–55018, 55555) + INVOIC (31001–31002, 31005–31009) + ORDERS Sperrung (17115–17117) + ORDERS/ORDRSP Konfiguration |
-| `mako-wim` | WiM Strom — Messstellenbetrieb (PIDs 55039, 55042, 55051, 55168) + ORDERS Geräteübernahme + Stammdaten |
-| `mako-wim-gas` | WiM Gas — UTILMD G (44022–44053) MSB-Wechsel Gas |
-| `mako-geli-gas` | GeLi Gas 3.0 (BK7-24-01-009) — UTILMD G (44001–44021) |
+| `mako-gpke` | GPKE — UTILMD Strom (55001–55018, 55555) + INVOIC (31001–31002, 31005–31008) + ORDERS Sperrung (17115–17117) + ORDERS/ORDRSP Konfiguration |
+| `mako-wim` | WiM Strom — Messstellenbetrieb (PIDs 55039, 55042, 55051, 55168) + INVOIC 31009 + ORDERS Geräteübernahme + Stammdaten |
+| `mako-wim-gas` | WiM Gas — UTILMD G (44022–44053, 44168–44170) MSB-Wechsel Gas + INVOIC 31003/31004 + INSRPT Gas 23005/23009 |
+| `mako-geli-gas` | GeLi Gas 3.0 (BK7-24-01-009) — UTILMD G (44001–44021) + INVOIC 31011 (AWH Sperrprozesse Gas) + PARTIN Gas (37008–37014) |
 | `mako-mabis` | MABIS — PID 13003 Bilanzkreisabrechnung Strom (BKV↔ÜNB) |
 | `mako-redispatch` | Redispatch 2.0 — 8 XML-document-driven workflows (Activation, Stammdaten, NetworkConstraint, …); IFTSTA PIDs 21037/21038 |
 | `redispatch-xml` | Redispatch 2.0 XML/XSD parsing |
-| `mako-gabi-gas` | GaBi Gas — INVOIC 31010 (Kapazitätsrechnung), 31011 (Rechnung sonstige Leistung) *(placeholder)* |
+| `mako-gabi-gas` | GaBi Gas — INVOIC 31010 (Kapazitätsrechnung, FNB/VNB → BKV) *(placeholder)* |
 | `mako-nbw` | Netzbetreiberwechsel — PARTIN bulk DSO handover *(placeholder)* |
 | `energy-api` | BDEW API-Webdienste Strom — REST/WebSocket client + Axum server |
 | `makod` | Production daemon — all modules, three ports, SlateDB, OTLP |
@@ -252,8 +279,11 @@ completion under the same rules even after the annual cutover.
 | Atomic dual-write (events + outbox) | ✅ | ❌ | ⚠ 2-phase |
 | AS4/ebMS3 transport | ✅ | ❌ | ❌ |
 | API-Webdienste Strom (iMS) | ✅ | ❌ | ❌ |
+| Cedar ABAC authorization | ✅ | ❌ | ⚠ bolt-on |
+| OIDC/JWT + API-key auth | ✅ | ❌ | ⚠ varies |
 | CloudEvents 1.0 ERP webhooks | ✅ | ❌ | ❌ |
 | OpenTelemetry traces + metrics | ✅ | ❌ | ⚠ varies |
+| LLM / MCP integration (tools + prompts) | ✅ | ❌ | ❌ |
 | 100% safe Rust, no OpenSSL for TLS | ✅ | ❌ | ❌ |
 
 </div>

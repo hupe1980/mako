@@ -68,10 +68,10 @@ use mako_engine::{
     store_slatedb::SlateDbPartnerStore,
     types::MarktpartnerCode,
 };
-use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
-use subtle::ConstantTimeEq;
 use utoipa::ToSchema;
+
+use crate::cedar_authz::{CedarAuthorizer, IngestResource};
 
 // ── Shared state ─────────────────────────────────────────────────────────────
 
@@ -79,10 +79,8 @@ use utoipa::ToSchema;
 pub struct EdifactApiState {
     pub platform: Arc<Platform>,
     pub pid_router: PidRouter,
-    /// When `Some`, every request to protected endpoints must supply
-    /// `Authorization: Bearer <token>`. When `None`, the API is unauthenticated
-    /// (a startup warning is logged by `main`).
-    pub optional_token: Option<SecretString>,
+    /// Cedar-based authorization engine for all protected endpoints.
+    pub cedar: Arc<CedarAuthorizer>,
     /// Maximum allowed request body size in bytes.
     /// Applied to `POST /edifact` via [`DefaultBodyLimit`].
     pub max_body_bytes: usize,
@@ -167,30 +165,16 @@ struct ApiError {
 
 /// Bearer-token authentication middleware.
 ///
-/// All routes require `Authorization: Bearer <token>` when
-/// [`EdifactApiState::optional_token`] is `Some`.
+/// All routes require `Authorization: Bearer <token>`. The token is verified
+/// via the Cedar authorizer's constant-time key comparison.
 async fn require_bearer_auth(
     State(state): State<Arc<EdifactApiState>>,
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    if let Some(expected) = &state.optional_token {
-        let provided = request
-            .headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "));
-
-        // Constant-time comparison prevents timing side-channel attacks
-        // where an attacker could recover the token byte-by-byte by measuring
-        // response latency.
-        let authenticated = provided.is_some_and(|p| {
-            p.as_bytes()
-                .ct_eq(expected.expose_secret().as_bytes())
-                .into()
-        });
-
-        if !authenticated {
+    let identity = match state.cedar.authenticate(request.headers()) {
+        Some(id) => id,
+        None => {
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(ApiError {
@@ -199,6 +183,16 @@ async fn require_bearer_auth(
             )
                 .into_response();
         }
+    };
+
+    // Authorization for EDIFACT ingest uses the instance tenant.
+    if !state.cedar.authorize_ingest(
+        &identity,
+        &IngestResource {
+            tenant: &state.tenant_id.to_string(),
+        },
+    ) {
+        return (StatusCode::FORBIDDEN, Json(ApiError { error: "forbidden" })).into_response();
     }
 
     next.run(request).await

@@ -13,6 +13,11 @@ covers BDEW EDI@Energy (UTILMD, MSCONS, INVOIC, APERAK, …).
 | `ALOCAT` | 5.11a | 2024-10-01 | D03A | Allokationsnachricht — gas quantity allocation |
 | `NOMINT` | 4.6 FK | 2026-02-01 | D01B | Nominierungsintegration — nomination submission |
 | `NOMRES` | 4.7 FK | 2026-02-01 | D01B | Nominierungsantwort — nomination response |
+| `SCHEDL` | G685/G2000 | — | D03A | Schedulingnachricht — transport schedule (FNB → BKV) |
+| `IMBNOT` | G685/G2000 | — | D03A | Imbalance Notification — intraday imbalance (FNB/MGV → BKV) |
+| `TRANOT` | G685/G2000 | — | D03A | Transport Notification — capacity restriction or event (FNB/VNB → BKV/GH/MGV) |
+| `DELORD` | G685/G2000 | — | D03A | Delivery Order — delivery nomination (BKV → FNB) |
+| `DELRES` | G685/G2000 | — | D03A | Delivery Response — FNB confirmation/rejection of DELORD (FNB → BKV) |
 
 **FK** = Fehlerkorrektur — editorial correction only; no structural change.
 
@@ -77,6 +82,18 @@ never collide with BDEW PIDs (10000–99999, documented in PID 3.3 / PID 4.0).
 Match `nomres.nomination_ref == nomint.nomination_ref` to correlate the response
 to the outbound nomination workflow.
 
+## DELORD/DELRES correlation
+
+1. BKV sends **DELORD** — `order_ref` holds the BGM document number.
+2. FNB responds with **DELRES** — `order_ref` holds the `RFF+Z13` value that
+   back-references the originating DELORD.
+
+Match `delres.order_ref == delord.order_ref` to correlate the delivery response
+to the outbound delivery order workflow.
+
+`delres.status` carries the overall disposition (`Accepted`, `Modified`, or
+`Rejected`). Per-location detail is in `delres.lines`.
+
 ## Feature flags
 
 | Feature  | Default | Description |
@@ -84,6 +101,11 @@ to the outbound nomination workflow.
 | `alocat` | ✅ on   | Enable `AlocatMessage` and ALOCAT parsing |
 | `nomint` | ✅ on   | Enable `NomintMessage` and NOMINT parsing |
 | `nomres` | ✅ on   | Enable `NomresMessage` and NOMRES parsing |
+| `schedl` | ✅ on   | Enable `SchedlMessage` and SCHEDL parsing |
+| `imbnot` | ✅ on   | Enable `ImbalanceMessage` and IMBNOT parsing |
+| `tranot` | ✅ on   | Enable `TransportNotificationMessage` and TRANOT parsing |
+| `delord` | ✅ on   | Enable `DeliveryOrderMessage` and DELORD parsing |
+| `delres` | ✅ on   | Enable `DeliveryResponseMessage` and DELRES parsing |
 | `serde`  | ❌ off  | Add `serde::Serialize` / `Deserialize` to all public value types |
 | `tracing`| ❌ off  | Emit structured tracing spans during parse dispatch |
 
@@ -107,8 +129,8 @@ on [edi-energy.de](http://www.edi-energy.de/).
 
 | Crate | Layer |
 |---|---|
-| `dvgw-edi` | EDIFACT parsing (ALOCAT, NOMINT, NOMRES) — **this crate** |
-| `mako-gabi-gas` | GaBi Gas process engine (INVOIC billing, allocation, nomination) |
+| `dvgw-edi` | EDIFACT parsing (ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES) — **this crate** |
+| `mako-gabi-gas` | GaBi Gas process engine (INVOIC billing + all DVGW transport workflows) |
 | `edi-energy` | BDEW EDI@Energy (UTILMD, MSCONS, INVOIC, APERAK, CONTRL, …) |
 | `mako-engine` | Event-sourced workflow runtime |
 

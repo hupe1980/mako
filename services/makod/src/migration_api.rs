@@ -28,9 +28,9 @@
 //!
 //! # Authentication
 //!
-//! Same bearer-token as all other `/admin/*` endpoints (`--http-api-token` /
-//! `MAKOD_HTTP_API_TOKEN`). Never mount this router on the public
-//! API-Webdienste port.
+//! All `/admin/migrations` endpoints are protected by Cedar ABAC authorization.
+//! The caller's principal must be permitted the relevant action in the active
+//! Cedar policy set. Never mount this router on the public API-Webdienste port.
 //!
 //! # Supported FV transitions
 //!
@@ -86,16 +86,17 @@ use mako_wim_gas::{
     WimGasAnmeldungWorkflow, WimGasInvoicWorkflow, WimGasKuendigungWorkflow,
     WimGasStornierungWorkflow, WimGasVerpflichtungsanfrageWorkflow,
 };
-use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
+
+use crate::cedar_authz::CedarAuthorizer;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
 /// Shared state for the migration admin API.
 pub struct MigrationApiState {
     pub store: Arc<SlateDbStore>,
-    pub optional_token: Option<SecretString>,
+    /// Cedar-based authorization engine.
+    pub cedar: Arc<CedarAuthorizer>,
 }
 
 // ── Request / response types ──────────────────────────────────────────────────
@@ -133,19 +134,7 @@ struct ErrorResponse {
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 
-fn check_auth(headers: &HeaderMap, token: Option<&SecretString>) -> bool {
-    let Some(expected) = token else {
-        return true; // unauthenticated mode — same policy as edifact_api
-    };
-    let Some(header_val) = headers.get("Authorization") else {
-        return false;
-    };
-    let Ok(header_str) = header_val.to_str() else {
-        return false;
-    };
-    let provided = header_str.strip_prefix("Bearer ").unwrap_or("").as_bytes();
-    provided.ct_eq(expected.expose_secret().as_bytes()).into()
-}
+// (Auth is handled via CedarAuthorizer in the handler directly.)
 
 // ── Migration dispatch ────────────────────────────────────────────────────────
 
@@ -534,7 +523,7 @@ async fn handle_migrate(
     headers: HeaderMap,
     Json(req): Json<MigrateRequest>,
 ) -> Response {
-    if !check_auth(&headers, state.optional_token.as_ref()) {
+    if state.cedar.authenticate(&headers).is_none() {
         return (
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse {

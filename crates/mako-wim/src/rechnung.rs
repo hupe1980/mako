@@ -23,14 +23,22 @@
 //!
 //! # Implementation status
 //!
-//! This module provides a **stub implementation** that:
+//! This module implements the full billing workflow state machine:
+//!
 //! 1. Registers PIDs 31003 and 31009 in the PID router (preventing dead-letter routing).
 //! 2. Accepts inbound INVOIC via `ReceiveInvoic` command.
-//! 3. Emits a `InvoicReceived` event and enqueues a CONTRL acknowledgement via the outbox.
+//! 3. Transitions to `PendingSettlement` and registers a 5-Werktage deadline.
+//! 4. Accepts `Settle` or `Dispute` commands to close the invoice lifecycle.
+//! 5. Accepts inbound REMADV (`ReceiveRemadv`) and COMDIS (`ReceiveComdis`).
+//! 6. Transitions to terminal states: `Settled`, `Disputed`, `PaymentConfirmed`,
+//!    `PaymentDisputed`, or `ComdisRejected`.
 //!
-//! Full dispute/settlement business logic is tracked in TODO.md §WiM-Rechnung.
-//! The stub is sufficient to satisfy the AS4 acknowledgement obligation
-//! (BDEW AS4-Profile §5) and prevent BNetzA traceability gaps.
+//! **Pending in application layer (`deadline_dispatch.rs`):**
+//! Automatic outbound REMADV generation (based on business rules when the 5-Werktage
+//! deadline fires without an explicit `Settle`/`Dispute` command) is tracked in
+//! TODO.md §WiM-Rechnung. The current implementation satisfies the AS4 acknowledgement
+//! obligation (BDEW AS4-Profile §5) and enables full traceability, but does not
+//! yet auto-emit REMADV in response to `DeadlineExpired`.
 
 use mako_engine::{
     error::WorkflowError,

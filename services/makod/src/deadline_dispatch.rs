@@ -39,22 +39,29 @@ use mako_engine::{
     ids::ProcessIdentity,
     process::Process,
 };
-use mako_gabi_gas::{GaBiGasInvoicCommand, GaBiGasInvoicWorkflow};
+use mako_gabi_gas::{
+    DeliveryOrderCommand, GaBiGasAllocationWorkflow, GaBiGasDeliveryOrderWorkflow,
+    GaBiGasInvoicCommand, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow, NominationCommand,
+};
 use mako_geli_gas::{
     GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand, GeliGasDatanabrufCommand,
-    GeliGasDatanabrufWorkflow, GeliGasSperrprozesseInvoicCommand,
+    GeliGasDatanabrufWorkflow, GeliGasLfStornierungWorkflow, GeliGasSperrprozesseInvoicCommand,
     GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow,
     GeliGasStornierungCommand, GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
+    LfStornierungCommand,
 };
 use mako_gpke::{
-    AbrechnungCommand, AllokationslisteCommand, AnfrageBestellungCommand, DatanabrufCommand,
-    GpkeAbrechnungWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
-    GpkeDatanabrufWorkflow, GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow,
-    GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow,
-    GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand, GpkeStornierungWorkflow,
-    GpkeSupplierChangeWorkflow, KonfigurationAenderungCommand, KonfigurationCommand,
-    LfAbmeldungCommand, LfAnmeldungCommand, NeuanlageCommand, SperrungCommand, SperrungLfCommand,
-    SupplierChangeCommand, anfrage_bestellung::WORKFLOW_NAME as ANFRAGE_BESTELLUNG_WORKFLOW,
+    AbrechnungCommand, AllokationslisteCommand, AnfrageBestellungCommand,
+    AnkuendigungZuordnungLfCommand, DatanabrufCommand, GpkeAbrechnungWorkflow,
+    GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
+    GpkeAnkuendigungZuordnungLfWorkflow, GpkeDatanabrufWorkflow,
+    GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
+    GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow,
+    GpkeStornierungCommand, GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow,
+    KonfigurationAenderungCommand, KonfigurationCommand, LfAbmeldungCommand, LfAnmeldungCommand,
+    NeuanlageCommand, SperrungCommand, SperrungLfCommand, SupplierChangeCommand,
+    anfrage_bestellung::WORKFLOW_NAME as ANFRAGE_BESTELLUNG_WORKFLOW,
+    ankuendigung_zuordnung_lf::WORKFLOW_NAME as ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW,
     lf_anmeldung::WORKFLOW_NAME as LF_ANMELDUNG_WORKFLOW,
     sperrung_lf::WORKFLOW_NAME as SPERRUNG_LF_WORKFLOW,
 };
@@ -299,6 +306,20 @@ pub async fn dispatch_deadline(
                 .await
                 .map(|_| ())
         }
+        "geli-gas-stornierung-lf" => {
+            let p = Process::<GeliGasLfStornierungWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                LfStornierungCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
         "geli-gas-datenabruf" => {
             let p = Process::<GeliGasDatanabrufWorkflow, _>::from_identity(
                 Arc::clone(&event_store),
@@ -350,6 +371,16 @@ pub async fn dispatch_deadline(
             );
             Ok(())
         }
+        "mabis-clearingliste" => {
+            // MaBiS Clearingliste processes (PIDs 55065/55069/55070) are simple
+            // receive-and-record workflows with no deadline obligation.
+            // This arm exists solely to satisfy assert_dispatch_coverage.
+            tracing::debug!(
+                deadline_id = %deadline_id,
+                "mabis-clearingliste: no deadline action (simple receipt workflow)",
+            );
+            Ok(())
+        }
         "mabis-billing" => {
             let p = Process::<MabisBillingWorkflow, _>::from_identity(
                 Arc::clone(&event_store),
@@ -385,6 +416,20 @@ pub async fn dispatch_deadline(
             );
             p.execute_and_enqueue_with_retry(
                 LfAbmeldungCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW => {
+            let p = Process::<GpkeAnkuendigungZuordnungLfWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                AnkuendigungZuordnungLfCommand::TimeoutExpired { deadline_id, label },
                 3,
             )
             .await?;
@@ -543,6 +588,82 @@ pub async fn dispatch_deadline(
             );
             p.execute_and_enqueue_with_retry(
                 GaBiGasInvoicCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "gabi-gas-nomination" => {
+            // NOMRES response deadline — no response from FNB/MGV before D-1 15:00.
+            let p = Process::<GaBiGasNominationWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                NominationCommand::NomresDeadlineExpired {
+                    deadline_id,
+                    label: label.into(),
+                },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "gabi-gas-allocation" => {
+            // ALOCAT is a simple receive-and-record workflow with no deadline obligation.
+            // This arm exists solely to satisfy assert_dispatch_coverage.
+            tracing::debug!(
+                deadline_id = %deadline_id,
+                "gabi-gas-allocation: no deadline action (simple receipt workflow)",
+            );
+            let _ = Process::<GaBiGasAllocationWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            Ok(())
+        }
+        "gabi-gas-schedl" => {
+            // SCHEDL is a simple receive-and-record workflow with no deadline obligation.
+            // This arm exists solely to satisfy assert_dispatch_coverage.
+            tracing::debug!(
+                deadline_id = %deadline_id,
+                "gabi-gas-schedl: no deadline action (simple receipt workflow)",
+            );
+            Ok(())
+        }
+        "gabi-gas-imbnot" => {
+            // IMBNOT is a simple receive-and-record workflow with no deadline obligation.
+            // This arm exists solely to satisfy assert_dispatch_coverage.
+            tracing::debug!(
+                deadline_id = %deadline_id,
+                "gabi-gas-imbnot: no deadline action (simple receipt workflow)",
+            );
+            Ok(())
+        }
+        "gabi-gas-tranot" => {
+            // TRANOT is a simple receive-and-record workflow with no deadline obligation.
+            // This arm exists solely to satisfy assert_dispatch_coverage.
+            tracing::debug!(
+                deadline_id = %deadline_id,
+                "gabi-gas-tranot: no deadline action (simple receipt workflow)",
+            );
+            Ok(())
+        }
+        "gabi-gas-delivery-order" => {
+            // DELRES response deadline — no DELRES received from FNB/MGV before deadline.
+            let p = Process::<GaBiGasDeliveryOrderWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                DeliveryOrderCommand::DelresDeadlineExpired {
+                    deadline_id,
+                    label: label.into(),
+                },
                 3,
             )
             .await?;
@@ -794,6 +915,7 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "gpke-konfiguration",
     "gpke-neuanlage",
     "gpke-lf-abmeldung",
+    ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW,
     ANFRAGE_BESTELLUNG_WORKFLOW,
     "wim-device-change",
     "wim-geraeteubernahme",
@@ -821,8 +943,10 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "geli-gas-sperrung-nb",
     "geli-gas-supplier-change",
     "geli-gas-stornierung",
+    "geli-gas-stornierung-lf",
     "geli-gas-partin",
     "mabis-billing",
+    "mabis-clearingliste",
     "wim-gas-anmeldung",
     "wim-gas-kuendigung",
     "wim-gas-verpflichtungsanfrage",
@@ -830,6 +954,12 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "wim-gas-stornierung",
     "wim-gas-insrpt",
     "gabi-gas-invoic",
+    "gabi-gas-nomination",
+    "gabi-gas-allocation",
+    "gabi-gas-schedl",
+    "gabi-gas-imbnot",
+    "gabi-gas-tranot",
+    "gabi-gas-delivery-order",
     "geli-gas-sperrprozesse-invoic",
     // ── Redispatch 2.0 ───────────────────────────────────────────────────────
     STAMMDATEN_WORKFLOW,
@@ -874,6 +1004,7 @@ pub fn build_scheduler<SS, OS, DS, PR>(
     ctx: &mako_engine::builder::EngineContext<SlateDbStore, SS, OS, DS, PR>,
     event_store: Arc<SlateDbStore>,
     snapshot_interval: u64,
+    poll_interval: Duration,
 ) -> DeadlineScheduler<DS>
 where
     DS: DeadlineStore + Clone,
@@ -890,6 +1021,6 @@ where
             Box::pin(async move { dispatch_deadline(deadline, es, ss, snapshot_interval).await })
         },
         100,
-        Duration::from_secs(30),
+        poll_interval,
     )
 }

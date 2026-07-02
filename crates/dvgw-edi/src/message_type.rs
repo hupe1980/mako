@@ -102,12 +102,12 @@ impl DvgwMessageType {
             Self::Alocat => "alocat",
             Self::Nomint => "nomint",
             Self::Nomres => "nomres",
-            Self::Schedl
-            | Self::Imbnot
-            | Self::Tranot
-            | Self::Delord
-            | Self::Delres
-            | Self::Chacap => "unimplemented",
+            Self::Schedl => "schedl",
+            Self::Imbnot => "imbnot",
+            Self::Tranot => "tranot",
+            Self::Delord => "delord",
+            Self::Delres => "delres",
+            Self::Chacap => "chacap",
         }
     }
 

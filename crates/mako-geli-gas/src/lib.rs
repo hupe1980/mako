@@ -21,7 +21,10 @@
 //! | Kündigung beim alten Lieferanten | 44016 | ✅ Registered |
 //! | Kündigung Lieferbeginn Gas (LFN ↔ LFA) | 44017–44018 | ✅ Registered |
 //! | Bestandsliste / Änderungsmeldung | 44019–44021 | ✅ Registered |
-//! | Stornierung (multi-domain) | 44022–44024 | GeLi Gas 2.0 + WiM Gas; routed by `WimGasModule` (GeLi Gas role routing: TODO) |
+//! | Stornierung Anfrage (LF → GNB) | 44022 | ✅ Outbound (LF-side), ERP-initiated |
+//! | Stornierung Bestätigung (GNB → LF) | 44023 | ✅ Inbound (LF-side), `geli-gas-stornierung-lf` |
+//! | Stornierung Ablehnung (GNB → LF) | 44024 | ✅ Inbound (LF-side), `geli-gas-stornierung-lf` |
+//! | Stornierung (GNB-side) | 44022–44024 | ✅ Registered (`geli-gas-stornierung`, `Nb`-only deployments) |
 //!
 //! ## Architecture
 //!
@@ -79,10 +82,22 @@
 //! process.execute(cmd).await?;
 //! ```
 
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
+#![warn(clippy::pedantic, clippy::must_use_candidate)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::doc_markdown)] // German MaKo terms and BDEW acronyms produce many false positives
+#![allow(clippy::too_many_lines)] // process handle() functions are necessarily verbose
+#![allow(clippy::match_same_arms)] // sometimes intentional for process-family readability
+#![allow(clippy::manual_let_else)] // existing code style; rewrite in follow-up
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::unnested_or_patterns)]
+#![allow(clippy::map_unwrap_or)]
+#![allow(clippy::items_after_statements)]
 
 pub mod datenabruf;
 pub mod invoic;
+pub mod lf_stornierung;
 pub mod lieferbeginn;
 pub mod mscons;
 pub mod partin;
@@ -103,6 +118,12 @@ pub use invoic::{
     GeliGasSperrprozesseInvoicWorkflow,
     SETTLEMENT_WINDOW_LABEL as SPERRPROZESSE_INVOIC_SETTLEMENT_LABEL, SPERRPROZESSE_INVOIC_PID,
     WORKFLOW_NAME as GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME,
+};
+pub use lf_stornierung::{
+    ANFRAGE_PID_LF as STORNIERUNG_ANFRAGE_PID_LF, ANTWORT_PIDS_LF as STORNIERUNG_ANTWORT_PIDS_LF,
+    GNB_RESPONSE_WINDOW_LABEL as STORNIERUNG_LF_RESPONSE_WINDOW_LABEL,
+    GeliGasLfStornierungWorkflow, LfStornierungCommand, LfStornierungData, LfStornierungEvent,
+    LfStornierungState, WORKFLOW_NAME as STORNIERUNG_LF_WORKFLOW_NAME,
 };
 pub use lieferbeginn::{
     ANFRAGE_PIDS as LIEFERBEGINN_ANFRAGE_PIDS, ANTWORT_PIDS as LIEFERBEGINN_ANTWORT_PIDS,
@@ -150,14 +171,25 @@ pub use stornierung::{
 /// Registers all GeLi Gas `Prüfidentifikator` values into the
 /// [`mako_engine::pid_router::PidRouter`] at engine startup:
 ///
-/// - PIDs 44001–44021 → `"geli-gas-supplier-change"`
-///   (`GeliGasSupplierChangeWorkflow`)
+/// - PIDs 44001–44021 → `"geli-gas-supplier-change"` (`GeliGasSupplierChangeWorkflow`)
 /// - PID 31011 → `"geli-gas-sperrprozesse-invoic"`
 ///   (`GeliGasSperrprozesseInvoicWorkflow`, Rechnung sonstige Leistung AWH, VNB → LFN/LFA)
+/// - PIDs 44022–44024 → `"geli-gas-stornierung"` when `Nb`-only deployment
+///   (`GeliGasStornierungWorkflow`; GNB receives Anfrage, sends Bestätigung/Ablehnung)
+/// - PIDs 44023–44024 → `"geli-gas-stornierung-lf"` when `Lf`-only deployment (no `Msb`/`Nmsb`)
+///   (`GeliGasLfStornierungWorkflow`; LF receives GNB response to outbound 44022)
 ///
-/// Note: PIDs **44022–44024** are multi-domain (GeLi Gas 2.0 + WiM Gas per BDEW PID
-/// 3.3/4.0 xlsx) and currently routed by `WimGasModule` in `mako-wim-gas`.
-/// Role-based routing for LFN/LFA contexts (GeLi Gas Stornierung) is a TODO.
+/// ## Stornierung PIDs 44022–44024 — multi-domain routing
+///
+/// PIDs 44022–44024 are multi-domain (GeLi Gas 2.0 + WiM Gas per BDEW PID 3.3/4.0 xlsx).
+/// Routing is role-conditional via `register_pids_with_roles`:
+///
+/// | Role | Registered PIDs | Workflow |
+/// |---|---|---|
+/// | `Nb`-only | 44022, 44023, 44024 | `geli-gas-stornierung` (GNB-side) |
+/// | `Lf`-only (no `Msb`/`Nmsb`) | 44023, 44024 (inbound responses) | `geli-gas-stornierung-lf` (LF-side) |
+/// | `Nb + Lf` | 44022 → GNB-side; 44023/44024 → LF-side | both workflows |
+/// | `Msb`/`Nmsb` / `all()` | handled by `WimGasModule` | `wim-gas-stornierung` |
 pub struct GeliGasModule;
 
 impl mako_engine::builder::EngineModule for GeliGasModule {
@@ -168,12 +200,12 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
     fn workflow_names(&self) -> &'static [&'static str] {
         &[
             "geli-gas-supplier-change",
-            // "geli-gas-stornierung" is registered here so `assert_dispatch_coverage`
-            // enforces its presence in the dispatch table.  PIDs 44022–44024 are
-            // currently routed by `WimGasModule` (wim-gas-stornierung) pending
-            // role-conditional routing for the LFN/LFA context.  Adding the name
-            // here ensures the dispatch arm can never be silently removed.
+            // GNB-side: receives 44022 from LFN/LFA, sends 44023/44024 response.
+            // Registered when Nb-only (no Msb/Nmsb). For all() and gMSB, WimGasModule owns these.
             stornierung::WORKFLOW_NAME,
+            // LF-side: LFN/LFA sends 44022 outbound, receives 44023/44024 inbound.
+            // Registered when Lf-only (no Msb/Nmsb). Outbound 44022 is ERP-initiated.
+            lf_stornierung::WORKFLOW_NAME,
             mscons::WORKFLOW_NAME,
             datenabruf::WORKFLOW_NAME,
             sperrung_lf::WORKFLOW_NAME,
@@ -191,8 +223,8 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         for &pid in lieferbeginn::UTILMD_PIDS {
             router.register(pid, "geli-gas-supplier-change");
         }
-        // PIDs 44022–44024 are multi-domain (GeLi Gas 2.0 + WiM Gas) and currently
-        // registered by WimGasModule only. GeLi Gas role routing is a TODO.
+        // PIDs 44022–44024: role-conditional — NOT registered here.
+        // See register_pids_with_roles() for the Nb-role guard.
 
         // Gas MSCONS data delivery PIDs (NB/MSB → LF, GeLi Gas Teil 2).
         //
@@ -289,6 +321,58 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         ]
     }
 
+    fn register_pids_with_roles(
+        &self,
+        router: &mut mako_engine::pid_router::PidRouter,
+        roles: &mako_engine::marktrolle::DeploymentRoles,
+    ) {
+        // Register all unconditional GeLi Gas PIDs first.
+        self.register_pids(router);
+
+        // PIDs 44022–44024: Stornierung — GeLi Gas context (LFN/LFA cancels supply change).
+        //
+        // Routing decision:
+        // PIDs 44022–44024: Stornierung — role-conditional routing.
+        //
+        // See GeliGasModule doc-comment for the full routing table.
+        //
+        // GNB-side (`Nb`-only, no `Msb`/`Nmsb`):
+        //   Register all three PIDs so the GNB correlates inbound 44022 and can route
+        //   44023/44024 outbound responses back via process ID.
+        //
+        // LF-side (`Lf` set, no `Msb`/`Nmsb`):
+        //   Register only 44023/44024 (inbound GNB responses). PID 44022 is ERP-initiated
+        //   outbound and does not need PID-router registration.
+        //   Combined Nb+Lf deployments work without conflict: different PIDs, different workflows.
+        //
+        // NOT registered when `Msb`/`Nmsb` or `all()`: WimGasModule owns 44022–44024 in those cases.
+        use mako_engine::marktrolle::Marktrolle;
+
+        let has_nb_only = !roles.is_all()
+            && roles.contains(Marktrolle::Nb)
+            && !roles.contains(Marktrolle::Msb)
+            && !roles.contains(Marktrolle::Nmsb);
+        let has_lf = !roles.is_all()
+            && roles.contains(Marktrolle::Lf)
+            && !roles.contains(Marktrolle::Msb)
+            && !roles.contains(Marktrolle::Nmsb);
+
+        if has_nb_only {
+            // Only 44022 is inbound on the GNB side — 44023/44024 are outbound responses
+            // dispatched via the outbox and do not need PID-router registration.
+            router.register_with_module(
+                stornierung::ANFRAGE_PID,
+                stornierung::WORKFLOW_NAME,
+                "geli-gas",
+            );
+        }
+        if has_lf {
+            for &pid in lf_stornierung::ANTWORT_PIDS_LF {
+                router.register_with_module(pid, lf_stornierung::WORKFLOW_NAME, "geli-gas");
+            }
+        }
+    }
+
     fn configure(&self) -> Result<(), String> {
         // Verify that all static PID slices are non-empty so a codegen regression
         // is caught at startup before any messages are processed.
@@ -299,6 +383,10 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         const _: () = assert!(
             !stornierung::STORNIERUNG_PIDS.is_empty(),
             "geli-gas: stornierung::STORNIERUNG_PIDS is empty — 44022/44023/44024 must be present"
+        );
+        const _: () = assert!(
+            !lf_stornierung::ANTWORT_PIDS_LF.is_empty(),
+            "geli-gas: lf_stornierung::ANTWORT_PIDS_LF is empty — 44023/44024 must be present"
         );
         const _: () = assert!(
             !mscons::MSCONS_PIDS.is_empty(),

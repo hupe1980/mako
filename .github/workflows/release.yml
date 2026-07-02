@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write   # needed to create GitHub Releases
+  packages: write   # needed to push to ghcr.io
 
 env:
   CARGO_TERM_COLOR: always
@@ -236,3 +237,72 @@ jobs:
           out=$(cargo publish -p mako-nbw 2>&1) && rc=0 || rc=$?
           echo "$out"
           if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+
+  # ── Docker build + push ──────────────────────────────────────────────────────
+  #
+  # Pushes to GitHub Container Registry (ghcr.io) as:
+  #   ghcr.io/<owner>/makod:<version>   (e.g. ghcr.io/hupe1980/makod:0.6.0)
+  #   ghcr.io/<owner>/makod:latest
+  #
+  # Requires:
+  #   - packages: write  permission (granted below)
+  #   - No additional secret: GITHUB_TOKEN is used automatically for ghcr.io
+  #
+  # The build uses the 4-stage cargo-chef + distroless Dockerfile at the
+  # workspace root. Multi-platform: linux/amd64 + linux/arm64.
+  # Dep layers are cached in the GitHub Actions cache backend.
+  docker:
+    name: Docker build + push (ghcr.io)
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (for linux/arm64 cross-compilation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Derive tags and OCI labels from the git tag (e.g. v0.6.0 → 0.6.0 + latest).
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/makod
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=makod
+            org.opencontainers.image.description=Mako process engine daemon — German energy market communication (MaKo/BDEW EDI@Energy)
+            org.opencontainers.image.licenses=MIT OR Apache-2.0
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            OCI_REVISION=${{ github.sha }}
+            OCI_CREATED=${{ github.event.head_commit.timestamp }}
+          # Cache dep layer between releases using the GitHub Actions cache backend.
+          cache-from: type=gha,scope=makod-docker
+          cache-to:   type=gha,scope=makod-docker,mode=max
+

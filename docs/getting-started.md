@@ -63,9 +63,11 @@ graph TB
     subgraph Domain["Domain Crates"]
         GPKE["mako-gpke<br/>PIDs 55001–55018, 55555"]
         WIM["mako-wim<br/>PIDs 55039, 55042, 55051, 55168"]
-        GAS["mako-geli-gas<br/>PIDs 44001–44021"]
+        GAS["mako-geli-gas<br/>PIDs 44001–44021, 31011"]
+        WIMGAS["mako-wim-gas<br/>PIDs 44022–44024, 44039–44053, 44168–44170"]
         MABIS["mako-mabis<br/>PID 13003"]
         RDSP["mako-redispatch<br/>Redispatch 2.0 (XML)"]
+        DVGW["dvgw-edi<br/>ALOCAT/NOMINT/NOMRES/SCHEDL/…"]
     end
 
     subgraph Store["SlateDB (Object Store)"]
@@ -101,7 +103,7 @@ graph TB
 
 ## Prerequisites
 
-- Rust **1.88** or newer (`rustup update stable`)
+- Rust **1.89** or newer (`rustup update stable`)
 - Basic familiarity with EDIFACT or the BDEW MaKo specification
 
 ---
@@ -112,7 +114,7 @@ graph TB
 
 ```toml
 [dependencies]
-edi-energy = "0.5"
+edi-energy = "0.6"
 ```
 
 By default this enables the four most common message types: **UTILMD**, **MSCONS**, **APERAK**, **CONTRL**.
@@ -120,7 +122,7 @@ By default this enables the four most common message types: **UTILMD**, **MSCONS
 Enable additional types:
 
 ```toml
-edi-energy = { version = "0.5", features = ["invoic", "remadv", "orders"] }
+edi-energy = { version = "0.6", features = ["invoic", "remadv", "orders"] }
 ```
 
 ### Feature flags
@@ -213,6 +215,68 @@ cargo run --example 06_parse_reader
 
 ---
 
+## Part 1b — DVGW EDIFACT parsing (`dvgw-edi`)
+
+`dvgw-edi` parses the DVGW EDIFACT formats used in the gas transport and
+balancing market (GaBi Gas 2.0, BK7-14-020). It is a stateless library with
+no async, no I/O, and no runtime deps — the same design contract as `edi-energy`.
+
+### Installation
+
+```toml
+[dependencies]
+dvgw-edi = { version = "0.6" }
+```
+
+All 8 formats are enabled by default. You can opt in/out per format:
+
+```toml
+dvgw-edi = { version = "0.6", default-features = false, features = ["alocat", "nomint", "nomres"] }
+```
+
+| Feature | Enables |
+|---|---|
+| `alocat` | ALOCAT — allocation messages |
+| `nomint` | NOMINT — nomination messages |
+| `nomres` | NOMRES — nomination response messages |
+| `schedl` | SCHEDL — schedule messages |
+| `imbnot` | IMBNOT — imbalance notification messages |
+| `tranot` | TRANOT — transport notification messages |
+| `delord` | DELORD — delivery order messages |
+| `delres` | DELRES — delivery response messages (correlated with DELORD) |
+
+### Your first DVGW parse
+
+```rust
+use dvgw_edi::{parse, AnyDvgwMessage, DvgwMessage};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let input = std::fs::read("nomination.edi")?;
+    let msg = parse(&input)?;
+
+    // Synthetic PID identifies the message type and direction
+    println!("Synthetic PID: {}", msg.detect_pid().as_u32());
+
+    match &msg {
+        AnyDvgwMessage::Nomint(m) => {
+            println!("Nomination: {} transactions", m.transactions().len());
+        }
+        AnyDvgwMessage::Nomres(m) => {
+            println!("Nomination response, status: {:?}", m.response_status());
+        }
+        _ => {}
+    }
+    Ok(())
+}
+```
+
+**Synthetic PIDs:** `dvgw-edi` assigns synthetic 5-digit PIDs (`90001`–`90062`)
+to each DVGW message type and direction. These are **not** BDEW Pruefidentifikatoren
+and must never be registered in the `PidRouter`. They are only used internally
+by `mako-gabi-gas` for routing within the GaBi Gas workflow engine.
+
+---
+
 ## Part 2 — Process engine (`mako-engine` + domain crates)
 
 The process engine handles the **runtime side** of MaKo: tracking in-flight
@@ -291,13 +355,13 @@ sequenceDiagram
 ```toml
 [dependencies]
 # Core runtime
-mako-engine = { version = "0.5", features = ["testing"] }  # add "slatedb" for production
+mako-engine = { version = "0.6", features = ["testing"] }  # add "slatedb" for production
 
 # One or more domain crates depending on the market role:
-mako-gpke     = "0.5"   # GPKE — Lieferbeginn/-ende Strom (PIDs 55001–55018, 55555)
-mako-wim      = "0.5"   # WiM  — Messstellenwechsel Strom (PIDs 55039, 55042, 55051, 55168)
-mako-geli-gas = "0.5"   # GeLi Gas — Lieferbeginn/-ende Gas (PIDs 44001–44021)
-mako-mabis    = "0.5"   # MABIS — Bilanzkreisabrechnung Strom (PID 13003)
+mako-gpke     = "0.6"   # GPKE — Lieferbeginn/-ende Strom (PIDs 55001–55018, 55555)
+mako-wim      = "0.6"   # WiM  — Messstellenwechsel Strom (PIDs 55039, 55042, 55051, 55168)
+mako-geli-gas = "0.6"   # GeLi Gas — Lieferbeginn/-ende Gas (PIDs 44001–44021)
+mako-mabis    = "0.6"   # MABIS — Bilanzkreisabrechnung Strom (PID 13003)
 ```
 
 For the **production daemon** (`makod`) that wires everything together, see [Part 3](#part-3--running-makod) below.
@@ -418,7 +482,7 @@ makod \
   --s3-bucket my-makod-events \
   --tenant-id 9900357000004 \
   --http-addr 0.0.0.0:8080 \
-  --http-api-token "${MAKOD_HTTP_API_TOKEN}" \
+  --auth-key erp-sap=$(openssl rand -hex 32) \
   --as4-addr 0.0.0.0:4080 \
   --as4-party-id 9900357000004 \
   --as4-signing-key-pem-file /etc/makod/signing.key.pem \

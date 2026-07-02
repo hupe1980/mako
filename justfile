@@ -60,9 +60,9 @@ ci: check test clippy fmt-check deny doc-check codegen-check validate-profiles-s
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
-# Build the production daemon (requires slatedb feature)
+# Build the production daemon
 build:
-    cargo build -p makod --release --features slatedb
+    cargo build -p makod --release
 
 # Build debug daemon (fast iteration)
 build-dev:

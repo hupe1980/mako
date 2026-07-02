@@ -354,6 +354,25 @@ impl<S: AtomicAppend> AtomicAppend for Arc<S> {
             .append_with_outbox(stream_id, expected_version, events, outbox)
             .await
     }
+
+    async fn append_with_outbox_and_deadlines(
+        &self,
+        stream_id: &StreamId,
+        expected_version: ExpectedVersion,
+        events: &[NewEvent],
+        outbox: &[crate::outbox::PendingOutbox],
+        deadlines: &[crate::deadline::Deadline],
+    ) -> Result<AppendResult, EngineError> {
+        self.as_ref()
+            .append_with_outbox_and_deadlines(
+                stream_id,
+                expected_version,
+                events,
+                outbox,
+                deadlines,
+            )
+            .await
+    }
 }
 
 // ── AtomicAppend trait ────────────────────────────────────────────────────────
@@ -405,6 +424,45 @@ pub trait AtomicAppend: EventStore {
         events: &[NewEvent],
         outbox: &[crate::outbox::PendingOutbox],
     ) -> Result<AppendResult, EngineError>;
+
+    /// Atomically append `events`, schedule `outbox` messages, **and** register
+    /// `deadlines` in a single write operation.
+    ///
+    /// Stronger guarantee than calling [`append_with_outbox`] followed by
+    /// [`DeadlineStore::register`]: either all three sets of writes land or
+    /// none do. This eliminates the non-atomic window where a process event is
+    /// persisted but its regulatory deadline is lost (e.g. on a crash between
+    /// the two calls).
+    ///
+    /// # Default implementation
+    ///
+    /// The default falls back to [`append_with_outbox`] only — **deadlines are
+    /// not persisted**. Override this in [`AtomicAppend`] implementations that
+    /// include a deadline store in the same underlying database (e.g.
+    /// [`SlateDbStore`]) to achieve full atomicity.
+    ///
+    /// Callers using the default must register deadlines separately via
+    /// [`DeadlineStore::register`] after this returns.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`append_with_outbox`].
+    ///
+    /// [`append_with_outbox`]: AtomicAppend::append_with_outbox
+    /// [`DeadlineStore::register`]: crate::deadline::DeadlineStore::register
+    /// [`SlateDbStore`]: crate::store_slatedb::SlateDbStore
+    async fn append_with_outbox_and_deadlines(
+        &self,
+        stream_id: &StreamId,
+        expected_version: ExpectedVersion,
+        events: &[NewEvent],
+        outbox: &[crate::outbox::PendingOutbox],
+        _deadlines: &[crate::deadline::Deadline],
+    ) -> Result<AppendResult, EngineError> {
+        // Default: non-atomic fallback — deadlines must be registered separately.
+        self.append_with_outbox(stream_id, expected_version, events, outbox)
+            .await
+    }
 }
 
 // ── InMemoryEventStore ────────────────────────────────────────────────────────

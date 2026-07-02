@@ -31,6 +31,10 @@
 //! [http]
 //! addr = "0.0.0.0:8080"
 //!
+//! [oidc]
+//! issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+//! audience = "api://makod"
+//!
 //! [as4]
 //! addr     = "0.0.0.0:4080"
 //! party_id = "9900000000001"
@@ -63,6 +67,7 @@ pub struct ConfigFile {
     pub logging: Option<LoggingConfig>,
     pub storage: Option<StorageConfig>,
     pub http: Option<HttpConfig>,
+    pub oidc: Option<OidcConfig>,
     pub webdienste: Option<WebdiensteConfig>,
     pub engine: Option<EngineConfig>,
     pub as4: Option<As4Config>,
@@ -154,11 +159,35 @@ pub struct AzureConfig {
 pub struct HttpConfig {
     /// TCP listen address, e.g. `"0.0.0.0:8080"`.
     pub addr: Option<std::net::SocketAddr>,
-    /// Bearer token required on `POST /edifact`. When absent, the API is
-    /// unauthenticated (a warning is logged at startup).
-    pub api_token: Option<String>,
     /// Maximum `POST /edifact` request body in bytes. Default: 10 MiB.
     pub max_body_bytes: Option<usize>,
+}
+
+/// `[oidc]` — OIDC/JWT bearer token authentication.
+///
+/// When configured, `makod` validates JWT bearer tokens issued by the given
+/// OIDC provider.  The `sub` claim becomes the Cedar principal name.
+/// API-key authentication (`--auth-key`) and OIDC can be enabled simultaneously.
+///
+/// ## Example
+///
+/// ```toml
+/// [oidc]
+/// issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+/// audience = "api://makod"
+/// jwks_refresh_secs = 300
+/// ```
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OidcConfig {
+    /// OIDC issuer URL (e.g. `https://login.microsoftonline.com/{tenant}/v2.0`).
+    pub issuer: Option<String>,
+
+    /// Expected JWT `aud` claim.
+    pub audience: Option<String>,
+
+    /// JWKS background refresh interval in seconds. Default: 300.
+    pub jwks_refresh_secs: Option<u64>,
 }
 
 /// `[webdienste]` — BDEW API-Webdienste Strom server.

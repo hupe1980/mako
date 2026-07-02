@@ -87,7 +87,7 @@ or via the config file (`storage.allow_volatile = true`).
 cargo run -p makod -- \
   --data-dir /var/lib/makod \
   --http-addr 0.0.0.0:8080 \
-  --http-api-token "$(openssl rand -hex 32)" \
+  --auth-key erp-prod=$(openssl rand -hex 32) \
   --tenant-id 9900357000004
 ```
 
@@ -98,7 +98,8 @@ makod \
   --data-dir /var/lib/makod \
   --tenant-id 9900357000004 \
   --http-addr 0.0.0.0:8080 \
-  --http-api-token "${MAKOD_HTTP_API_TOKEN}" \
+  --auth-key erp-sap=$(openssl rand -hex 32) \
+  --auth-key ops-grafana=$(openssl rand -hex 32) \
   --api-webdienste-addr 0.0.0.0:8090 \
   --as4-addr 0.0.0.0:4080 \
   --as4-party-id 9900357000004 \
@@ -132,13 +133,16 @@ prefix   = "makod"              # key prefix within the bucket
 # endpoint = "http://minio:9000"  # uncomment for MinIO / S3-compatible
 
 [engine]
-tenant_id   = "9900357000004"     # your 13-digit GLN
-marktrollen = ["LF"]              # roles this instance may issue commands for
+tenant_id = "9900357000004"     # your 13-digit GLN
 
 [http]
 addr           = "0.0.0.0:8080"
-api_token      = "change-me-in-production"
 max_body_bytes = 10485760       # 10 MiB (default)
+# Note: auth_keys, marktrollen, and cedar_policy_dir are CLI flags / env vars only.
+
+[oidc]
+# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "api://makod"
 
 [as4]
 addr     = "0.0.0.0:4080"
@@ -224,7 +228,9 @@ Azure credentials: `AZURE_STORAGE_ACCOUNT_KEY`, or service-principal via `AZURE_
 | TOML key | Env var | CLI flag | Default | Description |
 |---|---|---|---|---|
 | `tenant_id` | `MAKOD_TENANT_ID` | `--tenant-id` | `"default"` | Operator GLN or opaque ID |
-| `marktrollen` | `MAKOD_MARKTROLLEN` | `--marktrollen` | *(required when `--http-addr` is set)* | Marktrollen this instance is authorised to issue commands for (comma-separated) |
+| `shutdown_timeout_secs` | `MAKOD_SHUTDOWN_TIMEOUT_SECS` | `--shutdown-timeout-secs` | `30` | Shutdown grace period in seconds |
+| `deadline_poll_interval_secs` | `MAKOD_DEADLINE_POLL_INTERVAL_SECS` | `--deadline-poll-interval-secs` | `30` | How often the deadline scheduler polls for due deadlines (minimum 1 s; set ≤30 s for Redispatch 2.0 Activation 5-minute constraint) |
+| *(CLI/env only)* | `MAKOD_MARKTROLLEN` | `--marktrollen` | *(required when `--http-addr` is set)* | Marktrollen this instance is authorised to issue commands for (comma-separated) |
 
 Set `tenant_id` to your own 13-digit GLN. All process streams and inbox keys are
 scoped to this identifier.
@@ -252,11 +258,216 @@ gateway.
 | TOML key | Env var | CLI flag | Default | Description |
 |---|---|---|---|---|
 | `addr` | `MAKOD_HTTP_ADDR` | `--http-addr` | *(disabled)* | TCP listen address |
-| `api_token` | `MAKOD_HTTP_API_TOKEN` | `--http-api-token` | *(none)* | Bearer token for protected endpoints |
 | `max_body_bytes` | `MAKOD_HTTP_MAX_BODY_BYTES` | `--http-max-body-bytes` | `10485760` | Max `POST /edifact` body in bytes |
+| *(CLI/env only)* | `MAKOD_AUTH_KEYS` | `--auth-key` | *(none)* | Named API keys `NAME=TOKEN`. Repeatable. At least one `--auth-key` or `--oidc-issuer` is required when `--http-addr` is set. |
+| *(CLI/env only)* | `MAKOD_CEDAR_POLICY_DIR` | `--cedar-policy-dir` | *(none)* | Directory of extra `.cedar` policy files appended to the built-in policy |
 
-If `api_token` is absent, a startup `WARN` is logged. `GET /health` is always
-public. Every other endpoint requires `Authorization: Bearer <token>`.
+`makod` **refuses to start** when `--http-addr` is set and neither `--auth-key`
+nor `--oidc-issuer` is provided. `GET /health` is always public. Every other
+endpoint requires `Authorization: Bearer <token>`.
+
+---
+
+## Authorization
+{: #authorization }
+
+`makod` uses [Cedar](https://cedarpolicy.com) — the same policy engine used by
+Amazon Verified Permissions — for attribute-based access control (ABAC) across
+all HTTP endpoints.
+
+### How it works
+
+Every authenticated caller maps to a `MaKo::Principal` entity identified by the
+key name from `--auth-key NAME=TOKEN`. On each request the engine builds a Cedar
+`Request` with the principal, action, and resource, then evaluates it against the
+active policy set.
+
+The **built-in `default.cedar` policy** permits all actions to every authenticated
+principal — a reasonable default for single-tenant operator deployments. Replace
+it with stricter policies for multi-tenant or multi-system deployments.
+
+At startup, Cedar Validator runs in **strict mode** against the built-in schema.
+A policy file with type errors **prevents startup** — misconfigured policies are
+caught before they could silently over-permit or under-permit.
+
+### Identity model
+
+```
+MaKo namespace
+├── Principal          — caller identity (keyed by --auth-key NAME)
+├── Command            — attrs: name, marktrolle, pid, tenant
+├── EdifactIngest      — attrs: tenant
+├── AdminMaloRecord    — attrs: tenant, malo_id (optional)
+└── AdminPartnerRecord — attrs: tenant, gln (optional)
+
+Actions
+├── SubmitCommand
+├── IngestEdifact
+├── AdminMalo (group)
+│   ├── AdminMaloRead / AdminMaloWrite / AdminMaloDelete / AdminMaloStats
+├── AdminPartner (group)
+│   └── AdminPartnerRead / AdminPartnerWrite / AdminPartnerDelete / AdminPartnerImport
+```
+
+### Action groups
+
+The Cedar schema defines `AdminMalo` and `AdminPartner` action groups.
+Policies can reference the group name to match all member actions at once,
+without enumerating each one individually:
+
+```cedar
+// Deny ops-grafana everything except MaLo stats and partner read.
+forbid(
+  principal == MaKo::Principal::"ops-grafana",
+  action in [MaKo::Action::"AdminMalo", MaKo::Action::"AdminPartner"],
+  resource
+)
+unless {
+  action == MaKo::Action::"AdminMaloStats"
+  || action == MaKo::Action::"AdminPartnerRead"
+};
+```
+
+```cedar
+// Deny a gas-ERP key all partner admin and all Malo write/delete.
+forbid(
+  principal == MaKo::Principal::"erp-gas",
+  action in [MaKo::Action::"AdminPartner"],
+  resource
+);
+forbid(
+  principal == MaKo::Principal::"erp-gas",
+  action in [MaKo::Action::"AdminMalo"],
+  resource
+)
+unless { action == MaKo::Action::"AdminMaloRead"
+      || action == MaKo::Action::"AdminMaloStats" };
+```
+
+### Provisioning keys
+
+```bash
+# Single integration (e.g. SAP IS-U ERP)
+makod --auth-key erp-sap=$(openssl rand -hex 32) ...
+
+# Multiple integrations with separate keys
+makod \
+  --auth-key erp-sap=$(openssl rand -hex 32) \
+  --auth-key ops-grafana=$(openssl rand -hex 32) \
+  --auth-key ci-tests=$(openssl rand -hex 32) \
+  ...
+```
+
+Environment variable (comma-separated `NAME=TOKEN` pairs):
+
+```bash
+export MAKOD_AUTH_KEYS="erp-sap=<token1>,ops-grafana=<token2>"
+```
+
+In the TOML config file, API keys are set via the environment variable only
+(`MAKOD_AUTH_KEYS`) — they are not a TOML config field.
+
+### Custom Cedar policies
+
+Drop `.cedar` files into a directory and set `--cedar-policy-dir`:
+
+```cedar
+// /etc/makod/cedar/read_only_grafana.cedar
+// ops-grafana may only query MaLo stats — use the AdminMalo group.
+forbid(
+  principal == MaKo::Principal::"ops-grafana",
+  action in [MaKo::Action::"AdminMalo"],
+  resource
+)
+unless { action == MaKo::Action::"AdminMaloStats" };
+```
+
+```bash
+makod --cedar-policy-dir /etc/makod/cedar ...
+```
+
+Or via the environment variable:
+
+```bash
+export MAKOD_CEDAR_POLICY_DIR=/etc/makod/cedar
+```
+
+Multiple `.cedar` files in the directory are merged into a single policy set.
+The Cedar Validator validates all policies (including custom ones) at startup.
+
+### OIDC / JWT authentication
+
+`makod` supports JWT bearer tokens issued by any standards-compliant OIDC
+identity provider — Azure AD/Entra ID, Keycloak, Okta, Google Workspace, AWS
+Cognito, Kubernetes workload identity, and others.
+
+**Configuration:**
+
+| TOML key | Env var | CLI flag | Description |
+|---|---|---|---|
+| `oidc.issuer` | `MAKOD_OIDC_ISSUER` | `--oidc-issuer` | OIDC issuer URL |
+| `oidc.audience` | `MAKOD_OIDC_AUDIENCE` | `--oidc-audience` | Expected `aud` claim |
+| `oidc.jwks_refresh_secs` | `MAKOD_OIDC_JWKS_REFRESH_SECS` | `--oidc-jwks-refresh-secs` | JWKS refresh interval (default: 300 s) |
+
+At startup, `makod` fetches `<issuer>/.well-known/openid-configuration` to
+locate the JWKS endpoint, downloads the public keys, and caches them in
+memory.  Token verification is **synchronous and non-blocking** — no
+per-request network round-trips.  A background task refreshes the JWKS every
+`jwks_refresh_secs` seconds to handle key rotation without restarting.
+
+**Security constraints:**
+- Only **asymmetric algorithms** are accepted: RS256/384/512, ES256/384, PS256/384/512.
+- HMAC algorithms (`HS256`, `HS384`, `HS512`) are unconditionally rejected.
+- The JWT `iss` and `aud` claims are validated on every token.
+- JWT expiry (`exp`) is enforced.
+
+**Identity mapping:**  The JWT `sub` claim becomes the Cedar principal entity
+ID — identical to API-key names.  All Cedar policies work unchanged regardless
+of authentication method.
+
+**Coexistence:** `--auth-key` and `--oidc-issuer` can be active simultaneously.
+This enables gradual migration: add OIDC without removing existing API keys.
+
+**TOML example:**
+
+```toml
+[oidc]
+issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+audience = "api://makod"
+jwks_refresh_secs = 300
+```
+
+**Azure Managed Identity example (CLI):**
+
+```bash
+makod --oidc-issuer "https://login.microsoftonline.com/$TENANT/v2.0" \
+      --oidc-audience "api://makod" \
+      --http-addr "0.0.0.0:8080"
+```
+
+**Cedar policy scoping an OIDC service account:**
+
+```cedar
+// Allow the Azure Managed Identity (identified by its object-id `sub`)
+// to submit commands only — no admin access.
+forbid(
+  principal == MaKo::Principal::"<azure-object-id>",
+  action in [MaKo::Action::"AdminMalo", MaKo::Action::"AdminPartner"],
+  resource
+);
+```
+
+**Kubernetes workload identity example:**
+
+```toml
+[oidc]
+issuer   = "https://token.actions.githubusercontent.com"
+audience = "api://makod"
+```
+
+The Kubernetes service-account token `sub` typically looks like
+`system:serviceaccount:<namespace>:<name>` — use that string as the Cedar
+principal entity ID in your policies.
 
 ### `[as4]` — AS4/ebMS3 inbound and outbound
 
@@ -286,6 +497,143 @@ without requiring a redeploy.
 | TOML key | Env var | CLI flag | Description |
 |---|---|---|---|
 | `addr` | `MAKOD_API_WEBDIENSTE_ADDR` | `--api-webdienste-addr` | TCP listen address |
+
+---
+
+## MCP Server
+
+`makod` exposes an [Model Context Protocol (MCP)](https://modelcontextprotocol.io)
+server at `/mcp` on the same `--http-addr` port. This allows LLM tooling (Claude
+Desktop, VS Code Copilot, any MCP-capable client) to directly inspect process state
+and submit MaKo commands without writing integration code.
+
+### Transport
+
+Uses the **MCP Streamable HTTP transport** (spec 2025-11-25). Clients `POST` to
+`/mcp` for JSON-RPC requests and `GET /mcp` for SSE event streams. Stateful sessions
+are maintained in-memory (no separate session store required for single-instance
+deployments).
+
+### Authentication
+
+Every HTTP request to `/mcp` (including SSE stream connections) must carry an
+`Authorization: Bearer <token>` header. The same Cedar ABAC layer enforced on all
+other HTTP endpoints applies — unauthenticated requests are rejected with
+`401 Unauthorized` before reaching the MCP session layer.
+
+Both static auth keys and OIDC tokens are accepted, whichever is configured.
+
+### Tools
+
+| Tool | Description |
+|---|---|
+| `list_commands` | List all commands available for this instance's configured Marktrollen |
+| `submit_command` | Trigger a MaKo process command — same semantic as `POST /api/v1/commands` |
+| `get_malo` | Read a cached Marktlokation (MaLo) record by its 11-digit ID |
+| `list_partners` | List all registered trading partners for this tenant |
+| `get_partner` | Get a specific trading partner by 13-digit GLN |
+| `get_health` | Query daemon version, tenant ID, Marktrollen, and MaLo cache stats |
+
+Call `list_commands` first — it returns every command name, its Marktrolle(n),
+primary Prüfidentifikator, and whether a `marktrolle` override is required at
+dispatch time. Results are pre-filtered to the Marktrollen this instance was
+started with.
+
+#### `submit_command` parameters
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `command` | string | ✓ | Dotted command name: `<domain>.<prozess>.<aktion>` — e.g. `gpke.lieferbeginn.anmelden` |
+| `payload` | object | ✓ | Command-specific payload, e.g. `{"malo_id": "10001234567", "lieferbeginn_datum": "2026-10-01"}` |
+| `marktrolle` | string | – | Marktrolle override (`LF`, `NB`, `MSB`, …); required for multi-role commands |
+| `idempotency_key` | string | – | Stable UUID for retry safety; a random UUID is generated when omitted |
+
+#### `get_malo` / `get_partner` parameters
+
+`get_malo` takes `malo_id` (11-digit string). `get_partner` takes `gln` (13-digit GLN string).
+
+### Resources
+
+| URI template | Description |
+|---|---|
+| `malo://{malo_id}` | Full `MaloIdentResultPositive` record from the MaLo cache |
+| `partner://{gln}` | Full partner record including AS4 URL, market roles, and channels |
+
+Clients that support MCP Resources can read these directly (e.g. drag-and-drop into
+a Claude conversation, or `@resource malo://10001234567` in VS Code Copilot Chat).
+
+### Prompts
+
+Three guided workflow prompts are built in and pre-fill the relevant tool calls with
+context and step-by-step instructions:
+
+| Prompt | Arguments | Description |
+|---|---|---|
+| `gpke-lieferbeginn` | `malo_id`, `lieferbeginn_datum` | Guided GPKE Lieferbeginn Strom workflow (electricity supplier change) |
+| `geli-lieferbeginn` | `malo_id`, `lieferbeginn_datum` | Guided GeLi Gas Lieferbeginn workflow (gas supplier change) |
+| `wim-geraetewechsel` | `melo_id`, `wechseldatum`, `marktrolle` | Guided WiM Gerätewechsel workflow (meter device change) |
+
+Each prompt returns a `User` message that instructs the LLM to call the right tools
+in the right order, with the correct payload fields and applicable regulatory deadline.
+
+### Server instructions
+
+When a client connects, `makod` returns dynamic server instructions that include:
+
+- The instance's tenant ID and configured Marktrollen
+- A filtered command list (only commands relevant to the configured roles)
+- A regulatory deadline table (GPKE 24 h, WiM 5 Werktage, GeLi Gas 10 Werktage, MABIS 1 Werktag)
+- Machine-readable error prefix glossary
+
+This means the LLM always has full operational context without additional configuration.
+
+### Claude Desktop integration
+
+Add `makod` as an MCP server in `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "makod": {
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-auth-key-or-oidc-token>"
+      }
+    }
+  }
+}
+```
+
+Replace `localhost:8080` with your `--http-addr` and the header value with a
+valid auth key or OIDC access token. Restart Claude Desktop to activate.
+
+### VS Code Copilot integration
+
+Add to your VS Code `settings.json` or `.vscode/mcp.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "makod": {
+        "type": "http",
+        "url": "http://localhost:8080/mcp",
+        "headers": {
+          "Authorization": "Bearer ${env:MAKOD_AUTH_KEY}"
+        }
+      }
+    }
+  }
+}
+```
+
+Set `MAKOD_AUTH_KEY` in your shell environment before opening VS Code.
+
+### Kubernetes deployment note
+
+When `makod` runs inside a cluster, expose the HTTP port to the MCP client via
+`kubectl port-forward` or an internal `Service`. The `/mcp` path is subject to the
+same network access controls as the REST API — no additional configuration is needed.
 
 ---
 
@@ -634,29 +982,90 @@ curl -X POST http://localhost:8080/api/v1/commands \
 
 ## Docker Deployment
 
-```dockerfile
-FROM rust:1.88-slim AS builder
-WORKDIR /src
-COPY . .
-RUN cargo build -p makod --release --features slatedb
+The workspace ships a production-grade `Dockerfile` at the repository root.
+It uses a **4-stage cargo-chef + distroless** build:
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /src/target/release/makod /usr/local/bin/makod
-VOLUME ["/var/lib/makod", "/etc/makod"]
-EXPOSE 4080 8080 8090
-ENTRYPOINT ["makod"]
-```
+| Stage | Base | Purpose |
+|---|---|---|
+| `chef` | `lukemathwalker/cargo-chef:latest-rust-1.89-bookworm` | Rust toolchain + native build deps (`libssl-dev`, `libclang-dev`, `cmake`, `nasm`) |
+| `planner` | `chef` | `cargo chef prepare` — analyses workspace manifests, emits `recipe.json` |
+| `builder` | `chef` | `cargo chef cook` (cached dep layer) → `cargo build -p makod` → `strip` |
+| `runtime` | `gcr.io/distroless/cc-debian12:nonroot` | Minimal runtime: glibc + libgcc + CA certs + tzdata only; no shell, no package manager |
 
-Mount your signing keys into `/etc/makod/` and point `--config` at a TOML file:
+**Key build properties:**
+
+- `OPENSSL_STATIC=1` — OpenSSL linked statically into the binary; no `libssl.so` needed at runtime.
+- `TZ=Europe/Berlin` — `/usr/share/zoneinfo/Europe/` copied from builder so `time::OffsetDateTime` resolves CET/CEST correctly for regulatory deadline arithmetic.
+- `/var/lib/makod` pre-created with uid 65532 (distroless `nonroot`) so SlateDB can write without a mounted volume (e.g. `--check` mode and CI).
+- `VOLUME ["/var/lib/makod"]` declared *after* the pre-owned directory so Docker does not reset ownership.
+- `HEALTHCHECK CMD ["/usr/local/bin/makod", "--check"]` — validates all adapters and profiles; exits 0 on success.
+
+### Pre-built image
+
+Every release is automatically built for `linux/amd64` and `linux/arm64` and pushed to
+the GitHub Container Registry:
 
 ```bash
+# Pull the latest release
+docker pull ghcr.io/hupe1980/makod:latest
+
+# Pin to a specific version
+docker pull ghcr.io/hupe1980/makod:0.6.0
+
+# Smoke-test the image
+docker run --rm ghcr.io/hupe1980/makod:0.6.0 --check
+```
+
+Images are tagged with the semver version (`0.6.0`), major.minor (`0.6`), and `latest`.
+
+### Building locally
+
+```bash
+docker build \
+  --build-arg OCI_REVISION=$(git rev-parse HEAD) \
+  --build-arg OCI_CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  -t makod:latest \
+  .
+```
+
+Pass `--build-arg PROFILE=dev` for a debug build. The dep layer is cached as long as `Cargo.lock` and `Cargo.toml` files are unchanged.
+
+### Running the container
+
+```bash
+# Persistent local storage, signing keys, full port layout
 docker run -d \
   -v /srv/makod/data:/var/lib/makod \
-  -v /srv/makod/config:/etc/makod \
-  -p 4080:4080 -p 8080:8080 \
+  -v /srv/makod/config:/etc/makod:ro \
+  -p 4080:4080 \
+  -p 8080:8080 \
+  -p 8090:8090 \
   -e MAKOD_CONFIG=/etc/makod/makod.toml \
+  -e MAKOD_AUTH_KEYS="erp-sap=$(openssl rand -hex 32)" \
   makod:latest
+
+# Validate config without starting any workers (useful in CI pre-flight)
+docker run --rm makod:latest --check
+```
+
+The container runs as uid 65532 (`nonroot`) with no capabilities. Mount signing keys and config as read-only volumes (`-v /path:/etc/makod:ro`); the data volume must be writable by uid 65532.
+
+For `docker-compose`, declare the volume as user-scoped:
+
+```yaml
+services:
+  makod:
+    image: makod:latest
+    user: "65532:65532"
+    volumes:
+      - makod-data:/var/lib/makod
+      - ./config:/etc/makod:ro
+    ports: ["4080:4080", "8080:8080", "8090:8090"]
+    environment:
+      MAKOD_CONFIG: /etc/makod/makod.toml
+
+volumes:
+  makod-data:
 ```
 
 ### Kubernetes example
@@ -676,7 +1085,7 @@ spec:
     spec:
       containers:
         - name: makod
-          image: ghcr.io/your-org/makod:latest
+          image: ghcr.io/hupe1980/makod:0.6.0
           ports:
             - containerPort: 4080    # AS4
             - containerPort: 8080    # HTTP REST
@@ -684,9 +1093,9 @@ spec:
           env:
             - name: MAKOD_CONFIG
               value: /etc/makod/makod.toml
-            - name: MAKOD_HTTP_API_TOKEN
+            - name: MAKOD_AUTH_KEYS
               valueFrom:
-                secretKeyRef: { name: makod-secrets, key: http-api-token }
+                secretKeyRef: { name: makod-secrets, key: auth-keys }
           volumeMounts:
             - name: config
               mountPath: /etc/makod
@@ -775,7 +1184,7 @@ Enable the `tracing` feature in `edi-energy` to get per-message parse/validate
 spans:
 
 ```toml
-edi-energy = { version = "0.5", features = ["tracing"] }
+edi-energy = { version = "0.6", features = ["tracing"] }
 ```
 
 These integrate with OpenTelemetry exporters when a global subscriber is
@@ -793,7 +1202,7 @@ control. Use:
 |---|---|
 | **Kubernetes Secrets** | Mount as volume files; use `signing_key_pem_file` config key |
 | **Docker Secrets** | `docker secret create makod-key signing.pem`; bind-mount into container |
-| **Environment variables** | `MAKOD_AS4_SIGNING_KEY_PEM` (inline PEM); `MAKOD_HTTP_API_TOKEN` |
+| **Environment variables** | `MAKOD_AS4_SIGNING_KEY_PEM` (inline PEM); `MAKOD_AUTH_KEYS` |
 | **AWS Secrets Manager** | Fetch at startup via init container; write to tmpfs volume |
 
 For the signing key and cert, **always prefer the `*_pem_file` variant** over

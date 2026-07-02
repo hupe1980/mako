@@ -1504,38 +1504,35 @@ where
             // production; ProcessRegistry must survive restarts.
             #[cfg(not(any(test, feature = "testing")))]
             {
-                if ds_name.contains("NoopDeadlineStore") {
-                    panic!(
-                        "EngineBuilder::build: NoopDeadlineStore is active in a \
-                         non-testing build. This silently discards all APERAK deadlines, \
-                         which is an immediately reportable BNetzA violation \
-                         (BK6-22-024 §5, BK7-24-01-009). \
-                         Call .with_deadline_store(SlateDbStore::as_deadline_store()) \
-                         in your production engine assembly. \
-                         If this is a test, enable the 'testing' feature."
-                    );
-                }
-                if os_name.contains("NoopOutboxStore") {
-                    panic!(
-                        "EngineBuilder::build: NoopOutboxStore is active in a \
-                         non-testing build. This silently discards all outbound \
-                         APERAK, CONTRL, and UTILMD messages. \
-                         Call .with_outbox_store(SlateDbStore::as_outbox_store()) \
-                         in your production engine assembly. \
-                         If this is a test, enable the 'testing' feature."
-                    );
-                }
-                if pr_name.contains("NoopProcessRegistry") {
-                    panic!(
-                        "EngineBuilder::build: NoopProcessRegistry is active in a \
-                         non-testing build. This means conversation routing \
-                         (PID → stream_id lookup) is lost on every restart, \
-                         breaking all WiM, GeLi Gas, and GPKE in-flight processes. \
-                         Call .with_registry(SlateDbStore::as_process_registry()) \
-                         in your production engine assembly. \
-                         If this is a test, enable the 'testing' feature."
-                    );
-                }
+                assert!(
+                    !ds_name.contains("NoopDeadlineStore"),
+                    "EngineBuilder::build: NoopDeadlineStore is active in a \
+                     non-testing build. This silently discards all APERAK deadlines, \
+                     which is an immediately reportable BNetzA violation \
+                     (BK6-22-024 §5, BK7-24-01-009). \
+                     Call .with_deadline_store(SlateDbStore::as_deadline_store()) \
+                     in your production engine assembly. \
+                     If this is a test, enable the 'testing' feature."
+                );
+                assert!(
+                    !os_name.contains("NoopOutboxStore"),
+                    "EngineBuilder::build: NoopOutboxStore is active in a \
+                     non-testing build. This silently discards all outbound \
+                     APERAK, CONTRL, and UTILMD messages. \
+                     Call .with_outbox_store(SlateDbStore::as_outbox_store()) \
+                     in your production engine assembly. \
+                     If this is a test, enable the 'testing' feature."
+                );
+                assert!(
+                    !pr_name.contains("NoopProcessRegistry"),
+                    "EngineBuilder::build: NoopProcessRegistry is active in a \
+                     non-testing build. This means conversation routing \
+                     (PID → stream_id lookup) is lost on every restart, \
+                     breaking all WiM, GeLi Gas, and GPKE in-flight processes. \
+                     Call .with_registry(SlateDbStore::as_process_registry()) \
+                     in your production engine assembly. \
+                     If this is a test, enable the 'testing' feature."
+                );
             }
 
             // In test/testing/tracing builds: emit warnings instead of panicking.

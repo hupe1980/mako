@@ -100,6 +100,7 @@ mod adapters;
 mod api_bridge;
 mod as4_ingest;
 mod as4_sender;
+mod cedar_authz;
 mod commands_api;
 mod config;
 mod deadline_dispatch;
@@ -111,11 +112,14 @@ mod ingest_dispatcher;
 mod malo_admin_api;
 mod malo_cache;
 mod malo_ident_sender;
+mod mcp_server;
 mod metrics_api;
 mod migration_api;
+mod oidc_verifier;
 mod openapi;
 mod partner_api;
 mod projection_worker;
+mod startup;
 mod verzeichnisdienst_worker;
 mod webdienste;
 
@@ -306,24 +310,88 @@ struct Cli {
     #[arg(long, value_name = "ADDR", env = "MAKOD_HTTP_ADDR")]
     http_addr: Option<std::net::SocketAddr>,
 
-    /// Bearer token for the HTTP REST API.
+    /// Named API keys for Cedar authorization.
     ///
-    /// When set, every request to `POST /edifact` must include
-    /// `Authorization: Bearer <TOKEN>`. `GET /health` is always public.
-    /// When omitted and `--http-addr` is set, makod refuses to start. The HTTP REST
-    /// API and `/admin/migrations` endpoint perform privileged operations and must
-    /// not be exposed unauthenticated. Generate a token with
-    /// `openssl rand -hex 32`.
+    /// Format: `NAME=TOKEN` (repeatable, or comma-separated via the environment
+    /// variable).  Each key maps a bearer token to a named Cedar principal
+    /// (`MaKo::Principal::"<NAME>"`).  The name appears in all audit logs.
     ///
-    /// Can also be set via the `MAKOD_HTTP_API_TOKEN` environment variable.
+    /// Example:
+    /// ```text
+    /// --auth-key erp-sap=<token1> --auth-key ci-pipeline=<token2>
+    /// ```
+    ///
+    /// Can also be set via `MAKOD_AUTH_KEYS` (comma-separated `NAME=TOKEN` pairs).
+    #[arg(
+        long = "auth-key",
+        value_name = "NAME=TOKEN",
+        env = "MAKOD_AUTH_KEYS",
+        value_delimiter = ',',
+        hide_env_values = true
+    )]
+    auth_keys: Vec<String>,
+
+    /// Directory containing additional Cedar policy files (`.cedar`).
+    ///
+    /// All `*.cedar` files in this directory are concatenated and loaded at
+    /// startup to supplement or restrict the default policy.  Operators use
+    /// this to implement fine-grained ABAC rules per principal, tenant,
+    /// Marktrolle, or PID without recompiling the binary.
+    ///
+    /// See `src/cedar/default.cedar` for policy examples.
+    ///
+    /// Can also be set via `MAKOD_CEDAR_POLICY_DIR`.
+    #[arg(long, value_name = "DIR", env = "MAKOD_CEDAR_POLICY_DIR")]
+    cedar_policy_dir: Option<std::path::PathBuf>,
+
+    /// OIDC issuer URL for JWT bearer token validation.
+    ///
+    /// When set, `makod` fetches `<ISSUER>/.well-known/openid-configuration`
+    /// at startup to locate the JWKS endpoint, downloads the public keys, and
+    /// validates incoming JWT bearer tokens locally (no per-request network
+    /// round-trip).  The JWT `sub` claim becomes the Cedar principal name.
+    ///
+    /// Supported identity providers: Azure AD/Entra ID, Keycloak, Okta,
+    /// Google Workspace, AWS Cognito, Kubernetes workload identity, and any
+    /// standards-compliant OIDC provider.
+    ///
+    /// Only asymmetric algorithms (RS256/384/512, ES256/384, PS256/384/512)
+    /// are accepted.  HMAC tokens are rejected unconditionally.
+    ///
+    /// Requires `--oidc-audience`.  API-key auth (`--auth-key`) and OIDC
+    /// coexist — either or both can be configured simultaneously.
+    ///
+    /// Can also be set via `MAKOD_OIDC_ISSUER`.
+    #[arg(long, value_name = "URL", env = "MAKOD_OIDC_ISSUER")]
+    oidc_issuer: Option<String>,
+
+    /// Expected JWT `aud` claim (audience).
+    ///
+    /// Must match the audience configured in the identity provider for this
+    /// `makod` instance.  Tokens with a different audience are rejected.
+    ///
+    /// Example: `api://makod` (Azure) or `https://makod.example.com` (custom).
+    ///
+    /// Required when `--oidc-issuer` is set.
+    ///
+    /// Can also be set via `MAKOD_OIDC_AUDIENCE`.
+    #[arg(long, value_name = "AUD", env = "MAKOD_OIDC_AUDIENCE")]
+    oidc_audience: Option<String>,
+
+    /// JWKS background refresh interval in seconds.
+    ///
+    /// A Tokio task refreshes the cached JWKS on this cadence so that key
+    /// rotations at the identity provider are picked up without restarting
+    /// the daemon.  Default: 300 seconds (5 minutes).
+    ///
+    /// Can also be set via `MAKOD_OIDC_JWKS_REFRESH_SECS`.
     #[arg(
         long,
-        value_name = "TOKEN",
-        env = "MAKOD_HTTP_API_TOKEN",
-        hide_env_values = true,
-        value_parser = |s: &str| Ok::<SecretString, std::convert::Infallible>(SecretString::new(s.into())),
+        value_name = "SECS",
+        default_value_t = 300,
+        env = "MAKOD_OIDC_JWKS_REFRESH_SECS"
     )]
-    http_api_token: Option<SecretString>,
+    oidc_jwks_refresh_secs: u64,
 
     /// Maximum request body size for `POST /edifact`, in bytes.
     ///
@@ -700,6 +768,24 @@ struct Cli {
         env = "MAKOD_MAX_STREAM_EVENTS"
     )]
     max_stream_events: u64,
+
+    /// How often (in seconds) the deadline scheduler polls for due deadlines.
+    ///
+    /// The deadline scheduler fires compensation commands (e.g. GPKE 24h
+    /// APERAK timeout, MABIS 1-Werktag Prüfmitteilung deadline) at this
+    /// interval. For Redispatch workflows with 5-minute regulatory windows,
+    /// reduce this to 30 seconds or less.
+    ///
+    /// Defaults to 30 seconds. Minimum 1 second.
+    ///
+    /// Can also be set via the `MAKOD_DEADLINE_POLL_INTERVAL_SECS` environment variable.
+    #[arg(
+        long,
+        value_name = "SECS",
+        default_value_t = 30,
+        env = "MAKOD_DEADLINE_POLL_INTERVAL_SECS"
+    )]
+    deadline_poll_interval_secs: u64,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
@@ -965,177 +1051,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     //
     // Each domain workflow must have a registered adapter for every known
     // BDEW format version. A missing adapter means cross-FV inbound messages
-    // would be silently dead-lettered. Fail fast at startup.
-    {
-        let known = adapters::known_fvs();
-        let fv_names: Vec<&str> = known.iter().map(|fv| fv.as_str()).collect();
-
-        let gpke_check = adapters::gpke_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let gpke_lf_anmeldung_check = adapters::gpke_lf_anmeldung_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let gpke_neuanlage_check = adapters::gpke_neuanlage_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let gpke_lf_abmeldung_check = adapters::gpke_lf_abmeldung_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let gpke_sperrung_check = adapters::gpke_sperrung_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let gpke_stornierung_check = adapters::gpke_stornierung_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let gpke_anfrage_bestellung_check = adapters::gpke_anfrage_bestellung_registry()
-            .validate_policy(
-                &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-                &known,
-            );
-        let gpke_abrechnung_check = adapters::gpke_abrechnung_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let gpke_konfiguration_check = adapters::gpke_konfiguration_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let wim_check = adapters::wim_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let wim_geraeteubernahme_check = adapters::wim_geraeteubernahme_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let wim_stammdaten_check = adapters::wim_stammdaten_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let wim_stornierung_check = adapters::wim_stornierung_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let wim_rechnung_check = adapters::wim_rechnung_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let geli_check = adapters::geli_gas_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let geli_stornierung_check = adapters::geli_gas_stornierung_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let wim_gas_anmeldung_check = adapters::wim_gas_anmeldung_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let wim_gas_kuendigung_check = adapters::wim_gas_kuendigung_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let wim_gas_verpflichtungsanfrage_check =
-            adapters::wim_gas_verpflichtungsanfrage_registry().validate_policy(
-                &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-                &known,
-            );
-        let wim_gas_invoic_check = adapters::wim_gas_invoic_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let gabi_gas_invoic_check = adapters::gabi_gas_invoic_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let geli_gas_sperrprozesse_invoic_check =
-            adapters::geli_gas_sperrprozesse_invoic_registry().validate_policy(
-                &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-                &known,
-            );
-        let geli_gas_sperrung_nb_check = adapters::geli_gas_sperrung_nb_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let wim_insrpt_check = adapters::wim_insrpt_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let wim_gas_insrpt_check = adapters::wim_gas_insrpt_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-        let mabis_check = adapters::mabis_registry().validate_policy(
-            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
-            &known,
-        );
-
-        for (name, result) in [
-            ("gpke-supplier-change", gpke_check),
-            ("gpke-lf-anmeldung", gpke_lf_anmeldung_check),
-            ("gpke-neuanlage", gpke_neuanlage_check),
-            ("gpke-lf-abmeldung", gpke_lf_abmeldung_check),
-            ("gpke-sperrung", gpke_sperrung_check),
-            ("gpke-stornierung", gpke_stornierung_check),
-            ("gpke-anfrage-bestellung", gpke_anfrage_bestellung_check),
-            ("gpke-abrechnung", gpke_abrechnung_check),
-            ("gpke-konfiguration", gpke_konfiguration_check),
-            ("wim-device-change", wim_check),
-            ("wim-geraeteubernahme", wim_geraeteubernahme_check),
-            ("wim-stammdaten", wim_stammdaten_check),
-            ("wim-stornierung", wim_stornierung_check),
-            ("wim-rechnung", wim_rechnung_check),
-            ("wim-insrpt", wim_insrpt_check),
-            ("geli-gas-supplier-change", geli_check),
-            ("geli-gas-stornierung", geli_stornierung_check),
-            ("wim-gas-anmeldung", wim_gas_anmeldung_check),
-            ("wim-gas-kuendigung", wim_gas_kuendigung_check),
-            (
-                "wim-gas-verpflichtungsanfrage",
-                wim_gas_verpflichtungsanfrage_check,
-            ),
-            ("wim-gas-invoic", wim_gas_invoic_check),
-            ("wim-gas-insrpt", wim_gas_insrpt_check),
-            ("gabi-gas-invoic", gabi_gas_invoic_check),
-            (
-                "geli-gas-sperrprozesse-invoic",
-                geli_gas_sperrprozesse_invoic_check,
-            ),
-            ("geli-gas-sperrung-nb", geli_gas_sperrung_nb_check),
-            // mabis-billing: IFTSTA adapter is registered (PIDs 21000–21007).
-            // MSCONS PID 13003 billing commands are constructed by the
-            // aggregation layer; this check validates IFTSTA coverage only.
-            ("mabis-billing (IFTSTA)", mabis_check),
-        ] {
-            match result {
-                Ok(()) => {
-                    info!(workflow = name, format_versions = ?fv_names, "adapter coverage validated")
-                }
-                Err(uncovered) => {
-                    let missing: Vec<&str> = uncovered.iter().map(|fv| fv.as_str()).collect();
-                    // Panic at startup rather than silently dead-lettering
-                    // messages in production.
-                    panic!(
-                        "startup failure: workflow {name:?} has no registered MessageAdapter \
-                         for format versions {missing:?}. Register adapters in adapters.rs."
-                    );
-                }
-            }
-        }
-
-        // mabis-billing IFTSTA adapter is now in the validation loop above.
-        // MSCONS PID 13003 billing commands continue to be constructed by the
-        // aggregation layer; the adapter registered for mabis-billing handles
-        // only inbound IFTSTA messages (PIDs 21000–21007).
-    }
+    // would be silently dead-lettered. Panics on missing coverage.
+    startup::validate_adapter_coverage();
 
     // Hard-fail if any Noop store is active — a misconfigured deployment
     // (e.g. missing [outbox] section in makod.toml) must never silently
@@ -1191,23 +1108,61 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // the store is closed or unreachable.
     let health_state = health::HealthState::new(store.clone());
 
+    // Build the shared reqwest client for outbound HTTP (OIDC JWKS fetch,
+    // MaLo-ID callbacks, AS4 delivery worker).
+    // A 30-second timeout prevents slow-loris hangs on JWKS or callback endpoints.
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| anyhow::anyhow!("HTTP client build: {e}"))?;
+
     if let Some(addr) = cli.http_addr {
-        if cli.http_api_token.is_none() {
+        if cli.auth_keys.is_empty() && cli.oidc_issuer.is_none() {
             anyhow::bail!(
-                "--http-api-token / MAKOD_HTTP_API_TOKEN is required when \
-                 --http-addr is set.\n\
+                "--auth-key / MAKOD_AUTH_KEYS or --oidc-issuer / MAKOD_OIDC_ISSUER is \
+                 required when --http-addr is set.\n\
                  The HTTP REST API and /admin/migrations endpoint perform \
                  privileged operations (submitting commands, triggering \
                  migrations) and must not be exposed unauthenticated.\n\
-                 Set a strong random token (e.g. `openssl rand -hex 32`) via \
-                 the environment variable MAKOD_HTTP_API_TOKEN or the \
-                 --http-api-token flag."
+                 Provide at least one named API key with --auth-key NAME=TOKEN \
+                 (e.g. --auth-key erp-prod=$(openssl rand -hex 32)), or configure \
+                 an OIDC issuer with --oidc-issuer <URL> --oidc-audience <AUD>."
             );
         }
+        // ── Build OIDC verifier (optional) ────────────────────────────────────
+        let oidc = if let Some(issuer) = cli.oidc_issuer {
+            let audience = cli.oidc_audience.context(
+                "--oidc-audience / MAKOD_OIDC_AUDIENCE is required when \
+                 --oidc-issuer / MAKOD_OIDC_ISSUER is set",
+            )?;
+            let verifier = oidc_verifier::OidcVerifier::new(issuer, audience, &http_client)
+                .await
+                .context("OIDC verifier initialisation failed")?;
+            verifier.spawn_refresh_task(
+                http_client.clone(),
+                cli.oidc_jwks_refresh_secs,
+                shutdown_token.clone(),
+            );
+            Some(verifier)
+        } else {
+            None
+        };
+        // ── Build Cedar authorizer ────────────────────────────────────────────
+        let extra_policies = read_cedar_policy_dir(&cli.cedar_policy_dir)
+            .context("loading Cedar policy files from --cedar-policy-dir")?;
+        let keys = cli
+            .auth_keys
+            .iter()
+            .map(|s| cedar_authz::NamedKey::from_arg(s))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let cedar = cedar_authz::CedarAuthorizer::new(keys, extra_policies, oidc)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let cedar = Arc::new(cedar);
         let api_state = Arc::new(edifact_api::EdifactApiState {
             platform: Arc::clone(&platform),
             pid_router: ctx.pid_router().clone(),
-            optional_token: cli.http_api_token.clone(),
+            cedar: Arc::clone(&cedar),
             max_body_bytes: cli.http_max_body_bytes,
             partner_store: Some(Arc::new(store.as_partner_store())),
             tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
@@ -1215,7 +1170,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         });
         let admin_state = Arc::new(malo_admin_api::MaloAdminState {
             cache: malo_cache::SlateDbMaloCache::new(store.clone()),
-            optional_token: cli.http_api_token.clone(),
+            cedar: Arc::clone(&cedar),
             tenant_id: cli.tenant_id.to_string(),
         });
         let partner_store = store.as_partner_store();
@@ -1226,7 +1181,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         let partner_admin_state = Arc::new(partner_api::PartnerAdminState {
             store: partner_store,
             tenant_id: partner_tenant_id,
-            optional_token: cli.http_api_token.clone(),
+            cedar: Arc::clone(&cedar),
             platform: Arc::clone(&platform),
         });
         if cli.marktrollen.is_empty() {
@@ -1242,7 +1197,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             configured_marktrollen: cli.marktrollen.iter().map(|s| s.to_uppercase()).collect(),
             max_body_bytes: cli.http_max_body_bytes,
             snapshot_interval: cli.snapshot_interval,
-            optional_token: cli.http_api_token.clone(),
+            cedar: Arc::clone(&cedar),
             store: Arc::new(store.clone()),
             snapshot_store: store.as_snapshot_store(),
             malo_cache: malo_cache.clone(),
@@ -1250,11 +1205,21 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         });
         let metrics_state = Arc::new(metrics_api::MetricsState::new(
             store.clone(),
-            cli.http_api_token.clone(),
+            Arc::clone(&cedar),
+            cli.tenant_id.clone(),
         ));
         let migration_state = Arc::new(migration_api::MigrationApiState {
             store: Arc::new(store.clone()),
-            optional_token: cli.http_api_token.clone(),
+            cedar: Arc::clone(&cedar),
+        });
+        let mcp_state = Arc::new(mcp_server::MakodMcpState {
+            tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
+            tenant_id_str: cli.tenant_id.clone(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            cedar: Arc::clone(&cedar),
+            commands: Arc::clone(&commands_state),
+            malo_cache: malo_cache.clone(),
+            partner_store: Arc::new(store.as_partner_store()),
         });
         let app = edifact_api::router(api_state)
             .merge(malo_admin_api::router(admin_state))
@@ -1262,15 +1227,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             .merge(commands_api::router(commands_state))
             .merge(metrics_api::router(metrics_state))
             .merge(migration_api::router(migration_state))
+            .merge(mcp_server::router(mcp_state, shutdown_token.clone()))
             .merge(health::router(health_state.clone()))
             .merge(openapi::router());
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| anyhow::anyhow!("HTTP server bind {addr}: {e}"))?;
         info!(
-            addr          = %addr,
-            authenticated = cli.http_api_token.is_some(),
-            max_body_mib  = cli.http_max_body_bytes / (1024 * 1024),
+            addr         = %addr,
+            max_body_mib = cli.http_max_body_bytes / (1024 * 1024),
             "HTTP REST API listening",
         );
         let http_token = shutdown_token.clone();
@@ -1354,10 +1319,29 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                 cli.data_dir.is_some(),
             ));
 
+        // ── Startup warning: non-durable dedup + AS4 enabled ─────────────────
+        //
+        // When --as4-addr is set but no --data-dir is configured, the inbox
+        // dedup store is purely in-memory (volatile). A crash or restart will
+        // lose all dedup state, allowing replayed AS4 UserMessages to be
+        // ingested again as duplicates. This violates BDEW AS4 conformance
+        // (the BDEW AS4 profile requires durable duplicate detection per
+        // ebMS3 §6.6.1). Set --data-dir to a persistent path in production.
+        if cli.data_dir.is_none() {
+            tracing::warn!(
+                "AS4 inbox dedup storage is volatile (in-memory): duplicate detection \
+                 is lost on restart. Set --data-dir / MAKOD_DATA_DIR to a persistent \
+                 path to enable durable dedup (required for BDEW AS4 conformance)."
+            );
+        }
+
         let ingest_state = Arc::new(edifact_api::EdifactApiState {
             platform: Arc::clone(&platform),
             pid_router: ctx.pid_router().clone(),
-            optional_token: None,
+            cedar: Arc::new(
+                cedar_authz::CedarAuthorizer::unauthenticated()
+                    .expect("CedarAuthorizer::unauthenticated is infallible"),
+            ),
             max_body_bytes: mako_as4::bdew_router_config().max_body_bytes,
             partner_store: Some(Arc::new(store.as_partner_store())),
             tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
@@ -1438,304 +1422,36 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         });
     }
 
-    // ── Background: outbox delivery worker ───────────────────────────────────
+    // ── Background workers ────────────────────────────────────────────────────
     //
-    // Drains pending outbox messages and delivers them via AS4.
-    //
-    // If AS4 signing credentials are configured (`--as4-signing-key-pem` +
-    // `--as4-signing-cert-pem`), we wire `BdewAs4Sender` — a real AS4 client
-    // that POSTs signed SOAP envelopes to each recipient's registered endpoint.
-    //
-    // Otherwise we fall back to `MaloIdentSender` which handles only
-    // `MaloIdentCallback` messages (MaLo identification callbacks) and logs all
-    // other outbox messages at WARN level without transmitting them.
-
-    // Build the shared reqwest client for outbound HTTP (MaLo-ID callbacks).
-    let http_client = reqwest::Client::builder()
-        .build()
-        .map_err(|e| anyhow::anyhow!("HTTP client build: {e}"))?;
-
-    // Parse --maloid-partner GLN=URL pairs.
-    let maloid_partners = {
-        let mut map = std::collections::HashMap::new();
-        for pair in &cli.maloid_partner {
-            let (gln, url_str) = pair.split_once('=').ok_or_else(|| {
-                anyhow::anyhow!("--maloid-partner: expected GLN=URL, got {pair:?}")
-            })?;
-            let url = reqwest::Url::parse(url_str)
-                .map_err(|e| anyhow::anyhow!("--maloid-partner: invalid URL {url_str:?}: {e}"))?;
-            map.insert(gln.to_owned(), url);
-        }
-        if !map.is_empty() {
-            let glns: Vec<&str> = map.keys().map(String::as_str).collect();
-            info!(partners = ?glns, "MaLo-ID partner directory loaded");
-        }
-        map
-    };
-
-    // Build Verzeichnisdienst lookup helper when --verzeichnisdienst-url is set.
-    let verzeichnisdienst_lookup: Option<verzeichnisdienst_worker::VerzeichnisdienstLookup> =
-        if let Some(ref vz_url_str) = cli.verzeichnisdienst_url {
-            let base_url = reqwest::Url::parse(vz_url_str).map_err(|e| {
-                anyhow::anyhow!("--verzeichnisdienst-url: invalid URL {vz_url_str:?}: {e}")
-            })?;
-            let vz_client = energy_api::directory::DirectoryServiceClient::new(
-                base_url.clone(),
-                http_client.clone(),
-            );
-            let vz_partner_store = store.as_partner_store();
-            let vz_tenant_id = mako_engine::ids::TenantId::from_party_id(&cli.tenant_id);
-            info!(url = %base_url, "Verzeichnisdienst integration enabled");
-            let lookup = verzeichnisdienst_worker::VerzeichnisdienstLookup::new(
-                vz_client,
-                vz_partner_store,
-                vz_tenant_id,
-            );
-            // Spawn the periodic refresh task (every 5 minutes).
-            let refresh_lookup = lookup.clone();
-            tokio::spawn(verzeichnisdienst_worker::verzeichnisdienst_refresh_task(
-                refresh_lookup,
-                std::time::Duration::from_secs(300),
-            ));
-            Some(lookup)
-        } else {
-            None
-        };
-
-    let malo_sender = malo_ident_sender::MaloIdentSender::new(
-        (*malo_cache).clone(),
+    // Outbox delivery, ERP webhook, deadline scheduler, projection checkpoint,
+    // inbox purge — all spawned as Tokio tasks that exit on shutdown_token.
+    // See `startup::spawn_workers` and `startup::WorkersConfig` for details.
+    startup::spawn_workers(startup::WorkersConfig {
+        ctx,
+        store: store.clone(),
+        inbox_store_for_purge,
+        platform: Arc::clone(&platform),
+        ingest_dispatcher: Arc::clone(&ingest_dispatcher),
         http_client,
-        maloid_partners,
-        verzeichnisdienst_lookup,
-        store.clone(),
-    );
-
-    // Parse --as4-partner GLN=URL pairs into the partner directory.
-    let partners = mako_as4::PartnerDirectory::from_cli_pairs(&cli.as4_partner)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    if !partners.is_empty() {
-        let glns: Vec<&str> = partners.iter().map(|(g, _)| g).collect();
-        info!(partners = ?glns, "AS4 partner directory loaded");
-    }
-
-    // Spawn the outbox worker: BdewAs4Sender when signing credentials are
-    // available, MaloIdentSender otherwise.  The two branches produce
-    // different concrete types, so the worker is spawned inside each branch
-    // rather than assigned to a shared variable.
-    if let (Some(key_pem), Some(cert_pem)) = (
-        cli.as4_signing_key_pem.as_ref().map(|s| s.expose_secret()),
-        cli.as4_signing_cert_pem.as_deref(),
-    ) {
-        let party_id = cli
-            .as4_party_id
-            .clone()
-            .unwrap_or_else(|| cli.tenant_id.clone());
-
-        // Build a dedicated outbound session (may be separate from the AS4
-        // inbound server session if --as4-addr is also configured).
-        let outbound_session = {
-            let session_id = format!("makod-outbound-{}", uuid::Uuid::new_v4());
-            let trust_anchor = cli
-                .as4_trust_anchor_pem
-                .clone()
-                .unwrap_or_else(|| cert_pem.to_owned());
-            asx_rs::core::SessionContextBuilder::new(&session_id, &party_id)
-                .with_signing_cert_pem(cert_pem.to_owned())
-                .with_signing_key_pem(key_pem.to_owned())
-                .with_trust_anchor_pem(trust_anchor)
-                .build()
-                .map_err(|e| anyhow::anyhow!("AS4 outbound session build failed: {e}"))?
-        };
-        let outbound_bus = Arc::new(
-            asx_rs::observability::EventBus::new(256)
-                .map_err(|e| anyhow::anyhow!("AS4 EventBus (outbound) init failed: {e}"))?,
-        );
-
-        let sender = as4_sender::BdewAs4Sender::new(
-            Arc::new(outbound_session),
-            outbound_bus,
-            Arc::new(partners),
-            malo_sender,
-            cli.tenant_id.as_str(),
-            // Loopback: enables in-process delivery for combined-role deployments
-            // (NB+MSB, GNB+gMSB, NB+LF) where recipient == own GLN.
-            Some(Arc::new(edifact_api::EdifactApiState {
-                platform: Arc::clone(&platform),
-                pid_router: ctx.pid_router().clone(),
-                optional_token: None,
-                max_body_bytes: usize::MAX,
-                partner_store: None,
-                tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
-                dispatcher: Some(Arc::clone(&ingest_dispatcher)),
-            })),
-        )?;
-
-        info!(
-            party_id        = %party_id,
-            tenant_party_id = %cli.tenant_id,
-            "AS4 outbound sender active (BdewAs4Sender); \
-             UTILMD/APERAK/CONTRL/ORDERS/ORDRSP/INVOIC/REMADV rendered to conformant \
-             EDIFACT wire bytes. MSCONS requires external meter readings and is \
-             dead-lettered (RendererNotImplemented) until metering data is available.",
-        );
-
-        let worker = ctx.run_outbox_worker(sender, 50, Duration::from_secs(5), 48);
-        tokio::spawn(async move { worker.run().await });
-    } else {
-        tracing::warn!(
-            "AS4 signing credentials not configured \
-             (--as4-signing-key-pem / --as4-signing-cert-pem not set). \
-             Outbox delivery is running in MaloIdentCallback-only mode — \
-             all EDIFACT messages (APERAK, CONTRL, billing) will be logged \
-             and rescheduled without transmission. \
-             Provide signing credentials to enable full AS4 outbound delivery."
-        );
-        let worker = ctx.run_outbox_worker(malo_sender, 50, Duration::from_secs(5), 48);
-        tokio::spawn(async move { worker.run().await });
-    }
-
-    info!("outbox delivery worker started");
-
-    // ── Optional: ERP webhook outbound worker ─────────────────────────────────
-    //
-    // Enabled by --erp-webhook-url / MAKOD_ERP_WEBHOOK_URL.
-    //
-    // When set, starts an `OutboxErpWorker` that drains outbox entries that
-    // carry a BO4E payload (i.e. `payload_schema` is set) and POSTs them to
-    // the configured ERP endpoint as `ErpEvent` JSON objects.
-    //
-    // When omitted, ERP events are only logged via `LogErpAdapter` — no HTTP
-    // delivery occurs.  This is the safe default for environments where no ERP
-    // integration is configured yet.
-    if let Some(erp_url) = cli.erp_webhook_url.clone() {
-        let adapter =
-            erp_adapter::WebhookErpAdapter::new(erp_url.clone(), cli.erp_webhook_secret.clone());
-        let worker = erp_adapter::OutboxErpWorker::new(
-            store.clone(),
-            adapter,
-            50,
-            std::time::Duration::from_secs(5),
-        );
-        info!(
-            erp_webhook_url = %erp_url,
-            "ERP webhook outbound worker started (OutboxErpWorker)",
-        );
-        tokio::spawn(async move { worker.run().await });
-    } else {
-        // No ERP URL configured — wire LogErpAdapter for structured log output.
-        let adapter = mako_engine::erp::LogErpAdapter;
-        let worker = erp_adapter::OutboxErpWorker::new(
-            store.clone(),
-            adapter,
-            50,
-            std::time::Duration::from_secs(30),
-        );
-        tracing::debug!(
-            "ERP outbound notifications are logged only \
-             (--erp-webhook-url not set; set to enable HTTP delivery)",
-        );
-        tokio::spawn(async move { worker.run().await });
-    }
-
-    //
-    // A deployment with no --as4-addr and no --http-addr cannot receive any
-    // inbound messages.  This is almost always a misconfiguration.  Fail fast
-    // so the operator notices immediately rather than silently discarding all
-    // traffic.  An explicit --http-addr 0.0.0.0:8080 is sufficient to
-    // acknowledge that no-transport mode is intentional (e.g. local dev).
-    if cli.as4_addr.is_none() && cli.http_addr.is_none() {
-        tracing::error!(
-            "No ingest transport configured: neither --as4-addr nor --http-addr \
-             is set.  The engine cannot receive any inbound messages.  \
-             Set at least one of these options and restart."
-        );
-        std::process::exit(1);
-    }
-
-    // ── Background: deadline scheduler ───────────────────────────────────────
-    //
-    // Polls DeadlineStore::due_now every 30 s. When a deadline fires, the
-    // scheduler looks up the workflow name from the Deadline, reconstructs a
-    // ProcessIdentity, and dispatches a TimeoutExpired command to the correct
-    // workflow. This is the regulatory enforcement mechanism: processes that
-    // miss the APERAK window or settlement deadline are transitioned to
-    // Rejected/Disputed state and the event is recorded in the audit log.
-    //
-    // The dispatch table lives in `deadline_dispatch::build_scheduler`. That
-    // function also cross-checks registered workflow names against the table
-    // at startup and panics if any module's workflow is uncovered.
-    let event_store_for_scheduler = Arc::clone(ctx.event_store());
-    let scheduler =
-        deadline_dispatch::build_scheduler(&ctx, event_store_for_scheduler, cli.snapshot_interval);
-    tokio::spawn(async move { scheduler.run().await });
-    info!(
-        "deadline scheduler started (poll_interval=30s, dispatches TimeoutExpired to all workflow families)"
-    );
-
-    // ── Background: projection checkpoint workers ────────────────────────────
-    //
-    // Each domain projection is fed new events from the event store on each
-    // tick and persists its cursor (GlobalProjectionCheckpoint) to SlateDB.
-    // On restart the worker resumes from the last persisted cursor, bounding
-    // replay to O(events since last checkpoint) instead of O(all events).
-    //
-    // The checkpoint interval is tunable via --projection-checkpoint-interval.
-    // Set to 0 to disable (not recommended in production).
-    if cli.projection_checkpoint_interval > 0 {
-        let interval = Duration::from_secs(cli.projection_checkpoint_interval);
-
-        // KonfigurationProjection: tracks GPKE market-partner configuration
-        // state (MSB mandates, MaLo registration).
-        let worker = projection_worker::ProjectionWorker::new(
-            store.clone(),
-            mako_gpke::KonfigurationProjection::default(),
-            Some("gpke/"),
-            interval,
-        );
-        tokio::spawn(async move { worker.run().await });
-
-        // SupplierChangeProjection: aggregates GPKE Lieferantenwechsel process
-        // outcomes (accepted/rejected/pending) per MaLo stream.
-        let worker = projection_worker::ProjectionWorker::new(
-            store.clone(),
-            mako_gpke::SupplierChangeProjection::default(),
-            Some("gpke/"),
-            interval,
-        );
-        tokio::spawn(async move { worker.run().await });
-
-        info!(
-            interval_secs = cli.projection_checkpoint_interval,
-            "projection checkpoint workers started (KonfigurationProjection, SupplierChangeProjection)",
-        );
-    } else {
-        tracing::warn!(
-            "--projection-checkpoint-interval=0: projection checkpoints disabled; \
-             every restart will trigger a full event-store replay",
-        );
-    }
-
-    // ── Background: inbox purge worker ────────────────────────────────────────
-    //
-    // Deletes `ib/` (seen-set) and `it/` (time-index) keys older than 72 hours
-    // once per day. The 72-hour window covers the maximum AS4 retry period;
-    // after that, duplicate EB headers will never arrive legitimately.
-    //
-    // Without purging, the inbox deduplication store grows unboundedly at
-    // ~1 KB per distinct MessageId.
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(24 * 3600));
-        loop {
-            interval.tick().await;
-            let cutoff = time::OffsetDateTime::now_utc() - time::Duration::hours(72);
-            match inbox_store_for_purge.purge_expired(cutoff).await {
-                Ok(n) => tracing::info!(removed = n, "inbox purge complete"),
-                Err(e) => tracing::error!(error = %e, "inbox purge failed"),
-            }
-        }
-    });
-    info!("inbox purge worker started (daily, 72h TTL)");
+        malo_cache: Arc::clone(&malo_cache),
+        shutdown_token: shutdown_token.clone(),
+        tenant_id: cli.tenant_id.clone(),
+        as4_partner: cli.as4_partner.clone(),
+        as4_signing_key_pem: cli.as4_signing_key_pem.clone(),
+        as4_signing_cert_pem: cli.as4_signing_cert_pem.clone(),
+        as4_trust_anchor_pem: cli.as4_trust_anchor_pem.clone(),
+        as4_party_id: cli.as4_party_id.clone(),
+        maloid_partner: cli.maloid_partner.clone(),
+        verzeichnisdienst_url: cli.verzeichnisdienst_url.clone(),
+        erp_webhook_url: cli.erp_webhook_url.clone(),
+        erp_webhook_secret: cli.erp_webhook_secret.clone(),
+        snapshot_interval: cli.snapshot_interval,
+        deadline_poll_interval_secs: cli.deadline_poll_interval_secs,
+        projection_checkpoint_interval: cli.projection_checkpoint_interval,
+        no_transport_configured: cli.as4_addr.is_none() && cli.http_addr.is_none(),
+    })
+    .await?;
 
     wait_for_shutdown().await;
     info!("Mako engine shutting down — cancelling listeners");
@@ -1770,12 +1486,36 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
 
 // ── Config file merging ──────────────────────────────────────────────────────
 
-/// Merge `cfg` into `cli`, skipping any field that was already set via a CLI
-/// flag or environment variable.
+// ── Cedar helpers ─────────────────────────────────────────────────────────────
+
+/// Load and concatenate all `*.cedar` files from `dir`.
 ///
-/// The `matches` reference is used to distinguish "user-provided" values from
-/// "still at its built-in default" values via [`clap::parser::ValueSource`].
-/// Only fields whose source is `DefaultValue` are eligible for override.
+/// Files are sorted by name so loading order is deterministic.
+/// Returns `None` when the directory is `None` or contains no `.cedar` files.
+fn read_cedar_policy_dir(dir: &Option<std::path::PathBuf>) -> anyhow::Result<Option<String>> {
+    let Some(dir) = dir else {
+        return Ok(None);
+    };
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .with_context(|| format!("reading --cedar-policy-dir {}", dir.display()))?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "cedar"))
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    let mut buf = String::new();
+    for entry in entries {
+        let path = entry.path();
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading Cedar policy file {}", path.display()))?;
+        buf.push('\n');
+        buf.push_str(&content);
+    }
+    Ok(Some(buf))
+}
+
 /// Parse the `--deployment-roles` CLI argument into a [`DeploymentRoles`] value.
 ///
 /// Accepts uppercase BDEW role codes: `NB`, `LF`, `MSB`, `NMSB`, `AMSB`, `BKV`, `UENB`, `BIKO`.
@@ -1895,13 +1635,25 @@ fn apply_config_file(
         if cli.http_addr.is_none() {
             cli.http_addr = http.addr;
         }
-        if cli.http_api_token.is_none() {
-            cli.http_api_token = http.api_token.map(|s| SecretString::new(s.into()));
-        }
         if is_default("http_max_body_bytes")
             && let Some(n) = http.max_body_bytes
         {
             cli.http_max_body_bytes = n;
+        }
+    }
+
+    // ── OIDC ──────────────────────────────────────────────────────────────────
+    if let Some(oidc) = cfg.oidc {
+        if cli.oidc_issuer.is_none() {
+            cli.oidc_issuer = oidc.issuer;
+        }
+        if cli.oidc_audience.is_none() {
+            cli.oidc_audience = oidc.audience;
+        }
+        if is_default("oidc_jwks_refresh_secs")
+            && let Some(secs) = oidc.jwks_refresh_secs
+        {
+            cli.oidc_jwks_refresh_secs = secs;
         }
     }
 
@@ -2138,7 +1890,16 @@ async fn open_store(cli: &Cli) -> anyhow::Result<SlateDbStore> {
                 // local development; production endpoints should use HTTPS.
                 let allow_http = endpoint.starts_with("http://");
                 builder = builder.with_endpoint(endpoint).with_allow_http(allow_http);
-                info!(endpoint, allow_http, "using custom S3-compatible endpoint");
+                if allow_http {
+                    tracing::warn!(
+                        endpoint,
+                        "S3 endpoint uses plain HTTP — event data is transmitted \
+                         unencrypted. This violates §22 MessZV audit-trail \
+                         confidentiality requirements. Use HTTPS in production."
+                    );
+                } else {
+                    info!(endpoint, "using custom S3-compatible endpoint (HTTPS)");
+                }
             }
 
             let store = std::sync::Arc::new(builder.build()?);

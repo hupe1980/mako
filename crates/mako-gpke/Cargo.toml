@@ -21,7 +21,7 @@ time        = { workspace = true }
 anyhow      = { workspace = true }
 # edi-energy is only needed for integration tests (parse → validate → execute).
 # Production code uses only mako-engine's ProfileRequirement for startup checks.
-edi-energy  = { path = "../edi-energy", features = ["utilmd", "aperak"] }
+edi-energy  = { workspace = true, features = ["utilmd", "aperak"] }
 mako-engine = { workspace = true, features = ["testing"] }
 serde_json  = { workspace = true }
 time        = { workspace = true }

@@ -311,12 +311,27 @@ pub fn deadline_at_werktage(
     );
     match local_17.assume_timezone(berlin) {
         OffsetResult::Some(dt) => dt,
-        // 17:00 is unambiguous for Europe/Berlin; these branches are unreachable
-        // in practice but handled gracefully rather than panicking.
+        // 17:00 Europe/Berlin is never inside a DST gap or fold, so Ambiguous
+        // and None are unreachable in practice. If the timezone database is
+        // broken or absent, we must not silently compute a wrong deadline:
+        // UTC+1 in a CEST month (UTC+2) produces a deadline 1 hour late, which
+        // is a reportable BNetzA regulatory violation.
         OffsetResult::Ambiguous(earlier, _later) => earlier,
         OffsetResult::None => {
-            // Fallback: compute as CET (UTC+1) if the timezone db is broken.
-            local_17.assume_offset(time::UtcOffset::from_hms(1, 0, 0).unwrap())
+            // SAFETY: 17:00 is never inside a DST gap for Europe/Berlin. If we
+            // land here the timezone database is corrupt or missing. Panic loudly
+            // so the operator detects the failure before it silently produces
+            // wrong APERAK deadlines. A wrong deadline is worse than a crash
+            // because it is a regulatory violation without any visible signal.
+            panic!(
+                "CRITICAL: timezone database failure — could not resolve \
+                 17:00 Europe/Berlin for date {due_date}. \
+                 Cannot compute a correct APERAK deadline. \
+                 A wrong fallback offset violates BNetzA deadline obligations. \
+                 Ensure the system timezone database (tzdata) is installed and \
+                 up to date. Aborting rather than silently producing an \
+                 incorrect deadline."
+            );
         }
     }
 }

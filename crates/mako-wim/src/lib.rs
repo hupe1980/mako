@@ -18,7 +18,7 @@
 //! | Preisanfrage (REQOTE/QUOTES) | 35001–35005 (REQOTE in), 15001–15005 (QUOTES in) | REQOTE, QUOTES | `preisanfrage` | ✅ Implemented |
 //! | Preisliste (PRICAT) | 27001–27003 | PRICAT | `preisliste` | ✅ Implemented |
 //! | Stornierung Sperr-/Entsperrauftrag | 39000 | ORDCHG | `stornierung` | ✅ Implemented |
-//! | WiM-Rechnung / MSB-Rechnung (INVOIC) | 31003, 31009 | INVOIC | `rechnung` | ✅ Implemented (stub, full settlement pending) |
+//! | WiM-Rechnung / MSB-Rechnung (INVOIC) | 31003, 31009 | INVOIC | `rechnung` | ✅ Implemented (auto-REMADV pending in deadline_dispatch) |
 //!
 //! ## Architecture
 //!
@@ -76,7 +76,18 @@
 //! process.execute(cmd).await?;
 //! ```
 
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
+#![warn(clippy::pedantic, clippy::must_use_candidate)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::doc_markdown)] // German MaKo terms and BDEW acronyms produce many false positives
+#![allow(clippy::too_many_lines)] // process handle() functions are necessarily verbose
+#![allow(clippy::match_same_arms)] // sometimes intentional for process-family readability
+#![allow(clippy::manual_let_else)] // existing code style; rewrite in follow-up
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::unnested_or_patterns)]
+#![allow(clippy::map_unwrap_or)]
+#![allow(clippy::items_after_statements)]
 
 pub mod geraeteubernahme;
 pub mod geraetewechsel;
@@ -346,8 +357,9 @@ impl mako_engine::builder::EngineModule for WimModule {
         // be silently dead-lettered and no CONTRL acknowledgement would be sent,
         // violating the AS4 acknowledgement obligation (BDEW AS4-Profile §5).
         //
-        // The WimRechnungWorkflow provides a complete state machine;
-        // full settlement/dispute business logic is marked for follow-up in TODO.md.
+        // The WimRechnungWorkflow provides a complete state machine with Settle/Dispute
+        // commands. Automatic outbound REMADV generation (auto-settlement deadline) is
+        // tracked in TODO.md §WiM-Rechnung.
         for &pid in rechnung::WIM_INVOIC_PIDS {
             router.register(pid, "wim-rechnung");
         }

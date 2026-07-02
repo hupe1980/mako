@@ -29,13 +29,12 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use energy_api::models::electricity::MaloIdentResultPositive;
-use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 use tracing::info;
 use utoipa::ToSchema;
 
+use crate::cedar_authz::{CedarAuthorizer, MakoAction, MaloResource};
 use crate::malo_cache::{MaloCacheStats, SlateDbMaloCache};
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -43,7 +42,9 @@ use crate::malo_cache::{MaloCacheStats, SlateDbMaloCache};
 /// Shared state for the admin API.
 pub struct MaloAdminState {
     pub cache: SlateDbMaloCache,
-    pub optional_token: Option<SecretString>,
+    /// Cedar-based authorization engine — authenticates callers and evaluates
+    /// ABAC policies for each MaLo admin operation.
+    pub cedar: Arc<CedarAuthorizer>,
     /// Operator tenant ID (GLN). All cache operations are scoped to this tenant.
     ///
     /// When a caller provides `X-Tenant-Id`, it must match this value exactly;
@@ -121,24 +122,12 @@ pub fn router(state: Arc<MaloAdminState>) -> Router {
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 
-fn check_auth(headers: &HeaderMap, optional_token: &Option<SecretString>) -> bool {
-    let Some(expected) = optional_token else {
-        return true;
-    };
-    let provided = headers
-        .get("authorization")
-        .or_else(|| headers.get("Authorization"))
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .unwrap_or("");
-    provided
-        .as_bytes()
-        .ct_eq(expected.expose_secret().as_bytes())
-        .into()
-}
-
 fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+}
+
+fn forbidden() -> Response {
+    (StatusCode::FORBIDDEN, "Forbidden").into_response()
 }
 
 fn internal_error(e: impl std::fmt::Display) -> Response {
@@ -173,8 +162,19 @@ pub(crate) async fn handle_get(
     headers: HeaderMap,
     Path(malo_id): Path<String>,
 ) -> Response {
-    if !check_auth(&headers, &state.optional_token) {
-        return unauthorized();
+    let identity = match state.cedar.authenticate(&headers) {
+        Some(id) => id,
+        None => return unauthorized(),
+    };
+    if !state.cedar.authorize_malo(
+        &identity,
+        MakoAction::AdminMaloRead,
+        &MaloResource {
+            tenant: &state.tenant_id,
+            malo_id: Some(&malo_id),
+        },
+    ) {
+        return forbidden();
     }
     let tenant_id = if let Some(id) = tenant_from_header(&headers) {
         if id != state.tenant_id {
@@ -216,8 +216,19 @@ pub(crate) async fn handle_put(
     Path(malo_id): Path<String>,
     Json(body): Json<UpsertRequest>,
 ) -> Response {
-    if !check_auth(&headers, &state.optional_token) {
-        return unauthorized();
+    let identity = match state.cedar.authenticate(&headers) {
+        Some(id) => id,
+        None => return unauthorized(),
+    };
+    if !state.cedar.authorize_malo(
+        &identity,
+        MakoAction::AdminMaloWrite,
+        &MaloResource {
+            tenant: &state.tenant_id,
+            malo_id: Some(&malo_id),
+        },
+    ) {
+        return forbidden();
     }
     // Validate that the path parameter matches the payload MaLo-ID.
     if body.result.data_market_location.malo_id.0 != malo_id {
@@ -273,8 +284,19 @@ pub(crate) async fn handle_delete(
     headers: HeaderMap,
     Path(malo_id): Path<String>,
 ) -> Response {
-    if !check_auth(&headers, &state.optional_token) {
-        return unauthorized();
+    let identity = match state.cedar.authenticate(&headers) {
+        Some(id) => id,
+        None => return unauthorized(),
+    };
+    if !state.cedar.authorize_malo(
+        &identity,
+        MakoAction::AdminMaloDelete,
+        &MaloResource {
+            tenant: &state.tenant_id,
+            malo_id: Some(&malo_id),
+        },
+    ) {
+        return forbidden();
     }
     let tenant_id = if let Some(id) = tenant_from_header(&headers) {
         if id != state.tenant_id {
@@ -309,8 +331,19 @@ pub(crate) async fn handle_stats(
     State(state): State<Arc<MaloAdminState>>,
     headers: HeaderMap,
 ) -> Response {
-    if !check_auth(&headers, &state.optional_token) {
-        return unauthorized();
+    let identity = match state.cedar.authenticate(&headers) {
+        Some(id) => id,
+        None => return unauthorized(),
+    };
+    if !state.cedar.authorize_malo(
+        &identity,
+        MakoAction::AdminMaloStats,
+        &MaloResource {
+            tenant: &state.tenant_id,
+            malo_id: None,
+        },
+    ) {
+        return forbidden();
     }
     let tenants_res = state.cache.list_tenants().await;
     let tenant_ids = match tenants_res {
@@ -335,8 +368,19 @@ async fn handle_bulk_not_implemented(
     State(state): State<Arc<MaloAdminState>>,
     headers: HeaderMap,
 ) -> Response {
-    if !check_auth(&headers, &state.optional_token) {
-        return unauthorized();
+    let identity = match state.cedar.authenticate(&headers) {
+        Some(id) => id,
+        None => return unauthorized(),
+    };
+    if !state.cedar.authorize_malo(
+        &identity,
+        MakoAction::AdminMaloWrite,
+        &MaloResource {
+            tenant: &state.tenant_id,
+            malo_id: None,
+        },
+    ) {
+        return forbidden();
     }
     (
         StatusCode::NOT_IMPLEMENTED,

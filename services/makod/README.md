@@ -49,11 +49,13 @@ cargo run -p makod -- \
 ### Production — durable SlateDB on local disk
 
 ```bash
-cargo build -p makod --release --features slatedb
+# slatedb is enabled via mako-engine's feature in Cargo.toml — no --features flag needed
+cargo build -p makod --release
 
 ./target/release/makod \
   --data-dir /var/lib/makod \
   --http-addr 0.0.0.0:8080 \
+  --auth-key erp-prod=$(openssl rand -hex 32) \
   --as4-addr  0.0.0.0:4080 \
   --tenant-id 9900357000004 \
   --erp-webhook-url https://erp.example.com/mako/events
@@ -74,7 +76,7 @@ cargo build -p makod --release --features slatedb
 Every enabled port exposes `GET /health`:
 
 ```
-HTTP 200  {"status":"ok","version":"0.5.0","uptime_secs":142}
+HTTP 200  {"status":"ok","version":"0.6.0","uptime_secs":142}
 HTTP 503  {"status":"degraded","reason":"deadline_scheduler not running"}
 ```
 
@@ -103,7 +105,11 @@ Adjust the timeout via `--shutdown-timeout-secs <N>`.
 | `--tenant-id <ID>` | `MAKOD_TENANT_ID` | Operator BDEW code / GLN / EIC. |
 | `--marktrollen <ROLES>` | `MAKOD_MARKTROLLEN` | **Required** when `--http-addr` is set. Comma-separated Marktrollen (e.g. `LF,LFG`, `NB,MSB`). An unlisted role is rejected with `422`. |
 | `--http-addr <ADDR>` | `MAKOD_HTTP_ADDR` | Enable HTTP REST API on this address. |
-| `--http-api-token <TOKEN>` | `MAKOD_HTTP_API_TOKEN` | Bearer token protecting all non-health endpoints. Required when `--http-addr` is set. |
+| `--auth-key <NAME=TOKEN>` | `MAKOD_AUTH_KEYS` | Named API key for Bearer authentication. Repeatable. At least one `--auth-key` or `--oidc-issuer` is required when `--http-addr` is set. |
+| `--oidc-issuer <URL>` | `MAKOD_OIDC_ISSUER` | OIDC issuer URL. `makod` fetches `<URL>/.well-known/openid-configuration` at startup and validates JWT bearer tokens. |
+| `--oidc-audience <AUD>` | `MAKOD_OIDC_AUDIENCE` | Expected JWT `aud` claim (required when `--oidc-issuer` is set). |
+| `--oidc-jwks-refresh-secs <N>` | `MAKOD_OIDC_JWKS_REFRESH_SECS` | JWKS key-set refresh interval in seconds (default: 300). |
+| `--cedar-policy-dir <DIR>` | `MAKOD_CEDAR_POLICY_DIR` | Directory of extra `.cedar` policy files appended to the built-in default policy. |
 | `--as4-addr <ADDR>` | `MAKOD_AS4_ADDR` | Enable AS4/ebMS3 inbound transport. |
 | `--api-webdienste-addr <ADDR>` | `MAKOD_API_WEBDIENSTE_ADDR` | Enable API-Webdienste Strom port. |
 | `--erp-webhook-url <URL>` | `MAKOD_ERP_WEBHOOK_URL` | CloudEvents 1.0 webhook for ERP integration. |
@@ -112,6 +118,147 @@ Adjust the timeout via `--shutdown-timeout-secs <N>`.
 | `-f, --log-format` | `MAKOD_LOG_FORMAT` | Log format (`pretty`/`json`/`compact`). Default: `pretty`. |
 
 See `makod --help` for the full flag list including object-store backends (S3, GCS, Azure) and AS4 signing keys.
+
+---
+
+## Authorization (Cedar ABAC)
+
+All non-health HTTP endpoints are protected by [Cedar](https://cedarpolicy.com)
+attribute-based access control. Every request is evaluated against a Cedar policy
+set. The built-in `default.cedar` policy grants all actions to every authenticated
+principal — suitable for single-tenant deployments.
+
+### Provisioning API keys
+
+Each named key maps a caller identity to a Cedar principal:
+
+```bash
+# Single key
+makod --auth-key erp-prod=$(openssl rand -hex 32) ...
+
+# Multiple keys (one per integration)
+makod \
+  --auth-key erp-sap=$(openssl rand -hex 32) \
+  --auth-key ops-grafana=$(openssl rand -hex 32) \
+  ...
+```
+
+Via environment variable (comma-separated `NAME=TOKEN` pairs):
+
+```bash
+export MAKOD_AUTH_KEYS="erp-sap=abc123,ops-grafana=xyz456"
+```
+
+At least one `--auth-key` or `--oidc-issuer` is required when `--http-addr` is set.
+`makod` refuses to start without either.
+
+### Custom Cedar policies
+
+Drop `.cedar` files into a directory and point `--cedar-policy-dir` at it:
+
+```cedar
+// /etc/makod/cedar/restrict_readonly.cedar
+// Allow ops-grafana to read MaLo stats only; deny everything else.
+// Uses the AdminMalo action group (covers all 4 AdminMalo* actions).
+forbid(
+  principal == MaKo::Principal::"ops-grafana",
+  action    in [MaKo::Action::"AdminMalo"],
+  resource
+)
+unless { action == MaKo::Action::"AdminMaloStats" };
+```
+
+```bash
+makod --cedar-policy-dir /etc/makod/cedar ...
+```
+
+Cedar policies are validated at startup against the built-in schema using the
+Cedar Validator in strict mode — a policy with type errors prevents startup. This
+makes misconfigured policies visible immediately, not at first API call.
+
+### OIDC / JWT authentication
+
+In addition to API keys, `makod` accepts JWT bearer tokens from any
+standards-compliant OIDC identity provider — Azure AD/Entra ID, Keycloak,
+Okta, AWS Cognito, Google Workspace, Kubernetes workload identity, and others.
+
+```bash
+makod \
+  --oidc-issuer  "https://login.microsoftonline.com/$TENANT/v2.0" \
+  --oidc-audience "api://makod" \
+  --http-addr    "0.0.0.0:8080"
+```
+
+Or via the TOML config file:
+
+```toml
+[oidc]
+issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+audience = "api://makod"
+```
+
+The JWT `sub` claim becomes the Cedar principal entity ID — identical to an
+API-key name. All existing Cedar policies work unchanged regardless of
+authentication method.
+
+**Security properties:**
+- Only asymmetric algorithms are accepted: RS256/384/512, ES256/384, PS256/384/512.
+- HMAC algorithms (`HS256`, `HS384`, `HS512`) are unconditionally rejected.
+- `iss`, `aud`, `exp`, and `nbf` claims are validated on every token.
+- JWKS public keys are cached in memory; a background task refreshes them every
+  `--oidc-jwks-refresh-secs` seconds (default: 300) to handle key rotation
+  without restarting.
+
+**Coexistence:** `--auth-key` and `--oidc-issuer` can both be active at once,
+enabling gradual migration from API keys to OIDC without downtime.
+
+For the full configuration reference, Cedar policy examples, and provider-specific
+setup (Azure Managed Identity, Kubernetes workload identity), see the
+[Operator Guide authorization section](../../docs/makod.md#authorization).
+
+---
+
+## MCP server
+
+`makod` runs an [MCP](https://modelcontextprotocol.io) server at `/mcp` on the
+`--http-addr` port. LLM clients (Claude Desktop, VS Code Copilot Chat) can use
+it to inspect process state and submit commands without writing integration code.
+
+```json
+// claude_desktop_config.json
+{
+  "mcpServers": {
+    "makod": {
+      "url": "http://localhost:8080/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+**Tools:**
+
+| Tool | Description |
+|---|---|
+| `list_commands` | List commands available for this instance's configured Marktrollen |
+| `submit_command` | Trigger a MaKo process command (GPKE, GeLi Gas, WiM, MABIS) |
+| `get_malo` | Read a cached MaLo record by 11-digit ID |
+| `list_partners` | List all registered trading partners |
+| `get_partner` | Get a trading partner by 13-digit GLN |
+| `get_health` | Daemon version, tenant ID, Marktrollen, MaLo cache stats |
+
+**Resources:** `malo://{malo_id}`, `partner://{gln}`
+
+**Prompts:** `gpke-lieferbeginn`, `geli-lieferbeginn`, `wim-geraetewechsel` — guided step-by-step workflows
+
+The server returns dynamic instructions at connection time, including a filtered command
+list for this instance's Marktrollen and the applicable regulatory deadlines.
+
+See the [MCP section of the operator guide](../../docs/makod.md#mcp-server) for full details.
+
+Authentication is enforced — every request to `/mcp` must carry a valid Bearer
+token (same Cedar ABAC layer as the REST API). See the
+[Operator Guide MCP section](../../docs/makod.md#mcp-server) for full details.
 
 ---
 

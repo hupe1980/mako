@@ -774,7 +774,6 @@ mod tests {
         use mako_engine::deadline::Deadline;
         use mako_engine::ids::{ProcessId, StreamId, TenantId};
         use mako_engine::version::WorkflowId;
-        use time::OffsetDateTime;
 
         let data = GasSperrungAuftragData {
             location_id: malo(),
@@ -789,7 +788,7 @@ mod tests {
             TenantId::new(),
             WorkflowId::new(WORKFLOW_NAME, "FV2025-10-01"),
             ANTWORT_WINDOW_LABEL,
-            OffsetDateTime::now_utc(),
+            time::macros::datetime!(2025-01-01 12:00:00 UTC),
         );
         let cmd = GeliGasSperrungLfWorkflow::on_deadline(&deadline, &state);
         assert!(
@@ -803,7 +802,6 @@ mod tests {
         use mako_engine::deadline::Deadline;
         use mako_engine::ids::{ProcessId, StreamId, TenantId};
         use mako_engine::version::WorkflowId;
-        use time::OffsetDateTime;
 
         let state = GasSperrungLfState::OrdrspBestaetigt(GasSperrungAuftragData {
             location_id: malo(),
@@ -817,7 +815,7 @@ mod tests {
             TenantId::new(),
             WorkflowId::new(WORKFLOW_NAME, "FV2025-10-01"),
             ANTWORT_WINDOW_LABEL,
-            OffsetDateTime::now_utc(),
+            time::macros::datetime!(2025-01-01 12:00:00 UTC),
         );
         let cmd = GeliGasSperrungLfWorkflow::on_deadline(&deadline, &state);
         assert!(

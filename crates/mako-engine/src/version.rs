@@ -212,6 +212,22 @@ impl fmt::Display for FormatVersion {
     }
 }
 
+impl PartialOrd for FormatVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FormatVersion {
+    /// Compare two format versions chronologically.
+    ///
+    /// The `FV<YYYY>-<MM>-<DD>` prefix is fixed-width and zero-padded, so
+    /// lexicographic byte comparison is identical to chronological ordering.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
 impl From<&str> for FormatVersion {
     fn from(s: &str) -> Self {
         Self::new(s)

@@ -1,0 +1,151 @@
+// Cedar schema for the MaKo namespace.
+// Human-readable Cedar schema format (parsed via Schema::from_cedarschema_str).
+//
+// Entity types
+// ────────────
+// MaKo::Principal          — authenticated API caller (name = key name)
+// MaKo::Command            — ERP command resource (name, marktrolle, pid, tenant)
+// MaKo::EdifactIngest      — EDIFACT ingest endpoint (tenant)
+// MaKo::AdminMaloRecord    — MaLo admin resource (tenant, malo_id?)
+// MaKo::AdminPartnerRecord — partner admin resource (tenant, gln?)
+// MaKo::MetricsEndpoint    — Prometheus /metrics endpoint (tenant)
+//
+// Action groups (use in Cedar policies as `action in MaKo::Action::"AdminMalo"`)
+// ────────────
+// AdminMalo    — groups AdminMaloRead, AdminMaloWrite, AdminMaloDelete, AdminMaloStats
+// AdminPartner — groups AdminPartnerRead, AdminPartnerWrite, AdminPartnerDelete, AdminPartnerImport
+
+namespace MaKo {
+  entity Principal;
+
+  entity Command = {
+    name:       String,
+    marktrolle: String,
+    pid:        Long,
+    tenant:     String,
+  };
+
+  entity EdifactIngest = {
+    tenant: String,
+  };
+
+  entity AdminMaloRecord = {
+    tenant:  String,
+    malo_id?: String,
+  };
+
+  entity AdminPartnerRecord = {
+    tenant: String,
+    gln?:   String,
+  };
+
+  entity MetricsEndpoint = {
+    tenant: String,
+  };
+
+  entity McpEndpoint = {
+    tenant: String,
+  };
+
+  // Action groups — no appliesTo; used as targets for `action in [...]` in policies.
+  action AdminMalo;
+  action AdminPartner;
+
+  action SubmitCommand appliesTo {
+    principal: [Principal],
+    resource:  [Command],
+    context: {
+      tenant:     String,
+      marktrolle: String,
+      pid:        Long,
+    }
+  };
+
+  action IngestEdifact appliesTo {
+    principal: [Principal],
+    resource:  [EdifactIngest],
+    context: {
+      tenant: String,
+    }
+  };
+
+  action AdminMaloRead in [AdminMalo] appliesTo {
+    principal: [Principal],
+    resource:  [AdminMaloRecord],
+    context: {
+      tenant: String,
+    }
+  };
+
+  action AdminMaloWrite in [AdminMalo] appliesTo {
+    principal: [Principal],
+    resource:  [AdminMaloRecord],
+    context: {
+      tenant: String,
+    }
+  };
+
+  action AdminMaloDelete in [AdminMalo] appliesTo {
+    principal: [Principal],
+    resource:  [AdminMaloRecord],
+    context: {
+      tenant: String,
+    }
+  };
+
+  action AdminMaloStats in [AdminMalo] appliesTo {
+    principal: [Principal],
+    resource:  [AdminMaloRecord],
+    context: {
+      tenant: String,
+    }
+  };
+
+  action AdminPartnerRead in [AdminPartner] appliesTo {
+    principal: [Principal],
+    resource:  [AdminPartnerRecord],
+    context: {
+      tenant: String,
+    }
+  };
+
+  action AdminPartnerWrite in [AdminPartner] appliesTo {
+    principal: [Principal],
+    resource:  [AdminPartnerRecord],
+    context: {
+      tenant: String,
+    }
+  };
+
+  action AdminPartnerDelete in [AdminPartner] appliesTo {
+    principal: [Principal],
+    resource:  [AdminPartnerRecord],
+    context: {
+      tenant: String,
+    }
+  };
+
+  action AdminPartnerImport in [AdminPartner] appliesTo {
+    principal: [Principal],
+    resource:  [AdminPartnerRecord],
+    context: {
+      tenant: String,
+    }
+  };
+
+  action ReadMetrics appliesTo {
+    principal: [Principal],
+    resource:  [MetricsEndpoint],
+    context: {
+      tenant: String,
+    }
+  };
+
+  action UseMcp appliesTo {
+    principal: [Principal],
+    resource:  [McpEndpoint],
+    context: {
+      tenant: String,
+    }
+  };
+}

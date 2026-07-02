@@ -51,7 +51,18 @@
 //!   `docs/pdfs/bdew-mako/BDEW_VKU_GEODE_FNBGas_AWH_WiMGas_V2_0_20250804.pdf`
 //! - **UTILMD AHB Gas 1.1 / 1.2** — message specification
 
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
+#![warn(clippy::pedantic, clippy::must_use_candidate)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::doc_markdown)] // German MaKo terms and BDEW acronyms produce many false positives
+#![allow(clippy::too_many_lines)] // process handle() functions are necessarily verbose
+#![allow(clippy::match_same_arms)] // sometimes intentional for process-family readability
+#![allow(clippy::manual_let_else)] // existing code style; rewrite in follow-up
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::unnested_or_patterns)]
+#![allow(clippy::map_unwrap_or)]
+#![allow(clippy::items_after_statements)]
 
 /// WiM Gas Anmeldung / Abmeldung workflows (PIDs 44042–44053).
 pub mod anmeldung;
@@ -127,13 +138,17 @@ pub use verpflichtungsanfrage::{
 /// - PIDs 44042–44053 → `"wim-gas-anmeldung"` (`WimGasAnmeldungWorkflow`)
 /// - PIDs 44168–44170 → `"wim-gas-verpflichtungsanfrage"`
 /// - PIDs 31003, 31004 → `"wim-gas-invoic"` (INVOIC billing stub; settlement pending)
-/// - PIDs 44022–44024 → `"wim-gas-stornierung"` (WiM Gas Stornierung; canonical per BDEW PID 3.3/4.0)
+/// - PIDs 44022–44024 → `"wim-gas-stornierung"` when `DeploymentRoles::all()`, `Msb`, or `Nmsb`
+///   (role-conditional; see `WimGasModule` impl of `EngineModule::register_pids_with_roles`)
 ///
 /// IFTSTA PIDs 21009/21010/21011/21012/21013/21015/21018 carry informational
 /// WiM Gas MSB-Wechsel status messages. Per WiM Gas AWH V2.0 there is no APERAK
 /// obligation for these messages; they are not routed to any workflow.
 ///
 /// Note: GeLi Gas PIDs 44001–44021 belong to `mako-geli-gas`.
+/// Note: PIDs 44022–44024 are routed to `"geli-gas-stornierung"` (via `GeliGasModule`) when the
+/// deployment is a pure GNB (`Nb`-only), since supply-change stornierung (LFN/LFA → GNB)
+/// is the dominant traffic pattern for gas network operators.
 pub struct WimGasModule;
 
 impl mako_engine::builder::EngineModule for WimGasModule {
@@ -162,11 +177,8 @@ impl mako_engine::builder::EngineModule for WimGasModule {
         for &pid in verpflichtungsanfrage::VERPFLICHTUNGSANFRAGE_PIDS {
             router.register(pid, "wim-gas-verpflichtungsanfrage");
         }
-        // PIDs 44022–44024: WiM Gas Stornierung per BDEW PID overview (PID 3.3 / PID 4.0).
-        // Canonical implementation lives in `mako-wim-gas::stornierung`.
-        for pid in [44022_u32, 44023, 44024] {
-            router.register(pid, "wim-gas-stornierung");
-        }
+        // PIDs 44022–44024: role-conditional — NOT registered here.
+        // See register_pids_with_roles() for the gMSB-role guard.
         // IFTSTA PIDs 21009/21010/21011/21012/21013/21015/21018 carry informational
         // WiM Gas MSB-Wechsel status messages. Per WiM Gas AWH V2.0, there is no
         // APERAK obligation for these messages; they are not routed to any workflow.
@@ -222,6 +234,38 @@ impl mako_engine::builder::EngineModule for WimGasModule {
                 mako_engine::types::Sparte::Gas,
                 insrpt::WORKFLOW_NAME,
             );
+        }
+    }
+
+    fn register_pids_with_roles(
+        &self,
+        router: &mut mako_engine::pid_router::PidRouter,
+        roles: &mako_engine::marktrolle::DeploymentRoles,
+    ) {
+        // Register all unconditional WiM Gas PIDs first.
+        self.register_pids(router);
+
+        // PIDs 44022–44024: Stornierung — WiM Gas context (gMSB cancels MSB-change).
+        //
+        // Routing decision:
+        //   - `all()` — backward-compatible default; `wim-gas-stornierung` is the canonical
+        //     owner for combined deployments where all roles are present.
+        //   - `Msb` or `Nmsb` — the gMSB receives 44022 inbound (Anfrage nach Stornierung
+        //     of a WiM Gas Anmeldung/Kündigung) and sends 44023/44024 responses outbound.
+        //
+        // NOT registered when the deployment is a pure GNB (`Nb`-only, without `Msb`/`Nmsb`):
+        //   In that case, `GeliGasModule::register_pids_with_roles` registers 44022–44024 as
+        //   `"geli-gas-stornierung"` — appropriate for supply-change stornierung from LFN/LFA.
+        //
+        // Combined `Nb + Msb` deployments are not supported: both modules would conflict
+        //   on 44022–44024; the operator must run separate GNB and gMSB engine instances.
+        if roles.is_all()
+            || roles.contains(mako_engine::marktrolle::Marktrolle::Msb)
+            || roles.contains(mako_engine::marktrolle::Marktrolle::Nmsb)
+        {
+            for &pid in stornierung::STORNIERUNG_PIDS {
+                router.register_with_module(pid, stornierung::WORKFLOW_NAME, "wim-gas");
+            }
         }
     }
 

@@ -235,7 +235,7 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 - Regelenergie Gas
 - Mehr-/Mindermengenbilanzierung Gas
 - Konvertierung im qualitätsübergreifenden Gasmarktgebiet
-- INVOIC Gas billing: Kapazitätsrechnung (PID 31010), Rechnung sonstige Leistung (PID 31011)
+- INVOIC Gas billing: Kapazitätsrechnung (PID 31010)
 - DVGW message types: ALOCAT, NOMINT, NOMRES
 
 ---
@@ -263,10 +263,10 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 | GPKE Lieferantenwechsel + MMM Strom | BK6 | `mako-gpke` | PIDs 31001–31002, 31004–31008 ✅ |
 | MaBiS Bilanzkreisabrechnung | BK6 | `mako-mabis` | PID 13003 (MSCONS) |
 | WiM Messwesen / MSB | BK6 | `mako-wim` | PIDs 31003, 31009 ✅ |
-| GeLi Gas Lieferantenwechsel | BK7 | `mako-geli-gas` | ❌ No INVOIC |
-| GaBi Gas Bilanzierung / MMM Gas | BK7 | `mako-gabi-gas` | PIDs 31010–31011 ✅ |
+| GeLi Gas Lieferantenwechsel + AWH Sperrprozesse | BK7 | `mako-geli-gas` | PID 31011 (Rechnung sonstige Leistung, NB → LF) ✅ |
+| GaBi Gas Bilanzierung / MMM Gas | BK7 | `mako-gabi-gas` | PID 31010 (Kapazitätsrechnung) ✅ |
 | Netzbetreiberwechsel Strom | BK6 | `mako-nbw` | ❌ PARTIN only |
 
-> Gas Mehr-/Mindermengen billing (PIDs 31010–31011) is NOT part of GeLi Gas.
-> It falls under BK7 Bilanzierung (GaBi Gas domain), governed separately from the
-> supplier-switch process.
+> INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) is billed by the GNB/VNB
+> to the LFN/LFA for AWH performed during the Sperrprozess — it belongs to GeLi Gas (BK7-24-01-009),
+> not GaBi Gas. INVOIC 31010 (Kapazitätsrechnung, NB → BKV) is GaBi Gas (BK7-14-020).

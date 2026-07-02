@@ -6,9 +6,10 @@
 //!
 //! ## Security
 //!
-//! All endpoints that carry business data are protected by an opaque Bearer
-//! token (`Authorization: Bearer <token>`) configured with `--http-api-token`.
-//! The health probe at `GET /health` is always unauthenticated.
+//! All endpoints that carry business data are protected by Bearer token
+//! authentication and Cedar ABAC authorization. Tokens are named API keys
+//! provisioned via `--auth-key NAME=TOKEN`. The health probe at `GET /health`
+//! is always unauthenticated.
 
 use utoipa::{
     Modify, OpenApi,
@@ -28,7 +29,8 @@ impl Modify for SecurityAddon {
                 HttpBuilder::new()
                     .scheme(HttpAuthScheme::Bearer)
                     .description(Some(
-                        "Opaque token set via `--http-api-token`. \
+                        "Named API key provisioned with `--auth-key NAME=TOKEN` \
+                         (env: MAKOD_AUTH_KEYS). \
                          Pass as `Authorization: Bearer <token>`.",
                     ))
                     .build(),

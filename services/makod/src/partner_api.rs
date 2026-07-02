@@ -53,11 +53,11 @@ use mako_engine::{
     store_slatedb::SlateDbPartnerStore,
     types::MarktpartnerCode,
 };
-use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 use tracing::info;
 use utoipa::ToSchema;
+
+use crate::cedar_authz::{CedarAuthorizer, MakoAction, PartnerResource};
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -65,7 +65,8 @@ use utoipa::ToSchema;
 pub struct PartnerAdminState {
     pub store: SlateDbPartnerStore,
     pub tenant_id: TenantId,
-    pub optional_token: Option<SecretString>,
+    /// Cedar-based authorization engine.
+    pub cedar: Arc<CedarAuthorizer>,
     /// Shared EDIFACT platform for parsing PARTIN interchanges submitted to
     /// `POST /admin/partners/import`.
     pub platform: Arc<Platform>,
@@ -141,24 +142,12 @@ pub fn router(state: Arc<PartnerAdminState>) -> Router {
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 
-fn check_auth(headers: &HeaderMap, optional_token: &Option<SecretString>) -> bool {
-    let Some(expected) = optional_token else {
-        return true;
-    };
-    let provided = headers
-        .get("authorization")
-        .or_else(|| headers.get("Authorization"))
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .unwrap_or("");
-    provided
-        .as_bytes()
-        .ct_eq(expected.expose_secret().as_bytes())
-        .into()
-}
-
 fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
+}
+
+fn forbidden() -> Response {
+    (StatusCode::FORBIDDEN, "Forbidden").into_response()
 }
 
 fn internal_error(e: impl std::fmt::Display) -> Response {
@@ -189,8 +178,19 @@ pub(crate) async fn handle_list(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
 ) -> Response {
-    if !check_auth(&headers, &state.optional_token) {
-        return unauthorized();
+    let identity = match state.cedar.authenticate(&headers) {
+        Some(id) => id,
+        None => return unauthorized(),
+    };
+    if !state.cedar.authorize_partner(
+        &identity,
+        MakoAction::AdminPartnerRead,
+        &PartnerResource {
+            tenant: &state.tenant_id.to_string(),
+            gln: None,
+        },
+    ) {
+        return forbidden();
     }
     match state.store.list(state.tenant_id).await {
         Ok(partners) => {
@@ -219,8 +219,19 @@ pub(crate) async fn handle_get(
     State(state): State<Arc<PartnerAdminState>>,
     Path(gln_str): Path<String>,
 ) -> Response {
-    if !check_auth(&headers, &state.optional_token) {
-        return unauthorized();
+    let identity = match state.cedar.authenticate(&headers) {
+        Some(id) => id,
+        None => return unauthorized(),
+    };
+    if !state.cedar.authorize_partner(
+        &identity,
+        MakoAction::AdminPartnerRead,
+        &PartnerResource {
+            tenant: &state.tenant_id.to_string(),
+            gln: Some(&gln_str),
+        },
+    ) {
+        return forbidden();
     }
     let gln = MarktpartnerCode::from(gln_str.as_str());
     match state.store.get(state.tenant_id, &gln).await {
@@ -256,8 +267,19 @@ pub(crate) async fn handle_put(
     Path(gln_str): Path<String>,
     Json(body): Json<UpsertRequest>,
 ) -> Response {
-    if !check_auth(&headers, &state.optional_token) {
-        return unauthorized();
+    let identity = match state.cedar.authenticate(&headers) {
+        Some(id) => id,
+        None => return unauthorized(),
+    };
+    if !state.cedar.authorize_partner(
+        &identity,
+        MakoAction::AdminPartnerWrite,
+        &PartnerResource {
+            tenant: &state.tenant_id.to_string(),
+            gln: Some(&gln_str),
+        },
+    ) {
+        return forbidden();
     }
     let path_gln = MarktpartnerCode::from(gln_str.as_str());
     if body.record.gln != path_gln {
@@ -306,8 +328,19 @@ pub(crate) async fn handle_delete(
     State(state): State<Arc<PartnerAdminState>>,
     Path(gln_str): Path<String>,
 ) -> Response {
-    if !check_auth(&headers, &state.optional_token) {
-        return unauthorized();
+    let identity = match state.cedar.authenticate(&headers) {
+        Some(id) => id,
+        None => return unauthorized(),
+    };
+    if !state.cedar.authorize_partner(
+        &identity,
+        MakoAction::AdminPartnerDelete,
+        &PartnerResource {
+            tenant: &state.tenant_id.to_string(),
+            gln: Some(&gln_str),
+        },
+    ) {
+        return forbidden();
     }
     let gln = MarktpartnerCode::from(gln_str.as_str());
     match state.store.remove(state.tenant_id, &gln).await {
@@ -354,8 +387,19 @@ pub(crate) async fn handle_import(
     State(state): State<Arc<PartnerAdminState>>,
     body: Bytes,
 ) -> Response {
-    if !check_auth(&headers, &state.optional_token) {
-        return unauthorized();
+    let identity = match state.cedar.authenticate(&headers) {
+        Some(id) => id,
+        None => return unauthorized(),
+    };
+    if !state.cedar.authorize_partner(
+        &identity,
+        MakoAction::AdminPartnerImport,
+        &PartnerResource {
+            tenant: &state.tenant_id.to_string(),
+            gln: None,
+        },
+    ) {
+        return forbidden();
     }
     if body.is_empty() {
         return (

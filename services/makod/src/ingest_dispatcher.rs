@@ -46,7 +46,7 @@ use mako_geli_gas::{
     GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow, GeliGasSupplierChangeWorkflow,
 };
 use mako_gpke::{
-    GpkeLfAnmeldungWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow,
+    GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow,
     GpkeSupplierChangeWorkflow,
 };
 use time::OffsetDateTime;
@@ -231,6 +231,37 @@ impl EdifactIngestDispatcher {
                 }
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: "gpke-supplier-change",
+                    reason: "pid_not_in_spawn_table",
+                }),
+            },
+
+            // ── GPKE LF-Abmeldung — LF side (NB-initiated Lieferende) ───────
+            //
+            // PID 55007: Ankündigung NB-seitiges Lieferende (NB → LFN) — spawn.
+            //
+            // The NB proactively terminates a supply relationship (§41 EnWG or
+            // judicial order). The LF receives PID 55007 and responds with
+            // PID 55008 (Bestätigung) or 55009 (Ablehnung) via ERP command
+            // `gpke.nb-lieferende.bestaetigen` / `.ablehnen`.
+            //
+            // Note: PIDs 55007–55009 are present in UTILMD AHB Strom 2.1
+            // (FV2025-10-01). They were NOT removed by BK6-22-024 (LFW24);
+            // only the LF-initiated processes (55001/55002) were redesigned
+            // for 24h processing. APERAK Frist: 24h (BK6-22-024 §4).
+            "gpke-lf-abmeldung" => match pid {
+                55007 => {
+                    let cmd = adapters::gpke_lf_abmeldung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.spawn_or_resume::<GpkeLfAbmeldungWorkflow>(
+                        &malo_id,
+                        "gpke-lf-abmeldung",
+                        cmd,
+                        &fv,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gpke-lf-abmeldung",
                     reason: "pid_not_in_spawn_table",
                 }),
             },

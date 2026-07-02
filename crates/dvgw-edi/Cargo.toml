@@ -1,7 +1,7 @@
 [package]
 name         = "dvgw-edi"
 version.workspace     = true
-description  = "DVGW EDIFACT format parser and validator for the German gas market (ALOCAT, NOMINT, NOMRES)"
+description  = "DVGW EDIFACT format parser and validator for the German gas market (ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES)"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
@@ -23,9 +23,19 @@ alocat   = []
 nomint   = []
 ## Enables NOMRES (Nominierungsantwort) message support.
 nomres   = []
+## Enables SCHEDL (Schedulingnachricht) message support.
+schedl   = []
+## Enables IMBNOT (Imbalance Notification) message support.
+imbnot   = []
+## Enables TRANOT (Transport Notification) message support.
+tranot   = []
+## Enables DELORD (Delivery Order) message support.
+delord   = []
+## Enables DELRES (Delivery Response) message support.
+delres   = []
 ## Enables `serde::Serialize` / `Deserialize` on all public value types.
 serde    = ["dep:serde"]
-## Default: all Phase-1 message types enabled.
-default  = ["alocat", "nomint", "nomres"]
+## Default: all message types enabled.
+default  = ["alocat", "nomint", "nomres", "schedl", "imbnot", "tranot", "delord", "delres"]
 ## Enables structured tracing spans via the `tracing` crate.
 tracing  = ["dep:tracing"]

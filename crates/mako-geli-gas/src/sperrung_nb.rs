@@ -70,7 +70,11 @@ pub const MSB_ANTWORT_PIDS: &[u32] = &[19118, 19119];
 /// **10 Werktage** of receiving the Sperrauftrag.
 ///
 /// ```rust,ignore
-/// let due = mako_engine::fristen::add_werktage(received_date, 10, BdewMaKo);
+/// let due = mako_engine::fristen::deadline_at_werktage(
+///     received_at,
+///     10,
+///     mako_engine::fristen::HolidayCalendar::BdewMaKo,
+/// );
 /// let deadline = Deadline::new(process.stream_id().clone(), ..., ANTWORT_WINDOW_LABEL, due);
 /// deadline_store.register(&deadline).await?;
 /// ```

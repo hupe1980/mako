@@ -733,6 +733,74 @@ where
     Ok(result.events)
 }
 
+/// Like [`execute_command_atomic`] but co-persists `deadlines` in the same
+/// atomic write as events and outbox entries.
+///
+/// On [`SlateDbStore`] all three sets of writes land in a single SSI
+/// transaction, eliminating the non-atomic window between event persistence
+/// and deadline registration. On stores that use the default
+/// [`AtomicAppend::append_with_outbox_and_deadlines`] fallback, deadlines are
+/// **not** persisted here — callers must register them separately via
+/// [`DeadlineStore::register`].
+///
+/// This is the canonical implementation path for commands that must register
+/// a regulatory deadline (GPKE 24h, WiM 5 WT, GeLi Gas / WiM Gas 10 WT,
+/// MABIS 1 WT).
+///
+/// [`SlateDbStore`]: crate::store_slatedb::SlateDbStore
+/// [`DeadlineStore::register`]: crate::deadline::DeadlineStore::register
+pub(crate) async fn execute_command_atomic_with_deadlines<W, S>(
+    store: &S,
+    stream_id: &crate::ids::StreamId,
+    command: W::Command,
+    ctx: &CommandContext,
+    deadlines: &[crate::deadline::Deadline],
+) -> Result<Vec<EventEnvelope>, EngineError>
+where
+    W: Workflow,
+    S: crate::event_store::AtomicAppend,
+{
+    let (state, current_sequence) = store
+        .fold_stream(
+            stream_id,
+            0,
+            (W::State::default(), 0u64),
+            |(acc, _), env| {
+                let seq = env.sequence_number;
+                let payload = W::upcast(&env.event_type, env.schema_version, env.payload)?;
+                let event: W::Event = serde_json::from_value(payload)
+                    .map_err(|e| EngineError::Deserialization(e.to_string()))?;
+                Ok((W::apply(acc, &event), seq))
+            },
+        )
+        .await?;
+
+    let output = W::handle(&state, command)?;
+
+    if output.events.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let new_events: Result<Vec<NewEvent>, EngineError> = output
+        .events
+        .iter()
+        .map(|event| ctx.new_event(event))
+        .collect();
+    let new_events = new_events?;
+
+    let result = store
+        .append_with_outbox_and_deadlines(
+            stream_id,
+            ExpectedVersion::Exact(current_sequence),
+            &new_events,
+            &output.outbox,
+            deadlines,
+        )
+        .await?;
+
+    Ok(result.events)
+}
+
 /// Reconstruct `(W::State, current_sequence)` using an optional snapshot as a
 /// starting point.
 ///

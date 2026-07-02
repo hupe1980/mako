@@ -23,6 +23,7 @@ mako-gpke        = { path = "../../crates/mako-gpke" }
 mako-wim         = { path = "../../crates/mako-wim" }
 mako-geli-gas    = { path = "../../crates/mako-geli-gas" }
 mako-wim-gas     = { path = "../../crates/mako-wim-gas" }
+dvgw-edi         = { path = "../../crates/dvgw-edi" }
 mako-gabi-gas    = { path = "../../crates/mako-gabi-gas" }
 mako-mabis       = { path = "../../crates/mako-mabis" }
 mako-redispatch  = { path = "../../crates/mako-redispatch" }
@@ -43,6 +44,9 @@ object_store       = { version = "0.14", features = ["aws", "gcp", "azure"] }
 serde              = { version = "1", features = ["derive"] }
 toml               = { version = "0.8", default-features = false, features = ["parse"] }
 serde_json         = { workspace = true }
+cedar-policy       = "4"
+jsonwebtoken       = "9"
+thiserror          = { workspace = true }
 subtle             = "2"
 time               = { workspace = true }
 tokio              = { version = "1", features = ["full"] }
@@ -57,14 +61,14 @@ sha2               = "0.10"
 utoipa             = { version = "5", features = ["axum_extras", "uuid", "time"] }
 utoipa-axum        = "0.2"
 utoipa-swagger-ui  = { version = "9", features = ["axum"] }
+rmcp = { version = "2.0.0", features = ["transport-io", "transport-streamable-http-server"] }
+schemars = { version = "1.2.1", features = ["chrono04"] }
 
 [dev-dependencies]
+# Adds the "testing" feature on top of the production "slatedb" dep,
+# enabling InMemoryEventStore, NoopDeadLetterSink, InMemoryInboxStore.
+# Must never appear in a production build.
 mako-engine  = { path = "../../crates/mako-engine", features = ["testing"] }
-mako-gpke    = { path = "../../crates/mako-gpke" }
-mako-geli-gas = { path = "../../crates/mako-geli-gas" }
-mako-wim     = { path = "../../crates/mako-wim" }
-mako-wim-gas = { path = "../../crates/mako-wim-gas" }
-edi-energy  = { path = "../../crates/edi-energy", default-features = false, features = ["utilmd", "aperak"] }
-tokio       = { version = "1", features = ["full"] }
-serde_json  = { workspace = true }
-time        = { workspace = true }
+tokio        = { version = "1", features = ["full"] }
+serde_json   = { workspace = true }
+time         = { workspace = true }

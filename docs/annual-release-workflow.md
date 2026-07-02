@@ -279,7 +279,7 @@ in-flight processes from the old FV snapshot to the new FV.
 ```bash
 # Replace FV dates as appropriate for the current release cycle.
 curl -s -X POST \
-     -H "Authorization: Bearer ${MAKOD_HTTP_API_TOKEN}" \
+     -H "Authorization: Bearer ${TOKEN}" \
      -H "Content-Type: application/json" \
      -d '{"from":"FV2025-10-01","to":"FV2026-10-01"}' \
      http://makod-admin:8080/admin/migrations | jq .
@@ -355,6 +355,73 @@ incoming release formats are normatively acceptable.  The library handles this
 automatically via `TransitionState` — no code changes are needed during the
 grace period.  See `docs/release-lifecycle.md` for details.
 
+---
+
+## Appendix E — FV2026 profile effective dates and pairing rules
+
+Different message types take effect on **different dates** within the 2026
+release cycle.  This is the BDEW-mandated staggered rollout schedule.  When an
+engine processes a message after a partial cutover (e.g., INVOIC effective from
+2026-04-01 but UTILMD not until 2026-10-01), it must apply the correct profile
+for each message type independently.
+
+`FormatVersion` is chosen per-message-type at parse time based on the
+`UNH DE 0057` wire release code.  The engine never infers a profile from the
+calendar date; the sender declares which profile version to use in the wire
+format itself.  **Profile pairing is therefore a routing concern, not a clock
+concern** — concurrent processes can run under different FVs without conflict
+(see `WorkflowVersionPolicy::ForwardCompatible`).
+
+### FV2026 profile inventory
+
+| Message type | FV2025 baseline | FV2026 release | Effective from |
+|---|---|---|---|
+| `aperak` | `fv20251001` | `fv20261001` | 2026-10-01 |
+| `comdis` | `fv20251001` | `fv20261001` | 2026-10-01 |
+| `contrl` | `fv20251001` | `fv20260101` | 2026-01-01 |
+| `iftsta` | `fv20251001` | `fv20261001` | 2026-10-01 |
+| `insrpt` | `fv20211001` | `fv20260101` | 2026-01-01 |
+| `invoic` | `fv20251001` | `fv20260401` | 2026-04-01 |
+| `mscons` | `fv20251001` | `fv20261001` | 2026-10-01 |
+| `ordchg` | `fv20241001` | `fv20260401` | 2026-04-01 |
+| `orders` | `fv20251001` | `fv20260401` | 2026-04-01 |
+| `ordrsp` | `fv20251001` | `fv20260401` | 2026-04-01 |
+| `partin` | `fv20251001` | `fv20260401` | 2026-04-01 |
+| `pricat` | `fv20250401` | `fv20260401` | 2026-04-01 |
+| `quotes` | `fv20250401` | `fv20260401` | 2026-04-01 |
+| `remadv` | `fv20251001` | `fv20260401` | 2026-04-01 |
+| `reqote` | `fv20250401` | `fv20260401` | 2026-04-01 |
+| `utilmd` (Strom) | `fv20251001` | `fv20261001` | 2026-10-01 |
+| `utilmd` (Gas) | `fv20251001_gas` | `fv20261001_gas` | 2026-10-01 |
+| `utilts` | `fv20241001` | `fv20260401` | 2026-04-01 |
+
+### Transition windows
+
+There are two distinct cutover dates in the 2026 cycle:
+
+- **2026-01-01** — `contrl`, `insrpt` (limited scope; verify with BDEW release notes)
+- **2026-04-01** — billing and operational message types (INVOIC, ORDERS, ORDRSP, ORDCHG, PARTIN, REMADV, PRICAT, REQOTE, QUOTES, UTILTS)
+- **2026-10-01** — core supply-chain message types (UTILMD, MSCONS, APERAK, COMDIS, IFTSTA)
+
+During any transition window, the engine serves **both** FVs concurrently.
+Old processes continue to run under the FV they were spawned with
+(`WorkflowVersionPolicy::ForwardCompatible`).  New inbound messages select
+the profile using the wire release code in `UNH DE 0057`.
+
+### xtask coverage check
+
+After adding a new FV profile, verify that the `check-release-coverage` gate
+covers the new effective date:
+
+```bash
+cargo xtask check-release-coverage --date 2026-04-01
+cargo xtask check-release-coverage --date 2026-10-01
+```
+
+Both commands must exit 0 for the workspace to be considered FV2026-ready.
+
+
+
 ## Appendix C — Release naming conventions
 
 | Profile directory | Wire release code | Rule |
@@ -382,7 +449,7 @@ The `archive` meta-feature activates all per-type archive features:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.5", features = ["archive"] }
+edi-energy = { version = "0.6", features = ["archive"] }
 ```
 
 Archive features always imply their base type feature (`mscons-archive` implies

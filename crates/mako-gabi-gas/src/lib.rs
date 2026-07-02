@@ -53,10 +53,51 @@
 
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
+#![warn(clippy::pedantic, clippy::must_use_candidate)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::doc_markdown)] // German MaKo terms and BDEW acronyms produce many false positives
+#![allow(clippy::too_many_lines)] // process handle() functions are necessarily verbose
+#![allow(clippy::match_same_arms)] // sometimes intentional for process-family readability
+#![allow(clippy::manual_let_else)] // existing code style; rewrite in follow-up
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::unnested_or_patterns)]
+#![allow(clippy::map_unwrap_or)]
+#![allow(clippy::items_after_statements)]
 
 /// GaBi Gas INVOIC billing workflow — PIDs 31010 and 31011.
 pub mod invoic;
 
+/// GaBi Gas Nomination workflow — NOMINT/NOMRES (BKV ↔ FNB/MGV, PIDs 90011/90012/90021/90022).
+pub mod nomination;
+
+/// GaBi Gas Allocation workflow — ALOCAT receive-and-record (PIDs 90001/90002/90003).
+pub mod allocation;
+
+/// GaBi Gas SCHEDL workflow — day-ahead transport schedule receive-and-record (PID 90031).
+pub mod schedl;
+
+/// GaBi Gas IMBNOT workflow — imbalance notification receive-and-record (PID 90041).
+pub mod imbnot;
+
+/// GaBi Gas TRANOT workflow — transport notification receive-and-record (PID 90051).
+pub mod tranot;
+
+/// GaBi Gas DELORD/DELRES workflow — delivery order and response (PIDs 90061/90062).
+pub mod delord;
+
+pub use allocation::{
+    ALLOCATION_PIDS, AllocationCommand, AllocationData, AllocationEvent, AllocationState,
+    AllocationType, GaBiGasAllocationWorkflow, WORKFLOW_NAME as ALLOCATION_WORKFLOW_NAME,
+};
+pub use delord::{
+    DELIVERY_ORDER_PIDS, DELORD_PID, DELRES_DEADLINE_LABEL, DELRES_PID, DeliveryOrderCommand,
+    DeliveryOrderData, DeliveryOrderEvent, DeliveryOrderState, DelresStatus,
+    GaBiGasDeliveryOrderWorkflow, WORKFLOW_NAME as DELIVERY_ORDER_WORKFLOW_NAME,
+};
+pub use imbnot::{
+    GaBiGasImbalanceWorkflow, IMBNOT_PID, IMBNOT_PIDS, ImbalanceCommand, ImbalanceData,
+    ImbalanceDirection, ImbalanceEvent, ImbalanceState, WORKFLOW_NAME as IMBNOT_WORKFLOW_NAME,
+};
 pub use invoic::{
     GABI_GAS_COMDIS_ABLEHNUNG_PID, GABI_GAS_INVOIC_PIDS, GABI_GAS_REMADV_PID, GaBiGasInvoicCommand,
     GaBiGasInvoicData, GaBiGasInvoicEvent, GaBiGasInvoicProjection, GaBiGasInvoicRecord,
@@ -64,17 +105,56 @@ pub use invoic::{
     SETTLEMENT_WINDOW_LABEL as INVOIC_SETTLEMENT_WINDOW_LABEL,
     WORKFLOW_NAME as INVOIC_WORKFLOW_NAME,
 };
+pub use nomination::{
+    GaBiGasNominationWorkflow, NOMINATION_PIDS, NOMINT_PIDS, NOMRES_DEADLINE_LABEL, NOMRES_PIDS,
+    NominationCommand, NominationCounterparty, NominationData, NominationEvent, NominationState,
+    NomresAcceptance, WORKFLOW_NAME as NOMINATION_WORKFLOW_NAME,
+};
+pub use schedl::{
+    GaBiGasSchedlWorkflow, SCHEDL_PID, SCHEDL_PIDS, SchedlCommand, SchedlData, SchedlEvent,
+    SchedlState, WORKFLOW_NAME as SCHEDL_WORKFLOW_NAME,
+};
+pub use tranot::{
+    GaBiGasTransportNotificationWorkflow, TRANOT_PID, TRANOT_PIDS, TransportNotificationCommand,
+    TransportNotificationData, TransportNotificationEvent, TransportNotificationState,
+    TransportNotificationType, WORKFLOW_NAME as TRANOT_WORKFLOW_NAME,
+};
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
 
 /// Engine module for the GaBi Gas process family.
 ///
-/// Registers all GaBi Gas INVOIC `Prüfidentifikator` values into the
+/// Registers all GaBi Gas `Prüfidentifikator` values into the
 /// [`mako_engine::pid_router::PidRouter`] at engine startup:
 ///
+/// **INVOIC billing (BDEW / edi-energy):**
 /// - PID 31010 → `"gabi-gas-invoic"` ([`GaBiGasInvoicWorkflow`], Kapazitätsrechnung)
 /// - PID 33001 → `"gabi-gas-invoic"` (REMADV Zahlungsavis, invoicer role)
 /// - PID 29001 → `"gabi-gas-invoic"` (COMDIS Ablehnung REMADV, payer role)
+///
+/// **Nomination — NOMINT/NOMRES (DVGW synthetic PIDs):**
+/// - PID 90011 → `"gabi-gas-nomination"` (NOMINT BKV → FNB)
+/// - PID 90012 → `"gabi-gas-nomination"` (NOMINT BKV → MGV)
+/// - PID 90021 → `"gabi-gas-nomination"` (NOMRES FNB → BKV)
+/// - PID 90022 → `"gabi-gas-nomination"` (NOMRES MGV → BKV)
+///
+/// **Allocation — ALOCAT (DVGW synthetic PIDs):**
+/// - PID 90001 → `"gabi-gas-allocation"` (ALOCAT FNB → BKV daily)
+/// - PID 90002 → `"gabi-gas-allocation"` (ALOCAT MGV → BKV monthly)
+/// - PID 90003 → `"gabi-gas-allocation"` (ALOCAT VNB → FNB sub-daily)
+///
+/// **Schedule — SCHEDL (DVGW synthetic PID):**
+/// - PID 90031 → `"gabi-gas-schedl"` (SCHEDL transport schedule, receive-and-record)
+///
+/// **Imbalance notification — IMBNOT (DVGW synthetic PID):**
+/// - PID 90041 → `"gabi-gas-imbnot"` (IMBNOT FNB/MGV → BKV)
+///
+/// **Transport notification — TRANOT (DVGW synthetic PID):**
+/// - PID 90051 → `"gabi-gas-tranot"` (TRANOT FNB/VNB → BKV/GH/MGV)
+///
+/// **Delivery order — DELORD/DELRES (DVGW synthetic PIDs):**
+/// - PID 90061 → `"gabi-gas-delivery-order"` (DELORD BKV/GH → FNB/MGV)
+/// - PID 90062 → `"gabi-gas-delivery-order"` (DELRES FNB/MGV → BKV/GH)
 ///
 /// Note: PID 31011 (Rechnung sonstige Leistung / AWH Sperrprozesse Gas) is
 /// handled by `mako-geli-gas` (`geli-gas-sperrprozesse-invoic`), not here.
@@ -86,7 +166,15 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
     }
 
     fn workflow_names(&self) -> &'static [&'static str] {
-        &["gabi-gas-invoic"]
+        &[
+            "gabi-gas-invoic",
+            "gabi-gas-nomination",
+            "gabi-gas-allocation",
+            "gabi-gas-schedl",
+            "gabi-gas-imbnot",
+            "gabi-gas-tranot",
+            "gabi-gas-delivery-order",
+        ]
     }
 
     fn register_pids(&self, router: &mut mako_engine::pid_router::PidRouter) {
@@ -110,5 +198,29 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
         //
         // Source: COMDIS AHB 1.0, GaBi Gas, BK7.
         router.register(invoic::GABI_GAS_COMDIS_ABLEHNUNG_PID, "gabi-gas-invoic");
+
+        // NOMINT / NOMRES synthetic PIDs (DVGW, 90011/90012/90021/90022).
+        for &pid in nomination::NOMINATION_PIDS {
+            router.register(pid, "gabi-gas-nomination");
+        }
+
+        // ALOCAT synthetic PIDs (DVGW, 90001/90002/90003).
+        for &pid in allocation::ALLOCATION_PIDS {
+            router.register(pid, "gabi-gas-allocation");
+        }
+
+        // SCHEDL transport schedule (DVGW, 90031).
+        router.register(schedl::SCHEDL_PID, "gabi-gas-schedl");
+
+        // IMBNOT imbalance notification (DVGW, 90041).
+        router.register(imbnot::IMBNOT_PID, "gabi-gas-imbnot");
+
+        // TRANOT transport notification (DVGW, 90051).
+        router.register(tranot::TRANOT_PID, "gabi-gas-tranot");
+
+        // DELORD / DELRES delivery order cycle (DVGW, 90061/90062).
+        for &pid in delord::DELIVERY_ORDER_PIDS {
+            router.register(pid, "gabi-gas-delivery-order");
+        }
     }
 }

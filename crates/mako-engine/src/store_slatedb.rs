@@ -1266,9 +1266,91 @@ impl AtomicAppend for SlateDbStore {
             events: envelopes,
         })
     }
-}
 
-// ── ProjectionCheckpointStore impl ───────────────────────────────────────────
+    /// Atomically append `events`, enqueue `outbox` entries, **and** register
+    /// `deadlines` in a single SSI transaction.
+    ///
+    /// All three sets of writes land in one `txn.commit()`, eliminating the
+    /// non-atomic window that exists when `append_with_outbox` is followed by
+    /// separate `DeadlineStore::register` calls.  A crash after the transaction
+    /// but before a separate deadline registration would leave the process
+    /// without its regulatory deadline; this method removes that risk.
+    async fn append_with_outbox_and_deadlines(
+        &self,
+        stream_id: &StreamId,
+        expected_version: ExpectedVersion,
+        events: &[NewEvent],
+        outbox: &[crate::outbox::PendingOutbox],
+        deadlines: &[crate::deadline::Deadline],
+    ) -> Result<AppendResult, EngineError> {
+        if deadlines.is_empty() {
+            // Degenerate to the base method when no deadlines are provided.
+            return self
+                .append_with_outbox(stream_id, expected_version, events, outbox)
+                .await;
+        }
+
+        let txn = self
+            .db
+            .begin(IsolationLevel::SerializableSnapshot)
+            .await
+            .map_err(to_store_err)?;
+
+        let current = read_version_in_txn(&txn, stream_id).await?;
+        check_version(expected_version, current)?;
+        self.check_quota(stream_id, current, events.len())?;
+
+        let now = OffsetDateTime::now_utc();
+        let envelopes = stamp_events_txn(&txn, stream_id, current, events, now)?;
+
+        // ── Outbox ────────────────────────────────────────────────────────────
+        if !outbox.is_empty() {
+            let messages: Vec<crate::outbox::OutboxMessage> = outbox
+                .iter()
+                .map(|p| materialise_outbox(p, stream_id, &envelopes, now))
+                .collect();
+            let current_count = read_om_count_txn(&txn).await?;
+            let new_count = current_count + messages.len() as u64;
+            txn.put(OM_COUNT_KEY, new_count.to_le_bytes().as_slice())
+                .map_err(to_outbox_err)?;
+            write_outbox_entries_txn(&txn, &messages)?;
+        }
+
+        // ── Deadlines ─────────────────────────────────────────────────────────
+        //
+        // All deadlines are new (we just spawned the process), so we increment
+        // the counter by `deadlines.len()` without a per-deadline existence check.
+        let dl_count_before = read_dl_count_txn(&txn).await?;
+        txn.put(
+            DL_COUNT_KEY,
+            (dl_count_before + deadlines.len() as u64)
+                .to_le_bytes()
+                .as_slice(),
+        )
+        .map_err(to_deadline_err)?;
+        for deadline in deadlines {
+            let payload =
+                serde_json::to_vec(deadline).map_err(|e| EngineError::deadline(e.to_string()))?;
+            let dl_k = dl_key(&deadline.deadline_id());
+            let time_key = dt_key(deadline.due_at(), &deadline.deadline_id());
+            let stream_key = ds_key(deadline.stream_id(), &deadline.deadline_id());
+            txn.put(dl_k.as_bytes(), payload.as_slice())
+                .map_err(to_deadline_err)?;
+            txn.put(time_key.as_bytes(), b"").map_err(to_deadline_err)?;
+            txn.put(stream_key.as_bytes(), b"")
+                .map_err(to_deadline_err)?;
+        }
+
+        txn.commit()
+            .await
+            .map_err(|e| map_txn_commit_err(e, expected_version, current))?;
+
+        Ok(AppendResult {
+            last_sequence: current + events.len() as u64,
+            events: envelopes,
+        })
+    }
+}
 
 impl crate::projection::ProjectionCheckpointStore for SlateDbStore {
     /// Load the checkpoint for `name` from per-stream cursor keys.
@@ -3146,6 +3228,76 @@ mod tests {
         // Verify the outbox message has the correct causation linkage.
         assert_eq!(pending[0].causation_event_id, events[0].event_id);
         assert_eq!(pending[0].message_type.as_ref(), "APERAK");
+    }
+
+    /// `append_with_outbox_and_deadlines` must persist events, outbox entries,
+    /// and deadline registrations in a single transaction (F-009).
+    ///
+    /// After the call, all three sets of data must be visible:
+    /// - The event appears in the stream.
+    /// - The outbox message appears in `pending`.
+    /// - The deadline appears in `for_stream` / `len`.
+    #[tokio::test]
+    async fn append_with_outbox_and_deadlines_is_atomic() {
+        use crate::{deadline::DeadlineStore as _, event_store::AtomicAppend as _, ids::ProcessId};
+
+        let store = make_store().await;
+        let stream = make_stream("test/atomic-dl");
+        let dl_store = store.as_deadline_store();
+
+        let event = make_event(1);
+        let pending_outbox = PendingOutbox::new(
+            "APERAK",
+            "9900000000001",
+            serde_json::json!({ "type": "APERAK" }),
+        );
+        let deadline = Deadline::new(
+            stream.clone(),
+            ProcessId::new(),
+            TenantId::new(),
+            WorkflowId::new("test-workflow", "FV2025-10-01"),
+            "aperak-24h",
+            OffsetDateTime::now_utc() + Duration::days(1),
+        );
+        let deadline_id = deadline.deadline_id();
+
+        store
+            .append_with_outbox_and_deadlines(
+                &stream,
+                ExpectedVersion::NoStream,
+                &[event],
+                &[pending_outbox],
+                &[deadline],
+            )
+            .await
+            .unwrap();
+
+        // ── Event must be persisted ───────────────────────────────────────────
+        let events = store.load(&stream).await.unwrap();
+        assert_eq!(events.len(), 1, "event must be persisted");
+
+        // ── Outbox message must be persisted ──────────────────────────────────
+        let pending = store.pending(10, OffsetDateTime::now_utc()).await.unwrap();
+        assert_eq!(pending.len(), 1, "outbox entry must be persisted");
+        assert_eq!(pending[0].causation_event_id, events[0].event_id);
+
+        // ── Deadline must be persisted ────────────────────────────────────────
+        assert_eq!(
+            dl_store.len().await.unwrap(),
+            1,
+            "deadline must be persisted"
+        );
+        let stream_deadlines = dl_store.for_stream(&stream).await.unwrap();
+        assert_eq!(
+            stream_deadlines.len(),
+            1,
+            "deadline must be indexed by stream"
+        );
+        assert_eq!(
+            stream_deadlines[0].deadline_id(),
+            deadline_id,
+            "persisted deadline must have the correct id"
+        );
     }
 
     #[tokio::test]

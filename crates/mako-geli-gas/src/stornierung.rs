@@ -1,11 +1,17 @@
-//! GeLi Gas / WiM Gas Stornierung — cancellation of supply-change and MSB-change
-//! requests (PIDs 44022–44024).
+//! GeLi Gas / WiM Gas Stornierung — GNB-side workflow for cancellation of supply-change
+//! and MSB-change requests (PIDs 44022–44024).
 //!
-//! Per BDEW PID 3.3 xlsx: PIDs 44022–44024 are multi-domain — both **"GeLi Gas 2.0"**
+//! Per BDEW PID 3.3/4.0 xlsx: PIDs 44022–44024 are multi-domain — both **"GeLi Gas 2.0"**
 //! (supply-change cancellation, LFN/LFA role) and **"WiM Gas"** (MSB-change cancellation,
-//! MSB role). Per PID 4.0 xlsx: both **"GeLi Gas 2.0"** and **"AWH WiM Gas 2.0"**.
-//! PID routing is currently performed by `WimGasModule` in `mako-wim-gas`.
-//! Role-based routing for the GeLi Gas context (LFN/LFA roles) is a TODO.
+//! MSB role).
+//!
+//! **Routing is role-conditional** (implemented in `GeliGasModule::register_pids_with_roles`):
+//! - `Nb`-only: PID 44022 (inbound Anfrage) → this workflow (`geli-gas-stornierung`)
+//! - `Lf`: PIDs 44023/44024 (inbound GNB responses) → `geli-gas-stornierung-lf` (see `lf_stornierung`)
+//! - `Msb`/`Nmsb`/`all()`: `WimGasModule` routes all three to `wim-gas-stornierung`
+//!
+//! **This module is the GNB-side perspective.** For the LFN/LFA perspective (LF initiates
+//! outbound 44022, awaits 44023/44024), see [`crate::lf_stornierung`].
 //!
 //! A market participant (LFN / LFA / GNB) may request cancellation of a previously
 //! submitted Anmeldung, Abmeldung, or Kündigung by sending a UTILMD G message with
@@ -64,10 +70,17 @@ pub const STORNIERUNG_APERAK_WINDOW_LABEL: &str = "geli-gas-stornierung-aperak-1
 
 /// PIDs handled by the GeLi Gas Stornierung workflow (UTILMD G).
 ///
-/// - 44022: Anfrage nach Stornierung (initiator → GNB)
-/// - 44023: Bestätigung Stornierung  (GNB response — accepted)
-/// - 44024: Ablehnung Stornierung    (GNB response — rejected)
+/// - 44022: Anfrage nach Stornierung (initiator → GNB) — **inbound on GNB side**
+/// - 44023: Bestätigung Stornierung  (GNB response — accepted) — outbound from GNB
+/// - 44024: Ablehnung Stornierung    (GNB response — rejected) — outbound from GNB
 pub const STORNIERUNG_PIDS: &[u32] = &[44022, 44023, 44024];
+
+/// Inbound PID for the GNB-side workflow.
+///
+/// Only PID 44022 (Anfrage nach Stornierung) is received inbound on the GNB side.
+/// PIDs 44023/44024 are **outbound** from GNB — they are dispatched via the outbox
+/// and do not need PID-router registration for inbound routing.
+pub const ANFRAGE_PID: u32 = 44022;
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 

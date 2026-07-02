@@ -43,6 +43,8 @@
 //! | 55006 | Ablehnung Lieferende (NB → LFN)                 | 55002 Anfrage  |
 //! | 55017 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55016 Kündigung|
 //! | 55018 | Ablehnung Kündigung Lieferbeginn (LFA → LFN)    | 55016 Kündigung|
+//! | 55078 | Bestätigung Anmeldung erz. MaLo (NB → LFN)      | 55077 Anfrage  |
+//! | 55080 | Ablehnung Anmeldung erz. MaLo (NB → LFN)        | 55077 Anfrage  |
 //!
 //! #### Sperrung / Entsperrung — routed to `gpke-sperrung`
 //!
@@ -72,6 +74,15 @@
 //! | PID   | Process name (AHB)                                   | Status |
 //! |-------|------------------------------------------------------|--------|
 //! | 55007 | Ankündigung NB-seitiges Lieferende (NB → LFN)        | ✅ Implemented |
+//!
+//! ### Ankündigung Zuordnung LF — routed to `gpke-ankuendigung-zuordnung-lf`
+//!
+//! | PID   | Process name (AHB)                               | Status |
+//! |-------|--------------------------------------------------|--------|
+//! | 55607 | Ankündigung Zuordnung LF (NB → LFN)              | ✅ Implemented |
+//!
+//! PIDs 55608 (Bestätigung) and 55609 (Ablehnung) are outbound responses derived
+//! by `GpkeAnkuendigungZuordnungLfWorkflow` and never routed as inbound.
 //!
 //! PIDs 55008 (Bestätigung) and 55009 (Ablehnung) are outbound responses derived
 //! by `GpkeLfAbmeldungWorkflow` and never routed as inbound.
@@ -144,11 +155,23 @@
 //! process.execute(cmd).await?;
 //! ```
 
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
+#![warn(clippy::pedantic, clippy::must_use_candidate)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::doc_markdown)] // German MaKo terms and BDEW acronyms produce many false positives
+#![allow(clippy::too_many_lines)] // process handle() functions are necessarily verbose
+#![allow(clippy::match_same_arms)] // sometimes intentional for process-family readability
+#![allow(clippy::manual_let_else)] // existing code style; rewrite in follow-up
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::unnested_or_patterns)]
+#![allow(clippy::map_unwrap_or)]
+#![allow(clippy::items_after_statements)]
 
 pub mod abrechnung;
 pub mod allokationsliste;
 pub mod anfrage_bestellung;
+pub mod ankuendigung_zuordnung_lf;
 pub mod datenabruf;
 pub mod konfiguration;
 pub mod konfiguration_aenderung;
@@ -179,6 +202,12 @@ pub use anfrage_bestellung::{
     ANFRAGE_PID as ANFRAGE_BESTELLUNG_PID, ANFRAGE_WINDOW_LABEL, AnfrageBestellungCommand,
     AnfrageBestellungEvent, AnfrageBestellungState, AnfrageData, GpkeAnfrageBestellungWorkflow,
     WORKFLOW_NAME as ANFRAGE_BESTELLUNG_WORKFLOW_NAME,
+};
+pub use ankuendigung_zuordnung_lf::{
+    ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL, ANKUENDIGUNG_ZUORDNUNG_PIDS,
+    AnkuendigungZuordnungLfCommand, AnkuendigungZuordnungLfData, AnkuendigungZuordnungLfEvent,
+    AnkuendigungZuordnungLfState, GpkeAnkuendigungZuordnungLfWorkflow,
+    WORKFLOW_NAME as ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW_NAME,
 };
 pub use datenabruf::{
     DatanabrufCommand, DatanabrufEvent, DatanabrufState, GpkeDatanabrufWorkflow,
@@ -252,6 +281,7 @@ pub use wechselprozesse::{
 /// - PIDs 55022, 55023, 55024 (Stornierung Anfrage + Antwort, UTILMD) → `"gpke-stornierung"`
 /// - PIDs 55600, 55601 (Neuanlage ANFRAGE, UTILMD) → `"gpke-neuanlage"`
 /// - PID 55007 (NB-seitiges Lieferende, UTILMD) → `"gpke-lf-abmeldung"`
+/// - PID 55607 (Ankündigung Zuordnung LF, UTILMD) → `"gpke-ankuendigung-zuordnung-lf"`
 /// - PIDs 17115/17116/17117 (Sperrung/Entsperrung, ORDERS) → `"gpke-sperrung"`
 /// - **PID 55555** (Anfrage Daten der individuellen Bestellung, UTILMD) → `"gpke-anfrage-bestellung"`
 /// - PIDs 31001, 31002, 31005–31009 (billing, INVOIC) → `"gpke-abrechnung"`
@@ -316,6 +346,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             "gpke-konfiguration",
             "gpke-neuanlage",
             "gpke-lf-abmeldung",
+            ankuendigung_zuordnung_lf::WORKFLOW_NAME,
             stornierung::WORKFLOW_NAME,
             messwerte::WORKFLOW_NAME,
             partin::WORKFLOW_NAME,
@@ -347,6 +378,12 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // LF-role makod receives PID 55007 and responds with 55008/55009.
         for &pid in LF_ABMELDUNG_PIDS {
             router.register(pid, "gpke-lf-abmeldung");
+        }
+
+        // PID 55607 (Ankündigung Zuordnung LF, NB→LFN) — GPKE Teil 2 §2.2, BK6-24-174.
+        // LF-role makod receives PID 55607 and responds with 55608/55609.
+        for &pid in ANKUENDIGUNG_ZUORDNUNG_PIDS {
+            router.register(pid, ankuendigung_zuordnung_lf::WORKFLOW_NAME);
         }
 
         // ORDERS PIDs 17115/17116/17117 (Sperrung/Entsperrung) — NB-role workflow.
@@ -429,9 +466,11 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             }
         }
 
-        // LF-side Anmeldung: inbound NB/LFA response PIDs (55003–55006, 55017, 55018).
+        // LF-side Anmeldung: inbound NB/LFA response PIDs (55003–55006, 55017, 55018, 55078, 55080).
         // Registered so the AS4 inbound layer can route them by conversation ID
         // to the correct GpkeLfAnmeldungWorkflow instance (makod acting as LF).
+        // 55078 = Bestätigung Anmeldung erz. MaLo (NB → LFN)
+        // 55080 = Ablehnung Anmeldung erz. MaLo  (NB → LFN); PID 55079 unassigned
         for &pid in ANTWORT_PIDS_LF {
             router.register(pid, lf_anmeldung::WORKFLOW_NAME);
         }

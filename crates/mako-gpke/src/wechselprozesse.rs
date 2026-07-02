@@ -35,9 +35,11 @@
 //! **PID 55555** is "Anfrage Daten der individuellen Bestellung" (GPKE Teil 4) —
 //! a separate UTILMD data-request process, not a Sperrung PID.
 //!
-//! **Removed PIDs (not in LFW24 AHB):** 55007, 55008, 55009, 55010. These
-//! existed in pre-LFW24 (S1.x) specifications but were removed with the
-//! redesign to 24h processing. The router rejects them with CONTRL.
+//!
+//! **PIDs 55007–55009 — NB-initiated Lieferende:** These PIDs are **present**
+//! in UTILMD AHB Strom 2.1 (FV2025-10-01) and are handled by the separate
+//! [`super::lf_abmeldung::GpkeLfAbmeldungWorkflow`] (LF-side). They are NOT
+//! registered here. Only PID 55010 (Stornierung pre-LFW24) was removed.
 //!
 //! # Regulatory basis
 //!
@@ -65,13 +67,16 @@ use mako_engine::{
 /// Inbound ANFRAGE PIDs handled by this workflow as a receiving NB/LFA.
 ///
 /// Only these PIDs are routed to `GpkeSupplierChangeWorkflow` by the engine.
-/// The corresponding outbound ANTWORT PIDs (55003–55006, 55017, 55018) are derived
-/// internally by `response_pid_for` and stored in the `AntwortGesendet` event.
+/// The corresponding outbound ANTWORT PIDs (55003–55006, 55017, 55018, 55078, 55080)
+/// are derived internally by `response_pid_for` and stored in the `AntwortGesendet` event.
 ///
-/// | PID range      | Process (LFW24 AHB name)                   | AHB profile |
-/// |----------------|--------------------------------------------|--------------||
-/// | 55001–55002    | Anfrage Lieferbeginn/Lieferende (LFN → NB) | S2.1–S2.2 ✅ |
-/// | 55016          | Kündigung Lieferbeginn (LFN → LFA)         | S2.1–S2.2 ✅ |
+/// | PID   | Process (LFW24 AHB name)                          | AHB profile  |
+/// |-------|---------------------------------------------------|--------------|
+/// | 55001 | Anfrage Lieferbeginn verb. MaLo (LFN → NB)        | S2.1–S2.2 ✅ |
+/// | 55002 | Anfrage Lieferende verb. MaLo (LFN → NB)          | S2.1–S2.2 ✅ |
+/// | 55016 | Kündigung Lieferbeginn (LFN → LFA)                | S2.1–S2.2 ✅ |
+/// | 55077 | Anmeldung Lieferbeginn erz. MaLo (LFN → NB)       | S2.1–S2.2 ✅ |
+/// | 55557 | Änderung MSB-Abr.-Daten der MaLo (LFN ↔ NB)       | GPKE Teil 4  |
 ///
 /// ORDERS Sperrung (PIDs 17115/17116/17117) is handled by `GpkeSperrungWorkflow`
 /// (see `sperrung` module). **PID 55555** and **PID 55557** are GPKE Teil 4
@@ -79,8 +84,9 @@ use mako_engine::{
 /// / "Änderung MSB-Abr.-Daten der MaLo"). **PIDs 55007–55015** are NB-initiated
 /// processes; routing is handled by `GpkeLfAbmeldungWorkflow` for PIDs 55007–55009.
 pub const UTILMD_PIDS: &[u32] = &[
-    55001, 55002, // Anfrage Lieferbeginn/Lieferende (LFN → NB)
+    55001, 55002, // Anfrage Lieferbeginn/Lieferende verb. MaLo (LFN → NB)
     55016, // Kündigung Lieferbeginn (LFN → LFA)
+    55077, // Anmeldung Lieferbeginn erz. MaLo (LFN → NB, BK6-24-174)
     55557, // Änderung MSB-Abr.-Daten der MaLo (GPKE Teil 4, PID 3.3 + PID 4.0)
 ];
 
@@ -454,6 +460,9 @@ impl CommandPayload for SupplierChangeCommand {}
 /// | 55001   | 55003         | 55004          |
 /// | 55002   | 55005         | 55006          |
 /// | 55016   | 55017         | 55018          |
+/// | 55077   | 55078         | 55080          |
+///
+/// Note: PID 55079 does not exist in BDEW UTILMD AHB Strom (no such PID assigned).
 fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruefidentifikator> {
     let code: u32 = match anfrage_pid {
         55001 => {
@@ -475,6 +484,13 @@ fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruefidentifikat
                 55017 // Bestätigung Kündigung (LFA → LFN)
             } else {
                 55018 // Ablehnung Kündigung (LFA → LFN)
+            }
+        }
+        55077 => {
+            if accepted {
+                55078 // Bestätigung Anmeldung erz. MaLo (NB → LFN)
+            } else {
+                55080 // Ablehnung Anmeldung erz. MaLo (NB → LFN); 55079 is unassigned
             }
         }
         _ => return None,
@@ -643,20 +659,11 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 // Response PIDs 55003–55006, 55017, 55018 are outbound; they are derived
                 // internally by response_pid_for() and stored in AntwortGesendet events.
                 // ORDERS Sperrung (17115/17116/17117) is routed to GpkeSperrungWorkflow.
-                // PID 55555 is "Anfrage Daten der individuellen Bestellung" (GPKE Teil 4)
-                // — a separate UTILMD data-request process, unrelated to Sperrung.
+                // PID 55555 is "Anfrage Daten der individuellen Bestellung" (GPKE Teil 4).
                 //
-                // Note on PIDs 55007–55010:
-                // 55007–55009 are NB-initiated Lieferende (NB→LF) per UTILMD AHB Strom
-                // 2.1, §2.5 — confirmed present in LFW24 (BK6-22-024, FV2025-10-01).
-                // They are NOT redesigned away by LFW24; only LFN→NB (55001/55002)
-                // was redesigned. 55010 (Lieferantenwechsel Stornierung) is only present
-                // in earlier FVs. Neither this workflow (LF-side) nor the NB-side
-                // ANFRAGE workflow registers 55007–55009 yet; they need a separate
-                // NbLieferendeWorkflow. Until that is added, the router will not dispatch
-                // these PIDs here, so this guard will never fire for them.
-                // DO NOT add 55007–55009 to UTILMD_PIDS unless NB-side workflows are
-                // implemented and tested.
+                // PIDs 55007–55009 (NB-seitiges Lieferende, NB→LF) are routed to
+                // GpkeLfAbmeldungWorkflow (lf_abmeldung module) — NOT this workflow.
+                // DO NOT add 55007–55009 to UTILMD_PIDS here.
                 if !UTILMD_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
                         "expected an inbound ANFRAGE PID (55001, 55002, or 55016), \

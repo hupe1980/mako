@@ -74,9 +74,10 @@ pub fn validate(doc: &Document, result: &mut ValidationResult) {
         Document::Acknowledgement(d) => validate_ack(d, result),
         Document::NetworkConstraint(d) => validate_ncd(d, result),
         Document::Kostenblatt(d) => validate_kostenblatt(d, result),
-        // IEC 62325 documents: validate identifier.
+        // IEC 62325 documents: validate identifier and revision number.
         Document::Kaskade(d) => {
             check_document_id(&d.m_rid, result);
+            check_document_version(&d.revision_number, result);
         }
         Document::StatusRequest(d) => {
             check_document_id(&d.m_rid, result);

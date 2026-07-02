@@ -16,10 +16,14 @@ applyTo: "services/makod/**"
 
 ## Feature Flags
 
-The `slatedb` feature **must only be enabled at this level** — never in library crate defaults:
+The `slatedb` feature is enabled at the `makod` level via its dependency on
+`mako-engine = { ..., features = ["slatedb"] }` in `services/makod/Cargo.toml`.
+Do **not** pass `--features slatedb` to `cargo build -p makod` — makod has no
+such feature of its own:
 
 ```bash
-cargo build -p makod --release --features slatedb
+# Correct: slatedb already activated via Cargo.toml dep declaration
+cargo build -p makod --release
 ```
 
 The `testing` feature must **never** appear in production builds. Use it only in `makod` integration tests.

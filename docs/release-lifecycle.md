@@ -141,7 +141,20 @@ cargo xtask validate-pruefids --message-type utilmd
 
 ---
 
-## Release Diff
+## Publishing a Crate Release
+
+When all profile and code changes are merged and `just ci` is green:
+
+1. **Bump the workspace version** with `cargo xtask bump-version <X.Y.Z>`.
+2. **Create and push a tag**: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. The `release.yml` GitHub Actions workflow runs automatically:
+   - Runs `just ci` as a final gate.
+   - Publishes all workspace crates to [crates.io](https://crates.io) via `cargo publish`.
+   - Builds and pushes multi-arch Docker images (`linux/amd64`, `linux/arm64`) to `ghcr.io/hupe1980/makod` with tags `X.Y.Z`, `X.Y`, and `latest`.
+
+The Docker image is built using the workspace `Dockerfile` (cargo-chef + distroless).
+See the [makod Operator Guide](./makod.md#docker-deployment) for image details and
+deployment patterns.
 
 To see a human-readable diff between two annual releases (useful for release notes and reviewing spec changes):
 

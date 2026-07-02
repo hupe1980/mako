@@ -102,6 +102,7 @@ impl DvgwPlatform {
 }
 
 /// Dispatch parsed segments to the concrete message constructor.
+#[allow(clippy::too_many_lines)]
 fn dispatch(
     segments: Vec<edifact_rs::OwnedSegment>,
     msg_type: DvgwMessageType,
@@ -142,6 +143,66 @@ fn dispatch(
         DvgwMessageType::Nomres => Err(Error::FeatureNotEnabled {
             message_type: "NOMRES".into(),
             feature: "nomres".into(),
+        }),
+        #[cfg(feature = "schedl")]
+        DvgwMessageType::Schedl => {
+            use crate::messages::schedl::SchedlMessage;
+            Ok(AnyDvgwMessage::Schedl(Box::new(
+                SchedlMessage::from_segments(segments),
+            )))
+        }
+        #[cfg(not(feature = "schedl"))]
+        DvgwMessageType::Schedl => Err(Error::FeatureNotEnabled {
+            message_type: "SCHEDL".into(),
+            feature: "schedl".into(),
+        }),
+        #[cfg(feature = "imbnot")]
+        DvgwMessageType::Imbnot => {
+            use crate::messages::imbnot::ImbalanceMessage;
+            Ok(AnyDvgwMessage::Imbnot(Box::new(
+                ImbalanceMessage::from_segments(segments),
+            )))
+        }
+        #[cfg(not(feature = "imbnot"))]
+        DvgwMessageType::Imbnot => Err(Error::FeatureNotEnabled {
+            message_type: "IMBNOT".into(),
+            feature: "imbnot".into(),
+        }),
+        #[cfg(feature = "tranot")]
+        DvgwMessageType::Tranot => {
+            use crate::messages::tranot::TransportNotificationMessage;
+            Ok(AnyDvgwMessage::Tranot(Box::new(
+                TransportNotificationMessage::from_segments(segments),
+            )))
+        }
+        #[cfg(not(feature = "tranot"))]
+        DvgwMessageType::Tranot => Err(Error::FeatureNotEnabled {
+            message_type: "TRANOT".into(),
+            feature: "tranot".into(),
+        }),
+        #[cfg(feature = "delord")]
+        DvgwMessageType::Delord => {
+            use crate::messages::delord::DeliveryOrderMessage;
+            Ok(AnyDvgwMessage::Delord(Box::new(
+                DeliveryOrderMessage::from_segments(segments),
+            )))
+        }
+        #[cfg(not(feature = "delord"))]
+        DvgwMessageType::Delord => Err(Error::FeatureNotEnabled {
+            message_type: "DELORD".into(),
+            feature: "delord".into(),
+        }),
+        #[cfg(feature = "delres")]
+        DvgwMessageType::Delres => {
+            use crate::messages::delres::DeliveryResponseMessage;
+            Ok(AnyDvgwMessage::Delres(Box::new(
+                DeliveryResponseMessage::from_segments(segments),
+            )))
+        }
+        #[cfg(not(feature = "delres"))]
+        DvgwMessageType::Delres => Err(Error::FeatureNotEnabled {
+            message_type: "DELRES".into(),
+            feature: "delres".into(),
         }),
         other => Err(Error::FeatureNotEnabled {
             message_type: other.as_str().to_owned(),

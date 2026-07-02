@@ -1,0 +1,47 @@
+# ── .dockerignore ─────────────────────────────────────────────────────────────
+# Exclude files that must not be sent to the Docker build context.
+# Keeps build context small and prevents leaking sensitive local files.
+
+# Compiled artefacts — do not send gigabytes of build cache to the daemon.
+target/
+fuzz/target/
+
+# Developer tooling
+.git/
+.gitignore
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Local environment / secrets — never ship these.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.cert
+*.crt
+# Allow docs/pdfs — excluded separately because PDFs can be large.
+docs/pdfs/
+
+# Test fixtures and corpus — not needed in production image.
+fuzz/corpus/
+fuzz/artifacts/
+
+# CI / GitHub Actions config — not needed in image.
+.github/
+
+# Markdown / docs — reduce context size.
+*.md
+docs/
+
+# Log files.
+*.log
+
+# Lock files for package managers other than Cargo.
+package-lock.json
+yarn.lock
+Pipfile.lock

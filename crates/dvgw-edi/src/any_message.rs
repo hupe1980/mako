@@ -2,10 +2,20 @@ use crate::message::DvgwMessage;
 
 #[cfg(feature = "alocat")]
 use crate::messages::alocat::AlocatMessage;
+#[cfg(feature = "delord")]
+use crate::messages::delord::DeliveryOrderMessage;
+#[cfg(feature = "delres")]
+use crate::messages::delres::DeliveryResponseMessage;
+#[cfg(feature = "imbnot")]
+use crate::messages::imbnot::ImbalanceMessage;
 #[cfg(feature = "nomint")]
 use crate::messages::nomint::NomintMessage;
 #[cfg(feature = "nomres")]
 use crate::messages::nomres::NomresMessage;
+#[cfg(feature = "schedl")]
+use crate::messages::schedl::SchedlMessage;
+#[cfg(feature = "tranot")]
+use crate::messages::tranot::TransportNotificationMessage;
 
 /// A parsed DVGW message, dispatched to its concrete type.
 ///
@@ -34,6 +44,26 @@ pub enum AnyDvgwMessage {
     #[cfg(feature = "nomres")]
     Nomres(Box<NomresMessage>),
 
+    /// SCHEDL — Schedulingnachricht (transport schedule).
+    #[cfg(feature = "schedl")]
+    Schedl(Box<SchedlMessage>),
+
+    /// IMBNOT — Imbalance Notification.
+    #[cfg(feature = "imbnot")]
+    Imbnot(Box<ImbalanceMessage>),
+
+    /// TRANOT — Transport Notification.
+    #[cfg(feature = "tranot")]
+    Tranot(Box<TransportNotificationMessage>),
+
+    /// DELORD — Delivery Order.
+    #[cfg(feature = "delord")]
+    Delord(Box<DeliveryOrderMessage>),
+
+    /// DELRES — Delivery Response.
+    #[cfg(feature = "delres")]
+    Delres(Box<DeliveryResponseMessage>),
+
     /// An unrecognised or feature-disabled DVGW message type.
     ///
     /// Contains the raw EDIFACT message type code and the parsed segments.
@@ -59,6 +89,16 @@ impl AnyDvgwMessage {
             Self::Nomint(m) => Some(m.as_ref()),
             #[cfg(feature = "nomres")]
             Self::Nomres(m) => Some(m.as_ref()),
+            #[cfg(feature = "schedl")]
+            Self::Schedl(m) => Some(m.as_ref()),
+            #[cfg(feature = "imbnot")]
+            Self::Imbnot(m) => Some(m.as_ref()),
+            #[cfg(feature = "tranot")]
+            Self::Tranot(m) => Some(m.as_ref()),
+            #[cfg(feature = "delord")]
+            Self::Delord(m) => Some(m.as_ref()),
+            #[cfg(feature = "delres")]
+            Self::Delres(m) => Some(m.as_ref()),
             Self::Unknown { .. } => None,
         }
     }

@@ -37,13 +37,14 @@
 //! ## Security
 //!
 //! The metrics endpoint is mounted on the same port as the operator API.
-//! Bearer-token authentication (via `--http-api-token`) is applied when
-//! configured so scrape targets use the same token as other admin endpoints.
+//! Cedar ABAC authorization is applied: scrape principals must hold the
+//! `MaKo::Action::"AdminMaloStats"` (or equivalent metrics action) permission
+//! under the active Cedar policy set.
 //!
 //! ## Usage
 //!
 //! ```rust,ignore
-//! let metrics_state = metrics_api::MetricsState::new(store.clone(), optional_token.clone());
+//! let metrics_state = metrics_api::MetricsState::new(store.clone(), Arc::clone(&cedar));
 //! let app = my_router().merge(metrics_api::router(Arc::new(metrics_state)));
 //! ```
 
@@ -60,7 +61,8 @@ use mako_engine::{
     deadline::DeadlineStore as _, metrics::EngineMetrics, outbox::OutboxStore as _,
     registry::ProcessRegistry as _, store_slatedb::SlateDbStore,
 };
-use secrecy::{ExposeSecret as _, SecretString};
+
+use crate::cedar_authz::{CedarAuthorizer, MetricsResource};
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -68,16 +70,23 @@ use secrecy::{ExposeSecret as _, SecretString};
 #[derive(Clone)]
 pub struct MetricsState {
     store: SlateDbStore,
-    /// When `Some`, `Authorization: Bearer <token>` is required.
-    optional_token: Option<SecretString>,
+    /// Cedar-based authorization engine.
+    cedar: Arc<CedarAuthorizer>,
+    /// Operator tenant identifier (GLN).
+    tenant_id: String,
 }
 
 impl MetricsState {
     /// Create a new [`MetricsState`].
-    pub fn new(store: SlateDbStore, optional_token: Option<SecretString>) -> Self {
+    pub fn new(
+        store: SlateDbStore,
+        cedar: Arc<CedarAuthorizer>,
+        tenant_id: impl Into<String>,
+    ) -> Self {
         Self {
             store,
-            optional_token,
+            cedar,
+            tenant_id: tenant_id.into(),
         }
     }
 }
@@ -98,28 +107,30 @@ async fn handler(
     State(state): State<Arc<MetricsState>>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
-    // Bearer-token auth (when configured).
-    if let Some(ref expected) = state.optional_token {
-        let ok = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .map(|token| {
-                // Constant-time comparison to prevent timing oracle attacks.
-                use subtle::ConstantTimeEq as _;
-                token
-                    .as_bytes()
-                    .ct_eq(expected.expose_secret().as_bytes())
-                    .into()
-            })
-            .unwrap_or(false);
-        if !ok {
+    // ── Authentication ────────────────────────────────────────────────────────
+    let identity = match state.cedar.authenticate(&headers) {
+        Some(id) => id,
+        None => {
             return (
                 StatusCode::UNAUTHORIZED,
                 [(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"))],
                 "401 Unauthorized\n".to_owned(),
             );
         }
+    };
+
+    // ── Authorization: ReadMetrics ────────────────────────────────────────────
+    if !state.cedar.authorize_metrics(
+        &identity,
+        &MetricsResource {
+            tenant: &state.tenant_id,
+        },
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            [(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"))],
+            "403 Forbidden\n".to_owned(),
+        );
     }
 
     // Collect all metrics concurrently (independent reads).

@@ -4,9 +4,9 @@ title: DVGW EDI
 nav_order: 40
 parent: Architecture
 description: >
-  dvgw-edi: parsing ALOCAT, NOMINT, and NOMRES for GaBi Gas 2.0. Covers
-  regulatory basis, message taxonomy, version management, profile schema,
-  parsing architecture, and GaBi Gas workflow integration.
+  dvgw-edi: parsing ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, and DELRES
+  for GaBi Gas 2.0. Covers regulatory basis, message taxonomy, version management,
+  profile schema, parsing architecture, and GaBi Gas workflow integration.
 ---
 
 # DVGW EDI
@@ -130,6 +130,21 @@ crates/dvgw-edi/profiles/
     v4_7/
       mig.json
       ahb.json
+  schedl/
+    v4_4/
+      mig.json
+  imbnot/
+    v5_7a/
+      mig.json
+  tranot/
+    v5_8b/
+      mig.json
+  delord/
+    v4_5/
+      mig.json
+  delres/
+    v4_6/
+      mig.json
 ```
 
 A `valid_from` field in each `mig.json` records when the version became mandatory.
@@ -258,15 +273,21 @@ the parser.
 
 ### 6.1 INVOIC billing (live)
 
-`GaBiGasInvoicWorkflow` in `mako-gabi-gas` handles both billing PIDs:
+`GaBiGasInvoicWorkflow` in `mako-gabi-gas` handles PID 31010:
 
-| PID | Process | Direction |
-|---|---|---|
-| 31010 | Kapazitätsrechnung (capacity billing) | FNB/VNB → BKV |
-| 31011 | Rechnung sonstige Leistung (AWH Sperrprozesse) | VNB → BKV |
+| PID | Process | Direction | Crate |
+|---|---|---|---|
+| 31010 | Kapazitätsrechnung (capacity billing) | FNB/VNB → BKV | `mako-gabi-gas` |
 
-These PIDs use the standard BDEW INVOIC format handled by `edi-energy`'s INVOIC
-profile. They are independent of the DVGW formats (ALOCAT, NOMINT, NOMRES).
+> **PID 31011 is NOT a GaBi Gas billing.** PID 31011 (Rechnung sonstige Leistung,
+> AWH Sperrprozesse Gas, NB → LF) is the GeLi Gas billing for grid operator
+> charges incurred during gas disconnection processes. It belongs to `mako-geli-gas`
+> per BK7-24-01-009. The distinction matters: GaBi Gas (BK7-14-020) covers transport
+> and balancing between FNB/MGV/BKV; GeLi Gas (BK7-24-01-009) covers retail gas
+> market communication between LFG/GNB.
+
+PID 31010 uses the standard BDEW INVOIC format handled by `edi-energy`'s INVOIC
+profile. It is independent of the DVGW formats (ALOCAT, NOMINT, NOMRES, etc.).
 
 ### 6.2 Implementation patterns
 

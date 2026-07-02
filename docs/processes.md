@@ -87,7 +87,7 @@ Quick reference across all process families. Each row is a top-level domain.
 | **GaBi Gas Kapazitätsabrechnung** | 🔥 | `mako-gabi-gas` ✅ | INVOIC 31010 | — | BK7 |
 | **PARTIN Partnerstammdaten** | ⚡🔥 | `mako-gpke` / `mako-geli-gas` | PARTIN 37000–37014 | — | PARTIN AHB 1.0f |
 | **Redispatch 2.0** | ⚡ | `mako-redispatch` | IFTSTA 21037/21038; XML documents | — | BK6-20-160 |
-| **DVGW Gas Transport** | 🔥 | `mako-gabi-gas` 🔄 | Synthetic PIDs 90001–90062 | — | DVGW G685/G2000 |
+| **DVGW Gas Transport** | 🔥 | `mako-gabi-gas` ✅ | Synthetic PIDs 90001–90062 (NOMINT/NOMRES/ALOCAT/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES) | — | DVGW G685/G2000 |
 
 > WT = Werktage (Saturday counts; Sunday and public holidays excluded).
 > All APERAK Fristen computed in German local time (CET/CEST).
@@ -169,13 +169,13 @@ apply (55007–55015 range) via the `gpke-supplier-change` workflow.
 |---|---|---|---|---|---|
 | Anmeldung / Lieferbeginn (LF-AN) | LFN → NB | UTILMD **55001** | 55003 | 55004 | `mako-gpke` ✅ |
 | Lieferende / Abmeldung (LFN → NB) | LFN → NB | UTILMD **55002** | 55005 | 55006 | `mako-gpke` ✅ |
-| Anmeldung erz. MaLo (LF-AN) | LFN → NB | UTILMD **55077** | 55078 | 55080 | `mako-gpke` — |
+| Anmeldung erz. MaLo (LF-AN) | LFN → NB | UTILMD **55077** | 55078 | 55080 | `mako-gpke` ✅ |
 | Neuanlage verb. MaLo | LF → NB | UTILMD **55600** | 55602 | 55604 | `mako-gpke` ✅ |
 | Neuanlage erz. MaLo | LF → NB | UTILMD **55601** | 55603 | 55605 | `mako-gpke` ✅ |
 | Kündigung Lieferbeginn | LFN → LFA | UTILMD **55016** | 55017 | 55018 | `mako-gpke` ✅ |
 | Abmeldung (NB-initiiert) | NB → LFA | UTILMD **55007** | 55008 | 55009 | `mako-gpke` ✅ |
 | Änderung MSB-Abrechnungsdaten der MaLo | LFN ↔ NB | UTILMD **55557** | — | — | `mako-gpke` ✅ |
-| Ankündigung Zuordnung LF | NB → LFN | UTILMD **55607** | 55608 | 55609 | — |
+| Ankündigung Zuordnung LF | NB → LFN | UTILMD **55607** | 55608 | 55609 | `mako-gpke` ✅ |
 | Stornierung Zuordnungsprozess | orig. → orig. | UTILMD **55022** | 55023 | 55024 | `mako-gpke` ✅ |
 
 > **Lieferbeginn = T.** Both UTILMD 55001 (LFN → NB) and 55016 (LFN → LFA) are sent
@@ -585,9 +585,9 @@ There is no per-process deadline (Frist) — the submission windows are calendar
 |---|---|---|---|---|
 | Summenzeitreihe (BKV-Abrechnung) | ÜNB → BKV | MSCONS | **13003** | `mako-mabis` ✅ |
 | Statusmeldung BKV | LF/NB/BKV → NB/ÜNB | IFTSTA | **21000–21005** | `mako-mabis` ✅ |
-| Clearingliste DZR | BIKO → NB/ÜNB | UTILMD | **55069** | — |
-| Clearingliste BAS | BIKO → BKV | UTILMD | **55070** | — |
-| Lieferantenclearingliste | NB → LF | UTILMD | **55065** | — |
+| Clearingliste DZR | BIKO → NB/ÜNB | UTILMD | **55069** | `mako-mabis` ✅ |
+| Clearingliste BAS | BIKO → BKV | UTILMD | **55070** | `mako-mabis` ✅ |
+| Lieferantenclearingliste | NB → LF | UTILMD | **55065** | `mako-mabis` ✅ |
 
 ---
 
@@ -629,12 +629,15 @@ object. The grid operator is called **GNB** (Gasnetzbetreiber), not NB.
 | Kündigung beim alten Lieferanten | LFN → LFA | UTILMD G **44016** | 44017 | 44018 | `mako-geli-gas` ✅ |
 | Bestandsliste (GNB → LF) | GNB → LF | UTILMD G **44019** | — | — | `mako-geli-gas` ✅ |
 | Änderungsmeldung zur Bestandsliste | LF → GNB | UTILMD G **44020** | 44021 | — | `mako-geli-gas` ✅ |
+| Stornierung (GNB-side, inbound) | LFN/LFA → GNB | UTILMD G **44022** | — | — | `mako-geli-gas` ✅ |
+| Stornierung (LF-side, inbound) | GNB → LFN/LFA | UTILMD G **44023/44024** | — | — | `mako-geli-gas` ✅ |
 
-> **PIDs 44022–44024** (Stornierung Lieferbeginn Gas / MSB-Wechsel Gas) are
-> multi-domain per BDEW PID overview: they appear in both GeLi Gas 2.0 (supply
-> cancellation by LFN/LFA) and WiM Gas (MSB-change cancellation by gMSB).
-> Routing is performed by `mako-wim-gas` `wim-gas-stornierung` ✅.
-> Role-based disambiguation for the GeLi Gas LFN/LFA role is a known TODO.
+> **PIDs 44022–44024** (Stornierung) are multi-domain: GeLi Gas 2.0 (supply
+> cancellation by LFN/LFA ↔ GNB) and WiM Gas (MSB-change cancellation by gMSB).
+> Role-conditional routing is implemented in `mako-geli-gas`:
+> - `Nb`-only: PID 44022 → `geli-gas-stornierung` (GNB receives Anfrage)
+> - `Lf`-only: PIDs 44023/44024 → `geli-gas-stornierung-lf` (LF receives GNB response)
+> - `Msb`/`Nmsb`/`all()`: `mako-wim-gas` `wim-gas-stornierung` handles all three
 
 **Message flow — Lieferbeginn Gas:**
 
@@ -814,14 +817,22 @@ with APERAK within **10 Werktage** (BK7-24-01-009).
 | Anmeldung neuer MSB Gas beim GNB | gMSBN → GNB | UTILMD G **44042–44044** | ✅ | `mako-wim-gas` |
 | Ende MSB Gas / Vorläufige Abmeldung | gMSBA → GNB | UTILMD G **44051–44053** | ✅ | `mako-wim-gas` |
 | Verpflichtungsanfrage gMSB | GNB → gMSB | UTILMD G **44168–44170** | ✅ | `mako-wim-gas` |
-| Stornierung LF/MSB Gas ¹ | orig. → orig. | UTILMD G **44022–44024** | ✅ | `mako-wim-gas` |
+| Stornierung LF/MSB Gas ¹ | orig. → orig. | UTILMD G **44022–44024** | ✅ | `mako-wim-gas` / `mako-geli-gas` |
 | Weitere MSB-Wechsel Varianten | gMSBN/GNB | UTILMD G **44045–44050** | 🔄 | `mako-wim-gas` |
 
-> ¹ PIDs 44022–44024 are **multi-domain** per BDEW PID overview: they appear in
-> both "GeLi Gas 2.0" (supply-change cancellation by LFN/LFA) and "WiM Gas"
-> (MSB-change cancellation by gMSB). Routing is currently performed by
-> `mako-wim-gas` `wim-gas-stornierung`. Role-based disambiguation for the
-> GeLi Gas context (LFN/LFA role) is a known TODO in `mako-geli-gas`.
+> ¹ PIDs 44022–44024 are **multi-domain** per BDEW PID overview. Routing is
+> role-conditional:
+>
+> | Role | PID | Workflow | Crate |
+> |---|---|---|---|
+> | `Nb`-only (GNB) | 44022 inbound (Anfrage) | `geli-gas-stornierung` | `mako-geli-gas` |
+> | `Lf` (LFN/LFA) | 44023/44024 inbound (Bestätigung/Ablehnung) | `geli-gas-stornierung-lf` | `mako-geli-gas` |
+> | `Msb`/`Nmsb`/`all()` | 44022–44024 | `wim-gas-stornierung` | `mako-wim-gas` |
+>
+> For `Nb`-only deployments, PIDs 44023/44024 are outbound (GNB dispatches them
+> via outbox) and do not require inbound PID-router registration. For `Lf`
+> deployments, PID 44022 is ERP-initiated outbound via `POST /api/v1/commands`
+> and also does not need inbound registration.
 
 ### WiM Gas Abrechnung
 
@@ -866,7 +877,7 @@ WiM Strom, but with Gas-specific qualifier codes and a **10-Werktage deadline**
 
 **Regulatory basis:** BK7 (Kapazitätsabrechnung Gas / AWH Sperrprozesse Gas) + DVGW G685/G2000
 
-**Implementation status:** `mako-gabi-gas` ✅ for BK7 billing (INVOIC 31010 — full state machine with validation, happy-path, timeout, and dead-letter handling). DVGW transport processes (NOMINT, NOMRES, ALOCAT, SCHEDL, …) remain placeholder 🔄 — see DVGW section.
+**Implementation status:** `mako-gabi-gas` ✅ for all processes — BK7 billing (INVOIC 31010), DVGW nomination cycle (NOMINT/NOMRES), allocation (ALOCAT), and the full DVGW transport suite (SCHEDL, IMBNOT, TRANOT, DELORD/DELRES).
 
 > **Crate layering:** `dvgw-edi` is the **format library** (parses NOMINT, NOMRES,
 > ALOCAT, SCHEDL, …) — analogous to `edi-energy` for EDI@Energy messages.
@@ -874,14 +885,16 @@ WiM Strom, but with Gas-specific qualifier codes and a **10-Werktage deadline**
 > DVGW transport workflows (nominations, allocations) and BK7 billing (INVOIC
 > 31010) — analogous to `mako-gpke` sitting on top of `edi-energy`.
 
-**DVGW transport processes** (placeholder — see [DVGW — Gas Transport](#dvgw--gas-transport) for message list):
+**DVGW transport processes** (see [DVGW — Gas Transport](#dvgw--gas-transport) for the full PID/message table):
 
-| Process | Roles | Format | Crate |
-|---|---|---|---|
-| Nomination / Renomination | BKV → FNB/MGV | NOMINT / NOMRES | `mako-gabi-gas` 🔄 |
-| Allocation | FNB/MGV/VNB → BKV | ALOCAT | `mako-gabi-gas` 🔄 |
-| Schedule | FNB → BKV | SCHEDL | `mako-gabi-gas` 🔄 |
-| Delivery order / response | BKV ↔ FNB | DELORD / DELRES | `mako-gabi-gas` 🔄 |
+| Process | Roles | Format | Workflow | Crate |
+|---|---|---|---|---|
+| Nomination / Renomination | BKV → FNB/MGV | NOMINT / NOMRES | `gabi-gas-nomination` | `mako-gabi-gas` ✅ |
+| Allocation | FNB/MGV/VNB → BKV | ALOCAT | `gabi-gas-allocation` | `mako-gabi-gas` ✅ |
+| Day-ahead schedule | sender → receiver | SCHEDL | `gabi-gas-schedl` | `mako-gabi-gas` ✅ |
+| Imbalance notification | FNB/MGV → BKV | IMBNOT | `gabi-gas-imbnot` | `mako-gabi-gas` ✅ |
+| Transport notification | FNB/VNB → BKV/GH/MGV | TRANOT | `gabi-gas-tranot` | `mako-gabi-gas` ✅ |
+| Delivery order / response | BKV/GH ↔ FNB/MGV | DELORD / DELRES | `gabi-gas-delivery-order` | `mako-gabi-gas` ✅ |
 
 **BK7 billing processes:**
 
@@ -940,10 +953,10 @@ the XML document formats are parsed by `redispatch-xml`.
 | Process | Roles | Format | IFTSTA PID | Crate |
 |---|---|---|---|---|
 | Aktivierungsauftrag | NB → BTR | ActivationDocument (XML) | IFTSTA **21037/21038** | `mako-redispatch` ✅ |
-| Kaskade | NB → NB | Kaskade (XML) | — | `redispatch-xml` |
-| Stammdaten | NB → BTR | Stammdaten (XML) | — | `redispatch-xml` |
-| Netzrestriktion | NB → BTR | NetworkConstraintDocument (XML) | — | `redispatch-xml` |
-| PlannedResourceSchedule | NB → NB | PlannedResourceScheduleDocument (XML) | — | `redispatch-xml` |
+| Kaskade | NB → NB | Kaskade (XML) | — | `redispatch-xml` ✅ |
+| Stammdaten | NB → BTR | Stammdaten (XML) | — | `redispatch-xml` ✅ |
+| Netzrestriktion | NB → BTR | NetworkConstraintDocument (XML) | — | `redispatch-xml` ✅ |
+| PlannedResourceSchedule | NB → NB | PlannedResourceScheduleDocument (XML) | — | `redispatch-xml` ✅ |
 
 **Message flow — Redispatch Aktivierung:**
 
@@ -976,19 +989,20 @@ Prüfidentifikator**; routing uses synthetic PIDs (90000–90999) derived from
 
 See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 
-| Synthetic PID | Message | Direction | Description |
-|---|---|---|---|
-| 90001 | ALOCAT | FNB → BKV | Daily allocation |
-| 90002 | ALOCAT | MGV → BKV | Monthly allocation |
-| 90003 | ALOCAT | VNB → FNB | Sub-daily allocation |
-| 90011 | NOMINT | BKV → FNB | Nomination |
-| 90012 | NOMINT | BKV → MGV | Nomination |
-| 90021 | NOMRES | FNB → BKV | Nomination response |
-| 90022 | NOMRES | MGV → BKV | Nomination response |
-| 90031 | SCHEDL | FNB → BKV | Schedule |
-| 90041 | IMBNOT | MGV → BKV | Intraday imbalance |
-| 90061 | DELORD | BKV → FNB | Delivery order |
-| 90062 | DELRES | FNB → BKV | Delivery response |
+| Synthetic PID | Message | Direction | Description | Workflow |
+|---|---|---|---|---|
+| 90001 | ALOCAT | FNB → BKV | Daily allocation | `gabi-gas-allocation` ✅ |
+| 90002 | ALOCAT | MGV → BKV | Monthly allocation | `gabi-gas-allocation` ✅ |
+| 90003 | ALOCAT | VNB → FNB | Sub-daily allocation | `gabi-gas-allocation` ✅ |
+| 90011 | NOMINT | BKV → FNB | Nomination | `gabi-gas-nomination` ✅ |
+| 90012 | NOMINT | BKV → MGV | Nomination | `gabi-gas-nomination` ✅ |
+| 90021 | NOMRES | FNB → BKV | Nomination response | `gabi-gas-nomination` ✅ |
+| 90022 | NOMRES | MGV → BKV | Nomination response | `gabi-gas-nomination` ✅ |
+| 90031 | SCHEDL | FNB/BKV/MGV → receiver | Day-ahead transport schedule | `gabi-gas-schedl` ✅ |
+| 90041 | IMBNOT | FNB/MGV → BKV | Imbalance notification | `gabi-gas-imbnot` ✅ |
+| 90051 | TRANOT | FNB/VNB → BKV/GH/MGV | Transport notification | `gabi-gas-tranot` ✅ |
+| 90061 | DELORD | BKV/GH → FNB/MGV | Delivery order | `gabi-gas-delivery-order` ✅ |
+| 90062 | DELRES | FNB/MGV → BKV/GH | Delivery response | `gabi-gas-delivery-order` ✅ |
 
 ---
 

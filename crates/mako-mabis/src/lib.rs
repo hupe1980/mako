@@ -11,6 +11,9 @@
 //! | Process | PID | Status |
 //! |---|---|---|
 //! | Bilanzkreisabrechnung Strom | **13003** | ✅ Implemented |
+//! | Clearingliste DZR (BIKO → NB/ÜNB) | **55069** | ✅ Implemented |
+//! | Clearingliste BAS (BIKO → BKV) | **55070** | ✅ Implemented |
+//! | Lieferantenclearingliste (NB → LF) | **55065** | ✅ Implemented |
 //!
 //! > **PID 13003** is the MSCONS Summenzeitreihe PID (`"Summenzeitreihen und
 //! > Ausfallarbeitssummen"`), confirmed in MSCONS AHB 2.4c/2.5 (all FV versions)
@@ -68,23 +71,41 @@
 //! process.execute(cmd).await?;
 //! ```
 
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
+#![warn(clippy::pedantic, clippy::must_use_candidate)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::doc_markdown)] // German MaKo terms and BDEW acronyms produce many false positives
+#![allow(clippy::too_many_lines)] // process handle() functions are necessarily verbose
+#![allow(clippy::match_same_arms)] // sometimes intentional for process-family readability
+#![allow(clippy::manual_let_else)] // existing code style; rewrite in follow-up
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::unnested_or_patterns)]
+#![allow(clippy::map_unwrap_or)]
+#![allow(clippy::items_after_statements)]
 
 pub mod bilanzkreisabrechnung;
+pub mod clearingliste;
 
 pub use bilanzkreisabrechnung::{
     BillingCommand, BillingData, BillingEvent, BillingProjection, BillingRecord, BillingRecordData,
     BillingState, BillingVersion, DataStatus, IFTSTA_DATENSTATUS_PID, IFTSTA_PIDS,
     MabisBillingWorkflow, PRUEFMITTEILUNG_DEADLINE_LABEL,
 };
+pub use clearingliste::{
+    CLEARINGLISTE_PIDS, ClearinglisteCommand, ClearinglisteData, ClearinglisteEvent,
+    ClearinglisteKind, ClearinglisteState, MabisClearinglisteWorkflow,
+    WORKFLOW_NAME as CLEARINGLISTE_WORKFLOW_NAME,
+};
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
 
 /// Engine module for the MABIS process family.
 ///
-/// Registers PID 13003 (MSCONS Summenzeitreihe — `"Summenzeitreihen und
-/// Ausfallarbeitssummen"`) in the [`mako_engine::pid_router::PidRouter`].
-/// PID 13003 is the authoritative MABIS billing PID per MSCONS AHB 2.4c/2.5.
+/// Registers:
+/// - PID 13003, 13010–13012 (MSCONS Summenzeitreihe — Bilanzkreisabrechnung Strom)
+/// - PIDs 55065, 55069, 55070 (UTILMD Clearinglisten)
+/// - PIDs 21000–21005 (IFTSTA MaBiS Statusmeldungen)
 pub struct MabisModule;
 
 impl mako_engine::builder::EngineModule for MabisModule {
@@ -93,7 +114,7 @@ impl mako_engine::builder::EngineModule for MabisModule {
     }
 
     fn workflow_names(&self) -> &'static [&'static str] {
-        &["mabis-billing"]
+        &["mabis-billing", "mabis-clearingliste"]
     }
 
     fn register_pids(&self, router: &mut mako_engine::pid_router::PidRouter) {
@@ -125,6 +146,16 @@ impl mako_engine::builder::EngineModule for MabisModule {
         for &pid in bilanzkreisabrechnung::IFTSTA_PIDS {
             router.register(pid, "mabis-billing");
         }
+
+        // UTILMD Clearingliste PIDs (55065, 55069, 55070).
+        //
+        // PIDs 55065 (Lieferantenclearingliste, NB → LF),
+        //      55069 (Clearingliste DZR, BIKO → NB/ÜNB),
+        //      55070 (Clearingliste BAS, BIKO → BKV)
+        // are all part of the MaBiS Clearingverfahren (BK6-24-174 Anlage 3).
+        for &pid in clearingliste::CLEARINGLISTE_PIDS {
+            router.register(pid, "mabis-clearingliste");
+        }
     }
 
     fn profile_requirements(&self) -> &'static [mako_engine::profile::ProfileRequirement] {
@@ -137,6 +168,10 @@ impl mako_engine::builder::EngineModule for MabisModule {
             ProfileRequirement {
                 message_type: "IFTSTA",
                 label: "IFTSTA Statusmeldung (MaBiS 21000–21005)",
+            },
+            ProfileRequirement {
+                message_type: "UTILMD",
+                label: "UTILMD Clearingliste (MaBiS 55065 / 55069 / 55070)",
             },
         ]
     }

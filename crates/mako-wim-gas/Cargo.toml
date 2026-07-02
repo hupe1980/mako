@@ -19,7 +19,7 @@ time        = { workspace = true }
 
 [dev-dependencies]
 anyhow      = { workspace = true }
-edi-energy  = { path = "../edi-energy", features = ["utilmd", "aperak"] }
+edi-energy  = { workspace = true, features = ["utilmd", "aperak"] }
 mako-engine = { workspace = true, features = ["testing"] }
 mako-wim    = { path = "../mako-wim" }
 serde_json  = { workspace = true }

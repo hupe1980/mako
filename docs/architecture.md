@@ -129,7 +129,8 @@ See [ERP Integration](./erp-integration.md) for the full CloudEvents schema and 
 
 ### Deadline scheduler
 
-`DeadlineScheduler` ticks every 60 seconds. For each due entry in `DeadlineStore`:
+`DeadlineScheduler` ticks every **30 seconds** by default (configurable via
+`--deadline-poll-interval-secs`; minimum 1 second). For each due entry in `DeadlineStore`:
 
 1. Reconstruct the `ProcessIdentity` from the deadline record.
 2. Dispatch a `TimeoutExpired` command to the workflow.
@@ -150,11 +151,11 @@ at startup:
 
 ```
 makod (binary)
-├── registers mako-gpke    → PIDs 55001–55018, 55555, 17115–17117 (Strom NB), 31001–31009
-├── registers mako-wim     → PIDs 55039, 55042, 55051, 55168, 23001–23012
+├── registers mako-gpke    → PIDs 55001–55018, 55555, 17115–17117 (Strom NB), 31001–31008, 37000–37006
+├── registers mako-wim     → PIDs 55039, 55042, 55051, 55168, 31009, 23001–23012
 ├── registers mako-geli-gas → PIDs 44001–44021, 44022–44024*, 37008–37014, 31011
 ├── registers mako-mabis   → PID 13003
-├── registers mako-wim-gas → PIDs 44039–44053, 44168–44170, 23005, 23009
+├── registers mako-wim-gas → PIDs 44039–44053, 44168–44170, 23005, 23009, 31003, 31004
 ├── registers mako-redispatch → Redispatch 2.0 XML workflows
 │
 └── wires EdifactIngestDispatcher

@@ -27,11 +27,14 @@
 
 use std::any::Any;
 
+use dvgw_edi::AnyDvgwMessage;
 use edi_energy::{AnyMessage, EdiEnergyMessage};
 use mako_engine::{
     error::EngineError,
     message_adapter::{AdapterRegistry, FnAdapter},
-    types::{DeviceId, MaLo, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator},
+    types::{
+        BillingPeriod, DeviceId, MaLo, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator,
+    },
     version::FormatVersion,
 };
 
@@ -45,7 +48,10 @@ fn convert_pid(p: edi_energy::Pruefidentifikator) -> Result<Pruefidentifikator, 
     Pruefidentifikator::new(p.as_u32())
         .map_err(|e| EngineError::Deserialization(format!("PID out of range: {e}")))
 }
-use mako_gabi_gas::{GaBiGasInvoicCommand, GaBiGasInvoicWorkflow};
+use mako_gabi_gas::{
+    AllocationCommand, GaBiGasAllocationWorkflow, GaBiGasInvoicCommand, GaBiGasInvoicWorkflow,
+    GaBiGasNominationWorkflow, NominationCommand, NomresAcceptance,
+};
 use mako_geli_gas::{
     GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand,
     GeliGasSperrprozesseInvoicCommand, GeliGasSperrprozesseInvoicWorkflow,
@@ -53,14 +59,18 @@ use mako_geli_gas::{
     GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
 };
 use mako_gpke::{
-    AbrechnungCommand, AnfrageBestellungCommand, GpkeAbrechnungWorkflow,
-    GpkeAnfrageBestellungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
-    GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow,
-    GpkeStornierungCommand, GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow,
-    KonfigurationCommand, LfAbmeldungCommand, LfAnmeldungCommand, NeuanlageCommand,
-    SperrungCommand, SperrungLfCommand, SupplierChangeCommand,
+    AbrechnungCommand, AnfrageBestellungCommand, AnkuendigungZuordnungLfCommand,
+    GpkeAbrechnungWorkflow, GpkeAnfrageBestellungWorkflow, GpkeAnkuendigungZuordnungLfWorkflow,
+    GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow,
+    GpkeNeuanlageWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand,
+    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow, KonfigurationCommand, LfAbmeldungCommand,
+    LfAnmeldungCommand, NeuanlageCommand, SperrungCommand, SperrungLfCommand,
+    SupplierChangeCommand,
 };
-use mako_mabis::{BillingCommand, DataStatus, IFTSTA_DATENSTATUS_PID, MabisBillingWorkflow};
+use mako_mabis::{
+    BillingCommand, ClearinglisteCommand, DataStatus, IFTSTA_DATENSTATUS_PID, MabisBillingWorkflow,
+    MabisClearinglisteWorkflow,
+};
 use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, StammdatenCommand, StornierungCommand,
     WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimRechnungCommand,
@@ -1093,6 +1103,132 @@ pub fn mabis_registry() -> AdapterRegistry<MabisBillingWorkflow> {
     registry
 }
 
+// ── MaBiS Clearingliste (PIDs 55065, 55069, 55070) ────────────────────────────
+
+/// Build an [`AdapterRegistry`] for [`MabisClearinglisteWorkflow`].
+///
+/// Handles inbound UTILMD Clearingliste messages in the MaBiS settlement cycle:
+///
+/// | PID   | Process name (AHB)              | Direction       |
+/// |-------|---------------------------------|-----------------|
+/// | 55065 | Lieferantenclearingliste        | NB → LF         |
+/// | 55069 | Clearingliste DZR               | BIKO → NB / ÜNB |
+/// | 55070 | Clearingliste BAS               | BIKO → BKV      |
+///
+/// Extracts UTILMD header fields (sender, receiver, document date, message ref)
+/// and constructs a [`ClearinglisteCommand::ReceiveClearingliste`].
+///
+/// **Vacuous-validation guard**: AHB profiles for 55065/55069/55070 are not yet
+/// imported into the `edi-energy` profile registry. Until `cargo xtask
+/// import-xml-ahb` populates those rules, validation would return a vacuous
+/// pass (zero rules → always valid → `validation_passed = true`). This adapter
+/// detects the missing profile and forces `validation_passed = false` in that
+/// case, preventing false-positive "valid" records from entering the stream.
+///
+/// The `billing_period` field is derived from the UTILMD document date
+/// (DTM qualifier `"137"`) by truncating to `YYYYMM` format. If no document
+/// date segment is present, the field is left empty.
+///
+/// **Regulatory basis**: BNetzA BK6-24-174 Anlage 3 MaBiS — Clearingverfahren.
+/// No outbound APERAK deadline is associated with receiving these messages.
+#[must_use]
+pub fn mabis_clearingliste_registry() -> AdapterRegistry<MabisClearinglisteWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for MaBiS Clearingliste adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "MaBiS Clearingliste adapter: expected UTILMD message".into(),
+                ));
+            };
+
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "MaBiS Clearingliste adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            let validation_result = msg.validate().ok();
+            let mut validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+
+            // ── Vacuous-validation guard ──────────────────────────────────
+            // PIDs 55065/55069/55070 have no AHB profiles yet. Guard against
+            // false positives from empty rule sets.
+            if validation_passed {
+                let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
+                    .map(|edi_pid| {
+                        edi_energy::registry::ReleaseRegistry::global()
+                            .pid_has_ahb_rules(edi_energy::MessageType::Utilmd, edi_pid)
+                    })
+                    .unwrap_or(false);
+                if !has_ahb_rules {
+                    tracing::warn!(
+                        pid = pid.as_u32(),
+                        message_ref = msg.message_ref(),
+                        "MaBiS Clearingliste adapter: PID {} has no UTILMD AHB profile \
+                         in the compiled profile set — import gap; \
+                         vacuous validation forced to failed.",
+                        pid.as_u32(),
+                    );
+                    validation_passed = false;
+                }
+            }
+
+            // ── Field extraction ──────────────────────────────────────────
+            let document_date_str = u
+                .dtm()
+                .iter()
+                .find(|d| d.is_document_date())
+                .and_then(|d| d.value_str())
+                .unwrap_or("")
+                .to_owned();
+
+            // Derive billing period from document date: `YYYYMMDD` → `YYYYMM`.
+            // If document date is absent or shorter than 6 chars, store empty.
+            let billing_period = if document_date_str.len() >= 6 {
+                BillingPeriod::new(&document_date_str[..6])
+            } else {
+                BillingPeriod::new("")
+            };
+
+            Ok(ClearinglisteCommand::ReceiveClearingliste {
+                pid,
+                sender: MarktpartnerCode::new(
+                    u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: MarktpartnerCode::new(
+                    u.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                billing_period,
+                document_date: document_date_str,
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
 // ── GPKE UTILMD Antwort (PIDs 55003–55006, 55017, 55018) — LF role ──────────────
 
 /// Build an [`AdapterRegistry`] for [`GpkeLfAnmeldungWorkflow`].
@@ -1493,12 +1629,12 @@ pub fn gpke_lf_abmeldung_registry() -> AdapterRegistry<GpkeLfAbmeldungWorkflow> 
                 .unwrap_or_default();
 
             // ── PID 55007 — vacuous-validation guard ──────────────────────
-            // PID 55007 (Ankündigung NB-seitiges Lieferende, NB → LFN) was
-            // removed from the UTILMD AHB Strom in LFW24 and is absent from
-            // every profile version. Without AHB rules, validate() returns
-            // is_valid()=true (zero rules checked). Guard against that false
-            // positive by forcing validation_passed=false when no AHB profile
-            // exists for this PID.
+            // PID 55007 (Ankündigung NB-seitiges Lieferende, NB → LFN) is
+            // present in UTILMD AHB Strom 2.1 (FV2025-10-01) but has no
+            // compiled AHB profile in the edi-energy profile set (import gap).
+            // Without AHB rules, validate() returns is_valid()=true (zero
+            // rules checked). Guard against that false positive by forcing
+            // validation_passed=false until a proper profile is imported.
             if validation_passed {
                 let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
                     .map(|edi_pid| {
@@ -1511,8 +1647,8 @@ pub fn gpke_lf_abmeldung_registry() -> AdapterRegistry<GpkeLfAbmeldungWorkflow> 
                         pid = pid.as_u32(),
                         message_ref = msg.message_ref(),
                         "GPKE LF-Abmeldung adapter: PID {} (NB-seitiges Lieferende) \
-                         has no UTILMD AHB profile — removed in LFW24. \
-                         Validation was vacuous; forcing validation_passed = false.",
+                         has no UTILMD AHB profile in the compiled profile set — \
+                         import gap; vacuous validation forced to failed.",
                         pid.as_u32(),
                     );
                     validation_passed = false;
@@ -1520,6 +1656,114 @@ pub fn gpke_lf_abmeldung_registry() -> AdapterRegistry<GpkeLfAbmeldungWorkflow> 
             }
 
             Ok(LfAbmeldungCommand::ReceiveAnkuendigung {
+                pid,
+                sender: MarktpartnerCode::new(
+                    u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: MarktpartnerCode::new(
+                    u.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                location_id: MaLo::new(
+                    u.transactions()
+                        .first()
+                        .and_then(|t| t.ide.object_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                document_date: u
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                process_date: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.dtm.iter().find(|d| d.qualifier == "92"))
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+/// Build an [`AdapterRegistry`] for [`GpkeAnkuendigungZuordnungLfWorkflow`].
+///
+/// Adapts inbound UTILMD PID 55607 (Ankündigung Zuordnung LF, NB → LFN) to an
+/// [`AnkuendigungZuordnungLfCommand::ReceiveAnkuendigung`].
+///
+/// AHB validation is performed inline; `validation_passed` is set accordingly.
+/// The LFN ERP responds with a subsequent `SendAntwort` command (within 24h,
+/// BK6-22-024 §4).
+#[must_use]
+pub fn gpke_ankuendigung_zuordnung_lf_registry()
+-> AdapterRegistry<GpkeAnkuendigungZuordnungLfWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Ankündigung Zuordnung LF adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Ankündigung Zuordnung LF adapter: expected UTILMD message".into(),
+                ));
+            };
+
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Ankündigung Zuordnung LF adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let mut validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+
+            // ── PID 55607 — vacuous-validation guard ──────────────────────
+            // PID 55607 (Ankündigung Zuordnung LF, NB → LFN) requires AHB
+            // profile import before full validation is possible.
+            // Guard against false positives from empty rule sets.
+            if validation_passed {
+                let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
+                    .map(|edi_pid| {
+                        edi_energy::registry::ReleaseRegistry::global()
+                            .pid_has_ahb_rules(edi_energy::MessageType::Utilmd, edi_pid)
+                    })
+                    .unwrap_or(false);
+                if !has_ahb_rules {
+                    tracing::warn!(
+                        pid = pid.as_u32(),
+                        message_ref = msg.message_ref(),
+                        "GPKE Ankündigung Zuordnung LF adapter: PID {} has no UTILMD AHB \
+                         profile in the compiled profile set — import gap; \
+                         vacuous validation forced to failed.",
+                        pid.as_u32(),
+                    );
+                    validation_passed = false;
+                }
+            }
+
+            Ok(AnkuendigungZuordnungLfCommand::ReceiveAnkuendigung {
                 pid,
                 sender: MarktpartnerCode::new(
                     u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
@@ -2607,6 +2851,163 @@ pub fn geli_gas_sperrung_lf_registry() -> AdapterRegistry<GeliGasSperrungLfWorkf
                     o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
                 ),
                 reason: None,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GaBi Gas Nomination — NOMINT / NOMRES (DVGW synthetic PIDs 90011/90012/90021/90022) ──
+
+/// Build an [`AdapterRegistry`] for [`GaBiGasNominationWorkflow`].
+///
+/// Handles both outbound NOMINT dispatch (synthetic PIDs 90011/90012,
+/// BKV → FNB/MGV) and inbound NOMRES response (synthetic PIDs 90021/90022,
+/// FNB/MGV → BKV).
+///
+/// DVGW messages carry no BGM Prüfidentifikator; the synthetic PID is derived
+/// from the message type and role qualifier via `AnyDvgwMessage::detect_pid`.
+///
+/// Regulatory basis: KoV (Kooperationsvereinbarung Gas), BNetzA BK7-14-020.
+#[must_use]
+pub fn gabi_gas_nomination_registry() -> AdapterRegistry<GaBiGasNominationWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyDvgwMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyDvgwMessage for GaBi Gas Nomination adapter".into(),
+                )
+            })?;
+
+            let synthetic_pid = msg.detect_pid(None).ok_or_else(|| {
+                EngineError::Deserialization(
+                    "GaBi Gas Nomination adapter: could not derive synthetic PID".into(),
+                )
+            })?;
+
+            let pid = Pruefidentifikator::new(synthetic_pid).map_err(|e| {
+                EngineError::Deserialization(format!(
+                    "GaBi Gas Nomination adapter: synthetic PID out of range: {e}"
+                ))
+            })?;
+
+            let trait_msg = msg.as_trait().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "GaBi Gas Nomination adapter: message has no trait impl".into(),
+                )
+            })?;
+            let sender_eic = trait_msg.sender_eic().unwrap_or("").to_owned();
+            let receiver_eic = trait_msg.receiver_eic().unwrap_or("").to_owned();
+            let message_ref = MessageRef::new(trait_msg.message_ref());
+
+            match msg {
+                AnyDvgwMessage::Nomint(nomint) => {
+                    // Outbound NOMINT — BKV sends nomination to FNB/MGV.
+                    let gas_day = nomint.reference_date.clone().unwrap_or_default();
+                    let nomination_ref = nomint
+                        .nomination_ref
+                        .as_deref()
+                        .map(MessageRef::new)
+                        .unwrap_or_else(|| message_ref.clone());
+                    Ok(NominationCommand::SendNomination {
+                        synthetic_pid: pid.as_u32(),
+                        sender_eic,
+                        receiver_eic,
+                        gas_day,
+                        nomination_ref,
+                    })
+                }
+                AnyDvgwMessage::Nomres(nomres) => {
+                    // Inbound NOMRES — FNB/MGV responds to BKV.
+                    let gas_day = nomres.reference_date.clone().unwrap_or_default();
+                    let acceptance = match &nomres.overall_status {
+                        Some(dvgw_edi::messages::nomres::NomresStatus::Accepted) => {
+                            NomresAcceptance::Accepted
+                        }
+                        Some(dvgw_edi::messages::nomres::NomresStatus::PartiallyAccepted) => {
+                            NomresAcceptance::PartiallyAccepted
+                        }
+                        Some(dvgw_edi::messages::nomres::NomresStatus::Rejected) => {
+                            NomresAcceptance::Rejected
+                        }
+                        Some(dvgw_edi::messages::nomres::NomresStatus::Other(code)) => {
+                            NomresAcceptance::Other(code.clone())
+                        }
+                        Some(_) => NomresAcceptance::Other("unknown-variant".to_owned()),
+                        None => NomresAcceptance::Other("unknown".to_owned()),
+                    };
+                    Ok(NominationCommand::ReceiveNomres {
+                        nomres_ref: message_ref,
+                        acceptance,
+                        gas_day,
+                        rejection_reason: None,
+                    })
+                }
+                _ => Err(EngineError::Deserialization(
+                    "GaBi Gas Nomination adapter: expected NOMINT or NOMRES message".into(),
+                )),
+            }
+        },
+    ));
+    registry
+}
+
+// ── GaBi Gas Allocation — ALOCAT (DVGW synthetic PIDs 90001/90002/90003) ─────
+
+/// Build an [`AdapterRegistry`] for [`GaBiGasAllocationWorkflow`].
+///
+/// Handles inbound ALOCAT allocation messages (synthetic PIDs 90001/90002/90003,
+/// FNB/MGV/VNB → BKV). No response is sent — this is a receive-and-record workflow.
+///
+/// DVGW messages carry no BGM Prüfidentifikator; the synthetic PID is derived
+/// from the message type and role qualifier via `AnyDvgwMessage::detect_pid`.
+///
+/// Regulatory basis: KoV (Kooperationsvereinbarung Gas), BNetzA BK7-14-020.
+#[must_use]
+pub fn gabi_gas_allocation_registry() -> AdapterRegistry<GaBiGasAllocationWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyDvgwMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyDvgwMessage for GaBi Gas Allocation adapter".into(),
+                )
+            })?;
+
+            let AnyDvgwMessage::Alocat(alocat) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GaBi Gas Allocation adapter: expected ALOCAT message".into(),
+                ));
+            };
+
+            let synthetic_pid = msg.detect_pid(None).ok_or_else(|| {
+                EngineError::Deserialization(
+                    "GaBi Gas Allocation adapter: could not derive synthetic PID".into(),
+                )
+            })?;
+
+            let pid = Pruefidentifikator::new(synthetic_pid).map_err(|e| {
+                EngineError::Deserialization(format!(
+                    "GaBi Gas Allocation adapter: synthetic PID out of range: {e}"
+                ))
+            })?;
+
+            let trait_msg = msg.as_trait().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "GaBi Gas Allocation adapter: message has no trait impl".into(),
+                )
+            })?;
+
+            Ok(AllocationCommand::ReceiveAlocat {
+                synthetic_pid: pid.as_u32(),
+                sender_eic: trait_msg.sender_eic().unwrap_or("").to_owned(),
+                receiver_eic: trait_msg.receiver_eic().unwrap_or("").to_owned(),
+                gas_day: alocat.reference_date.clone().unwrap_or_default(),
+                clearing_number: alocat.clearing_number.clone(),
+                message_ref: MessageRef::new(trait_msg.message_ref()),
             })
         },
     ));

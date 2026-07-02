@@ -211,29 +211,29 @@ use axum::{
     routing::post,
 };
 use mako_engine::{
-    deadline::{Deadline, DeadlineStore as _},
+    deadline::Deadline,
     ids::{ProcessId, TenantId},
     metrics::EngineMetrics,
     registry::ProcessRegistry as _,
-    types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator},
+    types::{BikoId, BillingPeriod, BkvId, MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator},
     version::WorkflowId,
 };
 use mako_geli_gas::{GasSupplierChangeCommand, GeliGasSupplierChangeWorkflow};
 use mako_gpke::{
+    AnkuendigungZuordnungLfCommand, GpkeAnkuendigungZuordnungLfWorkflow, GpkeLfAbmeldungWorkflow,
     GpkeLfAnmeldungWorkflow, GpkeSupplierChangeWorkflow, LfAnmeldungCommand, SupplierChangeCommand,
 };
 use mako_mabis::{
-    BillingCommand, DataStatus, IFTSTA_DATENSTATUS_PID, IFTSTA_PIDS as MABIS_IFTSTA_PIDS,
-    MabisBillingWorkflow,
+    BillingCommand, BillingVersion, DataStatus, IFTSTA_DATENSTATUS_PID,
+    IFTSTA_PIDS as MABIS_IFTSTA_PIDS, MabisBillingWorkflow, PRUEFMITTEILUNG_DEADLINE_LABEL,
 };
 use mako_wim::steuerungsauftrag::{SteuerungsauftragCommand, WimSteuerungsauftragWorkflow};
 use mako_wim::{DeviceChangeCommand, WimDeviceChangeWorkflow};
-use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 use tracing::info;
 use utoipa::ToSchema;
 
+use crate::cedar_authz::{CedarAuthorizer, CommandResource};
 use crate::malo_cache::{MaloIdentResultCache, SlateDbMaloCache};
 
 // ── Shared state ─────────────────────────────────────────────────────────────
@@ -260,8 +260,11 @@ pub struct CommandsApiState {
     ///
     /// Set via `--marktrollen` at startup (e.g. `LF,LFG` for a dual-fuel supplier).
     pub configured_marktrollen: Vec<String>,
-    /// When `Some`, every request must supply `Authorization: Bearer <token>`.
-    pub optional_token: Option<SecretString>,
+    /// Cedar-based authorization engine.
+    ///
+    /// Resolves bearer tokens to named principals and evaluates Cedar ABAC
+    /// policies for each command submission.
+    pub cedar: Arc<CedarAuthorizer>,
     /// Shared SlateDB store — used for process dispatch and deadline registration.
     pub store: Arc<mako_engine::store_slatedb::SlateDbStore>,
     /// Snapshot store — shares the same underlying DB as `store`.
@@ -390,37 +393,20 @@ pub(crate) async fn handle_command(
     headers: axum::http::HeaderMap,
     Json(envelope): Json<ErpCommand>,
 ) -> impl IntoResponse {
-    // ── Bearer token authentication ───────────────────────────────────────────
-    if let Some(expected_token) = &state.optional_token {
-        match extract_bearer(&headers) {
-            None => {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    Json(serde_json::json!({
-                        "error": "Unauthorized",
-                        "detail": "Authorization: Bearer <token> header required"
-                    })),
-                )
-                    .into_response();
-            }
-            Some(provided) => {
-                let ok: bool = provided
-                    .as_bytes()
-                    .ct_eq(expected_token.expose_secret().as_bytes())
-                    .into();
-                if !ok {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        Json(serde_json::json!({
-                            "error": "Unauthorized",
-                            "detail": "invalid token"
-                        })),
-                    )
-                        .into_response();
-                }
-            }
+    // ── Authentication ────────────────────────────────────────────────────────
+    let identity = match state.cedar.authenticate(&headers) {
+        Some(id) => id,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "Unauthorized",
+                    "detail": "Authorization: Bearer <token> header required"
+                })),
+            )
+                .into_response();
         }
-    }
+    };
 
     // ── Resolve and validate Marktrolle ────────────────────────────────────────
     //
@@ -479,6 +465,26 @@ pub(crate) async fn handle_command(
                 .into_response();
         }
     };
+
+    // ── Cedar authorization ───────────────────────────────────────────────────
+    if !state.cedar.authorize_command(
+        &identity,
+        &CommandResource {
+            name: &cmd_lower,
+            marktrolle: &effective_marktrolle,
+            pid: command_primary_pid(&cmd_lower),
+            tenant: &state.tenant_id.to_string(),
+        },
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error":  "Forbidden",
+                "detail": "Cedar policy denied this command"
+            })),
+        )
+            .into_response();
+    }
 
     // ── Idempotency key ───────────────────────────────────────────────────────
     let idempotency_key = headers
@@ -632,6 +638,9 @@ pub(crate) async fn handle_command(
                 Json(serde_json::json!({
                     "error":  "not_implemented",
                     "detail": format!("command '{cmd}' is not yet dispatchable — do not retry automatically"),
+                    "hint":   "This command is registered but its workflow is not yet implemented \
+                               in this release. Check the makod release notes for the planned \
+                               delivery milestone, or open a support request."
                 })),
             )
                 .into_response();
@@ -652,7 +661,8 @@ pub(crate) async fn handle_command(
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
-enum DispatchOutcome {
+#[derive(Debug)]
+pub(crate) enum DispatchOutcome {
     Spawned {
         process_id: ProcessId,
     },
@@ -662,7 +672,8 @@ enum DispatchOutcome {
     },
 }
 
-enum DispatchError {
+#[derive(Debug)]
+pub(crate) enum DispatchError {
     /// Required `malo_id` not in the cache — ERP must seed it first.
     MaloNotFound(String),
     /// Payload is missing a required field or carries a malformed value.
@@ -706,121 +717,461 @@ impl From<mako_engine::error::EngineError> for DispatchError {
     }
 }
 
+// ── CommandDescriptor — compile-time dispatch linking ─────────────────────────
+
+/// Type alias for a statically-linked async dispatch function.
+///
+/// Using a concrete function pointer (not a `Box<dyn Fn>`) means every entry
+/// in `COMMAND_REGISTRY` must supply a real named function at compile time.
+/// This closes the registry-dispatch gap: adding a command to the registry
+/// without wiring a handler is a compile error, not a runtime 501.
+pub(crate) type DispatchFn = for<'a> fn(
+    &'a CommandsApiState,
+    &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+>;
+
+/// A single command descriptor: name, permitted roles, primary PID, and dispatch fn.
+///
+/// All three data points live together so adding a new command requires
+/// filling in all fields — no parallel data structures can silently drift apart.
+pub(crate) struct CommandDescriptor {
+    /// Stable lowercase command name, e.g. `"gpke.lieferbeginn.anmelden"`.
+    pub name: &'static str,
+    /// Marktrollen permitted to call this command (upper-case BDEW codes).
+    pub permitted_roles: &'static [&'static str],
+    /// Primary Prüfidentifikator associated with this command.
+    /// `0` for commands that carry no single outbound PID.
+    pub primary_pid: u32,
+    /// Async dispatch function — called by [`dispatch_command`] after role validation.
+    pub dispatch: DispatchFn,
+}
+
+// ── Per-command wrapper functions ─────────────────────────────────────────────
+//
+// Each is a named `fn` item (not a closure) so it satisfies the `for<'a> fn(...)`
+// bound of `DispatchFn` and can be stored in a `static CommandDescriptor`.
+
+fn cmd_gpke_lieferbeginn_anmelden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_lf_anmeldung(s, p, 55001, "lieferbeginn_datum"))
+}
+
+fn cmd_gpke_lieferende_anmelden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_lf_anmeldung(s, p, 55002, "lieferende_datum"))
+}
+
+fn cmd_gpke_kuendigung_anmelden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_lf_anmeldung(s, p, 55016, "kuendigung_datum"))
+}
+
+fn cmd_maloid_lieferbeginn_fortsetzen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_maloid_lieferbeginn_fortsetzen(s, p))
+}
+
+fn cmd_gpke_nb_lieferende_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_nb_lieferende_antwort(s, p, true))
+}
+
+fn cmd_gpke_nb_lieferende_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_nb_lieferende_antwort(s, p, false))
+}
+
+fn cmd_gpke_zuordnung_lf_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_zuordnung_lf_antwort(s, p, true))
+}
+
+fn cmd_gpke_zuordnung_lf_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_zuordnung_lf_antwort(s, p, false))
+}
+
+fn cmd_gpke_lieferbeginn_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let pid = p
+            .get("response_pid")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32)
+            .unwrap_or(55003);
+        dispatch_lf_antwort(s, p, true, pid).await
+    })
+}
+
+fn cmd_gpke_lieferbeginn_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let pid = p
+            .get("response_pid")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32)
+            .unwrap_or(55004);
+        dispatch_lf_antwort(s, p, false, pid).await
+    })
+}
+
+fn cmd_gpke_lieferende_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let pid = p
+            .get("response_pid")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32)
+            .unwrap_or(55005);
+        dispatch_lf_antwort(s, p, true, pid).await
+    })
+}
+
+fn cmd_gpke_lieferende_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let pid = p
+            .get("response_pid")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32)
+            .unwrap_or(55006);
+        dispatch_lf_antwort(s, p, false, pid).await
+    })
+}
+
+fn cmd_gpke_lieferbeginn_aktivieren<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_lf_activate(s, p))
+}
+
+fn cmd_gpke_sperrung_bestaetigen<'a>(
+    _s: &'a CommandsApiState,
+    _p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    // TODO(F-022): GpkeSperrungLfWorkflow not yet wired to the command API.
+    // Implement: extract malo_id + ausfuehrungsdatum, call dispatch_to_process
+    // for GpkeSperrungLfWorkflow with SperrungLfCommand::InitiateSperrung.
+    Box::pin(async {
+        Err(DispatchError::NotImplemented(
+            "gpke.sperrung.bestaetigen".to_owned(),
+        ))
+    })
+}
+
+fn cmd_gpke_abrechnung_annehmen<'a>(
+    _s: &'a CommandsApiState,
+    _p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    // TODO(F-022): GpkeAbrechnungWorkflow not yet wired to the command API.
+    // Implement: extract rechnung BO4E, call dispatch_to_process for
+    // GpkeAbrechnungWorkflow with the appropriate accept command.
+    Box::pin(async {
+        Err(DispatchError::NotImplemented(
+            "gpke.abrechnung.annehmen".to_owned(),
+        ))
+    })
+}
+
+fn cmd_gpke_abrechnung_ablehnen<'a>(
+    _s: &'a CommandsApiState,
+    _p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    // TODO(F-022): GpkeAbrechnungWorkflow not yet wired to the command API.
+    // Implement: extract rechnung BO4E + ablehnungsgrund, call dispatch_to_process
+    // for GpkeAbrechnungWorkflow with the appropriate reject command.
+    Box::pin(async {
+        Err(DispatchError::NotImplemented(
+            "gpke.abrechnung.ablehnen".to_owned(),
+        ))
+    })
+}
+
+fn cmd_geli_lieferbeginn_anmelden<'a>(
+    _s: &'a CommandsApiState,
+    _p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    // TODO(F-022): No LFG-side GeLi Gas Lieferbeginn workflow exists yet.
+    // GeLi Gas 3.0 (BK7-24-01-009) PID 44001 — LFG initiates Lieferbeginn.
+    // Implement: create GeliGasLfAnmeldungWorkflow, wire up analogously to
+    // GpkeLfAnmeldungWorkflow with the gas-specific AHB fields.
+    Box::pin(async {
+        Err(DispatchError::NotImplemented(
+            "geli.lieferbeginn.anmelden".to_owned(),
+        ))
+    })
+}
+
+fn cmd_geli_lieferende_anmelden<'a>(
+    _s: &'a CommandsApiState,
+    _p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    // TODO(F-022): No LFG-side GeLi Gas Lieferende workflow exists yet.
+    // GeLi Gas 3.0 (BK7-24-01-009) PID 44002 — LFG initiates Lieferende.
+    Box::pin(async {
+        Err(DispatchError::NotImplemented(
+            "geli.lieferende.anmelden".to_owned(),
+        ))
+    })
+}
+
+fn cmd_geli_lieferbeginn_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let pid = p
+            .get("response_pid")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32)
+            .unwrap_or(44003);
+        dispatch_geli_gas_antwort(s, p, true, pid).await
+    })
+}
+
+fn cmd_geli_lieferbeginn_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let pid = p
+            .get("response_pid")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32)
+            .unwrap_or(44004);
+        dispatch_geli_gas_antwort(s, p, false, pid).await
+    })
+}
+
+fn cmd_geli_lieferende_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let pid = p
+            .get("response_pid")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32)
+            .unwrap_or(44005);
+        dispatch_geli_gas_antwort(s, p, true, pid).await
+    })
+}
+
+fn cmd_geli_lieferende_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let pid = p
+            .get("response_pid")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32)
+            .unwrap_or(44006);
+        dispatch_geli_gas_antwort(s, p, false, pid).await
+    })
+}
+
+fn cmd_wim_geraetewechsel_beauftragen<'a>(
+    _s: &'a CommandsApiState,
+    _p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    // TODO(F-022): WimDeviceChangeWorkflow spawn via ERP command not yet wired.
+    // WiM (BK6-24-174) PIDs 55039/55042/55051/55168 — NB or MSB initiates Gerätewechsel.
+    // Implement: extract melo_id + wechseldatum + marktrolle, resolve NB+MSB GLNs
+    // from MeLo cache, spawn WimDeviceChangeWorkflow with DeviceChangeCommand::ReceiveUtilmd.
+    Box::pin(async {
+        Err(DispatchError::NotImplemented(
+            "wim.geraetewechsel.beauftragen".to_owned(),
+        ))
+    })
+}
+
+fn cmd_wim_geraetewechsel_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_aperak(s, p, true))
+}
+
+fn cmd_wim_geraetewechsel_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_aperak(s, p, false))
+}
+
+fn cmd_wim_steuerungsauftrag_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_steuerungsauftrag_endantwort(s, p, true))
+}
+
+fn cmd_wim_steuerungsauftrag_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_steuerungsauftrag_endantwort(s, p, false))
+}
+
+fn cmd_mabis_abrechnung_einleiten<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_mabis_billing_einleiten(s, p))
+}
+
+fn cmd_mabis_abrechnung_daten_einreichen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_mabis_billing_daten_einreichen(s, p))
+}
+
+fn cmd_mabis_abrechnung_begleichen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_mabis_billing_begleichen(s, p))
+}
+
+fn cmd_gpke_vollzugsmeldung_empfangen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_iftsta(s, p))
+}
+
+fn cmd_wim_iftsta_empfangen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_iftsta(s, p))
+}
+
+fn cmd_mabis_iftsta_empfangen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_mabis_iftsta(s, p, false))
+}
+
+fn cmd_mabis_datenstatus_empfangen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_mabis_iftsta(s, p, true))
+}
+
 /// Map an ERP command to a workflow command and dispatch it.
-async fn dispatch_command(
+///
+/// Looks up the command name in [`COMMAND_REGISTRY`] and calls the registered
+/// [`CommandDescriptor::dispatch`] function.  If the command is unknown the
+/// caller should have already rejected it in [`validate_command`]; this path
+/// returns `NotImplemented` as a safety net.
+pub(crate) async fn dispatch_command(
     state: &CommandsApiState,
     command: &str,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    match command {
-        // ── GPKE LF-side Anmeldung (new process, outbound UTILMD) ────────────
-        "gpke.lieferbeginn.anmelden" => {
-            dispatch_lf_anmeldung(state, payload, 55001, "lieferbeginn_datum").await
-        }
-        "gpke.lieferende.anmelden" => {
-            dispatch_lf_anmeldung(state, payload, 55002, "lieferende_datum").await
-        }
-        "gpke.kuendigung.anmelden" => {
-            dispatch_lf_anmeldung(state, payload, 55016, "kuendigung_datum").await
-        }
-
-        // ── GPKE MaLo-ID continuation ────────────────────────────────
-        //
-        // ERP receives `MaloIdentified` ERP event with a `tx_id`, then calls
-        // this command to auto-dispatch PID 55001 Lieferbeginn without having
-        // to know the malo_id in advance.  makod resolves malo_id + nb_gln
-        // from the `mc_txres/` cache written by MaloIdentSender.
-        "maloid.lieferbeginn.fortsetzen" => {
-            dispatch_maloid_lieferbeginn_fortsetzen(state, payload).await
-        }
-
-        // ── GPKE LF-side responses (routes to existing gpke-lf-anmeldung) ────
-        "gpke.lieferbeginn.bestaetigen" | "gpke.lieferende.bestaetigen" => {
-            let (response_pid_code, payload_pid_key) = if command == "gpke.lieferbeginn.bestaetigen"
-            {
-                (55003u32, "response_pid")
-            } else {
-                (55005u32, "response_pid")
-            };
-            let response_pid_code = payload
-                .get(payload_pid_key)
-                .and_then(|v| v.as_u64())
-                .map(|n| n as u32)
-                .unwrap_or(response_pid_code);
-            dispatch_lf_antwort(state, payload, true, response_pid_code).await
-        }
-        "gpke.lieferbeginn.ablehnen" | "gpke.lieferende.ablehnen" => {
-            let response_pid_code = if command == "gpke.lieferbeginn.ablehnen" {
-                55004u32
-            } else {
-                55006u32
-            };
-            let response_pid_code = payload
-                .get("response_pid")
-                .and_then(|v| v.as_u64())
-                .map(|n| n as u32)
-                .unwrap_or(response_pid_code);
-            dispatch_lf_antwort(state, payload, false, response_pid_code).await
-        }
-        "gpke.lieferbeginn.aktivieren" => dispatch_lf_activate(state, payload).await,
-
-        // ── GeLi Gas LFG-side responses (routes to geli-gas-lf-anmeldung) ────
-        "geli.lieferbeginn.bestaetigen" | "geli.lieferende.bestaetigen" => {
-            let response_pid_code = if command == "geli.lieferbeginn.bestaetigen" {
-                44003u32
-            } else {
-                44005u32
-            };
-            let response_pid_code = payload
-                .get("response_pid")
-                .and_then(|v| v.as_u64())
-                .map(|n| n as u32)
-                .unwrap_or(response_pid_code);
-            dispatch_geli_gas_antwort(state, payload, true, response_pid_code).await
-        }
-        "geli.lieferbeginn.ablehnen" | "geli.lieferende.ablehnen" => {
-            let response_pid_code = if command == "geli.lieferbeginn.ablehnen" {
-                44004u32
-            } else {
-                44006u32
-            };
-            let response_pid_code = payload
-                .get("response_pid")
-                .and_then(|v| v.as_u64())
-                .map(|n| n as u32)
-                .unwrap_or(response_pid_code);
-            dispatch_geli_gas_antwort(state, payload, false, response_pid_code).await
-        }
-
-        // ── WiM NB-side APERAK (routes to existing wim-device-change) ────────
-        "wim.geraetewechsel.bestaetigen" => dispatch_wim_aperak(state, payload, true).await,
-        "wim.geraetewechsel.ablehnen" => dispatch_wim_aperak(state, payload, false).await,
-
-        // ── WiM Steuerungsauftrag (MSB role — REST Control Measures ──
-        //
-        // After `makod` receives a `konfiguration` or `initialZustand` via the
-        // API-Webdienste Strom Control Measures endpoint, the ERP sends one of
-        // these commands to confirm or reject the execution.
-        //
-        // The `wim.steuerungsauftrag.bestaetigen` command is identified by the
-        // `tx_id` from the original REST request (the same tx_id the NB/LF sent).
-        "wim.steuerungsauftrag.bestaetigen" => {
-            dispatch_steuerungsauftrag_endantwort(state, payload, true).await
-        }
-        "wim.steuerungsauftrag.ablehnen" => {
-            dispatch_steuerungsauftrag_endantwort(state, payload, false).await
-        }
-
-        // ── Commands that are registered but not yet dispatched ───────────────
-        // IFTSTA status commands — route inbound Vollzugsmeldungen and
-        // status messages received via the REST channel (e.g. ERP replay,
-        // manual override) to the correct workflow instance.
-        "gpke.vollzugsmeldung.empfangen" => dispatch_gpke_iftsta(state, payload).await,
-        "wim.iftsta.empfangen" => dispatch_wim_iftsta(state, payload).await,
-        "mabis.iftsta.empfangen" => dispatch_mabis_iftsta(state, payload, false).await,
-        "mabis.datenstatus.empfangen" => dispatch_mabis_iftsta(state, payload, true).await,
-
-        cmd => Err(DispatchError::NotImplemented(cmd.to_owned())),
+    match COMMAND_REGISTRY.iter().find(|d| d.name == command) {
+        Some(desc) => (desc.dispatch)(state, payload).await,
+        None => Err(DispatchError::NotImplemented(command.to_owned())),
     }
 }
 
@@ -946,36 +1297,26 @@ async fn dispatch_lf_anmeldung(
     );
 
     let process_id = process.process_id();
-    process
-        .execute_and_enqueue_with_snapshot_and_retry(
-            domain_cmd,
-            /* max_attempts      */ 3,
-            &state.snapshot_store,
-            state.snapshot_interval,
-        )
-        .await?;
 
-    // ── Register 24h NB-response deadline (GPKE BK6-22-024) ──────────────────
+    // ── Build 24h NB-response deadline before the atomic write ───────────────
     //
-    // If the NB does not respond within 24 wall-clock hours the deadline
-    // scheduler fires `LfAnmeldungCommand::TimeoutExpired`, which transitions
-    // the process to `Rejected` and the ERP webhook receives an `AperakTimeout`.
+    // The deadline is built from `now_utc()` here so the regulatory window
+    // starts at the moment the ERP request is received, not when the store
+    // write completes.  It is passed to `execute_and_enqueue_with_deadlines`
+    // so that events, outbox entries, and the deadline land in a single SSI
+    // transaction (F-009).
     let due_at = mako_engine::fristen::add_hours(time::OffsetDateTime::now_utc(), 24);
     let deadline = Deadline::new(
         process.stream_id().clone(),
         process_id,
         state.tenant_id,
-        workflow_id,
+        workflow_id.clone(),
         "nb-response-window-24h",
         due_at,
     );
-    if let Err(e) = state.store.as_deadline_store().register(&deadline).await {
-        tracing::warn!(
-            process_id = %process_id,
-            error      = %e,
-            "ERP dispatch: deadline registration failed (non-fatal — process was spawned)",
-        );
-    }
+    process
+        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
+        .await?;
 
     // ── Register process under MaLo business key ──────────────────────────────
     //
@@ -1110,7 +1451,7 @@ fn latest_format_version() -> mako_engine::version::FormatVersion {
         .format_versions()
         .into_iter()
         .filter_map(|s| mako_engine::version::FormatVersion::parse(&s).ok())
-        .max_by(|a, b| a.as_str().cmp(b.as_str()))
+        .max()
         .unwrap_or_else(|| {
             mako_engine::version::FormatVersion::parse("FV2025-10-01")
                 .expect("fallback FV is valid")
@@ -1188,6 +1529,94 @@ where
         .await?;
 
     Ok(DispatchOutcome::Dispatched { process_id })
+}
+
+/// Dispatch LF's response to a NB-initiated Lieferende (PIDs 55008/55009).
+///
+/// Called for `gpke.nb-lieferende.bestaetigen` (→ 55008 Bestätigung) and
+/// `gpke.nb-lieferende.ablehnen` (→ 55009 Ablehnung).
+///
+/// The LF receives PID 55007 Ankündigung via AS4 (auto-spawned by the ingest
+/// dispatcher). After review, the ERP operator calls this command to send the
+/// formal response. APERAK Frist: 24h wall-clock (BK6-22-024 §4).
+///
+/// ## Required payload fields
+///
+/// | Field | Type | Notes |
+/// |---|---|---|
+/// | `malo_id` | string | Marktlokations-ID identifying the process |
+/// | `reason` | string (opt.) | Rejection reason — mandatory when `accepted = false` |
+async fn dispatch_gpke_nb_lieferende_antwort(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    accepted: bool,
+) -> Result<DispatchOutcome, DispatchError> {
+    let malo_id = payload
+        .get("malo_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"malo_id\" (Marktlokations-ID)".into(),
+            )
+        })?
+        .to_owned();
+
+    let reason = payload
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+
+    dispatch_to_process::<GpkeLfAbmeldungWorkflow, _>(
+        state,
+        &malo_id,
+        "gpke-lf-abmeldung",
+        move || mako_gpke::LfAbmeldungCommand::SendAntwort { accepted, reason },
+    )
+    .await
+}
+
+/// Dispatch LFN's response to a NB-initiated Ankündigung Zuordnung LF (PIDs 55608/55609).
+///
+/// Called for `gpke.zuordnung-lf.bestaetigen` (→ 55608 Bestätigung) and
+/// `gpke.zuordnung-lf.ablehnen` (→ 55609 Ablehnung).
+///
+/// The LFN receives PID 55607 Ankündigung via AS4 (auto-spawned by the ingest
+/// dispatcher). After review, the ERP operator calls this command to send the
+/// formal response. APERAK Frist: 24h wall-clock (BK6-22-024 §4).
+///
+/// ## Required payload fields
+///
+/// | Field | Type | Notes |
+/// |---|---|---|
+/// | `malo_id` | string | Marktlokations-ID identifying the process |
+/// | `reason` | string (opt.) | Rejection reason — mandatory when `accepted = false` |
+async fn dispatch_gpke_zuordnung_lf_antwort(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    accepted: bool,
+) -> Result<DispatchOutcome, DispatchError> {
+    let malo_id = payload
+        .get("malo_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"malo_id\" (Marktlokations-ID)".into(),
+            )
+        })?
+        .to_owned();
+
+    let reason = payload
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+
+    dispatch_to_process::<GpkeAnkuendigungZuordnungLfWorkflow, _>(
+        state,
+        &malo_id,
+        mako_gpke::ankuendigung_zuordnung_lf::WORKFLOW_NAME,
+        move || AnkuendigungZuordnungLfCommand::SendAntwort { accepted, reason },
+    )
+    .await
 }
 
 /// Dispatch a GPKE NB→LF Antwort (Bestätigung or Ablehnung) to an existing
@@ -1516,6 +1945,291 @@ async fn dispatch_wim_iftsta(
     .await
 }
 
+/// Dispatch `mabis.abrechnung.einleiten` — BIKO sends Abrechnungssummenzeitreihe;
+/// open the billing period from the BKV's perspective (MaBiS BK6-24-174 §13).
+///
+/// # Payload fields
+///
+/// | Field | Required | Description |
+/// |-------|----------|-------------|
+/// | `billing_period` | Yes | Billing period in `"YYYY-MM"` format (e.g. `"2025-09"`) |
+/// | `bkv_id` | Yes | BKV GLN (13-digit) |
+/// | `biko_id` | Yes | BIKO EIC code (16-char) |
+/// | `version` | Yes | `"vorlaeufig"` or `"endgueltig"` |
+/// | `message_ref` | Yes | MSCONS message reference |
+///
+/// # Deadline
+///
+/// Registers a 1-Werktag Prüfmitteilung deadline (BK6-24-174 §13.8) immediately
+/// after spawning. The deadline scheduler fires `PruefmitteilungDeadlineExpired`
+/// if the BKV does not issue `daten-einreichen` within 1 Werktag.
+async fn dispatch_mabis_billing_einleiten(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let billing_period_str = payload
+        .get("billing_period")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"billing_period\" (e.g. \"2025-09\")".into(),
+            )
+        })?
+        .to_owned();
+    let bkv_id_str = payload
+        .get("bkv_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"bkv_id\" (BKV GLN, 13 digits)".into(),
+            )
+        })?
+        .to_owned();
+    let biko_id_str = payload
+        .get("biko_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload("payload must contain \"biko_id\" (BIKO EIC code)".into())
+        })?
+        .to_owned();
+    let version_str = payload
+        .get("version")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"version\" (\"vorlaeufig\" or \"endgueltig\")".into(),
+            )
+        })?;
+    let version = match version_str {
+        "vorlaeufig" => BillingVersion::Vorlaeufig,
+        "endgueltig" => BillingVersion::Endgueltig,
+        other => {
+            return Err(DispatchError::InvalidPayload(format!(
+                "\"version\" must be \"vorlaeufig\" or \"endgueltig\", got \"{other}\""
+            )));
+        }
+    };
+    let message_ref_str = payload
+        .get("message_ref")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let pid = Pruefidentifikator::new(13_003).map_err(DispatchError::InvalidPayload)?;
+
+    // Business key: unique per BKV + billing period combination.
+    let business_key = format!("{bkv_id_str}|{billing_period_str}");
+
+    // ── Idempotency guard ─────────────────────────────────────────────────────
+    let existing = state
+        .store
+        .as_process_registry()
+        .lookup_correlated(state.tenant_id, &business_key)
+        .await
+        .map_err(|e| {
+            DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string()))
+        })?;
+    let already_active: Vec<_> = existing
+        .into_iter()
+        .filter(|id| id.workflow_id.name.as_ref() == "mabis-billing")
+        .collect();
+    if let Some(dup) = already_active.into_iter().next() {
+        tracing::warn!(
+            business_key = %business_key,
+            process_id   = %dup.process_id,
+            "mabis.abrechnung.einleiten refused: active billing process already registered for this BKV/period",
+        );
+        return Ok(DispatchOutcome::Dispatched {
+            process_id: dup.process_id,
+        });
+    }
+
+    // ── Spawn process and execute command ─────────────────────────────────────
+    let workflow_id = WorkflowId::new("mabis-billing", latest_format_version());
+    let process = mako_engine::process::Process::<
+        MabisBillingWorkflow,
+        Arc<mako_engine::store_slatedb::SlateDbStore>,
+    >::new(
+        Arc::clone(&state.store),
+        state.tenant_id,
+        workflow_id.clone(),
+    );
+    let process_id = process.process_id();
+    let domain_cmd = BillingCommand::ReceiveSummenzeitreihe {
+        pid,
+        billing_period: BillingPeriod::new(billing_period_str.clone()),
+        bkv_id: BkvId::new(bkv_id_str.clone()),
+        biko_id: BikoId::new(biko_id_str),
+        version,
+        message_ref: MessageRef::new(message_ref_str),
+    };
+
+    // ── Build 1-Werktag Prüfmitteilung deadline before the atomic write ───────
+    //
+    // Due at 17:00 Europe/Berlin on the first Werktag following receipt
+    // (BK6-24-174 §13.8).  The deadline is passed to
+    // `execute_and_enqueue_with_deadlines` so that the event, outbox entry,
+    // and the deadline all land in a single SSI transaction (F-009).
+    let due_at = mako_engine::fristen::deadline_at_werktage(
+        time::OffsetDateTime::now_utc(),
+        1,
+        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+    );
+    let deadline = Deadline::new(
+        process.stream_id().clone(),
+        process_id,
+        state.tenant_id,
+        workflow_id.clone(),
+        PRUEFMITTEILUNG_DEADLINE_LABEL,
+        due_at,
+    );
+    process
+        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                process_id = %process_id,
+                error      = %e,
+                "MABIS billing: atomic event+deadline write failed — \
+                 process not spawned, BKV deadline enforcement inactive",
+            );
+            DispatchError::Engine(e)
+        })?;
+
+    // ── Register process under BKV|billing_period business key ────────────────
+    let identity = process.identity();
+    if let Err(e) = state
+        .store
+        .as_process_registry()
+        .register_correlated(state.tenant_id, &business_key, process_id, identity)
+        .await
+    {
+        tracing::error!(
+            process_id   = %process_id,
+            business_key = %business_key,
+            error        = %e,
+            "MABIS billing: process registry registration failed — \
+             follow-up commands (daten-einreichen/begleichen) may not route correctly",
+        );
+    }
+
+    Ok(DispatchOutcome::Spawned { process_id })
+}
+
+/// Dispatch `mabis.abrechnung.daten-einreichen` — BKV sends Prüfmitteilung.
+///
+/// The BKV must respond to the Abrechnungssummenzeitreihe within 1 Werktag
+/// (BK6-24-174 §13.8) with either a positive or negative Prüfmitteilung.
+///
+/// # Payload fields
+///
+/// | Field | Required | Description |
+/// |-------|----------|-------------|
+/// | `bkv_id` | Yes | BKV GLN (same as used in `einleiten`) |
+/// | `billing_period` | Yes | Billing period `"YYYY-MM"` (same as used in `einleiten`) |
+/// | `message_ref` | No | Message reference for the outbound Prüfmitteilung |
+/// | `reject` | No | `true` to send a negative Prüfmitteilung (default: `false`) |
+/// | `reason` | Conditional | Dispute reason; required when `reject = true` |
+async fn dispatch_mabis_billing_daten_einreichen(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let bkv_id = payload
+        .get("bkv_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| DispatchError::InvalidPayload("\"bkv_id\" is required".into()))?;
+    let billing_period = payload
+        .get("billing_period")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| DispatchError::InvalidPayload("\"billing_period\" is required".into()))?;
+    let business_key = format!("{bkv_id}|{billing_period}");
+    let message_ref = MessageRef::new(
+        payload
+            .get("message_ref")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    );
+    let reject = payload
+        .get("reject")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if reject {
+        let reason = payload
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                DispatchError::InvalidPayload(
+                    "\"reason\" is required when \"reject\" is true".into(),
+                )
+            })?
+            .to_owned();
+        dispatch_to_process::<MabisBillingWorkflow, _>(
+            state,
+            &business_key,
+            "mabis-billing",
+            move || BillingCommand::SendPruefmitteilungNegativ {
+                message_ref,
+                reason,
+            },
+        )
+        .await
+    } else {
+        dispatch_to_process::<MabisBillingWorkflow, _>(
+            state,
+            &business_key,
+            "mabis-billing",
+            move || BillingCommand::SendPruefmitteilungPositiv { message_ref },
+        )
+        .await
+    }
+}
+
+/// Dispatch `mabis.abrechnung.begleichen` — BIKO sends Datenstatus; BKV marks settled.
+///
+/// # Payload fields
+///
+/// | Field | Required | Description |
+/// |-------|----------|-------------|
+/// | `bkv_id` | Yes | BKV GLN (same as used in `einleiten`) |
+/// | `billing_period` | Yes | Billing period `"YYYY-MM"` (same as used in `einleiten`) |
+/// | `data_status` | Yes | `"abrechnungsdaten"`, `"abgerechnete_daten"`, or `"abgerechnete_daten_kbka"` |
+async fn dispatch_mabis_billing_begleichen(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let bkv_id = payload
+        .get("bkv_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| DispatchError::InvalidPayload("\"bkv_id\" is required".into()))?;
+    let billing_period = payload
+        .get("billing_period")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| DispatchError::InvalidPayload("\"billing_period\" is required".into()))?;
+    let business_key = format!("{bkv_id}|{billing_period}");
+    let code = payload
+        .get("data_status")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| DispatchError::InvalidPayload("\"data_status\" is required".into()))?;
+    let data_status = match code {
+        "abrechnungsdaten" => DataStatus::Abrechnungsdaten,
+        "abgerechnete_daten" => DataStatus::AbgerechtneteDaten,
+        "abgerechnete_daten_kbka" => DataStatus::AbgerechtneteDatenKbka,
+        other => {
+            return Err(DispatchError::InvalidPayload(format!(
+                "unknown data_status \"{other}\"; valid values: \
+                 abrechnungsdaten, abgerechnete_daten, abgerechnete_daten_kbka"
+            )));
+        }
+    };
+    dispatch_to_process::<MabisBillingWorkflow, _>(
+        state,
+        &business_key,
+        "mabis-billing",
+        move || BillingCommand::ReceiveDatastatus { data_status },
+    )
+    .await
+}
+
 /// Dispatch `mabis.iftsta.empfangen` or `mabis.datenstatus.empfangen`.
 ///
 /// When `is_datenstatus = true` (`mabis.datenstatus.empfangen`), the payload
@@ -1615,9 +2329,258 @@ async fn dispatch_mabis_iftsta(
 
 // ── Command registry ──────────────────────────────────────────────────────────
 
+/// Registry of all supported ERP commands.
+///
+/// Each entry binds a command name to its permitted Marktrollen, primary PID,
+/// and a typed dispatch function.  This single source of truth prevents the
+/// three parallel data structures that existed before F-022 from drifting apart:
+/// - a `(&str, &[&str])` role table
+/// - a `dispatch_command` match arm
+/// - a `command_primary_pid` match arm
+///
+/// Adding a command here without supplying a `dispatch` function pointer is a
+/// **compile error**.  Stub commands that are not yet fully implemented carry an
+/// explicit `cmd_*` stub function that returns `NotImplemented`.
+///
+/// Sources:
+/// - BDEW GPKE AHB (BK6-22-024, LFW24)
+/// - BDEW GeLi Gas AHB (BK7-24-01-009)
+/// - BDEW WiM AHB (BK6-18-032)
+/// - BDEW MABIS AHB (BK6-24-174)
+pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
+    // ── GPKE Lieferbeginn (electricity) ───────────────────────────────────────
+    CommandDescriptor {
+        name: "gpke.lieferbeginn.anmelden",
+        permitted_roles: &["LF"],
+        primary_pid: 55001,
+        dispatch: cmd_gpke_lieferbeginn_anmelden,
+    },
+    CommandDescriptor {
+        name: "gpke.lieferbeginn.bestaetigen",
+        permitted_roles: &["NB"],
+        primary_pid: 55003,
+        dispatch: cmd_gpke_lieferbeginn_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "gpke.lieferbeginn.ablehnen",
+        permitted_roles: &["NB"],
+        primary_pid: 55004,
+        dispatch: cmd_gpke_lieferbeginn_ablehnen,
+    },
+    CommandDescriptor {
+        name: "gpke.lieferbeginn.aktivieren",
+        permitted_roles: &["LF"],
+        primary_pid: 0,
+        dispatch: cmd_gpke_lieferbeginn_aktivieren,
+    },
+    // ── GPKE Lieferende (electricity) ─────────────────────────────────────────
+    CommandDescriptor {
+        name: "gpke.lieferende.anmelden",
+        permitted_roles: &["LF"],
+        primary_pid: 55002,
+        dispatch: cmd_gpke_lieferende_anmelden,
+    },
+    CommandDescriptor {
+        name: "gpke.lieferende.bestaetigen",
+        permitted_roles: &["NB"],
+        primary_pid: 55005,
+        dispatch: cmd_gpke_lieferende_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "gpke.lieferende.ablehnen",
+        permitted_roles: &["NB"],
+        primary_pid: 55006,
+        dispatch: cmd_gpke_lieferende_ablehnen,
+    },
+    // ── GPKE Kündigung ────────────────────────────────────────────────────────
+    CommandDescriptor {
+        name: "gpke.kuendigung.anmelden",
+        permitted_roles: &["LF"],
+        primary_pid: 55016,
+        dispatch: cmd_gpke_kuendigung_anmelden,
+    },
+    // ── GPKE NB-seitiges Lieferende (PID 55007 NB→LF) ────────────────────────
+    // The NB sends PID 55007 (Ankündigung) via AS4; the LF responds.
+    // APERAK Frist: 24h (BK6-22-024 §4).
+    CommandDescriptor {
+        name: "gpke.nb-lieferende.bestaetigen",
+        permitted_roles: &["LF"],
+        primary_pid: 55008,
+        dispatch: cmd_gpke_nb_lieferende_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "gpke.nb-lieferende.ablehnen",
+        permitted_roles: &["LF"],
+        primary_pid: 55009,
+        dispatch: cmd_gpke_nb_lieferende_ablehnen,
+    },
+    // ── GPKE Ankündigung Zuordnung LF (PID 55607 NB→LFN) ─────────────────────
+    // After Lieferantenwechsel the NB sends PID 55607 to the new LF (LFN).
+    // LFN must respond within 24h (BK6-22-024 §4).
+    CommandDescriptor {
+        name: "gpke.zuordnung-lf.bestaetigen",
+        permitted_roles: &["LF"],
+        primary_pid: 55608,
+        dispatch: cmd_gpke_zuordnung_lf_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "gpke.zuordnung-lf.ablehnen",
+        permitted_roles: &["LF"],
+        primary_pid: 55609,
+        dispatch: cmd_gpke_zuordnung_lf_ablehnen,
+    },
+    // ── GPKE MaLo-ID continuation (ERP callback after MaloIdentified event) ───
+    // Primary key is `tx_id` from the `MaloIdentified` ERP event.  The engine
+    // resolves malo_id + nb_gln from the mc_txres/ cache.
+    CommandDescriptor {
+        name: "maloid.lieferbeginn.fortsetzen",
+        permitted_roles: &["LF"],
+        primary_pid: 55001,
+        dispatch: cmd_maloid_lieferbeginn_fortsetzen,
+    },
+    // ── GPKE Sperrung (ORDERS 17115/17117, LF → NB) — stub ───────────────────
+    // TODO: Implement GpkeSperrungLfWorkflow dispatch (InitiateSperrung).
+    CommandDescriptor {
+        name: "gpke.sperrung.bestaetigen",
+        permitted_roles: &["LF"],
+        primary_pid: 17115,
+        dispatch: cmd_gpke_sperrung_bestaetigen,
+    },
+    // ── GPKE Netznutzungsabrechnung — stubs ───────────────────────────────────
+    // TODO: Implement GpkeAbrechnungWorkflow dispatch.
+    CommandDescriptor {
+        name: "gpke.abrechnung.annehmen",
+        permitted_roles: &["NB"],
+        primary_pid: 31001,
+        dispatch: cmd_gpke_abrechnung_annehmen,
+    },
+    CommandDescriptor {
+        name: "gpke.abrechnung.ablehnen",
+        permitted_roles: &["NB"],
+        primary_pid: 31001,
+        dispatch: cmd_gpke_abrechnung_ablehnen,
+    },
+    // ── GeLi Gas Lieferbeginn (gas) — LFG-side stubs ─────────────────────────
+    // TODO: Implement GeliGasLfAnmeldungWorkflow (BK7-24-01-009).
+    CommandDescriptor {
+        name: "geli.lieferbeginn.anmelden",
+        permitted_roles: &["LFG"],
+        primary_pid: 44001,
+        dispatch: cmd_geli_lieferbeginn_anmelden,
+    },
+    CommandDescriptor {
+        name: "geli.lieferbeginn.bestaetigen",
+        permitted_roles: &["GNB"],
+        primary_pid: 44003,
+        dispatch: cmd_geli_lieferbeginn_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "geli.lieferbeginn.ablehnen",
+        permitted_roles: &["GNB"],
+        primary_pid: 44004,
+        dispatch: cmd_geli_lieferbeginn_ablehnen,
+    },
+    // ── GeLi Gas Lieferende (gas) ─────────────────────────────────────────────
+    CommandDescriptor {
+        name: "geli.lieferende.anmelden",
+        permitted_roles: &["LFG"],
+        primary_pid: 44002,
+        dispatch: cmd_geli_lieferende_anmelden,
+    },
+    CommandDescriptor {
+        name: "geli.lieferende.bestaetigen",
+        permitted_roles: &["GNB"],
+        primary_pid: 44005,
+        dispatch: cmd_geli_lieferende_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "geli.lieferende.ablehnen",
+        permitted_roles: &["GNB"],
+        primary_pid: 44006,
+        dispatch: cmd_geli_lieferende_ablehnen,
+    },
+    // ── WiM Messstellenbetrieb ────────────────────────────────────────────────
+    // TODO(beauftragen): Implement ERP-initiated WimDeviceChangeWorkflow spawn.
+    CommandDescriptor {
+        name: "wim.geraetewechsel.beauftragen",
+        permitted_roles: &["NB", "MSB"],
+        primary_pid: 55039,
+        dispatch: cmd_wim_geraetewechsel_beauftragen,
+    },
+    CommandDescriptor {
+        name: "wim.geraetewechsel.bestaetigen",
+        permitted_roles: &["MSB"],
+        primary_pid: 55039,
+        dispatch: cmd_wim_geraetewechsel_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "wim.geraetewechsel.ablehnen",
+        permitted_roles: &["MSB"],
+        primary_pid: 55039,
+        dispatch: cmd_wim_geraetewechsel_ablehnen,
+    },
+    // ── WiM Steuerungsauftrag ─────────────────────────────────────────────────
+    CommandDescriptor {
+        name: "wim.steuerungsauftrag.bestaetigen",
+        permitted_roles: &["MSB"],
+        primary_pid: 55039,
+        dispatch: cmd_wim_steuerungsauftrag_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "wim.steuerungsauftrag.ablehnen",
+        permitted_roles: &["MSB"],
+        primary_pid: 55039,
+        dispatch: cmd_wim_steuerungsauftrag_ablehnen,
+    },
+    // ── MABIS Bilanzkreisabrechnung ────────────────────────────────────────────
+    CommandDescriptor {
+        name: "mabis.abrechnung.einleiten",
+        permitted_roles: &["BKV"],
+        primary_pid: 13003,
+        dispatch: cmd_mabis_abrechnung_einleiten,
+    },
+    CommandDescriptor {
+        name: "mabis.abrechnung.daten-einreichen",
+        permitted_roles: &["BKV"],
+        primary_pid: 13003,
+        dispatch: cmd_mabis_abrechnung_daten_einreichen,
+    },
+    CommandDescriptor {
+        name: "mabis.abrechnung.begleichen",
+        permitted_roles: &["BKV", "ÜNB"],
+        primary_pid: 13003,
+        dispatch: cmd_mabis_abrechnung_begleichen,
+    },
+    // ── IFTSTA status messages (REST replay / manual override) ────────────────
+    CommandDescriptor {
+        name: "gpke.vollzugsmeldung.empfangen",
+        permitted_roles: &["NB", "LFN", "LFA"],
+        primary_pid: 0,
+        dispatch: cmd_gpke_vollzugsmeldung_empfangen,
+    },
+    CommandDescriptor {
+        name: "wim.iftsta.empfangen",
+        permitted_roles: &["NB", "MSB"],
+        primary_pid: 0,
+        dispatch: cmd_wim_iftsta_empfangen,
+    },
+    CommandDescriptor {
+        name: "mabis.iftsta.empfangen",
+        permitted_roles: &["BKV", "NB", "ÜNB", "BIKO"],
+        primary_pid: 0,
+        dispatch: cmd_mabis_iftsta_empfangen,
+    },
+    CommandDescriptor {
+        name: "mabis.datenstatus.empfangen",
+        permitted_roles: &["BKV", "NB", "BIKO"],
+        primary_pid: 0,
+        dispatch: cmd_mabis_datenstatus_empfangen,
+    },
+];
+
 /// Errors from [`validate_command`].
 #[derive(Debug)]
-enum CommandError {
+pub(crate) enum CommandError {
     /// Command name is not in the registry.
     UnknownCommand,
     /// Multi-role command but no `marktrolle` was supplied.
@@ -1626,6 +2589,23 @@ enum CommandError {
     RoleNotPermitted,
     /// The effective role is not in [`CommandsApiState::configured_marktrollen`].
     RoleNotConfigured,
+}
+
+impl std::fmt::Display for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownCommand => f.write_str("unknown_command: command name not in registry"),
+            Self::MarktrolleRequired => {
+                f.write_str("marktrolle_required: multi-role command requires a marktrolle field")
+            }
+            Self::RoleNotPermitted => {
+                f.write_str("role_not_permitted: asserted marktrolle is not valid for this command")
+            }
+            Self::RoleNotConfigured => f.write_str(
+                "role_not_configured: this instance is not configured for that marktrolle",
+            ),
+        }
+    }
 }
 
 /// Resolve and validate the effective Marktrolle for a command.
@@ -1644,77 +2624,15 @@ enum CommandError {
 /// are permitted — every command is rejected with [`CommandError::RoleNotConfigured`].
 ///
 /// Returns the resolved Marktrolle string on success.
-fn validate_command(
+pub(crate) fn validate_command(
     command: &str,
     asserted: Option<&str>,
     configured: &[String],
 ) -> Result<String, CommandError> {
-    // Registry: command → permitted Marktrollen (upper-case).
-    //
-    // Sources:
-    // - BDEW GPKE AHB (BK6-22-024, LFW24)
-    // - BDEW GeLi Gas AHB (BK7)
-    // - BDEW WiM AHB (BK6-18-032)
-    // - BDEW MABIS AHB
-    const REGISTRY: &[(&str, &[&str])] = &[
-        // ── GPKE Lieferbeginn / Lieferende (electricity) ──────────────────────
-        // LF (new supplier) sends Anmeldung to NB — PID 55001
-        ("gpke.lieferbeginn.anmelden", &["LF"]),
-        // NB accepts or rejects Lieferbeginn Anmeldung — PID 55003/55004
-        ("gpke.lieferbeginn.bestaetigen", &["NB"]),
-        // LF (old supplier) sends Lieferende Anmeldung to NB — PID 55002
-        ("gpke.lieferende.anmelden", &["LF"]),
-        // NB accepts or rejects Lieferende Anmeldung — PID 55005/55006
-        ("gpke.lieferende.bestaetigen", &["NB"]),
-        // LF sends Kündigung Lieferbeginn to old LFA — PID 55016
-        ("gpke.kuendigung.anmelden", &["LF"]),
-        // LF confirms Sperrung execution to NB (ORDERS 17115/17117 — no outbound UTILMD PID)
-        ("gpke.sperrung.bestaetigen", &["LF"]),
-        // NB (recipient) settles a Netznutzungsabrechnung INVOIC — PIDs 31001/31002
-        ("gpke.abrechnung.annehmen", &["NB"]),
-        // NB disputes a Netznutzungsabrechnung INVOIC
-        ("gpke.abrechnung.ablehnen", &["NB"]),
-        // ── GeLi Gas Lieferbeginn / Lieferende (gas) ─────────────────────────
-        // LFG (new gas supplier) sends Anmeldung to GNB — PID 44001
-        ("geli.lieferbeginn.anmelden", &["LFG"]),
-        // GNB accepts or rejects gas Lieferbeginn — PID 44003/44004
-        ("geli.lieferbeginn.bestaetigen", &["GNB"]),
-        // LFG sends gas Lieferende Anmeldung to GNB — PID 44002
-        ("geli.lieferende.anmelden", &["LFG"]),
-        // GNB accepts or rejects gas Lieferende — PID 44005/44006
-        ("geli.lieferende.bestaetigen", &["GNB"]),
-        // ── WiM Messstellenbetrieb ───────────────────────────────────────────────
-        // NB or MSB initiates a meter-device change — PIDs 55039, 55042, 55051, 55168
-        ("wim.geraetewechsel.beauftragen", &["NB", "MSB"]),
-        // MSB confirms the physical device swap — PIDs 55039, 55042, 55051, 55168
-        ("wim.geraetewechsel.bestaetigen", &["MSB"]),
-        // ── WiM Steuerungsauftrag (REST Control Measures ──────────────
-        // MSB sends final positive response to NB/LF
-        ("wim.steuerungsauftrag.bestaetigen", &["MSB"]),
-        // MSB sends final negative response to NB/LF
-        ("wim.steuerungsauftrag.ablehnen", &["MSB"]),
-        // ── MABIS Bilanzkreisabrechnung ────────────────────────────────────────
-        // BKV opens a billing period — PID 13001
-        ("mabis.abrechnung.einleiten", &["BKV"]),
-        // BKV submits pre-aggregated meter data — PID 13001
-        ("mabis.abrechnung.daten-einreichen", &["BKV"]),
-        // BKV or ÜNB marks the billing period as settled — PID 13001
-        ("mabis.abrechnung.begleichen", &["BKV", "ÜNB"]),
-        // ── IFTSTA status messages (REST replay / manual override) ────────────
-        // GPKE Vollzugsmeldung received via REST — PIDs 21024–21033
-        ("gpke.vollzugsmeldung.empfangen", &["NB", "LFN", "LFA"]),
-        // WiM IFTSTA status message received via REST — PIDs 21009–21018
-        ("wim.iftsta.empfangen", &["NB", "MSB"]),
-        // MABIS IFTSTA informational status received via REST — PIDs 21000–21003, 21005, 21007
-        ("mabis.iftsta.empfangen", &["BKV", "NB", "ÜNB", "BIKO"]),
-        // MABIS Datenstatus received via REST — PID 21004 (BIKO → BKV/NB)
-        ("mabis.datenstatus.empfangen", &["BKV", "NB", "BIKO"]),
-    ];
-
-    let permitted = REGISTRY
+    let permitted = COMMAND_REGISTRY
         .iter()
-        .find(|(cmd, _)| *cmd == command)
-        .map(|(_, roles)| *roles)
+        .find(|d| d.name == command)
+        .map(|d| d.permitted_roles)
         .ok_or(CommandError::UnknownCommand)?;
 
     // Resolve the effective Marktrolle.
@@ -1740,14 +2658,23 @@ fn validate_command(
     Ok(effective.to_owned())
 }
 
-// ── Bearer token extraction ───────────────────────────────────────────────────
+// ── Primary PID lookup ────────────────────────────────────────────────────────
 
-fn extract_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
-    headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(str::to_owned)
+/// Returns the primary Prüfidentifikator for a command name.
+///
+/// Used to populate the Cedar `CommandResource.pid` attribute so that
+/// operator ABAC policies can restrict specific API keys to specific PIDs.
+/// Returns `0` for commands that carry no single outbound PID (e.g. REST-only
+/// replay sinks or multi-PID ORDERS flows).
+///
+/// Data is read from [`COMMAND_REGISTRY`] so there is no third parallel data
+/// structure to maintain.
+pub(crate) fn command_primary_pid(command: &str) -> u32 {
+    COMMAND_REGISTRY
+        .iter()
+        .find(|d| d.name == command)
+        .map(|d| d.primary_pid)
+        .unwrap_or(0)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1940,15 +2867,185 @@ mod tests {
         assert!(validate_command("gpke.nonexistent.action", None, &roles(&["LF"])).is_err());
     }
 
-    // ── Bearer token extraction ───────────────────────────────────────────────
+    // ── MABIS billing dispatch (F-006) ──────────────────────────────────────
+    //
+    // These tests exercise the full `dispatch_command` path for the three MABIS
+    // billing commands.  Before F-001 was fixed, all three fell through to the
+    // `NotImplemented` catch-all; this module is the regression gate.
 
-    #[test]
-    fn extract_bearer_parses_header() {
-        let mut hm = axum::http::HeaderMap::new();
-        hm.insert(
-            axum::http::header::AUTHORIZATION,
-            axum::http::HeaderValue::from_static("Bearer my-secret-token"),
+    /// Build a minimal `CommandsApiState` backed by an in-memory store.
+    ///
+    /// Uses the same wiring as `main.rs` but with `SlateDbStore::open_in_memory()`
+    /// so no filesystem setup is required.  Cedar keys are omitted — dispatch
+    /// tests call `dispatch_command` directly, bypassing the HTTP auth layer.
+    async fn mabis_dispatch_state(marktrollen: &[&str]) -> CommandsApiState {
+        let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
+            .await
+            .expect("open in-memory SlateDB");
+        let cedar = Arc::new(CedarAuthorizer::new(vec![], None, None).expect("cedar build"));
+        CommandsApiState {
+            tenant_id: TenantId::from_party_id("4033872000022"),
+            sender_party_id: "4033872000022".to_owned(),
+            configured_marktrollen: marktrollen.iter().map(|s| s.to_uppercase()).collect(),
+            max_body_bytes: 1_048_576,
+            snapshot_interval: 100,
+            cedar,
+            snapshot_store: store.as_snapshot_store(),
+            malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
+            maloid_result_cache: MaloIdentResultCache::new(store.clone()),
+            store: Arc::new(store),
+        }
+    }
+
+    /// `mabis.abrechnung.einleiten` must spawn a new billing process.
+    ///
+    /// Regression guard for F-001: before the fix, this command returned
+    /// `DispatchError::NotImplemented` instead of `DispatchOutcome::Spawned`.
+    #[tokio::test]
+    async fn dispatch_mabis_einleiten_spawns_process() {
+        let state = mabis_dispatch_state(&["BKV"]).await;
+        let payload = serde_json::json!({
+            "billing_period": "2025-09",
+            "bkv_id":         "4033872000022",
+            "biko_id":        "10YDE-VE-TRANSMIX",
+            "version":        "vorlaeufig",
+        });
+        let outcome = dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
+            .await
+            .expect("einleiten must succeed");
+        assert!(
+            matches!(outcome, DispatchOutcome::Spawned { .. }),
+            "first einleiten must return Spawned; got: {outcome:?}"
         );
-        assert_eq!(extract_bearer(&hm), Some("my-secret-token".to_owned()));
+    }
+
+    /// Duplicate `einleiten` for the same BKV/period must be idempotent.
+    ///
+    /// The second call returns `Dispatched` (reuses the existing process)
+    /// rather than spawning a second one.
+    #[tokio::test]
+    async fn dispatch_mabis_einleiten_is_idempotent() {
+        let state = mabis_dispatch_state(&["BKV"]).await;
+        let payload = serde_json::json!({
+            "billing_period": "2025-09",
+            "bkv_id":         "4033872000022",
+            "biko_id":        "10YDE-VE-TRANSMIX",
+            "version":        "vorlaeufig",
+        });
+        dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
+            .await
+            .expect("first einleiten");
+        let second = dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
+            .await
+            .expect("second einleiten must be idempotent");
+        assert!(
+            matches!(second, DispatchOutcome::Dispatched { .. }),
+            "duplicate einleiten must return Dispatched; got: {second:?}"
+        );
+    }
+
+    /// `mabis.abrechnung.daten-einreichen` must route to an existing process.
+    ///
+    /// Regression guard for F-001: `daten-einreichen` returned `NotImplemented`
+    /// before the dispatch arm was added.
+    #[tokio::test]
+    async fn dispatch_mabis_daten_einreichen_routes_to_process() {
+        let state = mabis_dispatch_state(&["BKV"]).await;
+        // Seed the process.
+        dispatch_command(
+            &state,
+            "mabis.abrechnung.einleiten",
+            &serde_json::json!({
+                "billing_period": "2025-09",
+                "bkv_id":         "4033872000022",
+                "biko_id":        "10YDE-VE-TRANSMIX",
+                "version":        "vorlaeufig",
+            }),
+        )
+        .await
+        .expect("einleiten");
+        // Send positive Prüfmitteilung.
+        let outcome = dispatch_command(
+            &state,
+            "mabis.abrechnung.daten-einreichen",
+            &serde_json::json!({
+                "bkv_id":         "4033872000022",
+                "billing_period": "2025-09",
+                "reject":         false,
+            }),
+        )
+        .await
+        .expect("daten-einreichen must succeed");
+        assert!(
+            matches!(outcome, DispatchOutcome::Dispatched { .. }),
+            "daten-einreichen must return Dispatched; got: {outcome:?}"
+        );
+    }
+
+    /// `mabis.abrechnung.begleichen` must route Datenstatus to an existing process.
+    ///
+    /// Regression guard for F-001: `begleichen` returned `NotImplemented` before
+    /// the dispatch arm was added.
+    #[tokio::test]
+    async fn dispatch_mabis_begleichen_routes_to_process() {
+        let state = mabis_dispatch_state(&["BKV"]).await;
+        let bkv = "4033872000022";
+        let period = "2025-09";
+        // Seed + advance to PruefmitteilungSent.
+        dispatch_command(
+            &state,
+            "mabis.abrechnung.einleiten",
+            &serde_json::json!({
+                "billing_period": period,
+                "bkv_id":         bkv,
+                "biko_id":        "10YDE-VE-TRANSMIX",
+                "version":        "vorlaeufig",
+            }),
+        )
+        .await
+        .expect("einleiten");
+        dispatch_command(
+            &state,
+            "mabis.abrechnung.daten-einreichen",
+            &serde_json::json!({ "bkv_id": bkv, "billing_period": period, "reject": false }),
+        )
+        .await
+        .expect("daten-einreichen");
+        // Now receive Datenstatus → Settled.
+        let outcome = dispatch_command(
+            &state,
+            "mabis.abrechnung.begleichen",
+            &serde_json::json!({
+                "bkv_id":         bkv,
+                "billing_period": period,
+                "data_status":    "abgerechnete_daten",
+            }),
+        )
+        .await
+        .expect("begleichen must succeed");
+        assert!(
+            matches!(outcome, DispatchOutcome::Dispatched { .. }),
+            "begleichen must return Dispatched; got: {outcome:?}"
+        );
+    }
+
+    /// `mabis.abrechnung.einleiten` with a missing required field must return
+    /// `DispatchError::InvalidPayload`, not `NotImplemented`.
+    #[tokio::test]
+    async fn dispatch_mabis_einleiten_missing_field_returns_invalid_payload() {
+        let state = mabis_dispatch_state(&["BKV"]).await;
+        let payload = serde_json::json!({
+            // "billing_period" intentionally omitted
+            "bkv_id":  "4033872000022",
+            "biko_id": "10YDE-VE-TRANSMIX",
+            "version": "vorlaeufig",
+        });
+        let err = dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
+            .await
+            .expect_err("missing billing_period must return Err");
+        assert!(
+            matches!(err, DispatchError::InvalidPayload(_)),
+            "must be InvalidPayload; got: {err:?}"
+        );
     }
 }

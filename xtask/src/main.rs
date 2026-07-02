@@ -26,6 +26,9 @@ Options for `validate-pruefids`:
   --min-coverage <PCT>  Fail if covered / total PIDs < PCT%. Ratchet gate: set this
                         to the current coverage floor to prevent silent regressions
                         when new PIDs are added without fixtures. Default: 0 (disabled).
+  --json                Emit a machine-readable JSON report to stdout in addition to
+                        the human-readable output (keys: covered, missing, orphaned,
+                        coverage_pct, ok). Each entry in missing has pid and message_type.
   release-diff        Compare two releases of a message-type profile
 
 Options for `generate-fixtures`:
@@ -195,6 +198,7 @@ fn validate_pruefids() {
     let args: Vec<String> = std::env::args().skip(2).collect();
     let message_type_filter = parse_named_arg(&args, "--message-type");
     let strict = args.iter().any(|a| a == "--strict");
+    let json_output = args.iter().any(|a| a == "--json");
     let min_coverage_pct: u32 = args
         .windows(2)
         .find(|w| w[0] == "--min-coverage")
@@ -205,6 +209,7 @@ fn validate_pruefids() {
         message_type_filter.as_deref(),
         strict,
         min_coverage_pct,
+        json_output,
     );
     if !ok {
         std::process::exit(1);

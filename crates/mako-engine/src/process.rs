@@ -787,6 +787,42 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
             .await
     }
 
+    /// Like [`execute_and_enqueue`] but co-persists `deadlines` in the same
+    /// atomic write as events and outbox entries.
+    ///
+    /// On [`SlateDbStore`] this writes events, outbox entries, **and** deadlines
+    /// in a single SSI transaction.  On in-memory test stores the default
+    /// fallback is used: events and outbox are written atomically, deadlines are
+    /// **not** persisted here and must be registered separately.
+    ///
+    /// Use this method for commands that must register a regulatory deadline
+    /// (GPKE 24h APERAK, WiM 5 WT, GeLi Gas / WiM Gas 10 WT, MABIS 1 WT).
+    ///
+    /// [`execute_and_enqueue`]: Process::execute_and_enqueue
+    /// [`SlateDbStore`]: crate::store_slatedb::SlateDbStore
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] on storage or command handling failure.
+    pub async fn execute_and_enqueue_with_deadlines(
+        &self,
+        command: W::Command,
+        deadlines: &[crate::deadline::Deadline],
+    ) -> Result<Vec<EventEnvelope>, EngineError>
+    where
+        S: crate::event_store::AtomicAppend,
+    {
+        let ctx = CommandContext::new(self.tenant_id, self.process_id, self.workflow_id.clone());
+        crate::workflow::execute_command_atomic_with_deadlines::<W, S>(
+            &self.store,
+            &self.stream_id,
+            command,
+            &ctx,
+            deadlines,
+        )
+        .await
+    }
+
     /// Like [`execute_and_enqueue`] but uses a snapshot to accelerate replay.
     ///
     /// Atomically persists events and outbox entries while starting state
