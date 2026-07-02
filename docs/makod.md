@@ -69,7 +69,8 @@ production deployment uses all three.
 cargo run -p makod -- \
   --allow-volatile \
   --http-addr 127.0.0.1:8080 \
-  --tenant-id 9900357000004
+  --tenant-id 9900357000004 \
+  --marktrollen LF
 ```
 
 Without `--allow-volatile`, makod **refuses to start** in volatile mode and
@@ -223,16 +224,18 @@ Azure credentials: `AZURE_STORAGE_ACCOUNT_KEY`, or service-principal via `AZURE_
 | TOML key | Env var | CLI flag | Default | Description |
 |---|---|---|---|---|
 | `tenant_id` | `MAKOD_TENANT_ID` | `--tenant-id` | `"default"` | Operator GLN or opaque ID |
-| `marktrollen` | `MAKOD_MARKTROLLEN` | `--marktrollen` | *(empty — permissive)* | Comma-separated list of Marktrollen this instance is licensed to operate |
+| `marktrollen` | `MAKOD_MARKTROLLEN` | `--marktrollen` | *(required when `--http-addr` is set)* | Marktrollen this instance is authorised to issue commands for (comma-separated) |
 
 Set `tenant_id` to your own 13-digit GLN. All process streams and inbox keys are
 scoped to this identifier.
 
 `marktrollen` declares which market-participant roles this deployment is
-licensed for.  Commands whose effective Marktrolle is not in this list are
-rejected with `422 role_not_configured` before any workflow is touched.
-Leave it empty to run in **permissive mode** (no check — useful in development
-and for deployments that have not yet restricted their role set).
+authorised to issue commands for.  Every command submitted to
+`POST /api/v1/commands` is checked against this list before any workflow is
+touched; commands for unlisted roles are rejected with `422 role_not_configured`.
+This setting is **required** when `--http-addr` is enabled — `makod` refuses
+to start without it to prevent accidentally exposing an unrestricted command
+gateway.
 
 **Typical values:**
 
@@ -290,6 +293,30 @@ without requiring a redeploy.
 
 All REST endpoints are mounted on the `--http-addr` port. `GET /health` is also
 mounted on `--as4-addr` and `--api-webdienste-addr`.
+
+### OpenAPI spec and Swagger UI
+
+The full machine-readable API contract is served at runtime:
+
+| Path | Description |
+|------|-------------|
+| `GET /api/v1/openapi.json` | OpenAPI 3.1 JSON spec — suitable for client generation (openapi-generator, oapi-codegen, etc.) |
+| `GET /api/v1/docs/` | Swagger UI — interactive browser-based API explorer |
+
+Both paths are **public** (no bearer token required). The spec is generated from
+the handler annotations and is always in sync with the running binary — no
+separate maintenance step needed.
+
+```bash
+# Download the spec for client generation
+curl http://localhost:8080/api/v1/openapi.json -o makod-openapi.json
+
+# Open Swagger UI in the browser
+open http://localhost:8080/api/v1/docs/
+```
+
+The bearer token for protected endpoints can be entered directly in Swagger UI
+via the **Authorize** button.
 
 ### ERP command ingest
 
@@ -396,10 +423,8 @@ The engine resolves the effective Marktrolle in two steps:
 
 **Step 2 — Check against `--marktrollen`**
 
-If the instance was started with `--marktrollen`, the resolved effective role
-must appear in that list.  This prevents an LF-licensed deployment from
-accidentally issuing NB commands, and vice versa.  If the list is empty,
-this check is skipped (permissive mode).
+The resolved effective role must appear in `--marktrollen`.  This prevents an
+LF-licensed deployment from accidentally issuing NB commands, and vice versa.
 
 **Error responses:**
 
@@ -455,11 +480,17 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `geli.lieferbeginn.bestaetigen` | `GNB` | GeLi Gas | 44003/44004 | Gas DSO accepts/rejects supply start |
 | `geli.lieferende.anmelden` | `LFG` | GeLi Gas | 44002 | Gas supplier registers supply end |
 | `geli.lieferende.bestaetigen` | `GNB` | GeLi Gas | 44005/44006 | Gas DSO accepts/rejects supply end |
-| `wim.geraetewechsel.beauftragen` | `NB` or `MSB` | WiM | 11001 | Commission a meter-device change |
-| `wim.geraetewechsel.bestaetigen` | `MSB` | WiM | 11001 | MSB confirms physical device swap |
+| `wim.geraetewechsel.beauftragen` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Commission a meter-device change |
+| `wim.geraetewechsel.bestaetigen` | `MSB` | WiM | 55039/55042/55051/55168 | MSB confirms physical device swap |
+| `wim.steuerungsauftrag.bestaetigen` | `MSB` | WiM | — | MSB sends final positive control-measure response |
+| `wim.steuerungsauftrag.ablehnen` | `MSB` | WiM | — | MSB sends final negative control-measure response |
 | `mabis.abrechnung.einleiten` | `BKV` | MABIS | 13003 | Open a balancing-zone billing period |
 | `mabis.abrechnung.daten-einreichen` | `BKV` | MABIS | 13003 | Submit pre-aggregated meter data |
 | `mabis.abrechnung.begleichen` | `BKV` or `ÜNB` | MABIS | 13003 | Mark billing period settled |
+| `gpke.vollzugsmeldung.empfangen` | `NB`/`LFN`/`LFA` | GPKE | 21024–21033 | Vollzugsmeldung received via REST (manual replay) |
+| `wim.iftsta.empfangen` | `NB`/`MSB` | WiM | 21009–21018 | WiM IFTSTA status received via REST (manual replay) |
+| `mabis.iftsta.empfangen` | `BKV`/`NB`/`ÜNB`/`BIKO` | MABIS | 21000–21003, 21005, 21007 | MABIS IFTSTA informational status received via REST |
+| `mabis.datenstatus.empfangen` | `BKV`/`NB`/`BIKO` | MABIS | 21004 | MABIS Datenstatus received via REST (BIKO → BKV/NB) |
 
 Commands with a single Marktrolle never need a `marktrolle` field.
 Commands listing two Marktrollen (`NB`/`MSB`, `BKV`/`ÜNB`) **always** require it.

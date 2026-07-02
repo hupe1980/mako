@@ -232,6 +232,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use tracing::info;
+use utoipa::ToSchema;
 
 use crate::malo_cache::{MaloIdentResultCache, SlateDbMaloCache};
 
@@ -251,12 +252,13 @@ pub struct CommandsApiState {
     pub max_body_bytes: usize,
     /// Marktrollen this instance is licensed and configured for (upper-case).
     ///
-    /// When non-empty, only commands whose effective Marktrolle appears in this
-    /// list are accepted.  Commands for unconfigured roles are rejected with
-    /// `422 role_not_configured`.  Set via `--marktrollen` at startup.
+    /// Marktrollen this instance is authorised to submit commands for.
     ///
-    /// When empty, role configuration checking is skipped (permissive /
-    /// backward-compatible mode).
+    /// Must be non-empty; the engine rejects commands for any role not in this
+    /// list with `422 role_not_configured`.  An empty list means no roles are
+    /// configured and every command is rejected.
+    ///
+    /// Set via `--marktrollen` at startup (e.g. `LF,LFG` for a dual-fuel supplier).
     pub configured_marktrollen: Vec<String>,
     /// When `Some`, every request must supply `Authorization: Bearer <token>`.
     pub optional_token: Option<SecretString>,
@@ -294,11 +296,12 @@ pub struct CommandsApiState {
 /// The ERP explicitly names the MaKo process command it wants to trigger and
 /// its own Marktrolle.  The BO4E object(s) carrying domain data are placed in
 /// `payload` — they are never used for routing.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ErpCommand {
     /// Dotted command name: `<domain>.<prozess>.<aktion>`.
     ///
     /// Examples: `gpke.lieferbeginn.anmelden`, `wim.geraetewechsel.beauftragen`
+    #[schema(example = "gpke.lieferbeginn.anmelden")]
     pub command: String,
 
     /// Marktrolle of the ERP system issuing this command.
@@ -309,6 +312,7 @@ pub struct ErpCommand {
     /// this field is optional — the role is inferred from the command name.
     ///
     /// Examples: `"NB"`, `"LF"`, `"LFG"`, `"GNB"`, `"MSB"`, `"BKV"`, `"ÜNB"`
+    #[schema(example = "LF")]
     pub marktrolle: Option<String>,
 
     /// Command-specific payload.
@@ -331,19 +335,24 @@ pub struct ErpCommand {
     ///
     /// **Never include** `sender_party_id`, `receiver_party_id`, `pruefidentifikator`, or
     /// `message_ref` — these are engine-owned and will be ignored or rejected.
+    #[schema(value_type = Object, example = json!({"malo_id": "10001234567", "lieferbeginn_datum": "2026-10-01"}))]
     pub payload: serde_json::Value,
 }
 
 /// Successful command acceptance response.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct CommandAccepted {
     /// Idempotency key echoed back to the caller.
+    #[schema(example = "01HZX1234567890ABCDEFGHIJK")]
     pub idempotency_key: String,
     /// The command name as received.
+    #[schema(example = "gpke.lieferbeginn.anmelden")]
     pub command: String,
     /// The Marktrolle as received.
+    #[schema(example = "LF")]
     pub marktrolle: String,
     /// Always `"accepted"` for HTTP 202.
+    #[schema(value_type = String, example = "accepted")]
     pub status: &'static str,
 }
 
@@ -360,7 +369,23 @@ pub fn router(state: Arc<CommandsApiState>) -> Router {
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
-async fn handle_command(
+#[utoipa::path(
+    post,
+    path = "/api/v1/commands",
+    tag = "commands",
+    request_body(content = ErpCommand, description = "ERP command envelope", content_type = "application/json"),
+    responses(
+        (status = 202, description = "Command accepted", body = CommandAccepted),
+        (status = 400, description = "Malformed request body"),
+        (status = 401, description = "Missing or invalid bearer token"),
+        (status = 422, description = "Unknown command or missing marktrolle"),
+    ),
+    security(
+        (),
+        ("bearer_token" = [])
+    )
+)]
+pub(crate) async fn handle_command(
     State(state): State<Arc<CommandsApiState>>,
     headers: axum::http::HeaderMap,
     Json(envelope): Json<ErpCommand>,
@@ -1615,8 +1640,8 @@ enum CommandError {
 /// ## Instance configuration
 ///
 /// After resolving the effective role the function checks it against `configured`
-/// (the startup `--marktrollen` list).  If `configured` is empty the check is
-/// skipped (permissive / backward-compatible mode).
+/// (the startup `--marktrollen` list).  An empty `configured` means no roles
+/// are permitted — every command is rejected with [`CommandError::RoleNotConfigured`].
 ///
 /// Returns the resolved Marktrolle string on success.
 fn validate_command(
@@ -1708,8 +1733,7 @@ fn validate_command(
     };
 
     // Cross-check against instance configuration.
-    // Empty configured list → permissive / backward-compatible mode (no check).
-    if !configured.is_empty() && !configured.iter().any(|r| r.as_str() == effective) {
+    if !configured.iter().any(|r| r.as_str() == effective) {
         return Err(CommandError::RoleNotConfigured);
     }
 
@@ -1735,16 +1759,12 @@ mod tests {
     fn roles(r: &[&str]) -> Vec<String> {
         r.iter().map(|s| s.to_string()).collect()
     }
-    /// Permissive mode: no `--marktrollen` configured → skip instance check.
-    fn any() -> Vec<String> {
-        vec![]
-    }
 
     // ── Single-role commands ──────────────────────────────────────────────────
 
     #[test]
     fn single_role_inferred_without_marktrolle() {
-        let role = validate_command("gpke.lieferbeginn.anmelden", None, &any()).unwrap();
+        let role = validate_command("gpke.lieferbeginn.anmelden", None, &roles(&["LF"])).unwrap();
         assert_eq!(role, "LF");
     }
 
@@ -1752,25 +1772,28 @@ mod tests {
     fn single_role_asserted_marktrolle_is_ignored() {
         // For single-role commands the asserted marktrolle is always ignored.
         // An ERP connector that always sends marktrolle should not be rejected.
-        let role = validate_command("gpke.lieferbeginn.anmelden", Some("NB"), &any()).unwrap();
+        let role =
+            validate_command("gpke.lieferbeginn.anmelden", Some("NB"), &roles(&["LF"])).unwrap();
         assert_eq!(role, "LF"); // canonical role, not what ERP asserted
     }
 
     #[test]
     fn nb_role_resolved_for_bestaetigen() {
-        let role = validate_command("gpke.lieferbeginn.bestaetigen", None, &any()).unwrap();
+        let role =
+            validate_command("gpke.lieferbeginn.bestaetigen", None, &roles(&["NB"])).unwrap();
         assert_eq!(role, "NB");
     }
 
     #[test]
     fn gnb_role_resolved_for_gas_bestaetigen() {
-        let role = validate_command("geli.lieferbeginn.bestaetigen", None, &any()).unwrap();
+        let role =
+            validate_command("geli.lieferbeginn.bestaetigen", None, &roles(&["GNB"])).unwrap();
         assert_eq!(role, "GNB");
     }
 
     #[test]
     fn lfg_role_resolved_for_gas_lieferbeginn() {
-        let role = validate_command("geli.lieferbeginn.anmelden", None, &any()).unwrap();
+        let role = validate_command("geli.lieferbeginn.anmelden", None, &roles(&["LFG"])).unwrap();
         assert_eq!(role, "LFG");
     }
 
@@ -1822,23 +1845,44 @@ mod tests {
     #[test]
     fn multi_role_requires_marktrolle() {
         // wim.geraetewechsel.beauftragen → NB or MSB; no marktrolle → err.
-        assert!(validate_command("wim.geraetewechsel.beauftragen", None, &any()).is_err());
+        assert!(validate_command("wim.geraetewechsel.beauftragen", None, &roles(&["NB"])).is_err());
     }
 
     #[test]
     fn nb_may_initiate_geraetewechsel() {
-        assert!(validate_command("wim.geraetewechsel.beauftragen", Some("NB"), &any()).is_ok());
+        assert!(
+            validate_command(
+                "wim.geraetewechsel.beauftragen",
+                Some("NB"),
+                &roles(&["NB"])
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn msb_may_initiate_geraetewechsel() {
-        assert!(validate_command("wim.geraetewechsel.beauftragen", Some("MSB"), &any()).is_ok());
+        assert!(
+            validate_command(
+                "wim.geraetewechsel.beauftragen",
+                Some("MSB"),
+                &roles(&["MSB"])
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn lf_may_not_initiate_geraetewechsel() {
         // LF is not in the permitted set → RoleNotPermitted.
-        assert!(validate_command("wim.geraetewechsel.beauftragen", Some("LF"), &any()).is_err());
+        assert!(
+            validate_command(
+                "wim.geraetewechsel.beauftragen",
+                Some("LF"),
+                &roles(&["LF"])
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1861,11 +1905,11 @@ mod tests {
     fn bkv_single_role_commands_infer_role() {
         // einleiten and daten-einreichen are single-role (BKV only).
         assert_eq!(
-            validate_command("mabis.abrechnung.einleiten", None, &any()).unwrap(),
+            validate_command("mabis.abrechnung.einleiten", None, &roles(&["BKV"])).unwrap(),
             "BKV"
         );
         assert_eq!(
-            validate_command("mabis.abrechnung.daten-einreichen", None, &any()).unwrap(),
+            validate_command("mabis.abrechnung.daten-einreichen", None, &roles(&["BKV"])).unwrap(),
             "BKV"
         );
     }
@@ -1873,9 +1917,13 @@ mod tests {
     #[test]
     fn begleichen_is_multi_role_bkv_and_uenb() {
         // begleichen permits BKV and ÜNB → marktrolle required.
-        assert!(validate_command("mabis.abrechnung.begleichen", Some("BKV"), &any()).is_ok());
-        assert!(validate_command("mabis.abrechnung.begleichen", Some("ÜNB"), &any()).is_ok());
-        assert!(validate_command("mabis.abrechnung.begleichen", None, &any()).is_err());
+        assert!(
+            validate_command("mabis.abrechnung.begleichen", Some("BKV"), &roles(&["BKV"])).is_ok()
+        );
+        assert!(
+            validate_command("mabis.abrechnung.begleichen", Some("ÜNB"), &roles(&["ÜNB"])).is_ok()
+        );
+        assert!(validate_command("mabis.abrechnung.begleichen", None, &roles(&["BKV"])).is_err());
     }
 
     #[test]
@@ -1889,7 +1937,7 @@ mod tests {
 
     #[test]
     fn unknown_command_is_rejected() {
-        assert!(validate_command("gpke.nonexistent.action", None, &any()).is_err());
+        assert!(validate_command("gpke.nonexistent.action", None, &roles(&["LF"])).is_err());
     }
 
     // ── Bearer token extraction ───────────────────────────────────────────────

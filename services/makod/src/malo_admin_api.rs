@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 use tracing::info;
+use utoipa::ToSchema;
 
 use crate::malo_cache::{MaloCacheStats, SlateDbMaloCache};
 
@@ -43,44 +44,62 @@ use crate::malo_cache::{MaloCacheStats, SlateDbMaloCache};
 pub struct MaloAdminState {
     pub cache: SlateDbMaloCache,
     pub optional_token: Option<SecretString>,
+    /// Operator tenant ID (GLN). All cache operations are scoped to this tenant.
+    ///
+    /// When a caller provides `X-Tenant-Id`, it must match this value exactly;
+    /// mismatches are rejected with `403 Forbidden` to prevent cross-tenant data access.
+    pub tenant_id: String,
 }
 
 // ── Request / response types ──────────────────────────────────────────────────
 
 /// Request body for `PUT /admin/malo/{malo_id}`.
-#[derive(Debug, Deserialize)]
+///
+/// The server scopes all operations to its configured operator GLN;
+/// the request body must not include a `tenant_id` — the tenant is
+/// always the operator that holds the bearer token.
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpsertRequest {
-    pub tenant_id: String,
+    /// Full positive MaLo identification result from the UTILMD query process.
+    #[schema(value_type = Object)]
     pub result: MaloIdentResultPositive,
     /// Optional ISO 8601 effective-from date (informational; not enforced).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "2026-10-01")]
     pub valid_from: Option<String>,
-    /// Source tag for audit purposes (e.g. `"erp-sync"`, `"manual"`).
+    /// Source tag for audit trail (e.g. `"erp-sync"`, `"manual"`, `"partin"`).
     #[serde(default)]
+    #[schema(example = "erp-sync")]
     pub source: String,
 }
 
-#[derive(Serialize)]
-struct UpsertResponse {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct UpsertResponse {
+    #[schema(example = "10001234567")]
     malo_id: String,
+    #[schema(example = "2026-10-01T08:00:00Z")]
     updated_at: String,
 }
 
-#[derive(Serialize)]
-struct DeleteResponse {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct DeleteResponse {
+    #[schema(example = "10001234567")]
     malo_id: String,
     deleted: bool,
 }
 
-#[derive(Serialize)]
-struct StatsResponse {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct StatsResponse {
     tenants: Vec<TenantStats>,
 }
 
-#[derive(Serialize)]
-struct TenantStats {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct TenantStats {
+    #[schema(example = "4012345000009")]
     tenant_id: String,
+    #[schema(example = 1234)]
     malo_count: u64,
+    #[schema(example = "2026-10-01T08:00:00Z")]
     last_upsert: Option<String>,
 }
 
@@ -136,7 +155,20 @@ fn iso_now() -> String {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `GET /admin/malo/{malo_id}` — retrieve a cached MaLo record.
-async fn handle_get(
+#[utoipa::path(
+    get,
+    path = "/admin/malo/{malo_id}",
+    tag = "admin",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    responses(
+        (status = 200, description = "MaLo record found"),
+        (status = 401, description = "Missing or invalid bearer token"),
+        (status = 403, description = "Tenant mismatch"),
+        (status = 404, description = "MaLo not found"),
+    ),
+    security((), ("bearer_token" = []))
+)]
+pub(crate) async fn handle_get(
     State(state): State<Arc<MaloAdminState>>,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
@@ -144,9 +176,18 @@ async fn handle_get(
     if !check_auth(&headers, &state.optional_token) {
         return unauthorized();
     }
-    // Tenant is derived from the token's implied identity. For now, a single
-    // default tenant per deployment. Multi-tenant: parse from a header or JWT.
-    let tenant_id = tenant_from_headers(&headers);
+    let tenant_id = if let Some(id) = tenant_from_header(&headers) {
+        if id != state.tenant_id {
+            return (
+                StatusCode::FORBIDDEN,
+                "X-Tenant-Id does not match operator tenant",
+            )
+                .into_response();
+        }
+        id
+    } else {
+        state.tenant_id.clone()
+    };
     match state.cache.get(&tenant_id, &malo_id).await {
         Ok(Some(result)) => Json(result).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -155,7 +196,21 @@ async fn handle_get(
 }
 
 /// `PUT /admin/malo/{malo_id}` — upsert a MaLo record.
-async fn handle_put(
+#[utoipa::path(
+    put,
+    path = "/admin/malo/{malo_id}",
+    tag = "admin",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    request_body(content = UpsertRequest, description = "MaLo record to upsert", content_type = "application/json"),
+    responses(
+        (status = 200, description = "Upserted", body = UpsertResponse),
+        (status = 401, description = "Missing or invalid bearer token"),
+        (status = 403, description = "Tenant mismatch"),
+        (status = 422, description = "malo_id in path does not match maloId in body"),
+    ),
+    security((), ("bearer_token" = []))
+)]
+pub(crate) async fn handle_put(
     State(state): State<Arc<MaloAdminState>>,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
@@ -175,8 +230,8 @@ async fn handle_put(
         )
             .into_response();
     }
+    let tenant_id = state.tenant_id.clone();
     let UpsertRequest {
-        tenant_id,
         result,
         valid_from,
         source,
@@ -201,7 +256,19 @@ async fn handle_put(
 }
 
 /// `DELETE /admin/malo/{malo_id}` — remove a MaLo record.
-async fn handle_delete(
+#[utoipa::path(
+    delete,
+    path = "/admin/malo/{malo_id}",
+    tag = "admin",
+    params(("malo_id" = String, Path, description = "11-digit Marktlokations-ID")),
+    responses(
+        (status = 200, description = "Deletion result", body = DeleteResponse),
+        (status = 401, description = "Missing or invalid bearer token"),
+        (status = 403, description = "Tenant mismatch"),
+    ),
+    security((), ("bearer_token" = []))
+)]
+pub(crate) async fn handle_delete(
     State(state): State<Arc<MaloAdminState>>,
     headers: HeaderMap,
     Path(malo_id): Path<String>,
@@ -209,7 +276,18 @@ async fn handle_delete(
     if !check_auth(&headers, &state.optional_token) {
         return unauthorized();
     }
-    let tenant_id = tenant_from_headers(&headers);
+    let tenant_id = if let Some(id) = tenant_from_header(&headers) {
+        if id != state.tenant_id {
+            return (
+                StatusCode::FORBIDDEN,
+                "X-Tenant-Id does not match operator tenant",
+            )
+                .into_response();
+        }
+        id
+    } else {
+        state.tenant_id.clone()
+    };
     match state.cache.remove(&tenant_id, &malo_id).await {
         Ok(deleted) => Json(DeleteResponse { malo_id, deleted }).into_response(),
         Err(e) => internal_error(e),
@@ -217,7 +295,20 @@ async fn handle_delete(
 }
 
 /// `GET /admin/malo/stats` — per-tenant cache statistics.
-async fn handle_stats(State(state): State<Arc<MaloAdminState>>, headers: HeaderMap) -> Response {
+#[utoipa::path(
+    get,
+    path = "/admin/malo/stats",
+    tag = "admin",
+    responses(
+        (status = 200, description = "Cache statistics", body = StatsResponse),
+        (status = 401, description = "Missing or invalid bearer token"),
+    ),
+    security((), ("bearer_token" = []))
+)]
+pub(crate) async fn handle_stats(
+    State(state): State<Arc<MaloAdminState>>,
+    headers: HeaderMap,
+) -> Response {
     if !check_auth(&headers, &state.optional_token) {
         return unauthorized();
     }
@@ -256,20 +347,18 @@ async fn handle_bulk_not_implemented(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Derive tenant ID from request context.
+/// Extract `X-Tenant-Id` from request headers.
 ///
-/// In a single-tenant deployment the tenant is the operator's own GLN,
-/// configured at startup. For now, use the `X-Tenant-Id` header as a
-/// passthrough; default to `"default"` when absent.
-///
-/// TODO: replace with proper multi-tenant routing (mTLS cert CN or JWT sub).
-fn tenant_from_headers(headers: &HeaderMap) -> String {
+/// Returns `None` when the header is absent or non-UTF8.
+/// When present, callers must validate the value matches the operator's configured
+/// `tenant_id` before use — accepting arbitrary tenant IDs from headers enables
+/// cross-tenant data access.
+fn tenant_from_header(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-tenant-id")
         .or_else(|| headers.get("X-Tenant-Id"))
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("default")
-        .to_owned()
+        .map(ToOwned::to_owned)
 }
 
 fn stats_to_json(s: MaloCacheStats) -> TenantStats {

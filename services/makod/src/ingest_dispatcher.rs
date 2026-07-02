@@ -32,7 +32,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use edi_energy::AnyMessage;
+use edi_energy::{AnyMessage, EdiEnergyMessage as _, ReleaseRegistry};
 use mako_engine::{
     error::EngineError,
     ids::{ProcessId, ProcessIdentity, TenantId},
@@ -49,6 +49,7 @@ use mako_gpke::{
     GpkeLfAnmeldungWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow,
     GpkeSupplierChangeWorkflow,
 };
+use time::OffsetDateTime;
 
 use crate::adapters;
 
@@ -483,14 +484,46 @@ fn extract_malo_from_msg(msg: &AnyMessage) -> String {
 
 /// Detect the BDEW format version to use when spawning a new `WorkflowId`.
 ///
-/// Falls back to the current production format version `FV2025-10-01` because:
+/// Reads the association-assigned release code from UNH element S009 component
+/// DE 0057 (e.g. `"S2.1"`, `"G1.1"`, `"2.8e"`), then resolves the profile active
+/// for that release code today via [`ReleaseRegistry::global`].  The profile's
+/// `valid_from` date is used to build the `FormatVersion` key
+/// (e.g. `"FV2025-10-01"`).
+///
+/// Falls back to `FV2025-10-01` when:
+/// - The message is an `AnyMessage::Unknown` variant (no message type).
+/// - The UNH association code is absent or empty.
+/// - No profile is registered for the `(message_type, release)` pair.
+/// - The profile exists but has no `valid_from` date (legacy undated profile).
+///
+/// The fallback is safe because:
 /// 1. The FV only affects the `WorkflowId` name on the spawned process.
 /// 2. Adapters use `is_known_fv`, which accepts all registered FVs.
 /// 3. A running process keeps its original `WorkflowId` and is never re-versioned.
-///
-/// # TODO
-/// Improve by reading assoc_code from UNH (DE 0057) and mapping to the
-/// correct `FormatVersion` via `edi_energy::registry::ReleaseRegistry`.
-fn detect_format_version(_msg: &AnyMessage) -> FormatVersion {
-    FormatVersion::parse("FV2025-10-01").unwrap_or_else(|_| FormatVersion::new("FV2025-10-01"))
+fn detect_format_version(msg: &AnyMessage) -> FormatVersion {
+    const FALLBACK: &str = "FV2025-10-01";
+    let fallback = || FormatVersion::new(FALLBACK);
+
+    let Some(message_type) = msg.try_message_type() else {
+        return fallback();
+    };
+    let Ok(release) = msg.detect_release() else {
+        return fallback();
+    };
+
+    let today = OffsetDateTime::now_utc().date();
+    let Ok(profile) = ReleaseRegistry::global().profile_on(message_type, release, today) else {
+        return fallback();
+    };
+    let Some(valid_from) = profile.valid_from() else {
+        return fallback();
+    };
+
+    let fv_str = format!(
+        "FV{:04}-{:02}-{:02}",
+        valid_from.year(),
+        valid_from.month() as u8,
+        valid_from.day(),
+    );
+    FormatVersion::parse(&fv_str).unwrap_or_else(|_| fallback())
 }

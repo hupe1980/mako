@@ -184,6 +184,7 @@ MaBiS IFTSTA PIDs are **21000–21005** (21006 does not exist; 21007 belongs to 
 | WiM | **5 Werktage** | `fristen::add_werktage(d, 5, BdewMaKo)` | BK6-24-174 |
 | GeLi Gas | **10 Werktage** | `fristen::add_werktage(d, 10, BdewMaKo)` | BK7-24-01-009 |
 | WiM Gas | **10 Werktage** | `fristen::add_werktage(d, 10, BdewMaKo)` | BK7-24-01-009 |
+| MABIS (Prüfmitteilung) | **1 Werktag** | `fristen::add_werktage(d, 1, BdewMaKo)` | BK6-24-174 §13.8 |
 
 **Saturday = Werktag.** Sunday and public holidays do not count.
 All deadline arithmetic uses **German local time (CET/CEST)**, not UTC.

@@ -57,6 +57,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use tracing::info;
+use utoipa::ToSchema;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -76,43 +77,49 @@ pub struct PartnerAdminState {
 ///
 /// Accepts a full [`PartnerRecord`] as JSON. The `gln` field in the body
 /// must match the `{gln}` path parameter; a mismatch is rejected with `400`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpsertRequest {
+    #[schema(value_type = Object)]
     #[serde(flatten)]
     pub record: PartnerRecord,
 }
 
-#[derive(Serialize)]
-struct PartnerResponse {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct PartnerResponse {
+    #[schema(value_type = Object)]
     #[serde(flatten)]
     record: PartnerRecord,
     updated_at: String,
 }
 
-#[derive(Serialize)]
-struct ListResponse {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct ListResponse {
+    #[schema(value_type = Vec<Object>)]
     partners: Vec<PartnerRecord>,
     count: usize,
 }
 
-#[derive(Serialize)]
-struct DeleteResponse {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct DeleteResponse {
+    #[schema(example = "9904829000001")]
     gln: String,
     deleted: bool,
 }
 
-#[derive(Serialize)]
-struct ImportResponse {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct ImportResponse {
     /// Number of PARTIN records successfully upserted.
+    #[schema(example = 3)]
     upserted: usize,
     /// Number of PARTIN messages that had no extractable GLN.
+    #[schema(example = 0)]
     skipped: usize,
     /// GLNs that were upserted.
     glns: Vec<String>,
 }
 
-#[derive(Serialize)]
-struct ErrorResponse {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct ErrorResponse {
     error: String,
 }
 
@@ -168,7 +175,20 @@ fn internal_error(e: impl std::fmt::Display) -> Response {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `GET /admin/partners` — list all partner records for this tenant.
-async fn handle_list(headers: HeaderMap, State(state): State<Arc<PartnerAdminState>>) -> Response {
+#[utoipa::path(
+    get,
+    path = "/admin/partners",
+    tag = "admin",
+    responses(
+        (status = 200, description = "List of partners", body = ListResponse),
+        (status = 401, description = "Missing or invalid bearer token"),
+    ),
+    security((), ("bearer_token" = []))
+)]
+pub(crate) async fn handle_list(
+    headers: HeaderMap,
+    State(state): State<Arc<PartnerAdminState>>,
+) -> Response {
     if !check_auth(&headers, &state.optional_token) {
         return unauthorized();
     }
@@ -182,7 +202,19 @@ async fn handle_list(headers: HeaderMap, State(state): State<Arc<PartnerAdminSta
 }
 
 /// `GET /admin/partners/{gln}` — retrieve a single partner record.
-async fn handle_get(
+#[utoipa::path(
+    get,
+    path = "/admin/partners/{gln}",
+    tag = "admin",
+    params(("gln" = String, Path, description = "13-digit GLN")),
+    responses(
+        (status = 200, description = "Partner record", body = PartnerResponse),
+        (status = 401, description = "Missing or invalid bearer token"),
+        (status = 404, description = "Partner not found"),
+    ),
+    security((), ("bearer_token" = []))
+)]
+pub(crate) async fn handle_get(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
     Path(gln_str): Path<String>,
@@ -205,7 +237,20 @@ async fn handle_get(
 ///
 /// The `gln` in the path must match `record.gln` in the body; a mismatch is
 /// rejected with `400 Bad Request`.
-async fn handle_put(
+#[utoipa::path(
+    put,
+    path = "/admin/partners/{gln}",
+    tag = "admin",
+    params(("gln" = String, Path, description = "13-digit GLN")),
+    request_body(content = UpsertRequest, content_type = "application/json"),
+    responses(
+        (status = 200, description = "Upserted", body = PartnerResponse),
+        (status = 400, description = "GLN mismatch"),
+        (status = 401, description = "Missing or invalid bearer token"),
+    ),
+    security((), ("bearer_token" = []))
+)]
+pub(crate) async fn handle_put(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
     Path(gln_str): Path<String>,
@@ -245,7 +290,18 @@ async fn handle_put(
 }
 
 /// `DELETE /admin/partners/{gln}` — remove a partner record.
-async fn handle_delete(
+#[utoipa::path(
+    delete,
+    path = "/admin/partners/{gln}",
+    tag = "admin",
+    params(("gln" = String, Path, description = "13-digit GLN")),
+    responses(
+        (status = 200, description = "Deletion result", body = DeleteResponse),
+        (status = 401, description = "Missing or invalid bearer token"),
+    ),
+    security((), ("bearer_token" = []))
+)]
+pub(crate) async fn handle_delete(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
     Path(gln_str): Path<String>,
@@ -280,7 +336,20 @@ async fn handle_delete(
 /// [`PartnerRecord::merge_from_partin`].
 ///
 /// Returns a JSON summary of how many records were upserted/skipped.
-async fn handle_import(
+#[utoipa::path(
+    post,
+    path = "/admin/partners/import",
+    tag = "admin",
+    request_body(content = String, description = "Raw EDIFACT PARTIN interchange", content_type = "text/plain; charset=utf-8"),
+    responses(
+        (status = 200, description = "Import result", body = ImportResponse),
+        (status = 400, description = "Empty body"),
+        (status = 401, description = "Missing or invalid bearer token"),
+        (status = 422, description = "EDIFACT parse error"),
+    ),
+    security((), ("bearer_token" = []))
+)]
+pub(crate) async fn handle_import(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
     body: Bytes,

@@ -30,6 +30,7 @@ use std::sync::Arc;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
 use mako_engine::store_slatedb::{KvNamespace, SlateDbStore};
 use serde::Serialize;
+use utoipa::ToSchema;
 
 /// Namespace for the health-check sentinel key (`hc/ping`).
 const HC: KvNamespace = KvNamespace::new("hc/");
@@ -63,15 +64,18 @@ impl HealthState {
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
-struct HealthResponse {
-    /// `"ok"` when the store is alive; `"degraded"` when the store is closed
-    /// or unreachable.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct HealthResponse {
+    /// `"ok"` when the store is alive; `"degraded"` when the store is unavailable.
+    #[schema(value_type = String, example = "ok")]
     status: &'static str,
     /// `$HOSTNAME-$PID` of the responding `makod` instance.
+    #[schema(example = "mako-prod-01-12345")]
     instance_id: String,
-    /// Present only when `status == "degraded"`. Human-readable reason.
+    /// Present only when `status == "degraded"`. Stable category string — never
+    /// contains internal paths or stack traces.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "store_unavailable")]
     reason: Option<String>,
 }
 
@@ -81,7 +85,18 @@ struct HealthResponse {
 /// - `200 OK`  `{"status":"ok","instance_id":"..."}` — store is alive.
 /// - `503 Service Unavailable`  `{"status":"degraded","instance_id":"...","reason":"..."}`
 ///   — store is closed or unreachable.
-async fn handler(State(state): State<HealthState>) -> (StatusCode, Json<HealthResponse>) {
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "health",
+    responses(
+        (status = 200, description = "Store is alive", body = HealthResponse),
+        (status = 503, description = "Store is unavailable", body = HealthResponse),
+    )
+)]
+pub(crate) async fn handler(
+    State(state): State<HealthState>,
+) -> (StatusCode, Json<HealthResponse>) {
     match state.store.kv_get(HC, "ping").await {
         Ok(_) => (
             StatusCode::OK,

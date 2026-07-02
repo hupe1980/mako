@@ -113,6 +113,7 @@ mod malo_cache;
 mod malo_ident_sender;
 mod metrics_api;
 mod migration_api;
+mod openapi;
 mod partner_api;
 mod projection_worker;
 mod verzeichnisdienst_worker;
@@ -1215,6 +1216,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         let admin_state = Arc::new(malo_admin_api::MaloAdminState {
             cache: malo_cache::SlateDbMaloCache::new(store.clone()),
             optional_token: cli.http_api_token.clone(),
+            tenant_id: cli.tenant_id.to_string(),
         });
         let partner_store = store.as_partner_store();
         let partner_tenant_id = mako_engine::ids::TenantId::from_party_id(&cli.tenant_id);
@@ -1227,6 +1229,13 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             optional_token: cli.http_api_token.clone(),
             platform: Arc::clone(&platform),
         });
+        if cli.marktrollen.is_empty() {
+            anyhow::bail!(
+                "--marktrollen is required: specify the Marktrollen this instance is \
+                 authorised to use (e.g. `--marktrollen LF,LFG`). \
+                 An empty list rejects every command."
+            );
+        }
         let commands_state = Arc::new(commands_api::CommandsApiState {
             tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
             sender_party_id: cli.tenant_id.clone(),
@@ -1253,7 +1262,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             .merge(commands_api::router(commands_state))
             .merge(metrics_api::router(metrics_state))
             .merge(migration_api::router(migration_state))
-            .merge(health::router(health_state.clone()));
+            .merge(health::router(health_state.clone()))
+            .merge(openapi::router());
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| anyhow::anyhow!("HTTP server bind {addr}: {e}"))?;

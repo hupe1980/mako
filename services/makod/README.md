@@ -40,7 +40,8 @@ All three ports are optional and independently enabled via CLI flags or environm
 cargo run -p makod -- \
   --allow-volatile \
   --http-addr 127.0.0.1:8080 \
-  --tenant-id 9900357000004
+  --tenant-id 9900357000004 \
+  --marktrollen LF
 ```
 
 > `--allow-volatile` is required when `--data-dir` is omitted. Without it, `makod` refuses to start and prints an error directing you to set `--data-dir` or pass the flag explicitly. This prevents accidental production deployments without persistent storage.
@@ -100,7 +101,9 @@ Adjust the timeout via `--shutdown-timeout-secs <N>`.
 | `--data-dir <DIR>` | `MAKOD_DATA_DIR` | Persistent SlateDB path. Omit only with `--allow-volatile`. |
 | `--allow-volatile` | `MAKOD_ALLOW_VOLATILE` | Permit in-memory (non-durable) mode. Never use in production. |
 | `--tenant-id <ID>` | `MAKOD_TENANT_ID` | Operator BDEW code / GLN / EIC. |
+| `--marktrollen <ROLES>` | `MAKOD_MARKTROLLEN` | **Required** when `--http-addr` is set. Comma-separated Marktrollen (e.g. `LF,LFG`, `NB,MSB`). An unlisted role is rejected with `422`. |
 | `--http-addr <ADDR>` | `MAKOD_HTTP_ADDR` | Enable HTTP REST API on this address. |
+| `--http-api-token <TOKEN>` | `MAKOD_HTTP_API_TOKEN` | Bearer token protecting all non-health endpoints. Required when `--http-addr` is set. |
 | `--as4-addr <ADDR>` | `MAKOD_AS4_ADDR` | Enable AS4/ebMS3 inbound transport. |
 | `--api-webdienste-addr <ADDR>` | `MAKOD_API_WEBDIENSTE_ADDR` | Enable API-Webdienste Strom port. |
 | `--erp-webhook-url <URL>` | `MAKOD_ERP_WEBHOOK_URL` | CloudEvents 1.0 webhook for ERP integration. |
@@ -110,7 +113,24 @@ Adjust the timeout via `--shutdown-timeout-secs <N>`.
 
 See `makod --help` for the full flag list including object-store backends (S3, GCS, Azure) and AS4 signing keys.
 
-  --erp-webhook-secret "$(cat /run/secrets/makod-hmac)"
+---
+
+## API reference
+
+When `--http-addr` is enabled, the full OpenAPI 3.1 spec and an interactive
+Swagger UI are available at runtime — no separate documentation step required:
+
+| Path | Description |
+|------|-------------|
+| `GET /api/v1/openapi.json` | Machine-readable OpenAPI 3.1 spec |
+| `GET /api/v1/docs/` | Swagger UI — interactive API explorer |
+
+```bash
+# Download spec for client generation
+curl http://localhost:8080/api/v1/openapi.json -o makod-openapi.json
+
+# Open Swagger UI
+open http://localhost:8080/api/v1/docs/
 ```
 
 ---
@@ -120,28 +140,6 @@ See `makod --help` for the full flag list including object-store backends (S3, G
 | Flag | Description |
 |---|---|
 | `slatedb` | Enable SlateDB persistence (required for production). Never enable in library crates. |
-
----
-
-## Health checks
-
-```bash
-curl http://localhost:8080/health  # → {"status":"ok"}
-```
-
-In Kubernetes, point separate liveness/readiness probes at each enabled port. A port that is not enabled has no `/health` route.
-
----
-
-## Shutdown
-
-`makod` drains in-flight store writes before exiting. The timeout defaults to 30 seconds:
-
-| CLI flag | Environment variable | Default |
-|---|---|---|
-| `--shutdown-timeout-secs` | `MAKOD_SHUTDOWN_TIMEOUT_SECS` | `30` |
-
-Increase this for cloud object-store backends (S3/GCS/Azure) that may need longer to flush large write buffers.
 
 ---
 

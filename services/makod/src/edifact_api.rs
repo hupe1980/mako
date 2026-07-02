@@ -71,6 +71,7 @@ use mako_engine::{
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
 use subtle::ConstantTimeEq;
+use utoipa::ToSchema;
 
 // ── Shared state ─────────────────────────────────────────────────────────────
 
@@ -105,30 +106,35 @@ pub struct EdifactApiState {
 
 // ── Response types ────────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct IngestResponse {
     /// Number of messages that were parsed and routed (or had a known PID).
+    #[schema(example = 2)]
     pub accepted: usize,
     /// Number of messages that could not be parsed at all.
+    #[schema(example = 0)]
     pub rejected: usize,
     pub messages: Vec<MessageResult>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct MessageResult {
     /// EDIFACT message type, e.g. `"UTILMD"`, `"MSCONS"`, `"APERAK"`.
     /// `null` when the message type could not be determined (parse error).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "UTILMD")]
     pub message_type: Option<String>,
 
     /// The Prüfidentifikator extracted from the BGM segment, if present.
     /// `null` for message types that carry no PID (e.g. CONTRL).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = 55001)]
     pub pid: Option<u32>,
 
     /// Workflow name from the `PidRouter`, if the PID is registered.
     /// `null` when `pid` is `null` or when the PID is not registered.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "gpke-lieferbeginn")]
     pub workflow: Option<String>,
 
     /// Routing outcome for this message.
@@ -139,7 +145,7 @@ pub struct MessageResult {
     pub error: Option<String>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageStatus {
     /// Parsed and matched to a registered workflow.
@@ -283,7 +289,22 @@ fn is_edifact_content_type(ct: &str) -> bool {
     )
 }
 
-async fn ingest_edifact(
+#[utoipa::path(
+    post,
+    path = "/edifact",
+    tag = "edifact",
+    request_body(content = String, description = "Raw EDIFACT interchange (UNA+UNB…UNZ)", content_type = "application/edifact"),
+    responses(
+        (status = 200, description = "Ingest report", body = IngestResponse),
+        (status = 401, description = "Missing or invalid bearer token"),
+        (status = 415, description = "Unsupported content type"),
+    ),
+    security(
+        (),
+        ("bearer_token" = [])
+    )
+)]
+pub(crate) async fn ingest_edifact(
     State(state): State<Arc<EdifactApiState>>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
