@@ -179,6 +179,16 @@ pub(crate) fn validate_adapter_coverage() {
             "gabi-gas-invoic",
             adapters::gabi_gas_invoic_registry().validate_policy(fc, &known),
         ),
+        // gabi-gas-invoic resume adapters: REMADV 33001 (payment confirmation)
+        // and COMDIS 29001 (payment rejection) — both format-version-sensitive.
+        (
+            "gabi-gas-invoic/remadv",
+            adapters::gabi_gas_remadv_registry().validate_policy(fc, &known),
+        ),
+        (
+            "gabi-gas-invoic/comdis",
+            adapters::gabi_gas_comdis_registry().validate_policy(fc, &known),
+        ),
         // gabi-gas-nomination: DVGW NOMINT/NOMRES adapter (synthetic PIDs 90011/90012/90021/90022).
         (
             "gabi-gas-nomination",

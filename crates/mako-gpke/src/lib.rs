@@ -105,14 +105,14 @@
 //! | 31002 | NN-Rechnung (Netznutzungsabrechnung)          | ✅ Implemented |
 //! | 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo)        | ✅ Implemented |
 //! | 31006 | MMM-Rechnung (selbst ausgestellt)            | ✅ Implemented |
-//! | 31007 | Aggregierte Mehr-/Mindermenge Rechnung       | ✅ Implemented |
-//! | 31008 | Aggregierte Mehr-/Mindermenge Rechnung (SA)  | ✅ Implemented |
 //!
-//! All 6 PIDs use [`GpkeAbrechnungWorkflow`] (workflow name:
+//! All 4 PIDs use [`GpkeAbrechnungWorkflow`] (workflow name:
 //! `"gpke-abrechnung"`). The `pruefidentifikator` stored in
 //! [`abrechnung::AbrechnungData`] lets read-models distinguish variants.
 //! PID 31003 (WiM-Rechnung) belongs to `mako-wim`. PID 31004 (Stornorechnung
 //! WiM Gas) belongs to `mako-wim-gas` (BK7-24-01-009) — not registered here.
+//! PIDs 31007/31008 (Aggreg. MMM-Rechnung NB → MGV, Gas-only) belong to
+//! `mako-gabi-gas` `gabi-gas-invoic` — MGV is a Gas-only market role.
 //! PID 31009 (MSB-Rechnung, multi-domain: GPKE Teil 3 / WiM Strom Teil 1) is
 //! registered by `mako-wim` (`wim-rechnung`) to avoid double-registration;
 //! see `crates/mako-wim/src/rechnung.rs`.

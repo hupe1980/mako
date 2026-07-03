@@ -2407,12 +2407,15 @@ pub fn geli_gas_stornierung_registry() -> AdapterRegistry<GeliGasStornierungWork
     registry
 }
 
-// ── GaBi Gas INVOIC billing (PID 31010 Kapazitätsrechnung) ───────────────────
+// ── GaBi Gas INVOIC billing (PIDs 31010, 31007, 31008) ──────────────────────────────────────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`GaBiGasInvoicWorkflow`].
 ///
 /// Extracts INVOIC fields to construct a [`GaBiGasInvoicCommand::ReceiveInvoic`]
-/// for GaBi Gas billing PID 31010 (Kapazitätsrechnung, FNB/VNB → BKV).
+/// for GaBi Gas billing PIDs:
+/// - **31010** (Kapazitätsrechnung, FNB/VNB → BKV)
+/// - **31007** (Aggreg. MMM-Rechnung Gas, NB → MGV)
+/// - **31008** (Aggreg. MMM-Rechnung Gas selbst ausgestellt, NB → MGV)
 ///
 /// Note: PID 31011 (Rechnung sonstige Leistung / AWH Sperrprozesse Gas, NB → LF)
 /// belongs to GeLi Gas (BK7-24-01-009) and is handled by
@@ -3013,6 +3016,83 @@ pub fn geli_gas_mscons_registry() -> AdapterRegistry<GeliGasMsconsWorkflow> {
                 message_ref,
                 validation_passed,
                 validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GaBi Gas INVOIC — REMADV payment confirmation (PID 33001) ────────────────
+
+/// Build an [`AdapterRegistry`] for REMADV 33001 routed to [`GaBiGasInvoicWorkflow`].
+///
+/// After the GaBi Gas invoice is received and settled (payer side), the payer
+/// sends REMADV 33001 (Zahlungsavis) to confirm payment.  `makod` receives this
+/// as the **invoicer** (FNB/VNB for PID 31010, NB for PIDs 31007/31008) and
+/// resumes the billing process with [`GaBiGasInvoicCommand::ReceiveRemadv`].
+///
+/// **Correlation**: the ingest dispatcher looks up the billing process by the
+/// invoice message-reference key set at spawn time (`extract_malo_from_invoic`).
+/// The REMADV is correlated via the [`extract_invoice_ref_from_remadv`] helper
+/// which reads the `RFF+Z13` back-reference to the original INVOIC.
+///
+/// Regulatory basis: REMADV AHB 1.0, GaBi Gas, BK7.
+#[must_use]
+pub fn gabi_gas_remadv_registry() -> AdapterRegistry<GaBiGasInvoicWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GaBi Gas REMADV adapter".into(),
+                )
+            })?;
+            let AnyMessage::Remadv(r) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GaBi Gas REMADV adapter: expected REMADV message (PID 33001)".into(),
+                ));
+            };
+            Ok(GaBiGasInvoicCommand::ReceiveRemadv {
+                remadv_ref: MessageRef::new(msg.message_ref()),
+                sender: MarktpartnerCode::new(
+                    r.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+            })
+        },
+    ));
+    registry
+}
+
+// ── GaBi Gas INVOIC — COMDIS payment rejection (PID 29001) ───────────────────
+
+/// Build an [`AdapterRegistry`] for COMDIS 29001 routed to [`GaBiGasInvoicWorkflow`].
+///
+/// The invoicer (FNB/VNB or NB) rejects the payer's REMADV via COMDIS 29001
+/// (Ablehnung der Zahlung).  `makod` resumes the billing process with
+/// [`GaBiGasInvoicCommand::ReceiveComdis`].
+///
+/// **Correlation**: same `RFF+Z13` back-reference scheme as the REMADV adapter.
+///
+/// Regulatory basis: COMDIS AHB 1.0, GaBi Gas, BK7.
+#[must_use]
+pub fn gabi_gas_comdis_registry() -> AdapterRegistry<GaBiGasInvoicWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GaBi Gas COMDIS adapter".into(),
+                )
+            })?;
+            let AnyMessage::Comdis(_) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GaBi Gas COMDIS adapter: expected COMDIS message (PID 29001)".into(),
+                ));
+            };
+            Ok(GaBiGasInvoicCommand::ReceiveComdis {
+                comdis_ref: MessageRef::new(msg.message_ref()),
             })
         },
     ));

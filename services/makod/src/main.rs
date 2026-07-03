@@ -78,11 +78,13 @@
 //! makod
 //!   └── EngineContext (SlateDbStore — in-memory by default, local FS via --data-dir)
 //!         ├── GpkeModule    — UTILMD PIDs 55001–55002, 55016 (`gpke-supplier-change`)
-//!         │                   + INVOIC PIDs 31001–31002, 31005–31008 (`gpke-abrechnung`)
+//!         │                   + INVOIC PIDs 31001–31002, 31005–31006 (`gpke-abrechnung`)
 //!         ├── WimModule     — PIDs 55039, 55042, 55051, 55168 (WiM Strom, BK6-24-174)
 //!         ├── GeliGasModule — PIDs 44001–44021 (GeLi Gas; 44022–44024 registered by WimGasModule) + PID 31011 (AWH Rechnung)
 //!         ├── WimGasModule      — PIDs 44022–44024, 44039–44053, 44168–44170, 31003, 31004 (WiM Gas MSB-Wechsel + INVOIC billing)
-//!         ├── GaBiGasModule     — PID 31010 (GaBi Gas Kapazitätsrechnung, BK7-14-020)
+//!         ├── GaBiGasModule     — PIDs 31010/31007/31008 (INVOIC billing, BK7-14-020)
+//!         │                   + PID 33001 (REMADV Zahlungsavis) + PID 29001 (COMDIS Ablehnung)
+//!         │                   + PID 13013 (MSCONS Gas Allokationsliste, `gabi-gas-mmma`)
 //!         ├── MabisModule       — PID 13003 only (MABIS Bilanzkreisabrechnung Strom, MSCONS Summenzeitreihe)
 //!         └── RedispatchModule  — Redispatch 2.0 (§§ 13/13a/14 EnWG); XML routing + IFTSTA PIDs 21037/21038
 //!                                 Only registered when roles include Nb, Unb, or Anb.

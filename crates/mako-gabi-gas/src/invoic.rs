@@ -1,14 +1,17 @@
-//! GaBi Gas INVOIC billing — PID 31010 (Kapazitätsrechnung).
+//! GaBi Gas INVOIC billing — PIDs 31010, 31007, 31008.
 //!
-//! Handles INVOIC-based capacity billing in the GaBi Gas domain where the gas
-//! network operator (FNB/VNB) invoices the balance responsible party (BKV) for
-//! transmission capacity.
+//! Handles INVOIC-based billing in the GaBi Gas domain:
+//! - **Kapazitätsrechnung** (PID 31010): FNB/VNB invoices BKV for transmission capacity
+//! - **Aggreg. MMM-Rechnung Gas** (PID 31007): NB invoices MGV for aggregated Mehr-/Mindermengen
+//! - **Aggreg. MMM-Rechnung Gas selbst ausgestellt** (PID 31008): NB invoices MGV (self-billed)
 //!
 //! # Covered Prüfidentifikatoren (INVOIC AHB / FV2025-10-01, BK7-14-020)
 //!
-//! | PID   | Process                               | Direction   |
-//! |-------|---------------------------------------|-------------|
-//! | 31010 | Kapazitätsrechnung (capacity billing) | FNB/VNB → BKV |
+//! | PID   | Process                                           | Direction   |
+//! |-------|---------------------------------------------------|-------------|
+//! | 31010 | Kapazitätsrechnung (capacity billing)             | FNB/VNB → BKV |
+//! | 31007 | Aggreg. MMM-Rechnung Gas                          | NB → MGV    |
+//! | 31008 | Aggreg. MMM-Rechnung Gas selbst ausgestellt       | NB → MGV    |
 //!
 //! # Not covered here — see `mako-geli-gas`
 //!
@@ -54,11 +57,19 @@ use mako_engine::{
 
 /// GaBi Gas billing Prüfidentifikatoren handled by this workflow (INVOIC AHB).
 ///
-/// | PID   | Name                                         |
-/// |-------|----------------------------------------------|
-/// | 31010 | Kapazitätsrechnung (capacity invoice, FNB/VNB → BKV) |
+/// | PID   | Name                                                              |
+/// |-------|-------------------------------------------------------------------|
+/// | 31010 | Kapazitätsrechnung (capacity invoice, FNB/VNB → BKV)            |
+/// | 31007 | Aggreg. MMM-Rechnung Gas (NB → MGV) — Gas-only, MGV is Gas role  |
+/// | 31008 | Aggreg. MMM-Rechnung Gas selbst ausgestellt (NB → MGV) — Gas-only |
+///
+/// PIDs 31007/31008 were previously misassigned to `mako-gpke`; MGV
+/// (Marktgebietsverantwortlicher) is a Gas-only market role that does not exist
+/// in the Strom domain. Regulatory basis: BK7-14-020 GaBi Gas 2.0.
 pub const GABI_GAS_INVOIC_PIDS: &[u32] = &[
-    31010, // Kapazitätsrechnung (capacity billing)
+    31010, // Kapazitätsrechnung (capacity billing, FNB/VNB → BKV)
+    31007, // Aggreg. MMM-Rechnung Gas (NB → MGV)
+    31008, // Aggreg. MMM-selbst ausgest. Rechnung Gas (NB → MGV)
 ];
 
 /// Workflow key used for PID router registration.
@@ -74,15 +85,20 @@ pub const SETTLEMENT_WINDOW_LABEL: &str = "gabi-gas-invoic-settlement-deadline";
 
 /// REMADV PID for GaBi Gas billing (inbound Zahlungsavis, invoicer role).
 ///
-/// After the FNB/VNB sends INVOIC 31010, the BKV sends back REMADV 33001
-/// to confirm payment.
+/// After a GaBi Gas INVOIC is issued, the recipient sends REMADV 33001 to
+/// confirm payment:
+/// - PID 31010 (Kapazitätsrechnung): BKV sends REMADV to FNB/VNB
+/// - PIDs 31007/31008 (Aggreg. MMM-Rechnung Gas): MGV sends REMADV to NB
 ///
 /// Source: REMADV AHB 1.0, GaBi Gas, BK7.
 pub const GABI_GAS_REMADV_PID: u32 = 33001;
 
-/// COMDIS PID for GaBi Gas billing (inbound Ablehnung REMADV, payer role).
+/// COMDIS PID for GaBi Gas billing (inbound Ablehnung REMADV, invoicer role).
 ///
-/// The invoicer (FNB/VNB) can reject a BKV REMADV via COMDIS 29001.
+/// The invoicer can reject the recipient's REMADV via COMDIS 29001:
+/// - PID 31010: FNB/VNB rejects a BKV REMADV
+/// - PIDs 31007/31008: NB rejects an MGV REMADV
+///
 /// Source: COMDIS AHB 1.0, GaBi Gas, BK7.
 pub const GABI_GAS_COMDIS_ABLEHNUNG_PID: u32 = 29001;
 
@@ -92,7 +108,7 @@ pub const GABI_GAS_COMDIS_ABLEHNUNG_PID: u32 = 29001;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GaBiGasInvoicData {
-    /// BDEW Prüfidentifikator (always 31010 = Kapazitätsrechnung).
+    /// BDEW Prüfidentifikator (31010 = Kapazitätsrechnung; 31007/31008 = Aggreg. MMM-Rechnung Gas).
     pub pruefidentifikator: Pruefidentifikator,
     /// GLN of the invoice issuer (FNB/VNB).
     pub sender: MarktpartnerCode,
@@ -251,7 +267,7 @@ pub enum GaBiGasInvoicCommand {
     /// AHB check found rule violations; the workflow will emit `Rejected` and
     /// enqueue a negative CONTRL.
     ReceiveInvoic {
-        /// BDEW Prüfidentifikator (must be 31010 = Kapazitätsrechnung for this workflow).
+        /// BDEW Prüfidentifikator — must be one of [`GABI_GAS_INVOIC_PIDS`] (31007, 31008, or 31010).
         pid: Pruefidentifikator,
         /// GLN of the sender (FNB/VNB).
         sender: MarktpartnerCode,
@@ -306,10 +322,11 @@ impl CommandPayload for GaBiGasInvoicCommand {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
-/// GaBi Gas INVOIC billing workflow (PID 31010, Kapazitätsrechnung).
+/// GaBi Gas INVOIC billing workflow (PIDs 31010, 31007, 31008).
 ///
-/// Implements the complete BKV-side receive → validate → settle/dispute state
-/// machine for GaBi Gas capacity billing under BK7-14-020 (GaBi Gas 2.0).
+/// Implements the receive → validate → settle/dispute state machine for GaBi
+/// Gas billing (Kapazitätsrechnung and Aggreg. MMM-Rechnung Gas) under
+/// BK7-14-020 (GaBi Gas 2.0).
 ///
 /// # Deadline
 ///
@@ -433,7 +450,7 @@ impl Workflow for GaBiGasInvoicWorkflow {
                 }
                 if !GABI_GAS_INVOIC_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected GaBi Gas INVOIC PID 31010 (Kapazitätsrechnung), got {pid}",
+                        "expected a GaBi Gas INVOIC PID (31007/31008/31010), got {pid}",
                     )));
                 }
                 let mut events = vec![GaBiGasInvoicEvent::InvoicReceived {

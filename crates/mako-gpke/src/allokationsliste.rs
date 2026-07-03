@@ -4,19 +4,27 @@
 //! **bilanzierte Menge** data as defined in the GPKE / MMM (Mehr-/Mindermenge)
 //! process family (BK6-22-024):
 //!
-//! | PID   | Direction | Description |
-//! |-------|-----------|-------------|
-//! | 17110 | LF → NB   | Anforderung Allokationsliste |
-//! | 17114 | ? → NB    | Anforderung der bilanzierten Menge |
-//! | 19110 | NB → LF   | Ablehnung Allokationsliste |
-//! | 19115 | NB → LF   | Ablehnung Anforderung bilanzierte Menge |
+//! | PID   | ⚡ | 🔥 | Direction | Description |
+//! |-------|---|---|-----------|-------------|
+//! | 17110 | — | ✅ | LF → NB   | Anforderung Allokationsliste (Gas-only per ORDERS AHB 1.0; formally belongs to `mako-gabi-gas` `gabi-gas-mmma`) |
+//! | 17114 | ✅ | — | NB → ÜNB  | Anforderung der bilanzierten Menge (Strom-only) |
+//! | 19110 | — | ✅ | NB → LF   | Ablehnung Allokationsliste (Gas-only; formally belongs to `mako-gabi-gas` `gabi-gas-mmma`) |
+//! | 19115 | ✅ | — | NB → LF   | Ablehnung Anforderung bilanzierte Menge (Strom-only) |
 //!
-//! Positive responses (actual data) arrive via **MSCONS** (13013/13014 for Gas,
-//! further MSCONS PIDs for Strom).
+//! > **Note on 17110 / 19110**: These PIDs are Gas-only (⚡=— in ORDERS/ORDRSP AHB 1.0)
+//! > and are owned by `mako-gabi-gas` `gabi-gas-mmma` per the authoritative PID table.
+//! > They are currently also handled in this workflow to avoid breaking the shared
+//! > `gpke-allokationsliste` state machine while the Gas-specific workflow is built out.
+//! > Once `gabi-gas-mmma` implements its full ORDERS/ORDRSP state machine, 17110/19110
+//! > will be removed from this array and routed exclusively via that workflow.
+//!
+//! Positive responses (actual data) arrive via **MSCONS** (13014 for Strom bilanzierte
+//! Menge, further MSCONS PIDs for Strom). PID 13013 (Gas-only Allokationsliste) is
+//! handled by `mako-gabi-gas` `gabi-gas-mmma`.
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW GPKE / MMM Strom und Gas** — BK6-22-024
+//! - **BDEW GPKE / MMM Strom** — BK6-22-024
 
 use mako_engine::{
     error::WorkflowError,
@@ -33,30 +41,32 @@ pub const WORKFLOW_NAME: &str = "gpke-allokationsliste";
 
 /// ORDERS PIDs sent by LF (or other party) to NB requesting allocation data.
 ///
-/// | PID   | Description |
-/// |-------|-------------|
-/// | 17110 | Anforderung Allokationsliste |
-/// | 17114 | Anforderung der bilanzierten Menge |
+/// | PID   | ⚡ | 🔥 | Description |
+/// |-------|---|---|-------------|
+/// | 17110 | — | ✅ | Anforderung Allokationsliste (Gas-only; formally `gabi-gas-mmma`) |
+/// | 17114 | ✅ | — | Anforderung der bilanzierten Menge (Strom-only) |
 pub const ORDERS_ANFRAGE_PIDS: &[u32] = &[17110, 17114];
 
 /// ORDRSP rejection PIDs sent by NB back to LF.
 ///
-/// | PID   | Description |
-/// |-------|-------------|
-/// | 19110 | Ablehnung Allokationsliste |
-/// | 19115 | Ablehnung Anforderung bilanzierte Menge |
+/// | PID   | ⚡ | 🔥 | Description |
+/// |-------|---|---|-------------|
+/// | 19110 | — | ✅ | Ablehnung Allokationsliste (Gas-only; formally `gabi-gas-mmma`) |
+/// | 19115 | ✅ | — | Ablehnung Anforderung bilanzierte Menge (Strom-only) |
 pub const ORDRSP_ABLEHNUNG_PIDS: &[u32] = &[19110, 19115];
 
-/// MSCONS positive-response PIDs (NB sends allocation data to LF).
+/// MSCONS positive-response PIDs (NB sends Strom allocation data to LF).
 ///
 /// These arrive inbound at the LF as the positive answer to ORDERS 17110/17114.
-/// They are **MMM Strom/Gas** PIDs — NOT GeLi Gas (BK7-24-01-009) PIDs.
+/// They are **MMM Strom** PIDs — NOT GeLi Gas (BK7-24-01-009) PIDs.
+///
+/// PID 13013 (Marktlokationsscharfe Allokationsliste Gas, Gas-only) has moved to
+/// `mako-gabi-gas` `gabi-gas-mmma`. Only the Strom side (13014) is registered here.
 ///
 /// | PID   | Description |
 /// |-------|-------------|
-/// | 13013 | Marktlokationsscharfe Allokationsliste Gas (MMMA) |
-/// | 13014 | Marktlokationsscharfe bilanzierte Menge Gas (MMMA) |
-pub const MSCONS_RESPONSE_PIDS: &[u32] = &[13013, 13014];
+/// | 13014 | Marktlokationsscharfe bilanzierte Menge Strom/Gas (MMMA), Strom side |
+pub const MSCONS_RESPONSE_PIDS: &[u32] = &[13014];
 
 /// Deadline label for the allocation-list response window.
 pub const ANTWORT_WINDOW_LABEL: &str = "gpke-allokationsliste-antwort";
@@ -69,7 +79,7 @@ pub const ANTWORT_WINDOW_LABEL: &str = "gpke-allokationsliste-antwort";
 pub enum AllokationslisteEvent {
     /// LF sent an ORDERS allocation-list request.
     AnforderungGesendet {
-        /// ORDERS Prüfidentifikator (17110 or 17114).
+        /// ORDERS Prüfidentifikator (17114 for Strom; 17110 for Gas/shared).
         orders_pid: Pruefidentifikator,
         /// NB GLN.
         nb_gln: MarktpartnerCode,
@@ -80,7 +90,7 @@ pub enum AllokationslisteEvent {
     },
     /// NB rejected the allocation-list request.
     AnforderungAbgelehnt {
-        /// ORDRSP Prüfidentifikator (19110 or 19115).
+        /// ORDRSP Prüfidentifikator (19115 for Strom; 19110 for Gas/shared).
         ordrsp_pid: Pruefidentifikator,
         /// Rejection reason.
         reason: Option<String>,
@@ -199,7 +209,7 @@ impl AllokationslisteState {
 pub enum AllokationslisteCommand {
     /// LF requests an allocation list or billing-basis data.
     SendAnforderung {
-        /// ORDERS PID (17110 or 17114).
+        /// ORDERS PID (17114 for Strom; 17110 for Gas/shared).
         orders_pid: Pruefidentifikator,
         /// NB GLN.
         nb_gln: MarktpartnerCode,
@@ -212,7 +222,7 @@ pub enum AllokationslisteCommand {
     },
     /// NB rejected the request.
     ReceiveAblehnung {
-        /// ORDRSP PID (19110 or 19115).
+        /// ORDRSP PID (19115 for Strom; 19110 for Gas/shared).
         ordrsp_pid: Pruefidentifikator,
         /// Rejection reason.
         reason: Option<String>,

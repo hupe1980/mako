@@ -54,6 +54,7 @@ use mako_gpke::{
     GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow,
 };
 use mako_mabis::MabisClearinglisteWorkflow;
+use mako_gabi_gas::GaBiGasInvoicWorkflow;
 use mako_wim::{
     WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimRechnungWorkflow,
     WimStornierungWorkflow,
@@ -346,7 +347,9 @@ impl EdifactIngestDispatcher {
 
             // ── GPKE Allokationsliste — LF side ──────────────────────────────
             // PIDs 19110/19115: NB rejects the LF's ORDERS request — resume.
-            // PIDs 13013/13014: NB sends MSCONS data (positive response) — resume.
+            // PID 13014: NB sends MSCONS data for Strom bilanzierte Menge — resume.
+            //   Note: PID 13013 (Gas Allokationsliste, Gas-only) is registered by
+            //   GaBiGasModule → "gabi-gas-mmma" and handled in that arm below.
             //
             // Note: PIDs 17110/17114 (LF → NB ORDERS request) are spawned by the
             // ERP (via CommandAPI), not by inbound EDIFACT at the LF. They are
@@ -364,7 +367,7 @@ impl EdifactIngestDispatcher {
                     )
                     .await
                 }
-                13013 | 13014 => {
+                13014 => {
                     let cmd =
                         adapters::gpke_allokationsliste_mscons_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
@@ -883,6 +886,88 @@ impl EdifactIngestDispatcher {
                 }),
             },
 
+            // ── GaBi Gas INVOIC billing (PIDs 31010, 31007, 31008) ───────────
+            // PIDs 31010/31007/31008: inbound INVOIC (payer receives) — spawn.
+            // PID 33001 (REMADV): payment confirmation from payer — resume.
+            // PID 29001 (COMDIS): payment rejection by invoicer — resume.
+            //
+            // Regulatory basis: BK7-14-020 (GaBi Gas 2.0).
+            // Settlement window: no statutory deadline in BK7-14-020;
+            // 10 Werktage applied by analogy with Gas process norms.
+            "gabi-gas-invoic" => match pid {
+                31010 | 31007 | 31008 => {
+                    let cmd = adapters::gabi_gas_invoic_registry().dispatch(raw, &fv)?;
+                    let invoice_ref = extract_malo_from_invoic(msg);
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        10,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<GaBiGasInvoicWorkflow>(
+                        &invoice_ref,
+                        "gabi-gas-invoic",
+                        cmd,
+                        &fv,
+                        Some((mako_gabi_gas::INVOIC_SETTLEMENT_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                33001 => {
+                    // REMADV — payer confirms payment; invoicer (us) resumes process.
+                    // Correlation: RFF+Z13 back-reference to original INVOIC message_ref.
+                    let cmd = adapters::gabi_gas_remadv_registry().dispatch(raw, &fv)?;
+                    let invoice_ref = extract_invoice_ref_from_remadv(msg);
+                    self.resume_by_malo::<GaBiGasInvoicWorkflow>(
+                        &invoice_ref,
+                        "gabi-gas-invoic",
+                        cmd,
+                    )
+                    .await
+                }
+                29001 => {
+                    // COMDIS — invoicer rejects payer's REMADV.
+                    // Correlation: RFF+Z13 back-reference to original INVOIC message_ref.
+                    let cmd = adapters::gabi_gas_comdis_registry().dispatch(raw, &fv)?;
+                    let invoice_ref = extract_invoice_ref_from_comdis(msg);
+                    self.resume_by_malo::<GaBiGasInvoicWorkflow>(
+                        &invoice_ref,
+                        "gabi-gas-invoic",
+                        cmd,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gabi-gas-invoic",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── GaBi Gas MMMA — Gas Allokationsliste MSCONS (PID 13013) ──────
+            // PID 13013: NB delivers Gas MMM Allokationsliste to LF — resume the
+            // GpkeAllokationslisteWorkflow process spawned when LF sent ORDERS 17110.
+            //
+            // The PidRouter routes 13013 to "gabi-gas-mmma" (registered by
+            // GaBiGasModule).  Since gabi-gas-mmma has no independent workflow
+            // implementation yet, we delegate the MSCONS delivery to the existing
+            // GpkeAllokationslisteWorkflow using the same resume path as PID 13014.
+            "gabi-gas-mmma" => match pid {
+                13013 => {
+                    let cmd =
+                        adapters::gpke_allokationsliste_mscons_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.resume_by_malo::<GpkeAllokationslisteWorkflow>(
+                        &malo_id,
+                        "gpke-allokationsliste",
+                        cmd,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gabi-gas-mmma",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
             // ── All other workflows: not yet in Phase 2 dispatch table ────────
             //
             // WARNING: messages routed here are dead-lettered. Any workflow name
@@ -1179,6 +1264,40 @@ pub fn extract_melo_from_utilmd(msg: &AnyMessage) -> String {
         .and_then(|t| t.ide.object_id.as_deref())
         .unwrap_or("")
         .to_owned()
+}
+
+/// Extract the original invoice message-reference from a REMADV for process correlation.
+///
+/// BDEW convention: the REMADV carries `RFF+Z13:<original_message_ref>` where the
+/// reference value is the UNH message-reference (DE 0062) of the originating INVOIC.
+/// This matches the key used when spawning the billing process (`extract_malo_from_invoic`).
+///
+/// Falls back to the REMADV's own `msg.message_ref()` when the RFF+Z13 is absent.
+pub fn extract_invoice_ref_from_remadv(msg: &AnyMessage) -> String {
+    let AnyMessage::Remadv(r) = msg else {
+        return msg.message_ref().to_owned();
+    };
+    r.segments()
+        .iter()
+        .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some("Z13"))
+        .and_then(|s| s.component_str(0, 1))
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| msg.message_ref().to_owned())
+}
+
+/// Extract the original invoice message-reference from a COMDIS for process correlation.
+///
+/// Same `RFF+Z13` convention as [`extract_invoice_ref_from_remadv`].
+pub fn extract_invoice_ref_from_comdis(msg: &AnyMessage) -> String {
+    let AnyMessage::Comdis(c) = msg else {
+        return msg.message_ref().to_owned();
+    };
+    c.segments()
+        .iter()
+        .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some("Z13"))
+        .and_then(|s| s.component_str(0, 1))
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| msg.message_ref().to_owned())
 }
 
 /// Detect the BDEW format version to use when spawning a new `WorkflowId`.

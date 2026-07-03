@@ -224,17 +224,18 @@ fn is_gas(msg: &AnyMessage) -> bool {
 
 /// Gas-only PID ranges (cannot appear in Strom interchanges).
 ///
-/// | Range        | Sparte | Message type                    |
-/// |--------------|--------|---------------------------------|
-/// | 44001–44053  | Gas    | UTILMD G (GeLi Gas, WiM Gas)    |
-/// | 44168–44170  | Gas    | UTILMD G (WiM Gas extensions)   |
-/// | 23005, 23009 | Gas    | INSRPT Gas-only variants        |
-/// | 31003, 31004 | Gas    | INVOIC WiM Gas                  |
-/// | 31010, 31011 | Gas    | INVOIC GaBi Gas / GeLi Gas AWH  |
+/// | Range        | Sparte | Message type                             |
+/// |--------------|--------|------------------------------------------|
+/// | 44001–44053  | Gas    | UTILMD G (GeLi Gas, WiM Gas)             |
+/// | 44168–44170  | Gas    | UTILMD G (WiM Gas extensions)            |
+/// | 23005, 23009 | Gas    | INSRPT Gas-only variants                 |
+/// | 31003, 31004 | Gas    | INVOIC WiM Gas                           |
+/// | 31007, 31008 | Gas    | INVOIC GaBi Gas Aggreg. MMM-Rechnung (NB → MGV) |
+/// | 31010, 31011 | Gas    | INVOIC GaBi Gas / GeLi Gas AWH           |
 fn is_unambiguous_gas_pid(pid: u32) -> bool {
     matches!(
         pid,
-        44001..=44053 | 44168..=44170 | 23005 | 23009 | 31003 | 31004 | 31010 | 31011
+        44001..=44053 | 44168..=44170 | 23005 | 23009 | 31003 | 31004 | 31007 | 31008 | 31010 | 31011
     )
 }
 
@@ -249,8 +250,8 @@ fn is_strom_only_pid(pid: u32) -> bool {
         55001..=55557
             // GPKE IFTSTA Strom (Vollzugsmeldung)
             | 21024..=21028 | 21033 | 21035 | 21045 | 21047
-            // Strom INVOIC (GPKE, WiM Strom)
-            | 31001 | 31002 | 31005..=31009
+            // Strom INVOIC (GPKE, WiM Strom) — 31007/31008 are Gas-only (BK7-14-020)
+            | 31001 | 31002 | 31005 | 31006 | 31009
             // MaBiS MSCONS / IFTSTA
             | 13003 | 21000..=21005
     )
@@ -295,6 +296,8 @@ mod tests {
         assert!(is_unambiguous_gas_pid(23009));
         assert!(is_unambiguous_gas_pid(31003));
         assert!(is_unambiguous_gas_pid(31004));
+        assert!(is_unambiguous_gas_pid(31007));
+        assert!(is_unambiguous_gas_pid(31008));
         assert!(is_unambiguous_gas_pid(31010));
         assert!(is_unambiguous_gas_pid(31011));
     }
@@ -307,6 +310,20 @@ mod tests {
         assert!(!is_unambiguous_gas_pid(13003));
         assert!(!is_unambiguous_gas_pid(31001));
         assert!(!is_unambiguous_gas_pid(31002));
+    }
+
+    #[test]
+    fn strom_only_excludes_gas_invoic_pids() {
+        // 31007 and 31008 are Gas-only (BK7-14-020, Aggreg. MMM-Rechnung Gas, NB → MGV)
+        // They must NOT appear in is_strom_only_pid even though 31005–31009 is a natural range.
+        assert!(!is_strom_only_pid(31007));
+        assert!(!is_strom_only_pid(31008));
+        // Confirm Strom INVOIC PIDs are still classified correctly.
+        assert!(is_strom_only_pid(31001));
+        assert!(is_strom_only_pid(31002));
+        assert!(is_strom_only_pid(31005));
+        assert!(is_strom_only_pid(31006));
+        assert!(is_strom_only_pid(31009));
     }
 
     #[test]

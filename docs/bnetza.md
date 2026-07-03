@@ -53,7 +53,8 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 - Konfigurationseinrichtung Rollenzuordnung MSB (ORDERS/ORDRSP, PIDs 17134–17135, 19001–19002) — via BK6-22-024 GPKE Teil 4
 - Abschlagsrechnung / NN-Rechnung Netz (INVOIC, PIDs 31001–31002)
 - Stornorechnung Netz (INVOIC, PID 31004)
-- **Mehr-/Mindermengen Strom** (INVOIC, PIDs 31005–31008) — see Mitteilung Nr. 72 below
+- **Mehr-/Mindermengen Strom** (INVOIC, PIDs 31005–31006) — see Mitteilung Nr. 72 below
+- **Mehr-/Mindermengen Gas** (INVOIC, PIDs 31007–31008; NB → MGV, Gas-only) — belongs to GaBi Gas (`mako-gabi-gas`)
 
 **APERAK Frist (GPKE):** **24 Stunden** (wall-clock hours) — festgelegt in BK6-22-024
 
@@ -74,8 +75,9 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 | 4 | Einführung Änderungsmanagement, Umsetzung INVOIC/REMADV, GPKE-Auslegungsgrundsätze | 28.11.2007 |
 
 > **Key boundary:** Mitteilung Nr. 72 (05.02.2026) explicitly refers to „Mehr-/Mindermengenpreises **Strom**"
-> only, confirming that PIDs 31005–31008 are electricity-only GPKE processes.
-> Gas MMM billing is not part of GPKE.
+> only, confirming that PIDs 31005–31006 are Strom GPKE processes.
+> PIDs 31007–31008 (Aggreg. MMM-Rechnung, NB → MGV) are Gas-only (MGV is a Gas-domain role)
+> and belong to GaBi Gas (`mako-gabi-gas` `gabi-gas-invoic`), not GPKE.
 
 ---
 
@@ -260,11 +262,11 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 
 | Domain | BK | Crate | INVOIC billing? |
 |---|---|---|---|
-| GPKE Lieferantenwechsel + MMM Strom | BK6 | `mako-gpke` | PIDs 31001–31002, 31004–31008 ✅ |
+| GPKE Lieferantenwechsel + MMM Strom | BK6 | `mako-gpke` | PIDs 31001–31002, 31004–31006 ✅ |
 | MaBiS Bilanzkreisabrechnung | BK6 | `mako-mabis` | PID 13003 (MSCONS) |
 | WiM Messwesen / MSB | BK6 | `mako-wim` | PIDs 31003, 31009 ✅ |
 | GeLi Gas Lieferantenwechsel + AWH Sperrprozesse | BK7 | `mako-geli-gas` | PID 31011 (Rechnung sonstige Leistung, NB → LF) ✅ |
-| GaBi Gas Bilanzierung / MMM Gas | BK7 | `mako-gabi-gas` | PID 31010 (Kapazitätsrechnung) ✅ |
+| GaBi Gas Bilanzierung / MMM Gas | BK7 | `mako-gabi-gas` | PIDs 31007–31008 (Aggreg. MMM, NB → MGV) + PID 31010 (Kapazitätsrechnung) ✅ |
 | Netzbetreiberwechsel Strom | BK6 | `mako-nbw` | ❌ PARTIN only |
 
 > INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) is billed by the GNB/VNB

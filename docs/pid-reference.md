@@ -408,7 +408,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 17102 | Anfrage von Werten | GPKE Teil 4 / GeLi Gas 2.0 | LF → MSB · LF → NB | — | ✅ | ✅ | ✅ | ✅ | — |
 | 17103 | Anfrage Brennwert / Zustandszahl | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-datenabruf` |
 | 17104 | Anfrage vom MSB Gas | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-geli-gas` `geli-gas-datenabruf` |
-| 17110 | Anforderung der Allokationsliste | MMM Strom/Gas | LF → NB | — | — | ✅ | ✅ | ✅ | — |
+| 17110 | Anforderung der Allokationsliste | MMM Strom/Gas | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-mmma` |
 | 17113 | Reklamation von Werten | WiM Gas / WiM Strom Teil 2 | LF → NB · NB → MSB · MSB → MSB · LF → MSB · ÜNB → MSB | — | ✅ | ✅ | ✅ | ✅ | — |
 | 17114 | Anforderung bilanzierte Menge | MMM Strom/Gas | NB → ÜNB | — | ✅ | — | ✅ | ⚠️ | — |
 | 17115 | Sperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` (Strom inbound NB-role) · `mako-geli-gas` `geli-gas-sperrung-lf` (Gas outbound LF-role) · `mako-geli-gas` `geli-gas-sperrung-nb` (Gas inbound GNB-role) |
@@ -464,7 +464,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 19102 | Ablehnung der Anfrage Werte | GPKE Teil 4 / GeLi Gas 2.0 | MSB → LF · NB → LF | 17102 | ✅ | ✅ | ✅ | ✅ | — |
 | 19103 | Ablehnung der Anfrage Brennwert / Zustandszahl | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-datenabruf` |
 | 19104 | Ablehnung der Anfrage vom MSB Gas | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-geli-gas` `geli-gas-datenabruf` |
-| 19110 | Ablehnung der Anforderung Allokationsliste | MMM Strom/Gas | NB → LF | — | — | ✅ | ✅ | ✅ | — |
+| 19110 | Ablehnung der Anforderung Allokationsliste | MMM Strom/Gas | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-mmma` |
 | 19114 | Ablehnung Reklamation | WiM Gas / WiM Strom Teil 2 | NB → LF · MSB → NB · MSB → MSB · MSB → LF · MSB → ÜNB | — | ✅ | ✅ | ✅ | ✅ | — |
 | 19115 | Ablehnung der Anforderung bilanzierte Menge | MMM Strom/Gas | ÜNB → NB | — | ✅ | — | ✅ | ⚠️ | — |
 | 19116 | Bestätigung Sperr-/Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung-lf` · `mako-geli-gas` `geli-gas-sperrung-lf` |
@@ -548,7 +548,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 13010 | normiertes Profil | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-billing` |
 | 13011 | Profilschar | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-billing` |
 | 13012 | TEP vergh. Werte Referenzmessung | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-billing` |
-| 13013 | Marktlokationsscharfe Allokationsliste Gas (MMMA) | MMM Strom/Gas | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-gpke` `gpke-allokationsliste` |
+| 13013 | Marktlokationsscharfe Allokationsliste Gas (MMMA) | MMM Strom/Gas | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-mmma` |
 | 13014 | Marktlokationsscharfe bilanzierte Menge Strom/Gas (MMMA) | MMM Strom/Gas | ÜNB → NB · NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-allokationsliste` |
 | 13015 | Arbeit Leistungsmax. Kalenderjahr vor Lieferbeginn | GPKE Teil 2 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
 | 13016 | Energiemenge u. Leistungsmax. (Strom) | GPKE Teil 2 / GPKE Teil 4 / WiM Strom Teil 2 | NB → LF · MSB → LF · MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
@@ -574,8 +574,8 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 31004 | Stornorechnung | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | MSBA → NB · MSBA → MSBN · NB → TK/KN · NB → LF · NB → MGV · MSB → NB · MSB → LF · MSBA → MSBN/gMSB · MSB → ESA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-invoic` |
 | 31005 | MMM-Rechnung | MMM Strom/Gas | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 | 31006 | MMM-selbst ausgest. Rechnung | MMM Strom/Gas | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
-| 31007 | Aggreg. MMM-Rechnung | MMM Strom/Gas | NB → MGV | — | — | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
-| 31008 | Aggreg. MMM-selbst ausgest. Rechnung | MMM Strom/Gas | NB → MGV | — | — | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
+| 31007 | Aggreg. MMM-Rechnung | MMM Strom/Gas | NB → MGV | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-invoic` |
+| 31008 | Aggreg. MMM-selbst ausgest. Rechnung | MMM Strom/Gas | NB → MGV | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-invoic` |
 | 31009 | MSB-Rechnung | GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | MSB → NB · MSB → LF · MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnung` |
 | 31010 | Kapazitätsrechnung | Kapazitätsabrechnung | NB → KN | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-invoic` |
 | 31011 | Rechnung sonstige Leistung | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-sperrprozesse-invoic` |

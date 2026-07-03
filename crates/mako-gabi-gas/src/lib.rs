@@ -6,6 +6,8 @@
 //! | Process | PIDs | Messages |
 //! |---|---|---|
 //! | Kapazitätsrechnung (capacity billing) | 31010 | INVOIC |
+//! | Aggreg. MMM-Rechnung Gas (NB → MGV) | 31007, 31008 | INVOIC |
+//! | Allokationsliste Gas (MSCONS data delivery) | 13013 | MSCONS |
 //!
 //! # Note on PID 31011
 //!
@@ -64,7 +66,7 @@
 #![allow(clippy::map_unwrap_or)]
 #![allow(clippy::items_after_statements)]
 
-/// GaBi Gas INVOIC billing workflow — PIDs 31010 and 31011.
+/// GaBi Gas INVOIC billing workflow — PIDs 31010, 31007, 31008.
 pub mod invoic;
 
 /// GaBi Gas Nomination workflow — NOMINT/NOMRES (BKV ↔ FNB/MGV, PIDs 90011/90012/90021/90022).
@@ -78,6 +80,9 @@ pub mod schedl;
 
 /// GaBi Gas IMBNOT workflow — imbalance notification receive-and-record (PID 90041).
 pub mod imbnot;
+
+/// GaBi Gas MMM Allokationsliste Gas — Mehr-/Mindermengen data delivery (MSCONS 13013).
+pub mod mmma;
 
 /// GaBi Gas TRANOT workflow — transport notification receive-and-record (PID 90051).
 pub mod tranot;
@@ -119,6 +124,10 @@ pub use tranot::{
     TransportNotificationData, TransportNotificationEvent, TransportNotificationState,
     TransportNotificationType, WORKFLOW_NAME as TRANOT_WORKFLOW_NAME,
 };
+pub use mmma::{
+    MMMA_MSCONS_PIDS, ORDERS_ANFRAGE_PID as MMMA_ORDERS_ANFRAGE_PID,
+    ORDRSP_ABLEHNUNG_PID as MMMA_ORDRSP_ABLEHNUNG_PID, WORKFLOW_NAME as MMMA_WORKFLOW_NAME,
+};
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
 
@@ -128,9 +137,14 @@ pub use tranot::{
 /// [`mako_engine::pid_router::PidRouter`] at engine startup:
 ///
 /// **INVOIC billing (BDEW / edi-energy):**
-/// - PID 31010 → `"gabi-gas-invoic"` ([`GaBiGasInvoicWorkflow`], Kapazitätsrechnung)
+/// - PID 31010 → `"gabi-gas-invoic"` ([`GaBiGasInvoicWorkflow`], Kapazitätsrechnung, FNB/VNB → BKV)
+/// - PID 31007 → `"gabi-gas-invoic"` (Aggreg. MMM-Rechnung Gas, NB → MGV; Gas-only)
+/// - PID 31008 → `"gabi-gas-invoic"` (Aggreg. MMM-selbst ausgest. Rechnung Gas, NB → MGV; Gas-only)
 /// - PID 33001 → `"gabi-gas-invoic"` (REMADV Zahlungsavis, invoicer role)
 /// - PID 29001 → `"gabi-gas-invoic"` (COMDIS Ablehnung REMADV, payer role)
+///
+/// **MMM Allokationsliste Gas (MSCONS):**
+/// - PID 13013 → `"gabi-gas-mmma"` (Marktlokationsscharfe Allokationsliste Gas, NB → LF; Gas-only)
 ///
 /// **Nomination — NOMINT/NOMRES (DVGW synthetic PIDs):**
 /// - PID 90011 → `"gabi-gas-nomination"` (NOMINT BKV → FNB)
@@ -174,6 +188,7 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
             "gabi-gas-imbnot",
             "gabi-gas-tranot",
             "gabi-gas-delivery-order",
+            "gabi-gas-mmma",
         ]
     }
 
@@ -221,6 +236,15 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
         // DELORD / DELRES delivery order cycle (DVGW, 90061/90062).
         for &pid in delord::DELIVERY_ORDER_PIDS {
             router.register(pid, "gabi-gas-delivery-order");
+        }
+
+        // MMM Allokationsliste Gas — MSCONS 13013 (NB → LF, Gas-only).
+        //
+        // PID 13013 was previously misassigned to `mako-gpke` `gpke-allokationsliste`.
+        // MGV (Marktgebietsverantwortlicher) and the Gas MMM process are Gas-domain only.
+        // PIDs 17110/19110 (ORDERS/ORDRSP) are informational; see `mmma` module doc.
+        for &pid in mmma::MMMA_MSCONS_PIDS {
+            router.register(pid, "gabi-gas-mmma");
         }
     }
 }

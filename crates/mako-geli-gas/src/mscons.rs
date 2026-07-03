@@ -13,7 +13,8 @@
 //! | 13009 | Messwert Energiemenge Gas                      | NB/MSB → LF | GeLi Gas 2.0 / WiM Gas |
 //!
 //! PIDs **13013** and **13014** are MMM Strom/Gas (Allokationsliste) and are **not** in scope
-//! for GeLi Gas 2.0. They belong to `mako-gpke` `gpke-allokationsliste`.
+//! for GeLi Gas 2.0. PID 13013 (Gas-only) belongs to `mako-gabi-gas` `gabi-gas-mmma`.
+//! PID 13014 (Strom side) belongs to `mako-gpke` `gpke-allokationsliste`.
 //!
 //! ## Regulatory basis
 //!
@@ -42,7 +43,8 @@ pub const WORKFLOW_NAME: &str = "geli-gas-mscons";
 /// | 13009 | Messwert Energiemenge Gas                 | NB/MSB | GeLi Gas 2.0 / WiM Gas |
 ///
 /// PIDs 13013/13014 are **MMM Strom/Gas** (Allokationsliste), NOT GeLi Gas.
-/// They belong to `mako-gpke` `gpke-allokationsliste` (BK6-22-024 §8).
+/// PID 13013 (Gas-only) belongs to `mako-gabi-gas` `gabi-gas-mmma`.
+/// PID 13014 (cross-commodity Strom side) belongs to `mako-gpke` `gpke-allokationsliste`.
 pub const MSCONS_PIDS: &[u32] = &[13002, 13007, 13008, 13009];
 
 // ── Domain data ───────────────────────────────────────────────────────────────

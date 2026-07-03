@@ -11,16 +11,14 @@
 //! | 31002 | NN-Rechnung (Netznutzungsabrechnung)                 | 2.8e ✅     |
 //! | 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo)               | 2.8e ✅     |
 //! | 31006 | MMM-Rechnung (selbst ausgestellt)                    | 2.8e ✅     |
-//! | 31007 | Aggregierte Mehr-/Mindermenge Rechnung               | 2.8e ✅     |
-//! | 31008 | Aggregierte Mehr-/Mindermenge Rechnung (SA)          | 2.8e ✅     |
 //!
-//! All 6 PIDs share the same INVOIC-receive → settle/dispute state machine.
+//! All 4 PIDs share the same INVOIC-receive → settle/dispute state machine.
 //! PID 31003 (WiM-Rechnung) belongs to `mako-wim-gas`; not listed here.
 //! PID 31009 (MSB-Rechnung, multi-domain: GPKE Teil 3 / WiM Strom Teil 1) belongs to
 //! `mako-wim` (`wim-rechnung` workflow) per `crates/mako-wim/src/rechnung.rs`. It must
 //! not be registered here to avoid double-registration with `WIM_INVOIC_PIDS`.
-//! The stored `pruefidentifikator` field in [`AbrechnungData`] lets read-models
-//! distinguish process variants.
+//! PIDs 31007/31008 (Aggreg. MMM-Rechnung Gas, NB → MGV, Gas-only) belong to
+//! `mako-gabi-gas` `gabi-gas-invoic` — MGV is a Gas-only role; not registered here.
 //!
 //! # Regulatory basis
 //!
@@ -50,6 +48,8 @@ use mako_engine::{
 /// PID 31004 (Stornorechnung WiM Gas) belongs to `mako-wim-gas` per `docs/pid-reference.md`.
 /// PID 31009 (MSB-Rechnung, multi-domain: GPKE Teil 3 / WiM Strom Teil 1) belongs to
 /// `mako-wim` to avoid double-registration; see `crates/mako-wim/src/rechnung.rs`.
+/// PIDs 31007/31008 (Aggreg. MMM-Rechnung NB → MGV, Gas-only) belong to
+/// `mako-gabi-gas` `gabi-gas-invoic` — MGV is a Gas-only role.
 ///
 /// | PID   | Name                                         |
 /// |-------|----------------------------------------------|
@@ -57,9 +57,7 @@ use mako_engine::{
 /// | 31002 | NN-Rechnung (Netznutzungsabrechnung)          |
 /// | 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo)        |
 /// | 31006 | MMM-Rechnung (selbst ausgestellt)            |
-/// | 31007 | Aggregierte Mehr-/Mindermenge Rechnung       |
-/// | 31008 | Aggregierte Mehr-/Mindermenge Rechnung (SA)  |
-pub const INVOIC_PIDS: &[u32] = &[31001, 31002, 31005, 31006, 31007, 31008];
+pub const INVOIC_PIDS: &[u32] = &[31001, 31002, 31005, 31006];
 
 /// REMADV Prüfidentifikatoren handled by this workflow (inbound payment advice).
 ///
@@ -368,7 +366,7 @@ impl CommandPayload for AbrechnungCommand {}
 
 /// GPKE billing workflow for INVOIC-based processes.
 ///
-/// Covers Netznutzungsabrechnung (31001/31002), Mehr-/Mindermengen (31005–31008)
+/// Covers Netznutzungsabrechnung (31001/31002), Mehr-/Mindermengen (31005/31006)
 /// and MSB-Rechnung (31009) processes. These are the GPKE-domain billing PIDs
 /// in INVOIC AHB 2.8e / 1.0. PID 31004 belongs to `mako-wim-gas`.
 ///
@@ -515,7 +513,7 @@ impl Workflow for GpkeAbrechnungWorkflow {
                 }
                 if !INVOIC_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected a GPKE INVOIC PID (31001/31002/31005–31008), got {pid}",
+                        "expected a GPKE INVOIC PID (31001/31002/31005/31006), got {pid}",
                     )));
                 }
                 let mut events = vec![AbrechnungEvent::InvoicReceived {
@@ -582,7 +580,7 @@ impl Workflow for GpkeAbrechnungWorkflow {
                 }
                 if !INVOIC_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected a GPKE INVOIC PID (31001/31002/31005–31008), got {pid}",
+                        "expected a GPKE INVOIC PID (31001/31002/31005/31006), got {pid}",
                     )));
                 }
                 Ok(vec![AbrechnungEvent::InvoicSent {
