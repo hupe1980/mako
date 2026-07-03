@@ -687,6 +687,10 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         ))
                     })?;
 
+                // Clone before move for APERAK emission in the validation-failed path.
+                let sender_gln = sender.clone();
+                let receiver_gln = receiver.clone();
+
                 let mut events = vec![GasSupplierChangeEvent::Initiated {
                     variant,
                     sender,
@@ -699,16 +703,35 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 }];
                 if validation_passed {
                     events.push(GasSupplierChangeEvent::ValidationPassed { message_ref });
+                    Ok(WorkflowOutput::events(events))
                 } else {
+                    let reason = if validation_errors.is_empty() {
+                        "AHB validation failed".to_owned()
+                    } else {
+                        validation_errors.join("; ")
+                    };
                     events.push(GasSupplierChangeEvent::Rejected {
-                        reason: if validation_errors.is_empty() {
-                            "AHB validation failed".to_owned()
-                        } else {
-                            validation_errors.join("; ")
-                        },
+                        reason: reason.clone(),
                     });
+                    // F-035: APERAK BGM+313 (Verarbeitbarkeitsfehlermeldung) — mandatory
+                    // per APERAK AHB 1.0 §2.1.1 when AHB validation fails.
+                    // GeLi Gas deadline: 10 Werktage (BK7-24-01-009).
+                    let outbox = vec![
+                        PendingOutbox::new(
+                            "APERAK",
+                            sender_gln.as_str(),
+                            serde_json::json!({
+                                "sender":     receiver_gln.as_str(),
+                                "receiver":   sender_gln.as_str(),
+                                "pid":        29001_u32,
+                                "error_code": "Z29",
+                                "reason":     reason,
+                            }),
+                        )
+                        .caused_by(0),
+                    ];
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 }
-                Ok(WorkflowOutput::events(events))
             }
 
             GasSupplierChangeCommand::SendAntwort {

@@ -1,3 +1,5 @@
+//! Error types for Redispatch 2.0 XML.
+
 /// All errors that can occur when parsing, validating, or serializing
 /// Redispatch 2.0 XML documents.
 #[derive(Debug, thiserror::Error)]
@@ -46,7 +48,9 @@ pub enum RedispatchXmlError {
     /// The XML namespace URI on the root element does not match the expected value.
     #[error("namespace mismatch: expected {expected}, found {found}")]
     NamespaceMismatch {
+        /// Expected XML namespace URI for this document type.
         expected: &'static str,
+        /// Actual namespace URI found on the root element.
         found: String,
     },
 

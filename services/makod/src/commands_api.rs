@@ -357,6 +357,13 @@ pub struct CommandAccepted {
     /// Always `"accepted"` for HTTP 202.
     #[schema(value_type = String, example = "accepted")]
     pub status: &'static str,
+    /// UUID of the process that was spawned or updated.
+    ///
+    /// Matches the `subject` field of the corresponding CloudEvent sent to the
+    /// ERP webhook. Use this to correlate the command response with the
+    /// `de.mako.process.initiated` (or other) event the ERP received.
+    #[schema(example = "3181967a-02d1-4d0e-9105-0cc46f3b25c9")]
+    pub process_id: String,
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -503,7 +510,7 @@ pub(crate) async fn handle_command(
     );
 
     // ── Dispatch to workflow ──────────────────────────────────────────────────
-    match dispatch_command(&state, &cmd_lower, &envelope.payload).await {
+    let resolved_process_id = match dispatch_command(&state, &cmd_lower, &envelope.payload).await {
         Ok(DispatchOutcome::Spawned { process_id }) => {
             info!(
                 idempotency_key = %idempotency_key,
@@ -513,6 +520,7 @@ pub(crate) async fn handle_command(
             );
             // Track per-family process initiation for the Prometheus metrics endpoint.
             EngineMetrics::global().process_initiated("gpke");
+            process_id
         }
         Ok(DispatchOutcome::Dispatched { process_id }) => {
             info!(
@@ -521,6 +529,7 @@ pub(crate) async fn handle_command(
                 process_id      = %process_id,
                 "ERP command dispatched — existing process updated",
             );
+            process_id
         }
         Err(DispatchError::MaloNotFound(malo_id)) => {
             return (
@@ -645,7 +654,7 @@ pub(crate) async fn handle_command(
             )
                 .into_response();
         }
-    }
+    };
 
     (
         StatusCode::ACCEPTED,
@@ -654,6 +663,7 @@ pub(crate) async fn handle_command(
             command: envelope.command,
             marktrolle: effective_marktrolle,
             status: "accepted",
+            process_id: resolved_process_id.to_string(),
         }),
     )
         .into_response()
@@ -662,7 +672,7 @@ pub(crate) async fn handle_command(
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
-pub(crate) enum DispatchOutcome {
+pub enum DispatchOutcome {
     Spawned {
         process_id: ProcessId,
     },
@@ -673,7 +683,7 @@ pub(crate) enum DispatchOutcome {
 }
 
 #[derive(Debug)]
-pub(crate) enum DispatchError {
+pub enum DispatchError {
     /// Required `malo_id` not in the cache — ERP must seed it first.
     MaloNotFound(String),
     /// Payload is missing a required field or carries a malformed value.
@@ -831,14 +841,7 @@ fn cmd_gpke_lieferbeginn_bestaetigen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(async move {
-        let pid = p
-            .get("response_pid")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as u32)
-            .unwrap_or(55003);
-        dispatch_lf_antwort(s, p, true, pid).await
-    })
+    Box::pin(dispatch_supplier_change_antwort(s, p, true))
 }
 
 fn cmd_gpke_lieferbeginn_ablehnen<'a>(
@@ -847,14 +850,7 @@ fn cmd_gpke_lieferbeginn_ablehnen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(async move {
-        let pid = p
-            .get("response_pid")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as u32)
-            .unwrap_or(55004);
-        dispatch_lf_antwort(s, p, false, pid).await
-    })
+    Box::pin(dispatch_supplier_change_antwort(s, p, false))
 }
 
 fn cmd_gpke_lieferende_bestaetigen<'a>(
@@ -863,14 +859,7 @@ fn cmd_gpke_lieferende_bestaetigen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(async move {
-        let pid = p
-            .get("response_pid")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as u32)
-            .unwrap_or(55005);
-        dispatch_lf_antwort(s, p, true, pid).await
-    })
+    Box::pin(dispatch_supplier_change_antwort(s, p, true))
 }
 
 fn cmd_gpke_lieferende_ablehnen<'a>(
@@ -879,14 +868,7 @@ fn cmd_gpke_lieferende_ablehnen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(async move {
-        let pid = p
-            .get("response_pid")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as u32)
-            .unwrap_or(55006);
-        dispatch_lf_antwort(s, p, false, pid).await
-    })
+    Box::pin(dispatch_supplier_change_antwort(s, p, false))
 }
 
 fn cmd_gpke_lieferbeginn_aktivieren<'a>(
@@ -1160,11 +1142,11 @@ fn cmd_mabis_datenstatus_empfangen<'a>(
 
 /// Map an ERP command to a workflow command and dispatch it.
 ///
-/// Looks up the command name in [`COMMAND_REGISTRY`] and calls the registered
-/// [`CommandDescriptor::dispatch`] function.  If the command is unknown the
+/// Looks up the command name in `COMMAND_REGISTRY` and calls the registered
+/// `CommandDescriptor::dispatch` function.  If the command is unknown the
 /// caller should have already rejected it in [`validate_command`]; this path
 /// returns `NotImplemented` as a safety net.
-pub(crate) async fn dispatch_command(
+pub async fn dispatch_command(
     state: &CommandsApiState,
     command: &str,
     payload: &serde_json::Value,
@@ -1619,16 +1601,22 @@ async fn dispatch_gpke_zuordnung_lf_antwort(
     .await
 }
 
-/// Dispatch a GPKE NB→LF Antwort (Bestätigung or Ablehnung) to an existing
-/// `GpkeLfAnmeldungWorkflow` process looked up by `malo_id`.
+/// Dispatch the NB ERP decision (Bestätigung or Ablehnung) to an existing
+/// `GpkeSupplierChangeWorkflow` process looked up by `malo_id`.
 ///
 /// Called for `gpke.lieferbeginn.bestaetigen`, `gpke.lieferbeginn.ablehnen`,
 /// `gpke.lieferende.bestaetigen`, `gpke.lieferende.ablehnen`.
-async fn dispatch_lf_antwort(
+///
+/// ## Required payload fields
+///
+/// | Field | Type | Notes |
+/// |---|---|---|
+/// | `malo_id` | string | Marktlokations-ID identifying the NB-side process |
+/// | `reason` | string (opt.) | Rejection reason — required when `accepted = false` |
+async fn dispatch_supplier_change_antwort(
     state: &CommandsApiState,
     payload: &serde_json::Value,
     accepted: bool,
-    response_pid_code: u32,
 ) -> Result<DispatchOutcome, DispatchError> {
     let malo_id = payload
         .get("malo_id")
@@ -1641,24 +1629,14 @@ async fn dispatch_lf_antwort(
         .and_then(|v| v.as_str())
         .map(str::to_owned);
 
-    let response_ref = payload
-        .get("response_ref")
-        .and_then(|v| v.as_str())
-        .map(MessageRef::new)
-        .unwrap_or_else(|| MessageRef::new(""));
-
-    let response_pid =
-        Pruefidentifikator::new(response_pid_code).map_err(DispatchError::InvalidPayload)?;
-
-    dispatch_to_process::<GpkeLfAnmeldungWorkflow, _>(
+    dispatch_to_process::<GpkeSupplierChangeWorkflow, _>(
         state,
         &malo_id,
-        mako_gpke::lf_anmeldung::WORKFLOW_NAME,
-        || LfAnmeldungCommand::HandleAntwort {
-            response_pid,
+        "gpke-supplier-change",
+        move || SupplierChangeCommand::SendAntwort {
             accepted,
-            reason: reason.clone(),
-            response_ref: response_ref.clone(),
+            reason,
+            obligations: vec![],
         },
     )
     .await
@@ -2580,7 +2558,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
 
 /// Errors from [`validate_command`].
 #[derive(Debug)]
-pub(crate) enum CommandError {
+pub enum CommandError {
     /// Command name is not in the registry.
     UnknownCommand,
     /// Multi-role command but no `marktrolle` was supplied.
@@ -2624,7 +2602,7 @@ impl std::fmt::Display for CommandError {
 /// are permitted — every command is rejected with [`CommandError::RoleNotConfigured`].
 ///
 /// Returns the resolved Marktrolle string on success.
-pub(crate) fn validate_command(
+pub fn validate_command(
     command: &str,
     asserted: Option<&str>,
     configured: &[String],

@@ -53,19 +53,19 @@ use mako_gabi_gas::{
     GaBiGasNominationWorkflow, NominationCommand, NomresAcceptance,
 };
 use mako_geli_gas::{
-    GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand,
-    GeliGasSperrprozesseInvoicCommand, GeliGasSperrprozesseInvoicWorkflow,
+    GasMsconsDatenCommand, GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand,
+    GeliGasMsconsWorkflow, GeliGasSperrprozesseInvoicCommand, GeliGasSperrprozesseInvoicWorkflow,
     GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow, GeliGasStornierungCommand,
     GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
 };
 use mako_gpke::{
-    AbrechnungCommand, AnfrageBestellungCommand, AnkuendigungZuordnungLfCommand,
-    GpkeAbrechnungWorkflow, GpkeAnfrageBestellungWorkflow, GpkeAnkuendigungZuordnungLfWorkflow,
-    GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow,
-    GpkeNeuanlageWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand,
-    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow, KonfigurationCommand, LfAbmeldungCommand,
-    LfAnmeldungCommand, NeuanlageCommand, SperrungCommand, SperrungLfCommand,
-    SupplierChangeCommand,
+    AbrechnungCommand, AllokationslisteCommand, AnfrageBestellungCommand,
+    AnkuendigungZuordnungLfCommand, GpkeAbrechnungWorkflow, GpkeAllokationslisteWorkflow,
+    GpkeAnfrageBestellungWorkflow, GpkeAnkuendigungZuordnungLfWorkflow, GpkeKonfigurationWorkflow,
+    GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow,
+    GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand, GpkeStornierungWorkflow,
+    GpkeSupplierChangeWorkflow, KonfigurationCommand, LfAbmeldungCommand, LfAnmeldungCommand,
+    NeuanlageCommand, SperrungCommand, SperrungLfCommand, SupplierChangeCommand,
 };
 use mako_mabis::{
     BillingCommand, ClearinglisteCommand, DataStatus, IFTSTA_DATENSTATUS_PID, MabisBillingWorkflow,
@@ -233,6 +233,11 @@ pub fn gpke_sperrung_registry() -> AdapterRegistry<GpkeSperrungWorkflow> {
                 sender: mako_engine::types::MarktpartnerCode::new(
                     o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
                 ),
+                receiver: mako_engine::types::MarktpartnerCode::new(
+                    o.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
                 location_id,
                 document_date: o
                     .dtm()
@@ -309,6 +314,11 @@ pub fn geli_gas_sperrung_nb_registry() -> AdapterRegistry<GeliGasSperrungNbWorkf
                 pid,
                 sender: mako_engine::types::MarktpartnerCode::new(
                     o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: mako_engine::types::MarktpartnerCode::new(
+                    o.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
                 ),
                 location_id,
                 document_date: o
@@ -2851,6 +2861,158 @@ pub fn geli_gas_sperrung_lf_registry() -> AdapterRegistry<GeliGasSperrungLfWorkf
                     o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
                 ),
                 reason: None,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE Allokationsliste — ORDRSP rejection (PIDs 19110/19115) ───────────────
+
+/// Build an [`AdapterRegistry`] for [`GpkeAllokationslisteWorkflow`] (ORDRSP path).
+///
+/// Handles inbound ORDRSP 19110 (Ablehnung Allokationsliste) and 19115
+/// (Ablehnung Anforderung bilanzierte Menge) from the NB. Both are negative
+/// responses to an LF-initiated ORDERS 17110/17114 request.
+///
+/// **Regulatory basis**: GPKE / MMM Strom/Gas (BK6-22-024 §8).
+#[must_use]
+pub fn gpke_allokationsliste_ordrsp_registry() -> AdapterRegistry<GpkeAllokationslisteWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Allokationsliste ORDRSP adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Ordrsp(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Allokationsliste ORDRSP adapter: expected ORDRSP message (PIDs 19110/19115)".into(),
+                ));
+            };
+
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Allokationsliste ORDRSP adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            // Extract optional rejection reason from FTX free-text segment.
+            let reason: Option<String> = o.ftx().first().and_then(|f| f.text.clone());
+
+            Ok(AllokationslisteCommand::ReceiveAblehnung {
+                ordrsp_pid: pid,
+                reason,
+                message_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE Allokationsliste — MSCONS data delivery (PIDs 13013/13014) ───────────
+
+/// Build an [`AdapterRegistry`] for [`GpkeAllokationslisteWorkflow`] (MSCONS path).
+///
+/// Handles inbound MSCONS 13013 (Marktlokationsscharfe Allokationsliste Gas)
+/// and 13014 (Marktlokationsscharfe bilanzierte Menge) — the positive response
+/// to an LF-initiated ORDERS 17110/17114 request.
+///
+/// These are **MMM Strom/Gas** PIDs, NOT GeLi Gas. They arrive at the LF
+/// after the NB fulfils the allocation-list request.
+///
+/// **Regulatory basis**: GPKE / MMM Strom/Gas (BK6-22-024 §8).
+#[must_use]
+pub fn gpke_allokationsliste_mscons_registry() -> AdapterRegistry<GpkeAllokationslisteWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Allokationsliste MSCONS adapter".into(),
+                )
+            })?;
+
+            // Accept MSCONS 13013/13014 only.
+            if !matches!(msg, AnyMessage::Mscons(_)) {
+                return Err(EngineError::Deserialization(
+                    "GPKE Allokationsliste MSCONS adapter: expected MSCONS message (PIDs 13013/13014)".into(),
+                ));
+            }
+
+            Ok(AllokationslisteCommand::NotifyDatenGeliefert {
+                message_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
+// ── GeLi Gas MSCONS data delivery (PIDs 13002, 13007–13009) ─────────────────
+
+/// Build an [`AdapterRegistry`] for [`GeliGasMsconsWorkflow`].
+///
+/// Handles inbound Gas MSCONS metered-data messages from NB/MSB to LFG.
+/// PIDs 13002, 13007–13009 (GeLi Gas 2.0 + WiM Gas data delivery per GeLi Gas 3.0).
+///
+/// Note: PIDs 13013/13014 (MMM Strom/Gas Allokationsliste) are NOT handled here —
+/// they belong to `gpke-allokationsliste` and have their own registry.
+#[must_use]
+pub fn geli_gas_mscons_registry() -> AdapterRegistry<GeliGasMsconsWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas MSCONS adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Mscons(m) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas MSCONS adapter: expected MSCONS message (PIDs 13002, 13007–13009)"
+                        .into(),
+                ));
+            };
+
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas MSCONS adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+
+            let sender = mako_engine::types::MarktpartnerCode::new(
+                m.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+            );
+            let message_ref = mako_engine::types::MessageRef::new(msg.message_ref());
+
+            Ok(GasMsconsDatenCommand::ReceiveMscons {
+                pid,
+                sender,
+                message_ref,
+                validation_passed,
+                validation_errors,
             })
         },
     ));

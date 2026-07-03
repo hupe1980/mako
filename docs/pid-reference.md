@@ -538,18 +538,18 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
-| 13002 | Zählerstand (Gas) | WiM Gas / NBW Leitfaden / GeLi Gas 2.0 | MSBN → NB · MSBA → NB · NBA → NBN · LF → NB · MSB → NB · NB → MSB · NB → LF | 17102 | — | ✅ | ✅ | ✅ | — |
+| 13002 | Zählerstand (Gas) | WiM Gas / NBW Leitfaden / GeLi Gas 2.0 | MSBN → NB · MSBA → NB · NBA → NBN · LF → NB · MSB → NB · NB → MSB · NB → LF | 17102 | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-mscons` |
 | 13003 | Summenzeitreihe | MaBiS / AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → NB · NB → BIKO · NB → LF · ÜNB → LF · ÜNB → BIKO · BIKO → NB · BIKO → BKV · BIKO → ÜNB · ÜNB → NB · ÜNB → BKV · NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-billing` |
 | 13005 | EEG-Überf.-ZR | EEG-Überf.-ZR | BIKO → BKV · BIKO → NB | — | ✅ | — | ✅ | ✅ | — |
 | 13006 | Messwert Storno | WiM Gas / GPKE Teil 2 / WiM Strom Teil 2 / GeLi Gas 2.0 | MSBA → NB · MSBN → NB · NB → LF · MSB → MSB · MSB → NB · MSB → LF · MSB → ÜNB · LF → MSB · NB → MSB | — | ✅ | ✅ | ✅ | ✅ | — |
-| 13007 | Gasbeschaffenheit | KoV BK-Mgmt Gas / WiM Gas / GeLi Gas 2.0 | NB → LF · NB → NB · MSBN → NB · MSBA → NB · MSB → NB | — | — | ✅ | ✅ | ✅ | — |
-| 13008 | Lastgang (Gas) | KoV BK-Mgmt Gas / WiM Gas / Marktkommunikation mit der Sicherheitsplattform Gas / GeLi Gas 2.0 | NB → NB · MSBN → NB · MSBA → NB · NB → LF · NB → MSB · NB → MGV · MSB → NB | 17102 | — | ✅ | ✅ | ✅ | — |
-| 13009 | Energiemenge (Gas) | WiM Gas / GeLi Gas 2.0 | MSBN → NB · MSBA → NB · MSB → NB · NB → MSB · NB → LF | 17102 | — | ✅ | ✅ | ✅ | — |
+| 13007 | Gasbeschaffenheit | KoV BK-Mgmt Gas / WiM Gas / GeLi Gas 2.0 | NB → LF · NB → NB · MSBN → NB · MSBA → NB · MSB → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-mscons` |
+| 13008 | Lastgang (Gas) | KoV BK-Mgmt Gas / WiM Gas / Marktkommunikation mit der Sicherheitsplattform Gas / GeLi Gas 2.0 | NB → NB · MSBN → NB · MSBA → NB · NB → LF · NB → MSB · NB → MGV · MSB → NB | 17102 | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-mscons` |
+| 13009 | Energiemenge (Gas) | WiM Gas / GeLi Gas 2.0 | MSBN → NB · MSBA → NB · MSB → NB · NB → MSB · NB → LF | 17102 | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-mscons` |
 | 13010 | normiertes Profil | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-billing` |
 | 13011 | Profilschar | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-billing` |
 | 13012 | TEP vergh. Werte Referenzmessung | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-billing` |
-| 13013 | Marktlokationsscharfe Allokationsliste Gas (MMMA) | MMM Strom/Gas | NB → LF | — | — | ✅ | ✅ | ✅ | — |
-| 13014 | Marktlokationsscharfe bilanzierte Menge Strom/Gas (MMMA) | MMM Strom/Gas | ÜNB → NB · NB → LF | — | ✅ | ✅ | ✅ | ✅ | — |
+| 13013 | Marktlokationsscharfe Allokationsliste Gas (MMMA) | MMM Strom/Gas | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-gpke` `gpke-allokationsliste` |
+| 13014 | Marktlokationsscharfe bilanzierte Menge Strom/Gas (MMMA) | MMM Strom/Gas | ÜNB → NB · NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-allokationsliste` |
 | 13015 | Arbeit Leistungsmax. Kalenderjahr vor Lieferbeginn | GPKE Teil 2 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
 | 13016 | Energiemenge u. Leistungsmax. (Strom) | GPKE Teil 2 / GPKE Teil 4 / WiM Strom Teil 2 | NB → LF · MSB → LF · MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
 | 13017 | Zählerstand (Strom) | HKN-R (NB↔UBA) / GPKE Teil 4 / WiM Strom Teil 1 / WiM Strom Teil 2 | NB → HKN-R · MSB → LF · MSBN → MSBA · MSBA → MSBN · MSB → MSB · MSB → NB · LF → MSB · NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |

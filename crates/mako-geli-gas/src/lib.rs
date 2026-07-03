@@ -259,7 +259,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         // PIDs 19116/19117 are shared with GPKE Sperrung Strom; process context is
         // resolved by correlation ID at runtime in mixed Strom+Gas deployments.
         // Regulatory basis: BK7-24-01-009 (GeLi Gas 3.0).
-        // APERAK Frist: 10 Werktage.
+        // GNB execution window: 10 Werktage (BK7-24-01-009). APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
         for &pid in sperrung_lf::ORDRSP_SPERRUNG_PIDS {
             router.register(pid, sperrung_lf::WORKFLOW_NAME);
         }
@@ -272,7 +272,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         // PIDs 17115/17116/17117 are shared with GPKE Sperrung Strom (NB-role); process
         // context is resolved by commodity (Gas vs. Strom) at runtime.
         // Regulatory basis: BK7-24-01-009 (AWH Sperrprozesse Gas).
-        // APERAK Frist: 10 Werktage.
+        // GNB execution window: 10 Werktage (BK7-24-01-009). APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
         for &pid in sperrung_nb::SPERRUNG_PIDS {
             router.register(pid, sperrung_nb::WORKFLOW_NAME);
         }
@@ -304,7 +304,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
             },
             ProfileRequirement {
                 message_type: "MSCONS",
-                label: "MSCONS Gas Messdaten (13002, 13007–13009, 13013–13014)",
+                label: "MSCONS Gas Messdaten (13002, 13007–13009)",
             },
             ProfileRequirement {
                 message_type: "ORDERS",

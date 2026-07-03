@@ -87,7 +87,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 # ║ Stage 3 — builder  (cook deps + compile binary)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM chef AS builder
-ARG PROFILE
+ARG PROFILE=release
 
 # ── Dependency layer (cached) ──────────────────────────────────────────────────
 # cargo chef cook recreates minimal source stubs from recipe.json and compiles

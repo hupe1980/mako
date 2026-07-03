@@ -423,3 +423,62 @@ fn pruefmitteilung_deadline_label_is_stable() {
         "changing this label orphans existing Deadline records"
     );
 }
+
+// ── Negative AHB conformance tests ───────────────────────────────────────────
+
+/// A MSCONS PID 13003 with an invalid BGM qualifier (`Z27` instead of `7`)
+/// must be rejected by the AHB rule pack with rule `AHB-13003-BGM-1001-Q`.
+///
+/// `Z27` is the Geschäftsbestätigung qualifier valid for PID 13002 but not for
+/// PID 13003 (Summenzeitreihe Bilanzkreisabrechnung).
+///
+/// This guards against a profile regression that removes or relaxes the BGM
+/// qualifier check, or against the `Some(_unknown)` fallback silently returning
+/// `is_valid = true` for any PID absent from the MSCONS AHB dispatch table.
+#[test]
+fn negative_ahb_wrong_bgm_qualifier_pid_13003() {
+    use edi_energy::{EdiEnergyMessage, Platform};
+
+    let invalid_bytes: &[u8] = b"\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
+UNH+1+MSCONS:D:04B:UN:2.5'\
+BGM+Z27:::+00013003::+9'\
+DTM+137:20230101:102'\
+RFF+Z13:13003'\
+NAD+MS+4012345000023::293'\
+NAD+MR+9900357000004::293'\
+UNS+D'\
+LOC+172+51238696781'\
+QTY+220:1500.000:KWH'\
+UNT+10+1'\
+UNZ+1+1'";
+
+    let platform = Platform::with_all_profiles();
+    let msg = platform
+        .parse(invalid_bytes)
+        .expect("EDIFACT syntax is valid; parse must succeed");
+
+    // Reference date 2027-10-01 is conformance_reference_date() — max(valid_from) + 365d
+    // — which selects the mscons fv20261001 profile (MSCONS 2.5).
+    let ref_date = time::Date::from_calendar_date(2027, time::Month::October, 1).unwrap();
+    let report = msg
+        .validate_on_date(ref_date)
+        .expect("validate_on_date must not error");
+
+    assert!(
+        !report.is_valid(),
+        "wrong BGM qualifier Z27 must cause AHB validation failure for PID 13003"
+    );
+    assert!(
+        report.errors().iter().any(|e| e
+            .rule_id
+            .as_deref()
+            .is_some_and(|id| id == "AHB-13003-BGM-1001-Q")),
+        "error list must contain rule AHB-13003-BGM-1001-Q; got: {:?}",
+        report
+            .errors()
+            .iter()
+            .map(|e| e.rule_id.as_deref())
+            .collect::<Vec<_>>(),
+    );
+}

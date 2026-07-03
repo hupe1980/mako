@@ -1,7 +1,7 @@
 //! # WiM Gerätewechsel — mako-wim + edi-energy end-to-end example
 //!
 //! Demonstrates the full write→store→read cycle for a WiM "Gerätewechsel"
-//! (PID 11001) process using the `mako-engine` event-sourced runtime,
+//! (PID 55042 — Anmeldung MSB, nMSB → NB) process using the `mako-engine` event-sourced runtime,
 //! `mako-wim` domain logic, and `edi-energy` for EDIFACT parsing.
 //!
 //! ## Key difference from GPKE
@@ -53,24 +53,23 @@ use mako_wim::{DeviceChangeCommand, DeviceChangeProjection, WimDeviceChangeWorkf
 
 // ── EDIFACT fixture ───────────────────────────────────────────────────────────
 //
-// Minimal WiM UTILMD Anmeldung Messstellenbetrieb (PID 11001).
+// Minimal WiM UTILMD Anmeldung Messstellenbetrieb (PID 55042 — Anmeldung MSB, nMSB → NB).
 // BGM+E01 is used for WiM Anmeldung in UTILMD S2.x.
 // NAD+MS = neuer Messstellenbetreiber (nMSB, sender)
 // NAD+MR = Netzbetreiber (NB, receiver)
-// IDE+Z19 = Messlokation identifier
-// LOC+172 = meter device location with device_id
+// - IDE+24 = Messlokation identifier (24 qualifier for WiM MSB, per AHB-55042)
+// - MeLo ID: 51238696781 (11-char format, [A-Z0-9]{11})
 
 const UTILMD_GERAETEWECHSEL: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WIM-2025-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
-BGM+E01:::+00011001::+9'\
+BGM+E01:::+00055042::+9'\
 DTM+137:20250115:102'\
 RFF+Z13:WIM-REF-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+DE0001000001234567890000000000001::'\
-LOC+172+ZHR-12345678::'\
-UNT+9+MSG-001'\
+IDE+24+51238696781::'\
+UNT+8+MSG-001'\
 UNZ+1+WIM-2025-001'";
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -165,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("  ✓ Message type : {msg_type}");
     println!("  ✓ Release      : {release}");
-    println!("  ✓ PID          : {pid}  (WiM Gerätewechsel Anmeldung)");
+    println!("  ✓ PID          : {pid}  (WiM Anmeldung MSB — nMSB → NB)");
     println!("  ✓ Sender (nMSB): {sender}");
     println!("  ✓ Receiver (NB): {receiver}");
     println!("  ✓ MeLo         : {melo_id}");
@@ -179,6 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         validation_errors.len()
     );
+
 
     // ── Step 2: Inbox deduplication ───────────────────────────────────────────
     println!();

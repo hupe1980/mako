@@ -1,12 +1,12 @@
 //! Startup helpers extracted from `async_main`.
 //!
 //! Each function in this module covers a distinct startup phase, enabling
-//! per-phase unit tests with [`InMemoryEventStore`] without starting the
+//! per-phase unit tests with `InMemoryEventStore` without starting the
 //! full daemon.
 //!
 //! ## Type alias
 //!
-//! [`MakodCtx`] names the concrete [`EngineContext`] type used throughout the
+//! `MakodCtx` names the concrete `EngineContext` type used throughout the
 //! production daemon.  Tests that need an engine context can build one with
 //! `EngineBuilder::with_stores(...)` and store it as `MakodCtx`.
 //!
@@ -14,10 +14,9 @@
 //!
 //! | Function | What it does |
 //! |---|---|
-//! | [`validate_adapter_coverage`] | Panics if any workflow lacks a `MessageAdapter` for an active FV |
-//! | [`spawn_workers`] | Spawns outbox, ERP-webhook, deadline-scheduler, projection, and inbox-purge workers |
+//! | `validate_adapter_coverage` | Panics if any workflow lacks a `MessageAdapter` for an active FV |
+//! | `spawn_workers` | Spawns outbox, ERP-webhook, deadline-scheduler, projection, and inbox-purge workers |
 //!
-//! [`InMemoryEventStore`]: mako_engine::store_in_memory::InMemoryEventStore
 //! [`EngineContext`]: mako_engine::builder::EngineContext
 
 use std::sync::Arc;
@@ -273,6 +272,8 @@ pub(crate) struct WorkersConfig {
     // ── ERP webhook config ───────────────────────────────────────────────
     pub erp_webhook_url: Option<String>,
     pub erp_webhook_secret: Option<SecretString>,
+    // ── EDIFACT outbox webhook (dev/no-AS4 mode) ─────────────────────────
+    pub edifact_outbox_webhook_url: Option<String>,
     // ── Scheduler / timing config ────────────────────────────────────────
     pub snapshot_interval: u64,
     pub deadline_poll_interval_secs: u64,
@@ -355,7 +356,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
 
     let malo_sender = MaloIdentSender::new(
         (*cfg.malo_cache).clone(),
-        cfg.http_client,
+        cfg.http_client.clone(),
         maloid_partners,
         verzeichnisdienst_lookup,
         cfg.store.clone(),
@@ -418,6 +419,9 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
                 partner_store: None,
                 tenant_id: mako_engine::ids::TenantId::from_party_id(&cfg.tenant_id),
                 dispatcher: Some(Arc::clone(&cfg.ingest_dispatcher)),
+                // AS4 loopback (self-delivery) does not need a CONTRL ack:
+                // we are both sender and receiver in this code path.
+                contrl_ack: None,
             })),
         )?;
 
@@ -425,6 +429,23 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
             party_id        = %party_id,
             tenant_party_id = %cfg.tenant_id,
             "AS4 outbound sender active (BdewAs4Sender)",
+        );
+        let worker = cfg
+            .ctx
+            .run_outbox_worker(sender, 50, Duration::from_secs(5), 48);
+        tokio::spawn(async move { worker.run().await });
+    } else if let Some(ref edifact_webhook_url) = cfg.edifact_outbox_webhook_url {
+        use crate::as4_sender::WebhookEdifactSender;
+        let sender = WebhookEdifactSender::new(
+            edifact_webhook_url.as_str(),
+            cfg.tenant_id.as_str(),
+            cfg.http_client.clone(),
+            malo_sender,
+        );
+        info!(
+            url = %edifact_webhook_url,
+            "EDIFACT outbox webhook sender active (WebhookEdifactSender) — \
+             outbound EDIFACT will be POSTed as CloudEvents",
         );
         let worker = cfg
             .ctx

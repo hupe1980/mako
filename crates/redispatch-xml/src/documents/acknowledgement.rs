@@ -1,3 +1,4 @@
+//! `AcknowledgementDocument` — application-level acknowledgement for all Redispatch 2.0 message types.
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
@@ -11,50 +12,73 @@ use crate::types::{
 /// `ReceivingDocumentType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AckReceivingDocType {
+    /// Day-ahead plan / forecast document (A14).
     #[serde(rename = "A14")]
     DayAheadPlan,
+    /// Activation response document (A41).
     #[serde(rename = "A41")]
     ActivationResponse,
+    /// Tender reduction / ACR document (A42).
     #[serde(rename = "A42")]
     TenderReduction,
+    /// Status request document (A60).
     #[serde(rename = "A60")]
     StatusRequest,
+    /// Planned unavailability document (A67).
     #[serde(rename = "A67")]
     PlannedUnavailability,
+    /// Forced (unplanned) unavailability document (A76).
     #[serde(rename = "A76")]
     ForcedUnavailability,
+    /// Production unavailability document (A80).
     #[serde(rename = "A80")]
     ProductionUnavailability,
+    /// Redispatch activation / ACO document (A96).
     #[serde(rename = "A96")]
     RedispatchActivation,
+    /// Network constraint document (B15).
     #[serde(rename = "B15")]
     NetworkConstraint,
+    /// Stammdaten creation document (Z01).
     #[serde(rename = "Z01")]
     StammdatenCreation,
+    /// Stammdaten update document (Z02).
     #[serde(rename = "Z02")]
     StammdatenUpdate,
+    /// Stammdaten deactivation document (Z03).
     #[serde(rename = "Z03")]
     StammdatenDeactivation,
+    /// Grid operator aggregate Stammdaten document (Z04).
     #[serde(rename = "Z04")]
     StammdatenNbAggregate,
+    /// Kostenblatt (cost sheet) document (Z05).
     #[serde(rename = "Z05")]
     Kostenblatt,
+    /// Intraday plan document (Z08).
     #[serde(rename = "Z08")]
     IntradayPlan,
+    /// Stammdaten plan document (Z09).
     #[serde(rename = "Z09")]
     StammdatenPlan,
+    /// Aggregate plan document (Z11).
     #[serde(rename = "Z11")]
     AggregatePlan,
+    /// Corrected plan document (Z12).
     #[serde(rename = "Z12")]
     CorrectedPlan,
+    /// Reserved document type (Z13).
     #[serde(rename = "Z13")]
     Reserved13,
+    /// Bilanzkreisstammdaten (balance zone master data) document (Z14).
     #[serde(rename = "Z14")]
     Bilanzkreisstammdaten,
+    /// Alternative status request document (Z15).
     #[serde(rename = "Z15")]
     StatusRequestAlt,
+    /// Kaskade (cascade) document (Z16).
     #[serde(rename = "Z16")]
     Kaskade,
+    /// Test message document (Z17).
     #[serde(rename = "Z17")]
     TestMessage,
 }

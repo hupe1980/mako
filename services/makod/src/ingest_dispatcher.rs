@@ -34,7 +34,9 @@ use std::sync::Arc;
 
 use edi_energy::{AnyMessage, EdiEnergyMessage as _, ReleaseRegistry};
 use mako_engine::{
+    deadline::Deadline,
     error::EngineError,
+    fristen::{self, HolidayCalendar},
     ids::{ProcessId, ProcessIdentity, TenantId},
     process::Process,
     registry::ProcessRegistry as _,
@@ -43,11 +45,22 @@ use mako_engine::{
     workflow::{CommandPayload, Workflow},
 };
 use mako_geli_gas::{
-    GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow, GeliGasSupplierChangeWorkflow,
+    GeliGasMsconsWorkflow, GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungLfWorkflow,
+    GeliGasSperrungNbWorkflow, GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
 };
 use mako_gpke::{
+    GpkeAllokationslisteWorkflow, GpkeAnkuendigungZuordnungLfWorkflow, GpkeKonfigurationWorkflow,
     GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow,
-    GpkeSupplierChangeWorkflow,
+    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow,
+};
+use mako_mabis::MabisClearinglisteWorkflow;
+use mako_wim::{
+    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimRechnungWorkflow,
+    WimStornierungWorkflow,
+};
+use mako_wim_gas::{
+    WimGasAnmeldungWorkflow, WimGasInsrptWorkflow, WimGasInvoicWorkflow, WimGasKuendigungWorkflow,
+    WimGasVerpflichtungsanfrageWorkflow,
 };
 use time::OffsetDateTime;
 
@@ -141,11 +154,14 @@ impl EdifactIngestDispatcher {
                 17115 | 17117 => {
                     let cmd = adapters::gpke_sperrung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
+                    // APERAK Frist: 24 wall-clock hours (BK6-22-024 §5).
+                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
                     self.spawn_or_resume::<GpkeSperrungWorkflow>(
                         &malo_id,
                         "gpke-sperrung",
                         cmd,
                         &fv,
+                        Some((mako_gpke::SPERRUNG_WINDOW_LABEL, due_at)),
                     )
                     .await
                 }
@@ -182,11 +198,21 @@ impl EdifactIngestDispatcher {
                 17115 | 17117 => {
                     let cmd = adapters::geli_gas_sperrung_nb_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
+                    // APERAK Frist: 10 Werktage (BK7-24-01-009 §5).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        10,
+                        HolidayCalendar::BdewMaKo,
+                    );
                     self.spawn_or_resume::<GeliGasSperrungNbWorkflow>(
                         &malo_id,
                         "geli-gas-sperrung-nb",
                         cmd,
                         &fv,
+                        Some((
+                            mako_geli_gas::GELI_GAS_SPERRUNG_NB_ANTWORT_WINDOW_LABEL,
+                            due_at,
+                        )),
                     )
                     .await
                 }
@@ -221,11 +247,14 @@ impl EdifactIngestDispatcher {
                 55001 | 55002 | 55016 => {
                     let cmd = adapters::gpke_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
+                    // APERAK Frist: 24 wall-clock hours (BK6-22-024 §5).
+                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
                     self.spawn_or_resume::<GpkeSupplierChangeWorkflow>(
                         &malo_id,
                         "gpke-supplier-change",
                         cmd,
                         &fv,
+                        Some((mako_gpke::APERAK_WINDOW_LABEL, due_at)),
                     )
                     .await
                 }
@@ -252,11 +281,14 @@ impl EdifactIngestDispatcher {
                 55007 => {
                     let cmd = adapters::gpke_lf_abmeldung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
+                    // APERAK Frist: 24 wall-clock hours (BK6-22-024 §4).
+                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
                     self.spawn_or_resume::<GpkeLfAbmeldungWorkflow>(
                         &malo_id,
                         "gpke-lf-abmeldung",
                         cmd,
                         &fv,
+                        Some((mako_gpke::LF_ABMELDUNG_APERAK_WINDOW_LABEL, due_at)),
                     )
                     .await
                 }
@@ -291,11 +323,18 @@ impl EdifactIngestDispatcher {
                 44001..=44021 => {
                     let cmd = adapters::geli_gas_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
+                    // APERAK Frist: 10 Werktage (BK7-24-01-009).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        10,
+                        HolidayCalendar::BdewMaKo,
+                    );
                     self.spawn_or_resume::<GeliGasSupplierChangeWorkflow>(
                         &malo_id,
                         "geli-gas-supplier-change",
                         cmd,
                         &fv,
+                        Some((mako_geli_gas::LIEFERBEGINN_APERAK_WINDOW_LABEL, due_at)),
                     )
                     .await
                 }
@@ -305,12 +344,555 @@ impl EdifactIngestDispatcher {
                 }),
             },
 
+            // ── GPKE Allokationsliste — LF side ──────────────────────────────
+            // PIDs 19110/19115: NB rejects the LF's ORDERS request — resume.
+            // PIDs 13013/13014: NB sends MSCONS data (positive response) — resume.
+            //
+            // Note: PIDs 17110/17114 (LF → NB ORDERS request) are spawned by the
+            // ERP (via CommandAPI), not by inbound EDIFACT at the LF. They are
+            // registered in the PID router for completeness but have no inbound
+            // dispatch handler here (LF is the sender, not the receiver).
+            "gpke-allokationsliste" => match pid {
+                19110 | 19115 => {
+                    let cmd =
+                        adapters::gpke_allokationsliste_ordrsp_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.resume_by_malo::<GpkeAllokationslisteWorkflow>(
+                        &malo_id,
+                        "gpke-allokationsliste",
+                        cmd,
+                    )
+                    .await
+                }
+                13013 | 13014 => {
+                    let cmd =
+                        adapters::gpke_allokationsliste_mscons_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.resume_by_malo::<GpkeAllokationslisteWorkflow>(
+                        &malo_id,
+                        "gpke-allokationsliste",
+                        cmd,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gpke-allokationsliste",
+                    reason: "pid_not_in_resume_table",
+                }),
+            },
+
+            // ── WiM Messstellenbetrieb — EDIFACT/AS4 channel ──────────────
+            // PIDs 55042/55039: nMSB initiates (Anmeldung/Kündigung → NB) — spawn.
+            // PIDs 55051/55168: NB initiates (Ende/Verpflichtungsanfrage → MSB) — spawn.
+            //
+            // NOTE: the REST API-Webdienste channel (WimOrderHandler in webdienste.rs)
+            // is the primary transport for API-capable counterparties.  This arm
+            // covers the AS4/EDIFACT path for counterparties that only support AS4.
+            // MeLo ID is extracted from the first UTILMD transaction IDE segment
+            // (object_id component) — the same field the wim_registry adapter uses.
+            "wim-device-change" => match pid {
+                55042 | 55039 | 55051 | 55168 => {
+                    let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_utilmd(msg);
+                    // APERAK Frist: 5 Werktage (BK6-24-174 WiM Strom Teil 1).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        5,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimDeviceChangeWorkflow>(
+                        &melo_id,
+                        "wim-device-change",
+                        cmd,
+                        &fv,
+                        Some((mako_wim::GERAETEWECHSEL_APERAK_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-device-change",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── WiM Geräteübernahme (nMSB role) ──────────────────────────────
+            // PIDs 17001/17002: nMSB → NB Anfrage/Weiterverpflichtung — spawn.
+            // PID  17005:       NB   → MSB Bestellung Rechnungsabwicklung — spawn.
+            // PIDs 17009/17011: Stornierung (ORDCHG) — spawn.
+            // PIDs 19001/19002: ORDRSP Bestätigung/Ablehnung (NB → nMSB) — resume.
+            //
+            // Note: PIDs 19001/19002 are multi-domain — GPKE Konfiguration (NB role)
+            // and WiM Geräteübernahme (nMSB role) share them.  Role-conditional
+            // routing in the PidRouter ensures only one workflow is registered per
+            // role (both cannot be active simultaneously — build() panics if both are).
+            "wim-geraeteubernahme" => match pid {
+                17001 | 17002 | 17005 | 17009 | 17011 => {
+                    let cmd = adapters::wim_geraeteubernahme_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_orders(msg);
+                    // APERAK Frist: 5 Werktage (BK6-24-174 WiM Strom Teil 1).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        5,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimGeraeteubernahmeWorkflow>(
+                        &melo_id,
+                        "wim-geraeteubernahme",
+                        cmd,
+                        &fv,
+                        Some((mako_wim::GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL, due_at)),
+                    )
+                    .await
+                }
+                19001 | 19002 => {
+                    let cmd = adapters::wim_geraeteubernahme_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_orders(msg);
+                    self.resume_by_malo::<WimGeraeteubernahmeWorkflow>(
+                        &melo_id,
+                        "wim-geraeteubernahme",
+                        cmd,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-geraeteubernahme",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── WiM Stornierung (Strom) — PID 39002 ──────────────────────────
+            // PID 39002: Stornierung der Bestellung (ORDCHG, nMSB → NB) — spawn.
+            "wim-stornierung" => match pid {
+                39002 => {
+                    let cmd = adapters::wim_stornierung_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_orders(msg);
+                    // No APERAK Frist for pure stornierung — no outbox deadline needed.
+                    self.spawn_or_resume::<WimStornierungWorkflow>(
+                        &melo_id,
+                        "wim-stornierung",
+                        cmd,
+                        &fv,
+                        None,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-stornierung",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── WiM Rechnung (Strom) — PID 31009 ─────────────────────────────
+            // PID 31009: MSB-Rechnung (MSB → NB, multi-domain GPKE/WiM) — spawn.
+            "wim-rechnung" => match pid {
+                31009 => {
+                    let cmd = adapters::wim_rechnung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_invoic(msg);
+                    // Settlement deadline: 5 Werktage (BK6-24-174 WiM Strom).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        5,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimRechnungWorkflow>(
+                        &malo_id,
+                        "wim-rechnung",
+                        cmd,
+                        &fv,
+                        Some((mako_wim::WIM_RECHNUNG_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-rechnung",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── WiM INSRPT (Strom) — PIDs 23001, 23003, 23004, 23008, 23011/23012 ──
+            // PIDs 23001: INSRPT Anfrage Störungsmeldung (gMSB → NB) — spawn.
+            // PIDs 23003/23004/23008/23011/23012: INSRPT Antwort — resume.
+            "wim-insrpt" => match pid {
+                23001 => {
+                    let cmd = adapters::wim_insrpt_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_utilmd(msg);
+                    // INSRPT Frist: 5 Werktage (BK6-24-174 WiM Strom).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        5,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimInsrptWorkflow>(
+                        &melo_id,
+                        "wim-insrpt",
+                        cmd,
+                        &fv,
+                        Some((mako_wim::insrpt::ANTWORT_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                23003 | 23004 | 23008 | 23011 | 23012 => {
+                    let cmd = adapters::wim_insrpt_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_utilmd(msg);
+                    self.resume_by_malo::<WimInsrptWorkflow>(&melo_id, "wim-insrpt", cmd)
+                        .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-insrpt",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── GPKE Konfiguration — PIDs 17134/17135 (NB role) ──────────────
+            // PIDs 17134/17135: NB sends ORDERS Konfiguration to MSB — spawn.
+            // PIDs 19001/19002: MSB → NB ORDRSP Bestätigung/Ablehnung — resume.
+            //
+            // Role guard: registered only when DeploymentRoles contains Nb.
+            // nMSB instances use PIDs 19001/19002 for wim-geraeteubernahme instead.
+            "gpke-konfiguration" => match pid {
+                17134 | 17135 => {
+                    let cmd = adapters::gpke_konfiguration_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // APERAK Frist: 24 wall-clock hours (BK6-22-024 §5).
+                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    self.spawn_or_resume::<GpkeKonfigurationWorkflow>(
+                        &malo_id,
+                        "gpke-konfiguration",
+                        cmd,
+                        &fv,
+                        Some((mako_gpke::KONFIGURATION_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                19001 | 19002 => {
+                    let cmd = adapters::gpke_konfiguration_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.resume_by_malo::<GpkeKonfigurationWorkflow>(
+                        &malo_id,
+                        "gpke-konfiguration",
+                        cmd,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gpke-konfiguration",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── GPKE Stornierung — PIDs 55022/55023/55024 ────────────────────
+            // PIDs 55022–55024: UTILMD Stornierung Lieferbeginn/Lieferende — spawn.
+            "gpke-stornierung" => match pid {
+                55022..=55024 => {
+                    let cmd = adapters::gpke_stornierung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // APERAK Frist: 24 wall-clock hours (BK6-22-024 §5).
+                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    self.spawn_or_resume::<GpkeStornierungWorkflow>(
+                        &malo_id,
+                        "gpke-stornierung",
+                        cmd,
+                        &fv,
+                        Some((mako_gpke::STORNIERUNG_GPKE_APERAK_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gpke-stornierung",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── GPKE Ankündigung/Zuordnung LF — PID 55607 ────────────────────
+            // PID 55607: UTILMD Ankündigung Zuordnung LF (NB → LFN) — spawn.
+            "gpke-ankuendigung-zuordnung-lf" => match pid {
+                55607 => {
+                    let cmd =
+                        adapters::gpke_ankuendigung_zuordnung_lf_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // APERAK Frist: 24 wall-clock hours (BK6-22-024 §5).
+                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    self.spawn_or_resume::<GpkeAnkuendigungZuordnungLfWorkflow>(
+                        &malo_id,
+                        "gpke-ankuendigung-zuordnung-lf",
+                        cmd,
+                        &fv,
+                        Some((
+                            mako_gpke::ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL,
+                            due_at,
+                        )),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gpke-ankuendigung-zuordnung-lf",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── GeLi Gas MSCONS data delivery ─────────────────────────────────
+            // PIDs 13002, 13007–13009: MSCONS Gas Messdaten (NB/MSB → LFG) — spawn.
+            "geli-gas-mscons" => match pid {
+                13002 | 13007 | 13008 | 13009 => {
+                    let cmd = adapters::geli_gas_mscons_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // Gas MSCONS data delivery — no APERAK Frist for pure data messages.
+                    self.spawn_or_resume::<GeliGasMsconsWorkflow>(
+                        &malo_id,
+                        "geli-gas-mscons",
+                        cmd,
+                        &fv,
+                        None,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "geli-gas-mscons",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── GeLi Gas Stornierung — PIDs 44022/44023/44024 ────────────────
+            // PID 44022: GNB receives Stornierungsanfrage (LFG → GNB) — spawn (Nb role).
+            // PIDs 44023/44024: LFG receives GNB response — spawn (Lf role).
+            //
+            // Multi-domain: PIDs 44022–44024 are also used by wim-gas-stornierung
+            // on nMSB/gMSB instances.  Role-conditional routing ensures only one
+            // workflow is registered per role (PidRouter enforces at build time).
+            "geli-gas-stornierung" => match pid {
+                44022..=44024 => {
+                    let cmd = adapters::geli_gas_stornierung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // APERAK Frist: 10 Werktage (BK7-24-01-009).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        10,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<GeliGasStornierungWorkflow>(
+                        &malo_id,
+                        "geli-gas-stornierung",
+                        cmd,
+                        &fv,
+                        Some((mako_geli_gas::STORNIERUNG_APERAK_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "geli-gas-stornierung",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── GeLi Gas Sperrprozesse INVOIC — PID 31011 ────────────────────
+            // PID 31011: Rechnung sonstige Leistung AWH (GNB → LFG) — spawn.
+            "geli-gas-sperrprozesse-invoic" => match pid {
+                31011 => {
+                    let cmd =
+                        adapters::geli_gas_sperrprozesse_invoic_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_invoic(msg);
+                    // Settlement deadline: 10 Werktage (BK7-24-01-009).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        10,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<GeliGasSperrprozesseInvoicWorkflow>(
+                        &malo_id,
+                        "geli-gas-sperrprozesse-invoic",
+                        cmd,
+                        &fv,
+                        Some((mako_geli_gas::SPERRPROZESSE_INVOIC_SETTLEMENT_LABEL, due_at)),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "geli-gas-sperrprozesse-invoic",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── WiM Gas Anmeldung — PIDs 44042–44044, 44051–44053 ────────────
+            // PIDs 44042–44044: Anmeldung neuer MSB Gas (MSBN ↔ NB) — spawn.
+            // PIDs 44051–44053: Ende MSB Gas / Vorläufige Abmeldung (NB ↔ MSBA) — spawn.
+            "wim-gas-anmeldung" => match pid {
+                44042..=44044 | 44051..=44053 => {
+                    let cmd = adapters::wim_gas_anmeldung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // APERAK Frist: 10 Werktage (BK7-24-01-009).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        10,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimGasAnmeldungWorkflow>(
+                        &malo_id,
+                        "wim-gas-anmeldung",
+                        cmd,
+                        &fv,
+                        Some((mako_wim_gas::anmeldung::APERAK_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-gas-anmeldung",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── WiM Gas Kündigung — PIDs 44039/44040/44041 ───────────────────
+            // PID 44039: Kündigung MSB Gas Anfrage (MSBA → NB) — spawn.
+            // PIDs 44040/44041: Bestätigung/Ablehnung (NB → MSBA) — spawn (NB-initiating path).
+            "wim-gas-kuendigung" => match pid {
+                44039..=44041 => {
+                    let cmd = adapters::wim_gas_kuendigung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // APERAK Frist: 10 Werktage (BK7-24-01-009).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        10,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimGasKuendigungWorkflow>(
+                        &malo_id,
+                        "wim-gas-kuendigung",
+                        cmd,
+                        &fv,
+                        Some((mako_wim_gas::kuendigung::APERAK_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-gas-kuendigung",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── WiM Gas Verpflichtungsanfrage — PIDs 44168/44169/44170 ───────
+            // PID 44168: Verpflichtungsanfrage (NB → gMSB) — spawn.
+            // PIDs 44169/44170: Bestätigung/Ablehnung (gMSB → NB) — spawn.
+            //
+            // PID 44170 present in FV2025-10-01 (PID 3.3), absent from FV2026-10-01
+            // (PID 4.0).  In-flight FV2025 processes may still receive it after the
+            // cutover — the adapter handles it for forward compatibility.
+            "wim-gas-verpflichtungsanfrage" => match pid {
+                44168..=44170 => {
+                    let cmd =
+                        adapters::wim_gas_verpflichtungsanfrage_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // APERAK Frist: 10 Werktage (BK7-24-01-009).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        10,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimGasVerpflichtungsanfrageWorkflow>(
+                        &malo_id,
+                        "wim-gas-verpflichtungsanfrage",
+                        cmd,
+                        &fv,
+                        Some((
+                            mako_wim_gas::verpflichtungsanfrage::APERAK_WINDOW_LABEL,
+                            due_at,
+                        )),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-gas-verpflichtungsanfrage",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── WiM Gas INVOIC billing — PIDs 31003/31004 ────────────────────
+            // PID 31003: WiM-Rechnung Gas (gMSB → NB) — spawn.
+            // PID 31004: Stornorechnung WiM Gas (gMSB → NB) — spawn.
+            "wim-gas-invoic" => match pid {
+                31003 | 31004 => {
+                    let cmd = adapters::wim_gas_invoic_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_invoic(msg);
+                    // Settlement deadline: 10 Werktage (BK7-24-01-009).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        10,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimGasInvoicWorkflow>(
+                        &malo_id,
+                        "wim-gas-invoic",
+                        cmd,
+                        &fv,
+                        Some((mako_wim_gas::invoic::SETTLEMENT_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-gas-invoic",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── WiM Gas INSRPT — PIDs 23001/23003–23005/23008/23009 ──────────
+            // PID 23001: Anfrage Störungsmeldung (shared, gMSB → NB) — spawn.
+            // PIDs 23003/23004/23008: Antwort (shared, NB → gMSB) — spawn.
+            // PIDs 23005/23009: Gas-only variants — spawn.
+            "wim-gas-insrpt" => match pid {
+                23001 | 23003 | 23004 | 23005 | 23008 | 23009 => {
+                    let cmd = adapters::wim_gas_insrpt_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // INSRPT Frist: 10 Werktage (BK7-24-01-009).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        10,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimGasInsrptWorkflow>(
+                        &malo_id,
+                        "wim-gas-insrpt",
+                        cmd,
+                        &fv,
+                        Some((mako_wim_gas::insrpt::ANTWORT_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-gas-insrpt",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── MABIS Clearingliste — PIDs 55065/55069/55070 ──────────────────
+            // PIDs 55065/55069/55070: MABIS IFTSTA Clearingliste (BKV ↔ ÜNB) — spawn.
+            "mabis-clearingliste" => match pid {
+                55065 | 55069 | 55070 => {
+                    let cmd = adapters::mabis_clearingliste_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // No APERAK Frist for pure MABIS data messages.
+                    self.spawn_or_resume::<MabisClearinglisteWorkflow>(
+                        &malo_id,
+                        "mabis-clearingliste",
+                        cmd,
+                        &fv,
+                        None,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "mabis-clearingliste",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
             // ── All other workflows: not yet in Phase 2 dispatch table ────────
+            //
+            // WARNING: messages routed here are dead-lettered. Any workflow name
+            // appearing here should be investigated and given an explicit dispatch arm.
             wf_name => {
-                tracing::debug!(
+                tracing::warn!(
                     workflow_name = %wf_name,
                     pid,
-                    "ingest dispatcher: no Phase 2 handler — skipped",
+                    "ingest dispatcher: no Phase 2 handler — message dead-lettered; \
+                     add a dispatch arm in ingest_dispatcher.rs to handle this workflow",
                 );
                 Ok(IngestOutcome::Skipped {
                     workflow_name: "unregistered",
@@ -328,17 +910,27 @@ impl EdifactIngestDispatcher {
     /// [`IngestOutcome::Dispatched`].  Otherwise spawn a new process, execute
     /// `cmd`, register the process under the MaLo tag, and return
     /// [`IngestOutcome::Spawned`].
+    ///
+    /// `spawn_deadline`: when `Some((label, due_at))`, the deadline is written
+    /// atomically with the events in a single `WriteBatch` via
+    /// [`Process::execute_and_enqueue_with_deadlines`].  Pass `None` for
+    /// workflows that have no APERAK Frist (e.g. pure continuation handlers).
+    /// The deadline is only registered for freshly-spawned processes — resuming
+    /// an existing process must not re-register (the deadline was set at spawn).
     async fn spawn_or_resume<W>(
         &self,
         malo_id: &str,
         workflow_name_static: &'static str,
         cmd: W::Command,
         fv: &FormatVersion,
+        spawn_deadline: Option<(&'static str, time::OffsetDateTime)>,
     ) -> Result<IngestOutcome, EngineError>
     where
         W: Workflow + 'static,
         W::Command: CommandPayload + Clone,
         W::State: serde::Serialize,
+        // `execute_and_enqueue_with_deadlines` requires `AtomicAppend`:
+        Arc<SlateDbStore>: mako_engine::event_store::AtomicAppend,
     {
         if malo_id.is_empty() {
             tracing::warn!(
@@ -387,17 +979,36 @@ impl EdifactIngestDispatcher {
         let process = Process::<W, Arc<SlateDbStore>>::new(
             Arc::clone(&self.store),
             self.tenant_id,
-            workflow_id,
+            workflow_id.clone(),
         );
         let process_id = process.process_id();
-        process
-            .execute_and_enqueue_with_snapshot_and_retry(
-                cmd,
-                3,
-                &self.snap_store,
-                self.snapshot_interval,
-            )
-            .await?;
+
+        // Atomically persist events and (when applicable) the APERAK Frist deadline.
+        // Using `execute_and_enqueue_with_deadlines` ensures a crash between event
+        // write and deadline registration cannot produce a process with no monitoring
+        // window (dual-write atomicity requirement).
+        if let Some((label, due_at)) = spawn_deadline {
+            let deadline = Deadline::new(
+                process.stream_id().clone(),
+                process_id,
+                self.tenant_id,
+                workflow_id,
+                label,
+                due_at,
+            );
+            process
+                .execute_and_enqueue_with_deadlines(cmd, &[deadline])
+                .await?;
+        } else {
+            process
+                .execute_and_enqueue_with_snapshot_and_retry(
+                    cmd,
+                    3,
+                    &self.snap_store,
+                    self.snapshot_interval,
+                )
+                .await?;
+        }
 
         // Register under MaLo business key for future correlation lookups.
         let identity = process.identity();
@@ -494,21 +1105,78 @@ impl EdifactIngestDispatcher {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Extract the Messlokations-ID from an ORDERS/ORDRSP/ORDCHG message's IDE segment.
+///
+/// WiM ORDERS messages (Geräteübernahme, Stammdaten, Stornierung) identify the
+/// Messlokation in the `IDE` segment (element 1, component 0 = object ID).
+/// Returns an empty string when the message is not an ORDERS/ORDRSP/ORDCHG or
+/// when the IDE segment is absent.
+pub fn extract_melo_from_orders(msg: &AnyMessage) -> String {
+    let segs = match msg {
+        AnyMessage::Orders(o) => o.segments(),
+        AnyMessage::Ordrsp(o) => o.segments(),
+        AnyMessage::Ordchg(o) => o.segments(),
+        _ => return String::new(),
+    };
+    segs.iter()
+        .find(|s| s.tag == "IDE")
+        .and_then(|s| s.component_str(1, 0))
+        .unwrap_or("")
+        .to_owned()
+}
+
+/// Extract the INVOIC sender/document reference for MaLo correlation.
+///
+/// INVOIC messages do not carry a LOC or IDE segment. Use the message reference
+/// (UNH DE 0062) as the correlation key — workflows that receive INVOIC messages
+/// as initial commands are keyed on the invoice reference, not a MaLo.
+///
+/// Returns an empty string when the message is not an INVOIC.
+pub fn extract_malo_from_invoic(msg: &AnyMessage) -> String {
+    match msg {
+        AnyMessage::Invoic(_) => msg.message_ref().to_owned(),
+        _ => String::new(),
+    }
+}
+
 /// Extract the Marktlokations-ID from the first LOC segment (component 1, index 0).
 ///
 /// BDEW convention: `LOC+<qualifier>+<malo_id>::<code_list>:Z13`.
 /// Applies to ORDERS, ORDRSP, and UTILMD messages.
 /// Returns an empty string when the LOC segment is absent (INVOIC, IFTSTA, …).
-fn extract_malo_from_msg(msg: &AnyMessage) -> String {
+pub fn extract_malo_from_msg(msg: &AnyMessage) -> String {
     let segs = match msg {
         AnyMessage::Orders(o) => o.segments(),
         AnyMessage::Ordrsp(o) => o.segments(),
         AnyMessage::Utilmd(u) => u.segments(),
+        // MSCONS carries the MaLo in LOC (same convention as ORDERS/ORDRSP).
+        // Used by gpke-allokationsliste to correlate MSCONS 13013/13014 with the
+        // process that was spawned when the LF sent ORDERS 17110/17114.
+        AnyMessage::Mscons(m) => m.segments(),
         _ => return String::new(),
     };
     segs.iter()
         .find(|s| s.tag == "LOC")
         .and_then(|s| s.component_str(1, 0))
+        .unwrap_or("")
+        .to_owned()
+}
+
+/// Extract the Messlokations-ID from the first UTILMD transaction's IDE segment.
+///
+/// WiM UTILMD messages (55039, 55042, 55051, 55168) identify the Messlokation in
+/// the transaction header via `IDE+24+<melo_id>:::Z19` rather than the LOC segment
+/// convention used by GPKE messages.  The `wim_registry()` adapter extracts the
+/// MeLo from the same `transactions()[0].ide.object_id` path.
+///
+/// Returns an empty string when the message is not a UTILMD or the IDE is absent.
+pub fn extract_melo_from_utilmd(msg: &AnyMessage) -> String {
+    let AnyMessage::Utilmd(u) = msg else {
+        return String::new();
+    };
+    u.transactions()
+        .first()
+        .and_then(|t| t.ide.object_id.as_deref())
         .unwrap_or("")
         .to_owned()
 }

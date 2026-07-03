@@ -10,7 +10,7 @@
 //! 2. Looks up the MaLo record in [`SlateDbMaloCache`].
 //! 3. Resolves the LF's callback URL using one of two paths (in priority order):
 //!    a. The static `partner_urls` override map (keyed by GLN) — for testing and Verzeichnisdienst outages.
-//!    b. A [`VerzeichnisdienstLookup`] that queries the BDEW Verzeichnisdienst and caches the result in the [`SlateDbPartnerStore`].
+//!    b. A [`VerzeichnisdienstLookup`] that queries the BDEW Verzeichnisdienst and caches the result in the `SlateDbPartnerStore`.
 //! 4. Calls `MaloIdentClient::send_positive_response` or
 //!    `MaloIdentClient::send_negative_response` on the LF's callback endpoint.
 //! 5. On a positive callback, writes the resolved `(tx_id, malo_id, nb_gln)`
@@ -78,7 +78,7 @@ struct MaloIdentCallbackPayload {
 ///    store for future deliveries.
 ///
 /// After a positive callback is delivered:
-/// - A `MaloIdentified` outbox message is written to the [`OutboxStore`] so
+/// - A `MaloIdentified` outbox message is written to the `OutboxStore` so
 ///   the [`OutboxErpWorker`] can forward the event to the ERP system.
 /// - The resolved `(tx_id, malo_id, nb_gln)` is persisted to the
 ///   [`MaloIdentResultCache`] so the ERP can trigger

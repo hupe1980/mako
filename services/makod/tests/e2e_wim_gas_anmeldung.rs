@@ -238,8 +238,8 @@ async fn wim_gas_anmeldung_positive_aperak() {
     let aperak = &outbox[0];
     assert_eq!(
         aperak.message_type.as_ref(),
-        "Aperak",
-        "outbox entry must have type 'Aperak'"
+        "APERAK",
+        "outbox entry must have type 'APERAK'"
     );
     assert_eq!(
         aperak.recipient.as_ref(),

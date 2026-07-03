@@ -355,7 +355,7 @@ impl OidcVerifier {
     /// Return `true` if `token` has the structure of a JWT
     /// (`<base64url>.<base64url>.<base64url>`).
     ///
-    /// Used by [`CedarAuthorizer::authenticate`] to route tokens to the
+    /// Used by `CedarAuthorizer::authenticate` to route tokens to the
     /// correct verification path without expensive full parsing.  Opaque API
     /// keys (random hex) do not contain `.` and are routed to the key table.
     pub fn looks_like_jwt(token: &str) -> bool {

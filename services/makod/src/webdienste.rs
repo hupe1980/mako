@@ -1,7 +1,7 @@
 //! API-Webdienste Strom server for `makod`.
 //!
-//! This module wires the [`ControlMeasuresHandler`], [`MaloIdentHandler`], and
-//! [`WimOrderHandler`] traits from `energy-api` into a single axum [`Router`]
+//! This module wires the `ControlMeasuresHandler`, `MaloIdentHandler`, and
+//! `WimOrderHandler` traits from `energy-api` into a single axum [`Router`]
 //! that is mounted when `--api-webdienste-addr` is set.
 //!
 //! ## Architecture
@@ -42,12 +42,12 @@ use crate::api_bridge::{location_id_to_string, party_id_to_marktpartner};
 use axum::Router;
 use energy_api::models::electricity::{IdentificationParameter, WimAnmeldungRequest};
 use energy_api::server::{control_measures, malo_ident, wim_order};
-use mako_engine::deadline::DeadlineStore as _;
+use mako_engine::deadline::Deadline;
 use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId};
 use mako_engine::inbox::InboxStore as _;
 use mako_engine::outbox::{OutboxMessage, OutboxStore as _};
 use mako_engine::registry::ProcessRegistry as _;
-use mako_engine::store_slatedb::{SlateDbSnapshotStore, SlateDbStore};
+use mako_engine::store_slatedb::SlateDbStore;
 use mako_engine::types::MeLo;
 use mako_wim::geraetewechsel::{
     DeviceChangeCommand, WORKFLOW_NAME as DEVICE_CHANGE_WORKFLOW_NAME, WimDeviceChangeWorkflow,
@@ -65,8 +65,6 @@ use tracing::{info, warn};
 ///
 /// - `store`          — shared SlateDB instance for inbox idempotency, outbox
 ///   persistence, and event-sourced workflow dispatch.
-/// - `snapshot_store` — snapshot backend for bounded-replay dispatch of
-///   `WimSteuerungsauftragWorkflow` processes.
 /// - `tenant_id`      — the operator's [`TenantId`], derived from their BDEW
 ///   code / GLN via [`TenantId::from_party_id`].
 /// - `sender_party_id` — GLN string used as the MSB's `from` party in control
@@ -74,12 +72,8 @@ use tracing::{info, warn};
 #[derive(Clone)]
 pub struct MakodApiHandler {
     pub store: SlateDbStore,
-    pub snapshot_store: SlateDbSnapshotStore,
     pub tenant_id: TenantId,
     pub sender_party_id: String,
-    /// Snapshot interval (events between automatic snapshots) — passed to
-    /// `execute_and_enqueue_with_snapshot_and_retry` for bounded replay cost.
-    pub snapshot_interval: u64,
 }
 
 // ── MaloIdentHandler ──────────────────────────────────────────────────────────
@@ -175,10 +169,8 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
         command: energy_api::models::electricity::CommandControl,
     ) -> impl std::future::Future<Output = Result<(), energy_api::Error>> + Send {
         let store = self.store.clone();
-        let snapshot_store = self.snapshot_store.clone();
         let tenant_id = self.tenant_id;
         let sender_party_id = self.sender_party_id.clone();
-        let snapshot_interval = self.snapshot_interval;
         async move {
             // Idempotency — accept only the first delivery of this tx_id.
             let inbox_key = format!("steuerungsauftrag:{tenant_id}:{tx_id}");
@@ -207,19 +199,12 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
                 execution_time_until: command.execution_time_until.clone(),
             };
 
-            spawn_steuerungsauftrag(
-                store,
-                snapshot_store,
-                tenant_id,
-                snapshot_interval,
-                &tx_id,
-                domain_cmd,
-            )
-            .await
-            .map_err(|e| energy_api::Error::Http {
-                status: 500,
-                body: e.to_string(),
-            })?;
+            spawn_steuerungsauftrag(store, tenant_id, &tx_id, domain_cmd)
+                .await
+                .map_err(|e| energy_api::Error::Http {
+                    status: 500,
+                    body: e.to_string(),
+                })?;
 
             info!(
                 tx_id,
@@ -240,10 +225,8 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
         command: energy_api::models::electricity::CommandRegular,
     ) -> impl std::future::Future<Output = Result<(), energy_api::Error>> + Send {
         let store = self.store.clone();
-        let snapshot_store = self.snapshot_store.clone();
         let tenant_id = self.tenant_id;
         let sender_party_id = self.sender_party_id.clone();
-        let snapshot_interval = self.snapshot_interval;
         async move {
             let inbox_key = format!("steuerungsauftrag:{tenant_id}:{tx_id}");
             let is_new = store
@@ -269,19 +252,12 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
                 execution_time_from: command.execution_time_from.clone(),
             };
 
-            spawn_steuerungsauftrag(
-                store,
-                snapshot_store,
-                tenant_id,
-                snapshot_interval,
-                &tx_id,
-                domain_cmd,
-            )
-            .await
-            .map_err(|e| energy_api::Error::Http {
-                status: 500,
-                body: e.to_string(),
-            })?;
+            spawn_steuerungsauftrag(store, tenant_id, &tx_id, domain_cmd)
+                .await
+                .map_err(|e| energy_api::Error::Http {
+                    status: 500,
+                    body: e.to_string(),
+                })?;
 
             info!(
                 tx_id,
@@ -312,9 +288,7 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
         request: WimAnmeldungRequest,
     ) -> impl std::future::Future<Output = Result<(), energy_api::Error>> + Send {
         let store = self.store.clone();
-        let snapshot_store = self.snapshot_store.clone();
         let tenant_id = self.tenant_id;
-        let snapshot_interval = self.snapshot_interval;
         async move {
             // Idempotency — accept only the first delivery of this tx_id.
             let inbox_key = format!("wim-order:{tenant_id}:{tx_id}");
@@ -348,19 +322,12 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
                 process_date: request.process_date.clone(),
             };
 
-            let process_id = spawn_device_change(
-                store,
-                snapshot_store,
-                tenant_id,
-                snapshot_interval,
-                &tx_id,
-                domain_cmd,
-            )
-            .await
-            .map_err(|e| energy_api::Error::Http {
-                status: 500,
-                body: e.to_string(),
-            })?;
+            let process_id = spawn_device_change(store, tenant_id, &tx_id, domain_cmd)
+                .await
+                .map_err(|e| energy_api::Error::Http {
+                    status: 500,
+                    body: e.to_string(),
+                })?;
 
             info!(
                 tx_id,
@@ -381,9 +348,7 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
 /// Registers a 5-Werktage deadline and a correlated index under `tx_id`.
 async fn spawn_device_change(
     store: SlateDbStore,
-    snapshot_store: SlateDbSnapshotStore,
     tenant_id: TenantId,
-    snapshot_interval: u64,
     tx_id: &str,
     command: DeviceChangeCommand,
 ) -> Result<ProcessId, mako_engine::error::EngineError> {
@@ -406,20 +371,15 @@ async fn spawn_device_change(
     let stream_id = process.stream_id().clone();
     let identity = process.identity();
 
-    process
-        .execute_and_enqueue_with_snapshot_and_retry(command, 3, &snapshot_store, snapshot_interval)
-        .await?;
-
-    // Register 5-Werktage response deadline (BDEW WiM BK6-18-032).
+    // Build 5-Werktage deadline before the atomic write (BK6-24-174).
     // deadline_at_werktage computes 17:00 Europe/Berlin on the due Werktag,
-    // correctly handling CET/CEST transitions and using the Berlin calendar
-    // date of now_utc() as the start (not the UTC calendar date).
+    // correctly handling CET/CEST transitions.
     let due_at = mako_engine::fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         5,
         mako_engine::fristen::HolidayCalendar::BdewMaKo,
     );
-    let deadline = mako_engine::deadline::Deadline::new(
+    let deadline = Deadline::new(
         stream_id,
         process_id,
         tenant_id,
@@ -427,14 +387,11 @@ async fn spawn_device_change(
         "wim-anmeldung-antwort-5-werktage",
         due_at,
     );
-    if let Err(e) = store.as_deadline_store().register(&deadline).await {
-        warn!(
-            tx_id,
-            process_id = %process_id,
-            error = %e,
-            "WiM Anmeldung: deadline registration failed (non-fatal — process spawned)"
-        );
-    }
+    // Atomically persist events + deadline in one WriteBatch (F-043 fix).
+    // A crash between separate writes would lose the deadline permanently.
+    process
+        .execute_and_enqueue_with_deadlines(command, &[deadline])
+        .await?;
 
     // Register correlated index so ERP commands can look up this process
     // by tx_id via `ProcessRegistry::find_correlated`.
@@ -460,9 +417,7 @@ async fn spawn_device_change(
 /// Also registers a 5-Werktage deadline (BDEW WiM / BK6-18-032).
 async fn spawn_steuerungsauftrag(
     store: SlateDbStore,
-    snapshot_store: SlateDbSnapshotStore,
     tenant_id: TenantId,
-    snapshot_interval: u64,
     tx_id: &str,
     command: SteuerungsauftragCommand,
 ) -> Result<ProcessId, mako_engine::error::EngineError> {
@@ -486,20 +441,15 @@ async fn spawn_steuerungsauftrag(
     // Capture identity before consume-by-execute.
     let identity = process.identity();
 
-    process
-        .execute_and_enqueue_with_snapshot_and_retry(command, 3, &snapshot_store, snapshot_interval)
-        .await?;
-
-    // Register 5-Werktage response deadline (BDEW WiM BK6-18-032).
+    // Build 5-Werktage deadline before the atomic write (BK6-24-174).
     // deadline_at_werktage computes 17:00 Europe/Berlin on the due Werktag,
-    // correctly handling CET/CEST transitions and using the Berlin calendar
-    // date of now_utc() as the start (not the UTC calendar date).
+    // correctly handling CET/CEST transitions.
     let due_at = mako_engine::fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         5,
         mako_engine::fristen::HolidayCalendar::BdewMaKo,
     );
-    let deadline = mako_engine::deadline::Deadline::new(
+    let deadline = Deadline::new(
         stream_id,
         process_id,
         tenant_id,
@@ -507,14 +457,11 @@ async fn spawn_steuerungsauftrag(
         "steuerungsauftrag-antwort-5-werktage",
         due_at,
     );
-    if let Err(e) = store.as_deadline_store().register(&deadline).await {
-        warn!(
-            tx_id,
-            process_id = %process_id,
-            error = %e,
-            "Steuerungsauftrag: deadline registration failed (non-fatal — process spawned)"
-        );
-    }
+    // Atomically persist events + deadline in one WriteBatch (F-043 fix).
+    // A crash between separate writes would lose the deadline permanently.
+    process
+        .execute_and_enqueue_with_deadlines(command, &[deadline])
+        .await?;
 
     // Register the process under the tx_id business key so that ERP commands
     // `wim.steuerungsauftrag.bestaetigen` / `.ablehnen` can look it up via the

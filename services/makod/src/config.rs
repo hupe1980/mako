@@ -260,7 +260,7 @@ pub struct As4Config {
 
     /// Trading-partner AS4 endpoints in `"GLN=HTTPS-URL"` format.
     ///
-    /// These entries are **bootstrapped** into the durable [`PartnerStore`] at
+    /// These entries are **bootstrapped** into the durable `PartnerStore` at
     /// startup and survive restarts without requiring a redeploy. Once seeded,
     /// individual records can be updated at runtime via:
     ///
@@ -268,7 +268,7 @@ pub struct As4Config {
     /// - `POST /admin/partners/import` — ingest a raw PARTIN EDIFACT interchange
     ///
     /// When a partner sends an inbound PARTIN message (PIDs 37000–37014), the
-    /// engine calls [`PartnerStore::upsert`] with the richer PARTIN-derived
+    /// engine calls `PartnerStore::upsert` with the richer PARTIN-derived
     /// record; the bootstrapped AS4 URL is preserved until overwritten by a
     /// PARTIN `COM` segment with qualifier `AK`.
     ///

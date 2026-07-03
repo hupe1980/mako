@@ -201,6 +201,105 @@ async fn end_to_end_geraetewechsel_pipeline() {
     }
 }
 
+// ── Negative AHB conformance tests (F-026) ───────────────────────────────────
+
+/// AHB conformance — wrong BGM qualifier on PID 55042 must produce a
+/// validation error with rule `AHB-55042-BGM-1001-Q`.
+///
+/// Regression guard: before the fix (PIDs 55039/55042/55051/55168 absent from
+/// ahb.json), `report.is_valid()` returned `true` for any WiM UTILMD message
+/// because `ahb_rule_pack(Some(55042))` hit the `Some(_unknown)` branch and
+/// emitted only a warning.  Now it returns a proper error.
+#[test]
+fn negative_ahb_wrong_bgm_qualifier_pid_55042() {
+    // Valid PID 55042 uses BGM+E01; inject BGM+E99 (never valid for any WiM PID).
+    let invalid_bytes: &[u8] = b"\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WIM-NEG-001'\
+UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
+BGM+E99:::+00055042::+9'\
+DTM+137:20250115:102'\
+RFF+Z13:WIM-REF-NEG-001'\
+NAD+MS+4012345000023::293'\
+NAD+MR+9900357000004::293'\
+IDE+24+DE0001000001234567890000000000001::'\
+LOC+Z16+DE0001000001234567890000000000001::'\
+UNT+9+MSG-001'\
+UNZ+1+WIM-NEG-001'";
+
+    let platform = Platform::with_all_profiles();
+    let msg = platform
+        .parse(invalid_bytes)
+        .expect("EDIFACT syntax is valid; parse must succeed");
+
+    // Use a fixed reference date within the fv20251001 validity window (2025-10-01 to 2026-09-30).
+    let ref_date = time::Date::from_calendar_date(2026, time::Month::January, 15).unwrap();
+    let report = msg
+        .validate_on_date(ref_date)
+        .expect("validate_on_date must not error");
+
+    assert!(
+        !report.is_valid(),
+        "BGM+E99 on PID 55042 must fail AHB validation; got is_valid=true.\n\
+         This means WiM AHB qualifier checks are not firing — check that PID 55042 \
+         is registered in ahb.json for fv20251001/fv20261001."
+    );
+
+    let bgm_qualifier_rule_fired = report.errors().iter().any(|e| {
+        e.rule_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("AHB-55042-BGM-1001-Q"))
+    });
+    assert!(
+        bgm_qualifier_rule_fired,
+        "expected rule AHB-55042-BGM-1001-Q to fire; errors: {:#?}",
+        report.errors()
+    );
+}
+
+/// AHB conformance — wrong IDE qualifier (Z19 instead of 24) on PID 55039 must
+/// produce a validation error.  Z19 is the GPKE qualifier (MaLo); WiM uses 24
+/// (Transaktion).  Before the fix this was silently accepted.
+#[test]
+fn negative_ahb_wrong_ide_qualifier_pid_55039() {
+    let invalid_bytes: &[u8] = b"\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WIM-NEG-002'\
+UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
+BGM+E35:::+00055039::+9'\
+DTM+137:20250115:102'\
+RFF+Z13:WIM-REF-NEG-002'\
+NAD+MS+4012345000023::293'\
+NAD+MR+9900357000004::293'\
+IDE+Z19+51238696781::'\
+UNT+8+MSG-001'\
+UNZ+1+WIM-NEG-002'";
+
+    let platform = Platform::with_all_profiles();
+    let msg = platform
+        .parse(invalid_bytes)
+        .expect("EDIFACT syntax is valid; parse must succeed");
+
+    let ref_date = time::Date::from_calendar_date(2026, time::Month::January, 15).unwrap();
+    let report = msg
+        .validate_on_date(ref_date)
+        .expect("validate_on_date must not error");
+
+    assert!(
+        !report.is_valid(),
+        "IDE+Z19 on WiM PID 55039 must fail AHB validation (Z19 is GPKE, WiM requires 24)."
+    );
+
+    let ide_rule_fired = report.errors().iter().any(|e| {
+        e.rule_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("AHB-55039-IDE-7495-Q"))
+    });
+    assert!(
+        ide_rule_fired,
+        "expected rule AHB-55039-IDE-7495-Q to fire; errors: {:#?}",
+        report.errors()
+    );
+}
+
 /// A command with a non-WiM PID must be rejected by the workflow.
 #[tokio::test]
 async fn wrong_pid_returns_workflow_error() {

@@ -240,267 +240,178 @@
     },
     {
       "id": "SG5",
-      "trigger_segment": "NAD",
+      "trigger_segment": "LOC",
       "mandatory": true,
       "max_occurrences": 99999,
       "segments": [
         {
-          "tag": "NAD",
-          "name": "Liefer- bzw. Bezugsort",
+          "tag": "LOC",
+          "name": "Identifikationsangabe",
           "mandatory": true,
           "max_occurrences": 1,
           "elements": [
             {
-              "id": "3035",
+              "id": "3227",
               "status": "M",
               "components": 1
             },
             {
-              "id": "C082",
-              "status": "C",
+              "id": "C517",
+              "status": "M",
+              "components": 4
+            }
+          ],
+          "qualifier_restrictions": {
+            "3227": [
+              "172",
+              "237",
+              "Z06",
+              "Z98",
+              "ZZZ"
+            ]
+          }
+        },
+        {
+          "tag": "DTM",
+          "name": "Zeitraumangaben",
+          "mandatory": false,
+          "max_occurrences": 9,
+          "elements": [
+            {
+              "id": "C507",
+              "status": "M",
               "components": 3
             }
           ],
           "qualifier_restrictions": {
-            "3035": [
-              "DP"
+            "2005": [
+              "163",
+              "164",
+              "293",
+              "137",
+              "7",
+              "25",
+              "37",
+              "306"
             ]
           }
         }
       ],
       "groups": [
         {
-          "id": "SG6",
-          "trigger_segment": "LOC",
-          "mandatory": true,
+          "id": "SG9",
+          "trigger_segment": "LIN",
+          "mandatory": false,
           "max_occurrences": 99999,
           "segments": [
             {
-              "tag": "LOC",
-              "name": "Identifikationsangabe",
+              "tag": "LIN",
+              "name": "Laufende Position",
               "mandatory": true,
               "max_occurrences": 1,
               "elements": [
                 {
-                  "id": "3227",
+                  "id": "1082",
+                  "status": "C",
+                  "components": 1
+                }
+              ]
+            },
+            {
+              "tag": "PIA",
+              "name": "Produktidentifikation (OBIS-Kennzahl)",
+              "mandatory": false,
+              "max_occurrences": 1,
+              "elements": [
+                {
+                  "id": "4347",
                   "status": "M",
                   "components": 1
                 },
                 {
-                  "id": "C517",
+                  "id": "C212",
                   "status": "M",
                   "components": 4
                 }
               ],
               "qualifier_restrictions": {
-                "3227": [
-                  "172",
-                  "237",
-                  "Z06",
-                  "Z98",
-                  "ZZZ"
-                ]
-              }
-            },
-            {
-              "tag": "DTM",
-              "name": "Zeitraumangaben",
-              "mandatory": false,
-              "max_occurrences": 9,
-              "elements": [
-                {
-                  "id": "C507",
-                  "status": "M",
-                  "components": 3
-                }
-              ],
-              "qualifier_restrictions": {
-                "2005": [
-                  "163",
-                  "164",
-                  "293",
-                  "137",
-                  "7",
-                  "25",
-                  "37",
-                  "306"
+                "4347": [
+                  "5"
                 ]
               }
             }
           ],
           "groups": [
             {
-              "id": "SG7",
-              "trigger_segment": "RFF",
-              "mandatory": false,
-              "max_occurrences": 99,
+              "id": "SG10",
+              "trigger_segment": "QTY",
+              "mandatory": true,
+              "max_occurrences": 9999,
               "segments": [
                 {
-                  "tag": "RFF",
-                  "name": "Gerätenummer / Konfigurations-ID",
+                  "tag": "QTY",
+                  "name": "Mengenangaben",
                   "mandatory": true,
                   "max_occurrences": 1,
                   "elements": [
                     {
-                      "id": "C506",
+                      "id": "C186",
                       "status": "M",
-                      "components": 5
+                      "components": 3
                     }
                   ],
                   "qualifier_restrictions": {
-                    "1153": [
-                      "MG",
-                      "AGK",
+                    "6063": [
+                      "220",
+                      "67",
+                      "Z10",
+                      "Z18",
                       "Z19"
                     ]
                   }
-                }
-              ],
-              "groups": []
-            },
-            {
-              "id": "SG8",
-              "trigger_segment": "CCI",
-              "mandatory": false,
-              "max_occurrences": 99,
-              "segments": [
-                {
-                  "tag": "CCI",
-                  "name": "Zeitreihentyp",
-                  "mandatory": true,
-                  "max_occurrences": 1,
-                  "elements": [
-                    {
-                      "id": "7059",
-                      "status": "C",
-                      "components": 1
-                    },
-                    {
-                      "id": "C214",
-                      "status": "C",
-                      "components": 4
-                    }
-                  ]
-                }
-              ],
-              "groups": []
-            },
-            {
-              "id": "SG9",
-              "trigger_segment": "LIN",
-              "mandatory": false,
-              "max_occurrences": 99999,
-              "segments": [
-                {
-                  "tag": "LIN",
-                  "name": "Laufende Position",
-                  "mandatory": true,
-                  "max_occurrences": 1,
-                  "elements": [
-                    {
-                      "id": "1082",
-                      "status": "C",
-                      "components": 1
-                    }
-                  ]
                 },
                 {
-                  "tag": "PIA",
-                  "name": "Produktidentifikation (OBIS-Kennzahl)",
+                  "tag": "DTM",
+                  "name": "Zeitangaben Messwert",
                   "mandatory": false,
-                  "max_occurrences": 1,
+                  "max_occurrences": 9,
                   "elements": [
                     {
-                      "id": "4347",
+                      "id": "C507",
                       "status": "M",
-                      "components": 1
-                    },
-                    {
-                      "id": "C212",
-                      "status": "M",
-                      "components": 4
+                      "components": 3
                     }
                   ],
                   "qualifier_restrictions": {
-                    "4347": [
-                      "5"
+                    "2005": [
+                      "163",
+                      "164",
+                      "7",
+                      "25",
+                      "306"
                     ]
                   }
+                },
+                {
+                  "tag": "STS",
+                  "name": "Statusangabe",
+                  "mandatory": false,
+                  "max_occurrences": 9,
+                  "elements": [
+                    {
+                      "id": "9015",
+                      "status": "C",
+                      "components": 1
+                    },
+                    {
+                      "id": "C601",
+                      "status": "C",
+                      "components": 4
+                    }
+                  ]
                 }
               ],
-              "groups": [
-                {
-                  "id": "SG10",
-                  "trigger_segment": "QTY",
-                  "mandatory": true,
-                  "max_occurrences": 9999,
-                  "segments": [
-                    {
-                      "tag": "QTY",
-                      "name": "Mengenangaben",
-                      "mandatory": true,
-                      "max_occurrences": 1,
-                      "elements": [
-                        {
-                          "id": "C186",
-                          "status": "M",
-                          "components": 3
-                        }
-                      ],
-                      "qualifier_restrictions": {
-                        "6063": [
-                          "220",
-                          "67",
-                          "Z10",
-                          "Z18",
-                          "Z19"
-                        ]
-                      }
-                    },
-                    {
-                      "tag": "DTM",
-                      "name": "Zeitangaben Messwert",
-                      "mandatory": false,
-                      "max_occurrences": 9,
-                      "elements": [
-                        {
-                          "id": "C507",
-                          "status": "M",
-                          "components": 3
-                        }
-                      ],
-                      "qualifier_restrictions": {
-                        "2005": [
-                          "163",
-                          "164",
-                          "7",
-                          "25",
-                          "306"
-                        ]
-                      }
-                    },
-                    {
-                      "tag": "STS",
-                      "name": "Statusangabe",
-                      "mandatory": false,
-                      "max_occurrences": 9,
-                      "elements": [
-                        {
-                          "id": "9015",
-                          "status": "C",
-                          "components": 1
-                        },
-                        {
-                          "id": "C601",
-                          "status": "C",
-                          "components": 4
-                        }
-                      ]
-                    }
-                  ],
-                  "groups": []
-                }
-              ]
+              "groups": []
             }
           ]
         }

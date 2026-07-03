@@ -23,14 +23,23 @@ use crate::error::RedispatchXmlError;
 /// A parsed Redispatch 2.0 document (any of the nine supported types).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Document {
+    /// Activation document (`ActivationDocument`): ACO, ACR, or AAR.
     Activation(Box<ActivationDocument>),
+    /// Planned resource schedule document (`PlannedResourceScheduleDocument`).
     PlannedResourceSchedule(Box<PlannedResourceScheduleDocument>),
+    /// Acknowledgement document (`AcknowledgementDocument`).
     Acknowledgement(Box<AcknowledgementDocument>),
+    /// Stammdaten (master data) document.
     Stammdaten(Box<Stammdaten>),
+    /// Status request market document (`StatusRequest_MarketDocument`).
     StatusRequest(Box<StatusRequestMarketDocument>),
+    /// Unavailability market document (`Unavailability_MarketDocument`).
     Unavailability(Box<UnavailabilityMarketDocument>),
+    /// Kaskade (cascade) document.
     Kaskade(Box<Kaskade>),
+    /// Network constraint document (`NetworkConstraintDocument`).
     NetworkConstraint(Box<NetworkConstraintDocument>),
+    /// Kostenblatt (cost sheet) document.
     Kostenblatt(Box<Kostenblatt>),
 }
 

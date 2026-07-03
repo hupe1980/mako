@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! # energy-api
 //!
 //! Rust client and server bindings for the German energy market API-Webdienste

@@ -70,6 +70,7 @@ fn receive_sperrauftrag(validation_passed: bool) -> SperrungCommand {
     SperrungCommand::ReceiveSperrung {
         pid: pid(17115),
         sender: lf_gln(),
+        receiver: nb_gln(),
         location_id: malo(),
         document_date: "20250601".to_owned(),
         message_ref: msg("LF-SPERR-001"),
@@ -248,6 +249,7 @@ async fn nb_domain_data_preserved_in_validation_passed() {
     p.execute(SperrungCommand::ReceiveSperrung {
         pid: pid(17115),
         sender: sender.clone(),
+        receiver: nb_gln(),
         location_id: location.clone(),
         document_date: "20250601".to_owned(),
         message_ref: msg("NB-DATA-001"),
@@ -275,6 +277,7 @@ async fn nb_receive_entsperrauftrag_valid() {
     p.execute(SperrungCommand::ReceiveSperrung {
         pid: pid(17117),
         sender: lf_gln(),
+        receiver: nb_gln(),
         location_id: malo(),
         document_date: "20250601".to_owned(),
         message_ref: msg("LF-ENTSPERR-001"),

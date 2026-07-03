@@ -54,8 +54,11 @@ pub struct ApiRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiRecordRef {
+    /// 13-digit Marktpartner-ID of the API provider (OU from EMT.API cert).
     pub provider_id: String,
+    /// API service identifier (e.g. `controlMeasuresV1`).
     pub api_id: String,
+    /// Major version of the API service.
     pub major_version: i32,
 }
 
@@ -182,6 +185,7 @@ pub struct RedirectInfo {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CanceledSubscription {
+    /// Reference to the canceled directory entry subscription.
     pub record_ref: ApiRecordRef,
     /// `true` if the client initiated the cancel; `false` if server-initiated.
     pub canceled_by_client: bool,

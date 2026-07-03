@@ -31,7 +31,7 @@
 //! `POST /admin/partners/import` accepts a raw EDIFACT interchange
 //! (`Content-Type: text/plain; charset=utf-8`).  The body is parsed as a
 //! PARTIN message using [`edi_energy::Platform`]; each participating party
-//! is extracted and upserted into the [`PartnerStore`].
+//! is extracted and upserted into the `PartnerStore`.
 //!
 //! Until full PARTIN segment extraction is implemented the endpoint returns
 //! `501 Not Implemented`.

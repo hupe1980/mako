@@ -1,3 +1,4 @@
+//! `Stammdaten` -- technical master data exchange (ANB/DV to VNB, VNB to UNB) for registered Redispatch resources.
 use serde::{Deserialize, Serialize};
 
 use crate::types::{Decimal3, DocumentId, MarketParticipantId, Mrid, UtcDateTime};
@@ -51,12 +52,16 @@ pub enum StammdatenDocType {
 /// Sender market role (`Senderrolle`) in `Stammdaten`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StammdatenSenderRole {
+    /// Grid operator (Netzbetreiber, A18).
     #[serde(rename = "A18")]
     GridOperator,
+    /// Resource provider (Anlagenbetreiber / Direktvermarkter, A27).
     #[serde(rename = "A27")]
     ResourceProvider,
+    /// Data provider (Datenprovider, A39).
     #[serde(rename = "A39")]
     DataProvider,
+    /// Supplier (Lieferant, Z01).
     #[serde(rename = "Z01")]
     Supplier,
 }
@@ -64,12 +69,16 @@ pub enum StammdatenSenderRole {
 /// Receiver market role (`Empfaengerrolle`) in `Stammdaten`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StammdatenReceiverRole {
+    /// Balance responsible party (Bilanzkreisverantwortlicher, A08).
     #[serde(rename = "A08")]
     BalanceResponsibleParty,
+    /// Grid operator (Netzbetreiber, A18).
     #[serde(rename = "A18")]
     GridOperator,
+    /// Data provider (Datenprovider, A39).
     #[serde(rename = "A39")]
     DataProvider,
+    /// Supplier (Lieferant, Z01).
     #[serde(rename = "Z01")]
     Supplier,
 }
@@ -91,16 +100,22 @@ pub enum Meldungsstatus {
 /// German control zone (`Regelzone`) codes used in `Stammdaten`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Regelzone {
+    /// TransnetBW control zone (EIC 10YDE-ENBW-----N).
     #[serde(rename = "10YDE-ENBW-----N")]
     TransnetBw,
+    /// TenneT DE control zone (EIC 10YDE-EON------1).
     #[serde(rename = "10YDE-EON------1")]
     TennetDe,
+    /// Amprion control zone (EIC 10YDE-RWENET---I).
     #[serde(rename = "10YDE-RWENET---I")]
     Amprion,
+    /// 50Hertz control zone (EIC 10YDE-VE-------2).
     #[serde(rename = "10YDE-VE-------2")]
     FiftyHertz,
+    /// Stadtwerke Flensburg control zone (EIC 10YFLENSBURG---3).
     #[serde(rename = "10YFLENSBURG---3")]
     Flensburg,
+    /// DB Energie (Bahnstrom) control zone (EIC 11YRBAHNSTROM--P).
     #[serde(rename = "11YRBAHNSTROM--P")]
     Bahnstrom,
 }
@@ -109,48 +124,70 @@ pub enum Regelzone {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Energietraeger {
+    /// Natural gas (B01).
     #[serde(rename = "B01")]
     NaturalGas,
+    /// Lignite (brown coal, B02).
     #[serde(rename = "B02")]
     LigniteCoal,
+    /// Hard coal (B03).
     #[serde(rename = "B03")]
     HardCoal,
+    /// Oil (B04).
     #[serde(rename = "B04")]
     Oil,
+    /// Uranium / nuclear (B05).
     #[serde(rename = "B05")]
     Uranium,
+    /// Biomass (B06).
     #[serde(rename = "B06")]
     Biomass,
+    /// Wind energy (B07).
     #[serde(rename = "B07")]
     Wind,
+    /// Solar / photovoltaic (B08).
     #[serde(rename = "B08")]
     Solar,
+    /// Run-of-river hydro (B09).
     #[serde(rename = "B09")]
     RunOfRiver,
+    /// Pumped-storage hydro (B10).
     #[serde(rename = "B10")]
     PumpedStorage,
+    /// Geothermal (B11).
     #[serde(rename = "B11")]
     Geothermal,
+    /// Waste-to-energy (B12).
     #[serde(rename = "B12")]
     WasteToEnergy,
+    /// Other renewable energy source (B13).
     #[serde(rename = "B13")]
     OtherRenewable,
+    /// Mixed energy carrier (B14).
     #[serde(rename = "B14")]
     Mixed,
+    /// Pumped-storage hydro with natural inflow (B15).
     #[serde(rename = "B15")]
     PumpedStorageWithNaturalInflow,
+    /// Other non-renewable energy source (B16).
     #[serde(rename = "B16")]
     OtherNonRenewable,
+    /// Other storage technology (B17).
     #[serde(rename = "B17")]
     OtherStorage,
+    /// Hydrogen (B18).
     #[serde(rename = "B18")]
     Hydrogen,
+    /// Offshore wind energy (B19).
     #[serde(rename = "B19")]
     Offshore,
+    /// Battery storage (B20).
     #[serde(rename = "B20")]
     Battery,
+    /// EEG-remunerated renewable energy (Z01).
     #[serde(rename = "Z01")]
     Eeg,
+    /// KWKG-remunerated combined heat and power (Z02).
     #[serde(rename = "Z02")]
     Kwkg,
 }
@@ -183,8 +220,10 @@ pub enum AbrufartAufforderungsfall {
 /// Tolerance case (`Status_Duldungsfall`) for a controllable resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StatusDuldungsfall {
+    /// Tolerance case applies (A01).
     #[serde(rename = "A01")]
     Yes,
+    /// Tolerance case does not apply (A02).
     #[serde(rename = "A02")]
     No,
 }

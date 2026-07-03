@@ -42,6 +42,7 @@ use mako_engine::{
     deadline::Deadline,
     error::WorkflowError,
     ids::DeadlineId,
+    outbox::PendingOutbox,
     types::{MaLo, MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -391,6 +392,10 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                         "expected NB-initiated Lieferende PID (55007), got {pid}",
                     )));
                 }
+                // Clone before move for APERAK emission in the validation-failed path.
+                let sender_gln = sender.clone();
+                let receiver_gln = receiver.clone();
+
                 let mut events = vec![LfAbmeldungEvent::AnkuendigungErhalten {
                     location_id,
                     sender,
@@ -402,12 +407,45 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                 }];
                 if validation_passed {
                     events.push(LfAbmeldungEvent::ValidationPassed { message_ref });
+                    // F-038: APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.0 §2.4.
+                    // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    let outbox = vec![
+                        PendingOutbox::new(
+                            "APERAK",
+                            sender_gln.as_str(),
+                            serde_json::json!({
+                                "sender":        receiver_gln.as_str(),
+                                "receiver":      sender_gln.as_str(),
+                                "pid":           29001_u32,
+                                "document_code": "312",
+                            }),
+                        )
+                        .caused_by(1),
+                    ];
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 } else {
+                    let reason = validation_errors.join("; ");
                     events.push(LfAbmeldungEvent::Rejected {
-                        reason: validation_errors.join("; "),
+                        reason: reason.clone(),
                     });
+                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
+                    // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    let outbox = vec![
+                        PendingOutbox::new(
+                            "APERAK",
+                            sender_gln.as_str(),
+                            serde_json::json!({
+                                "sender":     receiver_gln.as_str(),
+                                "receiver":   sender_gln.as_str(),
+                                "pid":        29001_u32,
+                                "error_code": "Z29",
+                                "reason":     reason,
+                            }),
+                        )
+                        .caused_by(0),
+                    ];
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 }
-                Ok(events.into())
             }
 
             LfAbmeldungCommand::SendAntwort { accepted, reason } => {

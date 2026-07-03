@@ -1,3 +1,4 @@
+//! Time period types (`TimeInterval`, `Resolution`, `Period`, `Point`) used in scheduled time series.
 use serde::{Deserialize, Serialize};
 
 use crate::types::{AttrV, Decimal3, TimeInterval};

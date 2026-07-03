@@ -1,6 +1,6 @@
 //! BDEW AS4 outbound delivery for the Mako outbox.
 //!
-//! [`BdewAs4Sender`] is wired to the [`OutboxWorker`] in `main.rs` whenever
+//! [`BdewAs4Sender`] is wired to the `OutboxWorker` in `main.rs` whenever
 //! a signing key/cert pair is available (i.e. `--as4-signing-key-pem` and
 //! `--as4-signing-cert-pem` are set).  It replaces the stub
 //! [`MaloIdentSender`]-only path that previously discarded all EDIFACT
@@ -42,6 +42,8 @@
 //! the sender falls back to transmitting the JSON blob. A structured `warn!` is
 //! emitted for every such fallback so the operator knows about non-conformant
 //! transmissions.
+//!
+//! [`RenderError::InsufficientPayload`]: crate::edifact_renderer::RenderError::InsufficientPayload
 
 use std::sync::Arc;
 
@@ -60,6 +62,170 @@ use mako_as4::PartnerDirectory;
 
 use crate::edifact_renderer;
 use crate::malo_ident_sender::MaloIdentSender;
+
+// ── WebhookEdifactSender ──────────────────────────────────────────────────────
+
+/// An [`As4Sender`] that POSTs outbound EDIFACT messages to an HTTP webhook
+/// instead of using the BDEW AS4 transport.
+///
+/// Each message is rendered to EDIFACT wire bytes and delivered as a
+/// **[CloudEvents 1.0](https://cloudevents.io) structured-mode JSON** POST:
+///
+/// ```text
+/// POST <webhook_url>
+/// Content-Type: application/cloudevents+json
+///
+/// {
+///   "specversion": "1.0",
+///   "type": "de.mako.edifact.outbound",
+///   "source": "urn:mako:tenant:<tenant_id>",
+///   "id": "<message_id>",
+///   "subject": "<process_id>",
+///   "makomessagetype": "UTILMD",
+///   "makorecipient": "<recipient_gln>",
+///   "data": {
+///     "message_type": "UTILMD",
+///     "recipient": "<gln>",
+///     "edifact": "UNB+…'UNZ+…'"
+///   }
+/// }
+/// ```
+///
+/// `MaloIdentCallback` messages are still routed to the embedded
+/// [`MaloIdentSender`] (unchanged from the AS4 path).
+///
+/// Intended for development / ERP integration without an AS4 infrastructure.
+/// In production, use [`BdewAs4Sender`].
+#[derive(Clone)]
+pub struct WebhookEdifactSender {
+    webhook_url: Arc<str>,
+    tenant_id: Arc<str>,
+    http_client: reqwest::Client,
+    malo_sender: MaloIdentSender,
+}
+
+impl WebhookEdifactSender {
+    /// Create a new `WebhookEdifactSender`.
+    #[must_use]
+    pub fn new(
+        webhook_url: impl Into<Arc<str>>,
+        tenant_id: impl Into<Arc<str>>,
+        http_client: reqwest::Client,
+        malo_sender: MaloIdentSender,
+    ) -> Self {
+        Self {
+            webhook_url: webhook_url.into(),
+            tenant_id: tenant_id.into(),
+            http_client,
+            malo_sender,
+        }
+    }
+}
+
+impl As4Sender for WebhookEdifactSender {
+    fn send(
+        &self,
+        msg: &OutboxMessage,
+    ) -> impl std::future::Future<Output = Result<(), EngineError>> + Send {
+        let webhook_url = Arc::clone(&self.webhook_url);
+        let tenant_id = Arc::clone(&self.tenant_id);
+        let http_client = self.http_client.clone();
+        let malo_sender = self.malo_sender.clone();
+        let msg_owned = msg.clone();
+
+        async move {
+            // MaloIdentCallback: delegate to the MaLo-ID sender unchanged.
+            if msg_owned.message_type.as_ref() == "MaloIdentCallback" {
+                return malo_sender.send(&msg_owned).await;
+            }
+
+            // Render domain-intent JSON to EDIFACT wire bytes.
+            let edifact_str = match edifact_renderer::render_to_wire_bytes(&msg_owned, &tenant_id) {
+                Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                Err(ref e) if edifact_renderer::is_suppressed(e) => {
+                    // Gas positive APERAK: silence = acceptance per APERAK AHB 1.0 §2.3.
+                    // No wire EDIFACT sent; deliver domain JSON to ERP webhook so the
+                    // operator sees the positive outcome.
+                    tracing::debug!(
+                        message_id   = %msg_owned.message_id,
+                        message_type = %msg_owned.message_type,
+                        "WebhookEdifactSender: Gas positive APERAK suppressed — \
+                         sending domain JSON (silence = acceptance, APERAK AHB 1.0 §2.3)",
+                    );
+                    msg_owned.payload.to_string()
+                }
+                Err(ref e) if edifact_renderer::is_insufficient_payload(e) => {
+                    // No renderer registered for this message type — include
+                    // the raw domain-intent JSON payload so the ERP still sees
+                    // something useful, and log a warning.
+                    tracing::warn!(
+                        message_id   = %msg_owned.message_id,
+                        message_type = %msg_owned.message_type,
+                        "WebhookEdifactSender: no EDIFACT renderer — \
+                         sending raw payload JSON",
+                    );
+                    msg_owned.payload.to_string()
+                }
+                Err(e) => {
+                    return Err(EngineError::Serialization(format!(
+                        "EDIFACT render failed for {}: {e}",
+                        msg_owned.message_id
+                    )));
+                }
+            };
+
+            let body = serde_json::json!({
+                "specversion":     "1.0",
+                "type":            "de.mako.edifact.outbound",
+                "source":          format!("urn:mako:tenant:{tenant_id}"),
+                "id":              msg_owned.message_id.to_string(),
+                "subject":         msg_owned.process_id.to_string(),
+                "time":            time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_default(),
+                "datacontenttype": "application/json",
+                "makoconvid":      msg_owned.conversation_id.to_string(),
+                "makomessagetype": msg_owned.message_type.as_ref(),
+                "makorecipient":   msg_owned.recipient.as_ref(),
+                "data": {
+                    "message_type": msg_owned.message_type.as_ref(),
+                    "recipient":    msg_owned.recipient.as_ref(),
+                    "edifact":      edifact_str,
+                },
+            });
+
+            let resp = http_client
+                .post(webhook_url.as_ref())
+                .header("Content-Type", "application/cloudevents+json")
+                .header("X-Idempotency-Key", msg_owned.message_id.to_string())
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| EngineError::Transport {
+                    endpoint: webhook_url.as_ref().into(),
+                    message: e.to_string(),
+                })?;
+
+            if resp.status().is_success() {
+                tracing::info!(
+                    message_id   = %msg_owned.message_id,
+                    message_type = %msg_owned.message_type,
+                    recipient    = %msg_owned.recipient,
+                    url          = %webhook_url,
+                    "WebhookEdifactSender: outbound EDIFACT delivered",
+                );
+                Ok(())
+            } else {
+                let status = resp.status().as_u16();
+                let body_text = resp.text().await.unwrap_or_default();
+                Err(EngineError::Transport {
+                    endpoint: webhook_url.as_ref().into(),
+                    message: format!("HTTP {status}: {body_text}"),
+                })
+            }
+        }
+    }
+}
 
 // ── BdewAs4Sender ─────────────────────────────────────────────────────────────
 
@@ -322,6 +488,18 @@ impl As4Sender for BdewAs4Sender {
                             "BdewAs4Sender: rendered EDIFACT wire bytes",
                         );
                         bytes
+                    }
+                    Err(ref e) if edifact_renderer::is_suppressed(e) => {
+                        // Gas positive APERAK: silence = acceptance per APERAK AHB 1.0 §2.3.
+                        // No AS4 message is sent; the outbox entry is acknowledged immediately.
+                        tracing::debug!(
+                            message_id   = %message_id_str,
+                            message_type = %message_type,
+                            recipient    = %recipient,
+                            "BdewAs4Sender: Gas positive APERAK suppressed — \
+                             no wire EDIFACT sent (silence = acceptance, APERAK AHB 1.0 §2.3)",
+                        );
+                        return Ok(());
                     }
                     Err(ref e) if edifact_renderer::is_insufficient_payload(e) => {
                         tracing::error!(

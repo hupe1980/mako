@@ -1,7 +1,7 @@
 //! Generic background worker that periodically runs a [`Projection`] against
 //! the event store using [`ProjectionRunner::catch_up_persistent`].
 //!
-//! The worker loads the last persisted [`GlobalProjectionCheckpoint`] from
+//! The worker loads the last persisted `GlobalProjectionCheckpoint` from
 //! SlateDB on each tick, feeds only the *new* events to the projection, and
 //! writes back the updated cursors.  This bounds cold-start replay to O(events
 //! since last checkpoint) instead of O(all events).

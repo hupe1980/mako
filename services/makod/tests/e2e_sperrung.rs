@@ -138,6 +138,7 @@ impl MockLfn {
             SperrungCommand::ReceiveSperrung {
                 pid,
                 sender,
+                receiver,
                 location_id,
                 document_date,
                 message_ref,
@@ -166,6 +167,7 @@ impl MockLfn {
                 SperrungCommand::ReceiveSperrung {
                     pid,
                     sender,
+                    receiver,
                     location_id,
                     document_date,
                     message_ref,
@@ -294,6 +296,7 @@ async fn e2e_sperrung_validation_failure() {
         .execute(SperrungCommand::ReceiveSperrung {
             pid: mako_engine::types::Pruefidentifikator::new(17115).unwrap(),
             sender: mako_engine::types::MarktpartnerCode::new(NB_ID),
+            receiver: mako_engine::types::MarktpartnerCode::new("9900357000001"),
             location_id: mako_engine::types::MaLo::new(MALO_ID),
             document_date: "2025-01-15".to_owned(),
             message_ref: MessageRef::new("MSG-SPERR-002"),

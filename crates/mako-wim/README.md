@@ -78,7 +78,7 @@ holidays do not.
 | `geraeteubernahme` | PIDs 17001–17011, 19001/19002/19015/19016 — Geräteübernahme ORDERS/ORDRSP |
 | `stammdaten`       | PIDs 17102–17133, 17132 — Stammdaten Anforderung / Übermittlung           |
 | `stornierung`      | PID 39000 — Stornierung ORDCHG                                            |
-| `rechnung`         | PIDs 31003, 31009 — WiM-Rechnung / MSB-Rechnung INVOIC                    |
+| `rechnung`         | PID 31009 — MSB-Rechnung INVOIC (WiM Strom Teil 1, multi-domain; routed via `wim-rechnung`) |
 | `preisanfrage`     | PIDs 35001–35005 (REQOTE), 15001–15005 (QUOTES) — Preisanfrage            |
 | `preisliste`       | PIDs 27001–27003 — Preisliste PRICAT                                      |
 | `steuerungsauftrag`| PIDs 11021–11023 — iMS Steuerungsauftrag (API-Webdienste REST channel)    |

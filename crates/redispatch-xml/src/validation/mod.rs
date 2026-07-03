@@ -19,18 +19,25 @@ pub mod structural;
 /// A validation error (document is non-conformant and must not be processed).
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ValidationError {
+    /// Document identifier length is outside the allowed 1–35 character range.
     #[error("document identifier must be 1–35 characters, got {0}")]
     DocumentIdLength(usize),
+    /// Document version number is outside the allowed 1–999 range.
     #[error("document version must be 1–999, got {0}")]
     DocumentVersionRange(u32),
+    /// Market participant ID does not consist of exactly 13 decimal digits.
     #[error("market participant ID must be exactly 13 decimal digits, got {0:?}")]
     MarketParticipantIdFormat(String),
+    /// Timestamp carries a non-UTC offset; all timestamps must end with `Z`.
     #[error("timestamp must be UTC, got offset {0}")]
     TimestampNotUtc(String),
+    /// Time interval end is not after its start.
     #[error("time interval end must be after start")]
     TimeIntervalOrder,
+    /// A structural XSD constraint was violated (length, pattern, range, enumeration).
     #[error("{0}")]
     Structural(String),
+    /// A semantic cross-field rule from the BDEW AWT was violated.
     #[error("{0}")]
     Semantic(String),
 }

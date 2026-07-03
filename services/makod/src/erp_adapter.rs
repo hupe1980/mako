@@ -4,7 +4,7 @@
 //!
 //! | Type | Use case |
 //! |------|---------|
-//! | [`LogErpAdapter`] | Re-export from `mako-engine`; log-only, no delivery |
+//! | `LogErpAdapter` | Re-export from `mako-engine`; log-only, no delivery |
 //! | [`WebhookErpAdapter`] | HTTP POST CloudEvents 1.0 JSON to a configurable ERP endpoint |
 //!
 //! ## Wire format
@@ -385,11 +385,14 @@ where
             }
 
             for msg in batch {
-                // Only deliver messages that carry a BO4E payload or are
-                // explicitly ERP-targeted.  AS4-only messages (no payload_schema)
-                // are skipped — they are handled by the AS4 OutboxWorker.
-                let is_erp_relevant =
-                    msg.payload_schema.is_some() || msg.message_type.starts_with("ERP_");
+                // Only deliver messages that carry a BO4E payload, are
+                // explicitly ERP-targeted, OR have a recognised ERP message
+                // type.  AS4-only EDIFACT messages (message_type = "UTILMD",
+                // "MSCONS", etc., no payload_schema) are skipped — they are
+                // handled by the AS4 OutboxWorker.
+                let is_erp_relevant = msg.payload_schema.is_some()
+                    || msg.message_type.starts_with("ERP_")
+                    || map_message_type_to_erp_event(&msg.message_type).is_some();
 
                 if !is_erp_relevant {
                     continue;

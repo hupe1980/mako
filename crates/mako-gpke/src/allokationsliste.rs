@@ -47,6 +47,17 @@ pub const ORDERS_ANFRAGE_PIDS: &[u32] = &[17110, 17114];
 /// | 19115 | Ablehnung Anforderung bilanzierte Menge |
 pub const ORDRSP_ABLEHNUNG_PIDS: &[u32] = &[19110, 19115];
 
+/// MSCONS positive-response PIDs (NB sends allocation data to LF).
+///
+/// These arrive inbound at the LF as the positive answer to ORDERS 17110/17114.
+/// They are **MMM Strom/Gas** PIDs — NOT GeLi Gas (BK7-24-01-009) PIDs.
+///
+/// | PID   | Description |
+/// |-------|-------------|
+/// | 13013 | Marktlokationsscharfe Allokationsliste Gas (MMMA) |
+/// | 13014 | Marktlokationsscharfe bilanzierte Menge Gas (MMMA) |
+pub const MSCONS_RESPONSE_PIDS: &[u32] = &[13013, 13014];
+
 /// Deadline label for the allocation-list response window.
 pub const ANTWORT_WINDOW_LABEL: &str = "gpke-allokationsliste-antwort";
 

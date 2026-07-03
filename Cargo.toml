@@ -21,7 +21,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version     = "0.6.0"
+version     = "0.7.0"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
@@ -42,7 +42,7 @@ uuid        = { version = "1", features = ["v4", "v5", "serde"] }
 
 # ── Internal workspace crates (path + version so domain crates can be published) ─
 edi-energy       = { path = "crates/edi-energy",  version = "0.6" }
-mako-engine      = { path = "crates/mako-engine", version = "0.6" }
+mako-engine      = { path = "crates/mako-engine", version = "0.7" }
 
 # ── Release profile ─────────────────────────────────────────────────────────
 [profile.release]

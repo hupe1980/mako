@@ -55,7 +55,7 @@ pub const MALO_IDENT_MAJOR_VERSION: i32 = 1;
 /// On-demand Verzeichnisdienst lookup helper.
 ///
 /// Wraps a [`DirectoryServiceClient`] and a [`SlateDbPartnerStore`] to provide
-/// cached endpoint URL resolution for [`MaloIdentSender`].
+/// cached endpoint URL resolution for `MaloIdentSender`.
 ///
 /// Resolution order:
 ///

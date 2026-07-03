@@ -1,3 +1,4 @@
+//! `Unavailability_MarketDocument` — planned and forced unavailability declarations for generation resources.
 use serde::{Deserialize, Serialize};
 
 use crate::documents::activation::EicCodingScheme;
@@ -91,6 +92,7 @@ pub enum UnavailabilityMarketRoleType {
 /// Market role sub-element.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UnavailabilityMarketRole {
+    /// Market role type code.
     #[serde(rename = "type")]
     pub role_type: UnavailabilityMarketRoleType,
 }
@@ -98,8 +100,10 @@ pub struct UnavailabilityMarketRole {
 /// Market participant reference.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UnavailabilityParticipant {
+    /// Market participant identifier (EIC or national code).
     #[serde(rename = "mRID")]
     pub m_rid: ParticipantMrid,
+    /// Market role of this participant.
     #[serde(rename = "marketRole")]
     pub market_role: UnavailabilityMarketRole,
 }
@@ -119,6 +123,7 @@ pub struct UnavailabilityTimeInterval {
 /// `unavailability_Time_Period` wrapper element.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UnavailabilityTimePeriod {
+    /// The time interval covered by this unavailability period.
     #[serde(rename = "timeInterval")]
     pub time_interval: UnavailabilityTimeInterval,
 }
@@ -140,6 +145,7 @@ pub type UnavailabilityBiddingZone = SimpleContent<String, EicCodingScheme>;
 /// `biddingZone_Domain` element in `Unavailability_MarketDocument`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UnavailabilityBiddingZoneDomain {
+    /// EIC code of the bidding zone / control zone.
     #[serde(rename = "mRID")]
     pub m_rid: UnavailabilityBiddingZone,
 }

@@ -260,10 +260,10 @@ async fn e2e_wim_geraetewechsel_positive_aperak() {
     assert_eq!(
         aperak_outbox.len(),
         1,
-        "positive DispatchAperak must enqueue exactly one Aperak outbox entry"
+        "positive DispatchAperak must enqueue exactly one APERAK outbox entry"
     );
     let aperak = &aperak_outbox[0];
-    assert_eq!(aperak.message_type.as_ref(), "Aperak");
+    assert_eq!(aperak.message_type.as_ref(), "APERAK");
     assert_eq!(
         aperak.recipient.as_ref(),
         NMSB_ID,
@@ -337,10 +337,10 @@ async fn e2e_wim_geraetewechsel_negative_aperak() {
     assert_eq!(
         aperak_outbox.len(),
         1,
-        "negative DispatchAperak must also enqueue one Aperak outbox entry"
+        "negative DispatchAperak must also enqueue one APERAK outbox entry"
     );
     let aperak = &aperak_outbox[0];
-    assert_eq!(aperak.message_type.as_ref(), "Aperak");
+    assert_eq!(aperak.message_type.as_ref(), "APERAK");
     assert_eq!(aperak.recipient.as_ref(), NMSB_ID);
     let payload = aperak
         .payload

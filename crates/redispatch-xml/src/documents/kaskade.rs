@@ -1,3 +1,4 @@
+//! `Kaskade` -- emergency cascade measure document for congestion relief between TSO and DSO.
 use serde::{Deserialize, Serialize};
 
 use crate::documents::activation::EicCodingScheme;
@@ -178,12 +179,16 @@ pub struct KaskadeReason {
 /// Coding scheme for resource object identifiers within `Kaskade`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ResourceObjScheme {
+    /// EIC (Energy Identification Code) coding scheme (A01).
     #[serde(rename = "A01")]
     Eic,
+    /// National resource coding scheme (A02).
     #[serde(rename = "A02")]
     NationalResource,
+    /// NDE (German national format) coding scheme.
     #[serde(rename = "NDE")]
     Nde,
+    /// Other or proprietary coding scheme (Z01).
     #[serde(rename = "Z01")]
     Other,
 }

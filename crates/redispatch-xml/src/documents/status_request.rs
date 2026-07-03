@@ -1,3 +1,4 @@
+//! `StatusRequest_MarketDocument` — TSO/DSO request for the current status of a Redispatch resource.
 use serde::{Deserialize, Serialize};
 
 use crate::documents::kaskade::ParticipantMrid;

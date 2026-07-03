@@ -68,6 +68,7 @@
 //!   guidelines published on [bdew-mako.de](https://www.bdew-mako.de)
 
 #![deny(unsafe_code)]
+#![deny(missing_docs)]
 
 pub mod documents;
 pub mod error;

@@ -206,25 +206,7 @@ name    = "windows-sys"
 version = "0.59"
 reason  = "Windows crate ecosystem version skew."
 
-[[bans.skip]]
-name    = "windows-sys"
-version = "0.60"
-reason  = "Windows crate ecosystem version skew; 0.60 introduced by cargo update alongside 0.61."
 
-[[bans.skip]]
-name    = "windows-targets"
-version = "0.52"
-reason  = "Windows crate ecosystem version skew; companion to windows-sys 0.59/0.60."
-
-[[bans.skip]]
-name    = "windows_x86_64_gnu"
-version = "0.52"
-reason  = "Windows crate ecosystem version skew; companion to windows-targets 0.52."
-
-[[bans.skip]]
-name    = "windows_x86_64_msvc"
-version = "0.52"
-reason  = "Windows crate ecosystem version skew; companion to windows-targets 0.52."
 
 [[bans.skip]]
 name    = "windows-core"

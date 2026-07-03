@@ -68,6 +68,12 @@ pub enum RenderError {
     NoActiveProfile { message_type: Box<str> },
     /// The `edi-energy` builder returned a serialization error.
     BuilderError(String),
+    /// The message should be silently suppressed — no wire EDIFACT should be sent.
+    ///
+    /// Used for Gas positive APERAKs: per APERAK AHB 1.0 §2.3, silence = acceptance
+    /// for Gas processes. The domain outbox entry exists for ERP webhook delivery,
+    /// but no wire EDIFACT is emitted over AS4.
+    Suppressed { reason: Box<str> },
 }
 
 impl std::fmt::Display for RenderError {
@@ -92,6 +98,9 @@ impl std::fmt::Display for RenderError {
                 "EDIFACT render [{message_type}]: no active BDEW profile registered for today's date"
             ),
             RenderError::BuilderError(e) => write!(f, "EDIFACT render: builder error: {e}"),
+            RenderError::Suppressed { reason } => {
+                write!(f, "EDIFACT render: suppressed — {reason}")
+            }
         }
     }
 }
@@ -105,6 +114,16 @@ impl std::error::Error for RenderError {}
 #[allow(dead_code)] // used by as4_sender (bin-only module, not visible to lib)
 pub fn is_insufficient_payload(err: &RenderError) -> bool {
     matches!(err, RenderError::InsufficientPayload { .. })
+}
+
+/// Returns `true` when the message should be suppressed — no wire EDIFACT sent.
+///
+/// Used for Gas positive APERAKs (silence = acceptance per APERAK AHB 1.0 §2.3).
+/// The AS4 sender acknowledges the outbox entry without transmitting.
+/// The ERP webhook sender delivers the domain JSON payload instead.
+#[allow(dead_code)] // used by as4_sender (bin-only module, not visible to lib)
+pub fn is_suppressed(err: &RenderError) -> bool {
+    matches!(err, RenderError::Suppressed { .. })
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -272,6 +291,19 @@ fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
 fn render_aperak(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, RenderError> {
     let mt = "APERAK";
 
+    // Gas positive APERAK: silence = acceptance per APERAK AHB 1.0 §2.3.
+    // Payload carries `suppress_wire: true` to signal no wire EDIFACT should be sent.
+    // The outbox entry is still delivered as domain JSON to the ERP webhook.
+    if p.get("suppress_wire")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(RenderError::Suppressed {
+            reason: "Gas positive APERAK: suppress_wire=true (silence = acceptance, APERAK AHB 1.0 §2.3)"
+                .into(),
+        });
+    }
+
     let sender = require_str(p, mt, "sender")?;
     let receiver = p
         .get("receiver")
@@ -302,6 +334,18 @@ fn render_aperak(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
         .sender(sender)
         .receiver(receiver)
         .message_ref(message_ref);
+
+    // BGM+313 (Verarbeitbarkeitsfehlermeldung) is mandatory when an error code
+    // is present; BGM+312 (Anerkennungsmeldung) would be used for positive acks.
+    // The BDEW APERAK AHB 1.0 §2.1.1 requires BGM+313 for all APERAK rejections.
+    // The `document_code` payload field allows an explicit override when needed.
+    let document_code = p.get("document_code").and_then(|v| v.as_str());
+    if let Some(code) = document_code {
+        builder = builder.document_code(code);
+    } else if error_code.is_some() {
+        // Auto-select BGM+313: error APERAK (Verarbeitbarkeitsfehlermeldung).
+        builder = builder.document_code("313");
+    }
 
     if let Some(pv) = pid
         && let Ok(ep) = Pruefidentifikator::new(pv)

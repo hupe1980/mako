@@ -151,11 +151,15 @@ at startup:
 
 ```
 makod (binary)
-├── registers mako-gpke    → PIDs 55001–55018, 55555, 17115–17117 (Strom NB), 31001–31008, 37000–37006
-├── registers mako-wim     → PIDs 55039, 55042, 55051, 55168, 31009, 23001–23012
-├── registers mako-geli-gas → PIDs 44001–44021, 44022–44024*, 37008–37014, 31011
+├── registers mako-gpke    → PIDs 55001–55024, 55555, 55607–55609, 17115–17117 (Strom NB),
+│                            17134/17135, 19001/19002, 31001–31008, 37000–37006
+├── registers mako-wim     → PIDs 55039, 55042, 55051, 55168, 31009, 23001/23003/23004/23008,
+│                            17001–17011, 19001/19002 (nMSB role), 39000, 35001–35005, 15001–15005
+├── registers mako-geli-gas → PIDs 44001–44021, 44022* (Nb role), 44023–44024* (Lf role),
+│                             37008–37014, 31011, 17115–17117 (Gas NB)
 ├── registers mako-mabis   → PID 13003
-├── registers mako-wim-gas → PIDs 44039–44053, 44168–44170, 23005, 23009, 31003, 31004
+├── registers mako-wim-gas → PIDs 44022–44024* (Msb/Nmsb role), 44039–44053, 44168–44170,
+│                            31003, 31004, 23005, 23009
 ├── registers mako-redispatch → Redispatch 2.0 XML workflows
 │
 └── wires EdifactIngestDispatcher
@@ -163,8 +167,12 @@ makod (binary)
          └── called by: AS4 sender loopback (BdewAs4Sender, recipient == own GLN)
 ```
 
-`*` PIDs 44022–44024 are currently routed to `mako-wim-gas` `wim-gas-stornierung`
-(see [PID Reference](./pid-reference.md)).
+`*` PIDs 44022–44024 use role-conditional routing:
+- `mako-wim-gas` `wim-gas-stornierung`: Msb/Nmsb/all-role deployments
+- `mako-geli-gas` `geli-gas-stornierung`: Nb-only (44022 inbound as GNB)
+- `mako-geli-gas` `geli-gas-stornierung-lf`: Lf-only (44023/44024 inbound as LFN/LFA)
+
+See [PID Reference](./pid-reference.md) for the complete table.
 
 ---
 

@@ -142,6 +142,21 @@ impl<S, R> AperakBuilder<S, R> {
         self
     }
 
+    /// Override the BGM document function code (DE1001).
+    ///
+    /// The default is `"1000"` (standard EDIFACT APERAK code).
+    /// For BDEW-specific message classes:
+    /// - `"312"` — Anerkennungsmeldung (positive acknowledgement)
+    /// - `"313"` — Verarbeitbarkeitsfehlermeldung (processing error rejection,
+    ///   BGM+313 per BDEW APERAK AHB 1.0 §2.1.1)
+    ///
+    /// In most cases, the EDIFACT renderer in `makod` sets this
+    /// automatically based on whether an `error_code` is present.
+    pub fn document_code(mut self, code: impl Into<String>) -> Self {
+        self.inner.document_code = code.into();
+        self
+    }
+
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let unh_type = format!("APERAK:D:07B:UN:{}", self.inner.release.as_str());
         let dtm_val = self

@@ -103,6 +103,7 @@ mod as4_sender;
 mod cedar_authz;
 mod commands_api;
 mod config;
+mod contrl_ack;
 mod deadline_dispatch;
 mod edifact_api;
 mod edifact_renderer;
@@ -629,6 +630,22 @@ struct Cli {
     #[arg(long, value_name = "URL", env = "MAKOD_ERP_WEBHOOK_URL")]
     erp_webhook_url: Option<String>,
 
+    /// Webhook URL for outbound EDIFACT delivery without AS4.
+    ///
+    /// When set and `--as4-signing-key-pem` is not configured, every outbound
+    /// EDIFACT message (UTILMD 55003, APERAK, CONTRL, …) is POSTed to this
+    /// URL as a CloudEvents 1.0 JSON object
+    /// (`type = "de.mako.edifact.outbound"`) instead of being queued for AS4
+    /// delivery.  Rendered EDIFACT wire bytes are included in `data.edifact`.
+    ///
+    /// Intended for development, testing, and direct ERP-to-ERP integrations
+    /// that prefer HTTP over the BDEW AS4 transport profile.
+    ///
+    /// Can also be set via the `MAKOD_EDIFACT_OUTBOX_WEBHOOK_URL` environment
+    /// variable.
+    #[arg(long, value_name = "URL", env = "MAKOD_EDIFACT_OUTBOX_WEBHOOK_URL")]
+    edifact_outbox_webhook_url: Option<String>,
+
     /// Validate configuration, adapter coverage, and profile availability, then exit.
     ///
     /// In check mode makod:
@@ -847,6 +864,21 @@ enum LogFormat {
 
 fn main() -> anyhow::Result<()> {
     use clap::{CommandFactory, FromArgMatches};
+
+    // If MAKOD_DATA_DIR is set to an empty string (e.g. Docker `-e MAKOD_DATA_DIR=`
+    // to clear the image's baked-in default), remove it from the environment before
+    // clap parses arguments.  Clap treats an env var that is present-but-empty as
+    // "the flag was invoked with no value", which fails for required-value args.
+    //
+    // Safety: main() runs single-threaded before any call to thread::spawn or
+    // tokio::runtime::Builder::build(), so no other thread can race on the
+    // environment here.
+    if matches!(std::env::var("MAKOD_DATA_DIR").as_deref(), Ok("")) {
+        // SAFETY: single-threaded at this point; no concurrent env access.
+        unsafe {
+            std::env::remove_var("MAKOD_DATA_DIR");
+        }
+    }
 
     // Use the low-level ArgMatches API so we can detect which fields still
     // hold their built-in default values and fill those from the config file
@@ -1167,6 +1199,11 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             partner_store: Some(Arc::new(store.as_partner_store())),
             tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
             dispatcher: Some(Arc::clone(&ingest_dispatcher)),
+            contrl_ack: Some(Arc::new(contrl_ack::ContrlAckService::new(
+                Arc::new(store.clone()),
+                mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
+                cli.tenant_id.clone(),
+            ))),
         });
         let admin_state = Arc::new(malo_admin_api::MaloAdminState {
             cache: malo_cache::SlateDbMaloCache::new(store.clone()),
@@ -1346,6 +1383,11 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             partner_store: Some(Arc::new(store.as_partner_store())),
             tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
             dispatcher: Some(Arc::clone(&ingest_dispatcher)),
+            contrl_ack: Some(Arc::new(contrl_ack::ContrlAckService::new(
+                Arc::new(store.clone()),
+                mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
+                cli.tenant_id.clone(),
+            ))),
         });
 
         let handler = Arc::new(as4_ingest::BdewAs4IngestHandler::new(
@@ -1397,10 +1439,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     if let Some(addr) = cli.api_webdienste_addr {
         let handler = Arc::new(webdienste::MakodApiHandler {
             store: store.clone(),
-            snapshot_store: store.as_snapshot_store(),
             tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
             sender_party_id: cli.tenant_id.clone(),
-            snapshot_interval: cli.snapshot_interval,
         });
         let app = webdienste::router(handler).merge(health::router(health_state.clone()));
         let listener = tokio::net::TcpListener::bind(addr)
@@ -1446,6 +1486,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         verzeichnisdienst_url: cli.verzeichnisdienst_url.clone(),
         erp_webhook_url: cli.erp_webhook_url.clone(),
         erp_webhook_secret: cli.erp_webhook_secret.clone(),
+        edifact_outbox_webhook_url: cli.edifact_outbox_webhook_url.clone(),
         snapshot_interval: cli.snapshot_interval,
         deadline_poll_interval_secs: cli.deadline_poll_interval_secs,
         projection_checkpoint_interval: cli.projection_checkpoint_interval,

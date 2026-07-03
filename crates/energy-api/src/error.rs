@@ -7,12 +7,20 @@ use thiserror::Error;
 pub enum Error {
     /// The remote service responded with a non-success HTTP status.
     #[error("HTTP {status}: {body}")]
-    Http { status: u16, body: String },
+    Http {
+        /// HTTP status code (e.g. `400`, `503`).
+        status: u16,
+        /// Response body text.
+        body: String,
+    },
 
     /// The server returned a 307 Temporary Redirect — the caller should
     /// follow the given URL and retry the request there.
     #[error("Redirect to: {url}")]
-    Redirect { url: String },
+    Redirect {
+        /// Redirect target URL.
+        url: String,
+    },
 
     /// A requested directory record does not exist.
     #[error("record not found")]

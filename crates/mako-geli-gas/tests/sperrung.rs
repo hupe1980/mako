@@ -272,6 +272,7 @@ fn receive_sperrung_cmd(validation_passed: bool) -> GasSperrungNbCommand {
     GasSperrungNbCommand::ReceiveSperrung {
         pid: pid(17115),
         sender: MarktpartnerCode::new("4012345000023"),
+        receiver: lf_gnb(),
         location_id: malo(),
         document_date: "20250601".to_owned(),
         message_ref: msg("NB-RECV-001"),
@@ -454,6 +455,7 @@ async fn nb_domain_data_preserved_in_validation_passed() {
     p.execute(GasSperrungNbCommand::ReceiveSperrung {
         pid: pid(17115),
         sender: sender.clone(),
+        receiver: lf_gnb(),
         location_id: location.clone(),
         document_date: "20250601".to_owned(),
         message_ref: msg("NB-RECV-DATA"),

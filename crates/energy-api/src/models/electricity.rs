@@ -34,7 +34,9 @@ pub struct SrId(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum LocationId {
+    /// A network location (Netzlokation), identified by `E[A-Z0-9]{9}[0-9]`.
     NetworkLocation(NeloId),
+    /// A controllable resource (Steuerbare Ressource), identified by `C[A-Z0-9]{9}[0-9]`.
     ControllableResource(SrId),
 }
 
@@ -67,6 +69,7 @@ pub struct MaximumPowerValue(pub String);
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandControl {
+    /// Target maximum power value in kW.
     pub maximum_power_value: MaximumPowerValue,
     /// Start of effect period — ISO 8601 UTC, second precision (e.g. `"2023-08-01T12:30:00Z"`).
     pub execution_time_from: String,
@@ -100,6 +103,7 @@ pub enum ReasonNegative {
 /// Terminal state for negative (failure) responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StateNegative {
+    /// The command failed.
     #[serde(rename = "failed")]
     Failed,
 }
@@ -107,6 +111,7 @@ pub enum StateNegative {
 /// Terminal state for positive (success) responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StatePositive {
+    /// The command succeeded.
     #[serde(rename = "succeeded")]
     Succeeded,
 }
@@ -114,6 +119,7 @@ pub enum StatePositive {
 /// Preliminary state — command is executable in principle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PreliminaryStatePositive {
+    /// The command is executable in principle.
     #[serde(rename = "possible")]
     Possible,
 }
@@ -121,6 +127,7 @@ pub enum PreliminaryStatePositive {
 /// State indicating the final outcome is not yet known.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StateUnknown {
+    /// The final outcome is not yet known.
     #[serde(rename = "unknown")]
     Unknown,
 }
@@ -142,8 +149,10 @@ pub struct TrId(pub String);
 /// Energy flow direction at a market location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EnergyDirection {
+    /// Energy consumed from the grid (Verbrauch).
     #[serde(rename = "consumption")]
     Consumption,
+    /// Energy fed into the grid (Einspeisung).
     #[serde(rename = "production")]
     Production,
 }
@@ -151,10 +160,13 @@ pub enum EnergyDirection {
 /// Metering technology classification of a market location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MeasurementTechnologyClassification {
+    /// Intelligentes Messsystem (iMSys) — full smart meter system.
     #[serde(rename = "intelligentMeasuringSystem")]
     IntelligentMeasuringSystem,
+    /// Konventionelles Messsystem — traditional metering without smart functions.
     #[serde(rename = "conventionalMeasuringSystem")]
     ConventionalMeasuringSystem,
+    /// No metering equipment installed (e.g. virtual market location).
     #[serde(rename = "noMeasurement")]
     NoMeasurement,
 }
@@ -162,8 +174,10 @@ pub enum MeasurementTechnologyClassification {
 /// Whether the forecast basis may be changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OptionalChangeForecastBasis {
+    /// The forecast basis may be changed.
     #[serde(rename = "possible")]
     Possible,
+    /// The forecast basis may not be changed.
     #[serde(rename = "notPossible")]
     NotPossible,
 }
@@ -171,11 +185,13 @@ pub enum OptionalChangeForecastBasis {
 /// Lifecycle property / category of a market location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MarketLocationProperty {
+    /// Customer facility market location (Kundenanlage).
     #[serde(rename = "customerFacility")]
     CustomerFacility,
     /// Dormant market location (spec spelling: `"nonActice"`).
     #[serde(rename = "nonActice")]
     NonActive,
+    /// Standard market location.
     #[serde(rename = "standard")]
     Standard,
 }
@@ -183,8 +199,10 @@ pub enum MarketLocationProperty {
 /// Tranche proportion type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProportionType {
+    /// Tranche size defined by bilateral agreement.
     #[serde(rename = "bilateralAgreement")]
     BilateralAgreement,
+    /// Tranche size expressed as a percentage.
     #[serde(rename = "percent")]
     Percent,
 }
@@ -195,6 +213,7 @@ pub enum ProportionType {
 pub struct IdentificationParameter {
     /// Effective date for identification — ISO 8601 UTC, day-boundary midnight.
     pub identification_date_time: String,
+    /// Energy flow direction at the market location.
     pub energy_direction: EnergyDirection,
     /// Optional ID-based search criteria.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -207,14 +226,19 @@ pub struct IdentificationParameter {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentificationParameterId {
+    /// Optional market location ID to match.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub malo_id: Option<MaloId>,
+    /// Optional list of tranche IDs to match.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tranchen_ids: Option<Vec<String>>,
+    /// Optional list of metering location IDs (MeLo) to match.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub melo_ids: Option<Vec<MeloId>>,
+    /// Optional list of meter serial numbers to match.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meter_numbers: Option<Vec<String>>,
+    /// Optional customer number to match.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub customer_number: Option<String>,
 }
@@ -223,8 +247,10 @@ pub struct IdentificationParameterId {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentificationParameterAddress {
+    /// Optional customer name to match.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<PersonName>,
+    /// Optional postal address to match.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address: Option<PostalAddress>,
 }
@@ -233,12 +259,16 @@ pub struct IdentificationParameterAddress {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonName {
+    /// Family name(s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surnames: Option<String>,
+    /// Given name(s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub firstnames: Option<String>,
+    /// Optional title (e.g. `"Dr."`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Company or organisation name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub company: Option<String>,
 }
@@ -247,16 +277,22 @@ pub struct PersonName {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PostalAddress {
+    /// ISO 3166-1 alpha-2 country code (e.g. `"DE"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub country_code: Option<String>,
+    /// German postal code (PLZ).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zip_code: Option<String>,
+    /// City name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub city: Option<String>,
+    /// Street name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub street: Option<String>,
+    /// House number.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub house_number: Option<i32>,
+    /// House number suffix (Hausnummernzusatz, e.g. `"a"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub house_number_addition: Option<String>,
 }
@@ -268,15 +304,21 @@ pub struct PostalAddress {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MaloIdentResultPositive {
+    /// Market location master data.
     pub data_market_location: DataMarketLocation,
+    /// Billing tranches at the market location.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_tranches: Option<Vec<DataTranche>>,
+    /// Metering locations linked to this market location.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_meter_locations: Option<Vec<DataMeterLocation>>,
+    /// Technical resources linked to this market location.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_technical_resources: Option<Vec<DataTechnicalResource>>,
+    /// Controllable resources linked to this market location.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_controllable_resources: Option<Vec<DataControllableResource>>,
+    /// Network locations linked to this market location.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_network_locations: Option<Vec<DataNetworkLocation>>,
 }
@@ -289,6 +331,7 @@ pub struct MaloIdentResultNegative {
     pub decision_tree: String,
     /// Response code from that tree, e.g. `"A10"`.
     pub response_code: String,
+    /// Optional human-readable reason for the negative result.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// NB that now holds the location (when it left this NB's grid area).
@@ -300,19 +343,30 @@ pub struct MaloIdentResultNegative {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataMarketLocation {
+    /// Market location identifier (11-digit MaLo-ID).
     pub malo_id: MaloId,
+    /// Energy flow direction (consumption or production).
     pub energy_direction: EnergyDirection,
+    /// Metering technology classification of this market location.
     pub measurement_technology_classification: MeasurementTechnologyClassification,
+    /// Whether the forecast basis may be changed.
     pub optional_change_forecast_basis: OptionalChangeForecastBasis,
+    /// Time-sliced lifecycle properties of this market location.
     pub data_market_location_properties: Vec<MarketLocationProperties>,
+    /// Time-sliced network operator (Netzbetreiber) assignments.
     pub data_market_location_network_operators: Vec<TimeSlicedMarketPartner>,
+    /// Time-sliced transmission system operator (ÜNB) assignments.
     pub data_market_location_transmission_system_operators: Vec<TimeSlicedMarketPartner>,
+    /// Time-sliced measuring point operator (MSB) assignments.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_market_location_measuring_point_operators: Option<Vec<TimeSlicedMarketPartner>>,
+    /// Time-sliced supplier (Lieferant) assignments.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_market_location_suppliers: Option<Vec<TimeSlicedMarketPartner>>,
+    /// Customer name at this market location.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_market_location_name: Option<PersonName>,
+    /// Customer address at this market location.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_market_location_address: Option<PostalAddress>,
 }
@@ -321,8 +375,11 @@ pub struct DataMarketLocation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimeSlicedMarketPartner {
+    /// 13-digit Marktpartner-ID.
     pub market_partner_id: MarketPartnerId,
+    /// Start of the validity period (ISO 8601 UTC).
     pub execution_time_from: String,
+    /// End of the validity period (ISO 8601 UTC); absent means open-ended.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_time_until: Option<String>,
 }
@@ -331,8 +388,11 @@ pub struct TimeSlicedMarketPartner {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MarketLocationProperties {
+    /// The lifecycle property value.
     pub market_location_property: MarketLocationProperty,
+    /// Start of the validity period (ISO 8601 UTC).
     pub execution_time_from: String,
+    /// End of the validity period (ISO 8601 UTC); absent means open-ended.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_time_until: Option<String>,
 }
@@ -341,8 +401,11 @@ pub struct MarketLocationProperties {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataMeterLocation {
+    /// Metering location identifier (MeLo EIC).
     pub melo_id: MeloId,
+    /// Physical meter serial number.
     pub meter_number: String,
+    /// Time-sliced measuring point operator (MSB) assignments for this MeLo.
     pub data_meter_location_measuring_point_operators: Vec<TimeSlicedMarketPartner>,
 }
 
@@ -350,6 +413,7 @@ pub struct DataMeterLocation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataTechnicalResource {
+    /// Technical resource identifier (TR-ID).
     pub tr_id: TrId,
 }
 
@@ -357,7 +421,9 @@ pub struct DataTechnicalResource {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataControllableResource {
+    /// Controllable resource identifier (SR-ID).
     pub sr_id: SrId,
+    /// Time-sliced measuring point operator assignments for this controllable resource.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_controllable_resource_measuring_point_operators: Option<Vec<SrMarketPartner>>,
 }
@@ -366,10 +432,14 @@ pub struct DataControllableResource {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SrMarketPartner {
+    /// 13-digit Marktpartner-ID.
     pub market_partner_id: MarketPartnerId,
+    /// Start of the validity period (ISO 8601 UTC).
     pub execution_time_from: String,
+    /// End of the validity period (ISO 8601 UTC); absent means open-ended.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_time_until: Option<String>,
+    /// Market partner role type for this controllable resource.
     pub market_partner_type_sr: String,
 }
 
@@ -377,7 +447,9 @@ pub struct SrMarketPartner {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataNetworkLocation {
+    /// Network location identifier (NeLo EIC).
     pub nelo_id: NeloId,
+    /// Time-sliced measuring point operator (MSB) assignments for this NeLo.
     pub data_network_location_measuring_point_operators: Vec<TimeSlicedMarketPartner>,
 }
 
@@ -385,10 +457,14 @@ pub struct DataNetworkLocation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataTranche {
+    /// Tranche identifier.
     pub tranchen_id: String,
+    /// How the tranche proportion is expressed.
     pub proportion: ProportionType,
+    /// Percentage value when `proportion` is [`ProportionType::Percent`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub percent: Option<f64>,
+    /// Time-sliced supplier assignments for this tranche.
     pub data_tranche_suppliers: Vec<TimeSlicedMarketPartner>,
 }
 

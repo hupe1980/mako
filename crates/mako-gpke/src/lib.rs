@@ -194,7 +194,8 @@ pub use abrechnung::{
 };
 pub use allokationsliste::{
     AllokationslisteCommand, AllokationslisteEvent, AllokationslisteState, AnforderungData,
-    GpkeAllokationslisteWorkflow, ORDERS_ANFRAGE_PIDS as ALLOKATIONSLISTE_ORDERS_PIDS,
+    GpkeAllokationslisteWorkflow, MSCONS_RESPONSE_PIDS as ALLOKATIONSLISTE_MSCONS_PIDS,
+    ORDERS_ANFRAGE_PIDS as ALLOKATIONSLISTE_ORDERS_PIDS,
     ORDRSP_ABLEHNUNG_PIDS as ALLOKATIONSLISTE_ORDRSP_PIDS,
     WORKFLOW_NAME as ALLOKATIONSLISTE_WORKFLOW_NAME,
 };
@@ -557,11 +558,15 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // GPKE Allokationsliste — LF requests allocation lists (MMM Strom/Gas).
         //
         // LF sends ORDERS 17110/17114, NB rejects with ORDRSP 19110/19115.
-        // Positive response comes via MSCONS (13013/13014).
+        // Positive response comes via MSCONS (13013/13014) — MMM Strom/Gas PIDs,
+        // NOT GeLi Gas. Routed here per BK6-22-024 §8 / MMM AHB.
         for &pid in allokationsliste::ORDERS_ANFRAGE_PIDS {
             router.register(pid, allokationsliste::WORKFLOW_NAME);
         }
         for &pid in allokationsliste::ORDRSP_ABLEHNUNG_PIDS {
+            router.register(pid, allokationsliste::WORKFLOW_NAME);
+        }
+        for &pid in allokationsliste::MSCONS_RESPONSE_PIDS {
             router.register(pid, allokationsliste::WORKFLOW_NAME);
         }
 
@@ -677,6 +682,10 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             (
                 "allokationsliste::ORDRSP_ABLEHNUNG_PIDS",
                 allokationsliste::ORDRSP_ABLEHNUNG_PIDS,
+            ),
+            (
+                "allokationsliste::MSCONS_RESPONSE_PIDS",
+                allokationsliste::MSCONS_RESPONSE_PIDS,
             ),
             (
                 "konfiguration_aenderung::IFTSTA_PIDS",

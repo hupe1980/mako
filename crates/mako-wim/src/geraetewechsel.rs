@@ -522,6 +522,10 @@ impl Workflow for WimDeviceChangeWorkflow {
                         pid.as_u32()
                     )));
                 }
+                // Clone before move for APERAK emission in the validation-failed path.
+                let sender_gln = sender.clone();
+                let receiver_gln = receiver.clone();
+
                 let mut events = vec![DeviceChangeEvent::Initiated {
                     melo_id,
                     incoming_msb: sender,
@@ -533,12 +537,34 @@ impl Workflow for WimDeviceChangeWorkflow {
                 }];
                 if validation_passed {
                     events.push(DeviceChangeEvent::ValidationPassed { message_ref });
+                    // WiM Gerätewechsel: the APERAK is dispatched by the ERP within 5 Werktage
+                    // (BK6-24-174 §2a) — NOT auto-emitted here. DispatchAperak is the single
+                    // APERAK decision point for both positive (BGM+312) and negative (BGM+313).
+                    // This is different from GPKE workflows where the APERAK is immediate.
+                    Ok(WorkflowOutput::events(events))
                 } else {
+                    let reason = validation_errors.join("; ");
                     events.push(DeviceChangeEvent::Rejected {
-                        reason: validation_errors.join("; "),
+                        reason: reason.clone(),
                     });
+                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
+                    // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    let outbox = vec![
+                        PendingOutbox::new(
+                            "APERAK",
+                            sender_gln.as_str(),
+                            serde_json::json!({
+                                "sender":     receiver_gln.as_str(),
+                                "receiver":   sender_gln.as_str(),
+                                "pid":        29001_u32,
+                                "error_code": "Z29",
+                                "reason":     reason,
+                            }),
+                        )
+                        .caused_by(0),
+                    ];
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 }
-                Ok(events.into())
             }
 
             DeviceChangeCommand::DispatchAperak { positive, reason } => {
@@ -551,21 +577,30 @@ impl Workflow for WimDeviceChangeWorkflow {
                         ));
                     }
                 };
-                let mut payload = serde_json::json!({
-                    "pid":           data.pruefidentifikator.as_u32(),
-                    "melo":          data.melo_id.as_str(),
-                    "incoming_msb":  data.incoming_msb.as_str(),
-                    "grid_operator": data.grid_operator.as_str(),
-                    "positive":      positive,
+                // Always enqueue an APERAK outbox entry so the ERP layer sees the
+                // business decision.  The renderer/outbox worker translates the
+                // domain payload into the wire APERAK:
+                //   positive = true  → BGM+312 (Bestätigung Gerätewechsel, within 5 WT)
+                //   positive = false → BGM+313 (Ablehnung, within 5 WT)
+                // Both polarities share the same domain payload schema so the ERP
+                // can record the outcome uniformly (APERAK AHB 1.0 §2.4).
+                // `sender` = grid_operator: the NB sends the APERAK to the incoming MSB.
+                let mut aperak_payload = serde_json::json!({
+                    "sender":   data.grid_operator.as_str(),
+                    "pid":      data.pruefidentifikator.as_u32(),
+                    "melo":     data.melo_id.as_str(),
+                    "positive": positive,
                 });
                 if let Some(ref mr) = data.message_ref {
-                    payload["orig_message_ref"] = serde_json::Value::String(mr.as_str().to_owned());
+                    aperak_payload["orig_message_ref"] =
+                        serde_json::Value::String(mr.as_str().to_owned());
                 }
                 if let Some(ref r) = reason {
-                    payload["reason"] = serde_json::Value::String(r.clone());
+                    aperak_payload["reason"] = serde_json::Value::String(r.clone());
                 }
                 let outbox_entry =
-                    PendingOutbox::new("Aperak", data.incoming_msb.as_str(), payload);
+                    PendingOutbox::new("APERAK", data.incoming_msb.as_str(), aperak_payload)
+                        .caused_by(0);
                 Ok(WorkflowOutput::with_outbox(
                     vec![DeviceChangeEvent::AperakDispatched { positive, reason }],
                     vec![outbox_entry],

@@ -1,3 +1,4 @@
+//! `NetworkConstraintDocument` -- network constraint declaration sent by TSO or DSO.
 use serde::{Deserialize, Serialize};
 
 use crate::documents::activation::{ControlZoneRef, ResourceObjectRef};

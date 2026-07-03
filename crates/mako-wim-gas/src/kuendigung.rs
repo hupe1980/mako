@@ -329,6 +329,10 @@ impl Workflow for WimGasKuendigungWorkflow {
                         "unsupported WiM Gas Kündigung PID {pid} (expected one of: {KUENDIGUNG_PIDS:?})",
                     )));
                 }
+                // Clone before move for APERAK emission in the validation-failed path.
+                let sender_gln = sender.clone();
+                let receiver_gln = receiver.clone();
+
                 let mut events = vec![WimGasKuendigungEvent::Initiated {
                     malo_id,
                     sender,
@@ -339,12 +343,32 @@ impl Workflow for WimGasKuendigungWorkflow {
                 }];
                 if validation_passed {
                     events.push(WimGasKuendigungEvent::ValidationPassed { message_ref });
+                    Ok(events.into())
                 } else {
+                    let reason = validation_errors.join("; ");
                     events.push(WimGasKuendigungEvent::Rejected {
-                        reason: validation_errors.join("; "),
+                        reason: reason.clone(),
                     });
+                    // F-035: APERAK BGM+313 (Verarbeitbarkeitsfehlermeldung) — mandatory
+                    // per APERAK AHB 1.0 §2.1.1.
+                    // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
+                    // Note: 10 Werktage is the WiM Gas process window (BK7-24-01-009), NOT the APERAK sending deadline.
+                    let outbox = vec![
+                        PendingOutbox::new(
+                            "APERAK",
+                            sender_gln.as_str(),
+                            serde_json::json!({
+                                "sender":     receiver_gln.as_str(),
+                                "receiver":   sender_gln.as_str(),
+                                "pid":        29001_u32,
+                                "error_code": "Z29",
+                                "reason":     reason,
+                            }),
+                        )
+                        .caused_by(0),
+                    ];
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 }
-                Ok(events.into())
             }
 
             WimGasKuendigungCommand::DispatchAperak { positive, reason } => {
@@ -357,20 +381,28 @@ impl Workflow for WimGasKuendigungWorkflow {
                         ));
                     }
                 };
-                let mut payload = serde_json::json!({
+                // Always enqueue an APERAK outbox entry so the ERP layer sees the
+                // APERAK decision.  The renderer/sender applies the Gas silence rule:
+                //   positive = true  → suppress_wire, no wire EDIFACT (APERAK AHB 1.0 §2.3)
+                //   positive = false → BGM+313 rendered and sent
+                let mut aperak_payload = serde_json::json!({
+                    "sender":   data.receiver.as_str(),  // NB = sender of APERAK wire message
                     "pid":      data.pruefidentifikator.as_u32(),
                     "malo":     data.malo_id.as_str(),
-                    "sender":   data.sender.as_str(),
-                    "receiver": data.receiver.as_str(),
                     "positive": positive,
                 });
+                if positive {
+                    aperak_payload["suppress_wire"] = serde_json::Value::Bool(true);
+                }
                 if let Some(ref mr) = data.message_ref {
-                    payload["orig_message_ref"] = serde_json::Value::String(mr.as_str().to_owned());
+                    aperak_payload["orig_message_ref"] =
+                        serde_json::Value::String(mr.as_str().to_owned());
                 }
                 if let Some(ref r) = reason {
-                    payload["reason"] = serde_json::Value::String(r.clone());
+                    aperak_payload["reason"] = serde_json::Value::String(r.clone());
                 }
-                let outbox_entry = PendingOutbox::new("Aperak", data.sender.as_str(), payload);
+                let outbox_entry =
+                    PendingOutbox::new("APERAK", data.sender.as_str(), aperak_payload).caused_by(0);
                 Ok(WorkflowOutput::with_outbox(
                     vec![WimGasKuendigungEvent::AperakDispatched { positive, reason }],
                     vec![outbox_entry],

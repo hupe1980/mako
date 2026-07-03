@@ -234,3 +234,53 @@ async fn wrong_pid_returns_workflow_error() {
         "wrong PID must produce WorkflowError::Rejected"
     );
 }
+
+// ── Negative AHB conformance tests ───────────────────────────────────────────
+
+/// A UTILMD G PID 44001 with an invalid BGM qualifier (`E99` instead of `E01`)
+/// must be rejected by the AHB rule pack with rule `AHB-44001-BGM-1001-Q`.
+///
+/// This guards against the `Some(_unknown)` dispatch branch silently returning
+/// `is_valid = true` for any PID absent from the AHB profile dispatch table,
+/// and against profile regressions that remove or relax the BGM qualifier check.
+#[test]
+fn negative_ahb_wrong_bgm_qualifier_pid_44001() {
+    let invalid_bytes: &[u8] = b"\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+GAS-NEG-001'\
+UNH+MSG-001+UTILMD:D:11A:UN:G1.1'\
+BGM+E99:::+00044001::+9'\
+DTM+137:20250115:102'\
+RFF+Z13:GAS-NEG-REF-001'\
+NAD+MS+4012345000023::293'\
+NAD+MR+9900357000004::293'\
+IDE+Z19+52695662085::'\
+UNT+8+MSG-001'\
+UNZ+1+GAS-NEG-001'";
+
+    let platform = Platform::with_all_profiles();
+    let msg = platform
+        .parse(invalid_bytes)
+        .expect("parse must succeed even for an AHB-invalid message");
+
+    let ref_date = time::Date::from_calendar_date(2026, time::Month::January, 15).unwrap();
+    let report = msg
+        .validate_on_date(ref_date)
+        .expect("validate_on_date must not error");
+
+    assert!(
+        !report.is_valid(),
+        "wrong BGM qualifier E99 must cause AHB validation failure for PID 44001"
+    );
+    assert!(
+        report.errors().iter().any(|e| e
+            .rule_id
+            .as_deref()
+            .is_some_and(|id| id == "AHB-44001-BGM-1001-Q")),
+        "error list must contain rule AHB-44001-BGM-1001-Q; got: {:?}",
+        report
+            .errors()
+            .iter()
+            .map(|e| e.rule_id.as_deref())
+            .collect::<Vec<_>>(),
+    );
+}

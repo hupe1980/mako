@@ -163,6 +163,27 @@
             }
           ],
           "_description": "Migrated from flat segment_rules: intra-SG10 conditional (F-001 fix)"
+        },
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
         }
       ]
     },
@@ -283,7 +304,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13003)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13005,
@@ -402,7 +445,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13005)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13006,
@@ -526,7 +591,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13006)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13007,
@@ -645,7 +732,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13007)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13008,
@@ -764,7 +873,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13008)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13009,
@@ -919,6 +1050,27 @@
             }
           ],
           "_description": "Migrated from flat segment_rules: intra-SG10 conditional (F-001 fix)"
+        },
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
         }
       ]
     },
@@ -1031,7 +1183,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13010)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13011,
@@ -1142,7 +1316,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13011)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13012,
@@ -1253,7 +1449,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13012)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13013,
@@ -1372,7 +1590,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13013)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13014,
@@ -1491,7 +1731,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13014)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13015,
@@ -1611,7 +1873,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13015)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13016,
@@ -1732,7 +2016,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13016)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13017,
@@ -1884,6 +2190,27 @@
             }
           ],
           "_description": "Migrated from flat segment_rules: intra-SG10 conditional (F-001 fix)"
+        },
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
         }
       ]
     },
@@ -2005,7 +2332,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13018)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13019,
@@ -2125,7 +2474,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13019)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13020,
@@ -2243,7 +2614,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13020)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13021,
@@ -2361,7 +2754,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13021)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13022,
@@ -2479,7 +2894,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13022)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13023,
@@ -2598,7 +3035,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13023)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13025,
@@ -2718,7 +3177,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13025)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13026,
@@ -2836,7 +3317,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13026)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13027,
@@ -2956,7 +3459,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13027)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     },
     {
       "code": 13028,
@@ -3074,7 +3599,29 @@
           "_description": "STS is optional per MIG 2.5 (no AHB constraint for PID 13028)"
         }
       ],
-      "group_rules": []
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG2 Beteiligter is mandatory (sender + receiver must be identified). Presence of NAD as trigger segment required in each SG2 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG5",
+          "tag": "NAD",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG5 Messlokalisation/Zaehlpunktbeschreibung is mandatory (at least one measuring point must be present). Presence of NAD as trigger segment required in each SG5 instance. [enforcement downgraded to O: NAD is the group trigger — require_segment_in_group on a trigger segment is vacuous; message-level SG cardinality requires a future counting mechanism]"
+        },
+        {
+          "group_id": "SG6",
+          "tag": "LOC",
+          "requirement": "O",
+          "conditional_rules": [],
+          "_description": "MIG 2.4c §4.3: SG6 Messort is optional (max 5 per SG5). No cardinality check enforced here; upper-bound enforcement requires message-level counting."
+        }
+      ]
     }
   ]
 }

@@ -673,11 +673,11 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                     )));
                 }
                 let mut events = vec![SupplierChangeEvent::Initiated {
-                    location_id,
-                    new_supplier: sender,
-                    grid_operator: receiver,
+                    location_id: location_id.clone(),
+                    new_supplier: sender.clone(),
+                    grid_operator: receiver.clone(),
                     document_date,
-                    process_date,
+                    process_date: process_date.clone(),
                     message_ref: message_ref.clone(),
                     pruefidentifikator: pid,
                 }];
@@ -688,7 +688,73 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                         reason: validation_errors.join("; "),
                     });
                 }
-                Ok(events.into())
+
+                // Notify the NB ERP that a new Lieferbeginn/Lieferende/Kündigung
+                // Anfrage has arrived and is awaiting the NB decision.
+                // The OutboxErpWorker delivers this as a CloudEvent
+                // (`de.mako.process.initiated`) to the configured ERP webhook URL
+                // so the ERP can review and then call
+                // `gpke.lieferbeginn.bestaetigen` / `gpke.lieferbeginn.ablehnen`
+                // via the command API.
+                //
+                // Only emitted when validation passed — rejected interchanges do
+                // not require any NB action.
+                let outbox = if validation_passed {
+                    vec![
+                        PendingOutbox::new(
+                            "ProcessInitiated",
+                            receiver.as_str(),
+                            serde_json::json!({
+                                "pid":           pid.as_u32(),
+                                "malo_id":       location_id.as_str(),
+                                "new_supplier":  sender.as_str(),
+                                "grid_operator": receiver.as_str(),
+                                "process_date":  process_date,
+                            }),
+                        )
+                        // Caused by ValidationPassed (index 1), not Initiated (index 0),
+                        // so the ERP event correlates to the event that confirms the
+                        // message was parseable and process-able.
+                        .caused_by(1),
+                        // F-038: APERAK BGM+312 (Anerkennungsmeldung) — mandatory per
+                        // APERAK AHB 1.0 §2.4: both Anerkennung and rejection must always
+                        // be sent for Strom (unlike Gas, where silence = acceptance).
+                        // Frist (UTILMD/ORDERS weekday): 45 Min (APERAK AHB 1.0 §2.4.1).
+                        // Saturday UTILMD/ORDERS: Sonntag 12 Uhr; other: nächster Werktag 12 Uhr.
+                        PendingOutbox::new(
+                            "APERAK",
+                            sender.as_str(),
+                            serde_json::json!({
+                                "sender":        receiver.as_str(),
+                                "receiver":      sender.as_str(),
+                                "pid":           29001_u32,
+                                "document_code": "312",
+                            }),
+                        )
+                        .caused_by(1),
+                    ]
+                } else {
+                    // F-035: AHB validation failed — emit APERAK BGM+313
+                    // (Verarbeitbarkeitsfehlermeldung) back to the new supplier.
+                    // APERAK AHB 1.0 §2.1.1: mandatory rejection APERAK on validation failure.
+                    // Caused by Initiated (index 0) — no ValidationPassed event in this path.
+                    vec![
+                        PendingOutbox::new(
+                            "APERAK",
+                            sender.as_str(),
+                            serde_json::json!({
+                                "sender":     receiver.as_str(),
+                                "receiver":   sender.as_str(),
+                                "pid":        29001_u32,
+                                "error_code": "Z29",
+                                "reason":     validation_errors.join("; "),
+                            }),
+                        )
+                        .caused_by(0),
+                    ]
+                };
+
+                Ok(WorkflowOutput::with_outbox(events, outbox))
             }
 
             SupplierChangeCommand::SendAntwort {
@@ -770,12 +836,34 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 }
                 let aperak_pid = Pruefidentifikator::new(29001)
                     .map_err(|_| WorkflowError::other("invalid APERAK PID 29001"))?;
-                Ok(vec![SupplierChangeEvent::AperakFehlerDispatched {
+                let events = vec![SupplierChangeEvent::AperakFehlerDispatched {
                     aperak_pid,
-                    reason,
+                    reason: reason.clone(),
                     outbound_ref,
-                }]
-                .into())
+                }];
+
+                // F-035: emit the APERAK outbox entry atomically with the event.
+                // APERAK AHB 1.0 §2.1.1: mandatory within 24h (BK6-22-024 §4).
+                let outbox = if let Some(data) = state.initiated_data() {
+                    vec![
+                        PendingOutbox::new(
+                            "APERAK",
+                            data.new_supplier.as_str(),
+                            serde_json::json!({
+                                "sender":     data.grid_operator.as_str(),
+                                "receiver":   data.new_supplier.as_str(),
+                                "pid":        29001_u32,
+                                "error_code": "Z29",
+                                "reason":     reason,
+                            }),
+                        )
+                        .caused_by(0),
+                    ]
+                } else {
+                    vec![]
+                };
+
+                Ok(WorkflowOutput::with_outbox(events, outbox))
             }
 
             SupplierChangeCommand::TimeoutExpired { deadline_id, label } => {

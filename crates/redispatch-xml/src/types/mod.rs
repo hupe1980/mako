@@ -1,3 +1,5 @@
+//! Primitive types and value wrappers for Redispatch 2.0 XML.
+
 pub mod attr_v;
 pub mod common;
 pub mod period;

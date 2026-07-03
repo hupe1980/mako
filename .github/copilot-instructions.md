@@ -15,9 +15,9 @@ communication (MaKo / BDEW EDI@Energy). Two distinct concerns:
 ```
 crates/edi-energy/        EDIFACT parse/validate/schema — stateless library
 crates/mako-engine/       Event-sourced runtime (EventStore, Workflow, Process, …)
-crates/mako-gpke/         GPKE — UTILMD Strom (55001–55018, 55555) + INVOIC (31001, 31002, 31005–31008) + ORDERS Sperrung (17115–17117) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) + PARTIN Strom (37000–37006)
-crates/mako-wim/          WiM Strom — Messstellenbetrieb (55039, 55042, 55051, 55168) + ORDERS Geräteübernahme + Stammdaten + INSRPT (23001–23012)
-crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44021; 44022–44024 pending) + ORDERS Sperrung Gas (17115–17117, LF-role `geli-gas-sperrung-lf` + GNB-role `geli-gas-sperrung-nb`) + PARTIN Gas (37008–37014) + INVOIC 31011 (AWH Sperrprozesse Gas)
+crates/mako-gpke/         GPKE — UTILMD Strom (55001–55018, 55022–55024, 55555, 55607–55609) + INVOIC (31001, 31002, 31005–31008) + ORDERS Sperrung (17115–17117) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) + PARTIN Strom (37000–37006)
+crates/mako-wim/          WiM Strom — Messstellenbetrieb (55039, 55042, 55051, 55168) + ORDERS Geräteübernahme (17001–17011, 19001/19002 nMSB role) + Stammdaten + INSRPT (23001–23012)
+crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44021) + UTILMD G Stornierung role-conditional (44022 Nb-only, 44023/44024 Lf-only) + ORDERS Sperrung Gas (17115–17117, LF-role `geli-gas-sperrung-lf` + GNB-role `geli-gas-sperrung-nb`) + PARTIN Gas (37008–37014) + INVOIC 31011 (AWH Sperrprozesse Gas)
 crates/mako-mabis/        MABIS — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB)
 crates/mako-wim-gas/      WiM Gas — UTILMD G (44022–44024 + 44039–44053, 44168–44170) + INVOIC (31003, 31004) + INSRPT Gas-only (23005, 23009)
 crates/mako-gabi-gas/     GaBi Gas — INVOIC 31010 (Kapazitätsrechnung) [placeholder]
@@ -183,6 +183,24 @@ PIDs 13002–13028 (excluding 13003) are Messwesen PIDs — do not register them
 MaBiS IFTSTA PIDs are **21000–21005** (21006 does not exist; 21007 belongs to WiM Strom Teil 1 / WiM Gas, registered in `mako-wim` `wim-device-change`).
 
 ### APERAK Fristen — never mix these up
+
+#### APERAK *sending* deadline (how quickly the receiver must send the APERAK)
+Per **APERAK AHB 1.0** (FV2025-10-01):
+
+| Sparte | Message type | Deadline | Source |
+|---|---|---|---|
+| **Strom** | UTILMD / ORDERS (weekday) | **45 Minuten** | APERAK AHB 1.0 §2.4.1 |
+| **Strom** | UTILMD / ORDERS (Saturday) | **Sonntag 12 Uhr** | APERAK AHB 1.0 §2.4.1 |
+| **Strom** | all other | **nächster Werktag 12 Uhr** | APERAK AHB 1.0 §2.4.1 |
+| **Gas** | Folgeprozesse | **nächster Werktag 12 Uhr** | APERAK AHB 1.0 §2.3.1 |
+| **Gas** | Initialprozesse | **3 Werktage** | APERAK AHB 1.0 §2.3.1 |
+
+Gas APERAKs are always **Verarbeitbarkeitsfehlermeldungen** (BGM+313) only — no Anerkennungsmeldung.
+Strom APERAKs include **both** Anerkennungsmeldung (BGM+312, accepted) and Verarbeitbarkeitsfehlermeldung (BGM+313, rejected).
+Gas CONTRL rule: "Auf eine APERAK ist immer eine CONTRL zu senden." (APERAK AHB 1.0 §2.3, CONTRL AHB 1.0 §2.3.1)
+
+#### Process *response* deadline (how long the business process can take overall)
+These are NOT APERAK deadlines. Never use these as the APERAK-sending window.
 
 | Process | Deadline | Function | Source |
 |---|---|---|---|

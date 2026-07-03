@@ -100,6 +100,15 @@ pub struct EdifactApiState {
     /// process after classification.  When `None`, ingest stops at classification
     /// (Phase 1 only — useful in read-only / test contexts).
     pub dispatcher: Option<Arc<crate::ingest_dispatcher::EdifactIngestDispatcher>>,
+    /// Gas CONTRL Empfangsbestätigung emitter (CONTRL AHB 1.0 §1.2).
+    ///
+    /// When `Some`, a CONTRL (UCI=7) is enqueued for every inbound Gas interchange
+    /// that contains at least one non-CONTRL, non-APERAK message. Required for
+    /// regulatory compliance with the mandatory 6-hour CONTRL obligation.
+    ///
+    /// `None` disables CONTRL emission (e.g. in read-only / test contexts without
+    /// an outbox store).
+    pub contrl_ack: Option<Arc<crate::contrl_ack::ContrlAckService>>,
 }
 
 // ── Response types ────────────────────────────────────────────────────────────
@@ -137,6 +146,23 @@ pub struct MessageResult {
 
     /// Routing outcome for this message.
     pub status: MessageStatus,
+
+    /// UUID of the process that was spawned or resumed.
+    ///
+    /// Matches the `subject` of the `de.mako.process.initiated` CloudEvent
+    /// sent to the ERP webhook. Present only when `status == "routed"` and
+    /// Phase 2 dispatch succeeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "3181967a-02d1-4d0e-9105-0cc46f3b25c9")]
+    pub process_id: Option<String>,
+
+    /// Marktlokations-ID extracted from the message (LOC+Z16), if present.
+    ///
+    /// Use this to correlate the ingest response with the corresponding
+    /// command API call (`gpke.lieferbeginn.bestaetigen` etc.).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "51238696781")]
+    pub malo_id: Option<String>,
 
     /// Human-readable parse error, present only when `status == "parse_error"`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -319,6 +345,8 @@ pub(crate) async fn ingest_edifact(
                     pid: None,
                     workflow: None,
                     status: MessageStatus::ParseError,
+                    process_id: None,
+                    malo_id: None,
                     error: Some(format!(
                         "unsupported Content-Type '{content_type}'; \
                          expected 'application/edifact' or 'text/plain'"
@@ -340,6 +368,9 @@ pub(crate) async fn ingest_edifact(
     }
 
     let mut messages = Vec::new();
+    // Collect successfully-parsed messages for CONTRL Empfangsbestätigung emission
+    // after the loop (CONTRL AHB 1.0 §1.2: one CONTRL per interchange, not per message).
+    let mut parsed_msgs: Vec<AnyMessage> = Vec::new();
 
     for result in state
         .platform
@@ -353,6 +384,8 @@ pub(crate) async fn ingest_edifact(
                     pid: None,
                     workflow: None,
                     status: MessageStatus::ParseError,
+                    process_id: None,
+                    malo_id: None,
                     error: Some(e.to_string()),
                 });
             }
@@ -409,16 +442,32 @@ pub(crate) async fn ingest_edifact(
                 );
 
                 // Phase 2: execute workflow command if dispatcher is wired.
+                let mut dispatch_process_id: Option<String> = None;
+                let mut dispatch_malo_id: Option<String> = None;
                 if let (Some(pid_val), Some(wf_name), Some(dispatcher)) =
                     (pid, workflow.as_deref(), state.dispatcher.as_deref())
                     && matches!(status, MessageStatus::Routed)
                 {
                     match dispatcher.dispatch(&msg, wf_name, pid_val).await {
                         Ok(outcome) => {
+                            use crate::ingest_dispatcher::IngestOutcome;
+                            match &outcome {
+                                IngestOutcome::Spawned { process_id, .. }
+                                | IngestOutcome::Dispatched { process_id, .. } => {
+                                    dispatch_process_id = Some(process_id.to_string());
+                                }
+                                IngestOutcome::Skipped { .. } => {}
+                            }
+                            // Extract MaLo from the raw message for the response.
+                            dispatch_malo_id =
+                                Some(crate::ingest_dispatcher::extract_malo_from_msg(&msg))
+                                    .filter(|s| !s.is_empty());
                             tracing::debug!(
-                                workflow = %wf_name,
-                                pid      = pid_val,
-                                outcome  = ?outcome,
+                                workflow    = %wf_name,
+                                pid         = pid_val,
+                                outcome     = ?outcome,
+                                process_id  = ?dispatch_process_id,
+                                malo_id     = ?dispatch_malo_id,
                                 "EDIFACT REST ingest: Phase 2 command dispatched",
                             );
                         }
@@ -439,10 +488,21 @@ pub(crate) async fn ingest_edifact(
                     pid,
                     workflow,
                     status,
+                    process_id: dispatch_process_id,
+                    malo_id: dispatch_malo_id,
                     error: None,
                 });
+                parsed_msgs.push(msg);
             }
         }
+    }
+
+    // Emit CONTRL Empfangsbestätigung for Gas interchanges (CONTRL AHB 1.0 §1.2).
+    // One CONTRL per interchange (not per message) — emitted once after all messages
+    // from the UNB…UNZ have been collected.
+    if let Some(contrl_svc) = state.contrl_ack.as_deref() {
+        let refs: Vec<&AnyMessage> = parsed_msgs.iter().collect();
+        contrl_svc.emit_for_interchange(&refs).await;
     }
 
     let accepted = messages

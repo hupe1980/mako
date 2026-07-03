@@ -49,6 +49,7 @@ use crate::models::directory::{ApiRecord, ServiceInfo};
 pub enum RecordResponse {
     /// Record found — return it with signature headers.
     Found {
+        /// The directory record body.
         record: ApiRecord,
         /// RFC 9440 signing certificate (`X-BDEW-CERT`).
         signing_cert: String,
@@ -56,7 +57,10 @@ pub enum RecordResponse {
         signature: String,
     },
     /// A redirect is configured for this entry — return 307.
-    Redirect { target_url: String },
+    Redirect {
+        /// URL to which the client should redirect and retry.
+        target_url: String,
+    },
     /// No entry exists — return 404.
     NotFound,
 }

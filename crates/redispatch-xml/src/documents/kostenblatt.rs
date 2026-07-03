@@ -1,3 +1,4 @@
+//! `Kostenblatt` -- cost sheet for redispatch measures (billing document, ANB to VNB/UNB).
 use serde::{Deserialize, Serialize};
 
 use crate::documents::activation::{ControlZoneRef, ResourceObjectRef};

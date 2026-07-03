@@ -17,6 +17,33 @@
 
 pub mod adapters;
 pub mod api_bridge;
+pub mod as4_ingest;
+pub mod as4_sender;
+pub mod cedar_authz;
+pub mod commands_api;
+pub mod config;
+pub mod contrl_ack;
 pub mod deadline_dispatch;
+pub mod edifact_api;
 pub mod edifact_renderer;
+pub mod erp_adapter;
+pub mod health;
 pub mod ingest_dispatcher;
+pub mod malo_admin_api;
+pub mod malo_cache;
+pub mod malo_ident_sender;
+pub mod mcp_server;
+pub mod metrics_api;
+pub mod migration_api;
+pub mod oidc_verifier;
+pub mod openapi;
+pub mod partner_api;
+pub mod projection_worker;
+// startup symbols (MakodCtx, WorkersConfig, spawn_workers, validate_adapter_coverage)
+// are pub(crate) and called only from main.rs. The lib target sees them as dead code
+// because main.rs is a separate compilation unit. Allow dead_code here; the binary
+// target's own dead-code check (via the bin unit) correctly skips these.
+#[allow(dead_code)]
+pub mod startup;
+pub mod verzeichnisdienst_worker;
+pub mod webdienste;

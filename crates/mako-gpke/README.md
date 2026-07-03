@@ -57,6 +57,47 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 > PIDs 31003 (WiM-Rechnung) and 31009 (MSB-Rechnung) belong to the WiM domain.
 > PID 31004 (Stornorechnung WiM Gas) belongs to `mako-wim-gas` (BK7-24-01-009).
 
+### ORDERS Sperrung Strom — NB role (GPKE Teil 4, BK6-22-024)
+
+> The gas Sperrung equivalents of these PIDs (same PID numbers, different Sparte) belong
+> to `mako-geli-gas`. Never mix Strom and Gas Sperrung in the same deployment module.
+
+| PID   | Process name                                              | Direction   | Status         |
+|-------|-----------------------------------------------------------|-------------|----------------|
+| 17115 | Anfrage Sperrung / Entsperrung (NB → gMSB/MSB)           | NB → MSB    | ✅ Implemented |
+| 17116 | Antwort Sperrung / Entsperrung (gMSB/MSB → NB)           | MSB → NB    | ↩ Derived      |
+| 17117 | Stornierung Sperrauftrag / Änderung (NB → gMSB/MSB)      | NB → MSB    | ✅ Implemented |
+
+### UTILMD Stornierung Zuordnungsprozess (GPKE Teil 1)
+
+| PID   | Process name                                          | Direction            | Status         |
+|-------|-------------------------------------------------------|----------------------|----------------|
+| 55022 | Anfrage Stornierung Zuordnungsprozess                 | LFN/NB → NB/LFN      | ✅ Implemented |
+| 55023 | Bestätigung Stornierung Zuordnungsprozess             | NB/LFN → orig.       | ↩ Derived      |
+| 55024 | Ablehnung Stornierung Zuordnungsprozess               | NB/LFN → orig.       | ↩ Derived      |
+
+### UTILMD Ankündigung / Zuordnung LF (GPKE Teil 1)
+
+| PID   | Process name                                          | Direction    | Status         |
+|-------|-------------------------------------------------------|--------------|----------------|
+| 55607 | Ankündigung Zuordnung LF (NB → LFN)                   | NB → LFN     | ✅ Implemented |
+| 55608 | Bestätigung Ankündigung Zuordnung LF (LFN → NB)       | LFN → NB     | ↩ Derived      |
+| 55609 | Ablehnung Ankündigung Zuordnung LF (LFN → NB)         | LFN → NB     | ↩ Derived      |
+
+### PARTIN Strom — Kommunikationsdaten (PARTIN AHB 1.0f)
+
+| PID       | Process name                                             | Status         |
+|-----------|----------------------------------------------------------|----------------|
+| 37000     | Übermittlung Kommunikationsdaten Strom (Stammdaten)      | ✅ Implemented |
+| 37001     | Bestätigung Übermittlung Kommunikationsdaten Strom       | ↩ Derived      |
+| 37002     | Ablehnung Übermittlung Kommunikationsdaten Strom         | ↩ Derived      |
+| 37003     | Übermittlung Kommunikationsdaten Strom (Korrekturen)     | ✅ Implemented |
+| 37004     | Bestätigung Korrektur                                    | ↩ Derived      |
+| 37005     | Ablehnung Korrektur                                      | ↩ Derived      |
+| 37006     | Übermittlung Kommunikationsdaten — weiterer Typ          | ✅ Implemented |
+
+> PIDs 37008–37014 (PARTIN Gas Kommunikationsdaten) belong to `mako-geli-gas`.
+
 ## EDIFACT Format Versions
 
 | Format version   | Valid from | Valid until | Profile status                   |
@@ -79,6 +120,10 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 | `anfrage_bestellung`| PID 55555 (Anfrage Daten der individuellen Bestellung, LFN → NB, GPKE Teil 4) |
 | `abrechnung`        | PIDs 31001–31008 (INVOIC Netznutzungsabrechnung)        |
 | `konfiguration`     | PIDs 17134/17135 (ORDERS outbound) + 19001/19002 (ORDRSP inbound) — GPKE Teil 4 |
+| `sperrung`          | PIDs 17115–17117 (ORDERS Sperrung Strom, NB role)       |
+| `stornierung`       | PIDs 55022–55024 (UTILMD Stornierung Zuordnungsprozess) |
+| `ankuendigung_zuordnung_lf` | PIDs 55607–55609 (UTILMD Ankündigung Zuordnung LF) |
+| `partin`            | PIDs 37000–37006 (PARTIN Strom Kommunikationsdaten)     |
 
 ## Usage
 

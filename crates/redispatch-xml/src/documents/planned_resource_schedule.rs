@@ -1,3 +1,4 @@
+//! `PlannedResourceScheduleDocument` -- planned generation and consumption schedule for dispatchable resources.
 use serde::{Deserialize, Serialize};
 
 use crate::documents::activation::{ControlZoneRef, EicCodingScheme};
@@ -39,34 +40,49 @@ pub enum PrsProcessType {
 /// `BusinessType` codes for `PlannedResourceTimeSeries`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PrsBusinessType {
+    /// Production schedule (A01).
     #[serde(rename = "A01")]
     Production,
+    /// Consumption schedule (A04).
     #[serde(rename = "A04")]
     Consumption,
+    /// Generation forecast (A10).
     #[serde(rename = "A10")]
     GenerationForecast,
+    /// Consumption forecast (A11).
     #[serde(rename = "A11")]
     ConsumptionForecast,
+    /// Generation schedule (A12).
     #[serde(rename = "A12")]
     GenerationSchedule,
+    /// System operator redispatching schedule (A46).
     #[serde(rename = "A46")]
     SystemOperatorRedispatching,
+    /// Transmission capacity (A60).
     #[serde(rename = "A60")]
     TransmissionCapacity,
+    /// Exchange schedule (A61).
     #[serde(rename = "A61")]
     ExchangeSchedule,
+    /// Dispatchable production unit (A77).
     #[serde(rename = "A77")]
     ProductionDispatchable,
+    /// Dispatchable consumption unit (A79).
     #[serde(rename = "A79")]
     ConsumptionDispatchable,
+    /// Internal redispatch (A85).
     #[serde(rename = "A85")]
     InternalRedispatch,
+    /// Controllable generation unit (A93).
     #[serde(rename = "A93")]
     ControllableGeneration,
+    /// Controllable consumption unit (A94).
     #[serde(rename = "A94")]
     ControllableConsumption,
+    /// Network element (B59).
     #[serde(rename = "B59")]
     NetworkElement,
+    /// Flexibility resource (Z05).
     #[serde(rename = "Z05")]
     Flexibility,
 }

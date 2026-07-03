@@ -7,12 +7,13 @@
 //!
 //! | PID   | Description                                    | Direction   | Domain           |
 //! |-------|------------------------------------------------|-------------|------------------|
-//! | 13002 | Messwerte Zählerstand Gas                      | NB/MSB → LF | GeLi Gas Teil 2  |
-//! | 13007 | Gasbeschaffenheitsdaten                        | NB → LF     | GeLi Gas Teil 2  |
-//! | 13008 | Messwert Lastgang Gas                          | NB/MSB → LF | GeLi Gas Teil 2  |
-//! | 13009 | Messwert Energiemenge Gas                      | NB/MSB → LF | GeLi Gas Teil 2  |
-//! | 13013 | Marktlokationsscharfe Allokationsliste Gas     | NB → LF     | GeLi Gas Teil 2  |
-//! | 13014 | Marktlokationsscharfe bilanzierte Menge Gas    | NB → LF     | GeLi Gas Teil 2  |
+//! | 13002 | Messwerte Zählerstand Gas                      | NB/MSB → LF | GeLi Gas 2.0 / WiM Gas |
+//! | 13007 | Gasbeschaffenheitsdaten                        | NB → LF     | GeLi Gas 2.0 / KoV Gas |
+//! | 13008 | Messwert Lastgang Gas                          | NB/MSB → LF | GeLi Gas 2.0 / KoV Gas |
+//! | 13009 | Messwert Energiemenge Gas                      | NB/MSB → LF | GeLi Gas 2.0 / WiM Gas |
+//!
+//! PIDs **13013** and **13014** are MMM Strom/Gas (Allokationsliste) and are **not** in scope
+//! for GeLi Gas 2.0. They belong to `mako-gpke` `gpke-allokationsliste`.
 //!
 //! ## Regulatory basis
 //!
@@ -33,15 +34,16 @@ pub const WORKFLOW_NAME: &str = "geli-gas-mscons";
 
 /// MSCONS Prüfidentifikatoren for Gas data delivery (NB/MSB → LF).
 ///
-/// | PID   | Description                               | Source |
-/// |-------|-------------------------------------------|--------|
-/// | 13002 | Messwerte Zählerstand Gas                 | NB/MSB |
-/// | 13007 | Gasbeschaffenheitsdaten                   | NB     |
-/// | 13008 | Messwert Lastgang Gas                     | NB/MSB |
-/// | 13009 | Messwert Energiemenge Gas                 | NB/MSB |
-/// | 13013 | Marktlokationsscharfe Allokationsliste Gas| NB     |
-/// | 13014 | Marktlokationsscharfe bilanzierte Menge   | NB     |
-pub const MSCONS_PIDS: &[u32] = &[13002, 13007, 13008, 13009, 13013, 13014];
+/// | PID   | Description                               | Source | Domain |
+/// |-------|-------------------------------------------|--------|--------|
+/// | 13002 | Messwerte Zählerstand Gas                 | NB/MSB | GeLi Gas 2.0 / WiM Gas |
+/// | 13007 | Gasbeschaffenheitsdaten                   | NB     | GeLi Gas 2.0 / KoV BK-Mgmt Gas |
+/// | 13008 | Messwert Lastgang Gas                     | NB/MSB | GeLi Gas 2.0 / KoV BK-Mgmt Gas |
+/// | 13009 | Messwert Energiemenge Gas                 | NB/MSB | GeLi Gas 2.0 / WiM Gas |
+///
+/// PIDs 13013/13014 are **MMM Strom/Gas** (Allokationsliste), NOT GeLi Gas.
+/// They belong to `mako-gpke` `gpke-allokationsliste` (BK6-22-024 §8).
+pub const MSCONS_PIDS: &[u32] = &[13002, 13007, 13008, 13009];
 
 // ── Domain data ───────────────────────────────────────────────────────────────
 

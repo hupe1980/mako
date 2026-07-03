@@ -1,0 +1,59 @@
+# makod demo — docker compose
+#
+# Starts makod in NB (Netzbetreiber Strom) role with an ERP webhook receiver.
+#
+# Storage: volatile in-memory SlateDB (data lost on restart — fine for demos).
+# For persistent storage, see the "Persistent storage" note in README.md.
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f
+#   docker compose logs webhook -f     # watch incoming CloudEvents
+#   docker compose down
+#
+# The demo uses image: makod:dev (local build).
+# To use the published image instead, swap the `image:` line to:
+#   image: ghcr.io/hupe1980/makod:0.6.0
+
+services:
+  # ── ERP webhook receiver ──────────────────────────────────────────────────
+  # Receives CloudEvent POSTs from makod and stores them in memory.
+  # View incoming events:
+  #   curl http://localhost:8000/events | jq '.[].body | {type,subject}'
+  #   docker compose logs webhook -f
+  webhook:
+    image: python:3.12-alpine
+    volumes:
+      - ./webhook-receiver.py:/app/webhook-receiver.py:ro
+    working_dir: /app
+    command: python webhook-receiver.py
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  # ── makod process engine ───────────────────────────────────────────────────
+  makod:
+    image: makod:dev
+    # image: ghcr.io/hupe1980/makod:0.6.0
+    depends_on:
+      - webhook
+    ports:
+      - "8080:8080"      # HTTP REST API + Swagger UI + MCP
+    environment:
+      # Clear the image's baked-in data-dir default so --allow-volatile
+      # activates the true in-memory SlateDB store (no filesystem I/O).
+      # Docker Desktop named volumes have VirtioFS quirks with SlateDB's
+      # atomic-rename operations; in-memory is the reliable demo default.
+      MAKOD_DATA_DIR: ""
+      MAKOD_ALLOW_VOLATILE: "true"
+    command:
+      - "--tenant-id=9900357000004"       # NB GLN — matches NAD+MR in demo fixtures
+      - "--marktrollen=NB"                # accept messages addressed to this NB
+      - "--auth-key=demo=demo-secret-change-me"   # Bearer token for REST API calls
+      - "--erp-webhook-url=http://webhook:8000"   # deliver ERP CloudEvents to the demo receiver
+      - "--edifact-outbox-webhook-url=http://webhook:8000"  # deliver outbound EDIFACT as CloudEvents
+      - "--log-format=json"
+      - "--log-level=info"
+    # MAKOD_HTTP_ADDR=0.0.0.0:8080 is already the image default.
+    # Override via environment: if you need a different address.
+    restart: unless-stopped

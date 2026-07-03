@@ -1,3 +1,4 @@
+//! Common primitive value types for Redispatch 2.0 XML (identifiers, timestamps, decimals, market roles).
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};

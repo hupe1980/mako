@@ -87,14 +87,6 @@ static SEGMENTS: &[SegmentDefinition] = &[
         ],
     },
     SegmentDefinition {
-        tag: "CCI",
-        name: "Zeitreihentyp",
-        elements: &[
-            ElementRef::new(1, "7059", Status::Conditional, 1),
-            ElementRef::new(2, "C214", Status::Conditional, 1),
-        ],
-    },
-    SegmentDefinition {
         tag: "LIN",
         name: "Laufende Position",
         elements: &[ElementRef::new(1, "1082", Status::Conditional, 1)],
@@ -165,7 +157,6 @@ fn expected_components(tag: &str, idx: usize) -> Option<u8> {
         | ("NAD", 0)
         | ("CTA", 0)
         | ("LOC", 0)
-        | ("CCI", 0)
         | ("LIN", 0)
         | ("PIA", 0)
         | ("STS", 0) => Some(1),
@@ -319,43 +310,85 @@ fn rule_group_sg1_rff_max_occurrences(
     }
 }
 
-/// Layer 3 — combined max bound: all `NAD` groups together must not exceed 100098 occurrences.
+/// Layer 3 — verify the `NAD` segment group appears at most 99 times.
 ///
-/// Multiple top-level groups share the trigger `NAD`.  A per-group flat
-/// count would be ambiguous, so this rule enforces the combined upper bound
-/// (sum of all group maxima) instead.
-fn rule_group_nad_combined_max_occurrences(
+/// Each occurrence of the trigger segment `NAD` marks the start of
+/// one group instance.  The MIG specifies a maximum of 99 instances.
+fn rule_group_sg2_nad_max_occurrences(
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
     let count = segments.iter().filter(|s| s.tag == "NAD").count();
-    if count > 100_098 {
+    if count > 99 {
         issues.push(
-                ValidationIssue::new(
-                    ValidationSeverity::Error,
-                    format!("segment groups triggered by NAD total {count} occurrences; combined maximum is 100_098"),
-                )
-                .with_rule_id("MIG-MSCONS-MIG-2.5-NAD-COMBINED-CARD-MAX")
-                .with_segment("NAD".to_owned())
-            );
+            ValidationIssue::new(
+                ValidationSeverity::Error,
+                format!("segment group triggered by NAD occurs {count} times; maximum is 99"),
+            )
+            .with_rule_id("MIG-MSCONS-MIG-2.5-GROUP-SG2-NAD-CARD-MAX")
+            .with_segment("NAD".to_owned()),
+        );
     }
 }
 
-/// Layer 3 — combined min bound: `NAD` groups must appear at least 1 time(s) in total.
-fn rule_group_nad_combined_min_occurrences(
+/// Layer 3 — verify the `LOC` segment group appears at most 99999 times.
+///
+/// Each occurrence of the trigger segment `LOC` marks the start of
+/// one group instance.  The MIG specifies a maximum of 99999 instances.
+fn rule_group_sg5_loc_max_occurrences(
+    segments: &[edifact_rs::Segment<'_>],
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let count = segments.iter().filter(|s| s.tag == "LOC").count();
+    if count > 99_999 {
+        issues.push(
+            ValidationIssue::new(
+                ValidationSeverity::Error,
+                format!("segment group triggered by LOC occurs {count} times; maximum is 99_999"),
+            )
+            .with_rule_id("MIG-MSCONS-MIG-2.5-GROUP-SG5-LOC-CARD-MAX")
+            .with_segment("LOC".to_owned()),
+        );
+    }
+}
+
+/// Layer 3 — verify the `NAD` segment group appears at least 1 time(s).
+///
+/// The MIG specifies a minimum of 1 occurrence(s) for this group.
+fn rule_group_sg2_nad_min_occurrences(
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
 ) {
     let count = segments.iter().filter(|s| s.tag == "NAD").count();
     if count < 1 {
         issues.push(
-                ValidationIssue::new(
-                    ValidationSeverity::Error,
-                    format!("segment groups triggered by NAD total {count} occurrences; combined minimum is 1"),
-                )
-                .with_rule_id("MIG-MSCONS-MIG-2.5-NAD-COMBINED-CARD-MIN")
-                .with_segment("NAD".to_owned())
-            );
+            ValidationIssue::new(
+                ValidationSeverity::Error,
+                format!("segment group triggered by NAD occurs {count} times; minimum is 1"),
+            )
+            .with_rule_id("MIG-MSCONS-MIG-2.5-GROUP-SG2-NAD-CARD-MIN")
+            .with_segment("NAD".to_owned()),
+        );
+    }
+}
+
+/// Layer 3 — verify the `LOC` segment group appears at least 1 time(s).
+///
+/// The MIG specifies a minimum of 1 occurrence(s) for this group.
+fn rule_group_sg5_loc_min_occurrences(
+    segments: &[edifact_rs::Segment<'_>],
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let count = segments.iter().filter(|s| s.tag == "LOC").count();
+    if count < 1 {
+        issues.push(
+            ValidationIssue::new(
+                ValidationSeverity::Error,
+                format!("segment group triggered by LOC occurs {count} times; minimum is 1"),
+            )
+            .with_rule_id("MIG-MSCONS-MIG-2.5-GROUP-SG5-LOC-CARD-MIN")
+            .with_segment("LOC".to_owned()),
+        );
     }
 }
 
@@ -462,8 +495,10 @@ static MIG_MSCONS_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
             .with_stateless_rule_fn(rule_nad_mandatory)
             .with_stateless_rule_fn(rule_loc_mandatory)
             .with_stateless_rule_fn(rule_group_sg1_rff_max_occurrences)
-            .with_stateless_rule_fn(rule_group_nad_combined_max_occurrences)
-            .with_stateless_rule_fn(rule_group_nad_combined_min_occurrences)
+            .with_stateless_rule_fn(rule_group_sg2_nad_max_occurrences)
+            .with_stateless_rule_fn(rule_group_sg5_loc_max_occurrences)
+            .with_stateless_rule_fn(rule_group_sg2_nad_min_occurrences)
+            .with_stateless_rule_fn(rule_group_sg5_loc_min_occurrences)
             .with_stateless_rule_fn(rule_segment_order),
     )
 });
@@ -472,11 +507,14 @@ pub(crate) fn mig_rule_pack() -> Arc<ProfileRulePack> {
     Arc::clone(&MIG_MSCONS_PACK)
 }
 
-static GROUP_SCHEMA: &[GroupDef] = &[GroupDef {
-    name: "SG5",
-    trigger: "NAD",
-    children: &[GroupDef {
-        name: "SG6",
+static GROUP_SCHEMA: &[GroupDef] = &[
+    GroupDef {
+        name: "SG2",
+        trigger: "NAD",
+        children: &[],
+    },
+    GroupDef {
+        name: "SG5",
         trigger: "LOC",
         children: &[GroupDef {
             name: "SG9",
@@ -487,8 +525,8 @@ static GROUP_SCHEMA: &[GroupDef] = &[GroupDef {
                 children: &[],
             }],
         }],
-    }],
-}];
+    },
+];
 #[allow(unused_imports)]
 use super::ahb_helpers::{
     ahb_check_conditional, ahb_check_field_value, ahb_check_mandatory, ahb_check_not_used,

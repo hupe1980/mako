@@ -35,6 +35,7 @@ use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
+    outbox::PendingOutbox,
     types::{MaLo, MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -369,15 +370,36 @@ impl Workflow for GpkeStornierungWorkflow {
             }
 
             GpkeStornierungCommand::DispatchAperak { positive, reason } => {
-                if !matches!(state, GpkeStornierungState::ValidationPassed(_)) {
-                    return Err(WorkflowError::invalid_state(
-                        "ValidationPassed",
-                        state.status_str(),
-                    ));
+                let data = match state {
+                    GpkeStornierungState::ValidationPassed(d) => d,
+                    _ => {
+                        return Err(WorkflowError::invalid_state(
+                            "ValidationPassed",
+                            state.status_str(),
+                        ));
+                    }
+                };
+                // APERAK AHB 1.0 §2.4: Strom UTILMD always requires APERAK (BGM+312 or BGM+313).
+                // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                let mut aperak_payload = serde_json::json!({
+                    "sender":        data.receiver.as_str(),
+                    "receiver":      data.sender.as_str(),
+                    "pid":           29001_u32,
+                    "document_code": if positive { "312" } else { "313" },
+                });
+                if !positive {
+                    aperak_payload["error_code"] = serde_json::Value::String("Z29".to_owned());
                 }
-                Ok(WorkflowOutput::events(vec![
-                    GpkeStornierungEvent::AperakDispatched { positive, reason },
-                ]))
+                if let Some(ref r) = reason {
+                    aperak_payload["reason"] = serde_json::Value::String(r.clone());
+                }
+                let outbox = vec![
+                    PendingOutbox::new("APERAK", data.sender.as_str(), aperak_payload).caused_by(0),
+                ];
+                Ok(WorkflowOutput::with_outbox(
+                    vec![GpkeStornierungEvent::AperakDispatched { positive, reason }],
+                    outbox,
+                ))
             }
 
             GpkeStornierungCommand::TimeoutExpired { deadline_id, label } => match state {

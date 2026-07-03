@@ -1,0 +1,28 @@
+{
+  "gln": "4012345000023",
+  "display_name": "Demo Lieferant GmbH",
+  "channels": [
+    {
+      "qualifier": "AK",
+      "address": "https://as4.example.com/as4/receive"
+    },
+    {
+      "qualifier": "EM",
+      "address": "edifact@demo-lieferant.example.com"
+    }
+  ],
+  "roles": ["LfStrom"],
+  "contacts": [
+    {
+      "name": "EDI Support",
+      "channels": [
+        {
+          "qualifier": "TE",
+          "address": "+49 30 123456789"
+        }
+      ]
+    }
+  ],
+  "country_code": "DE",
+  "updated_at": "2026-07-01T00:00:00Z"
+}

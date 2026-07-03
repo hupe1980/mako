@@ -1,3 +1,4 @@
+//! `ActivationDocument` -- redispatch activation orders (ACO), confirmations (ACR), and activation adjustments (AAR).
 use serde::{Deserialize, Serialize};
 
 use crate::types::{

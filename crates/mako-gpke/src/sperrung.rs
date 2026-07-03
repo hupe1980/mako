@@ -29,6 +29,7 @@ use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
+    outbox::PendingOutbox,
     types::{MaLo, MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -256,6 +257,8 @@ pub enum SperrungCommand {
         pid: Pruefidentifikator,
         /// GLN of the LF sending the Sperrungsanweisung.
         sender: MarktpartnerCode,
+        /// GLN of the receiving NB (our own party code).
+        receiver: MarktpartnerCode,
         /// EIC/MaLo of the supply location to be locked/unlocked.
         location_id: MaLo,
         /// Document date from the UTILMD.
@@ -419,6 +422,7 @@ impl Workflow for GpkeSperrungWorkflow {
             SperrungCommand::ReceiveSperrung {
                 pid,
                 sender,
+                receiver,
                 location_id,
                 document_date,
                 message_ref,
@@ -433,6 +437,10 @@ impl Workflow for GpkeSperrungWorkflow {
                         "expected a Sperrung PID (17115, 17116, or 17117), got {pid}",
                     )));
                 }
+                // Clone before move for APERAK emission in the validation-failed path.
+                let sender_gln = sender.clone();
+                let receiver_gln = receiver.clone();
+
                 let mut events = vec![SperrungEvent::AnweisungErhalten {
                     location_id,
                     sender,
@@ -442,12 +450,45 @@ impl Workflow for GpkeSperrungWorkflow {
                 }];
                 if validation_passed {
                     events.push(SperrungEvent::ValidationPassed { message_ref });
+                    // F-038: APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.0 §2.4.
+                    // Strom ORDERS (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    let outbox = vec![
+                        PendingOutbox::new(
+                            "APERAK",
+                            sender_gln.as_str(),
+                            serde_json::json!({
+                                "sender":        receiver_gln.as_str(),
+                                "receiver":      sender_gln.as_str(),
+                                "pid":           29001_u32,
+                                "document_code": "312",
+                            }),
+                        )
+                        .caused_by(1),
+                    ];
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 } else {
+                    let reason = validation_errors.join("; ");
                     events.push(SperrungEvent::Rejected {
-                        reason: validation_errors.join("; "),
+                        reason: reason.clone(),
                     });
+                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
+                    // Strom ORDERS (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    let outbox = vec![
+                        PendingOutbox::new(
+                            "APERAK",
+                            sender_gln.as_str(),
+                            serde_json::json!({
+                                "sender":     receiver_gln.as_str(),
+                                "receiver":   sender_gln.as_str(),
+                                "pid":        29001_u32,
+                                "error_code": "Z29",
+                                "reason":     reason,
+                            }),
+                        )
+                        .caused_by(0),
+                    ];
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 }
-                Ok(events.into())
             }
 
             SperrungCommand::BestaetigueSperrung {

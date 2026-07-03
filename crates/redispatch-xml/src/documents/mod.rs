@@ -1,3 +1,5 @@
+//! Concrete document types for all nine Redispatch 2.0 document families.
+
 pub mod acknowledgement;
 pub mod activation;
 pub mod kaskade;

@@ -48,6 +48,7 @@ use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
+    outbox::PendingOutbox,
     types::{MaLo, MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -375,6 +376,9 @@ impl Workflow for GeliGasStornierungWorkflow {
                         "unsupported GeLi Gas Stornierung PID {pid} (expected one of: {STORNIERUNG_PIDS:?})",
                     )));
                 }
+                let sender_gln = sender.clone();
+                let receiver_gln = receiver.clone();
+
                 let mut events = vec![GeliGasStornierungEvent::StornierungReceived {
                     pruefidentifikator: pid,
                     sender,
@@ -385,24 +389,68 @@ impl Workflow for GeliGasStornierungWorkflow {
                 }];
                 if validation_passed {
                     events.push(GeliGasStornierungEvent::ValidationPassed { message_ref });
+                    Ok(WorkflowOutput::events(events))
                 } else {
+                    let reason = validation_errors.join("; ");
                     events.push(GeliGasStornierungEvent::ValidationFailed {
                         errors: validation_errors,
                     });
+                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
+                    // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
+                    // Note: 10 Werktage is the process stornierung window (BK7-24-01-009), NOT the APERAK sending deadline.
+                    let outbox = vec![
+                        PendingOutbox::new(
+                            "APERAK",
+                            sender_gln.as_str(),
+                            serde_json::json!({
+                                "sender":     receiver_gln.as_str(),
+                                "receiver":   sender_gln.as_str(),
+                                "pid":        29001_u32,
+                                "error_code": "Z29",
+                                "reason":     reason,
+                            }),
+                        )
+                        .caused_by(0),
+                    ];
+                    Ok(WorkflowOutput::with_outbox(events, outbox))
                 }
-                Ok(WorkflowOutput::events(events))
             }
 
             GeliGasStornierungCommand::DispatchAperak { positive, reason } => {
-                if !matches!(state, GeliGasStornierungState::ValidationPassed(_)) {
-                    return Err(WorkflowError::invalid_state(
-                        "ValidationPassed",
-                        state.status_str(),
-                    ));
+                let data = match state {
+                    GeliGasStornierungState::ValidationPassed(d) => d,
+                    _ => {
+                        return Err(WorkflowError::invalid_state(
+                            "ValidationPassed",
+                            state.status_str(),
+                        ));
+                    }
+                };
+                // Always enqueue one APERAK outbox entry with domain payload.
+                // The renderer/sender applies the Gas silence rule:
+                //   positive = true  → suppress_wire, no wire EDIFACT (APERAK AHB 1.0 §2.3)
+                //   positive = false → BGM+313 rendered and sent
+                let mut aperak_payload = serde_json::json!({
+                    "sender":   data.receiver.as_str(),  // GNB = sender of APERAK wire message
+                    "pid":      data.pruefidentifikator.as_u32(),
+                    "positive": positive,
+                });
+                if positive {
+                    aperak_payload["suppress_wire"] = serde_json::Value::Bool(true);
                 }
-                Ok(WorkflowOutput::events(vec![
-                    GeliGasStornierungEvent::AperakDispatched { positive, reason },
-                ]))
+                if let Some(ref mr) = data.message_ref {
+                    aperak_payload["orig_message_ref"] =
+                        serde_json::Value::String(mr.as_str().to_owned());
+                }
+                if let Some(ref r) = reason {
+                    aperak_payload["reason"] = serde_json::Value::String(r.clone());
+                }
+                let outbox_entry =
+                    PendingOutbox::new("APERAK", data.sender.as_str(), aperak_payload).caused_by(0);
+                Ok(WorkflowOutput::with_outbox(
+                    vec![GeliGasStornierungEvent::AperakDispatched { positive, reason }],
+                    vec![outbox_entry],
+                ))
             }
 
             GeliGasStornierungCommand::TimeoutExpired { deadline_id, label } => match state {

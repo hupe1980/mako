@@ -1,3 +1,4 @@
+//! `AttrV` and `AttrVWithScheme` -- serde wrappers for EDIFACT/CIM XML simpleContent elements with attributes.
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
