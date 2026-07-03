@@ -3033,8 +3033,8 @@ pub fn geli_gas_mscons_registry() -> AdapterRegistry<GeliGasMsconsWorkflow> {
 ///
 /// **Correlation**: the ingest dispatcher looks up the billing process by the
 /// invoice message-reference key set at spawn time (`extract_malo_from_invoic`).
-/// The REMADV is correlated via the [`extract_invoice_ref_from_remadv`] helper
-/// which reads the `RFF+Z13` back-reference to the original INVOIC.
+/// The REMADV is correlated via the `extract_invoice_ref_from_remadv` helper
+/// in `ingest_dispatcher`, which reads the `RFF+Z13` back-reference to the original INVOIC.
 ///
 /// Regulatory basis: REMADV AHB 1.0, GaBi Gas, BK7.
 #[must_use]
