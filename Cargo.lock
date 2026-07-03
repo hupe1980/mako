@@ -1173,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "dvgw-edi"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "edifact-rs",
  "serde",
@@ -1212,7 +1212,7 @@ dependencies = [
 
 [[package]]
 name = "edi-energy"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "criterion",
  "edifact-rs",
@@ -1317,7 +1317,7 @@ dependencies = [
 
 [[package]]
 name = "energy-api"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "axum",
  "base64ct",
@@ -2699,14 +2699,14 @@ dependencies = [
 
 [[package]]
 name = "mako-as4"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "asx-rs",
 ]
 
 [[package]]
 name = "mako-engine"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "criterion",
  "rand 0.10.2",
@@ -2724,7 +2724,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gabi-gas"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "dvgw-edi",
  "mako-engine",
@@ -2735,7 +2735,7 @@ dependencies = [
 
 [[package]]
 name = "mako-geli-gas"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -2749,7 +2749,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gpke"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -2763,7 +2763,7 @@ dependencies = [
 
 [[package]]
 name = "mako-mabis"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "edi-energy",
  "mako-engine",
@@ -2776,11 +2776,11 @@ dependencies = [
 
 [[package]]
 name = "mako-nbw"
-version = "0.6.0"
+version = "0.7.0"
 
 [[package]]
 name = "mako-redispatch"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "mako-engine",
  "redispatch-xml",
@@ -2793,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "mako-wim"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -2807,7 +2807,7 @@ dependencies = [
 
 [[package]]
 name = "mako-wim-gas"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -2822,7 +2822,7 @@ dependencies = [
 
 [[package]]
 name = "makod"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "asx-rs",
@@ -3942,7 +3942,7 @@ dependencies = [
 
 [[package]]
 name = "redispatch-xml"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "quick-xml",
  "serde",
