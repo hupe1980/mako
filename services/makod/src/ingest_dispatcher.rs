@@ -44,6 +44,7 @@ use mako_engine::{
     version::{FormatVersion, WorkflowId},
     workflow::{CommandPayload, Workflow},
 };
+use mako_gabi_gas::GaBiGasInvoicWorkflow;
 use mako_geli_gas::{
     GeliGasMsconsWorkflow, GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungLfWorkflow,
     GeliGasSperrungNbWorkflow, GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
@@ -54,7 +55,6 @@ use mako_gpke::{
     GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow,
 };
 use mako_mabis::MabisClearinglisteWorkflow;
-use mako_gabi_gas::GaBiGasInvoicWorkflow;
 use mako_wim::{
     WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimRechnungWorkflow,
     WimStornierungWorkflow,

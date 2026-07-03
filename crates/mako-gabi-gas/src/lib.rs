@@ -110,6 +110,10 @@ pub use invoic::{
     SETTLEMENT_WINDOW_LABEL as INVOIC_SETTLEMENT_WINDOW_LABEL,
     WORKFLOW_NAME as INVOIC_WORKFLOW_NAME,
 };
+pub use mmma::{
+    MMMA_MSCONS_PIDS, ORDERS_ANFRAGE_PID as MMMA_ORDERS_ANFRAGE_PID,
+    ORDRSP_ABLEHNUNG_PID as MMMA_ORDRSP_ABLEHNUNG_PID, WORKFLOW_NAME as MMMA_WORKFLOW_NAME,
+};
 pub use nomination::{
     GaBiGasNominationWorkflow, NOMINATION_PIDS, NOMINT_PIDS, NOMRES_DEADLINE_LABEL, NOMRES_PIDS,
     NominationCommand, NominationCounterparty, NominationData, NominationEvent, NominationState,
@@ -123,10 +127,6 @@ pub use tranot::{
     GaBiGasTransportNotificationWorkflow, TRANOT_PID, TRANOT_PIDS, TransportNotificationCommand,
     TransportNotificationData, TransportNotificationEvent, TransportNotificationState,
     TransportNotificationType, WORKFLOW_NAME as TRANOT_WORKFLOW_NAME,
-};
-pub use mmma::{
-    MMMA_MSCONS_PIDS, ORDERS_ANFRAGE_PID as MMMA_ORDERS_ANFRAGE_PID,
-    ORDRSP_ABLEHNUNG_PID as MMMA_ORDRSP_ABLEHNUNG_PID, WORKFLOW_NAME as MMMA_WORKFLOW_NAME,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
