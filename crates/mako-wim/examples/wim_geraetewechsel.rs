@@ -179,7 +179,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         validation_errors.len()
     );
 
-
     // ── Step 2: Inbox deduplication ───────────────────────────────────────────
     println!();
     println!("[2/6] Inbox deduplication...");
