@@ -5,7 +5,7 @@ the German electricity-grid congestion-management protocol (§§ 13, 13a, 14 EnW
 mandatory since 1 October 2021).
 
 All nine BDEW Redispatch 2.0 document types are fully implemented: parse, serialize,
-structural validation, and semantic validation. The crate targets MSRV 1.88 and is
+structural validation, and semantic validation. The crate targets MSRV 1.89 and is
 `#![deny(unsafe_code)]`.
 
 ---

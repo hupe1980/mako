@@ -114,7 +114,7 @@ graph TB
 
 ```toml
 [dependencies]
-edi-energy = "0.6"
+edi-energy = "0.7"
 ```
 
 By default this enables the four most common message types: **UTILMD**, **MSCONS**, **APERAK**, **CONTRL**.
@@ -122,7 +122,7 @@ By default this enables the four most common message types: **UTILMD**, **MSCONS
 Enable additional types:
 
 ```toml
-edi-energy = { version = "0.6", features = ["invoic", "remadv", "orders"] }
+edi-energy = { version = "0.7", features = ["invoic", "remadv", "orders"] }
 ```
 
 ### Feature flags
@@ -225,13 +225,13 @@ no async, no I/O, and no runtime deps — the same design contract as `edi-energ
 
 ```toml
 [dependencies]
-dvgw-edi = { version = "0.6" }
+dvgw-edi = { version = "0.7" }
 ```
 
 All 8 formats are enabled by default. You can opt in/out per format:
 
 ```toml
-dvgw-edi = { version = "0.6", default-features = false, features = ["alocat", "nomint", "nomres"] }
+dvgw-edi = { version = "0.7", default-features = false, features = ["alocat", "nomint", "nomres"] }
 ```
 
 | Feature | Enables |
@@ -355,13 +355,13 @@ sequenceDiagram
 ```toml
 [dependencies]
 # Core runtime
-mako-engine = { version = "0.6", features = ["testing"] }  # add "slatedb" for production
+mako-engine = { version = "0.7", features = ["testing"] }  # add "slatedb" for production
 
 # One or more domain crates depending on the market role:
-mako-gpke     = "0.6"   # GPKE — Lieferbeginn/-ende Strom (PIDs 55001–55018, 55555)
-mako-wim      = "0.6"   # WiM  — Messstellenwechsel Strom (PIDs 55039, 55042, 55051, 55168)
-mako-geli-gas = "0.6"   # GeLi Gas — Lieferbeginn/-ende Gas (PIDs 44001–44021)
-mako-mabis    = "0.6"   # MABIS — Bilanzkreisabrechnung Strom (PID 13003)
+mako-gpke     = "0.7"   # GPKE — Lieferbeginn/-ende Strom (PIDs 55001–55018, 55555)
+mako-wim      = "0.7"   # WiM  — Messstellenwechsel Strom (PIDs 55039, 55042, 55051, 55168)
+mako-geli-gas = "0.7"   # GeLi Gas — Lieferbeginn/-ende Gas (PIDs 44001–44021)
+mako-mabis    = "0.7"   # MABIS — Bilanzkreisabrechnung Strom (PID 13003)
 ```
 
 For the **production daemon** (`makod`) that wires everything together, see [Part 3](#part-3--running-makod) below.
@@ -493,11 +493,11 @@ makod \
 Or use the TOML config file — see the full operator guide at
 [docs/makod.md](./makod.md).
 
-### `makod` port layout
+### Service port layout
 
 ```
 Port  Service              Endpoint
-────  ──────────────────── ────────────────────────────────────────────
+────  ──────────────────── ──────────────────────────────────────────
 4080  AS4/ebMS3 inbound    POST /as4/inbox
                            GET  /health
 8080  HTTP REST API        POST /edifact
@@ -509,13 +509,23 @@ Port  Service              Endpoint
 8090  API-Webdienste Strom POST /maloId/request/v1
                            POST /controlMeasures/…
                            GET  /health
+8180  mdmd (companion)     GET  /api/v1/malos
+                           PUT  /api/v1/malos/{malo_id}
+                           GET  /api/v1/contracts
+                           POST /api/v1/subscriptions
+                           POST /api/v1/events  (inbound from makod)
+                           GET  /health  /ready
 ```
+
+`makod` (:4080/:8080/:8090) and `mdmd` (:8180) are independently deployable.
+See the [`mdmd` Operator Guide](./mdmd.md) for the master data service.
 
 ---
 
 ## Next Steps
 
 - [**`makod` Operator Guide**](./makod.md) — all config options, Docker/Kubernetes, secrets, health checks, partner management
+- [**`mdmd` Operator Guide**](./mdmd.md) — master data daemon: MaLo/MeLo/contracts, ERP webhooks, OIDC/JWT, PostgreSQL
 - [Process Engine Guide](./engine.md) — `mako-engine` architecture, stores, deadlines, outbox
 - [Parsing Guide](./parsing.md) — single message, interchange, streaming reader
 - [Validation Guide](./validation.md) — interpreting reports, severity levels

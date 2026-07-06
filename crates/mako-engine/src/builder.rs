@@ -1261,8 +1261,7 @@ impl<ES, SS, OS, DS, PR> EngineBuilder<ES, SS, OS, DS, PR> {
     ///
     /// Enable snapshotting in production by providing a real [`SnapshotStore`]
     /// implementation (e.g. the SlateDB-backed store in `makod`).  In tests,
-    /// [`InMemorySnapshotStore`][crate::snapshot::InMemorySnapshotStore] is
-    /// available behind the `testing` feature flag.
+    /// `InMemorySnapshotStore` is available behind the `testing` feature flag.
     ///
     /// Note: [`Process::state_with_snapshot`][crate::process::Process::state_with_snapshot]
     /// is a compile-time no-op when the snapshot store is `NoopSnapshotStore`
@@ -1412,6 +1411,19 @@ impl<ES, SS, OS, DS, PR> EngineBuilder<ES, SS, OS, DS, PR> {
     #[must_use]
     pub fn register(mut self, module: Box<dyn EngineModule>) -> Self {
         self.modules.push(module);
+        self
+    }
+
+    /// Register multiple [`EngineModule`]s at once from a pre-built `Vec`.
+    ///
+    /// Equivalent to calling [`register`] in a loop. Useful when the set of
+    /// modules is assembled conditionally (e.g. via `#[cfg]`-gated pushes to a
+    /// `Vec<Box<dyn EngineModule>>`) before the builder chain starts.
+    ///
+    /// [`register`]: EngineBuilder::register
+    #[must_use]
+    pub fn register_many(mut self, modules: Vec<Box<dyn EngineModule>>) -> Self {
+        self.modules.extend(modules);
         self
     }
 

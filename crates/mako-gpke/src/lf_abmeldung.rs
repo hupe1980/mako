@@ -49,6 +49,9 @@ use mako_engine::{
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
+/// Workflow name used for PID routing and `WorkflowId` construction.
+pub const WORKFLOW_NAME: &str = "gpke-lf-abmeldung";
+
 /// Inbound PIDs for NB-initiated Lieferende handled by [`GpkeLfAbmeldungWorkflow`].
 ///
 /// | PID   | Process (AHB name)                          | AHB profile  |

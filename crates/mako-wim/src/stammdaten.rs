@@ -49,6 +49,9 @@ use mako_engine::{
 
 // ── PID constants ─────────────────────────────────────────────────────────────
 
+/// Workflow name used for PID routing and `WorkflowId` construction.
+pub const WORKFLOW_NAME: &str = "wim-stammdaten";
+
 /// ORDERS PID for Stammdaten Anforderung **Strom** (NB → MSB).
 ///
 /// Per ORDERS AHB fv20251001: 17132 = "Anfrage zur Übermittlung von Stammdaten Strom".

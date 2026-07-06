@@ -25,8 +25,10 @@
 //! bucket = "my-makod-bucket"
 //! prefix = "makod"
 //!
-//! [engine]
-//! tenant_id = "9900000000001"
+//! # Single GLN covering all roles (most common):
+//! [[party]]
+//! gln   = "9900000000001"
+//! roles = ["NB", "LF", "MSB"]
 //!
 //! [http]
 //! addr = "0.0.0.0:8080"
@@ -37,7 +39,6 @@
 //!
 //! [as4]
 //! addr     = "0.0.0.0:4080"
-//! party_id = "9900000000001"
 //! signing_key_pem_file  = "/etc/makod/signing.key.pem"
 //! signing_cert_pem_file = "/etc/makod/signing.cert.pem"
 //! partners = [
@@ -72,6 +73,69 @@ pub struct ConfigFile {
     pub engine: Option<EngineConfig>,
     pub as4: Option<As4Config>,
     pub erp: Option<ErpConfig>,
+    /// `[[party]]` — one entry per BDEW market-participant identity.
+    ///
+    /// Use this instead of `[engine] tenant_id` + `--marktrollen` when the
+    /// operator holds **multiple GLNs** (e.g. separate BDEW registrations for
+    /// NB, LF, and MSB roles).  The first entry marked `primary = true` (or
+    /// the first entry in document order when none is marked) becomes the
+    /// storage partition key and the default EDIFACT sender GLN fallback.
+    ///
+    /// Example:
+    /// ```toml
+    /// [[party]]
+    /// gln     = "9900001000001"
+    /// roles   = ["NB"]
+    /// primary = true
+    ///
+    /// [[party]]
+    /// gln   = "9900001000002"
+    /// roles = ["LF"]
+    ///
+    /// [[party]]
+    /// gln   = "9900001000003"
+    /// roles = ["LFG", "MSB"]
+    /// ```
+    pub party: Option<Vec<PartyConfig>>,
+}
+
+/// One `[[party]]` entry — a single BDEW market-participant identity.
+///
+/// Multiple `[[party]]` entries on the same `makod` instance describe an
+/// operator who has registered separate BDEW GLNs for different roles
+/// (e.g. a large utility with distinct NB, LF, and MSB subsidiaries).
+///
+/// For the common case — a single company GLN covering all roles — a single
+/// entry with all relevant roles is sufficient:
+///
+/// ```toml
+/// [[party]]
+/// gln   = "9900001000001"
+/// roles = ["NB", "LF", "MSB", "GNB", "LFG"]
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PartyConfig {
+    /// 13-digit BDEW GLN or 16-char EIC.  Must be globally unique per entry.
+    pub gln: String,
+    /// BDEW Marktrollen this GLN is authorised for.
+    ///
+    /// Valid values: `NB`, `LF`, `MSB`, `GNB`, `LFG`, `gMSB`, `MGV`, `BKV`,
+    /// `UNB`, `ANB`, `VNB`, `NMSB`, `AMSB`.
+    pub roles: Vec<String>,
+    /// Marks this entry as the **storage partition key** for the engine.
+    ///
+    /// When `true`, this GLN is used to derive the `TenantId` UUID that scopes
+    /// all event streams, outbox entries, and MaLo cache keys.
+    /// Exactly one entry should have `primary = true`; when none does, the
+    /// first entry in document order is used.
+    #[serde(default)]
+    pub primary: bool,
+    /// NAD agency code for EDIFACT sender segments.
+    ///
+    /// Defaults to `"293"` (BDEW).  Set to `"305"` for GS1 GLNs or `"ZEW"`
+    /// for EIC identifiers.
+    pub agency: Option<String>,
 }
 
 // ── Sections ─────────────────────────────────────────────────────────────────
@@ -202,11 +266,6 @@ pub struct WebdiensteConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EngineConfig {
-    /// Operator tenant identifier (13-digit GLN or opaque string).
-    /// Used to scope MaLo cache entries and inbox keys.
-    /// Default: `"default"`.
-    pub tenant_id: Option<String>,
-
     /// Maximum seconds to wait for the store to close after shutdown signal.
     /// Mirrors `--shutdown-timeout-secs`. Default: 30.
     pub shutdown_timeout_secs: Option<u64>,

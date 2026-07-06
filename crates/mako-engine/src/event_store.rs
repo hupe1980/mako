@@ -1,8 +1,8 @@
-//! [`EventStore`] trait and the in-process [`InMemoryEventStore`] implementation.
+//! [`EventStore`] trait and the in-process `InMemoryEventStore` implementation.
 //!
 //! The engine defines only the trait. The production implementation is
-//! [`SlateDbStore`][crate::store_slatedb::SlateDbStore], enabled by the `slatedb`
-//! feature flag. [`InMemoryEventStore`] is included here for tests, spikes, and
+//! `SlateDbStore` (crate `store_slatedb`), enabled by the `slatedb`
+//! feature flag. `InMemoryEventStore` is included here for tests, spikes, and
 //! development without external dependencies.
 
 use std::sync::Arc;
@@ -382,7 +382,7 @@ impl<S: AtomicAppend> AtomicAppend for Arc<S> {
 ///
 /// Implementations must guarantee that either both the events and the outbox
 /// messages are persisted, or neither is — even across process crashes. For
-/// SlateDB this is achieved via a single [`WriteBatch`].
+/// SlateDB this is achieved via a single `WriteBatch` (requires `slatedb` feature).
 ///
 /// # Why a separate trait?
 ///
@@ -397,7 +397,7 @@ impl<S: AtomicAppend> AtomicAppend for Arc<S> {
 /// path. Never write events first and outbox messages second — a crash
 /// between the two produces a silent lost APERAK.
 ///
-/// [`WriteBatch`]: slatedb::WriteBatch
+/// `WriteBatch`: see `slatedb::WriteBatch` (requires `slatedb` feature)
 #[allow(async_fn_in_trait)]
 pub trait AtomicAppend: EventStore {
     /// Atomically append `events` to `stream_id` and schedule `outbox` messages.
@@ -439,7 +439,7 @@ pub trait AtomicAppend: EventStore {
     /// The default falls back to [`append_with_outbox`] only — **deadlines are
     /// not persisted**. Override this in [`AtomicAppend`] implementations that
     /// include a deadline store in the same underlying database (e.g.
-    /// [`SlateDbStore`]) to achieve full atomicity.
+    /// `SlateDbStore` (requires `slatedb` feature)) to achieve full atomicity.
     ///
     /// Callers using the default must register deadlines separately via
     /// [`DeadlineStore::register`] after this returns.
@@ -450,7 +450,7 @@ pub trait AtomicAppend: EventStore {
     ///
     /// [`append_with_outbox`]: AtomicAppend::append_with_outbox
     /// [`DeadlineStore::register`]: crate::deadline::DeadlineStore::register
-    /// [`SlateDbStore`]: crate::store_slatedb::SlateDbStore
+    /// `SlateDbStore`: see `crate::store_slatedb` (requires `slatedb` feature)
     async fn append_with_outbox_and_deadlines(
         &self,
         stream_id: &StreamId,

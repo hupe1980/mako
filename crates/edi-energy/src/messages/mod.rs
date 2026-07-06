@@ -226,3 +226,79 @@ pub mod utilmd;
 /// UTILTS — Übertragung technischer Stammdaten (Technical Master Data) message.
 #[cfg(feature = "utilts")]
 pub mod utilts;
+
+// ── Shared semantic validation helpers ────────────────────────────────────────
+
+/// Helpers shared across multiple message-type semantic rule packs.
+///
+/// Gated on the union of all consuming features so they compile away in minimal
+/// feature builds.
+#[cfg(any(
+    feature = "mscons",
+    feature = "utilmd",
+    feature = "orders",
+    feature = "insrpt",
+    feature = "invoic",
+    feature = "remadv",
+))]
+pub(super) mod common {
+    /// Returns `true` when `id` is exactly 11 ASCII upper-case letters or digits.
+    ///
+    /// Used by MSCONS `SEM-MSCONS-MELO-FORMAT` and UTILMD `SEM-UTILMD-MALO-FORMAT`
+    /// to validate Marktlokations-IDs and Messlokations-IDs.
+    #[inline]
+    pub(super) fn is_valid_location_id(id: &str) -> bool {
+        id.len() == 11
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    }
+
+    /// Emit a period-order error when DTM+163 (start) is lexicographically after
+    /// DTM+164 (end) in `segments`.
+    ///
+    /// Shared by MSCONS, ORDERS (flat message-level rule) and INSRPT (group rule
+    /// via `with_scoped_group_rule_fn`).  The `rule_id` parameter lets each
+    /// caller stamp their own `SEM-<TYPE>-PERIOD-ORDER` identifier.
+    pub(super) fn check_period_order(
+        segments: &[edifact_rs::Segment<'_>],
+        rule_id: &'static str,
+        issues: &mut Vec<edifact_rs::ValidationIssue>,
+    ) {
+        let mut start: Option<(&str, edifact_rs::Span)> = None;
+        let mut end: Option<(&str, edifact_rs::Span)> = None;
+
+        for seg in segments.iter().filter(|s| s.tag == "DTM") {
+            let Some(c507) = seg.get_element(0) else {
+                continue;
+            };
+            let qualifier = c507.get_component(0).unwrap_or("");
+            let value = c507.get_component(1).unwrap_or("");
+            match qualifier {
+                "163" => start = Some((value, seg.span)),
+                "164" => end = Some((value, seg.span)),
+                _ => {}
+            }
+        }
+
+        if let (Some((start_val, start_span)), Some((end_val, _))) = (start, end) {
+            if !start_val.is_empty() && !end_val.is_empty() && start_val > end_val {
+                issues.push(
+                    edifact_rs::ValidationIssue::new(
+                        edifact_rs::ValidationSeverity::Error,
+                        "DTM: period-start (qualifier 163) is after period-end (qualifier 164)"
+                            .to_owned(),
+                    )
+                    .with_span(start_span)
+                    .with_rule_id(rule_id)
+                    .with_segment("DTM")
+                    .with_suggestion(
+                        "Ensure DTM+163 (Beginn Lieferzeitraum) is not later than \
+                         DTM+164 (Ende Lieferzeitraum) \u{2014} date values must be in \
+                         ascending chronological order",
+                    ),
+                );
+            }
+        }
+    }
+}

@@ -10,7 +10,10 @@ use asx_rs::interop::{
     ProfileValidationResult, SecurityPolicy, ValidationPolicy,
 };
 
-use crate::pmode::{PMode, PModeRegistry};
+use crate::{
+    constants,
+    pmode::{BdewAction, PMode, PModeRegistry, bdew_pmode_with_endpoint},
+};
 
 /// Short identifier for the BDEW MaKo AS4 profile.
 pub const PROFILE_NAME: &str = "bdew_mako_as4";
@@ -130,6 +133,99 @@ impl BdewAs4Profile {
         self
     }
 
+    /// Register P-Modes for all standard BDEW EDIFACT message types with one call.
+    ///
+    /// For each [`BdewAction::all_standard()`] variant, creates a P-Mode with:
+    /// - `endpoint_url = Some(endpoint_url)` (HTTPS validated at send time)
+    /// - `security.sign = true`, `security.encrypt = false` (BDEW defaults)
+    /// - `mep = OneWayPush`
+    ///
+    /// This is the recommended way to register a trading partner at startup
+    /// when you know their single AS4 inbox URL and use BDEW default security
+    /// settings (signing required, encryption optional).
+    ///
+    /// For per-action encryption overrides, register individual P-Modes via
+    /// [`bdew_pmode_encrypted_with_endpoint`](crate::pmode::bdew_pmode_encrypted_with_endpoint)
+    /// and [`register_pmode`](Self::register_pmode) instead.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use mako_as4::profile::BdewAs4Profile;
+    /// use mako_as4::pmode::BdewAction;
+    ///
+    /// let mut profile = BdewAs4Profile::new();
+    /// profile.register_partner_all_actions(
+    ///     "9900000000001",
+    ///     "https://partner.example/as4/inbox",
+    /// );
+    /// // One P-Mode per standard BDEW action variant
+    /// assert_eq!(profile.registry().len(), BdewAction::all_standard().len());
+    /// ```
+    pub fn register_partner_all_actions(
+        &mut self,
+        partner_gln: impl Into<String>,
+        endpoint_url: impl Into<String>,
+    ) -> &mut Self {
+        let gln: String = partner_gln.into();
+        let url: String = endpoint_url.into();
+        for action in BdewAction::all_standard() {
+            let action_short = action
+                .as_uri()
+                .strip_prefix(constants::SERVICE)
+                .and_then(|s| s.strip_prefix(':'))
+                .unwrap_or("unknown")
+                .to_ascii_lowercase();
+            let id = format!("pm-{gln}-{action_short}");
+            self.registry
+                .register(bdew_pmode_with_endpoint(id, &gln, action, &url));
+        }
+        self
+    }
+
+    /// Resolve the first P-Mode for `partner_gln` matching this BDEW [`BdewAction`].
+    ///
+    /// Uses [`PModeRegistry::resolve_by_action`] against the BDEW action URI.
+    /// Unlike [`resolve_pmode`](Self::resolve_pmode), the BDEW service URI
+    /// ([`constants::SERVICE`]) does not need to match — only the partner GLN
+    /// and action URI are compared.  In BDEW deployments this is the correct
+    /// strategy since there is only one service URI.
+    ///
+    /// Returns `None` when no P-Mode is registered for `(partner_gln, action)`.
+    pub fn resolve_pmode_by_action(
+        &self,
+        partner_gln: &str,
+        action: &BdewAction,
+    ) -> Option<&PMode> {
+        self.registry
+            .resolve_by_action(partner_gln, &action.as_uri())
+    }
+
+    /// All registered P-Modes.
+    ///
+    /// Useful for startup-validation logging (e.g. warn when a P-Mode has
+    /// `endpoint_url = None`) and auditing the registry state.
+    pub fn all_pmodes(&self) -> &[PMode] {
+        self.registry.all()
+    }
+
+    /// Resolve the HTTPS endpoint URL for the first P-Mode matching `partner_gln`,
+    /// `service`, and `action`.
+    ///
+    /// Returns `Some(&str)` when a matching P-Mode is registered **and** its
+    /// [`PMode::endpoint_url`] field is populated.  Returns `None` when no P-Mode
+    /// matches or when the matched P-Mode has `endpoint_url = None`.
+    ///
+    /// Use this as an alternative to a separate `PartnerDirectory` when endpoint
+    /// URLs are baked into P-Mode registrations via [`bdew_pmode_with_endpoint`].
+    ///
+    /// [`bdew_pmode_with_endpoint`]: crate::pmode::bdew_pmode_with_endpoint
+    pub fn resolve_endpoint(&self, partner_gln: &str, service: &str, action: &str) -> Option<&str> {
+        self.registry
+            .resolve(partner_gln, service, action)
+            .and_then(|pm| pm.endpoint_url.as_deref())
+    }
+
     /// Resolve a P-Mode by partner GLN, service URI, and action URI.
     ///
     /// Returns `None` when no matching P-Mode is registered.
@@ -244,5 +340,98 @@ mod tests {
         let b = BdewAs4Profile::default();
         assert_eq!(a.registry().len(), b.registry().len());
         assert_eq!(a.profile_stack().base.name, b.profile_stack().base.name);
+    }
+
+    #[test]
+    fn resolve_endpoint_returns_url_when_baked_in() {
+        use crate::pmode::bdew_pmode_with_endpoint;
+        let mut profile = BdewAs4Profile::new();
+        profile.register_pmode(bdew_pmode_with_endpoint(
+            "pm-u",
+            "9900000000001",
+            BdewAction::Utilmd,
+            "https://partner.example/as4",
+        ));
+        let url = profile.resolve_endpoint(
+            "9900000000001",
+            constants::SERVICE,
+            &BdewAction::Utilmd.as_uri(),
+        );
+        assert_eq!(url, Some("https://partner.example/as4"));
+    }
+
+    #[test]
+    fn resolve_endpoint_returns_none_when_not_set() {
+        let mut profile = BdewAs4Profile::new();
+        profile.register_pmode(bdew_pmode("pm-u", "9900000000001", BdewAction::Utilmd));
+        assert!(
+            profile
+                .resolve_endpoint(
+                    "9900000000001",
+                    constants::SERVICE,
+                    &BdewAction::Utilmd.as_uri()
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn register_partner_all_actions_creates_one_pmode_per_standard_action() {
+        use crate::pmode::BdewAction;
+        let mut profile = BdewAs4Profile::new();
+        profile.register_partner_all_actions("9900000000001", "https://partner.example/as4/inbox");
+        assert_eq!(profile.registry().len(), BdewAction::all_standard().len());
+        // Every P-Mode must carry the endpoint
+        for pm in profile.all_pmodes() {
+            assert_eq!(
+                pm.endpoint_url.as_deref(),
+                Some("https://partner.example/as4/inbox"),
+            );
+        }
+    }
+
+    #[test]
+    fn register_partner_all_actions_chaining() {
+        let mut profile = BdewAs4Profile::new();
+        profile
+            .register_partner_all_actions("9900000000001", "https://a.example/as4")
+            .register_partner_all_actions("9900000000002", "https://b.example/as4");
+        use crate::pmode::BdewAction;
+        assert_eq!(
+            profile.registry().len(),
+            2 * BdewAction::all_standard().len()
+        );
+    }
+
+    #[test]
+    fn resolve_pmode_by_action_finds_registered_pmode() {
+        use crate::pmode::BdewAction;
+        let mut profile = BdewAs4Profile::new();
+        profile.register_partner_all_actions("9900000000001", "https://partner.example/as4/inbox");
+        let pm = profile.resolve_pmode_by_action("9900000000001", &BdewAction::Utilmd);
+        assert!(pm.is_some());
+        assert_eq!(pm.unwrap().partner_id, "9900000000001");
+        assert_eq!(pm.unwrap().action, BdewAction::Utilmd.as_uri());
+    }
+
+    #[test]
+    fn resolve_pmode_by_action_returns_none_for_unknown_partner() {
+        use crate::pmode::BdewAction;
+        let mut profile = BdewAs4Profile::new();
+        profile.register_partner_all_actions("9900000000001", "https://partner.example/as4");
+        assert!(
+            profile
+                .resolve_pmode_by_action("9999999999999", &BdewAction::Utilmd)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn all_pmodes_reflects_registered_pmode_count() {
+        use crate::pmode::BdewAction;
+        let mut profile = BdewAs4Profile::new();
+        assert!(profile.all_pmodes().is_empty());
+        profile.register_partner_all_actions("9900000000001", "https://a.example/as4");
+        assert_eq!(profile.all_pmodes().len(), BdewAction::all_standard().len());
     }
 }

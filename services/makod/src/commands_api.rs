@@ -45,7 +45,7 @@
 //! | Header | Required | Notes |
 //! |--------|----------|-------|
 //! | `Content-Type` | Yes | Must be `application/json` |
-//! | `Idempotency-Key` | Recommended | Stable UUID; prevents double-execution |
+//! | `Idempotency-Key` | **Required** | Stable UUID; prevents duplicate execution on retries |
 //!
 //! **Request body** — an [`ErpCommand`] envelope with a command-specific payload:
 //!
@@ -220,8 +220,9 @@ use mako_engine::{
 };
 use mako_geli_gas::{GasSupplierChangeCommand, GeliGasSupplierChangeWorkflow};
 use mako_gpke::{
-    AnkuendigungZuordnungLfCommand, GpkeAnkuendigungZuordnungLfWorkflow, GpkeLfAbmeldungWorkflow,
-    GpkeLfAnmeldungWorkflow, GpkeSupplierChangeWorkflow, LfAnmeldungCommand, SupplierChangeCommand,
+    AbrechnungCommand, AnkuendigungZuordnungLfCommand, GpkeAbrechnungWorkflow,
+    GpkeAnkuendigungZuordnungLfWorkflow, GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow,
+    GpkeSupplierChangeWorkflow, LfAnmeldungCommand, SupplierChangeCommand,
 };
 use mako_mabis::{
     BillingCommand, BillingVersion, DataStatus, IFTSTA_DATENSTATUS_PID,
@@ -229,6 +230,7 @@ use mako_mabis::{
 };
 use mako_wim::steuerungsauftrag::{SteuerungsauftragCommand, WimSteuerungsauftragWorkflow};
 use mako_wim::{DeviceChangeCommand, WimDeviceChangeWorkflow};
+use rubo4e::identifiers::{MaloId, MeloId};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 use utoipa::ToSchema;
@@ -236,7 +238,69 @@ use utoipa::ToSchema;
 use crate::cedar_authz::{CedarAuthorizer, CommandResource};
 use crate::malo_cache::{MaloIdentResultCache, SlateDbMaloCache};
 
-// ── Shared state ─────────────────────────────────────────────────────────────
+// ── Identifier extraction helpers ─────────────────────────────────────────────
+
+/// Extract and validate a `malo_id` field from an ERP JSON payload.
+///
+/// Returns a 422-ready [`DispatchError::InvalidPayload`] when:
+/// - the `malo_id` key is absent or not a JSON string, or
+/// - the string fails BDEW MaLo-ID validation (11 digits + alternating-weight
+///   checksum, per BDEW MaLo-ID spec).
+///
+/// Returns the validated identifier as a plain [`String`] so that downstream
+/// code (MaLo cache key, process business key, `MaLo::new(...)`) can use it
+/// without threading the rubo4e newtype through the engine layer.
+fn extract_malo_id(payload: &serde_json::Value) -> Result<String, DispatchError> {
+    let s = payload
+        .get("malo_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"malo_id\" (11-digit Marktlokations-ID)".into(),
+            )
+        })?;
+    s.parse::<MaloId>()
+        .map(|id| id.as_ref().to_owned())
+        .map_err(|e| DispatchError::InvalidPayload(format!("invalid malo_id {s:?}: {e}")))
+}
+
+/// Extract and validate a `melo_id` field from an ERP JSON payload.
+///
+/// Returns a 422-ready [`DispatchError::InvalidPayload`] when:
+/// - the `melo_id` key is absent or not a JSON string, or
+/// - the string fails BDEW MeLo-ID validation (ISO 3166-1 alpha-2 prefix
+///   + 31 digits, per BO4E / WiM spec).
+fn extract_melo_id(payload: &serde_json::Value) -> Result<String, DispatchError> {
+    let s = payload
+        .get("melo_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"melo_id\" (Messlokations-ID, e.g. DE000…)".into(),
+            )
+        })?;
+    s.parse::<MeloId>()
+        .map(|id| id.as_ref().to_owned())
+        .map_err(|e| DispatchError::InvalidPayload(format!("invalid melo_id {s:?}: {e}")))
+}
+
+/// Extract a `invoice_ref` field from an ERP JSON payload.
+///
+/// Used for billing commands (`gpke.abrechnung.annehmen`/`ablehnen`) where the
+/// business key is the INVOIC message-reference rather than a MaLo-ID.
+/// Returns a 422-ready [`DispatchError::InvalidPayload`] when the field is absent.
+fn extract_invoice_ref(payload: &serde_json::Value) -> Result<String, DispatchError> {
+    payload
+        .get("invoice_ref")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"invoice_ref\" (EDIFACT INVOIC message reference)".into(),
+            )
+        })
+}
 
 /// Shared state for the ERP commands API.
 #[derive(Clone)]
@@ -494,12 +558,31 @@ pub(crate) async fn handle_command(
     }
 
     // ── Idempotency key ───────────────────────────────────────────────────────
-    let idempotency_key = headers
+    //
+    // Required for all state-mutating commands. A missing or empty key means the
+    // ERP has no stable retry identity and will generate a new "duplicate" event
+    // on every HTTP retry before the engine's business-level DuplicateProcess guard
+    // fires. Return 422 so the ERP retries are blocked until the key is supplied.
+    let idempotency_key = match headers
         .get("idempotency-key")
         .or_else(|| headers.get("Idempotency-Key"))
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned)
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    {
+        Some(key) if !key.is_empty() => key,
+        _ => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error":  "missing_idempotency_key",
+                    "detail": "The Idempotency-Key header is required for all commands. \
+                               Use a stable UUID (e.g. your ERP order or correlation ID) \
+                               to prevent duplicate process execution on retries.",
+                })),
+            )
+                .into_response();
+        }
+    };
 
     info!(
         idempotency_key = %idempotency_key,
@@ -897,34 +980,39 @@ fn cmd_gpke_sperrung_bestaetigen<'a>(
 }
 
 fn cmd_gpke_abrechnung_annehmen<'a>(
-    _s: &'a CommandsApiState,
-    _p: &'a serde_json::Value,
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    // TODO(F-022): GpkeAbrechnungWorkflow not yet wired to the command API.
-    // Implement: extract rechnung BO4E, call dispatch_to_process for
-    // GpkeAbrechnungWorkflow with the appropriate accept command.
-    Box::pin(async {
-        Err(DispatchError::NotImplemented(
-            "gpke.abrechnung.annehmen".to_owned(),
-        ))
+    Box::pin(async move {
+        // The ERP (or invoicd) must supply the original INVOIC message-ref so
+        // we can route to the correct billing process.
+        let invoice_ref = extract_invoice_ref(p)?;
+        dispatch_to_process::<GpkeAbrechnungWorkflow, _>(s, &invoice_ref, "gpke-abrechnung", || {
+            AbrechnungCommand::SettleInvoice
+        })
+        .await
     })
 }
 
 fn cmd_gpke_abrechnung_ablehnen<'a>(
-    _s: &'a CommandsApiState,
-    _p: &'a serde_json::Value,
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    // TODO(F-022): GpkeAbrechnungWorkflow not yet wired to the command API.
-    // Implement: extract rechnung BO4E + ablehnungsgrund, call dispatch_to_process
-    // for GpkeAbrechnungWorkflow with the appropriate reject command.
-    Box::pin(async {
-        Err(DispatchError::NotImplemented(
-            "gpke.abrechnung.ablehnen".to_owned(),
-        ))
+    Box::pin(async move {
+        let invoice_ref = extract_invoice_ref(p)?;
+        let reason = p
+            .get("ablehnungsgrund")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Automatisch ermittelte Abweichung")
+            .to_owned();
+        dispatch_to_process::<GpkeAbrechnungWorkflow, _>(s, &invoice_ref, "gpke-abrechnung", || {
+            AbrechnungCommand::DisputeInvoice { reason }
+        })
+        .await
     })
 }
 
@@ -1172,15 +1260,7 @@ async fn dispatch_lf_anmeldung(
     process_date_key: &str,
 ) -> Result<DispatchOutcome, DispatchError> {
     // ── Extract ERP-supplied fields ───────────────────────────────────────────
-    let malo_id = payload
-        .get("malo_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"malo_id\" (11-digit Marktlokations-ID string)".into(),
-            )
-        })?
-        .to_owned();
+    let malo_id = extract_malo_id(payload)?;
 
     let process_date = payload
         .get(process_date_key)
@@ -1533,15 +1613,7 @@ async fn dispatch_gpke_nb_lieferende_antwort(
     payload: &serde_json::Value,
     accepted: bool,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let malo_id = payload
-        .get("malo_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"malo_id\" (Marktlokations-ID)".into(),
-            )
-        })?
-        .to_owned();
+    let malo_id = extract_malo_id(payload)?;
 
     let reason = payload
         .get("reason")
@@ -1577,15 +1649,7 @@ async fn dispatch_gpke_zuordnung_lf_antwort(
     payload: &serde_json::Value,
     accepted: bool,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let malo_id = payload
-        .get("malo_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"malo_id\" (Marktlokations-ID)".into(),
-            )
-        })?
-        .to_owned();
+    let malo_id = extract_malo_id(payload)?;
 
     let reason = payload
         .get("reason")
@@ -1618,11 +1682,7 @@ async fn dispatch_supplier_change_antwort(
     payload: &serde_json::Value,
     accepted: bool,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let malo_id = payload
-        .get("malo_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| DispatchError::InvalidPayload("payload must contain \"malo_id\"".into()))?
-        .to_owned();
+    let malo_id = extract_malo_id(payload)?;
 
     let reason = payload
         .get("reason")
@@ -1650,11 +1710,7 @@ async fn dispatch_lf_activate(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let malo_id = payload
-        .get("malo_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| DispatchError::InvalidPayload("payload must contain \"malo_id\"".into()))?
-        .to_owned();
+    let malo_id = extract_malo_id(payload)?;
 
     dispatch_to_process::<GpkeLfAnmeldungWorkflow, _>(
         state,
@@ -1676,15 +1732,7 @@ async fn dispatch_geli_gas_antwort(
     positive: bool,
     response_pid_code: u32,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let malo_id = payload
-        .get("malo_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"malo_id\" (gas Marktlokations-ID)".into(),
-            )
-        })?
-        .to_owned();
+    let malo_id = extract_malo_id(payload)?;
 
     let reason = payload
         .get("reason")
@@ -1715,15 +1763,7 @@ async fn dispatch_wim_aperak(
     payload: &serde_json::Value,
     positive: bool,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let melo_id = payload
-        .get("melo_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"melo_id\" (Messlokations-ID)".into(),
-            )
-        })?
-        .to_owned();
+    let melo_id = extract_melo_id(payload)?;
 
     let reason = payload
         .get("reason")
@@ -2424,17 +2464,18 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: 17115,
         dispatch: cmd_gpke_sperrung_bestaetigen,
     },
-    // ── GPKE Netznutzungsabrechnung — stubs ───────────────────────────────────
-    // TODO: Implement GpkeAbrechnungWorkflow dispatch.
+    // ── GPKE Netznutzungsabrechnung — LF-payer side ───────────────────────────
+    // The LF receives an INVOIC from the NB and settles or disputes it.
+    // Routing key: `invoice_ref` (INVOIC message-reference) from the payload.
     CommandDescriptor {
         name: "gpke.abrechnung.annehmen",
-        permitted_roles: &["NB"],
+        permitted_roles: &["LF"],
         primary_pid: 31001,
         dispatch: cmd_gpke_abrechnung_annehmen,
     },
     CommandDescriptor {
         name: "gpke.abrechnung.ablehnen",
-        permitted_roles: &["NB"],
+        permitted_roles: &["LF"],
         primary_pid: 31001,
         dispatch: cmd_gpke_abrechnung_ablehnen,
     },

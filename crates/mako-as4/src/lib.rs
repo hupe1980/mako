@@ -58,7 +58,10 @@ pub mod server;
 // ── Top-level re-exports for ergonomics ──────────────────────────────────────
 
 pub use partner_directory::{PartnerDirectory, PartnerDirectoryParseError};
-pub use pmode::{BdewAction, PModeRegistry, bdew_pmode, bdew_pmode_encrypted};
+pub use pmode::{
+    BdewAction, PModeRegistry, bdew_pmode, bdew_pmode_encrypted,
+    bdew_pmode_encrypted_with_endpoint, bdew_pmode_with_endpoint,
+};
 pub use profile::{BdewAs4Profile, bdew_mako_profile_stack};
 #[cfg(feature = "server")]
 pub use server::bdew_router_config;

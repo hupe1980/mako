@@ -62,6 +62,7 @@ use axum::{
 };
 use edi_energy::{AnyMessage, EdiEnergyMessage as _, Platform};
 use mako_engine::{
+    dead_letter::{AuditContext, DeadLetterReason, DeadLetterSink},
     ids::TenantId,
     partner::{CommunicationChannel, MarketRole, PartnerRecord, PartnerStore as _},
     pid_router::PidRouter,
@@ -94,6 +95,13 @@ pub struct EdifactApiState {
     pub partner_store: Option<Arc<SlateDbPartnerStore>>,
     /// Tenant identifier for partner store writes.
     pub tenant_id: TenantId,
+    /// Dead-letter sink for §22 MessZV audit records.
+    ///
+    /// Every rejected, unroutable, or test-flagged message must produce a
+    /// structured dead-letter record.  Use `LogDeadLetterSink` for production
+    /// (logs structured `tracing::warn!`) or the SlateDB-backed sink for
+    /// durable persistence.
+    pub dl_sink: std::sync::Arc<dyn DeadLetterSink>,
     /// Phase 2 ingest dispatcher.
     ///
     /// When `Some`, every routed message is forwarded to the domain workflow
@@ -372,129 +380,208 @@ pub(crate) async fn ingest_edifact(
     // after the loop (CONTRL AHB 1.0 §1.2: one CONTRL per interchange, not per message).
     let mut parsed_msgs: Vec<AnyMessage> = Vec::new();
 
-    for result in state
-        .platform
-        .parse_interchange(std::io::Cursor::new(&body[..]))
-    {
-        match result {
-            Err(e) => {
-                tracing::warn!(error = %e, "EDIFACT REST ingest: parse error");
-                messages.push(MessageResult {
+    // ── Parse interchange (single pass) ──────────────────────────────────────
+    //
+    // `parse_interchange_full` parses the entire UNB…UNZ envelope in one shot
+    // and returns a `ParsedInterchange` with the interchange header and all
+    // contained messages.  A single parse is used for three reasons:
+    //
+    // 1. **Correctness**: `InterchangeHeader::test_indicator` must be checked
+    //    *before* dispatching any messages (§AF §3).  Doing this in a separate
+    //    pre-scan parse would double-charge CPU for every production request.
+    //
+    // 2. **Richer context**: each `MessageEnvelope` carries the interchange
+    //    header alongside the message, so the §22 MessZV `AuditContext` for
+    //    `UnknownPid` rejections can include the interchange sender/receiver/ref
+    //    instead of synthesising a timestamp-only context.
+    //
+    // 3. **Structural validation**: `ParsedInterchange::is_structurally_valid()`
+    //    checks UNZ message-count and control-ref integrity in one expression.
+    let pi = match state.platform.parse_interchange_full(&body[..]) {
+        Ok(pi) => pi,
+        Err(e) => {
+            tracing::warn!(error = %e, "EDIFACT REST ingest: interchange parse error");
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(IngestResponse {
+                    accepted: 0,
+                    rejected: 1,
+                    messages: vec![MessageResult {
+                        message_type: None,
+                        pid: None,
+                        workflow: None,
+                        status: MessageStatus::ParseError,
+                        process_id: None,
+                        malo_id: None,
+                        error: Some(e.to_string()),
+                    }],
+                }),
+            );
+        }
+    };
+
+    // ── Test-indicator guard (§AF §3 / Allgemeine Festlegungen V6.1d §3) ──────
+    // DE0035 = "1" means test interchange — must never reach production workflows.
+    if pi.header.test_indicator {
+        let ctx = AuditContext::from_interchange(
+            &pi.header.sender_id,
+            &pi.header.receiver_id,
+            &pi.header.control_ref,
+        )
+        .with_tenant_id(state.tenant_id.to_string());
+        state
+            .dl_sink
+            .reject(&DeadLetterReason::TestMessage { context: ctx });
+        tracing::warn!(
+            sender = %pi.header.sender_id,
+            receiver = %pi.header.receiver_id,
+            control_ref = %pi.header.control_ref,
+            "EDIFACT REST ingest: test interchange (DE0035=1) rejected — \
+             must not process test messages on production endpoint (§AF §3)",
+        );
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(IngestResponse {
+                accepted: 0,
+                rejected: 1,
+                messages: vec![MessageResult {
                     message_type: None,
                     pid: None,
                     workflow: None,
                     status: MessageStatus::ParseError,
                     process_id: None,
                     malo_id: None,
-                    error: Some(e.to_string()),
-                });
-            }
-            Ok(msg) => {
-                let message_type = msg.try_message_type().map(|t| t.to_string());
-                let pid = msg.detect_pruefidentifikator().ok().map(|p| p.as_u32());
-                let workflow = pid
-                    .and_then(|p| state.pid_router.route(p))
-                    .map(str::to_owned);
+                    error: Some(
+                        "test interchange rejected (UNB DE0035=1): \
+                         test messages must not reach a production endpoint"
+                            .to_owned(),
+                    ),
+                }],
+            }),
+        );
+    }
 
-                let status = match (pid, workflow.as_deref()) {
-                    (None, _) => MessageStatus::NoPid,
-                    (Some(_), Some(_)) => MessageStatus::Routed,
-                    (Some(_), None) => MessageStatus::UnknownPid,
-                };
+    for env in pi.messages {
+        // Partial move: `env.header` remains accessible for AuditContext
+        // after `env.message` is moved into `msg`.
+        let msg = env.message;
 
-                // Auto-upsert PARTIN: when we receive a PARTIN message and a
-                // PartnerStore is wired, extract the sender's communication data
-                // and store it immediately — no ERP integration needed.
-                if let (AnyMessage::Partin(partin), Some(ps)) =
-                    (&msg, state.partner_store.as_deref())
-                {
-                    match partin_to_partner_record(partin, pid) {
-                        Some(record) => {
-                            if let Err(e) = ps.upsert(state.tenant_id, &record).await {
-                                tracing::warn!(
-                                    gln = %record.gln,
-                                    error = %e,
-                                    "PARTIN auto-upsert failed — partner data not stored",
-                                );
-                            } else {
-                                tracing::info!(
-                                    gln = %record.gln,
-                                    pid,
-                                    "PARTIN auto-upsert: partner record stored",
-                                );
-                            }
-                        }
-                        None => {
-                            tracing::warn!(
-                                pid,
-                                "PARTIN received but sender GLN missing — skipping auto-upsert",
-                            );
-                        }
+        let message_type = msg.try_message_type().map(|t| t.to_string());
+        let pid = msg.detect_pruefidentifikator().ok().map(|p| p.as_u32());
+        let workflow = pid
+            .and_then(|p| state.pid_router.route(p))
+            .map(str::to_owned);
+
+        let status = match (pid, workflow.as_deref()) {
+            (None, _) => MessageStatus::NoPid,
+            (Some(_), Some(_)) => MessageStatus::Routed,
+            (Some(_), None) => MessageStatus::UnknownPid,
+        };
+
+        // Dead-letter unroutable messages (§22 MessZV).
+        if matches!(status, MessageStatus::UnknownPid) {
+            let ctx = AuditContext::from_interchange(
+                &env.header.sender_id,
+                &env.header.receiver_id,
+                &env.header.control_ref,
+            )
+            .with_message_type(message_type.as_deref().unwrap_or(""))
+            .with_pid(pid.unwrap_or(0))
+            .with_tenant_id(state.tenant_id.to_string());
+            state.dl_sink.reject(&DeadLetterReason::UnknownPid {
+                pid: pid.unwrap_or(0),
+                context: ctx,
+            });
+        }
+
+        // Auto-upsert PARTIN: when we receive a PARTIN message and a
+        // PartnerStore is wired, extract the sender's communication data
+        // and store it immediately — no ERP integration needed.
+        if let (AnyMessage::Partin(partin), Some(ps)) = (&msg, state.partner_store.as_deref()) {
+            match partin_to_partner_record(partin, pid) {
+                Some(record) => {
+                    if let Err(e) = ps.upsert(state.tenant_id, &record).await {
+                        tracing::warn!(
+                            gln = %record.gln,
+                            error = %e,
+                            "PARTIN auto-upsert failed — partner data not stored",
+                        );
+                    } else {
+                        tracing::info!(
+                            gln = %record.gln,
+                            pid,
+                            "PARTIN auto-upsert: partner record stored",
+                        );
                     }
                 }
-
-                tracing::info!(
-                    message_type = ?message_type,
-                    pid,
-                    workflow = ?workflow,
-                    status   = ?status,
-                    "EDIFACT message received via REST",
-                );
-
-                // Phase 2: execute workflow command if dispatcher is wired.
-                let mut dispatch_process_id: Option<String> = None;
-                let mut dispatch_malo_id: Option<String> = None;
-                if let (Some(pid_val), Some(wf_name), Some(dispatcher)) =
-                    (pid, workflow.as_deref(), state.dispatcher.as_deref())
-                    && matches!(status, MessageStatus::Routed)
-                {
-                    match dispatcher.dispatch(&msg, wf_name, pid_val).await {
-                        Ok(outcome) => {
-                            use crate::ingest_dispatcher::IngestOutcome;
-                            match &outcome {
-                                IngestOutcome::Spawned { process_id, .. }
-                                | IngestOutcome::Dispatched { process_id, .. } => {
-                                    dispatch_process_id = Some(process_id.to_string());
-                                }
-                                IngestOutcome::Skipped { .. } => {}
-                            }
-                            // Extract MaLo from the raw message for the response.
-                            dispatch_malo_id =
-                                Some(crate::ingest_dispatcher::extract_malo_from_msg(&msg))
-                                    .filter(|s| !s.is_empty());
-                            tracing::debug!(
-                                workflow    = %wf_name,
-                                pid         = pid_val,
-                                outcome     = ?outcome,
-                                process_id  = ?dispatch_process_id,
-                                malo_id     = ?dispatch_malo_id,
-                                "EDIFACT REST ingest: Phase 2 command dispatched",
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                workflow = %wf_name,
-                                pid      = pid_val,
-                                error    = %e,
-                                "EDIFACT REST ingest: Phase 2 command dispatch failed \
-                                 (non-fatal — message was routed)",
-                            );
-                        }
-                    }
+                None => {
+                    tracing::warn!(
+                        pid,
+                        "PARTIN received but sender GLN missing — skipping auto-upsert",
+                    );
                 }
-
-                messages.push(MessageResult {
-                    message_type,
-                    pid,
-                    workflow,
-                    status,
-                    process_id: dispatch_process_id,
-                    malo_id: dispatch_malo_id,
-                    error: None,
-                });
-                parsed_msgs.push(msg);
             }
         }
+
+        tracing::info!(
+            message_type = ?message_type,
+            pid,
+            workflow = ?workflow,
+            status   = ?status,
+            "EDIFACT message received via REST",
+        );
+
+        // Phase 2: execute workflow command if dispatcher is wired.
+        let mut dispatch_process_id: Option<String> = None;
+        let mut dispatch_malo_id: Option<String> = None;
+        if let (Some(pid_val), Some(wf_name), Some(dispatcher)) =
+            (pid, workflow.as_deref(), state.dispatcher.as_deref())
+            && matches!(status, MessageStatus::Routed)
+        {
+            match dispatcher.dispatch(&msg, wf_name, pid_val).await {
+                Ok(outcome) => {
+                    use crate::ingest_dispatcher::IngestOutcome;
+                    match &outcome {
+                        IngestOutcome::Spawned { process_id, .. }
+                        | IngestOutcome::Dispatched { process_id, .. } => {
+                            dispatch_process_id = Some(process_id.to_string());
+                        }
+                        IngestOutcome::Skipped { .. } => {}
+                    }
+                    // Extract MaLo from the raw message for the response.
+                    dispatch_malo_id = Some(crate::ingest_dispatcher::extract_malo_from_msg(&msg))
+                        .filter(|s| !s.is_empty());
+                    tracing::debug!(
+                        workflow    = %wf_name,
+                        pid         = pid_val,
+                        outcome     = ?outcome,
+                        process_id  = ?dispatch_process_id,
+                        malo_id     = ?dispatch_malo_id,
+                        "EDIFACT REST ingest: Phase 2 command dispatched",
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        workflow = %wf_name,
+                        pid      = pid_val,
+                        error    = %e,
+                        "EDIFACT REST ingest: Phase 2 command dispatch failed \
+                         (non-fatal — message was routed)",
+                    );
+                }
+            }
+        }
+
+        messages.push(MessageResult {
+            message_type,
+            pid,
+            workflow,
+            status,
+            process_id: dispatch_process_id,
+            malo_id: dispatch_malo_id,
+            error: None,
+        });
+        parsed_msgs.push(msg);
     }
 
     // Emit CONTRL Empfangsbestätigung for Gas interchanges (CONTRL AHB 1.0 §1.2).
@@ -502,7 +589,9 @@ pub(crate) async fn ingest_edifact(
     // from the UNB…UNZ have been collected.
     if let Some(contrl_svc) = state.contrl_ack.as_deref() {
         let refs: Vec<&AnyMessage> = parsed_msgs.iter().collect();
-        contrl_svc.emit_for_interchange(&refs).await;
+        contrl_svc
+            .emit_for_interchange(&refs, &pi.header.control_ref)
+            .await;
     }
 
     let accepted = messages

@@ -48,6 +48,9 @@ use mako_engine::{
 
 // ── PID constants ─────────────────────────────────────────────────────────────
 
+/// Workflow name used for PID routing and `WorkflowId` construction.
+pub const WORKFLOW_NAME: &str = "wim-geraeteubernahme";
+
 /// All ORDERS PIDs for the Geräteübernahme process family (WiM Strom Teil 1).
 ///
 /// Per BDEW PID 3.3/4.0 xlsx (sheet "Prüf-ID Prozessschritt"):
@@ -59,6 +62,8 @@ use mako_engine::{
 ///
 /// WiM Gas Geräteübernahme routing is not yet implemented in `mako-wim-gas`;
 /// role-based disambiguation for the Gas context is a future TODO.
+///
+/// All routing PIDs (combined for convenience).
 pub const GERAETEUBERNAHME_PIDS: &[u32] = &[
     17001, // Bestellung Geräteübernahmeangebot (WiM Strom Teil 1 + WiM Gas)
     17002, // Weiterverpflichtung (WiM Strom Teil 1 + WiM Gas)

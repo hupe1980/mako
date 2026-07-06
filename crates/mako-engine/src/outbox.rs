@@ -41,12 +41,10 @@
 //!
 //! # Atomicity contract
 //!
-//! [`InMemoryOutboxStore`] does **not** guarantee transactional atomicity
-//! with [`InMemoryEventStore`]. Persistent backend crates
+//! `InMemoryOutboxStore` does **not** guarantee transactional atomicity
+//! with `InMemoryEventStore`. Persistent backend crates
 //! (`mako-event-store-slatedb`, `mako-event-store-postgres`) MUST enqueue
 //! messages in the same database transaction as the event append.
-//!
-//! [`InMemoryEventStore`]: crate::event_store::InMemoryEventStore
 
 use std::sync::Arc;
 
@@ -238,6 +236,18 @@ pub struct OutboxMessage {
     /// Number of delivery attempts so far. Starts at `0`, incremented by
     /// [`OutboxStore::reschedule`].
     pub attempt_count: u32,
+
+    /// Workflow family name that produced this message (e.g. `"gpke-sperrung"`).
+    ///
+    /// Stamped from the `EventEnvelope::workflow_id.name` at materialisation
+    /// time.  Used by the `OutboxErpWorker` to populate the `makoworkflow`
+    /// CloudEvents extension attribute, which `mdmd` maps to `mdmrole` for
+    /// role-scoped ERP fan-out.
+    ///
+    /// Empty string for messages materialised before this field was introduced
+    /// (backward-compatible deserialisation via `#[serde(default)]`).
+    #[serde(default)]
+    pub workflow_name: Box<str>,
 }
 
 impl OutboxMessage {
@@ -276,6 +286,7 @@ impl OutboxMessage {
             created_at: OffsetDateTime::now_utc(),
             deliver_after: None,
             attempt_count: 0,
+            workflow_name: "".into(),
         }
     }
 
@@ -442,13 +453,12 @@ impl<S: OutboxStore> OutboxStore for Arc<S> {
 /// in production.
 ///
 /// This type is available in all build configurations so it can serve as a
-/// default type parameter in [`EngineBuilder`]. However, [`EngineBuilder::new`]
+/// default type parameter in [`EngineBuilder`]. However, `EngineBuilder::new`
 /// (which wires this as the default) is only available with the `testing`
 /// feature or in `cfg(test)`. Production code must call
 /// [`EngineBuilder::with_stores`] instead.
 ///
 /// [`EngineBuilder`]: crate::builder::EngineBuilder
-/// [`EngineBuilder::new`]: crate::builder::EngineBuilder::new
 /// [`EngineBuilder::with_stores`]: crate::builder::EngineBuilder::with_stores
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use = "NoopOutboxStore discards all outbound messages silently — use a persistent OutboxStore in production"]

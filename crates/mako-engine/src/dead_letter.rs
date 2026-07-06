@@ -38,6 +38,8 @@
 
 use std::sync::Arc;
 
+use time_tz::{OffsetDateTimeExt as _, timezones};
+
 // ── AuditContext ──────────────────────────────────────────────────────────────
 
 /// Structured audit context attached to every dead-letter event.
@@ -88,6 +90,10 @@ pub struct AuditContext {
 impl AuditContext {
     /// Create an `AuditContext` with only a timestamp, all other fields `None`.
     ///
+    /// The timestamp is set to the current wall-clock time in **German local time**
+    /// (CET = UTC+1 in winter, CEST = UTC+2 in summer), satisfying the §22 MessZV
+    /// requirement for German-timezone audit records.
+    ///
     /// Use builder-style setters to fill in known fields:
     /// ```rust
     /// use mako_engine::dead_letter::AuditContext;
@@ -99,6 +105,7 @@ impl AuditContext {
     /// ```
     #[must_use]
     pub fn now() -> Self {
+        let berlin = timezones::db::europe::BERLIN;
         Self {
             message_type: None,
             release_code: None,
@@ -109,8 +116,28 @@ impl AuditContext {
             process_id: None,
             tenant_id: None,
             correlation_id: None,
-            timestamp: time::OffsetDateTime::now_utc(),
+            // Use Berlin local time so audit records align with the German
+            // regulatory clock — an off-by-one-hour error at DST transitions
+            // is a reportable BNetzA regulatory violation.
+            timestamp: time::OffsetDateTime::now_utc().to_timezone(berlin),
         }
+    }
+
+    /// Populate an `AuditContext` from an interchange header and known optional fields.
+    ///
+    /// Fills in `sender_eic`, `receiver_eic`, and `message_ref` (interchange control
+    /// reference) from the parsed UNB header.  All remaining fields (pid, process_id,
+    /// tenant_id, correlation_id) are `None` and should be set via builder setters
+    /// when available.
+    ///
+    /// Satisfies the §22 MessZV requirement that every dead-letter record carries at
+    /// minimum the sender GLN, receiver GLN, and interchange reference.
+    #[must_use]
+    pub fn from_interchange(sender_id: &str, receiver_id: &str, control_ref: &str) -> Self {
+        Self::now()
+            .with_sender_eic(sender_id)
+            .with_receiver_eic(receiver_id)
+            .with_message_ref(control_ref)
     }
 
     /// Set the message type.
@@ -260,6 +287,17 @@ pub enum DeadLetterReason {
         context: AuditContext,
     },
 
+    /// An interchange flagged with UNB DE0035 = 1 (test indicator) was received
+    /// on a production endpoint.
+    ///
+    /// Per Allgemeine Festlegungen V6.1d §3, test interchanges **must not** be
+    /// processed as production. The interchange is rejected at the ingest boundary
+    /// without being forwarded to any workflow.
+    TestMessage {
+        /// §22 MessZV structured audit context (contains sender, receiver, control_ref).
+        context: AuditContext,
+    },
+
     /// The outbox delivery worker gave up after exhausting all retry attempts.
     ///
     /// The message was re-queued `max_attempts` times and never successfully
@@ -291,6 +329,7 @@ impl DeadLetterReason {
             Self::VersionMismatch { .. } => "version_mismatch",
             Self::DuplicateMessage { .. } => "duplicate_message",
             Self::ProcessingError { .. } => "processing_error",
+            Self::TestMessage { .. } => "test_message",
             Self::OutboxExhausted { .. } => "outbox_exhausted",
         }
     }
@@ -306,7 +345,8 @@ impl DeadLetterReason {
             | Self::UnknownConversation { context, .. }
             | Self::VersionMismatch { context, .. }
             | Self::DuplicateMessage { context, .. }
-            | Self::ProcessingError { context, .. } => Some(context),
+            | Self::ProcessingError { context, .. }
+            | Self::TestMessage { context, .. } => Some(context),
             Self::OutboxExhausted { .. } => None,
         }
     }
@@ -329,6 +369,13 @@ impl std::fmt::Display for DeadLetterReason {
             ),
             Self::DuplicateMessage { inbox_key, .. } => write!(f, "duplicate message {inbox_key}"),
             Self::ProcessingError { message, .. } => write!(f, "processing error: {message}"),
+            Self::TestMessage { context } => write!(
+                f,
+                "test interchange rejected (DE0035=1): sender={}, receiver={}, ref={}",
+                context.sender_eic.as_deref().unwrap_or(""),
+                context.receiver_eic.as_deref().unwrap_or(""),
+                context.message_ref.as_deref().unwrap_or(""),
+            ),
             Self::OutboxExhausted {
                 message_id,
                 message_type,

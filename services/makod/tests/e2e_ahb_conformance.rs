@@ -701,6 +701,7 @@ async fn ahb_31001_invoic_validates_and_dispatches() {
         document_date: String::from("20250101"),
         validation_passed: report.is_valid(), // authoritative AHB result — no bypass
         validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
+        rechnung: None,
     };
     assert!(
         cmd_valid,

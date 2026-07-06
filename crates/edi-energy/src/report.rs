@@ -10,8 +10,10 @@ use edifact_rs::{ValidationIssue, ValidationReport};
 fn classify_rule_origin(rule_id: &str) -> Option<&'static str> {
     if rule_id.starts_with("MIG-") || rule_id.starts_with("UNKNOWN-MSG-TYPE") {
         Some("mig")
-    } else if rule_id.starts_with("AHB-") {
+    } else if rule_id.starts_with("AHB-") || rule_id.starts_with("AHB-SKIP-") {
         Some("ahb")
+    } else if rule_id.starts_with("SEM-") {
+        Some("semantic")
     } else if rule_id.starts_with("PARSE-") {
         Some("parse")
     } else if rule_id.starts_with("DIR-") {
@@ -69,9 +71,20 @@ pub struct ValidationIssueSummary {
     /// Suggested remediation text, if available.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub suggestion: Option<String>,
-    /// Byte offset in the source input, if available.
+    /// Byte offset of the first byte of the affected region in the source input.
+    ///
+    /// Populated from [`edifact_rs::ValidationIssue::span`]`.start` (0.11.0+)
+    /// when the issue carries a full span; otherwise from `issue.offset`.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub offset: Option<usize>,
+    /// Exclusive byte offset of the end of the affected region in the source input.
+    ///
+    /// Together with [`offset`](Self::offset) this forms a half-open byte range
+    /// `[offset, byte_end)` that maps directly to an LSP `Range` or a `miette`
+    /// source span.  `None` when the issue has no span (only a start offset or
+    /// no position information at all).
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub byte_end: Option<usize>,
     /// The BDEW Prüfidentifikator (process variant code) associated with this
     /// issue, when the report was produced by a PID-specific validation layer.
     ///
@@ -144,7 +157,8 @@ impl ValidationIssueSummary {
             component_index: issue.component_index,
             message_ref: issue.message_ref.clone(),
             suggestion: issue.suggestion.clone(),
-            offset: issue.offset,
+            offset: issue.span().map(|s| s.start).or(issue.offset),
+            byte_end: issue.span().map(|s| s.end),
             pruefidentifikator: resolved_pid,
             rule_origin,
         }
@@ -177,6 +191,16 @@ pub struct EdiEnergyReport {
     /// an AHB correction without a MIG change (e.g. INSRPT wire `1.1a` but AHB `1.1g`).
     /// Including this in audit records disambiguates which rule set was applied.
     ahb_revision: Option<&'static str>,
+    /// The parsed interchange envelope header (UNB fields), when the message was
+    /// validated from a full interchange (UNB…UNZ).
+    ///
+    /// `None` for bare messages (UNH…UNT only, no interchange wrapper).  Present
+    /// when an interchange wrapper was detected and successfully validated by
+    /// `edifact_rs::validate_envelope_owned`.
+    ///
+    /// Combines with the validation issues to provide a single comprehensive
+    /// audit record (who sent it, when, control reference, and whether it was valid).
+    pub interchange_header: Option<crate::interchange::InterchangeHeader>,
 }
 
 impl EdiEnergyReport {
@@ -189,6 +213,7 @@ impl EdiEnergyReport {
             pruefidentifikator: None,
             release: None,
             ahb_revision: None,
+            interchange_header: None,
         }
     }
 
@@ -204,6 +229,7 @@ impl EdiEnergyReport {
             pruefidentifikator: pid,
             release: None,
             ahb_revision: None,
+            interchange_header: None,
         }
     }
 
@@ -222,6 +248,20 @@ impl EdiEnergyReport {
     ) -> Self {
         self.release = Some(release);
         self.ahb_revision = ahb_revision;
+        self
+    }
+
+    /// Attach the interchange envelope header to the report.
+    ///
+    /// Call this when the message was validated from a full interchange (UNB…UNZ)
+    /// so that the report carries both routing metadata and validation findings as
+    /// a single audit record.
+    #[must_use]
+    pub(crate) fn with_interchange_header(
+        mut self,
+        header: crate::interchange::InterchangeHeader,
+    ) -> Self {
+        self.interchange_header = Some(header);
         self
     }
 
@@ -336,6 +376,7 @@ impl EdiEnergyReport {
             pruefidentifikator: self.pruefidentifikator,
             release: self.release.clone(),
             ahb_revision: self.ahb_revision,
+            interchange_header: self.interchange_header.clone(),
         }
     }
 
@@ -359,6 +400,7 @@ impl EdiEnergyReport {
             pruefidentifikator: self.pruefidentifikator,
             release: self.release.clone(),
             ahb_revision: self.ahb_revision,
+            interchange_header: self.interchange_header.clone(),
         }
     }
 
@@ -442,6 +484,25 @@ impl EdiEnergyReport {
             Ok(())
         }
     }
+
+    /// Convert to `Result<Self, Self>`, consuming `self`.
+    ///
+    /// Returns `Ok(self)` when valid (no errors), `Err(self)` when invalid.
+    /// Mirrors the `edifact_rs::ValidationReport::result()` API so call-sites
+    /// that use `?` propagation work symmetrically across both types.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(self)` when the report contains at least one error-level issue.
+    #[must_use = "call into_result() or as_result() if you only need the side-effect"]
+    pub fn result(self) -> Result<Self, Self> {
+        if self.inner.has_errors() {
+            Err(self)
+        } else {
+            Ok(self)
+        }
+    }
+
     /// Consume the wrapper and return the underlying [`ValidationReport`].
     #[must_use]
     pub fn into_inner(self) -> ValidationReport {
@@ -509,7 +570,8 @@ impl serde::Serialize for EdiEnergyReport {
         // Count optional top-level fields to size the struct correctly.
         let opt_field_count = usize::from(pid.is_some())
             + usize::from(self.release.is_some())
-            + usize::from(self.ahb_revision.is_some());
+            + usize::from(self.ahb_revision.is_some())
+            + usize::from(self.interchange_header.is_some());
         let mut st = s.serialize_struct("EdiEnergyReport", 5 + opt_field_count)?;
         st.serialize_field("valid", &self.inner.is_valid())?;
         st.serialize_field(
@@ -545,6 +607,9 @@ impl serde::Serialize for EdiEnergyReport {
         }
         if let Some(rev) = self.ahb_revision {
             st.serialize_field("ahbRevision", rev)?;
+        }
+        if let Some(ref hdr) = self.interchange_header {
+            st.serialize_field("interchangeHeader", hdr)?;
         }
         st.end()
     }

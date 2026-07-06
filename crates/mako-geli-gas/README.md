@@ -108,15 +108,36 @@ families. Saturday counts as a Werktag; Sunday and public holidays do not.
 | `FV2025-10-01_gas`   | 2025-10-01 | 2026-09-30  | ✓ available    |
 | `FV2026-10-01_gas`   | 2026-10-01 | —           | ✓ available    |
 
+## MSCONS Messdaten Gas — GNB/gMSB to LFG
+
+Workflow `geli-gas-mscons` receives inbound MSCONS messages that carry gas
+metering values from the GNB or gMSB to the LF. These are read-only deliveries
+on the retail gas side; no APERAK response is required unless validation fails.
+
+| PID   | Process name (AHB)                                       | Sender        |
+|-------|----------------------------------------------------------|---------------|
+| 13002 | Energiemenge Gas (GNB → LF)                              | GNB → LF      |
+| 13007 | Lastgang Gas (GNB / gMSB → LF)                           | GNB/gMSB → LF |
+| 13008 | Tageslosmenge Gas (GNB → LF)                             | GNB → LF      |
+| 13009 | Messwerte Gas (gMSB → LF)                                | gMSB → LF     |
+
+> All four PIDs carry metered gas quantities under the GeLi Gas framework
+> (BK7-24-01-009). They are routed to `geli-gas-mscons` on any deployment
+> that includes the GeLi Gas module.
+
 ## Modules
 
-| Rust module    | Contents                                                                  |
-|----------------|-----------------------------------------------------------------------|
-| `lieferbeginn` | PIDs 44001–44006, 44007–44021 Lieferantenwechsel workflow + projections  |
-| `datenabruf`   | PIDs 17103, 17104 Gas Datenabruf (ORDERS) + ORDRSP 19103, 19104           |
-| `sperrung_lf`  | PIDs 17115, 17117 Gas Sperrung LF-initiated (outbound); ORDRSP 19116, 19117, 19128, 19129 (inbound); ORDCHG 39000 (outbound Stornierung) |
-| `sperrung_nb`  | PIDs 17115, 17116, 17117 (inbound GNB receives from LF); ORDERS 17116 (outbound GNB → gMSB); ORDRSP 19118, 19119 (inbound gMSB → GNB response); ORDCHG 39000 (inbound Stornierung from LF); ORDCHG 39001 (outbound Weiterleitung to gMSB) — 10 WT deadline |
-| `partin`       | PIDs 37008–37014 Gas Kommunikationsdaten (LF, GNB, gMSB, MGV, ÜNB) — auto-upsert into `PartnerStore` |
+| Rust module    | Workflow name               | Contents                                                                           |
+|----------------|-----------------------------|------------------------------------------------------------------------------------|
+| `lieferbeginn` | `geli-gas-supplier-change`  | PIDs 44001–44021 Lieferantenwechsel workflow + projections                         |
+| `stornierung`  | `geli-gas-stornierung`      | PID 44022 Nb-only (GNB receives Stornierungsanfrage inbound)                       |
+| `lf_stornierung` | `geli-gas-stornierung-lf` | PIDs 44023/44024 Lf-only (LF receives GNB Stornierungsantwort inbound)             |
+| `datenabruf`   | `geli-gas-datenabruf`       | PIDs 17103/17104 Gas Datenabruf (ORDERS) + ORDRSP 19103/19104                      |
+| `sperrung_lf`  | `geli-gas-sperrung-lf`      | PIDs 17115/17117 Gas Sperrung LF-initiated; ORDRSP 19116/19117/19128/19129; ORDCHG 39000 |
+| `sperrung_nb`  | `geli-gas-sperrung-nb`      | PIDs 17115/17116/17117 (GNB receives); ORDERS 17116 → gMSB; ORDRSP 19118/19119; ORDCHG 39000/39001 |
+| `sperrprozesse_invoic` | `geli-gas-sperrprozesse-invoic` | PID 31011 (INVOIC AWH Sperrprozesse Gas, NB → LF)                      |
+| `mscons`       | `geli-gas-mscons`           | PIDs 13002/13007/13008/13009 (MSCONS Messdaten Gas, GNB/gMSB → LF)               |
+| `partin`       | `geli-gas-partin`           | PIDs 37008–37014 Gas Kommunikationsdaten (LF, GNB, gMSB, MGV, ÜNB)               |
 
 ## Usage
 

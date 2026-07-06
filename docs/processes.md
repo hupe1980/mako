@@ -68,29 +68,50 @@ Quick reference across all process families. Each row is a top-level domain.
 
 | Domain | Sparte | Crate | Key PIDs | APERAK Frist | Basis |
 |---|:---:|---|---|---|---|
-| **GPKE Lieferantenwechsel** | ⚡ | `mako-gpke` | UTILMD 55001–55018, 55600–55605 | 24 h | BK6-24-174 |
-| **GPKE Sperrung/Entsperrung** | ⚡ | `mako-gpke` | ORDERS 17115, 17117 → ORDRSP 19116/19117 | 24 h | BK6-22-024 |
-| **GPKE Abrechnung (INVOIC)** | ⚡ | `mako-gpke` | INVOIC 31001, 31002, 31005–31008; REMADV 33001–33004 | 24 h | BK6-24-174 |
-| **GPKE Datenabruf** | ⚡ | `mako-gpke` | ORDERS 17004, 17102, 17113; UTILMD 55555 | 24 h | BK6-22-024 |
-| **GPKE UTILTS** | ⚡ | `mako-gpke` | UTILTS 25001, 25004–25010 | 24 h | BK6-24-174 |
-| **GPKE MSCONS** | ⚡ | `mako-gpke` | MSCONS (metered values NB→LF) | 24 h | BK6-24-174 |
-| **WiM Strom MSB-Wechsel** | ⚡ | `mako-wim` | UTILMD 55039, 55042, 55051, 55168 | 5 WT | BK6-24-174 |
-| **WiM Strom Geräteübernahme** | ⚡ | `mako-wim` | ORDERS 17001, 17002, 17009, 17011 | 5 WT | BK6-24-174 |
-| **WiM Strom Abrechnung** | ⚡ | `mako-wim` | INVOIC 31009 | 5 WT | BK6-24-174 |
-| **MaBiS Bilanzkreisabrechnung** | ⚡ | `mako-mabis` | MSCONS 13003; IFTSTA 21000–21005 | — (calendar) | BK6-24-174 |
-| **GeLi Gas Lieferantenwechsel** | 🔥 | `mako-geli-gas` | UTILMD G 44001–44021 | 10 WT | BK7-24-01-009 |
-| **GeLi Gas Sperrung/Entsperrung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-lf` ✅ | ORDERS 17115/17117 · ORDCHG 39000 | 10 WT | BK7-24-01-009 |
-| **GeLi Gas Sperrung/Entsperrung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-nb` ✅ | ORDERS 17115–17117 · ORDCHG 39000/39001 · ORDRSP 19118/19119 | 10 WT | BK7-24-01-009 |
-| **GeLi Gas AWH-Abrechnung** | 🔥 | `mako-geli-gas` `geli-gas-sperrprozesse-invoic` ✅ | INVOIC 31011 | — | BK7-24-01-009 |
-| **GeLi Gas Datenabruf** | 🔥 | `mako-geli-gas` | ORDERS 17103, 17104 | 10 WT | BK7-24-01-009 |
-| **WiM Gas MSB-Wechsel** | 🔥 | `mako-wim-gas` ⚠️ | UTILMD G 44039–44053, 44168–44170 | 10 WT | BK7-24-01-009 |
-| **GaBi Gas Kapazitätsabrechnung** | 🔥 | `mako-gabi-gas` ✅ | INVOIC 31010 | — | BK7 |
-| **PARTIN Partnerstammdaten** | ⚡🔥 | `mako-gpke` / `mako-geli-gas` | PARTIN 37000–37014 | — | PARTIN AHB 1.0f |
-| **Redispatch 2.0** | ⚡ | `mako-redispatch` | IFTSTA 21037/21038; XML documents | — | BK6-20-160 |
-| **DVGW Gas Transport** | 🔥 | `mako-gabi-gas` ✅ | Synthetic PIDs 90001–90062 (NOMINT/NOMRES/ALOCAT/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES) | — | DVGW G685/G2000 |
-
-> WT = Werktage (Saturday counts; Sunday and public holidays excluded).
-> All APERAK Fristen computed in German local time (CET/CEST).
+| **GPKE Lieferantenwechsel (NB-Sicht)** | ⚡ | `mako-gpke` `gpke-supplier-change` | UTILMD 55001–55018, 55022–55024 | 24 h | BK6-24-174 |
+| **GPKE Lieferantenwechsel (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-lf-anmeldung` | UTILMD 55001/55002/55016/55077 (out) · 55003–55006 (in) | 24 h | BK6-24-174 |
+| **GPKE Neuanlage MaLo** | ⚡ | `mako-gpke` `gpke-neuanlage` | UTILMD 55600/55601 → 55602–55605 | 24 h | BK6-24-174 |
+| **GPKE Abmeldung LF** | ⚡ | `mako-gpke` `gpke-lf-abmeldung` | UTILMD 55007 → 55008/55009 | 24 h | BK6-24-174 |
+| **GPKE Ankündigung Zuordnung LF** | ⚡ | `mako-gpke` `gpke-ankuendigung-zuordnung-lf` | UTILMD 55607 → 55608/55609 | 24 h | BK6-24-174 |
+| **GPKE Sperrung/Entsperrung (NB)** | ⚡ | `mako-gpke` `gpke-sperrung` | ORDERS 17115/17117 → ORDRSP 19116/19117 | 24 h | BK6-22-024 |
+| **GPKE Sperrung/Entsperrung (LF-ANTWORT)** | ⚡ | `mako-gpke` `gpke-sperrung-lf` | ORDRSP 19116/19117 · IFTSTA Sperrung | 24 h | BK6-22-024 |
+| **GPKE Abrechnung (INVOIC)** | ⚡ | `mako-gpke` `gpke-abrechnung` | INVOIC 31001/31002/31005/31006; REMADV; COMDIS | 24 h | BK6-24-174 |
+| **GPKE Datenabruf** | ⚡ | `mako-gpke` `gpke-datenabruf` | ORDERS 17004/17102/17113 → ORDRSP rejection | 24 h | BK6-22-024 |
+| **GPKE Anfrage Bestellung (55555)** | ⚡ | `mako-gpke` `gpke-anfrage-bestellung` | UTILMD 55555 | 24 h | BK6-22-024 |
+| **GPKE Allokationsliste Strom** | ⚡ | `mako-gpke` `gpke-allokationsliste` | ORDERS 17110/17114 · ORDRSP 19110/19115 · MSCONS 13014 | 24 h | BK6-24-174 |
+| **GPKE Messwerte (MSCONS)** | ⚡ | `mako-gpke` `gpke-messwerte` | MSCONS 13005/13006/13015–13019/13025/13027 | 24 h | BK6-24-174 |
+| **GPKE UTILTS** | ⚡ | `mako-gpke` `gpke-utilts` | UTILTS 25001/25004–25010 | 24 h | BK6-24-174 |
+| **GPKE Konfiguration** | ⚡ | `mako-gpke` `gpke-konfiguration` | ORDERS 17134/17135 → ORDRSP 19001/19002 | 24 h | BK6-22-024 |
+| **GPKE Konfiguration Änderung** | ⚡ | `mako-gpke` `gpke-konfiguration-aenderung` | ORDERS/ORDRSP config changes | 24 h | BK6-22-024 |
+| **PARTIN Strom Kommunikationsdaten** | ⚡ | `mako-gpke` `gpke-partin` | PARTIN 37000–37006 | — | PARTIN AHB 1.0f |
+| **WiM Strom MSB-Wechsel** | ⚡ | `mako-wim` `wim-device-change` | UTILMD 55039/55042/55051/55168 | 5 WT | BK6-24-174 |
+| **WiM Strom Geräteübernahme** | ⚡ | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001–17011 · ORDRSP 19001/19002 | 5 WT | BK6-24-174 |
+| **WiM Strom Abrechnung** | ⚡ | `mako-wim` `wim-rechnung` | INVOIC 31009 | 5 WT | BK6-24-174 |
+| **WiM Strom INSRPT** | ⚡ | `mako-wim` `wim-insrpt` | INSRPT 23001/23003/23004/23008 | 5 WT | BK6-24-174 |
+| **MaBiS Bilanzkreisabrechnung** | ⚡ | `mako-mabis` `mabis-billing` | MSCONS 13003; IFTSTA 21000–21005 | 1 WT (§13.8) | BK6-24-174 |
+| **MaBiS Clearingliste** | ⚡ | `mako-mabis` `mabis-clearingliste` | UTILMD 55065/55069/55070 | — | BK6-24-174 |
+| **GeLi Gas Lieferantenwechsel** | 🔥 | `mako-geli-gas` `geli-gas-supplier-change` | UTILMD G 44001–44021 | 10 WT | BK7-24-01-009 |
+| **GeLi Gas Stornierung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung` | UTILMD G 44022 (Nb-only inbound) | 10 WT | BK7-24-01-009 |
+| **GeLi Gas Stornierung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung-lf` | UTILMD G 44023/44024 (Lf-only inbound) | 10 WT | BK7-24-01-009 |
+| **GeLi Gas Sperrung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-lf` | ORDERS 17115/17117 · ORDCHG 39000 | 10 WT | BK7-24-01-009 |
+| **GeLi Gas Sperrung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-nb` | ORDERS 17115–17117 · ORDCHG 39000/39001 · ORDRSP 19118/19119 | 10 WT | BK7-24-01-009 |
+| **GeLi Gas AWH-Abrechnung** | 🔥 | `mako-geli-gas` `geli-gas-sperrprozesse-invoic` | INVOIC 31011 | — | BK7-24-01-009 |
+| **GeLi Gas Messdaten (MSCONS)** | 🔥 | `mako-geli-gas` `geli-gas-mscons` | MSCONS 13002/13007/13008/13009 | — | BK7-24-01-009 |
+| **GeLi Gas Datenabruf** | 🔥 | `mako-geli-gas` `geli-gas-datenabruf` | ORDERS 17103/17104 → ORDRSP 19103/19104 | 10 WT | BK7-24-01-009 |
+| **PARTIN Gas Kommunikationsdaten** | 🔥 | `mako-geli-gas` `geli-gas-partin` | PARTIN 37008–37014 | — | PARTIN AHB 1.0f |
+| **WiM Gas MSB-Wechsel** | 🔥 | `mako-wim-gas` | UTILMD G 44039–44053/44168–44170 | 10 WT | BK7-24-01-009 |
+| **WiM Gas Stornierung** | 🔥 | `mako-wim-gas` `wim-gas-stornierung` | UTILMD G 44022–44024 (Msb/Nmsb role) | 10 WT | BK7-24-01-009 |
+| **WiM Gas INSRPT** | 🔥 | `mako-wim-gas` `wim-gas-insrpt` | INSRPT 23005/23009 (Gas-only) | 10 WT | BK7-24-01-009 |
+| **WiM Gas Abrechnung** | 🔥 | `mako-wim-gas` `wim-gas-invoic` | INVOIC 31003/31004 | — | BK7-24-01-009 |
+| **GaBi Gas Abrechnung** | 🔥 | `mako-gabi-gas` `gabi-gas-invoic` | INVOIC 31007/31008/31010 | — | BK7-14-020 |
+| **GaBi Gas Allokationsliste (MMMA)** | 🔥 | `mako-gabi-gas` `gabi-gas-mmma` | ORDERS 17110 · ORDRSP 19110 · MSCONS 13013 | — | BK7-14-020 |
+| **GaBi Gas ALOCAT** | 🔥 | `mako-gabi-gas` `gabi-gas-allocation` | Synthetic PIDs 90001–90003 | — | DVGW ALOCAT 5.11a |
+| **GaBi Gas NOMINT/NOMRES** | 🔥 | `mako-gabi-gas` `gabi-gas-nomination` | Synthetic PIDs 90011/90012/90021/90022 | — | DVGW NOMINT 4.6 FK |
+| **GaBi Gas SCHEDL** | 🔥 | `mako-gabi-gas` `gabi-gas-schedl` | Synthetic PIDs | — | DVGW G685/G2000 |
+| **GaBi Gas IMBNOT** | 🔥 | `mako-gabi-gas` `gabi-gas-imbnot` | Synthetic PIDs | — | DVGW IMBNOT 5.7a |
+| **GaBi Gas TRANOT** | 🔥 | `mako-gabi-gas` `gabi-gas-tranot` | Synthetic PIDs | — | DVGW TRANOT 5.8b |
+| **GaBi Gas DELORD/DELRES** | 🔥 | `mako-gabi-gas` `gabi-gas-delivery-order` | Synthetic PIDs | — | DVGW DELORD 4.5 FK |
+| **Redispatch 2.0** | ⚡ | `mako-redispatch` | IFTSTA 21037/21038; XML documents | — | BK6-20-059/060/061 |
 
 ---
 

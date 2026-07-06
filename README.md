@@ -4,12 +4,14 @@
 
 A **Rust workspace** for end-to-end German energy market communication (**BDEW MaKo / EDI@Energy**).
 
-Four distinct layers live here:
+Five distinct layers live here:
 
 - **`edi-energy`** — Stateless BDEW EDI@Energy EDIFACT library: parse, validate, build, and serialize. No async, no I/O, no runtime deps.
 - **`dvgw-edi`** — Stateless DVGW EDIFACT library for the gas transport and balancing market (GaBi Gas 2.0): ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES. No async, no I/O.
 - **`redispatch-xml`** — Stateless Redispatch 2.0 XML/XSD parsing library: all 9 document types (`ActivationDocument`, `AcknowledgementDocument`, `PlannedResourceSchedule`, `Stammdaten`, `Unavailability`, `NetworkConstraintDocument`, `Kaskade`, `StatusRequest`, `Kostenblatt`). No async, no I/O.
 - **`mako-engine` + domain crates + `makod`** — Event-sourced process runtime for long-running MaKo workflows with regulatory deadlines, dual-write atomicity, AS4 inbound/outbound transport, Cedar ABAC authorization, OIDC/JWT + API-key auth, CloudEvents 1.0 ERP webhooks, and an MCP server.
+- **`mako-mdm` + `mdmd`** — Master data layer: validated domain IDs (`MaloId`, `MeloId`, `Gln`), six repository traits, temporal `Lokationszuordnung`, and the companion `mdmd` daemon (PostgreSQL, OIDC/JWT, ERP webhook subscriptions). Independently deployable; communicates with `makod` exclusively via CloudEvents 1.0.
+- **`invoic-checker` + `invoicd`** — Autonomous INVOIC plausibility-check pipeline for the Lieferant role. `invoicd` subscribes to `de.mako.process.initiated` events from `mdmd`, runs five plausibility checks, and issues `gpke.abrechnung.annehmen` or `gpke.abrechnung.ablehnen` back to `makod` — no ERP round-trip required.
 
 [![CI](https://github.com/hupe1980/mako/actions/workflows/ci.yml/badge.svg)](https://github.com/hupe1980/mako/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](./LICENSE-MIT)
@@ -25,12 +27,12 @@ Four distinct layers live here:
 |---|---|
 | `edi-energy` | Parse · validate · build all 17 EDI@Energy EDIFACT message types |
 | `mako-engine` | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
-| `mako-gpke` | GPKE workflows — UTILMD Strom supplier-switch (55001–55018) + Anfrage Daten (55555, GPKE Teil 4) + Sperrung ORDERS (17115–17117) + INVOIC (31001–31002, 31005–31008) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) + PARTIN Strom (37000–37006) |
+| `mako-gpke` | GPKE workflows — UTILMD Strom supplier-switch (55001–55018) + Anfrage Daten (55555, GPKE Teil 4) + Sperrung ORDERS (17115–17117) + INVOIC (31001–31002, 31005–31006) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) + PARTIN Strom (37000–37006) |
 | `mako-wim` | WiM Strom workflows — UTILMD (55039, 55042, 55051, 55168) + MSB-Rechnung INVOIC (31009) + ORDERS/ORDRSP (various) |
 | `mako-geli-gas` | GeLi Gas 3.0 workflows — UTILMD G supplier-switch Gas (44001–44021) + INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) |
-| `mako-mabis` | MABIS workflows — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB) |
+| `mako-mabis` | MABIS workflows — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB) + PIDs 55065/55069/55070 (Clearingliste) |
 | `mako-wim-gas` | WiM Gas workflows — UTILMD G MSB-change (44022–44024, 44039–44053, 44168–44170) + INSRPT Gas (23005, 23009) + WiM-Rechnung INVOIC (31003, 31004) |
-| `mako-gabi-gas` | GaBi Gas workflows — INVOIC 31010 (Kapazitätsrechnung, FNB/VNB → BKV); DVGW ALOCAT/NOMINT/NOMRES parsing via `dvgw-edi` |
+| `mako-gabi-gas` | GaBi Gas workflows — INVOIC 31010 (Kapazitätsrechnung, NB → BKV) + INVOIC 31007/31008 (Aggreg. MMM-Rechnung Gas, NB → MGV) + MSCONS 13013 (Allokationsliste Gas MMMA, ORDERS 17110/ORDRSP 19110) + DVGW ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES via `dvgw-edi` (8 workflows total) |
 | `mako-nbw` | Netzbetreiberwechsel — PARTIN bulk DSO concession handover (PIDs 37000–37014) — placeholder |
 | `mako-as4` | BDEW AS4 profile constants, P-Mode registry, partner directory, and inbound routing config |
 | `dvgw-edi` | DVGW EDIFACT formats — ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES parsing for GaBi Gas 2.0 (BK7-14-020) |
@@ -38,6 +40,10 @@ Four distinct layers live here:
 | `redispatch-xml` | Redispatch 2.0 XML/XSD format parsing |
 | `energy-api` | BDEW API-Webdienste Strom — REST/WebSocket client + Axum server for iMS processes |
 | `makod` | Production daemon — assembles all modules, AS4 inbound server, deadline scheduler |
+| `mako-mdm` | Master data library — `MaloId`, `MeloId`, `Gln`, repository traits, CloudEvents, test doubles |
+| `mdmd` | Master Data Manager daemon — MaLo/MeLo/contracts/subscriptions, PostgreSQL, OIDC/JWT, `:8180` |
+| `invoic-checker` | INVOIC plausibility library — period validity, position arithmetic, document total, tariff match, tariff found |
+| `invoicd` | INVOIC plausibility-check daemon (LF role) — auto-settles or disputes GPKE billing invoices |
 
 ---
 
@@ -55,6 +61,38 @@ Four distinct layers live here:
 | 🔁 **Round-trip serialisation** | Parse → validate → serialize with byte-exact EDIFACT output |
 | 🧪 **Code-generated profiles** | 36 profiles across 17 types, regenerated annually via `cargo xtask codegen` |
 
+### DVGW gas transport layer (`dvgw-edi`)
+
+| Category | Detail |
+|---|---|
+| 📦 **8 DVGW message types** | ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES |
+| 🔗 **Correlation helpers** | `nomination_ref` links NOMINT → NOMRES; `order_ref` links DELORD → DELRES |
+| 🔀 **Synthetic PID routing** | `detect_pid(role_qualifier)` maps each direction to unique PIDs in range 90001–90062 for `mako-engine` integration |
+| 🧪 **Independent of edi-energy** | Separate `DvgwPlatform`; shares no parser state with the BDEW EDIFACT stack |
+| 📜 **Regulatory basis** | BNetzA BK7-14-020 · DVGW G 685 · Kooperationsvereinbarung Gas |
+
+### Redispatch 2.0 XML layer (`redispatch-xml`)
+
+| Category | Detail |
+|---|---|
+| 📦 **9 CIM/IEC 62325 document types** | `ActivationDocument`, `PlannedResourceSchedule`, `AcknowledgementDocument`, `Stammdaten`, `Unavailability`, `NetworkConstraintDocument`, `Kaskade`, `StatusRequest`, `Kostenblatt` |
+| 🔍 **Two-phase validation** | `parse_and_validate()` — XSD structural check + semantic cross-field rules in one call |
+| 🔁 **Round-trip serialization** | Parse → serialize with byte-stable XML output |
+| 🔑 **Document correlation** | `Document::mrid()`, `sender_id()`, `receiver_id()` — routing keys for `AcknowledgementDocument` process matching |
+| 🔒 **`#![deny(unsafe_code)]`** | Memory-safe XML processing; no `unsafe` in the parse path |
+| 📜 **Regulatory basis** | BNetzA BK6-20-059 · BK6-20-060 · BK6-20-061 · NABEG §§ 13, 13a, 14 EnWG |
+
+### Master data layer (`mako-mdm`)
+
+| Category | Detail |
+|---|---|
+| 🆔 **Validated domain IDs** | `MaloId` (11-digit BDEW check-digit), `MeloId` (DE+31-char), `Gln` (13-digit; auto-derives NAD DE3055 agency code `293`/`332`/`9`) |
+| 🗂️ **Six repository traits** | `MaloRepository`, `MeloRepository`, `ContractRepository`, `SubscriptionRepository`, `CorrelationIndex`, `PartnerRepository` — AFIT, no `dyn Trait` overhead |
+| ⏳ **Temporal role assignments** | `Lokationszuordnung` with `valid_from`/`valid_to` — evaluated against CET/CEST German calendar date at query time |
+| 📨 **CloudEvents 1.0** | Outbound events (`MdmEvent`) with HMAC-SHA256 signing; `InboundMakoEvent` for receiving `makod` lifecycle events |
+| 🧪 **`testing` feature** | `InMemory*` test doubles for all six traits — no PostgreSQL required in unit tests |
+| 🚫 **Zero framework deps** | No axum, sqlx, or async runtime — pure domain library; all I/O lives in `services/mdmd` |
+
 ### Process engine layer (`mako-engine` + domain crates)
 
 | Category | Detail |
@@ -66,7 +104,7 @@ Four distinct layers live here:
 | 🔐 **Cedar ABAC authorization** | All HTTP endpoints gated by [Cedar](https://cedarpolicy.com) attribute-based access control; built-in default policy with custom policy overlay via `--cedar-policy-dir` |
 | 🪪 **OIDC / JWT + API-key auth** | JWT bearer tokens from Azure AD, Keycloak, Okta, Kubernetes workload identity; RS256/ES256/PS256 families only; JWKS cached with background refresh; coexists with named API keys |
 | 📡 **CloudEvents 1.0 ERP webhooks** | Outbound ERP notifications as [CloudEvents 1.0](https://cloudevents.io) structured-mode JSON (`application/cloudevents+json`), HMAC-SHA256 signed; natively routable by SAP BTP, AWS EventBridge, Azure Event Grid, Google Eventarc |
-| �🔄 **Format-version coexistence** | Processes started under `FV2025-10-01` run to completion under those rules even after `FV2026-10-01` cutover |
+| 🔄 **Format-version coexistence** | Processes started under `FV2025-10-01` run to completion under those rules even after `FV2026-10-01` cutover |
 | 🪦 **Dead-letter sink** | Structured `DeadLetterReason` variants — `UnknownPid`, `DuplicateMessage`, `VersionMismatch`, … |
 
 ---
@@ -75,7 +113,7 @@ Four distinct layers live here:
 
 ```toml
 [dependencies]
-edi-energy = "0.6"
+edi-energy = "0.7"
 ```
 
 ```rust
@@ -93,8 +131,8 @@ println!("Valid: {}", report.is_valid());
 
 ```toml
 [dependencies]
-mako-engine = { version = "0.6", features = ["testing"] }
-mako-gpke   = "0.6"
+mako-engine = { version = "0.7", features = ["testing"] }
+mako-gpke   = "0.7"
 ```
 
 ```rust
@@ -120,9 +158,91 @@ let state = process.state().await?;
 
 ---
 
-## 📋 Message Type Coverage
+## 🚀 Quick Start — DVGW gas transport
 
-| Message | EDIFACT Type | Latest Release | Use Case |
+```toml
+[dependencies]
+dvgw-edi = "0.7"
+```
+
+```rust
+use dvgw_edi::{DvgwPlatform, AnyDvgwMessage};
+
+// Parse: dispatch by EDIFACT message type header, validate envelope
+let msg = DvgwPlatform::default().parse(edi_bytes)?;
+
+if let AnyDvgwMessage::Nomint(n) = &msg {
+    println!("nomination ref: {:?}", n.nomination_ref);
+    for qty in &n.quantities {
+        println!("  {} {}", qty.location_code, qty.quantity);
+    }
+}
+
+// Synthetic PID for mako-engine routing:
+// BKV→FNB nomination → 90011; FNB→BKV response → 90012
+let pid = msg.detect_pid(Some("Z01"));
+```
+
+---
+
+## 🚀 Quick Start — Redispatch 2.0 XML
+
+```toml
+[dependencies]
+redispatch-xml = "0.7"
+```
+
+```rust
+use redispatch_xml::{parse_and_validate, serialize, detect, DocumentType};
+
+// Optionally detect document type before parsing (useful for routing)
+let doc_type = detect(xml_bytes);
+
+// Parse + validate in one step (recommended)
+let doc = parse_and_validate(xml_bytes)?;
+
+// Primary routing keys — use to correlate AcknowledgementDocument to process
+println!("mRID:     {}", doc.mrid());
+println!("sender:   {}", doc.sender_id());   // EIC of TSO/RSO
+println!("receiver: {}", doc.receiver_id());
+
+// Serialize back to XML (byte-stable round-trip)
+let out = serialize(&doc)?;
+```
+
+---
+
+## 🚀 Quick Start — Master data (`mako-mdm`)
+
+```toml
+[dependencies]
+mako-mdm = { version = "0.7", features = ["testing"] }
+```
+
+```rust
+use mako_mdm::domain::{MaloId, MeloId, Gln};
+
+// Validated identifiers — construction returns Err on malformed input
+let malo_id = MaloId::new("51238696780")?;
+let melo_id = MeloId::new("DE00056266802AO6G00000H")?;
+let gln     = Gln::new("9900357000004")?;
+
+// NAD DE3055 agency code derived from GLN prefix automatically:
+// "99…" → "293" (BDEW Strom), "98…" → "332" (DVGW Gas), other → "9" (GS1)
+assert_eq!(gln.nad_agency_code(), "293");
+
+// In tests — use InMemory* doubles; no PostgreSQL required
+use mako_mdm::testing::InMemoryMaloRepository;
+let repo = InMemoryMaloRepository::default();
+```
+
+---
+
+## 📋 Format and Document Coverage
+
+### BDEW EDI@Energy (`edi-energy`) — 17 EDIFACT message types
+
+| Message | EDIFACT type | Latest release | Use case |
 |---|---|---|---|
 | UTILMD Strom | `UTILMD` | S2.2 (`fv20261001`) | Grid connection (supplier switch, registration) |
 | UTILMD Gas | `UTILMD` | G1.2 (`fv20261001_gas`) | Gas grid connection processes |
@@ -143,6 +263,33 @@ let state = process.state().await?;
 | PRICAT | `PRICAT` | 2.1 (`fv20260401`) | Price/sales catalogue |
 | UTILTS | `UTILTS` | 1.1e (`fv20260401`) | Technical master data |
 
+### DVGW gas transport (`dvgw-edi`) — 8 message types
+
+| Message | Version | Direction | Use case |
+|---|---|---|---|
+| ALOCAT | 5.11a | FNB/MGV/VNB → BKV | Gas quantity allocation list |
+| NOMINT | 4.6 FK | BKV → FNB/MGV | Nomination submission |
+| NOMRES | 4.7 FK | FNB/MGV → BKV | Nomination response / matching result |
+| SCHEDL | G685/G2000 | FNB → BKV | Transport schedule |
+| IMBNOT | G685/G2000 | FNB/MGV → BKV | Intraday imbalance notification |
+| TRANOT | G685/G2000 | FNB/VNB → BKV/GH/MGV | Transport restriction / event notification |
+| DELORD | G685/G2000 | BKV → FNB | Delivery order (quantity nomination) |
+| DELRES | G685/G2000 | FNB → BKV | Delivery order confirmation / rejection |
+
+### Redispatch 2.0 XML (`redispatch-xml`) — 9 document types
+
+| Document type | BNetzA ruling | Deadline | Status |
+|---|---|---|---|
+| `ActivationDocument` | BK6-20-060 | 5 min (UTC) | ✅ |
+| `PlannedResourceScheduleDocument` | BK6-20-060 | — | ✅ |
+| `AcknowledgementDocument` | BK6-20-059 | 6 h (UTC) | ✅ |
+| `Stammdaten` | BK6-20-060 | 1 Werktag (CET/CEST) | ✅ |
+| `Unavailability_MarketDocument` | BK6-20-059 | — | ✅ |
+| `NetworkConstraintDocument` | BK6-20-060 | — | ✅ |
+| `Kaskade` | BK6-20-060 | — | ✅ |
+| `StatusRequest_MarketDocument` | BK6-20-059 | 24 h (UTC) | ✅ |
+| `Kostenblatt` | BK6-20-061 | 15th of following month (CET/CEST) | ✅ |
+
 ---
 
 ## 📖 Documentation
@@ -159,9 +306,12 @@ let state = process.state().await?;
 | [Platform Guide](./docs/platform.md) | Multi-tenant, test isolation, custom profiles |
 | [API-Webdienste Strom](./docs/api-webdienste.md) | REST/JSON channel for iMS processes (`energy-api`) |
 | [makod Operator Guide](./docs/makod.md) | Production daemon: persistence, ports, auth, MCP, Kubernetes |
+| [mdmd Operator Guide](./docs/mdmd.md) | Master Data Manager daemon: MaLo/MeLo, subscriptions, OIDC, Docker |
 | [Release Lifecycle](./docs/release-lifecycle.md) | Annual BDEW profile updates, codegen pipeline |
 | [Schema Versioning](./docs/schema-versioning.md) | Profile JSON schema evolution and archive lifecycle |
 | [PID Reference](./docs/pid-reference.md) | Prüfidentifikatoren — authoritative crate ownership table |
+| [DVGW EDI Guide](./docs/dvgw.md) | ALOCAT/NOMINT/NOMRES/SCHEDL parsing, synthetic PIDs 90001–90062, GaBi Gas 2.0 routing |
+| [Redispatch 2.0 Guide](./docs/redispatch.md) | XML document types, 8 workflows, UTC deadline semantics, IFTSTA integration |
 | [API Reference](https://docs.rs/edi-energy) | Full rustdoc |
 
 ---
@@ -266,11 +416,11 @@ mako/
 │   │   └── src/             # Workflow, Process, EngineBuilder, all store traits
 │   │                        # + SlateDB implementations, fristen, dead-letter
 │   │
-│   ├── mako-gpke/           # GPKE domain (55001–55018, 55555 Anfrage, 17115–17117 Sperrung, INVOIC 31001–31002/31005–31008, ORDERS 17134/17135; PARTIN Strom 37000–37006)
+│   ├── mako-gpke/           # GPKE domain (55001–55018, 55555 Anfrage, 17115–17117 Sperrung, INVOIC 31001–31002/31005–31006, ORDERS 17134/17135; PARTIN Strom 37000–37006)
 │   ├── mako-wim/            # WiM Strom domain (55039, 55042, 55051, 55168, INVOIC 31009, INSRPT 23001–23012)
 │   ├── mako-geli-gas/       # GeLi Gas 3.0 domain (44001–44021; PARTIN Gas 37008–37014; INVOIC 31011)
 │   ├── mako-mabis/          # MABIS domain (13003 — Bilanzkreisabrechnung Strom)
-│   ├── mako-gabi-gas/       # GaBi Gas domain — INVOIC 31010 (Kapazitätsrechnung); DVGW ALOCAT/NOMINT/NOMRES via dvgw-edi
+│   ├── mako-gabi-gas/       # GaBi Gas domain — INVOIC 31007/31008/31010 + MSCONS 13013 (Allokationsliste MMMA) + DVGW ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES (8 workflows)
 │   ├── mako-wim-gas/        # WiM Gas domain (44022–44024 Stornierung, 44039–44053, 44168–44170, INSRPT Gas 23005/23009, INVOIC 31003/31004)
 │   ├── mako-nbw/            # Netzbetreiberwechsel — PARTIN DSO handover (placeholder)
 │   ├── mako-as4/            # BDEW AS4 profile constants, P-Modes, partner directory, routing config
@@ -280,13 +430,17 @@ mako/
 │   └── redispatch-xml/      # Redispatch 2.0 XML/XSD parsing — all 9 document types
 │
 ├── services/
-│   └── makod/               # Production daemon
-│       └── src/             # main.rs, config.rs, as4_ingest.rs, as4_sender.rs
-│                            # edifact_api.rs, commands_api.rs, webdienste.rs
-│                            # adapters.rs, edifact_renderer.rs, erp_adapter.rs
-│                            # partner_api.rs, deadline_dispatch.rs, health.rs
-│                            # mcp_server.rs  ← MCP server (tools + resources + prompts)
-│                            # CLI: --data-dir, --as4-addr, --http-addr, --tenant-id
+│   ├── makod/               # Protocol daemon
+│   │   └── src/             # main.rs, config.rs, as4_ingest.rs, as4_sender.rs
+│   │                        # edifact_api.rs, commands_api.rs, webdienste.rs
+│   │                        # adapters.rs, edifact_renderer.rs, erp_adapter.rs
+│   │                        # partner_api.rs, deadline_dispatch.rs, health.rs
+│   │                        # mcp_server.rs  ← MCP server (tools + resources + prompts)
+│   │                        # CLI: --data-dir, --as4-addr, --http-addr, --tenant-id
+│   └── mdmd/                # Master Data Manager daemon
+│       └── src/             # main.rs, config.rs, handlers/, pg/, fanout.rs, auth.rs
+│                            # PostgreSQL · OIDC/JWT · OpenAPI 3.1 · CloudEvents 1.0
+│                            # CLI: --database-url, --tenant-gln, --auth-issuer, :8180
 │
 ├── xtask/                   # Dev automation: codegen · validate · release-diff
 └── fuzz/                    # cargo-fuzz targets (1 100+ corpus entries)
@@ -310,9 +464,19 @@ PidRouter::route  ──  selects domain handler (GPKE / WiM / GeLi Gas / MABIS)
 Process::execute_and_enqueue  ──  replay state · Workflow::handle · AtomicAppend
        │
        ├─ EventStore (SlateDB)
-       ├─ OutboxStore  ──►  OutboxErpWorker  ──►  ERP (CloudEvents 1.0, HMAC-SHA256)
+       ├─ OutboxStore  ──►  OutboxErpWorker  ──►  makod ERP webhook (CloudEvents 1.0)
        ├─ OutboxStore  ──►  OutboxWorker     ──►  AS4 send → BDEW counterparty
        └─ DeadlineStore ──►  scheduler  ──►  TimeoutExpired → de.mako.aperak.timeout
+
+                                          makod ERP webhook
+                                                │ POST /api/v1/events
+                                                ▼
+                                          mdmd :8180  (optional companion)
+                                          MaLo / MeLo / contracts
+                                          PostgreSQL · OIDC/JWT
+                                                │ fan-out (CloudEvents 1.0 + HMAC)
+                                                ▼
+                                          ERP system (SAP, Schleupen, Wilken, …)
 ```
 
 ---
@@ -323,7 +487,7 @@ By default UTILMD, MSCONS, APERAK, and CONTRL are compiled in:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.6", features = ["invoic", "remadv", "orders"] }
+edi-energy = { version = "0.7", features = ["invoic", "remadv", "orders"] }
 ```
 
 | Flag | Default | Enables |
@@ -349,6 +513,34 @@ edi-energy = { version = "0.6", features = ["invoic", "remadv", "orders"] }
 | `serde` | | `Serialize` on `EdiEnergyReport` |
 | `diagnostics` | | `miette::Diagnostic` on reports |
 | `tracing` | | Structured tracing spans |
+
+## ⚙️ Feature Flags — `dvgw-edi`
+
+All 8 format parsers are compiled in by default. Disable unused formats to reduce binary size:
+
+```toml
+dvgw-edi = { version = "0.7", default-features = false, features = ["nomint", "nomres"] }
+```
+
+| Flag | Default | Enables |
+|---|---|---|
+| `alocat` | ✅ | `AlocatMessage` and ALOCAT parsing |
+| `nomint` | ✅ | `NomintMessage` and NOMINT parsing |
+| `nomres` | ✅ | `NomresMessage` and NOMRES parsing |
+| `schedl` | ✅ | `SchedlMessage` and SCHEDL parsing |
+| `imbnot` | ✅ | `ImbalanceMessage` and IMBNOT parsing |
+| `tranot` | ✅ | `TransportNotificationMessage` and TRANOT parsing |
+| `delord` | ✅ | `DeliveryOrderMessage` and DELORD parsing |
+| `delres` | ✅ | `DeliveryResponseMessage` and DELRES parsing |
+| `serde` | | `Serialize`/`Deserialize` on all public types |
+| `tracing` | | Structured tracing spans during parse dispatch |
+
+## ⚙️ Feature Flags — `mako-mdm`
+
+| Flag | Default | Enables |
+|---|---|---|
+| *(default)* | ✅ | All domain types, six repository traits, CloudEvents, `InboundMakoEvent` |
+| `testing` | | `InMemory*` test doubles for all six traits — **never enable in production** |
 
 ## ⚙️ Feature Flags — `mako-engine` / `makod`
 

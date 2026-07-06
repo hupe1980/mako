@@ -321,12 +321,13 @@ pub fn deadline_at_werktage(
             // SAFETY: 17:00 is never inside a DST gap for Europe/Berlin. If we
             // land here the timezone database is corrupt or missing. Panic loudly
             // so the operator detects the failure before it silently produces
-            // wrong APERAK deadlines. A wrong deadline is worse than a crash
-            // because it is a regulatory violation without any visible signal.
+            // wrong regulatory deadlines (Fristen). A wrong deadline is worse
+            // than a crash because it is a regulatory violation without any
+            // visible signal.
             panic!(
                 "CRITICAL: timezone database failure — could not resolve \
                  17:00 Europe/Berlin for date {due_date}. \
-                 Cannot compute a correct APERAK deadline. \
+                 Cannot compute a correct regulatory Frist (deadline). \
                  A wrong fallback offset violates BNetzA deadline obligations. \
                  Ensure the system timezone database (tzdata) is installed and \
                  up to date. Aborting rather than silently producing an \

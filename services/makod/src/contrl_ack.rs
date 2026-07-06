@@ -41,10 +41,13 @@ use std::sync::Arc;
 
 use edi_energy::{AnyMessage, EdiEnergyMessage as _};
 use mako_engine::{
+    deadline::{Deadline, DeadlineStore as _},
     ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId},
     outbox::{OutboxMessage, OutboxStore as _},
-    store_slatedb::SlateDbStore,
+    store_slatedb::{SlateDbDeadlineStore, SlateDbStore},
+    version::WorkflowId,
 };
+use time::Duration;
 
 // ── ContrlAckService ─────────────────────────────────────────────────────────
 
@@ -58,6 +61,12 @@ use mako_engine::{
 /// methods are not yet dyn-compatible in Rust 1.89.
 pub struct ContrlAckService {
     outbox: Arc<SlateDbStore>,
+    /// Deadline store for registering the mandatory 6-hour CONTRL delivery window.
+    ///
+    /// CONTRL AHB 1.0 §2.3.1 requires delivery within 6 wall-clock hours.
+    /// Registering a deadline ensures an escalation fires if the `OutboxWorker`
+    /// is delayed beyond 6 hours (e.g. due to a network outage or worker crash).
+    deadline_store: SlateDbDeadlineStore,
     tenant_id: TenantId,
     /// The tenant's own market-participant identifier (GLN), emitted as the
     /// CONTRL `sender` field (the party acknowledging the inbound interchange).
@@ -68,16 +77,19 @@ impl ContrlAckService {
     /// Construct a new service.
     ///
     /// - `outbox`: shared `SlateDbStore` for enqueuing the CONTRL message.
+    /// - `deadline_store`: persists the 6h CONTRL delivery deadline (CONTRL AHB 1.0 §2.3.1).
     /// - `tenant_id`: the active tenant identifier.
     /// - `own_gln`: the tenant's market-participant code (BDEW GLN, 13 digits).
     #[must_use]
     pub fn new(
         outbox: Arc<SlateDbStore>,
+        deadline_store: SlateDbDeadlineStore,
         tenant_id: TenantId,
         own_gln: impl Into<Box<str>>,
     ) -> Self {
         Self {
             outbox,
+            deadline_store,
             tenant_id,
             own_gln: own_gln.into(),
         }
@@ -96,6 +108,12 @@ impl ContrlAckService {
     /// This means: we MUST send CONTRL for both Gas interchanges AND Gas APERAKs we
     /// receive.  Only CONTRL-on-CONTRL is forbidden (§2.2.2.2).
     ///
+    /// `interchange_ref` is the UNB DE0020 interchange control reference.  Pass
+    /// `pi.header.control_ref.as_ref()` from the parsed interchange.  An empty
+    /// string is accepted when the control reference is unavailable (e.g. for
+    /// bare UNH…UNT messages without a UNB envelope).  The CONTRL renderer treats
+    /// an empty `interchange_ref` as absent.
+    ///
     /// Passes silently when:
     /// - No Gas message is present in `messages`.
     /// - All messages are CONTRL (§2.2.2.2 exception: no CONTRL-on-CONTRL).
@@ -105,7 +123,7 @@ impl ContrlAckService {
     /// UNB…UNZ interchange.  Syntax-error messages (parse failures) are not
     /// passed here — they should trigger a CONTRL Syntaxfehlermeldung (UCI=4)
     /// via a separate path (not yet implemented, tracked as part of F-033).
-    pub async fn emit_for_interchange(&self, messages: &[&AnyMessage]) {
+    pub async fn emit_for_interchange(&self, messages: &[&AnyMessage], interchange_ref: &str) {
         // §2.2.2.2 exception: no CONTRL in response to CONTRL.
         // APERAK is NOT excluded: CONTRL AHB §2.3.1 + APERAK AHB §2.3 mandate
         // a CONTRL reply even for inbound Gas APERAKs.
@@ -148,16 +166,50 @@ impl ContrlAckService {
                 "sender":          self.own_gln.as_ref(),
                 "receiver":        sender_gln.as_ref(),
                 "accepted":        true,
-                // interchange_ref: would come from the UNB header.
-                // The REST + AS4 ingest paths currently do not surface the
-                // UNB control reference — pass empty string; the renderer
-                // treats empty interchange_ref as absent (no UCI reference).
-                "interchange_ref": "",
+                // UNB DE0020 interchange control reference.
+                // Surfaced from the parsed interchange header; the CONTRL
+                // renderer uses this to populate UCI reference fields.
+                "interchange_ref": interchange_ref,
             }),
         );
 
         match self.outbox.enqueue(&[msg]).await {
             Ok(()) => {
+                // Register the 6-hour CONTRL delivery deadline.
+                //
+                // CONTRL AHB 1.0 §2.3.1: the Empfangsbestätigung must be delivered
+                // within 6 wall-clock hours.  The deadline scheduler fires a
+                // `contrl-ack-obligation` event if the OutboxWorker has not cleared
+                // the message by then.  The `deadline_dispatch` module logs a
+                // regulatory alert for any fired `contrl-ack-obligation` deadlines.
+                //
+                // The format version is the latest known FV from the release registry.
+                // `contrl-ack-obligation` is not a domain workflow; the FV is used
+                // only as a WorkflowId discriminator in the deadline store.
+                let fv = crate::adapters::known_fvs()
+                    .into_iter()
+                    .max()
+                    .unwrap_or_else(|| {
+                        mako_engine::version::FormatVersion::parse("FV2025-10-01")
+                            .expect("FV2025-10-01 is a valid fallback format version")
+                    });
+                let due_at = time::OffsetDateTime::now_utc() + Duration::hours(6);
+                let deadline = Deadline::new(
+                    StreamId::for_process(self.tenant_id, &process_id),
+                    process_id,
+                    self.tenant_id,
+                    WorkflowId::new("contrl-ack-obligation", fv.as_str()),
+                    "contrl-6h-delivery-window",
+                    due_at,
+                );
+                if let Err(e) = self.deadline_store.register(&deadline).await {
+                    tracing::error!(
+                        error      = %e,
+                        sender_gln = sender_gln.as_ref(),
+                        "CONTRL ack: failed to register 6h deadline — escalation \
+                         will not fire if OutboxWorker is delayed (CONTRL AHB 1.0 §2.3.1)",
+                    );
+                }
                 tracing::debug!(
                     sender_gln = sender_gln.as_ref(),
                     "CONTRL ack: Empfangsbestätigung enqueued for Gas interchange",

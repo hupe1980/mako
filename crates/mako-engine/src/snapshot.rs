@@ -209,14 +209,12 @@ impl<S: SnapshotStore> SnapshotStore for Arc<S> {
 ///
 /// `NoopSnapshotStore` **discards every snapshot silently**. Processes built
 /// with this store perform full event replay on every state read. Do not use
-/// in production — bind a [`SlateDbStore::as_snapshot_store()`] instead.
+/// in production — bind a `SlateDbStore::as_snapshot_store()` (requires `slatedb`
+/// feature) instead.
 ///
 /// The [`SnapshotStore`] implementation is only compiled when the `testing`
 /// feature is enabled or inside `#[cfg(test)]`. Production binaries must call
-/// [`EngineBuilder::with_snapshot_store`] with a durable backend.
-///
-/// [`SlateDbStore::as_snapshot_store()`]: crate::store_slatedb::SlateDbStore::as_snapshot_store
-/// [`EngineBuilder::with_snapshot_store`]: crate::builder::EngineBuilder::with_snapshot_store
+/// `EngineBuilder::with_snapshot_store` with a durable backend.
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use = "NoopSnapshotStore discards all snapshots silently — use a persistent SnapshotStore in production"]
 pub struct NoopSnapshotStore;

@@ -25,8 +25,8 @@ docker build \
 Or pull the published image and tag it locally:
 
 ```bash
-docker pull ghcr.io/hupe1980/makod:0.6.0
-docker tag  ghcr.io/hupe1980/makod:0.6.0 makod:dev
+docker pull ghcr.io/hupe1980/makod:0.7.0
+docker tag  ghcr.io/hupe1980/makod:0.7.0 makod:dev
 ```
 
 ---

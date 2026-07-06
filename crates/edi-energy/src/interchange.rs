@@ -13,6 +13,8 @@ use crate::{AnyMessage, EdiEnergyMessage, EdiEnergyReport, Release};
 /// All fields come from the UNB segment of the EDIFACT interchange.
 /// Use these for routing, acknowledgement generation, and audit logging.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct InterchangeHeader {
     /// Sender identification (UNB S002, DE 0004 — e.g. a 13-digit GLN).
     pub sender_id: Box<str>,
@@ -32,6 +34,12 @@ pub struct InterchangeHeader {
     pub syntax_id: Box<str>,
     /// EDIFACT syntax version number from UNB S001 (DE 0002 — e.g. `3`).
     pub syntax_version: u8,
+    /// Test indicator from UNB DE 0035.
+    ///
+    /// `true` when DE 0035 is `"1"`. Per Allgemeine Festlegungen V6.1d §3,
+    /// interchanges with the test flag **must not** be processed as production
+    /// messages. Reject at the ingest boundary and record a dead-letter entry.
+    pub test_indicator: bool,
 }
 
 impl InterchangeHeader {
@@ -41,6 +49,69 @@ impl InterchangeHeader {
     #[must_use]
     pub fn transmission_date(&self) -> Option<time::Date> {
         self.transmission_datetime.map(time::OffsetDateTime::date)
+    }
+
+    /// Convert from the `edifact_rs::InterchangeEnvelope` produced by
+    /// [`edifact_rs::validate_envelope_owned`] into edi-energy's typed header.
+    ///
+    /// Used to attach envelope metadata to [`EdiEnergyReport`] so a single
+    /// report carries both the interchange routing data (sender/receiver/control
+    /// reference) and the validation findings.
+    #[must_use]
+    pub(crate) fn from_edifact_envelope(env: edifact_rs::InterchangeEnvelope) -> Self {
+        use time::{Date, Month, OffsetDateTime, Time, UtcOffset};
+
+        // Parse YYMMDD (6-digit) or YYYYMMDD (8-digit) date + HHMM or HHMMSS time.
+        let transmission_datetime = (|| -> Option<OffsetDateTime> {
+            let date_str = &env.date;
+            let time_str = env.time.as_deref().unwrap_or("");
+
+            let d: Date = match date_str.len() {
+                6 => {
+                    let yy: i32 = date_str[0..2].parse().ok()?;
+                    let mm: u8 = date_str[2..4].parse().ok()?;
+                    let dd: u8 = date_str[4..6].parse().ok()?;
+                    Date::from_calendar_date(2000 + yy, Month::try_from(mm).ok()?, dd).ok()?
+                }
+                8 => {
+                    let yyyy: i32 = date_str[0..4].parse().ok()?;
+                    let mm: u8 = date_str[4..6].parse().ok()?;
+                    let dd: u8 = date_str[6..8].parse().ok()?;
+                    Date::from_calendar_date(yyyy, Month::try_from(mm).ok()?, dd).ok()?
+                }
+                _ => return None,
+            };
+            let t: Time = match time_str.len() {
+                4 => {
+                    let hh: u8 = time_str[0..2].parse().ok()?;
+                    let mi: u8 = time_str[2..4].parse().ok()?;
+                    Time::from_hms(hh, mi, 0).ok()?
+                }
+                6 => {
+                    let hh: u8 = time_str[0..2].parse().ok()?;
+                    let mi: u8 = time_str[2..4].parse().ok()?;
+                    let ss: u8 = time_str[4..6].parse().ok()?;
+                    Time::from_hms(hh, mi, ss).ok()?
+                }
+                // Time field may be absent; default to midnight
+                _ => Time::MIDNIGHT,
+            };
+            Some(OffsetDateTime::new_utc(d, t).to_offset(UtcOffset::UTC))
+        })();
+
+        let syntax_version: u8 = env.syntax_version.parse().unwrap_or(3);
+
+        Self {
+            sender_id: env.sender_id.into_boxed_str(),
+            sender_qualifier: env.sender_qualifier.into_boxed_str(),
+            receiver_id: env.recipient_id.into_boxed_str(),
+            receiver_qualifier: env.recipient_qualifier.into_boxed_str(),
+            transmission_datetime,
+            control_ref: env.control_ref.into_boxed_str(),
+            syntax_id: env.syntax_identifier.into_boxed_str(),
+            syntax_version,
+            test_indicator: env.test_indicator,
+        }
     }
 }
 

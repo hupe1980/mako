@@ -42,7 +42,7 @@ pub const MAX_INBOX_KEY_LEN: usize = 509;
 /// Async idempotency store for inbound messages.
 ///
 /// Implement this trait to plug in persistent deduplication storage (e.g.
-/// PostgreSQL, redb). Use [`InMemoryInboxStore`] for tests and development.
+/// PostgreSQL, redb). Use `InMemoryInboxStore` (requires `testing` feature) for tests and development.
 #[allow(async_fn_in_trait)]
 pub trait InboxStore: Send + Sync {
     /// Check whether `key` has been seen before and, if not, register it.

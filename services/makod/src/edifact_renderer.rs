@@ -46,6 +46,8 @@ use edi_energy::{
 };
 use mako_engine::outbox::OutboxMessage;
 
+use crate::party_registry::GlnRegistry;
+
 // ── Error type ────────────────────────────────────────────────────────────────
 
 /// Error returned by [`render_to_wire_bytes`].
@@ -130,10 +132,11 @@ pub fn is_suppressed(err: &RenderError) -> bool {
 
 /// Render a domain-intent [`OutboxMessage`] to BDEW-conformant EDIFACT wire bytes.
 ///
-/// `tenant_party_id` is the operator's own market-participant identifier
-/// (BDEW code, GLN, or EIC — from `--tenant-id`). It is used as
-/// the sender for ORDERS and similar messages where the payload does not carry
-/// an explicit sender GLN.
+/// `registry` provides the operator's own GLN(s).  For ORDERS messages, the
+/// sender GLN is resolved from `payload["sender"]` when present; otherwise the
+/// registry's static PID → role table is used.
+/// For all other fallbacks (ORDRSP, INVOIC, REMADV without explicit `sender`)
+/// [`GlnRegistry::primary_gln`] is used.
 ///
 /// # Errors
 ///
@@ -144,17 +147,17 @@ pub fn is_suppressed(err: &RenderError) -> bool {
 /// - [`RenderError::BuilderError`] — the `edi-energy` builder failed.
 pub fn render_to_wire_bytes(
     msg: &OutboxMessage,
-    tenant_party_id: &str,
+    registry: &GlnRegistry,
 ) -> Result<Vec<u8>, RenderError> {
     let p = &msg.payload;
     match msg.message_type.as_ref() {
         "UTILMD" => render_utilmd(p, msg),
         "APERAK" => render_aperak(p, msg),
         "CONTRL" => render_contrl(p, msg),
-        "ORDERS" => render_orders(p, msg, tenant_party_id),
-        "ORDRSP" => render_ordrsp(p, msg, tenant_party_id),
-        "INVOIC" => render_invoic(p, msg, tenant_party_id),
-        "REMADV" => render_remadv(p, msg, tenant_party_id),
+        "ORDERS" => render_orders(p, msg, registry),
+        "ORDRSP" => render_ordrsp(p, msg, registry),
+        "INVOIC" => render_invoic(p, msg, registry),
+        "REMADV" => render_remadv(p, msg, registry),
         other => Err(intent_only(other)),
     }
 }
@@ -256,10 +259,6 @@ fn render_utilmd(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
 /// | 55039, 55042, 55051, 55168 | WiM Messstellenbetrieb | 163       | Execution date      |
 /// | 44003–44006    | GeLi Gas Antwort  | 163       | Confirmation date   |
 /// | _              | fallback          | 163       | Delivery start      |
-///
-/// Note: PIDs 56001–56010 do not appear in any current BDEW AHB (PID 3.3, PID 4.0)
-/// and must never be rendered.
-/// See `crates/edi-energy/tests/registry.rs` for the authoritative phantom-PID guard.
 fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
     match pid {
         55001 | 44001 => "163",                 // Lieferbeginn
@@ -428,23 +427,36 @@ fn render_contrl(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
 
 /// Render an ORDERS (Beauftragung) message from domain-intent JSON.
 ///
-/// The sender is the operator tenant (`tenant_party_id`); the receiver comes from
-/// `msg.recipient`. Both GPKE Konfigurationseinrichtung (PID 17134) and
-/// GeLi Gas Beauftragung (PID 17135) are handled here.
+/// **Sender resolution** (in priority order):
+/// 1. `payload["sender"]` — set this in the workflow for deterministic
+///    multi-GLN deployments.
+/// 2. [`GlnRegistry::sender_gln_for_orders_pid`] — static PID → role lookup.
+/// 3. [`GlnRegistry::primary_gln`] — final fallback.
+///
+/// The receiver comes from `msg.recipient`.
 ///
 /// Payload fields:
 ///
 /// | Field        | Required | Description                                  |
 /// |--------------|----------|----------------------------------------------|
+/// | `sender`     | no       | Sender GLN (overrides registry lookup)       |
 /// | `pid`        | no       | ORDERS Prüfidentifikator (e.g. 17134)        |
 /// | `orders_ref` | no       | UUID reference → 14-char UNH message ref     |
 /// | `malo`       | no       | Supply point MaLo for BGM context            |
 fn render_orders(
     p: &serde_json::Value,
     msg: &OutboxMessage,
-    tenant_party_id: &str,
+    registry: &GlnRegistry,
 ) -> Result<Vec<u8>, RenderError> {
     let mt = "ORDERS";
+
+    let pid = p.get("pid").and_then(|v| v.as_u64()).map(|n| n as u32);
+
+    // Sender: explicit in payload first, then registry lookup by PID, then primary.
+    let sender = p.get("sender").and_then(|v| v.as_str()).unwrap_or_else(|| {
+        pid.map(|p| registry.sender_gln_for_orders_pid(p))
+            .unwrap_or_else(|| registry.primary_gln())
+    });
 
     let orders_ref = p
         .get("orders_ref")
@@ -452,7 +464,6 @@ fn render_orders(
         .map(msg_ref_from_uuid);
     let causation_ref = msg_ref_from_uuid(&msg.causation_event_id.to_string());
     let message_ref = orders_ref.as_deref().unwrap_or(causation_ref.as_str());
-    let pid = p.get("pid").and_then(|v| v.as_u64()).map(|n| n as u32);
 
     let release = active_release(MessageType::Orders, &ReleaseTrack::Short).ok_or_else(|| {
         RenderError::NoActiveProfile {
@@ -461,7 +472,7 @@ fn render_orders(
     })?;
 
     let mut builder = builders::OrdersBuilder::new(release)
-        .sender(tenant_party_id)
+        .sender(sender)
         .receiver(msg.recipient.as_ref())
         .message_ref(message_ref);
 
@@ -485,7 +496,7 @@ fn render_orders(
 ///
 /// | Field          | Required | Description                                   |
 /// |----------------|----------|-----------------------------------------------|
-/// | `sender`       | no       | Sender GLN (falls back to `tenant_party_id`)  |
+/// | `sender`       | no       | Sender GLN (falls back to `registry.primary_gln()`)|
 /// | `receiver`     | no       | Receiver GLN (falls back to `msg.recipient`)  |
 /// | `document_id`  | no       | BGM document identifier (Auftragsnummer)      |
 /// | `document_date`| no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)    |
@@ -493,14 +504,14 @@ fn render_orders(
 fn render_ordrsp(
     p: &serde_json::Value,
     msg: &OutboxMessage,
-    tenant_party_id: &str,
+    registry: &GlnRegistry,
 ) -> Result<Vec<u8>, RenderError> {
     let mt = "ORDRSP";
 
     let sender = p
         .get("sender")
         .and_then(|v| v.as_str())
-        .unwrap_or(tenant_party_id);
+        .unwrap_or_else(|| registry.primary_gln());
     let receiver = p
         .get("receiver")
         .and_then(|v| v.as_str())
@@ -564,14 +575,14 @@ fn render_ordrsp(
 fn render_invoic(
     p: &serde_json::Value,
     msg: &OutboxMessage,
-    tenant_party_id: &str,
+    registry: &GlnRegistry,
 ) -> Result<Vec<u8>, RenderError> {
     let mt = "INVOIC";
 
     let sender = p
         .get("sender")
         .and_then(|v| v.as_str())
-        .unwrap_or(tenant_party_id);
+        .unwrap_or_else(|| registry.primary_gln());
     let receiver = p
         .get("receiver")
         .and_then(|v| v.as_str())
@@ -626,7 +637,7 @@ fn render_invoic(
 ///
 /// | Field           | Required | Description                                   |
 /// |-----------------|----------|-----------------------------------------------|
-/// | `sender`        | no       | Sender GLN (falls back to `tenant_party_id`)  |
+/// | `sender`        | no       | Sender GLN (falls back to `registry.primary_gln()`)|
 /// | `receiver`      | no       | Receiver GLN (falls back to `msg.recipient`)  |
 /// | `document_id`   | no       | BGM document identifier (Avisnummer)          |
 /// | `document_code` | no       | BGM type code (default `"239"`)               |
@@ -635,14 +646,14 @@ fn render_invoic(
 fn render_remadv(
     p: &serde_json::Value,
     msg: &OutboxMessage,
-    tenant_party_id: &str,
+    registry: &GlnRegistry,
 ) -> Result<Vec<u8>, RenderError> {
     let mt = "REMADV";
 
     let sender = p
         .get("sender")
         .and_then(|v| v.as_str())
-        .unwrap_or(tenant_party_id);
+        .unwrap_or_else(|| registry.primary_gln());
     let receiver = p
         .get("receiver")
         .and_then(|v| v.as_str())
@@ -771,8 +782,20 @@ fn msg_ref_from_uuid(uuid_str: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::PartyConfig;
+    use crate::party_registry::GlnRegistry;
     use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId};
     use mako_engine::outbox::OutboxMessage;
+
+    fn test_registry(gln: &str) -> GlnRegistry {
+        let party = PartyConfig {
+            gln: gln.to_owned(),
+            roles: vec!["NB".to_owned()],
+            primary: true,
+            agency: None,
+        };
+        GlnRegistry::from_config(&[party]).expect("test registry")
+    }
 
     fn fake_msg(message_type: &str, recipient: &str, payload: serde_json::Value) -> OutboxMessage {
         OutboxMessage::new(
@@ -829,7 +852,7 @@ mod tests {
                 "malo": "DE0001234567890",
             }),
         );
-        let result = render_to_wire_bytes(&msg, "9900123456789");
+        let result = render_to_wire_bytes(&msg, &test_registry("9900123456789"));
         assert!(matches!(
             result,
             Err(RenderError::InsufficientPayload { .. })
@@ -847,7 +870,7 @@ mod tests {
                 "process_date": "20260101",
             }),
         );
-        let result = render_to_wire_bytes(&msg, "9900123456789");
+        let result = render_to_wire_bytes(&msg, &test_registry("9900123456789"));
         assert!(
             matches!(result, Err(RenderError::MissingField { field, .. }) if field.as_ref() == "pid")
         );
@@ -867,7 +890,7 @@ mod tests {
         );
         // We can't guarantee a release is active in unit-test context (no registry),
         // but we can verify the payload-extraction path reaches the release lookup.
-        let result = render_to_wire_bytes(&msg, "9900123456789");
+        let result = render_to_wire_bytes(&msg, &test_registry("9900123456789"));
         // Either succeeds (if a profile is registered) or NoActiveProfile.
         // Never MissingField or InsufficientPayload.
         match &result {

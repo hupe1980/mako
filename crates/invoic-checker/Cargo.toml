@@ -1,0 +1,21 @@
+[package]
+name         = "invoic-checker"
+version.workspace     = true
+description  = "Automated INVOIC plausibility and tariff validation for German energy market suppliers (LF/LFG). Pure library — no I/O, no async."
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+keywords     = ["invoic", "bo4e", "energy", "mako", "bdew"]
+categories   = ["data-structures"]
+
+[dependencies]
+rubo4e      = { workspace = true }
+serde       = { workspace = true }
+thiserror   = { workspace = true }
+time        = { workspace = true }
+
+[dev-dependencies]
+rust_decimal = "1"
+serde_json  = { workspace = true }

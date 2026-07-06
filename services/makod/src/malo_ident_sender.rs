@@ -306,6 +306,7 @@ impl As4Sender for MaloIdentSender {
                         created_at: OffsetDateTime::now_utc(),
                         deliver_after: None,
                         attempt_count: 0,
+                        workflow_name: "".into(),
                     };
                     if let Err(e) = outbox_store.enqueue(&[erp_msg]).await {
                         warn!(

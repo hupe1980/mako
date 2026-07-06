@@ -87,6 +87,14 @@ static SEGMENTS: &[SegmentDefinition] = &[
         ],
     },
     SegmentDefinition {
+        tag: "CCI",
+        name: "Merkmal/Charakteristik",
+        elements: &[
+            ElementRef::new(1, "7081", Status::Conditional, 1),
+            ElementRef::new(2, "C240", Status::Conditional, 1),
+        ],
+    },
+    SegmentDefinition {
         tag: "LIN",
         name: "Laufende Position",
         elements: &[ElementRef::new(1, "1082", Status::Conditional, 1)],
@@ -157,6 +165,7 @@ fn expected_components(tag: &str, idx: usize) -> Option<u8> {
         | ("NAD", 0)
         | ("CTA", 0)
         | ("LOC", 0)
+        | ("CCI", 0)
         | ("LIN", 0)
         | ("PIA", 0)
         | ("STS", 0) => Some(1),

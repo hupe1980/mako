@@ -78,6 +78,11 @@ struct CloudEventEnvelope<'a> {
     makopid: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     makofailreason: Option<&'a str>,
+    /// Workflow family that produced this event — used by `mdmd` to derive
+    /// `mdmrole` for role-scoped ERP subscriber fan-out.
+    /// Empty string is serialized as an absent field.
+    #[serde(skip_serializing_if = "str::is_empty")]
+    makoworkflow: &'a str,
     data: &'a serde_json::Value,
 }
 
@@ -100,6 +105,7 @@ impl<'a> CloudEventEnvelope<'a> {
             makocausationid: event.causation_id.to_string(),
             makopid: event.pid,
             makofailreason: fail_reason,
+            makoworkflow: event.workflow_name.as_ref(),
             data: &event.payload,
         }
     }
@@ -422,6 +428,7 @@ where
                     payload_schema: msg.payload_schema.as_deref().map(str::to_owned),
                     payload: msg.payload.clone(),
                     occurred_at: msg.created_at,
+                    workflow_name: msg.workflow_name.clone(),
                 };
 
                 match self.adapter.notify(event).await {

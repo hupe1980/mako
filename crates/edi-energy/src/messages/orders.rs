@@ -1,4 +1,4 @@
-use edifact_rs::OwnedSegment;
+use edifact_rs::{OwnedSegment, ProfileRulePack, ValidationIssue};
 
 use crate::{
     MessageType,
@@ -99,4 +99,16 @@ impl OrdersMessage {
     }
 }
 
-impl_edi_energy_message!(OrdersMessage);
+impl_edi_energy_message!(OrdersMessage, sem = orders_semantic_pack());
+
+/// `SEM-ORDERS-PERIOD-ORDER` — When both a period-start (`DTM+163`) and a
+/// period-end (`DTM+164`) are present, the start must not be after the end.
+fn orders_semantic_pack() -> ProfileRulePack {
+    ProfileRulePack::new("ORDERS-SEM")
+        .for_message_type("ORDERS")
+        .with_stateless_rule_fn(
+            |segs: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>| {
+                super::common::check_period_order(segs, "SEM-ORDERS-PERIOD-ORDER", issues);
+            },
+        )
+}

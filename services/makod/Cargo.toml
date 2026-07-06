@@ -27,9 +27,12 @@ dvgw-edi         = { path = "../../crates/dvgw-edi" }
 mako-gabi-gas    = { path = "../../crates/mako-gabi-gas" }
 mako-mabis       = { path = "../../crates/mako-mabis" }
 mako-redispatch  = { path = "../../crates/mako-redispatch" }
+edifact-rs       = { workspace = true }
 mako-as4     = { path = "../../crates/mako-as4", features = ["server"] }
 energy-api   = { path = "../../crates/energy-api", features = ["server", "client"] }
-asx-rs       = { version = "0.3", features = ["as4", "client", "interop-strict", "server"] }
+rubo4e       = { workspace = true }
+rust_decimal = { workspace = true }
+asx-rs       = { version = "0.5", features = ["as4", "client", "interop-strict", "server"] }
 edi-energy   = { path = "../../crates/edi-energy", default-features = false, features = [
     "utilmd", "mscons", "aperak", "contrl", "invoic", "remadv",
     "orders", "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp",
@@ -72,3 +75,38 @@ mako-engine  = { path = "../../crates/mako-engine", features = ["testing"] }
 tokio        = { version = "1", features = ["full"] }
 serde_json   = { workspace = true }
 time         = { workspace = true }
+
+# ── Role-isolation feature flags ─────────────────────────────────────────────
+#
+# Use these to build purpose-specific binaries that exclude code for roles
+# not deployed by the operator. This reduces binary size, eliminates
+# compile-time registration of unwanted PIDs, and provides legal traceability
+# (binary SHA identifies role scope for BNetzA audit).
+#
+# Deployment profiles:
+#   lf-only       = ["role-lf"]                         # pure LF supplier
+#   nb-only       = ["role-nb"]                         # pure DSO/GNB
+#   nb-strom-only = ["role-nb-strom"]                   # Strom DSO only
+#   nb-gas-only   = ["role-nb-gas"]                     # Gas GNB only
+#   msb-only      = ["role-msb"]                        # pure MSB
+#   integrated    = ["role-lf","role-nb","role-msb"]    # Stadtwerk/integrated
+#
+# Default (no feature flags): all roles active — backwards-compatible with
+# existing deployments that have not yet migrated to role-scoped builds.
+[features]
+# ── Per-Sparte, per-role granular flags ──────────────────────────────────────
+# Strom roles
+role-lf-strom  = []  # LF Strom: gpke-* LF-side, wim LF-affected
+role-nb-strom  = []  # NB/DSO Strom: gpke-* NB-side, Sperrung, Konfiguration,
+                     #   UTILTS, MSCONS, WiM NB-side, PARTIN 37000-37006,
+                     #   INVOIC 31001/31002/31005/31006
+role-msb-strom = []  # MSB Strom: wim-* Messstellenbetrieb
+# Gas roles
+role-lf-gas    = []  # LF Gas (LFG): geli-gas-* LF-side
+role-nb-gas    = []  # GNB: geli-gas-* NB-side, Sperrung Gas, PARTIN 37008-37014,
+                     #   INVOIC 31007/31008/31011, gabi-gas-mmma (13013)
+role-msb-gas   = []  # gMSB: wim-gas-* Messstellenbetrieb Gas
+# ── Composite convenience flags ───────────────────────────────────────────────
+role-lf  = ["role-lf-strom",  "role-lf-gas"]   # dual-fuel LF (most common)
+role-nb  = ["role-nb-strom",  "role-nb-gas"]    # combined DSO+GNB
+role-msb = ["role-msb-strom", "role-msb-gas"]   # combined MSB

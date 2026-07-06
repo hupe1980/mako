@@ -89,6 +89,8 @@ mod error;
 mod message;
 mod message_type;
 mod platform;
+mod report;
+mod validate;
 mod version;
 
 /// Concrete DVGW message type structs.
@@ -99,4 +101,5 @@ pub use error::Error;
 pub use message::DvgwMessage;
 pub use message_type::DvgwMessageType;
 pub use platform::DvgwPlatform;
+pub use report::{DvgwIssue, DvgwReport};
 pub use version::DvgwVersion;

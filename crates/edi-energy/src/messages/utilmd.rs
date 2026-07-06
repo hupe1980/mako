@@ -368,7 +368,7 @@ fn rule_sem_malo_format(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<V
         if id.is_empty() {
             continue;
         }
-        if !is_valid_location_id(id) {
+        if !super::common::is_valid_location_id(id) {
             issues.push(
                 ValidationIssue::new(
                     ValidationSeverity::Error,
@@ -376,18 +376,14 @@ fn rule_sem_malo_format(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<V
                      Markt-/Messlokations-ID format [A-Z0-9]{11}"
                         .to_owned(),
                 )
+                .with_span(seg.span)
                 .with_rule_id("SEM-UTILMD-MALO-FORMAT")
-                .with_segment("IDE"),
+                .with_segment("IDE")
+                .with_suggestion(
+                    "Markt-/Messlokations-IDs in IDE C206 must be exactly 11 upper-case \
+                     alphanumeric characters matching [A-Z0-9]{11}",
+                ),
             );
         }
     }
-}
-
-/// Returns `true` when `id` is exactly 11 ASCII upper-case letters or digits.
-#[inline]
-fn is_valid_location_id(id: &str) -> bool {
-    id.len() == 11
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
 }

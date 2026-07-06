@@ -880,6 +880,22 @@ pub async fn dispatch_deadline(
                 .await
                 .map(|_| ())
         }
+        // CONTRL 6h delivery-window obligation (CONTRL AHB 1.0 §2.3.1).
+        // Registered by ContrlAckService; fires if the OutboxWorker has not
+        // delivered the CONTRL Empfangsbestätigung within 6 hours.
+        // There is no domain workflow to retry — log a regulatory alert so the
+        // operator can investigate and manually trigger a re-delivery.
+        "contrl-ack-obligation" => {
+            tracing::error!(
+                deadline_id = %deadline_id,
+                label       = %label,
+                "REGULATORY ALERT: CONTRL 6h delivery window expired \
+                 (CONTRL AHB 1.0 §2.3.1) — the Gas CONTRL Empfangsbestätigung \
+                 was NOT delivered within 6 hours of receipt. \
+                 Inspect the outbox for stuck messages and trigger manual re-delivery.",
+            );
+            Ok(())
+        }
         unknown => {
             tracing::error!(
                 deadline_id  = %deadline_id,

@@ -300,8 +300,15 @@ fn rule_sem_contrl_syntax_code(
                          defined set (4=accepted, 7=rejected-group, 8=rejected-interchange)"
                     ),
                 )
+                .with_span(seg.span)
                 .with_rule_id("SEM-CONTRL-SYNTAX-CODE-UNKNOWN")
-                .with_segment("UCI"),
+                .with_segment("UCI")
+                .with_suggestion(
+                    "Valid UN/EDIFACT UCI acknowledgement codes (DE 0083): \
+                     4 = interchange received, \
+                     7 = rejected at functional-group level, \
+                     8 = rejected at interchange level",
+                ),
             );
         }
     }

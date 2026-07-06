@@ -1,4 +1,4 @@
-use edifact_rs::OwnedSegment;
+use edifact_rs::{OwnedSegment, ProfileRulePack, ValidationIssue, ValidationSeverity};
 
 use crate::{
     MessageType,
@@ -101,4 +101,41 @@ impl InvoicMessage {
     }
 }
 
-impl_edi_energy_message!(InvoicMessage);
+impl_edi_energy_message!(InvoicMessage, sem = invoic_semantic_pack());
+
+/// Semantic rule pack for INVOIC.
+///
+/// Checks that are universal across all BDEW INVOIC PIDs 31001–31011:
+/// - `SEM-INVOIC-DTM-137-REQUIRED`: `DTM+137` (Rechnungsdatum) must be present.
+/// - `SEM-INVOIC-PERIOD-ORDER`: When `DTM+163` (Beginn Abrechnungszeitraum) and
+///   `DTM+164` (Ende Abrechnungszeitraum) are both present, start must not be
+///   after end.
+fn invoic_semantic_pack() -> ProfileRulePack {
+    ProfileRulePack::new("INVOIC-SEM")
+        .for_message_type("INVOIC")
+        .with_stateless_rule_fn(
+            |segs: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>| {
+                // DTM+137 (Rechnungsdatum / invoice date) is mandatory in all BDEW
+                // INVOIC PIDs 31001–31011: billing, self-billed, and WiM invoices.
+                if !segs
+                    .iter()
+                    .any(|s| s.tag == "DTM" && s.component_str(0, 0) == Some("137"))
+                {
+                    issues.push(
+                        ValidationIssue::new(
+                            ValidationSeverity::Error,
+                            "DTM+137 (Rechnungsdatum / invoice date) is missing — \
+                             mandatory in all BDEW INVOIC PIDs 31001–31011",
+                        )
+                        .with_rule_id("SEM-INVOIC-DTM-137-REQUIRED")
+                        .with_segment("DTM")
+                        .with_suggestion(
+                            "Add DTM+137:<YYYYMMDD>:102' to specify the invoice \
+                             issue date (format 102 = CCYYMMDD per UN/EDIFACT)",
+                        ),
+                    );
+                }
+                super::common::check_period_order(segs, "SEM-INVOIC-PERIOD-ORDER", issues);
+            },
+        )
+}

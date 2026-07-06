@@ -9,9 +9,16 @@ billing between balance responsible parties (BKV), network operators
 
 ## Implemented processes
 
-| Process | PIDs | Messages | Governing document |
+| Workflow | PIDs / Message types | Governing document | Status |
 |---|---|---|---|
-| Kapazitätsrechnung (capacity billing) | 31010 | INVOIC | INVOIC AHB, BK7-14-020 |
+| `gabi-gas-invoic` | INVOIC 31010 (Kapazitätsrechnung, NB/VNB → BKV) + 31007/31008 (Aggreg. MMM-Rechnung, NB → MGV) | BK7-14-020 | ✅ |
+| `gabi-gas-allocation` | ALOCAT (synthetic PIDs 90001–90003) | BK7-14-020 / DVGW ALOCAT 5.11a | ✅ |
+| `gabi-gas-nomination` | NOMINT (90011/90012) + NOMRES (90021/90022) | BK7-14-020 / DVGW NOMINT 4.6 FK / NOMRES 4.7 FK | ✅ |
+| `gabi-gas-mmma` | MSCONS 13013 + ORDERS 17110 + ORDRSP 19110 (Allokationsliste Gas, MMMA) | BK7-14-020 | ✅ |
+| `gabi-gas-schedl` | SCHEDL (synthetic PIDs) | DVGW SCHEDL G685/G2000 | ✅ |
+| `gabi-gas-imbnot` | IMBNOT (synthetic PIDs) | DVGW IMBNOT 5.7a | ✅ |
+| `gabi-gas-tranot` | TRANOT (synthetic PIDs) | DVGW TRANOT 5.8b | ✅ |
+| `gabi-gas-delivery-order` | DELORD + DELRES (synthetic PIDs) | DVGW DELORD 4.5 FK / DELRES 4.6 FK | ✅ |
 
 ## Domain background
 
@@ -29,7 +36,7 @@ DVGW-format electronic exchange for all balancing processes.
 | Governing document | BK7-24-01-009 | BK7-14-020 |
 | Scope | Supplier switching (Lieferantenwechsel Gas) + AWH billing | Gas balancing (Bilanzierung) |
 | Parties | LFN ↔ GNB | BKV ↔ FNB/VNB ↔ MGV |
-| Primary formats | UTILMD G (PIDs 44xxx), INVOIC 31011 | ALOCAT, NOMINT, NOMRES, INVOIC 31010 |
+| Primary formats | UTILMD G (PIDs 44xxx), INVOIC 31011 | ALOCAT, NOMINT, NOMRES, INVOIC 31007/31008/31010, MSCONS 13013 |
 | INVOIC billing | ✅ PID 31011 (NB → LF, AWH Sperrprozesse) | ✅ PID 31010 (NB → BKV, Kapazität) |
 
 GaBi Gas capacity billing (PID 31010) is in this crate; AWH Sperrprozesse billing (PID 31011) is in `mako-geli-gas`.
@@ -38,12 +45,23 @@ GaBi Gas capacity billing (PID 31010) is in this crate; AWH Sperrprozesse billin
 
 | Crate | Responsibility |
 |---|---|
-| `dvgw-edi` | EDIFACT parsing — ALOCAT, NOMINT, NOMRES |
-| `mako-gabi-gas` | Process engine — Workflow state machines, PID routing, deadline handling |
+| `dvgw-edi` | EDIFACT parsing — ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES |
+| `mako-gabi-gas` | Process engine — all eight workflow state machines, PID routing, deadline handling |
 
-## INVOIC billing workflow
+## INVOIC billing workflows
 
-`GaBiGasInvoicWorkflow` handles both INVOIC PIDs via a single state machine:
+`GaBiGasInvoicWorkflow` handles all three INVOIC PIDs via a single state machine:
+
+| PID   | Process name                                          | Direction   |
+|-------|-------------------------------------------------------|-------------|
+| 31010 | Kapazitätsrechnung (NB/VNB → BKV/KN)                 | NB → BKV    |
+| 31007 | Aggreg. MMM-Rechnung Gas (NB → MGV)                   | NB → MGV    |
+| 31008 | MMM-Rechnung Gas selbst ausgestellt (MGV → NB)        | MGV → NB    |
+
+> PIDs 31007/31008 are Gas-only (GaBi Gas, BK7-14-020, NB → MGV).
+> PID 31010 is capacity billing between NB/VNB and BKV.
+> PID 31011 (AWH Sperrprozesse Gas, NB → LF) belongs to `mako-geli-gas` — it is
+> billed by GNB for actions during the Sperrprozess, not by GaBi.
 
 ```text
 New ──ReceiveInvoic──► InvoicReceived ──[valid]──► ValidationPassed
@@ -56,6 +74,47 @@ Any active state ──TimeoutExpired──► Rejected
 After `ValidationPassed`, register a deadline with label
 `"gabi-gas-invoic-settlement-deadline"` to enforce the contractual response window.
 
+## Allokationsliste Gas MMMA (`gabi-gas-mmma`)
+
+The MMMA (Marktgebiets-Mehr-/Mindermengenabrechnungs-Allokation) process handles
+the allocation list exchange between NB and MGV in the gas balancing framework.
+
+```text
+NB ──(ORDERS 17110 Anfrage)──► MGV
+                                 │ [accepted]
+                                 ├──(MSCONS 13013 Allokationsliste)──► NB
+                                 │ [rejected]
+                                 └──(ORDRSP 19110 Ablehnung)──► NB
+```
+
+| PID   | Message | Process name                              | Direction  |
+|-------|---------|-------------------------------------------|------------|
+| 17110 | ORDERS  | Anfrage Allokationsliste Gas              | NB → MGV   |
+| 19110 | ORDRSP  | Ablehnung Anfrage Allokationsliste Gas    | MGV → NB   |
+| 13013 | MSCONS  | Allokationsliste Gas (MMMA)               | MGV → NB   |
+
+> PID 17110 here is Gas (GaBi, BK7-14-020). The same PID also exists in `mako-gpke`
+> for the Strom Allokationsliste (different commodity — never cross-register).
+
+## DVGW transport workflows
+
+DVGW message types are parsed by `dvgw-edi` and routed via synthetic PIDs
+(90001–90062) through `mako-engine`. Each workflow corresponds to one DVGW
+message exchange:
+
+| Workflow | Synthetic PIDs | DVGW message(s) | Description |
+|---|---|---|---|
+| `gabi-gas-allocation` | 90001–90003 | ALOCAT 5.11a | Gas quantity allocation per exit zone / entry point / measurement point |
+| `gabi-gas-nomination` | 90011/90012 (NOMINT) · 90021/90022 (NOMRES) | NOMINT 4.6 FK · NOMRES 4.7 FK | BKV → FNB/MGV nomination + FNB confirmation/rejection |
+| `gabi-gas-schedl` | synthetic | SCHEDL G685/G2000 | Transport schedule for a gas day (FNB → BKV) |
+| `gabi-gas-imbnot` | synthetic | IMBNOT 5.7a | Intraday imbalance notification (MGV/FNB → BKV) |
+| `gabi-gas-tranot` | synthetic | TRANOT 5.8b | Transport notification — capacity restriction or event (FNB/VNB → BKV/GH/MGV) |
+| `gabi-gas-delivery-order` | synthetic | DELORD 4.5 FK · DELRES 4.6 FK | Delivery nomination (BKV → FNB) + FNB confirmation/rejection |
+
+Synthetic PID assignment follows `dvgw_edi::AnyDvgwMessage::detect_pid(role_qualifier)`.
+PIDs in the 90001–90062 range are unique to this crate and never overlap with
+BDEW EDI@Energy PIDs.
+
 ## Market roles
 
 | Role | Abbrev. | Description |
@@ -64,6 +123,7 @@ After `ValidationPassed`, register a deadline with label
 | Verteilnetzbetreiber | VNB | Gas distribution system operator |
 | Bilanzkreisverantwortlicher | BKV | Balance responsible party |
 | Marktgebietsverantwortlicher | MGV | Market area manager |
+| Kapazitätsnutzer | KN | Capacity user — books entry/exit points; counterparty in PID 31010 |
 
 ## Regulatory references
 

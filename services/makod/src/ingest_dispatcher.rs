@@ -44,24 +44,29 @@ use mako_engine::{
     version::{FormatVersion, WorkflowId},
     workflow::{CommandPayload, Workflow},
 };
-use mako_gabi_gas::GaBiGasInvoicWorkflow;
+use mako_gabi_gas::{GaBiGasAllocationWorkflow, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow};
 use mako_geli_gas::{
-    GeliGasMsconsWorkflow, GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungLfWorkflow,
-    GeliGasSperrungNbWorkflow, GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
+    GeliGasLfStornierungWorkflow, GeliGasMsconsWorkflow, GeliGasPartinWorkflow,
+    GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow,
+    GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
 };
 use mako_gpke::{
-    GpkeAllokationslisteWorkflow, GpkeAnkuendigungZuordnungLfWorkflow, GpkeKonfigurationWorkflow,
-    GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow,
-    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow,
+    GpkeAbrechnungWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
+    GpkeAnkuendigungZuordnungLfWorkflow, GpkeDatanabrufWorkflow,
+    GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
+    GpkeLfAnmeldungWorkflow, GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow,
+    GpkePartinWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungWorkflow,
+    GpkeSupplierChangeWorkflow, GpkeUtiltsWorkflow,
 };
-use mako_mabis::MabisClearinglisteWorkflow;
+use mako_mabis::{MabisBillingWorkflow, MabisClearinglisteWorkflow};
 use mako_wim::{
-    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimRechnungWorkflow,
+    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow,
+    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimRechnungWorkflow, WimStammdatenWorkflow,
     WimStornierungWorkflow,
 };
 use mako_wim_gas::{
     WimGasAnmeldungWorkflow, WimGasInsrptWorkflow, WimGasInvoicWorkflow, WimGasKuendigungWorkflow,
-    WimGasVerpflichtungsanfrageWorkflow,
+    WimGasStornierungWorkflow, WimGasVerpflichtungsanfrageWorkflow,
 };
 use time::OffsetDateTime;
 
@@ -113,6 +118,61 @@ pub struct EdifactIngestDispatcher {
 }
 
 impl EdifactIngestDispatcher {
+    /// All workflow names that have a dispatch arm in [`Self::dispatch`].
+    ///
+    /// Used by `startup::validate_dispatch_completeness` to verify at startup
+    /// that every workflow name registered in the `PidRouter` has a matching
+    /// arm here. When a new workflow is added to a domain crate's
+    /// `register_pids`, add its name here AND add the corresponding `match`
+    /// arm in `dispatch` below.
+    pub const KNOWN_WORKFLOW_NAMES: &'static [&'static str] = &[
+        "gabi-gas-allocation",
+        "gabi-gas-invoic",
+        "gabi-gas-mmma",
+        "gabi-gas-nomination",
+        "geli-gas-mscons",
+        "geli-gas-partin",
+        "geli-gas-sperrprozesse-invoic",
+        "geli-gas-sperrung-lf",
+        "geli-gas-sperrung-nb",
+        "geli-gas-stornierung",
+        "geli-gas-stornierung-lf",
+        "geli-gas-supplier-change",
+        "gpke-abrechnung",
+        "gpke-allokationsliste",
+        "gpke-anfrage-bestellung",
+        "gpke-ankuendigung-zuordnung-lf",
+        "gpke-datenabruf",
+        "gpke-konfiguration",
+        "gpke-konfiguration-aenderung",
+        "gpke-lf-abmeldung",
+        "gpke-lf-anmeldung",
+        "gpke-messwerte",
+        "gpke-neuanlage",
+        "gpke-partin",
+        "gpke-sperrung",
+        "gpke-sperrung-lf",
+        "gpke-stornierung",
+        "gpke-supplier-change",
+        "gpke-utilts",
+        "mabis-billing",
+        "mabis-clearingliste",
+        "wim-device-change",
+        "wim-gas-anmeldung",
+        "wim-gas-insrpt",
+        "wim-gas-invoic",
+        "wim-gas-kuendigung",
+        "wim-gas-stornierung",
+        "wim-gas-verpflichtungsanfrage",
+        "wim-geraeteubernahme",
+        "wim-insrpt",
+        "wim-preisanfrage",
+        "wim-preisliste",
+        "wim-rechnung",
+        "wim-stammdaten",
+        "wim-stornierung",
+    ];
+
     /// Construct a new dispatcher backed by the given stores.
     #[must_use]
     pub fn new(
@@ -481,6 +541,64 @@ impl EdifactIngestDispatcher {
                 }
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: "wim-stornierung",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── GPKE INVOIC billing — PIDs 31001/31002/31005/31006 ───────────
+            //
+            // The NB (invoicer) sends an INVOIC to the LF (payer).  `makod`
+            // acting as the LF receives the INVOIC and spawns a new billing
+            // process.  The settlement window is 24 wall-clock hours per
+            // BK6-22-024.  After spawning, the `ProcessInitiated` outbox
+            // message notifies `invoicd`, which runs automated plausibility
+            // checks and submits a SettleInvoice or DisputeInvoice command.
+            //
+            // REMADV 33001–33004 (payer-side payment advice to invoicer) and
+            // COMDIS 29001 (invoicer rejects payer's REMADV) resume an
+            // existing process keyed on the original invoice message-ref.
+            //
+            // Regulatory basis: INVOIC AHB 2.8e / 1.0; REMADV AHB 1.0;
+            // COMDIS AHB 1.0; BK6-22-024 §5.
+            "gpke-abrechnung" => match pid {
+                31001 | 31002 | 31005 | 31006 => {
+                    let cmd = adapters::gpke_abrechnung_registry().dispatch(raw, &fv)?;
+                    let invoice_ref = extract_malo_from_invoic(msg);
+                    // Settlement window: 24 wall-clock hours (BK6-22-024 §5).
+                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    self.spawn_or_resume::<GpkeAbrechnungWorkflow>(
+                        &invoice_ref,
+                        "gpke-abrechnung",
+                        cmd,
+                        &fv,
+                        Some((mako_gpke::ABRECHNUNG_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                33001..=33004 => {
+                    // REMADV from payer — resume the invoicer-side billing process.
+                    let cmd = adapters::gpke_abrechnung_remadv_registry().dispatch(raw, &fv)?;
+                    let invoice_ref = extract_invoice_ref_from_remadv(msg);
+                    self.resume_by_malo::<GpkeAbrechnungWorkflow>(
+                        &invoice_ref,
+                        "gpke-abrechnung",
+                        cmd,
+                    )
+                    .await
+                }
+                29001 => {
+                    // COMDIS from invoicer — resume the payer-side billing process.
+                    let cmd = adapters::gpke_abrechnung_comdis_registry().dispatch(raw, &fv)?;
+                    let invoice_ref = extract_invoice_ref_from_comdis(msg);
+                    self.resume_by_malo::<GpkeAbrechnungWorkflow>(
+                        &invoice_ref,
+                        "gpke-abrechnung",
+                        cmd,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gpke-abrechnung",
                     reason: "pid_not_in_dispatch_table",
                 }),
             },
@@ -968,6 +1086,383 @@ impl EdifactIngestDispatcher {
                 }),
             },
 
+            // ── GPKE Neuanlage (PIDs 55600, 55601) ────────────────────────────
+            "gpke-neuanlage" => match pid {
+                55600 | 55601 => {
+                    let cmd = adapters::gpke_neuanlage_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // GPKE 24h wall-clock deadline (BK6-22-024 §5).
+                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    self.spawn_or_resume::<GpkeNeuanlageWorkflow>(
+                        &malo_id,
+                        "gpke-neuanlage",
+                        cmd,
+                        &fv,
+                        Some((mako_gpke::neuanlage::NEUANLAGE_APERAK_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gpke-neuanlage",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── GPKE Anfrage / Bestellung (PID 55555) ─────────────────────────
+            "gpke-anfrage-bestellung" => match pid {
+                55555 => {
+                    let cmd = adapters::gpke_anfrage_bestellung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // GPKE 24h wall-clock deadline (BK6-22-024 §5).
+                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    self.spawn_or_resume::<GpkeAnfrageBestellungWorkflow>(
+                        &malo_id,
+                        "gpke-anfrage-bestellung",
+                        cmd,
+                        &fv,
+                        Some((mako_gpke::anfrage_bestellung::ANFRAGE_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gpke-anfrage-bestellung",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── GPKE PARTIN Kommunikationsdaten (PIDs 37000–37006) ────────────
+            "gpke-partin" => {
+                if mako_gpke::partin::PARTIN_STROM_PIDS.contains(&pid) {
+                    let cmd = adapters::gpke_partin_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // No APERAK Frist for pure data delivery messages.
+                    self.spawn_or_resume::<GpkePartinWorkflow>(
+                        &malo_id,
+                        "gpke-partin",
+                        cmd,
+                        &fv,
+                        None,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "gpke-partin",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
+            // ── GPKE Messwerte MSCONS (PIDs 13005, 13006, …) ─────────────────
+            "gpke-messwerte" => {
+                if mako_gpke::messwerte::MSCONS_PIDS.contains(&pid) {
+                    let cmd = adapters::gpke_messwerte_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // No deadline for pure data delivery.
+                    self.spawn_or_resume::<GpkeMesswerteLieferungWorkflow>(
+                        &malo_id,
+                        "gpke-messwerte",
+                        cmd,
+                        &fv,
+                        None,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "gpke-messwerte",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
+            // ── GPKE UTILTS Konfigurationsdaten ───────────────────────────────
+            "gpke-utilts" => {
+                if mako_gpke::utilts::UTILTS_PIDS.contains(&pid) {
+                    let cmd = adapters::gpke_utilts_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.spawn_or_resume::<GpkeUtiltsWorkflow>(
+                        &malo_id,
+                        "gpke-utilts",
+                        cmd,
+                        &fv,
+                        None,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "gpke-utilts",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
+            // ── GPKE Datenabruf ORDRSP/Ablehnung ──────────────────────────────
+            // The outbound ORDERS is sent by LF; the only inbound message is a
+            // rejection ORDRSP from NB/MSB (PIDs 19101, 19102, 19114).
+            "gpke-datenabruf" => {
+                if mako_gpke::datenabruf::ORDRSP_ABLEHNUNG_PIDS.contains(&pid) {
+                    let cmd = adapters::gpke_datenabruf_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // Resume existing process; no spawn — LF initiates.
+                    self.resume_by_malo::<GpkeDatanabrufWorkflow>(&malo_id, "gpke-datenabruf", cmd)
+                        .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "gpke-datenabruf",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
+            // ── GPKE Konfigurationsänderung ORDRSP ────────────────────────────
+            // LF sends ORDERS (PIDs 19120–19133); NB/MSB responds with ORDRSP.
+            "gpke-konfiguration-aenderung" => {
+                if mako_gpke::konfiguration_aenderung::ORDRSP_PIDS.contains(&pid) {
+                    let cmd =
+                        adapters::gpke_konfiguration_aenderung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.resume_by_malo::<GpkeKonfigurationAenderungWorkflow>(
+                        &malo_id,
+                        "gpke-konfiguration-aenderung",
+                        cmd,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "gpke-konfiguration-aenderung",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
+            // ── GeLi Gas PARTIN Kommunikationsdaten (PIDs 37008–37014) ────────
+            "geli-gas-partin" => {
+                if mako_geli_gas::partin::PARTIN_GAS_PIDS.contains(&pid) {
+                    let cmd = adapters::geli_gas_partin_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.spawn_or_resume::<GeliGasPartinWorkflow>(
+                        &malo_id,
+                        "geli-gas-partin",
+                        cmd,
+                        &fv,
+                        None,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "geli-gas-partin",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
+            // ── MABIS Bilanzkreisabrechnung IFTSTA (PIDs 21000–21005) ──────────
+            "mabis-billing" => {
+                if mako_mabis::bilanzkreisabrechnung::IFTSTA_PIDS.contains(&pid) {
+                    let cmd = adapters::mabis_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // Prüfmitteilung deadline: 1 Werktag (BK6-24-174 §13.8).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        1,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<MabisBillingWorkflow>(
+                        &malo_id,
+                        "mabis-billing",
+                        cmd,
+                        &fv,
+                        Some((mako_mabis::PRUEFMITTEILUNG_DEADLINE_LABEL, due_at)),
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "mabis-billing",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
+            // ── WiM Stammdaten ORDERS (PID 17132) ─────────────────────────────
+            "wim-stammdaten" => match pid {
+                17132 => {
+                    let cmd = adapters::wim_stammdaten_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_orders(msg);
+                    // Stammdaten deadline: 5 Werktage (BK6-24-174).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        5,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimStammdatenWorkflow>(
+                        &melo_id,
+                        "wim-stammdaten",
+                        cmd,
+                        &fv,
+                        Some((mako_wim::stammdaten::STAMMDATEN_DEADLINE_LABEL, due_at)),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-stammdaten",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── WiM Preisanfrage REQOTE (PIDs 35001–35005) ────────────────────
+            "wim-preisanfrage" => {
+                if mako_wim::preisanfrage::REQOTE_PIDS.contains(&pid) {
+                    let cmd = adapters::wim_preisanfrage_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // Preisanfrage deadline: 5 Werktage (BK6-24-174).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        5,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimPreisanfrageWorkflow>(
+                        &malo_id,
+                        "wim-preisanfrage",
+                        cmd,
+                        &fv,
+                        Some((mako_wim::preisanfrage::PREISANFRAGE_DEADLINE_LABEL, due_at)),
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "wim-preisanfrage",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
+            // ── WiM Preisliste PRICAT (PIDs 27001–27003) ──────────────────────
+            "wim-preisliste" => {
+                if mako_wim::preisliste::PRICAT_PIDS.contains(&pid) {
+                    let cmd = adapters::wim_preisliste_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // Price list is a publish-only workflow; no statutory deadline.
+                    self.spawn_or_resume::<WimPreislisteWorkflow>(
+                        &malo_id,
+                        "wim-preisliste",
+                        cmd,
+                        &fv,
+                        None,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "wim-preisliste",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
+            // ── GaBi Gas Nomination (PIDs 90011, 90012, 90021, 90022) ─────────
+            // Regulatory basis: Kooperationsvereinbarung Gas (KoV), BK7-14-020.
+            // Nomination response (NOMRES) is required by D-1 15:00 CET (≈ 2 h after
+            // the D-1 13:00 nomination deadline). The 10-Werktage value here is a
+            // conservative outer bound for the engine deadline store; the actual
+            // KoV intraday window is enforced by the FNB/MGV at the application layer.
+            "gabi-gas-nomination" => {
+                if mako_gabi_gas::nomination::NOMINATION_PIDS.contains(&pid) {
+                    let cmd = adapters::gabi_gas_nomination_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // Gas nomination deadline: response required within 10 Werktage.
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        10,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<GaBiGasNominationWorkflow>(
+                        &malo_id,
+                        "gabi-gas-nomination",
+                        cmd,
+                        &fv,
+                        Some((mako_gabi_gas::nomination::NOMRES_DEADLINE_LABEL, due_at)),
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "gabi-gas-nomination",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
+            // ── GaBi Gas Allocation (PIDs 90001, 90002, 90003) ────────────────
+            // Regulatory basis: DVGW ALOCAT (allocation list) — no statutory
+            // response deadline in BK7-14-020; ALOCAT is a one-way push from MMMA
+            // to participants. spawn_deadline = None.
+            "gabi-gas-allocation" => {
+                if mako_gabi_gas::allocation::ALLOCATION_PIDS.contains(&pid) {
+                    let cmd = adapters::gabi_gas_allocation_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // Allocation list: no statutory response deadline defined.
+                    self.spawn_or_resume::<GaBiGasAllocationWorkflow>(
+                        &malo_id,
+                        "gabi-gas-allocation",
+                        cmd,
+                        &fv,
+                        None,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "gabi-gas-allocation",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
+            // ── WiM Gas Stornierung — GNB side (PID 44022) ───────────────────
+            // PID 44022: Anfrage nach Stornierung (LF → GNB) — spawn.
+            // Response PIDs 44023/44024 are outbound (dispatched by the ERP layer); no
+            // inbound arm needed on the GNB side.
+            "wim-gas-stornierung" => match pid {
+                44022 => {
+                    let cmd = adapters::wim_gas_stornierung_registry().dispatch(raw, &fv)?;
+                    let vorgang_id = extract_melo_from_utilmd(msg);
+                    // WiM Gas: 10 Werktage response deadline (BK7-24-01-009).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        10,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimGasStornierungWorkflow>(
+                        &vorgang_id,
+                        "wim-gas-stornierung",
+                        cmd,
+                        &fv,
+                        Some((mako_wim_gas::STORNIERUNG_APERAK_WINDOW_LABEL, due_at)),
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-gas-stornierung",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── GeLi Gas Stornierung — LF side (PIDs 44023–44024) ────────────
+            // PIDs 44023/44024: GNB response (Bestätigung / Ablehnung) to LF — resume.
+            // The LF's process was spawned by the ERP-side InitiateStornierung command.
+            "geli-gas-stornierung-lf" => match pid {
+                44023 | 44024 => {
+                    let cmd = adapters::geli_gas_stornierung_lf_registry().dispatch(raw, &fv)?;
+                    let vorgang_id = extract_melo_from_utilmd(msg);
+                    self.resume_by_malo::<GeliGasLfStornierungWorkflow>(
+                        &vorgang_id,
+                        "geli-gas-stornierung-lf",
+                        cmd,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "geli-gas-stornierung-lf",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
             // ── All other workflows: not yet in Phase 2 dispatch table ────────
             //
             // WARNING: messages routed here are dead-lettered. Any workflow name
@@ -1319,8 +1814,16 @@ pub fn extract_invoice_ref_from_comdis(msg: &AnyMessage) -> String {
 /// 2. Adapters use `is_known_fv`, which accepts all registered FVs.
 /// 3. A running process keeps its original `WorkflowId` and is never re-versioned.
 fn detect_format_version(msg: &AnyMessage) -> FormatVersion {
-    const FALLBACK: &str = "FV2025-10-01";
-    let fallback = || FormatVersion::new(FALLBACK);
+    // Derive the fallback dynamically from the registry so it stays current
+    // across annual format-version cutovers without a code change.
+    let fallback = || {
+        adapters::known_fvs().into_iter().max().unwrap_or_else(|| {
+            // Last-resort: if the registry is empty (pathological), use
+            // the current production FV. This branch should never fire.
+            FormatVersion::parse("FV2025-10-01")
+                .expect("FV2025-10-01 is always a valid FormatVersion literal")
+        })
+    };
 
     let Some(message_type) = msg.try_message_type() else {
         return fallback();

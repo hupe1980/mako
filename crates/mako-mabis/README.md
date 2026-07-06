@@ -41,6 +41,29 @@ Datenstatus                ──────→ ReceiveDatastatus → Settled /
 > **PIDs 13002–13028 are NOT MABIS.** They are Messwerten-PIDs (MSCONS meter data
 > exchange) in other domains. Never register 13002–13028 under `"mabis-billing"`.
 
+### Lieferantenclearingliste / Clearingliste — UTILMD (BK6-24-174)
+
+Workflow `mabis-clearingliste` handles the three UTILMD PIDs that distribute
+settlement reference data across the billing chain. All three are receive-only;
+no outbound response is required.
+
+```
+BIKO ──┬──(55069 Clearingliste DZR)──→  NB / ÜNB
+       └──(55070 Clearingliste BAS)──→  BKV
+NB   ─────(55065 Lieferantenclearingliste)──→  LF
+```
+
+| PID   | Process name                                   | Direction      | Status         |
+|-------|------------------------------------------------|----------------|----------------|
+| 55065 | Lieferantenclearingliste (NB → LF)             | NB → LF        | ✅ Implemented |
+| 55069 | Clearingliste DZR (BIKO → NB / ÜNB)           | BIKO → NB/ÜNB  | ✅ Implemented |
+| 55070 | Clearingliste BAS (BIKO → BKV)                 | BIKO → BKV     | ✅ Implemented |
+
+> PID 55065 is structurally identical to 55069/55070 but is sent by the **NB**
+> to the **LF** — not by the BIKO. It carries the settled allocation time-series
+> for the current billing period so the LF can reconcile its billing records.
+> Despite the routing difference it is handled by the same `MabisClearinglisteWorkflow`.
+
 ## EDIFACT Format Versions
 
 | Format version | Valid from | Notes |
@@ -50,9 +73,10 @@ Datenstatus                ──────→ ReceiveDatastatus → Settled /
 
 ## Modules
 
-| Rust module             | Contents                                            |
-|-------------------------|-----------------------------------------------------|
-| `bilanzkreisabrechnung` | PID 13003 workflow + `BillingProjection` read-model |
+| Rust module             | Workflow name             | Contents                                                      |
+|-------------------------|---------------------------|---------------------------------------------------------------|
+| `bilanzkreisabrechnung` | `mabis-billing`           | PID 13003 workflow + `BillingProjection` read-model           |
+| `clearingliste`         | `mabis-clearingliste`     | PIDs 55065/55069/55070 — Clearingliste DZR/BAS + Lieferantenclearingliste |
 
 ## Usage
 

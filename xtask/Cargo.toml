@@ -9,7 +9,7 @@ publish = false
 serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true }
 jsonschema = { version = "0.46", default-features = false }
-pdf-extract = "0.12"
+lopdf       = { version = "0.43", default-features = false }
 time        = { workspace = true }
 zip         = { version = "3", default-features = false, features = ["deflate"] }
 quick-xml   = { version = "0.40", features = ["serialize"] }

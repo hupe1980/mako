@@ -37,6 +37,30 @@ use utoipa::ToSchema;
 use crate::cedar_authz::{CedarAuthorizer, MakoAction, MaloResource};
 use crate::malo_cache::{MaloCacheStats, SlateDbMaloCache};
 
+// ── Identifier validation ──────────────────────────────────────────────────────
+
+/// Reject an invalid MaLo-ID path parameter before any business logic runs.
+///
+/// Returns `Some(422 response)` when `s` is not a valid 11-digit
+/// Marktlokations-ID (BDEW alternating-weight checksum); `None` when valid.
+#[inline]
+fn invalid_malo_id_response(s: &str) -> Option<Response> {
+    if s.parse::<rubo4e::identifiers::MaloId>().is_err() {
+        Some(
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "invalid_malo_id",
+                    "detail": format!("{s:?} is not a valid 11-digit Marktlokations-ID"),
+                })),
+            )
+                .into_response(),
+        )
+    } else {
+        None
+    }
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 /// Shared state for the admin API.
@@ -162,6 +186,9 @@ pub(crate) async fn handle_get(
     headers: HeaderMap,
     Path(malo_id): Path<String>,
 ) -> Response {
+    if let Some(err) = invalid_malo_id_response(&malo_id) {
+        return err;
+    }
     let identity = match state.cedar.authenticate(&headers) {
         Some(id) => id,
         None => return unauthorized(),
@@ -216,6 +243,9 @@ pub(crate) async fn handle_put(
     Path(malo_id): Path<String>,
     Json(body): Json<UpsertRequest>,
 ) -> Response {
+    if let Some(err) = invalid_malo_id_response(&malo_id) {
+        return err;
+    }
     let identity = match state.cedar.authenticate(&headers) {
         Some(id) => id,
         None => return unauthorized(),
@@ -284,6 +314,9 @@ pub(crate) async fn handle_delete(
     headers: HeaderMap,
     Path(malo_id): Path<String>,
 ) -> Response {
+    if let Some(err) = invalid_malo_id_response(&malo_id) {
+        return err;
+    }
     let identity = match state.cedar.authenticate(&headers) {
         Some(id) => id,
         None => return unauthorized(),

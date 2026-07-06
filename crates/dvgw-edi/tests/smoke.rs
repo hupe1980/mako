@@ -8,8 +8,15 @@ use dvgw_edi::{AnyDvgwMessage, DvgwMessage, DvgwMessageType, DvgwPlatform};
 // Format: UNA + UNB + UNH(type) + functional segments + UNT + UNZ
 
 fn wrap(msg_type: &str, inner: &str) -> Vec<u8> {
+    // UNT+N+1 counts segments from UNH through UNT inclusive:
+    //   1 (UNH) + 1 (NAD+MS) + 1 (NAD+MR) + inner_segment_count + 1 (UNT)
+    // Count inner segments by counting segment terminators (') in inner.
+    let inner_count = inner.chars().filter(|&c| c == '\'').count();
+    let seg_count = 4 + inner_count;
     format!(
-        "UNA:+.? 'UNB+UNOC:3+SENDER:14+RECEIVER:14+240101:1000+1'UNH+1+{msg_type}:D:01B:UN'NAD+MS+SENDERCODE::ZZZ'NAD+MR+RECEIVERCODE::ZZZ'{inner}UNT+5+1'UNZ+1+1'",
+        "UNA:+.? 'UNB+UNOC:3+SENDER:14+RECEIVER:14+240101:1000+1'\
+UNH+1+{msg_type}:D:01B:UN'NAD+MS+SENDERCODE::ZZZ'NAD+MR+RECEIVERCODE::ZZZ'\
+{inner}UNT+{seg_count}+1'UNZ+1+1'",
     )
     .into_bytes()
 }
@@ -167,4 +174,107 @@ fn quantity_f64_parses_correctly() {
     } else {
         panic!("expected Alocat");
     }
+}
+
+// ── DvgwPlatform::validate ────────────────────────────────────────────────────
+
+#[cfg(feature = "alocat")]
+#[test]
+fn validate_alocat_valid() {
+    let input = wrap(
+        "ALOCAT:5:11a",
+        "BGM+7+ALLOCREF001'DTM+137:202401011200:203'LOC+Z01+DE_LOC001::ZZZ'QTY+136:12345.6:KWH'",
+    );
+    let report = DvgwPlatform::default()
+        .validate(&input)
+        .expect("validate should not fail hard");
+    assert!(
+        report.is_valid(),
+        "expected no errors, got: {:?}",
+        report.issues
+    );
+    assert_eq!(report.message_type, DvgwMessageType::Alocat);
+}
+
+#[cfg(feature = "alocat")]
+#[test]
+fn validate_alocat_missing_bgm_produces_error() {
+    // No BGM segment
+    let input = wrap(
+        "ALOCAT:5:11a",
+        "DTM+137:202401011200:203'LOC+Z01+DE_LOC001::ZZZ'QTY+136:100:KWH'",
+    );
+    let report = DvgwPlatform::default()
+        .validate(&input)
+        .expect("hard parse should succeed");
+    assert!(!report.is_valid());
+    let err = report
+        .errors()
+        .next()
+        .expect("should have at least one error");
+    assert_eq!(err.rule_id.as_deref(), Some("SEM-DVGW-BGM-REQUIRED"));
+}
+
+#[cfg(feature = "alocat")]
+#[test]
+fn validate_alocat_missing_dtm_137_produces_error() {
+    // No DTM+137
+    let input = wrap(
+        "ALOCAT:5:11a",
+        "BGM+7+ALLOCREF001'LOC+Z01+DE_LOC001::ZZZ'QTY+136:100:KWH'",
+    );
+    let report = DvgwPlatform::default()
+        .validate(&input)
+        .expect("hard parse should succeed");
+    assert!(!report.is_valid());
+    assert!(
+        report
+            .errors()
+            .any(|e| e.rule_id.as_deref() == Some("SEM-ALOCAT-DTM-137-REQUIRED")),
+        "expected SEM-ALOCAT-DTM-137-REQUIRED, got: {:?}",
+        report.issues,
+    );
+}
+
+#[cfg(feature = "nomres")]
+#[test]
+fn validate_nomres_missing_rff_z13_produces_warning() {
+    // Valid NOMRES but no RFF+Z13 correlation reference
+    let input = wrap(
+        "NOMRES:4:7",
+        "BGM+Z02+RESREF001'DTM+137:202601010600:203'STS+Z01'",
+    );
+    let report = DvgwPlatform::default()
+        .validate(&input)
+        .expect("should not hard-fail");
+    // Warnings present (RFF+Z13 missing) but no errors = still valid
+    assert!(report.is_valid(), "should be valid (only a warning)");
+    assert!(
+        report
+            .warnings()
+            .any(|w| w.rule_id.as_deref() == Some("SEM-NOMRES-RFF-Z13-EXPECTED")),
+        "expected SEM-NOMRES-RFF-Z13-EXPECTED warning",
+    );
+}
+
+#[cfg(feature = "nomint")]
+#[test]
+fn validate_result_ok_on_valid_message() {
+    let input = wrap(
+        "NOMINT:4:6",
+        "BGM+Z01+NOMREF001'DTM+137:202601010600:203'LOC+Z01+DE_LOC001::ZZZ'QTY+136:9999.0:KWH'",
+    );
+    let report = DvgwPlatform::default().validate(&input).expect("parse ok");
+    // result() should return Ok when valid
+    assert!(report.result().is_ok());
+}
+
+#[cfg(feature = "nomint")]
+#[test]
+fn validate_result_err_on_invalid_message() {
+    // Missing NAD+MS, NAD+MR and DTM+137
+    let input = wrap("NOMINT:4:6", "BGM+Z01+REF001'");
+    let report = DvgwPlatform::default().validate(&input).expect("parse ok");
+    // result() should return Err when there are errors
+    assert!(report.result().is_err());
 }

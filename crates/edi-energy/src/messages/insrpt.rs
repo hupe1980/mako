@@ -1,4 +1,4 @@
-use edifact_rs::OwnedSegment;
+use edifact_rs::{OwnedSegment, ProfileRulePack, ValidationIssue};
 
 use crate::{
     MessageType,
@@ -99,4 +99,22 @@ impl InsrptMessage {
     }
 }
 
-impl_edi_energy_message!(InsrptMessage);
+impl_edi_energy_message!(InsrptMessage, sem = insrpt_semantic_pack());
+
+/// `SEM-INSRPT-SG7-PERIOD-ORDER` — Within each `SG7` group, when both
+/// `DTM+163` (processing start) and `DTM+164` (processing end) are present,
+/// the start must not be after the end.
+///
+/// Per INSRPT AHB, DTM+164 is mandatory when `STS+Z06+Z10` is present (the
+/// "DTM 164 ist Pflicht" condition); this rule validates the ordering constraint.
+fn insrpt_semantic_pack() -> ProfileRulePack {
+    ProfileRulePack::new("INSRPT-SEM")
+        .for_message_type("INSRPT")
+        .with_scoped_group_rule_fn(
+            "SG7",
+            "SEM-INSRPT-SG7-PERIOD-ORDER",
+            |_group, segs: &[edifact_rs::Segment<'_>], _ctx, issues: &mut Vec<ValidationIssue>| {
+                super::common::check_period_order(segs, "SEM-INSRPT-SG7-PERIOD-ORDER", issues);
+            },
+        )
+}

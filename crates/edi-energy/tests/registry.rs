@@ -487,10 +487,6 @@ fn utilmd_strom_s1_2_bridging_profile_covers_gap() {
 
 /// UTILMD Strom S1.2 bridging profile — known-PID detection is sound.
 ///
-/// A PID that does not appear in the AHB profile JSON does not exist in that
-/// release. PIDs 56001–56010 are absent from every BDEW PID list
-/// (PID 3.3, PID 4.0) and must therefore never appear in any profile.
-///
 /// This test also verifies that the `has_pid` closure uses the correct
 /// detection idiom (`pack.name() != "unknown-pid"`) rather than the broken
 /// `rule_count() > 0` check, which returns `true` for every PID — including
@@ -523,8 +519,6 @@ fn utilmd_strom_s1_2_known_pid_detection_is_sound() {
         );
     }
 
-    // Phantom PIDs 56001–56004 must NOT be registered — they were never assigned
-    // in any BDEW AHB document (PID 3.3, PID 4.0, or any UTILMD AHB PDF).
     for phantom in [56001u32, 56002, 56003, 56004] {
         assert!(
             !has_pid(phantom),

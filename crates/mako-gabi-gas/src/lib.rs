@@ -104,9 +104,10 @@ pub use imbnot::{
     ImbalanceDirection, ImbalanceEvent, ImbalanceState, WORKFLOW_NAME as IMBNOT_WORKFLOW_NAME,
 };
 pub use invoic::{
-    GABI_GAS_COMDIS_ABLEHNUNG_PID, GABI_GAS_INVOIC_PIDS, GABI_GAS_REMADV_PID, GaBiGasInvoicCommand,
-    GaBiGasInvoicData, GaBiGasInvoicEvent, GaBiGasInvoicProjection, GaBiGasInvoicRecord,
-    GaBiGasInvoicState, GaBiGasInvoicWorkflow,
+    COMDIS_RESUME_PATH as INVOIC_COMDIS_RESUME_PATH, GABI_GAS_COMDIS_ABLEHNUNG_PID,
+    GABI_GAS_INVOIC_PIDS, GABI_GAS_REMADV_PID, GaBiGasInvoicCommand, GaBiGasInvoicData,
+    GaBiGasInvoicEvent, GaBiGasInvoicProjection, GaBiGasInvoicRecord, GaBiGasInvoicState,
+    GaBiGasInvoicWorkflow, REMADV_RESUME_PATH as INVOIC_REMADV_RESUME_PATH,
     SETTLEMENT_WINDOW_LABEL as INVOIC_SETTLEMENT_WINDOW_LABEL,
     WORKFLOW_NAME as INVOIC_WORKFLOW_NAME,
 };

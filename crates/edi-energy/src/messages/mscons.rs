@@ -520,7 +520,7 @@ fn rule_sem_melo_format(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<V
         if id.is_empty() {
             continue;
         }
-        if !is_valid_location_id(id) {
+        if !super::common::is_valid_location_id(id) {
             issues.push(
                 ValidationIssue::new(
                     ValidationSeverity::Error,
@@ -528,8 +528,13 @@ fn rule_sem_melo_format(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<V
                      Messlokations-ID format [A-Z0-9]{11}"
                         .to_owned(),
                 )
+                .with_span(seg.span)
                 .with_rule_id("SEM-MSCONS-MELO-FORMAT")
-                .with_segment("LOC"),
+                .with_segment("LOC")
+                .with_suggestion(
+                    "Messlokations-IDs in LOC+172 must be exactly 11 upper-case \
+                     alphanumeric characters matching [A-Z0-9]{11}",
+                ),
             );
         }
     }
@@ -542,8 +547,10 @@ fn rule_sem_melo_format(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<V
 /// Date strings are in `YYYYMMDD` (format 102) or `YYYYMMDDHHmm` (format 203),
 /// both of which sort chronologically as strings.
 fn rule_sem_period_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
-    let mut start_date: Option<&str> = None;
-    let mut end_date: Option<&str> = None;
+    // Track both value and source span so we can point diagnostics at the
+    // out-of-order start segment.
+    let mut start: Option<(&str, edifact_rs::Span)> = None;
+    let mut end: Option<(&str, edifact_rs::Span)> = None;
 
     for seg in segments.iter().filter(|s| s.tag == "DTM") {
         // DTM element[0] = C507 composite:
@@ -555,22 +562,28 @@ fn rule_sem_period_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<
         let qualifier = c507.get_component(0).unwrap_or("");
         let value = c507.get_component(1).unwrap_or("");
         match qualifier {
-            "163" => start_date = Some(value),
-            "164" => end_date = Some(value),
+            "163" => start = Some((value, seg.span)),
+            "164" => end = Some((value, seg.span)),
             _ => {}
         }
     }
 
-    if let (Some(start), Some(end)) = (start_date, end_date) {
-        if !start.is_empty() && !end.is_empty() && start > end {
+    if let (Some((start_val, start_span)), Some((end_val, _))) = (start, end) {
+        if !start_val.is_empty() && !end_val.is_empty() && start_val > end_val {
             issues.push(
                 ValidationIssue::new(
                     ValidationSeverity::Error,
                     "DTM: period-start (qualifier 163) is after period-end (qualifier 164)"
                         .to_owned(),
                 )
+                .with_span(start_span)
                 .with_rule_id("SEM-MSCONS-PERIOD-ORDER")
-                .with_segment("DTM"),
+                .with_segment("DTM")
+                .with_suggestion(
+                    "Ensure DTM+163 (Beginn Lieferzeitraum) is not later than \
+                     DTM+164 (Ende Lieferzeitraum) — date values must be in \
+                     ascending chronological order",
+                ),
             );
         }
     }
@@ -607,18 +620,14 @@ fn rule_sem_unit_unknown(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<
                      in the EDI@Energy approved set for MSCONS"
                         .to_owned(),
                 )
+                .with_span(seg.span)
                 .with_rule_id("SEM-MSCONS-UNIT-UNKNOWN")
-                .with_segment("QTY"),
+                .with_segment("QTY")
+                .with_suggestion(
+                    "Use one of the EDI@Energy MSCONS approved units (Code List 6411): \
+                     KWH MWH GWH KW MW GW KVA MVA KVAR MVAR M3 M3H HM3 GJ MJ J Z03 Z12 Z14",
+                ),
             );
         }
     }
-}
-
-/// Returns `true` when `id` is exactly 11 ASCII upper-case letters or digits.
-#[inline]
-fn is_valid_location_id(id: &str) -> bool {
-    id.len() == 11
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
 }

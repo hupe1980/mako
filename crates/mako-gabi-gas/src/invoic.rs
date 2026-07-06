@@ -75,6 +75,20 @@ pub const GABI_GAS_INVOIC_PIDS: &[u32] = &[
 /// Workflow key used for PID router registration.
 pub const WORKFLOW_NAME: &str = "gabi-gas-invoic";
 
+/// Resume-path workflow name for REMADV (payment confirmation) messages.
+///
+/// Used in startup adapter validation. The REMADV resume path reuses the same
+/// `GaBiGasInvoicWorkflow` but is validated separately because it accepts
+/// a different adapter registry (`gabi_gas_remadv_registry`).
+pub const REMADV_RESUME_PATH: &str = "gabi-gas-invoic/remadv";
+
+/// Resume-path workflow name for COMDIS (payment rejection) messages.
+///
+/// Used in startup adapter validation. The COMDIS resume path reuses the same
+/// `GaBiGasInvoicWorkflow` but is validated separately because it accepts
+/// a different adapter registry (`gabi_gas_comdis_registry`).
+pub const COMDIS_RESUME_PATH: &str = "gabi-gas-invoic/comdis";
+
 /// Deadline label for the GaBi Gas INVOIC settlement response window.
 ///
 /// Per standard GaBi Gas billing terms, the receiving party must settle or

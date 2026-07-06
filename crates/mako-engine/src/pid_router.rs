@@ -296,6 +296,26 @@ impl PidRouter {
         self.table.keys().copied()
     }
 
+    /// Return a sorted, deduplicated list of all workflow names registered in
+    /// this router (across both the unambiguous table and commodity-qualified
+    /// table).
+    ///
+    /// Used at startup by `validate_dispatch_completeness` to verify that every
+    /// workflow name reachable via PID routing has a matching arm in the
+    /// `EdifactIngestDispatcher`.
+    #[must_use]
+    pub fn workflow_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .table
+            .values()
+            .map(Box::as_ref)
+            .chain(self.commodity_table.values().map(Box::as_ref))
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
     /// Return the number of registered PID mappings.
     #[must_use]
     pub fn len(&self) -> usize {

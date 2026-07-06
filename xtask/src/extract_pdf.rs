@@ -47,11 +47,20 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
     }
 
     eprintln!("Extracting text from PDF: {}", opts.file);
-    let text = match pdf_extract::extract_text(&pdf_path) {
-        Ok(t) => t,
+    let text = match lopdf::Document::load(&pdf_path) {
         Err(e) => {
-            eprintln!("error: PDF extraction failed: {e}");
+            eprintln!("error: PDF load failed: {e}");
             return false;
+        }
+        Ok(doc) => {
+            let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
+            match doc.extract_text(&pages) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("error: PDF text extraction failed: {e}");
+                    return false;
+                }
+            }
         }
     };
 

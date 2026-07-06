@@ -102,6 +102,7 @@ impl MockNb {
                 document_date: "2025-01-15".to_owned(),
                 validation_passed,
                 validation_errors: errors,
+                rechnung: None,
             })
             .await
             .expect("ReceiveInvoic");
@@ -300,6 +301,7 @@ async fn e2e_gpke_abrechnung_invalid_pid_rejected() {
             document_date: "2025-01-15".to_owned(),
             validation_passed: true,
             validation_errors: vec![],
+            rechnung: None,
         })
         .await;
 
@@ -338,6 +340,7 @@ async fn e2e_gpke_abrechnung_duplicate_receive_rejected() {
             document_date: "2025-01-15".to_owned(),
             validation_passed: true,
             validation_errors: vec![],
+            rechnung: None,
         })
         .await;
 

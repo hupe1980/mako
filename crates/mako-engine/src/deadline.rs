@@ -398,13 +398,12 @@ impl<S: DeadlineStore> DeadlineStore for Arc<S> {
 /// violation under BNetzA monitoring. Do not use in production.
 ///
 /// This type is available in all build configurations so it can serve as a
-/// default type parameter in [`EngineBuilder`]. However, [`EngineBuilder::new`]
+/// default type parameter in [`EngineBuilder`]. However, `EngineBuilder::new`
 /// (which wires this as the default) is only available with the `testing`
 /// feature or in `cfg(test)`. Production binaries must call
 /// [`EngineBuilder::with_stores`] instead.
 ///
 /// [`EngineBuilder`]: crate::builder::EngineBuilder
-/// [`EngineBuilder::new`]: crate::builder::EngineBuilder::new
 /// [`EngineBuilder::with_stores`]: crate::builder::EngineBuilder::with_stores
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use = "NoopDeadlineStore discards all deadlines silently — use a persistent DeadlineStore in production"]

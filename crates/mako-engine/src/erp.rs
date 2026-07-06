@@ -79,9 +79,9 @@
 //!
 //! | Type | Feature | Use case |
 //! |------|---------|---------|
-//! | [`NoopErpAdapter`] | `testing` | Unit tests, CI |
+//! | `NoopErpAdapter` | `testing` | Unit tests, CI |
 //! | [`LogErpAdapter`] | — | Structured log output; starting point for new integrations |
-//! | [`NoopErpCommandSource`] | `testing` | No-op inbound source for tests |
+//! | `NoopErpCommandSource` | `testing` | No-op inbound source for tests |
 //!
 //! For the production `WebhookErpAdapter` and `POST /api/v1/commands` endpoint,
 //! see `makod/src/erp_adapter.rs`.
@@ -271,6 +271,16 @@ pub struct ErpEvent {
 
     /// Wall-clock time when the domain event was persisted.
     pub occurred_at: OffsetDateTime,
+
+    /// Workflow family name that produced this event (e.g. `"gpke-sperrung"`).
+    ///
+    /// Carried through from `OutboxMessage::workflow_name`.  Emitted as the
+    /// `makoworkflow` CloudEvents extension attribute by `WebhookErpAdapter`.
+    /// `mdmd` maps this to `mdmrole` for role-scoped ERP subscriber fan-out.
+    ///
+    /// Empty string for events produced by legacy outbox messages that
+    /// predate this field.
+    pub workflow_name: Box<str>,
 }
 
 // ── ErpAdapter trait ──────────────────────────────────────────────────────────

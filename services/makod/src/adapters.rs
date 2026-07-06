@@ -29,6 +29,7 @@ use std::any::Any;
 
 use dvgw_edi::AnyDvgwMessage;
 use edi_energy::{AnyMessage, EdiEnergyMessage};
+use edifact_rs::OwnedSegment;
 use mako_engine::{
     error::EngineError,
     message_adapter::{AdapterRegistry, FnAdapter},
@@ -37,6 +38,9 @@ use mako_engine::{
     },
     version::FormatVersion,
 };
+use rubo4e::v202501 as bo4e;
+use rust_decimal::Decimal;
+use time::OffsetDateTime;
 
 /// Convert an `edi_energy::Pruefidentifikator` to the domain `Pruefidentifikator`.
 ///
@@ -53,35 +57,42 @@ use mako_gabi_gas::{
     GaBiGasNominationWorkflow, NominationCommand, NomresAcceptance,
 };
 use mako_geli_gas::{
-    GasMsconsDatenCommand, GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand,
-    GeliGasMsconsWorkflow, GeliGasSperrprozesseInvoicCommand, GeliGasSperrprozesseInvoicWorkflow,
-    GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow, GeliGasStornierungCommand,
-    GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
+    GasKommunikationsdatenCommand, GasMsconsDatenCommand, GasSperrungLfCommand,
+    GasSperrungNbCommand, GasSupplierChangeCommand, GeliGasLfStornierungWorkflow,
+    GeliGasMsconsWorkflow, GeliGasPartinWorkflow, GeliGasSperrprozesseInvoicCommand,
+    GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow,
+    GeliGasStornierungCommand, GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
+    LfStornierungCommand,
 };
 use mako_gpke::{
     AbrechnungCommand, AllokationslisteCommand, AnfrageBestellungCommand,
-    AnkuendigungZuordnungLfCommand, GpkeAbrechnungWorkflow, GpkeAllokationslisteWorkflow,
-    GpkeAnfrageBestellungWorkflow, GpkeAnkuendigungZuordnungLfWorkflow, GpkeKonfigurationWorkflow,
-    GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow,
-    GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand, GpkeStornierungWorkflow,
-    GpkeSupplierChangeWorkflow, KonfigurationCommand, LfAbmeldungCommand, LfAnmeldungCommand,
-    NeuanlageCommand, SperrungCommand, SperrungLfCommand, SupplierChangeCommand,
+    AnkuendigungZuordnungLfCommand, DatanabrufCommand, GpkeAbrechnungWorkflow,
+    GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
+    GpkeAnkuendigungZuordnungLfWorkflow, GpkeDatanabrufWorkflow,
+    GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
+    GpkeLfAnmeldungWorkflow, GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow,
+    GpkePartinWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand,
+    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow, GpkeUtiltsWorkflow,
+    KommunikationsdatenCommand, KonfigurationAenderungCommand, KonfigurationCommand,
+    LfAbmeldungCommand, LfAnmeldungCommand, MesswerteLieferungCommand, NeuanlageCommand,
+    SperrungCommand, SperrungLfCommand, SupplierChangeCommand, UtiltsKonfigCommand,
 };
 use mako_mabis::{
     BillingCommand, ClearinglisteCommand, DataStatus, IFTSTA_DATENSTATUS_PID, MabisBillingWorkflow,
     MabisClearinglisteWorkflow,
 };
 use mako_wim::{
-    DeviceChangeCommand, GeraeteubernahmeCommand, StammdatenCommand, StornierungCommand,
-    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimRechnungCommand,
+    DeviceChangeCommand, GeraeteubernahmeCommand, PreisanfrageCommand, PreislisteCommand,
+    StammdatenCommand, StornierungCommand, WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow,
+    WimInsrptWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimRechnungCommand,
     WimRechnungWorkflow, WimStammdatenWorkflow, WimStornierungWorkflow,
     insrpt::StorungsmeldungCommand,
 };
 use mako_wim_gas::{
     WimGasAnmeldungCommand, WimGasAnmeldungWorkflow, WimGasInsrptWorkflow, WimGasInvoicCommand,
     WimGasInvoicWorkflow, WimGasKuendigungCommand, WimGasKuendigungWorkflow,
-    WimGasVerpflichtungsanfrageCommand, WimGasVerpflichtungsanfrageWorkflow,
-    insrpt::GasStorungsmeldungCommand,
+    WimGasStornierungCommand, WimGasStornierungWorkflow, WimGasVerpflichtungsanfrageCommand,
+    WimGasVerpflichtungsanfrageWorkflow, insrpt::GasStorungsmeldungCommand,
 };
 
 // ── GPKE UTILMD Anfrage (PIDs 55001, 55002, 55016) ──────────────────────────────
@@ -407,6 +418,87 @@ pub fn gpke_abrechnung_registry() -> AdapterRegistry<GpkeAbrechnungWorkflow> {
                     .to_owned(),
                 validation_passed,
                 validation_errors,
+                rechnung: Some(Box::new(build_rechnung(inv.segments()))),
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE billing — REMADV payment advice (PIDs 33001–33004) ──────────────────
+
+/// Build an [`AdapterRegistry`] for REMADV 33001–33004 routed to [`GpkeAbrechnungWorkflow`].
+///
+/// After the NB sends an INVOIC to the LF, the LF (payer) responds with a REMADV
+/// confirming or partially disputing the payment.  `makod` resumes the billing
+/// process with [`AbrechnungCommand::ReceiveRemadv`].
+///
+/// **Correlation**: `extract_invoice_ref_from_remadv` reads `RFF+Z13:<invoice_ref>` to
+/// map back to the spawned billing process.
+///
+/// Source: REMADV AHB 1.0, GPKE Teil 2/Teil 3, BK6-24-174.
+#[must_use]
+pub fn gpke_abrechnung_remadv_registry() -> AdapterRegistry<GpkeAbrechnungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization("expected AnyMessage for GPKE REMADV adapter".into())
+            })?;
+            let AnyMessage::Remadv(r) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE REMADV adapter: expected REMADV message (PIDs 33001–33004)".into(),
+                ));
+            };
+            let pid = r
+                .bgm()
+                .and_then(|b| b.pruefidentifikator())
+                .ok_or_else(|| {
+                    EngineError::Deserialization(
+                        "GPKE REMADV adapter: PID not found in REMADV BGM".into(),
+                    )
+                })
+                .and_then(convert_pid)?;
+            Ok(AbrechnungCommand::ReceiveRemadv {
+                pid,
+                remadv_ref: MessageRef::new(msg.message_ref()),
+                sender: MarktpartnerCode::new(
+                    r.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE billing — COMDIS payment rejection (PID 29001) ──────────────────────
+
+/// Build an [`AdapterRegistry`] for COMDIS 29001 routed to [`GpkeAbrechnungWorkflow`].
+///
+/// After the LF (payer) sends a REMADV, the NB (invoicer) may reject it via
+/// COMDIS 29001 (Ablehnung der Zahlung).  `makod` resumes the billing process
+/// with [`AbrechnungCommand::ReceiveComdis`].
+///
+/// **Correlation**: `extract_invoice_ref_from_comdis` reads `RFF+Z13:<invoice_ref>`.
+///
+/// Source: COMDIS AHB 1.0, GPKE Teil 2/Teil 3, BK6-24-174.
+#[must_use]
+pub fn gpke_abrechnung_comdis_registry() -> AdapterRegistry<GpkeAbrechnungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization("expected AnyMessage for GPKE COMDIS adapter".into())
+            })?;
+            let AnyMessage::Comdis(_) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE COMDIS adapter: expected COMDIS message (PID 29001)".into(),
+                ));
+            };
+            Ok(AbrechnungCommand::ReceiveComdis {
+                comdis_ref: MessageRef::new(msg.message_ref()),
             })
         },
     ));
@@ -1806,6 +1898,607 @@ pub fn gpke_ankuendigung_zuordnung_lf_registry()
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE PARTIN Kommunikationsdaten (PIDs 37000–37006) ───────────────────────
+
+/// Build an [`AdapterRegistry`] for [`GpkePartinWorkflow`].
+///
+/// Handles all inbound PARTIN messages with PIDs 37000–37006 (Strom
+/// Kommunikationsdaten). Produces [`KommunikationsdatenCommand::ReceivePartin`].
+#[must_use]
+pub fn gpke_partin_registry() -> AdapterRegistry<GpkePartinWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization("expected AnyMessage for GPKE PARTIN adapter".into())
+            })?;
+            let AnyMessage::Partin(p) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE PARTIN adapter: expected PARTIN message (PIDs 37000–37006)".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE PARTIN adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+            Ok(KommunikationsdatenCommand::ReceivePartin {
+                pid,
+                sender: MarktpartnerCode::new(
+                    p.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                document_date: p
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE MSCONS Messwerte (PIDs 13002, 13005–13006) ──────────────────────────
+
+/// Build an [`AdapterRegistry`] for [`GpkeMesswerteLieferungWorkflow`].
+///
+/// Handles inbound MSCONS metered-data messages from NB/MSB to LF. The
+/// delivery location MaLo is extracted from the first SG5 NAD segment.
+/// Produces [`MesswerteLieferungCommand::ReceiveMscons`].
+#[must_use]
+pub fn gpke_messwerte_registry() -> AdapterRegistry<GpkeMesswerteLieferungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Messwerte adapter".into(),
+                )
+            })?;
+            let AnyMessage::Mscons(m) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Messwerte adapter: expected MSCONS message (PIDs 13002, 13005–13006)"
+                        .into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Messwerte adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+            // First SG5 NAD (qualifier 172 = metering location) carries the MaLo.
+            let location_id = mako_engine::types::MaLo::new(
+                m.delivery_points()
+                    .first()
+                    .map(|dp| dp.nad.party_id.as_deref().unwrap_or(""))
+                    .unwrap_or(""),
+            );
+            Ok(MesswerteLieferungCommand::ReceiveMscons {
+                pid,
+                sender: MarktpartnerCode::new(
+                    m.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                location_id,
+                document_date: m
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE UTILTS Konfigurationsdaten (PIDs 11002, 11003, …) ───────────────────
+
+/// Build an [`AdapterRegistry`] for [`GpkeUtiltsWorkflow`].
+///
+/// Handles inbound UTILTS configuration-data messages for GPKE Teil 3.
+/// Produces [`UtiltsKonfigCommand::ReceiveUtilts`].
+#[must_use]
+pub fn gpke_utilts_registry() -> AdapterRegistry<GpkeUtiltsWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization("expected AnyMessage for GPKE UTILTS adapter".into())
+            })?;
+            let AnyMessage::Utilts(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE UTILTS adapter: expected UTILTS message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE UTILTS adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+            Ok(UtiltsKonfigCommand::ReceiveUtilts {
+                pid,
+                sender: MarktpartnerCode::new(
+                    u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                document_date: u
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE Konfigurationsänderung ORDRSP (PIDs 17102, 17113) ───────────────────
+
+/// Build an [`AdapterRegistry`] for [`GpkeKonfigurationAenderungWorkflow`].
+///
+/// Handles inbound ORDRSP messages (NB/MSB response to LF config-change
+/// request). Produces [`KonfigurationAenderungCommand::ReceiveOrdrsp`].
+///
+/// The `accepted` flag is set to `true` when the ORDRSP BGM response code
+/// indicates acceptance (`27` = accepted without amendment). Any other
+/// response is treated as a rejection and `accepted` is `false`.
+#[must_use]
+pub fn gpke_konfiguration_aenderung_registry() -> AdapterRegistry<GpkeKonfigurationAenderungWorkflow>
+{
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Konfigurationsänderung adapter".into(),
+                )
+            })?;
+            let AnyMessage::Ordrsp(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Konfigurationsänderung adapter: expected ORDRSP message (PIDs 17102, 17113)".into(),
+                ));
+            };
+            let ordrsp_pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Konfigurationsänderung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            // BGM response code 27 = accepted without amendment; anything else = rejection.
+            let (accepted, reason) = {
+                let code = o
+                    .segments()
+                    .iter()
+                    .find(|s| s.tag == "BGM")
+                    .and_then(|s| s.component_str(2, 0));
+                let accepted = code == Some("27");
+                let reason = if accepted {
+                    None
+                } else {
+                    Some(format!(
+                        "ORDRSP response code: {}",
+                        code.unwrap_or("unknown")
+                    ))
+                };
+                (accepted, reason)
+            };
+            Ok(KonfigurationAenderungCommand::ReceiveOrdrsp {
+                ordrsp_pid,
+                accepted,
+                reason,
+                message_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
+// ── GPKE Datenabruf ORDRSP / Ablehnung (PIDs 17102, 17113) ───────────────────
+
+/// Build an [`AdapterRegistry`] for [`GpkeDatanabrufWorkflow`].
+///
+/// The Datenabruf process is LF-initiated (outbound ORDERS); the only inbound
+/// message is a rejection ORDRSP from NB/MSB. Produces
+/// [`DatanabrufCommand::ReceiveAblehnung`].
+#[must_use]
+pub fn gpke_datenabruf_registry() -> AdapterRegistry<GpkeDatanabrufWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Datenabruf adapter".into(),
+                )
+            })?;
+            let AnyMessage::Ordrsp(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Datenabruf adapter: expected ORDRSP message (PIDs 17102, 17113)".into(),
+                ));
+            };
+            let ordrsp_pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Datenabruf adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let reason = o
+                .segments()
+                .iter()
+                .find(|s| s.tag == "FTX")
+                .and_then(|s| s.component_str(4, 0))
+                .map(|s| s.to_owned());
+            Ok(DatanabrufCommand::ReceiveAblehnung {
+                ordrsp_pid,
+                reason,
+                message_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
+// ── GeLi Gas PARTIN Kommunikationsdaten (PIDs 37008–37014) ───────────────────
+
+/// Build an [`AdapterRegistry`] for [`GeliGasPartinWorkflow`].
+///
+/// Handles all inbound Gas PARTIN messages with PIDs 37008–37014
+/// (Gas Kommunikationsdaten). Produces
+/// [`GasKommunikationsdatenCommand::ReceivePartin`].
+#[must_use]
+pub fn geli_gas_partin_registry() -> AdapterRegistry<GeliGasPartinWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas PARTIN adapter".into(),
+                )
+            })?;
+            let AnyMessage::Partin(p) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas PARTIN adapter: expected PARTIN message (PIDs 37008–37014)".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas PARTIN adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+            Ok(GasKommunikationsdatenCommand::ReceivePartin {
+                pid,
+                sender: MarktpartnerCode::new(
+                    p.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                document_date: p
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── WiM Preisanfrage REQOTE (PIDs 35001–35005) ────────────────────────────────
+
+/// Build an [`AdapterRegistry`] for [`WimPreisanfrageWorkflow`].
+///
+/// Handles inbound REQOTE price-inquiry messages from nMSB to MSB.
+/// Produces [`PreisanfrageCommand::ReceiveReqote`].
+#[must_use]
+pub fn wim_preisanfrage_registry() -> AdapterRegistry<WimPreisanfrageWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Preisanfrage adapter".into(),
+                )
+            })?;
+            let AnyMessage::Reqote(r) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM Preisanfrage adapter: expected REQOTE message (PIDs 35001–35005)".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "WiM Preisanfrage adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+            Ok(PreisanfrageCommand::ReceiveReqote {
+                pid,
+                sender: MarktpartnerCode::new(
+                    r.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: MarktpartnerCode::new(
+                    r.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── WiM Preisliste PRICAT (PIDs 27001–27003) ──────────────────────────────────
+
+/// Build an [`AdapterRegistry`] for [`WimPreislisteWorkflow`].
+///
+/// Handles inbound PRICAT price-list messages from MSB to nMSB.
+/// Produces [`PreislisteCommand::ReceivePricat`].
+#[must_use]
+pub fn wim_preisliste_registry() -> AdapterRegistry<WimPreislisteWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Preisliste adapter".into(),
+                )
+            })?;
+            let AnyMessage::Pricat(p) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM Preisliste adapter: expected PRICAT message (PIDs 27001–27003)".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "WiM Preisliste adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+            Ok(PreislisteCommand::ReceivePricat {
+                pid,
+                sender: MarktpartnerCode::new(
+                    p.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: MarktpartnerCode::new(
+                    p.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── WiM Gas Stornierung — GNB side (PID 44022) ───────────────────────────────
+
+/// Build an [`AdapterRegistry`] for [`WimGasStornierungWorkflow`].
+///
+/// Handles inbound PID 44022 (Anfrage nach Stornierung) from LF → GNB.
+/// Produces [`WimGasStornierungCommand::ReceiveUtilmd`].
+///
+/// The Vorgangsnummer from `IDE+24` is used as the process correlation key.
+/// Regulatory basis: BK7-24-01-009, WiM Gas (Msb/Nmsb/all deployment roles).
+#[must_use]
+pub fn wim_gas_stornierung_registry() -> AdapterRegistry<WimGasStornierungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Gas Stornierung adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM Gas Stornierung adapter: expected UTILMD message (PID 44022)".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "WiM Gas Stornierung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+            Ok(WimGasStornierungCommand::ReceiveUtilmd {
+                pid,
+                sender: MarktpartnerCode::new(
+                    u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: MarktpartnerCode::new(
+                    u.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                vorgang_id: MaLo::new(
+                    u.transactions()
+                        .first()
+                        .and_then(|t| t.ide.object_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                document_date: u
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+// ── GeLi Gas Stornierung LF side (PIDs 44023–44024) ──────────────────────────
+
+/// Build an [`AdapterRegistry`] for [`GeliGasLfStornierungWorkflow`].
+///
+/// Handles inbound PIDs 44023/44024 (Bestätigung / Ablehnung Stornierung)
+/// from GNB → LF. Produces [`LfStornierungCommand::HandleAntwort`].
+///
+/// Acceptance is determined by PID alone: 44023 = accepted, 44024 = rejected.
+/// The rejection reason is extracted from the first transaction's FTX segment.
+/// Regulatory basis: BK7-24-01-009, GeLi Gas (Lf-only deployment role).
+#[must_use]
+pub fn geli_gas_stornierung_lf_registry() -> AdapterRegistry<GeliGasLfStornierungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas Stornierung LF adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas Stornierung LF adapter: expected UTILMD message (PIDs 44023–44024)"
+                        .into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas Stornierung LF adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            // PID 44023 = Bestätigung (accepted), 44024 = Ablehnung (rejected).
+            let accepted = pid.as_u32() == 44023;
+            let reason = u
+                .transactions()
+                .first()
+                .and_then(|tx| tx.ftx.first())
+                .and_then(|f| f.text.clone());
+            Ok(LfStornierungCommand::HandleAntwort {
+                response_pid: pid,
+                accepted,
+                reason,
+                response_ref: MessageRef::new(msg.message_ref()),
             })
         },
     ));
@@ -3254,4 +3947,224 @@ pub fn gabi_gas_allocation_registry() -> AdapterRegistry<GaBiGasAllocationWorkfl
         },
     ));
     registry
+}
+
+// ── EDIFACT → BO4E anti-corruption layer ─────────────────────────────────────
+
+/// Convert raw INVOIC EDIFACT segments into a [`bo4e::Rechnung`].
+///
+/// This is the **only** place in the codebase where EDIFACT segment parsing
+/// knowledge about the INVOIC message structure is combined with BO4E object
+/// construction.  All downstream domain logic and the `invoic-checker` engine
+/// work exclusively with the resulting [`bo4e::Rechnung`].
+///
+/// # Date format
+///
+/// EDIFACT DTM values are in `YYYYMMDD` format.  This function converts them
+/// to ISO 8601 (`YYYY-MM-DD`) so that `Zeitraum.startdatum / enddatum` and
+/// `Rechnungsposition.lieferung_von / bis` are lexicographically sortable and
+/// compatible with BO4E JSON consumers.
+#[must_use]
+fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
+    // Split at the first LIN segment: header vs. detail sections.
+    let lin_start = segs
+        .iter()
+        .position(|s| s.tag == "LIN")
+        .unwrap_or(segs.len());
+    let header = &segs[..lin_start];
+
+    let period_start = dtm(header, "163").and_then(edifact_date_to_offset_datetime);
+    let period_end = dtm(header, "164").and_then(edifact_date_to_offset_datetime);
+    let invoice_date = dtm(header, "137").and_then(edifact_date_to_offset_datetime);
+
+    let gesamtnetto = moa_betrag(header, "79");
+    let gesamtbrutto = moa_betrag(header, "9");
+
+    let rechnungsnummer = segs
+        .iter()
+        .find(|s| s.tag == "BGM")
+        .and_then(|s| s.component_str(1, 0))
+        .map(str::to_owned);
+
+    let rechnungsperiode = match (period_start, period_end) {
+        (Some(s), Some(e)) => Some(bo4e::Zeitraum {
+            startdatum: Some(s),
+            enddatum: Some(e),
+            ..Default::default()
+        }),
+        _ => None,
+    };
+    let rechnungspositionen = {
+        let p = build_positions(segs);
+        if p.is_empty() { None } else { Some(p) }
+    };
+    bo4e::Rechnung {
+        rechnungsnummer,
+        rechnungsdatum: invoice_date,
+        rechnungsperiode,
+        gesamtnetto,
+        gesamtbrutto,
+        rechnungspositionen,
+        ..Default::default()
+    }
+}
+
+/// Build a `Vec<Rechnungsposition>` by splitting on `LIN` segment boundaries.
+fn build_positions(segs: &[OwnedSegment]) -> Vec<bo4e::Rechnungsposition> {
+    let mut result = Vec::new();
+    let mut group: Vec<&OwnedSegment> = Vec::new();
+    let mut in_detail = false;
+
+    for seg in segs {
+        if seg.tag == "LIN" {
+            if in_detail && !group.is_empty() {
+                result.push(build_position(&group));
+            }
+            group.clear();
+            in_detail = true;
+        }
+        if in_detail {
+            group.push(seg);
+        }
+    }
+    if in_detail && !group.is_empty() {
+        result.push(build_position(&group));
+    }
+    result
+}
+
+/// Build a single `Rechnungsposition` from one LIN group.
+fn build_position(group: &[&OwnedSegment]) -> bo4e::Rechnungsposition {
+    let positionsnummer = group
+        .first()
+        .and_then(|s| s.component_str(0, 0))
+        .and_then(|s| s.parse::<i64>().ok());
+
+    let lokations_id = group
+        .iter()
+        .find(|s| s.tag == "LOC" && s.component_str(0, 0) == Some("172"))
+        .and_then(|s| s.component_str(1, 0))
+        .map(str::to_owned);
+
+    let lieferung_von = dtm_in_group(group, "163").map(edifact_date_to_iso);
+    let lieferung_bis = dtm_in_group(group, "164").map(edifact_date_to_iso);
+
+    let positions_menge = group
+        .iter()
+        .find(|s| s.tag == "QTY" && s.component_str(0, 0) == Some("46"))
+        .and_then(|s| s.component_str(0, 1))
+        .and_then(|wert| {
+            let normalized = wert.replace(',', ".");
+            normalized.parse::<Decimal>().ok().map(|d| bo4e::Menge {
+                wert: Some(d),
+                einheit: Some(bo4e::Mengeneinheit::Kwh),
+                ..Default::default()
+            })
+        });
+
+    let einzelpreis = group
+        .iter()
+        .find(|s| s.tag == "PRI" && s.component_str(0, 0) == Some("AAB"))
+        .and_then(|s| s.component_str(0, 1))
+        .and_then(|p| {
+            let normalized = p.replace(',', ".");
+            normalized.parse::<Decimal>().ok().map(|d| bo4e::Preis {
+                wert: Some(d),
+                ..Default::default()
+            })
+        });
+
+    let teilsumme_netto = moa_betrag_in_group(group, "77");
+
+    bo4e::Rechnungsposition {
+        positionsnummer,
+        lokations_id,
+        lieferung_von,
+        lieferung_bis,
+        positions_menge,
+        einzelpreis,
+        teilsumme_netto,
+        ..Default::default()
+    }
+}
+
+// ── EDIFACT segment accessor helpers ─────────────────────────────────────────
+
+/// Find the value of a `DTM` segment with a given qualifier in a slice.
+fn dtm<'a>(segs: &'a [OwnedSegment], qualifier: &str) -> Option<&'a str> {
+    segs.iter()
+        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some(qualifier))
+        .and_then(|s| s.component_str(0, 1))
+}
+
+/// Find the value of a `DTM` segment within a LIN group (slices of references).
+fn dtm_in_group<'a>(group: &[&'a OwnedSegment], qualifier: &str) -> Option<&'a str> {
+    group
+        .iter()
+        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some(qualifier))
+        .and_then(|s| s.component_str(0, 1))
+}
+
+/// Build a [`bo4e::Betrag`] from a `MOA` segment with a given qualifier.
+fn moa_betrag(segs: &[OwnedSegment], qualifier: &str) -> Option<bo4e::Betrag> {
+    segs.iter()
+        .find(|s| s.tag == "MOA" && s.component_str(0, 0) == Some(qualifier))
+        .and_then(|s| s.component_str(0, 1))
+        .and_then(|wert| {
+            wert.replace(',', ".")
+                .parse::<Decimal>()
+                .ok()
+                .map(|d| bo4e::Betrag {
+                    wert: Some(d),
+                    ..Default::default()
+                })
+        })
+}
+
+/// Build a [`bo4e::Betrag`] from a `MOA` segment within a LIN group.
+fn moa_betrag_in_group(group: &[&OwnedSegment], qualifier: &str) -> Option<bo4e::Betrag> {
+    group
+        .iter()
+        .find(|s| s.tag == "MOA" && s.component_str(0, 0) == Some(qualifier))
+        .and_then(|s| s.component_str(0, 1))
+        .and_then(|wert| {
+            wert.replace(',', ".")
+                .parse::<Decimal>()
+                .ok()
+                .map(|d| bo4e::Betrag {
+                    wert: Some(d),
+                    ..Default::default()
+                })
+        })
+}
+
+/// Convert an EDIFACT date (`YYYYMMDD`) to ISO 8601 (`YYYY-MM-DD`).
+///
+/// Lexicographic comparison of ISO dates is correct — required by
+/// `invoic_checker`'s period-validity check (string comparison on
+/// `Zeitraum.startdatum` / `enddatum`).
+fn edifact_date_to_iso(yyyymmdd: &str) -> String {
+    if yyyymmdd.len() == 8 {
+        format!("{}-{}-{}", &yyyymmdd[..4], &yyyymmdd[4..6], &yyyymmdd[6..8])
+    } else {
+        yyyymmdd.to_owned()
+    }
+}
+
+/// Parse an EDIFACT date string (`YYYYMMDD`) to an `OffsetDateTime` at midnight UTC.
+///
+/// Returns `None` if the string is not exactly 8 digits or cannot be parsed as a
+/// valid calendar date.
+fn edifact_date_to_offset_datetime(yyyymmdd: &str) -> Option<OffsetDateTime> {
+    use time::{Date, Month, PrimitiveDateTime, Time};
+    if yyyymmdd.len() != 8 {
+        return None;
+    }
+    let year: i32 = yyyymmdd[..4].parse().ok()?;
+    let month: u8 = yyyymmdd[4..6].parse().ok()?;
+    let day: u8 = yyyymmdd[6..8].parse().ok()?;
+    let month = Month::try_from(month).ok()?;
+    let date = Date::from_calendar_date(year, month, day).ok()?;
+    let dt = PrimitiveDateTime::new(date, Time::MIDNIGHT);
+    Some(dt.assume_utc())
 }

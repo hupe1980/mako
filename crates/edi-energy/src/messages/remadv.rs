@@ -1,4 +1,4 @@
-use edifact_rs::OwnedSegment;
+use edifact_rs::{OwnedSegment, ProfileRulePack, ValidationIssue, ValidationSeverity};
 
 use crate::{
     MessageType,
@@ -99,4 +99,39 @@ impl RemadvMessage {
     }
 }
 
-impl_edi_energy_message!(RemadvMessage);
+impl_edi_energy_message!(RemadvMessage, sem = remadv_semantic_pack());
+
+/// Semantic rule pack for REMADV.
+///
+/// Checks that are universal across all BDEW REMADV messages:
+/// - `SEM-REMADV-DTM-137-REQUIRED`: `DTM+137` (Zahlungsdatum / payment date) must
+///   be present.
+/// - `SEM-REMADV-PERIOD-ORDER`: When `DTM+163` (Beginn Zahlungszeitraum) and
+///   `DTM+164` (Ende Zahlungszeitraum) are both present, start must not be after end.
+fn remadv_semantic_pack() -> ProfileRulePack {
+    ProfileRulePack::new("REMADV-SEM")
+        .for_message_type("REMADV")
+        .with_stateless_rule_fn(
+            |segs: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>| {
+                // DTM+137 (Zahlungsdatum) is mandatory in BDEW REMADV messages.
+                if !segs
+                    .iter()
+                    .any(|s| s.tag == "DTM" && s.component_str(0, 0) == Some("137"))
+                {
+                    issues.push(
+                        ValidationIssue::new(
+                            ValidationSeverity::Error,
+                            "DTM+137 (Zahlungsdatum / payment date) is missing",
+                        )
+                        .with_rule_id("SEM-REMADV-DTM-137-REQUIRED")
+                        .with_segment("DTM")
+                        .with_suggestion(
+                            "Add DTM+137:<YYYYMMDD>:102' to specify the payment \
+                             date (format 102 = CCYYMMDD per UN/EDIFACT)",
+                        ),
+                    );
+                }
+                super::common::check_period_order(segs, "SEM-REMADV-PERIOD-ORDER", issues);
+            },
+        )
+}

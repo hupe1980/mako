@@ -38,6 +38,7 @@ pub mod migration_api;
 pub mod oidc_verifier;
 pub mod openapi;
 pub mod partner_api;
+pub mod party_registry;
 pub mod projection_worker;
 // startup symbols (MakodCtx, WorkersConfig, spawn_workers, validate_adapter_coverage)
 // are pub(crate) and called only from main.rs. The lib target sees them as dead code

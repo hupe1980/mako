@@ -190,7 +190,7 @@ pub mod wechselprozesse;
 pub use abrechnung::{
     ABRECHNUNG_WINDOW_LABEL, AbrechnungCommand, AbrechnungData, AbrechnungEvent,
     AbrechnungProjection, AbrechnungRecord, AbrechnungState, COMDIS_ABLEHNUNG_REMADV_PID,
-    GpkeAbrechnungWorkflow, INVOIC_PIDS, REMADV_PIDS,
+    GpkeAbrechnungWorkflow, INVOIC_PIDS, REMADV_PIDS, WORKFLOW_NAME as ABRECHNUNG_WORKFLOW_NAME,
 };
 pub use allokationsliste::{
     AllokationslisteCommand, AllokationslisteEvent, AllokationslisteState, AnforderungData,
@@ -218,7 +218,7 @@ pub use datenabruf::{
 pub use konfiguration::{
     BeauftragungData, GpkeKonfigurationWorkflow, KONFIGURATION_WINDOW_LABEL, KonfigurationCommand,
     KonfigurationEvent, KonfigurationProjection, KonfigurationRecord, KonfigurationState,
-    ORDERS_PIDS, ORDRSP_PIDS,
+    ORDERS_PIDS, ORDRSP_PIDS, WORKFLOW_NAME as KONFIGURATION_WORKFLOW_NAME,
 };
 pub use konfiguration_aenderung::{
     GpkeKonfigurationAenderungWorkflow, IFTSTA_PIDS as KONFIGURATION_AENDERUNG_IFTSTA_PIDS,
@@ -230,47 +230,52 @@ pub use konfiguration_aenderung::{
 pub use lf_abmeldung::{
     GpkeLfAbmeldungWorkflow, LF_ABMELDUNG_APERAK_WINDOW_LABEL, LF_ABMELDUNG_PIDS,
     LfAbmeldungCommand, LfAbmeldungData, LfAbmeldungEvent, LfAbmeldungState,
+    WORKFLOW_NAME as LF_ABMELDUNG_WORKFLOW_NAME,
 };
 pub use lf_anmeldung::{
     ANFRAGE_PIDS_LF, ANTWORT_PIDS_LF, GpkeLfAnmeldungWorkflow, LfAnmeldungCommand, LfAnmeldungData,
     LfAnmeldungEvent, LfAnmeldungState, NB_RESPONSE_WINDOW_LABEL,
+    WORKFLOW_NAME as LF_ANMELDUNG_WORKFLOW_NAME,
 };
 pub use messwerte::{
     GpkeMesswerteLieferungWorkflow, MSCONS_PIDS, MesswerteLieferungCommand, MesswerteLieferungData,
-    MesswerteLieferungEvent, MesswerteLieferungState,
+    MesswerteLieferungEvent, MesswerteLieferungState, WORKFLOW_NAME as MESSWERTE_WORKFLOW_NAME,
 };
 pub use neuanlage::{
     GpkeNeuanlageWorkflow, NEUANLAGE_APERAK_WINDOW_LABEL, NEUANLAGE_PIDS, NeuanlageCommand,
-    NeuanlageData, NeuanlageEvent, NeuanlageState,
+    NeuanlageData, NeuanlageEvent, NeuanlageState, WORKFLOW_NAME as NEUANLAGE_WORKFLOW_NAME,
 };
 pub use partin::{
     GpkePartinWorkflow, KommunikationsdatenCommand, KommunikationsdatenData,
     KommunikationsdatenEvent, KommunikationsdatenState, PARTIN_STROM_PIDS,
+    WORKFLOW_NAME as PARTIN_WORKFLOW_NAME,
 };
 pub use sperrung::{
     GpkeSperrungWorkflow, MSB_ANTWORT_PIDS, ORDCHG_STORNIERUNG_PIDS, SPERRUNG_PIDS,
     SPERRUNG_WINDOW_LABEL, SperrungCommand, SperrungData, SperrungEvent, SperrungState,
+    WORKFLOW_NAME as SPERRUNG_WORKFLOW_NAME,
 };
 pub use sperrung_lf::{
     ANTWORT_WINDOW_LABEL as SPERRUNG_LF_ANTWORT_WINDOW_LABEL, GpkeSperrungLfWorkflow,
     IFTSTA_SPERRUNG_PID, ORDRSP_SPERRUNG_PIDS, ORDRSP_STORNO_PIDS,
     SPERRUNG_ANFRAGE_PIDS as SPERRUNG_LF_ANFRAGE_PIDS, SperrungAuftragData, SperrungLfCommand,
-    SperrungLfEvent, SperrungLfState,
+    SperrungLfEvent, SperrungLfState, WORKFLOW_NAME as SPERRUNG_LF_WORKFLOW_NAME,
 };
 pub use stornierung::{
     GpkeStornierungCommand, GpkeStornierungData, GpkeStornierungEvent, GpkeStornierungState,
     GpkeStornierungWorkflow,
     STORNIERUNG_APERAK_WINDOW_LABEL as STORNIERUNG_GPKE_APERAK_WINDOW_LABEL,
-    STORNIERUNG_PIDS as STORNIERUNG_GPKE_PIDS,
+    STORNIERUNG_PIDS as STORNIERUNG_GPKE_PIDS, WORKFLOW_NAME as STORNIERUNG_GPKE_WORKFLOW_NAME,
 };
 pub use utilts::{
     GpkeUtiltsWorkflow, UTILTS_PIDS, UtiltsKonfigCommand, UtiltsKonfigData, UtiltsKonfigEvent,
-    UtiltsKonfigState,
+    UtiltsKonfigState, WORKFLOW_NAME as UTILTS_WORKFLOW_NAME,
 };
 pub use wechselprozesse::{
     APERAK_WINDOW_LABEL, GpkeSupplierChangeWorkflow, IFTSTA_PIDS as IFTSTA_VOLLZUGS_PIDS,
     InitiatedData, InitiatedDetails, SupplierChangeCommand, SupplierChangeEvent,
     SupplierChangeProjection, SupplierChangeRecord, SupplierChangeState, UTILMD_PIDS,
+    WORKFLOW_NAME as SUPPLIER_CHANGE_WORKFLOW_NAME,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────

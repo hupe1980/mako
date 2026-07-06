@@ -37,6 +37,9 @@ use mako_engine::{
 
 // ── PID constants ─────────────────────────────────────────────────────────────
 
+/// Workflow name used for PID routing and `WorkflowId` construction.
+pub const WORKFLOW_NAME: &str = "wim-stornierung";
+
 /// Inbound ORDCHG PID — triggers a new `WimStornierungWorkflow` process.
 ///
 /// **PID 39000** ("Stornierung Sperr-/Entsperrauftrag", AWH Sperrprozesse Gas)

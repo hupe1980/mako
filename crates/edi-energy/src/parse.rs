@@ -101,6 +101,14 @@ pub struct ParseConfig {
     /// lightweight messages inside the per-message limits can otherwise consume
     /// unbounded memory.
     pub max_messages_per_interchange: Option<usize>,
+    /// Stop parsing after this many UNH/UNT message pairs have been read.
+    ///
+    /// Maps directly to [`edifact_rs::ReaderConfig::max_messages`] (0.11.0+).
+    /// Useful for sampling large interchanges — e.g., `max_messages: Some(1)`
+    /// extracts only the first message without reading the rest of the file.
+    ///
+    /// `None` (the default) means no limit.
+    pub max_messages: Option<usize>,
     /// Maximum number of segments allowed within a single EDIFACT message (UNH…UNT pair).
     ///
     /// Defaults to `Some(500)`.  Set to `None` to disable the limit for
@@ -139,6 +147,7 @@ impl Default for ParseConfig {
             max_input_bytes: Some(10 * 1024 * 1024),
             max_messages_per_interchange: Some(1_000),
             max_segments_per_message: Some(500),
+            max_messages: None,
             reference_date: None,
         }
     }
@@ -161,6 +170,9 @@ impl ParseConfig {
         }
         if let Some(n) = self.max_input_bytes {
             cfg = cfg.max_input_bytes(n as u64);
+        }
+        if let Some(n) = self.max_messages {
+            cfg = cfg.max_messages(n);
         }
         cfg
     }
@@ -690,6 +702,7 @@ fn parse_interchange_header_from_segments(
         unb.component_str(3, 1).unwrap_or(""),
     );
     let control_ref = unb.element_str(4).unwrap_or("").to_owned();
+    let test_indicator = unb.element_str(10).map_or(false, |v| v.trim() == "1");
 
     Ok(InterchangeHeader {
         sender_id: sender_id.into_boxed_str(),
@@ -700,6 +713,7 @@ fn parse_interchange_header_from_segments(
         control_ref: control_ref.into_boxed_str(),
         syntax_id: syntax_id.into_boxed_str(),
         syntax_version,
+        test_indicator,
     })
 }
 
@@ -776,6 +790,10 @@ fn parse_interchange_full_from_segments_with_registry(
     )
     .entered();
 
+    // DE 0035: test indicator.  "1" = test message; absent or any other value = production.
+    // Per Allgemeine Festlegungen V6.1d §3: test messages must not be processed as production.
+    let test_indicator = unb.element_str(10).map_or(false, |v| v.trim() == "1");
+
     let header = InterchangeHeader {
         sender_id: sender_id.into_boxed_str(),
         sender_qualifier: sender_qualifier.into_boxed_str(),
@@ -785,6 +803,7 @@ fn parse_interchange_full_from_segments_with_registry(
         control_ref: control_ref.into_boxed_str(),
         syntax_id: syntax_id.into_boxed_str(),
         syntax_version,
+        test_indicator,
     };
 
     // ── Parse UNZ ─────────────────────────────────────────────────────────────

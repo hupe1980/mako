@@ -74,8 +74,20 @@ use mako_gpke::{
 };
 use makod::{
     adapters::{gpke_lf_anmeldung_registry, gpke_registry},
+    config::PartyConfig,
     edifact_renderer::render_to_wire_bytes,
+    party_registry::GlnRegistry,
 };
+
+fn make_registry(gln: &str, role: &str) -> GlnRegistry {
+    GlnRegistry::from_config(&[PartyConfig {
+        gln: gln.to_owned(),
+        roles: vec![role.to_owned()],
+        primary: true,
+        agency: None,
+    }])
+    .expect("test registry")
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -174,7 +186,8 @@ impl MockLfn {
              the renderer sets it to today at dispatch time"
         );
 
-        render_to_wire_bytes(msg, LFN_ID).expect("LFN: render_to_wire_bytes (55001)")
+        render_to_wire_bytes(msg, &make_registry(LFN_ID, "LF"))
+            .expect("LFN: render_to_wire_bytes (55001)")
     }
 
     /// ERP action: submit Kündigung Lieferbeginn (PID 55016) to the old supplier.
@@ -225,7 +238,8 @@ impl MockLfn {
              the renderer sets it to today at dispatch time"
         );
 
-        render_to_wire_bytes(msg, LFN_ID).expect("LFN: render_to_wire_bytes (55016)")
+        render_to_wire_bytes(msg, &make_registry(LFN_ID, "LF"))
+            .expect("LFN: render_to_wire_bytes (55016)")
     }
 
     /// ERP notification: receive NB's UTILMD response (55003/55004) and execute on `nb_leg`.
@@ -414,7 +428,7 @@ impl MockNb {
             );
         }
 
-        render_to_wire_bytes(utilmd, NB_ID).expect("NB: render_to_wire_bytes")
+        render_to_wire_bytes(utilmd, &make_registry(NB_ID, "NB")).expect("NB: render_to_wire_bytes")
     }
 
     async fn state(&self) -> SupplierChangeState {
@@ -552,7 +566,8 @@ impl MockLfa {
             "UTILMD 55017 must be addressed to the LFN"
         );
 
-        render_to_wire_bytes(msg, LFA_ID).expect("LFA: render_to_wire_bytes (55017)")
+        render_to_wire_bytes(msg, &make_registry(LFA_ID, "LF"))
+            .expect("LFA: render_to_wire_bytes (55017)")
     }
 
     async fn state(&self) -> SupplierChangeState {

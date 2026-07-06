@@ -14,8 +14,8 @@
 //!       ├── message_type == "MaloIdentCallback"
 //!       │     → MaloIdentSender (existing cache-lookup path, unchanged)
 //!       └── EDIFACT type (APERAK, CONTRL, UTILMD, …)
-//!             1. look up recipient GLN in PartnerDirectory
-//!             2. map message_type → BdewAction URI
+//!             1. resolve P-Mode from BdewAs4Profile (GLN + message type)
+//!             2. extract endpoint URL from P-Mode
 //!             3. serialize payload to wire bytes
 //!             4. asx_rs::as4::send_async  →  As4SendOutput (signed SOAP)
 //!             5. As4HttpTransport::send(endpoint_url, &output)
@@ -23,11 +23,14 @@
 //!             7. Err →  OutboxStore::reschedule(…, exponential backoff)
 //! ```
 //!
-//! ## Partner directory
+//! ## P-Mode registry
 //!
-//! Every trading partner's AS4 endpoint must be registered at startup via
-//! `--as4-partner <GLN>=<HTTPS-URL>` (repeatable).  Messages destined for
-//! an unknown recipient GLN are rescheduled after a structured `WARN` log.
+//! Every trading partner's AS4 endpoint and protocol settings must be
+//! registered in the [`BdewAs4Profile`] at startup via
+//! `--as4-partner <GLN>=<HTTPS-URL>` (repeatable).  This registers one
+//! P-Mode per standard BDEW EDIFACT message type for the partner.  Messages
+//! destined for an unknown recipient GLN or with a missing endpoint URL are
+//! dead-lettered immediately (permanent `PartnerUnknown` error).
 //!
 //! ## Payload encoding
 //!
@@ -47,21 +50,22 @@
 
 use std::sync::Arc;
 
-use asx_rs::as4::{As4SendPolicy, As4SendRequest};
+use asx_rs::as4::As4SendRequest;
 use asx_rs::core::SessionContext;
 use asx_rs::observability::EventBus;
 use asx_rs::transport::{As4HttpTransport, TransportConfig};
 use edi_energy::EdiEnergyMessage as _;
-use mako_as4::{BdewAction, constants};
+use mako_as4::BdewAction;
 use mako_engine::builder::As4Sender;
 use mako_engine::error::EngineError;
 use mako_engine::metrics::EngineMetrics;
 use mako_engine::outbox::OutboxMessage;
 
-use mako_as4::PartnerDirectory;
+use mako_as4::profile::BdewAs4Profile;
 
 use crate::edifact_renderer;
 use crate::malo_ident_sender::MaloIdentSender;
+use crate::party_registry::GlnRegistry;
 
 // ── WebhookEdifactSender ──────────────────────────────────────────────────────
 
@@ -99,7 +103,7 @@ use crate::malo_ident_sender::MaloIdentSender;
 #[derive(Clone)]
 pub struct WebhookEdifactSender {
     webhook_url: Arc<str>,
-    tenant_id: Arc<str>,
+    gln_registry: Arc<GlnRegistry>,
     http_client: reqwest::Client,
     malo_sender: MaloIdentSender,
 }
@@ -109,13 +113,13 @@ impl WebhookEdifactSender {
     #[must_use]
     pub fn new(
         webhook_url: impl Into<Arc<str>>,
-        tenant_id: impl Into<Arc<str>>,
+        gln_registry: Arc<GlnRegistry>,
         http_client: reqwest::Client,
         malo_sender: MaloIdentSender,
     ) -> Self {
         Self {
             webhook_url: webhook_url.into(),
-            tenant_id: tenant_id.into(),
+            gln_registry,
             http_client,
             malo_sender,
         }
@@ -128,7 +132,7 @@ impl As4Sender for WebhookEdifactSender {
         msg: &OutboxMessage,
     ) -> impl std::future::Future<Output = Result<(), EngineError>> + Send {
         let webhook_url = Arc::clone(&self.webhook_url);
-        let tenant_id = Arc::clone(&self.tenant_id);
+        let gln_registry: Arc<GlnRegistry> = Arc::clone(&self.gln_registry);
         let http_client = self.http_client.clone();
         let malo_sender = self.malo_sender.clone();
         let msg_owned = msg.clone();
@@ -140,44 +144,45 @@ impl As4Sender for WebhookEdifactSender {
             }
 
             // Render domain-intent JSON to EDIFACT wire bytes.
-            let edifact_str = match edifact_renderer::render_to_wire_bytes(&msg_owned, &tenant_id) {
-                Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-                Err(ref e) if edifact_renderer::is_suppressed(e) => {
-                    // Gas positive APERAK: silence = acceptance per APERAK AHB 1.0 §2.3.
-                    // No wire EDIFACT sent; deliver domain JSON to ERP webhook so the
-                    // operator sees the positive outcome.
-                    tracing::debug!(
-                        message_id   = %msg_owned.message_id,
-                        message_type = %msg_owned.message_type,
-                        "WebhookEdifactSender: Gas positive APERAK suppressed — \
-                         sending domain JSON (silence = acceptance, APERAK AHB 1.0 §2.3)",
-                    );
-                    msg_owned.payload.to_string()
-                }
-                Err(ref e) if edifact_renderer::is_insufficient_payload(e) => {
-                    // No renderer registered for this message type — include
-                    // the raw domain-intent JSON payload so the ERP still sees
-                    // something useful, and log a warning.
-                    tracing::warn!(
-                        message_id   = %msg_owned.message_id,
-                        message_type = %msg_owned.message_type,
-                        "WebhookEdifactSender: no EDIFACT renderer — \
-                         sending raw payload JSON",
-                    );
-                    msg_owned.payload.to_string()
-                }
-                Err(e) => {
-                    return Err(EngineError::Serialization(format!(
-                        "EDIFACT render failed for {}: {e}",
-                        msg_owned.message_id
-                    )));
-                }
-            };
+            let edifact_str =
+                match edifact_renderer::render_to_wire_bytes(&msg_owned, &gln_registry) {
+                    Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                    Err(ref e) if edifact_renderer::is_suppressed(e) => {
+                        // Gas positive APERAK: silence = acceptance per APERAK AHB 1.0 §2.3.
+                        // No wire EDIFACT sent; deliver domain JSON to ERP webhook so the
+                        // operator sees the positive outcome.
+                        tracing::debug!(
+                            message_id   = %msg_owned.message_id,
+                            message_type = %msg_owned.message_type,
+                            "WebhookEdifactSender: Gas positive APERAK suppressed — \
+                             sending domain JSON (silence = acceptance, APERAK AHB 1.0 §2.3)",
+                        );
+                        msg_owned.payload.to_string()
+                    }
+                    Err(ref e) if edifact_renderer::is_insufficient_payload(e) => {
+                        // No renderer registered for this message type — include
+                        // the raw domain-intent JSON payload so the ERP still sees
+                        // something useful, and log a warning.
+                        tracing::warn!(
+                            message_id   = %msg_owned.message_id,
+                            message_type = %msg_owned.message_type,
+                            "WebhookEdifactSender: no EDIFACT renderer — \
+                             sending raw payload JSON",
+                        );
+                        msg_owned.payload.to_string()
+                    }
+                    Err(e) => {
+                        return Err(EngineError::Serialization(format!(
+                            "EDIFACT render failed for {}: {e}",
+                            msg_owned.message_id
+                        )));
+                    }
+                };
 
             let body = serde_json::json!({
                 "specversion":     "1.0",
                 "type":            "de.mako.edifact.outbound",
-                "source":          format!("urn:mako:tenant:{tenant_id}"),
+                "source":          format!("urn:mako:tenant:{}", gln_registry.primary_gln()),
                 "id":              msg_owned.message_id.to_string(),
                 "subject":         msg_owned.process_id.to_string(),
                 "time":            time::OffsetDateTime::now_utc()
@@ -248,13 +253,15 @@ pub struct BdewAs4Sender {
     session: Arc<SessionContext>,
     event_bus: Arc<EventBus>,
     transport: Arc<As4HttpTransport>,
-    partners: Arc<PartnerDirectory>,
+    profile: Arc<BdewAs4Profile>,
     malo_sender: MaloIdentSender,
-    /// The operator's own GLN (from `--tenant-id`).
+    /// The operator's own GLN registry.
     ///
-    /// Used by the EDIFACT renderer as the sender for ORDERS and similar
-    /// messages where the payload does not carry an explicit sender party ID.
-    tenant_party_id: Box<str>,
+    /// Used by the EDIFACT renderer to resolve the correct sender GLN per role
+    /// and by the loopback path to detect own-GLN recipients (combined-role
+    /// deployments where NB and MSB, or GNB and gMSB, have different GLNs on
+    /// the same instance).
+    gln_registry: Arc<GlnRegistry>,
     /// Optional in-process loopback handle for combined-role deployments.
     ///
     /// When `Some`, outbox messages addressed to `tenant_party_id` (own GLN)
@@ -265,8 +272,8 @@ pub struct BdewAs4Sender {
 }
 
 impl BdewAs4Sender {
-    /// Construct from the shared AS4 session context, event bus, partner
-    /// directory, and MaLo cache.
+    /// Construct from the shared AS4 session context, event bus, P-Mode
+    /// profile, and MaLo cache.
     ///
     /// # Errors
     ///
@@ -275,9 +282,9 @@ impl BdewAs4Sender {
     pub fn new(
         session: Arc<SessionContext>,
         event_bus: Arc<EventBus>,
-        partners: Arc<PartnerDirectory>,
+        profile: Arc<BdewAs4Profile>,
         malo_sender: MaloIdentSender,
-        tenant_party_id: impl Into<Box<str>>,
+        gln_registry: Arc<GlnRegistry>,
         loopback: Option<Arc<crate::edifact_api::EdifactApiState>>,
     ) -> anyhow::Result<Self> {
         let transport = As4HttpTransport::new(TransportConfig::default())
@@ -286,9 +293,9 @@ impl BdewAs4Sender {
             session,
             event_bus,
             transport: Arc::new(transport),
-            partners,
+            profile,
             malo_sender,
-            tenant_party_id: tenant_party_id.into(),
+            gln_registry,
             loopback,
         })
     }
@@ -304,7 +311,7 @@ impl As4Sender for BdewAs4Sender {
         let session = Arc::clone(&self.session);
         let event_bus = Arc::clone(&self.event_bus);
         let transport = Arc::clone(&self.transport);
-        let partners = Arc::clone(&self.partners);
+        let profile = Arc::clone(&self.profile);
         let malo_sender = self.malo_sender.clone();
         let loopback = self.loopback.clone();
 
@@ -315,7 +322,7 @@ impl As4Sender for BdewAs4Sender {
         let recipient = msg.recipient.clone();
         let message_id_str = msg.message_id.to_string();
         let conversation_id = msg.conversation_id.to_string();
-        let tenant_party_id = self.tenant_party_id.clone();
+        let gln_registry: Arc<GlnRegistry> = Arc::clone(&self.gln_registry);
         async move {
             // Route MaloIdentCallback to the existing cache-lookup path.
             if message_type.as_ref() == "MaloIdentCallback" {
@@ -337,21 +344,21 @@ impl As4Sender for BdewAs4Sender {
             // EDIFACT wire bytes, re-parsed, and dispatched in-process — zero AS4
             // round-trip, zero network latency.
             //
-            // When no loopback handle is wired (single-role deployment), the
-            // message is dead-lettered with an actionable error log.
-            if recipient.as_ref() == tenant_party_id.as_ref() {
+            // The registry is_own_gln check covers ALL own GLNs, so loopback works
+            // even when NB and MSB have DIFFERENT GLNs on the same makod instance.
+            if gln_registry.is_own_gln(recipient.as_ref()) {
                 if let Some(ref loopback_state) = loopback {
                     // ── In-process loopback delivery ──────────────────────────
                     let payload_bytes = match edifact_renderer::render_to_wire_bytes(
                         &msg_owned,
-                        &tenant_party_id,
+                        &gln_registry,
                     ) {
                         Ok(bytes) => bytes,
                         Err(ref e) if edifact_renderer::is_insufficient_payload(e) => {
                             tracing::error!(
                                 message_id   = %message_id_str,
                                 message_type = %message_type,
-                                own_gln      = %tenant_party_id,
+                                own_glns     = ?gln_registry.own_glns().collect::<Vec<_>>(),
                                 "BdewAs4Sender loopback: no renderer registered — dead-lettering",
                             );
                             return Err(EngineError::RendererNotImplemented {
@@ -389,7 +396,7 @@ impl As4Sender for BdewAs4Sender {
                                             message_type = %message_type,
                                             workflow     = %wf_name,
                                             outcome      = ?outcome,
-                                            own_gln      = %tenant_party_id,
+                                            own_glns     = ?gln_registry.own_glns().collect::<Vec<_>>(),
                                             "BdewAs4Sender loopback: in-process delivery succeeded",
                                         );
                                         any_dispatched = true;
@@ -415,7 +422,7 @@ impl As4Sender for BdewAs4Sender {
                                     message_id   = %message_id_str,
                                     message_type = %message_type,
                                     pid          = ?pid_opt,
-                                    own_gln      = %tenant_party_id,
+                                    own_glns     = ?gln_registry.own_glns().collect::<Vec<_>>(),
                                     "BdewAs4Sender loopback: PID not in dispatch table — \
                                      no MSB-side workflow registered; use ERP command API \
                                      (e.g. gpke.sperrung.bestaetigen) to confirm",
@@ -430,7 +437,7 @@ impl As4Sender for BdewAs4Sender {
                         tracing::warn!(
                             message_id   = %message_id_str,
                             message_type = %message_type,
-                            own_gln      = %tenant_party_id,
+                            own_glns     = ?gln_registry.own_glns().collect::<Vec<_>>(),
                             "BdewAs4Sender loopback: rendered message produced no \
                              dispatchable messages (no dispatcher wired or parse yielded nothing)",
                         );
@@ -442,7 +449,7 @@ impl As4Sender for BdewAs4Sender {
                 tracing::error!(
                     message_id   = %message_id_str,
                     message_type = %message_type,
-                    own_gln      = %tenant_party_id,
+                    own_glns     = ?gln_registry.own_glns().collect::<Vec<_>>(),
                     "BdewAs4Sender: outbox message addressed to own GLN \
                      (combined-role deployment — NB+MSB or GNB+gMSB sharing one GLN). \
                      No loopback handle configured. \
@@ -451,23 +458,35 @@ impl As4Sender for BdewAs4Sender {
                 return Err(EngineError::PartnerUnknown { recipient });
             }
 
-            // Look up the recipient's AS4 endpoint URL.
+            // Resolve the P-Mode for the recipient GLN + message type.
+            // P-Modes are registered at startup via
+            // BdewAs4Profile::register_partner_all_actions.
             // Use PartnerUnknown (permanent error) so the outbox worker
             // dead-letters immediately rather than retrying indefinitely.
-            let endpoint = match partners.endpoint(&recipient) {
-                Some(url) => url.to_owned(),
-                None => {
-                    tracing::warn!(
-                        message_id   = %message_id_str,
-                        message_type = %message_type,
-                        recipient    = %recipient,
-                        "BdewAs4Sender: no AS4 endpoint configured for this recipient GLN. \
-                         Add --as4-partner {}=<URL> to register it.",
-                        recipient,
-                    );
-                    return Err(EngineError::PartnerUnknown { recipient });
-                }
+            let bdew_action = BdewAction::from_message_type_str(&message_type);
+            let Some(pm) = profile.resolve_pmode_by_action(&recipient, &bdew_action) else {
+                tracing::warn!(
+                    message_id   = %message_id_str,
+                    message_type = %message_type,
+                    recipient    = %recipient,
+                    "BdewAs4Sender: no P-Mode registered for this recipient GLN. \
+                     Add --as4-partner {}=<URL> to register it.",
+                    recipient,
+                );
+                return Err(EngineError::PartnerUnknown { recipient });
             };
+            let Some(endpoint_ref) = pm.endpoint_url.as_deref() else {
+                tracing::warn!(
+                    message_id   = %message_id_str,
+                    message_type = %message_type,
+                    recipient    = %recipient,
+                    "BdewAs4Sender: P-Mode has no endpoint_url. \
+                     Re-register with --as4-partner {}=<URL>.",
+                    recipient,
+                );
+                return Err(EngineError::PartnerUnknown { recipient });
+            };
+            let endpoint = endpoint_ref.to_owned();
 
             // Record the delivery attempt before rendering/sending.
 
@@ -479,7 +498,7 @@ impl As4Sender for BdewAs4Sender {
             // retrying (retries would never succeed) or transmitting a non-EDIFACT
             // JSON blob over AS4 (which violates BDEW MaKo interoperability).
             let payload_bytes =
-                match edifact_renderer::render_to_wire_bytes(&msg_owned, &tenant_party_id) {
+                match edifact_renderer::render_to_wire_bytes(&msg_owned, &gln_registry) {
                     Ok(bytes) => {
                         tracing::debug!(
                             message_id   = %message_id_str,
@@ -530,14 +549,55 @@ impl As4Sender for BdewAs4Sender {
                 )));
             }
 
-            let action = BdewAction::from_message_type_str(&message_type).as_uri();
+            let mut policy = pm.to_send_policy().map_err(|e| EngineError::Transport {
+                endpoint: endpoint.clone().into(),
+                message: format!("P-Mode policy materialisation failed for {message_id_str}: {e}"),
+            })?;
+            policy.conversation_id = Some(conversation_id);
+            let action = bdew_action.as_uri();
 
-            let policy = As4SendPolicy {
-                action: action.clone(),
-                service: constants::SERVICE.to_owned(),
-                service_type: constants::SERVICE_TYPE.to_owned(),
-                conversation_id: Some(conversation_id),
-                ..As4SendPolicy::regulated()
+            // Build the §AF §2.12 Content-Disposition filename:
+            // Nachrichtentyp_Anwendungsreferenz_von_an_yyyymmdd_DAR.txt
+            // (Allgemeine Festlegungen V6.1d §2.12)
+            //
+            // - Nachrichtentyp: EDIFACT message type from UNH DE0065
+            // - Anwendungsreferenz: VL/TL/EM from UNB DE0026; empty for most types
+            //   (UTILMD, APERAK, CONTRL, etc.) — empty → double underscore
+            // - von/an: sender/receiver MP-IDs from UNB DE0004/DE0010
+            // - yyyymmdd: creation date **in UTC** (not German local time)
+            // - DAR: Datenaustauschreferenz from UNB DE0020; since our builders
+            //   produce bare UNH…UNT (no UNB wrapper), no DE0020 is set — we
+            //   substitute the first 14 uppercase hex chars of the outbox
+            //   message UUID, which is unique per message and satisfies the
+            //   UNOC character set constraint (A–Z, 0–9 subset).
+            let payload_filename = {
+                let now = time::OffsetDateTime::now_utc();
+                let yyyymmdd =
+                    format!("{:04}{:02}{:02}", now.year(), now.month() as u8, now.day(),);
+                // DAR must use UNOC chars (A-Z, 0-9, and select punctuation).
+                // Uppercase UUID hex satisfies this constraint.
+                let dar: String = message_id_str
+                    .replace('-', "")
+                    .to_uppercase()
+                    .chars()
+                    .take(14)
+                    .collect();
+                // Anwendungsreferenz is empty for all types except MSCONS
+                // (TL = Lastgang, VL = Zählerstand/Energiemenge).
+                // Per §2.12 example: empty → rendered as double underscore.
+                let anwendungsref = anwendungsreferenz_for(&message_type);
+                let name = format!(
+                    "{}_{}_{}_{}_{}_{}.txt",
+                    message_type,
+                    anwendungsref,
+                    gln_registry.primary_gln(),
+                    recipient,
+                    yyyymmdd,
+                    dar,
+                );
+                // PayloadFilename validates printable-ASCII + length invariants.
+                // All components are ASCII digits/uppercase letters/underscores.
+                asx_rs::as4::PayloadFilename::new(&name).ok()
             };
 
             let request = As4SendRequest {
@@ -545,6 +605,7 @@ impl As4Sender for BdewAs4Sender {
                 payload: payload_bytes,
                 policy,
                 credentials: None,
+                payload_filename,
             };
 
             // Build the signed SOAP envelope (CPU-bound; runs on Tokio blocking pool).
@@ -712,6 +773,26 @@ fn extract_element_text<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
     let start = xml.find(open.as_str())? + open.len();
     let end = xml[start..].find(close.as_str()).map(|i| start + i)?;
     Some(xml[start..end].trim())
+}
+
+// ── §AF §2.12 helpers ─────────────────────────────────────────────────────────
+
+/// Returns the `Anwendungsreferenz` (UNB DE0026) token for a given EDIFACT
+/// message type, as defined by the BDEW Nachrichtenbeschreibungen.
+///
+/// For most types (UTILMD, APERAK, CONTRL, etc.) the field is empty — the
+/// §AF §2.12 filename then renders the second position as an empty string,
+/// producing a double underscore (e.g. `UTILMD__9900…`).
+///
+/// For MSCONS the value depends on the message content and is not knowable
+/// from the type alone, so we leave it empty here too.  The AS4 metadata
+/// (`BDEWApplicationReference` PartProperty) carries the same information and
+/// is also absent because our builders produce bare UNH…UNT without UNB.
+fn anwendungsreferenz_for(_message_type: &str) -> &'static str {
+    // Per AF §2.12 and BDEW Nachrichtenbeschreibungen:
+    // VL / TL / EM are only used for MSCONS, and only when the sender
+    // explicitly sets UNB DE0026 — which our bare-UNH builders never do.
+    ""
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

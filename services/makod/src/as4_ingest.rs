@@ -205,7 +205,32 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                     payload_bytes  = edifact.len(),
                     "AS4 inbound: message received",
                 );
-
+                // ── Test-indicator guard (§AF §3 / Allgemeine Festlegungen V6.1d §3) ──
+                // Reject before dispatching any messages.
+                if let Ok(pi) = self.ingest.platform.parse_interchange_full(&edifact[..])
+                    && pi.header.test_indicator
+                {
+                    use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                    let ctx = AuditContext::from_interchange(
+                        &pi.header.sender_id,
+                        &pi.header.receiver_id,
+                        &pi.header.control_ref,
+                    );
+                    self.ingest
+                        .dl_sink
+                        .reject(&DeadLetterReason::TestMessage { context: ctx });
+                    tracing::warn!(
+                        as4_message_id = %msg_id,
+                        sender = %pi.header.sender_id,
+                        receiver = %pi.header.receiver_id,
+                        control_ref = %pi.header.control_ref,
+                        "AS4 ingest: test interchange (DE0035=1) rejected — \
+                         must not process test messages on production endpoint (§AF §3)",
+                    );
+                    return HandlerOutcome::bad_request(
+                        "test interchange rejected: DE0035=1 on production endpoint",
+                    );
+                }
                 // ── EDIFACT dispatch ──────────────────────────────────────────
                 let mut accepted = 0usize;
                 let mut rejected = 0usize;
@@ -237,6 +262,18 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                                 (Some(_), Some(_)) => MessageStatus::Routed,
                                 (Some(_), None) => MessageStatus::UnknownPid,
                             };
+
+                            // Dead-letter unroutable messages (§22 MessZV).
+                            if matches!(status, MessageStatus::UnknownPid) {
+                                use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                                let ctx = AuditContext::now()
+                                    .with_message_type(message_type.as_deref().unwrap_or(""))
+                                    .with_pid(pid.unwrap_or(0));
+                                self.ingest.dl_sink.reject(&DeadLetterReason::UnknownPid {
+                                    pid: pid.unwrap_or(0),
+                                    context: ctx,
+                                });
+                            }
 
                             tracing::info!(
                                 as4_message_id = %msg_id,

@@ -27,6 +27,12 @@ ERP  ←─────────── BO4E JSON ─────────�
               EDIFACT / AS4 / BDEW network
 ```
 
+> **Master data management via `mdmd`** — if you deploy the companion
+> [`mdmd`](./mdmd.md) service, configure `makod` to push process lifecycle
+> events to `mdmd`'s ingest endpoint (`POST /api/v1/events`). `mdmd` then
+> fans out to your registered ERP subscribers, eliminating the need to
+> configure a webhook endpoint directly in `makod`.
+
 Outbound webhook events are delivered as **[CloudEvents 1.0](https://cloudevents.io)**
 structured-mode JSON. CloudEvents is a CNCF-graduated vendor-neutral standard
 for event metadata. It is natively supported by SAP BTP, AWS EventBridge, Azure
@@ -148,6 +154,8 @@ message is dead-lettered.
 | ERP → makod | `PUT /admin/malo/{malo_id}` | Push MaLo master data to the local cache |
 | ERP → makod | `PUT /admin/partners/{gln}` | Register or update a trading-partner endpoint |
 | ERP → makod | `ErpCommandSource` trait | Fully event-driven inbound (Kafka, SFTP, CDC, …) |
+| mdmd → invoicd | `POST /webhook` CloudEvents | GPKE billing notifications for automatic plausibility check |
+| invoicd → makod | `POST /api/v1/commands` | `gpke.abrechnung.annehmen` or `gpke.abrechnung.ablehnen` |
 
 ---
 
@@ -799,5 +807,92 @@ With BO4E:
 | Engine architecture | [docs/engine.md](engine.md) |
 | API-Webdienste Strom (MaLo-ID) | [docs/api-webdienste.md](api-webdienste.md) |
 | Annual release workflow | [docs/annual-release-workflow.md](annual-release-workflow.md) |
+
+---
+
+## Automated Billing Settlement
+
+For the Lieferant (LF) role, received INVOIC messages (PIDs 31001, 31002, 31005,
+31006) require a plausibility check before settlement. Rather than routing every
+invoice through the ERP, deploy [`invoicd`](../services/invoicd/README.md) as
+an autonomous sidecar. It subscribes to `de.mako.process.initiated` events from
+`mdmd` and runs the `invoic-checker` pipeline without any ERP involvement.
+
+### Full billing flow
+
+```
+NB (counterparty)
+    │  INVOIC (PID 31001/31002/31005/31006)
+    │  AS4/EDIFACT push
+    ▼
+makod :8080
+    │  GpkeAbrechnungWorkflow.handle(ReceiveInvoic)
+    │  emits: de.mako.process.initiated
+    │  outbox: invoice_ref, Rechnung BO4E object
+    ▼
+mdmd :8180
+    │  fan-out to registered subscribers
+    ▼
+invoicd :8280
+    │  InvoicCheckEngine::check(tariff_store, check_config, &rechnung)
+    │
+    ├─ no dispute findings ──► POST /api/v1/commands
+    │                              {"command": "gpke.abrechnung.annehmen",
+    │                               "payload": {"invoice_ref": "..."}}
+    │                              ↓
+    │                          makod emits REMADV (PID 33001/33002)
+    │                          AS4 → NB
+    │
+    └─ dispute findings ─────► POST /api/v1/commands
+                                   {"command": "gpke.abrechnung.ablehnen",
+                                    "payload": {"invoice_ref": "...",
+                                                "ablehnungsgrund": "..."}}
+                                   ↓
+                               makod emits COMDIS (PID 29001)
+                               AS4 → NB
+```
+
+### Five plausibility checks
+
+| Check | What it verifies |
+|---|---|
+| Period validity | `rechnungsperiode.startdatum` ≤ `enddatum`; dates parseable |
+| Position arithmetic | Sum of `position.positions_menge × einzelpreis` ≈ `teilsumme_netto` (within `arithmetic_tolerance`) |
+| Document total | Sum of `rechnungspositionen[*].teilsumme_netto` ≈ `gesamtnetto` (within `total_tolerance`) |
+| Tariff match | Each position's unit price falls within the registered tariff band ± `tariff_tolerance` |
+| Tariff found | A tariff entry for the MaLo + period exists in the tariff store (only when `require_tariff = true`) |
+
+### Tariff seeding
+
+Seed the tariff store via `invoicd`'s admin endpoint:
+
+```http
+PUT /admin/tariff
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{
+  "malo_id": "51238696782",
+  "artikel_id": "NT-4x20",
+  "preis_eur_ct_per_kwh": 4.85,
+  "valid_from": "2025-10-01",
+  "valid_to": "2026-09-30"
+}
+```
+
+The in-memory store is ephemeral. Populate it at startup from your ERP or a
+tariff export — `invoicd` does not connect to any database directly.
+
+### ERP involvement
+
+With `invoicd` deployed, the ERP's billing integration is narrowed to:
+
+1. Seeding tariffs in `invoicd` when rates change.
+2. Receiving `de.mako.process.completed` (settlement confirmed) or
+   `de.mako.process.failed` (manual review required) events from `mdmd`
+   to update the ERP's payment status.
+
+No ERP webhook response is required for the settlement decision itself — that is
+handled end-to-end between `invoicd`, `makod`, and the counterparty AS4 channel.
 
 

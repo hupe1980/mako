@@ -64,6 +64,9 @@ use mako_engine::{
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
+/// Workflow name used for PID routing and `WorkflowId` construction.
+pub const WORKFLOW_NAME: &str = "gpke-supplier-change";
+
 /// Inbound ANFRAGE PIDs handled by this workflow as a receiving NB/LFA.
 ///
 /// Only these PIDs are routed to `GpkeSupplierChangeWorkflow` by the engine.

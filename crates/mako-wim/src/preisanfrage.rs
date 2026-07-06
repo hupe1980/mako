@@ -48,6 +48,9 @@ use mako_engine::{
 
 // ── PID sets ──────────────────────────────────────────────────────────────────
 
+/// Workflow name used for PID routing and `WorkflowId` construction.
+pub const WORKFLOW_NAME: &str = "wim-preisanfrage";
+
 /// Inbound REQOTE Prüfidentifikatoren handled by [`WimPreisanfrageWorkflow`].
 ///
 /// | PID   | Process (AHB)                                | AHB version |

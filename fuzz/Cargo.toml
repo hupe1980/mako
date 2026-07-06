@@ -18,6 +18,13 @@ features = ["utilmd", "mscons", "aperak", "contrl", "invoic", "remadv", "orders"
 path = "../crates/mako-engine"
 default-features = false
 
+[dependencies.mako-as4]
+path = "../crates/mako-as4"
+
+[dependencies.asx-rs]
+version = "0.4"
+features = ["as4"]
+
 [[bin]]
 name = "fuzz_parse_validate"
 path = "fuzz_targets/fuzz_parse_validate.rs"
@@ -42,6 +49,13 @@ bench = false
 [[bin]]
 name = "fuzz_format_version"
 path = "fuzz_targets/fuzz_format_version.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_as4_envelope"
+path = "fuzz_targets/fuzz_as4_envelope.rs"
 test = false
 doc = false
 bench = false

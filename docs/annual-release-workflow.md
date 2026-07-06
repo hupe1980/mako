@@ -449,7 +449,7 @@ The `archive` meta-feature activates all per-type archive features:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.6", features = ["archive"] }
+edi-energy = { version = "0.7", features = ["archive"] }
 ```
 
 Archive features always imply their base type feature (`mscons-archive` implies

@@ -37,6 +37,9 @@ All three ports are optional and independently enabled via CLI flags or
 environment variables. A minimal deployment can use a single port; a full
 production deployment uses all three.
 
+The companion **[`mdmd`](./mdmd.md)** Master Data Manager daemon runs separately on `:8180`
+and provides the MaLo/MeLo/contract REST API, webhook subscriptions, and ERP fan-out.
+
 ---
 
 ## Quick Start
@@ -252,6 +255,57 @@ gateway.
 | Electricity DSO only | `NB` |
 | Integrated DSO + MSB (Stadtwerke) | `NB,MSB` |
 | Balancing-zone responsible | `BKV` |
+
+---
+
+## Role Feature Flags
+
+`makod` uses Cargo feature flags to determine **which workflow modules are
+compiled in**. This allows building trimmed binaries that omit processes that are
+irrelevant for a particular operator — reducing binary size and attack surface.
+
+### Granular flags
+
+| Feature flag | Compiled modules |
+|---|---|
+| `role-lf-strom` | `mako-gpke` (LF side): `gpke-lf-anmeldung`, `gpke-lf-abmeldung`, `gpke-ankuendigung-zuordnung-lf`, `gpke-abrechnung`, `gpke-messwerte`, `gpke-allokationsliste`, `gpke-datenabruf`, `gpke-anfrage-bestellung`, `gpke-utilts` |
+| `role-lf-gas` | `mako-geli-gas` (LF side): `geli-gas-stornierung-lf`, `geli-gas-sperrung-lf`, `geli-gas-mscons` |
+| `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side) |
+| `role-nb-gas` | `mako-geli-gas` (GNB side): `geli-gas-supplier-change`, `geli-gas-sperrung-nb`, `geli-gas-stornierung`, `geli-gas-datenabruf`, `geli-gas-partin`, `geli-gas-sperrprozesse-invoic` |
+| `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-preisliste`, `wim-rechnung`, `wim-insrpt`, `wim-stornierung` |
+| `role-msb-gas` | `mako-wim-gas`: all WiM Gas workflows |
+
+### Composite flags
+
+| Composite flag | Expands to |
+|---|---|
+| `role-lf` | `role-lf-strom` + `role-lf-gas` |
+| `role-nb` | `role-nb-strom` + `role-nb-gas` |
+| `role-msb` | `role-msb-strom` + `role-msb-gas` |
+
+### Default (no flags)
+
+When no role feature flags are set, **all modules register** — this is the
+backward-compatible default. Use this for development and combined
+multi-role deployments. The `makod` binary in the container image ships with all
+roles compiled in; use feature flags to produce smaller operator-specific images.
+
+```dockerfile
+# Lieferant-only image
+FROM rust:1.89 AS build
+RUN cargo build -p makod --release \
+    --no-default-features \
+    --features role-lf,slatedb
+```
+
+> **Runtime `--marktrollen` is separate from compile-time feature flags.**
+> Feature flags determine which *code* is compiled; `--marktrollen` determines
+> which *commands* are accepted at runtime. In a full binary, setting
+> `--marktrollen LF` still loads the NB-side modules in memory — they simply
+> reject NB-addressed commands. Use feature flags to remove them from the binary
+> entirely.
+
+---
 
 ### `[http]` — REST admin API
 
@@ -1010,13 +1064,13 @@ the GitHub Container Registry:
 docker pull ghcr.io/hupe1980/makod:latest
 
 # Pin to a specific version
-docker pull ghcr.io/hupe1980/makod:0.6.0
+docker pull ghcr.io/hupe1980/makod:0.7.0
 
 # Smoke-test the image
-docker run --rm ghcr.io/hupe1980/makod:0.6.0 --check
+docker run --rm ghcr.io/hupe1980/makod:0.7.0 --check
 ```
 
-Images are tagged with the semver version (`0.6.0`), major.minor (`0.6`), and `latest`.
+Images are tagged with the semver version (`0.7.0`), major.minor (`0.7`), and `latest`.
 
 ### Building locally
 
@@ -1085,7 +1139,7 @@ spec:
     spec:
       containers:
         - name: makod
-          image: ghcr.io/hupe1980/makod:0.6.0
+          image: ghcr.io/hupe1980/makod:0.7.0
           ports:
             - containerPort: 4080    # AS4
             - containerPort: 8080    # HTTP REST
@@ -1184,7 +1238,7 @@ Enable the `tracing` feature in `edi-energy` to get per-message parse/validate
 spans:
 
 ```toml
-edi-energy = { version = "0.6", features = ["tracing"] }
+edi-energy = { version = "0.7", features = ["tracing"] }
 ```
 
 These integrate with OpenTelemetry exporters when a global subscriber is
@@ -1302,6 +1356,7 @@ Omit the `[otel]` section entirely to disable telemetry with zero overhead — t
 
 - [Getting Started](./getting-started.md) — first workflow in 5 minutes
 - [Process Engine Guide](./engine.md) — event-sourcing architecture
+- [`mdmd` Operator Guide](./mdmd.md) — Master Data Manager daemon (MaLo/MeLo, subscriptions, ERP webhooks)
 - [ERP Integration](./erp-integration.md) — CloudEvents 1.0 webhooks, Command API, receiver implementation guide
 - [API-Webdienste Strom](./api-webdienste.md) — REST/JSON channel for iMS processes
 - [Annual Release Workflow](./annual-release-workflow.md) — incorporating new BDEW specs

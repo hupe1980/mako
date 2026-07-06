@@ -22,12 +22,12 @@ All three ports are optional and independently enabled via CLI flags or environm
 
 | Module | Domain | Key PIDs |
 |---|---|---|
-| `GpkeModule` | GPKE — Lieferbeginn/-ende Strom, Sperrung (NB), Abrechnung, Konfiguration | 55001–55002, 55016–55018, 55555, 17115–17117 (NB), 31001–31008, 17134/17135 |
-| `WimModule` | WiM Strom — Messstellenbetrieb, Geräteübernahme, INSRPT | 55039, 55042, 55051, 55168, 23001/23003/23004/23008 |
-| `GeliGasModule` | GeLi Gas 3.0 — Lieferantenwechsel Gas, Sperrung Gas, PARTIN Gas + AWH-Rechnung | 44001–44021, 17115–17117 (Gas NB), 37008–37014, 31011 |
-| `WimGasModule` | WiM Gas — Messstellenbetrieb Gas, INVOIC Gas billing | 44022–44024, 44039–44053, 44168–44170, 31003/31004, 23005/23009 |
-| `MabisModule` | MABIS — Bilanzkreisabrechnung Strom (BKV↔ÜNB) | 13003 |
-| `GaBiGasModule` | GaBi Gas — Kapazitätsrechnung | 31010 |
+| `GpkeModule` | GPKE — 16 workflows: Lieferbeginn/-ende Strom (LF+NB), Neuanlage, Abmeldung LF, Ankündigung ZuordnungLF, Sperrung (NB+LF-Antwort), Abrechnung, Datenabruf, Allokationsliste, Messwerte, Konfiguration, Anfrage Bestellung, Ankündigung, UTILTS, PARTIN Strom | 55001–55018/55022–55024/55555/55600–55609, ORDERS 17xxx, INVOIC 31001–31006, PARTIN 37000–37006 |
+| `WimModule` | WiM Strom — 10 workflows: MSB-Wechsel, Geräteübernahme, Stammdaten, Preisanfrage/Preisliste, Abrechnung, INSRPT, Stornierung, iMS-Steuerungsauftrag | 55039/55042/55051/55168, ORDERS 17001–17133, INVOIC 31009, INSRPT 23001–23012 |
+| `GeliGasModule` | GeLi Gas 3.0 — 9 workflows: UTILMD G Lieferantenwechsel, Stornierung (LF+GNB), Sperrung (LF+GNB), MSCONS Messdaten, Datenabruf, INVOIC 31011 (AWH), PARTIN Gas | 44001–44024, 17103/17104, MSCONS 13002/13007–13009, ORDERS 17115–17117 (Gas), INVOIC 31011, PARTIN 37008–37014 |
+| `WimGasModule` | WiM Gas — MSB-Wechsel Gas, Stornierung WiM Gas, INVOIC Gas billing, INSRPT Gas | 44022–44024, 44039–44053, 44168–44170, INVOIC 31003/31004, INSRPT 23005/23009 |
+| `MabisModule` | MABIS — Bilanzkreisabrechnung Strom (BKV↔ÜNB) + Clearingliste | 13003, 55065/55069/55070 |
+| `GaBiGasModule` | GaBi Gas — 8 workflows: INVOIC 31007/31008/31010, MSCONS 13013 (Allokationsliste MMMA), ALOCAT, NOMINT/NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD/DELRES | INVOIC 31007/31008/31010, ORDERS 17110, MSCONS 13013, synthetic PIDs 90001–90062 |
 | `RedispatchModule` | Redispatch 2.0 — congestion management (§§ 13/13a/14 EnWG) | 21037/21038 (NB/ÜNB/ANB roles only) |
 
 ---

@@ -355,6 +355,9 @@ pub struct MabisBillingWorkflow;
 /// ```
 pub const PRUEFMITTEILUNG_DEADLINE_LABEL: &str = "mabis-pruefmitteilung-1-werktag";
 
+/// Workflow name used for PID routing and `WorkflowId` construction.
+pub const WORKFLOW_NAME: &str = "mabis-billing";
+
 /// All MaBiS IFTSTA Prüfidentifikatoren (21000–21005).
 ///
 /// These are exchanged between LF, NB/ÜNB, BIKO, and BKV in the MaBiS process.

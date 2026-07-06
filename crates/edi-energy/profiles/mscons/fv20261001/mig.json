@@ -295,6 +295,24 @@
               "306"
             ]
           }
+        },
+        {
+          "tag": "CCI",
+          "name": "Merkmal/Charakteristik",
+          "mandatory": false,
+          "max_occurrences": 1,
+          "elements": [
+            {
+              "id": "7081",
+              "status": "C",
+              "components": 1
+            },
+            {
+              "id": "C240",
+              "status": "C",
+              "components": 4
+            }
+          ]
         }
       ],
       "groups": [

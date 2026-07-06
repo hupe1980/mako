@@ -2,6 +2,7 @@
 //!
 //! Assembles all domain modules (GPKE, WiM, GeLi Gas, MABIS) into a single
 //! [`EngineContext`] and runs until a graceful shutdown signal is received.
+#![deny(unsafe_code)]
 //!
 //! ## Usage
 //!
@@ -79,15 +80,21 @@
 //!   └── EngineContext (SlateDbStore — in-memory by default, local FS via --data-dir)
 //!         ├── GpkeModule    — UTILMD PIDs 55001–55002, 55016 (`gpke-supplier-change`)
 //!         │                   + INVOIC PIDs 31001–31002, 31005–31006 (`gpke-abrechnung`)
+//!         │                   [role-lf-strom OR role-nb-strom OR no role flags]
 //!         ├── WimModule     — PIDs 55039, 55042, 55051, 55168 (WiM Strom, BK6-24-174)
+//!         │                   [role-msb-strom OR role-nb-strom OR no role flags]
 //!         ├── GeliGasModule — PIDs 44001–44021 (GeLi Gas; 44022–44024 registered by WimGasModule) + PID 31011 (AWH Rechnung)
+//!         │                   [role-lf-gas OR role-nb-gas OR no role flags]
 //!         ├── WimGasModule      — PIDs 44022–44024, 44039–44053, 44168–44170, 31003, 31004 (WiM Gas MSB-Wechsel + INVOIC billing)
+//!         │                       [role-msb-gas OR role-nb-gas OR no role flags]
 //!         ├── GaBiGasModule     — PIDs 31010/31007/31008 (INVOIC billing, BK7-14-020)
 //!         │                   + PID 33001 (REMADV Zahlungsavis) + PID 29001 (COMDIS Ablehnung)
 //!         │                   + PID 13013 (MSCONS Gas Allokationsliste, `gabi-gas-mmma`)
+//!         │                   [role-nb-gas OR no role flags]
 //!         ├── MabisModule       — PID 13003 only (MABIS Bilanzkreisabrechnung Strom, MSCONS Summenzeitreihe)
+//!         │                       [role-nb-strom OR no role flags]
 //!         └── RedispatchModule  — Redispatch 2.0 (§§ 13/13a/14 EnWG); XML routing + IFTSTA PIDs 21037/21038
-//!                                 Only registered when roles include Nb, Unb, or Anb.
+//!                                 [always registered]
 //!
 //! Background tasks:
 //!   ├── OutboxWorker      — drains pending outbox messages via MaloIdentSender
@@ -121,6 +128,7 @@ mod migration_api;
 mod oidc_verifier;
 mod openapi;
 mod partner_api;
+mod party_registry;
 mod projection_worker;
 mod startup;
 mod verzeichnisdienst_worker;
@@ -458,24 +466,6 @@ struct Cli {
     #[arg(long, value_name = "ADDR", env = "MAKOD_API_WEBDIENSTE_ADDR")]
     api_webdienste_addr: Option<std::net::SocketAddr>,
 
-    /// Operator market-participant identifier (BDEW code 13-digit, GLN 13-digit,
-    /// EIC 16-char, or any opaque string used as the tenant scope).
-    ///
-    /// In EDIFACT NAD segments this value is emitted with agency code `"293"`
-    /// (BDEW) by default. Use `--party-agency` to override for EIC / GS1 parties.
-    ///
-    /// Used to scope MaLo cache entries and inbox idempotency keys to this
-    /// operator instance. Defaults to `"default"` when omitted.
-    ///
-    /// Can also be set via the `MAKOD_TENANT_ID` environment variable.
-    #[arg(
-        long,
-        value_name = "ID",
-        default_value = "default",
-        env = "MAKOD_TENANT_ID"
-    )]
-    tenant_id: String,
-
     /// Acknowledge that an external distributed lock (e.g. S3 conditional-put
     /// or DynamoDB conditional write) protects against concurrent multi-instance
     /// inbox duplication.
@@ -805,6 +795,39 @@ struct Cli {
         env = "MAKOD_DEADLINE_POLL_INTERVAL_SECS"
     )]
     deadline_poll_interval_secs: u64,
+
+    /// `[[party]]` entries loaded from `makod.toml`.
+    ///
+    /// Not settable via CLI flags.  Populated by `apply_config_file` when the
+    /// TOML config file contains `[[party]]` entries.  When non-empty, takes
+    /// precedence over `--tenant-id` / `[engine] tenant_id` for GLN routing.
+    #[arg(skip)]
+    parties: Vec<config::PartyConfig>,
+
+    /// Subcommand to run instead of the daemon.
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+}
+
+/// Top-level subcommands for `makod`.
+///
+/// When no subcommand is given, `makod` starts the daemon normally.
+#[derive(Debug, Clone, clap::Subcommand)]
+enum CliCommand {
+    /// Run all pending state migrations and exit.
+    ///
+    /// Connects to the configured event store, executes the same migration
+    /// pipeline as `POST /admin/migrations`, prints a JSON report to stdout,
+    /// and exits with status 0 on success or 1 on any migration failure.
+    ///
+    /// Use this as a Kubernetes `initContainer` or Compose `depends_on` step
+    /// to ensure schema migrations are applied before the daemon starts.
+    ///
+    /// Example:
+    /// ```text
+    /// makod --config makod.toml migrate
+    /// ```
+    Migrate,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
@@ -877,6 +900,9 @@ fn main() -> anyhow::Result<()> {
     // environment here.
     if matches!(std::env::var("MAKOD_DATA_DIR").as_deref(), Ok("")) {
         // SAFETY: single-threaded at this point; no concurrent env access.
+        #[allow(unsafe_code)]
+        // SAFETY: main() is single-threaded before any tokio::spawn or thread::spawn
+        // call, so no other thread races on the environment.
         unsafe {
             std::env::remove_var("MAKOD_DATA_DIR");
         }
@@ -914,6 +940,68 @@ fn main() -> anyhow::Result<()> {
 
 async fn async_main(cli: Cli) -> anyhow::Result<()> {
     init_tracing(&cli);
+
+    use party_registry::GlnRegistry;
+
+    // ── GLN registry ─────────────────────────────────────────────────────────
+    //
+    // `[[party]]` entries are the single source of truth for all GLN identity.
+    // There is no `--tenant-id` fallback — a config file with at least one
+    // `[[party]]` entry is required.
+    anyhow::ensure!(
+        !cli.parties.is_empty(),
+        "makod requires at least one [[party]] entry in makod.toml.\n\
+         Create a config file (--config / MAKOD_CONFIG) with:\n\
+         \n\
+         [[party]]\n\
+         gln   = \"<13-digit-GLN>\"\n\
+         roles = [\"NB\", \"LF\", \"MSB\"]  # adjust to operator's Marktrollen\n\
+         \n\
+         See docs/makod.md for the full configuration reference."
+    );
+
+    let gln_registry: Arc<GlnRegistry> =
+        Arc::new(GlnRegistry::from_config(&cli.parties).context("invalid [[party]] config")?);
+
+    info!(
+        primary_gln  = %gln_registry.primary_gln(),
+        primary_agency = %gln_registry.primary_agency(),
+        own_glns     = ?gln_registry.own_glns().collect::<Vec<_>>(),
+        party_count  = cli.parties.len(),
+        "GLN registry built from [[party]] entries",
+    );
+
+    // ── Auto-derive engine roles from [[party]] ───────────────────────────────
+    //
+    // When --deployment-roles / MAKOD_DEPLOYMENT_ROLES is not set explicitly,
+    // derive from the union of all [[party]] roles.  This eliminates the need
+    // to configure the same role set in two places.
+    let effective_deployment_roles = if cli.deployment_roles.is_empty() {
+        let derived = gln_registry.deployment_role_strings();
+        if !derived.is_empty() {
+            info!(
+                roles = ?derived,
+                "deployment roles auto-derived from [[party]] entries \
+                 (set --deployment-roles explicitly to override)",
+            );
+        }
+        parse_deployment_roles(&derived)
+    } else {
+        parse_deployment_roles(&cli.deployment_roles)
+    };
+
+    // ── Auto-derive marktrollen from [[party]] ────────────────────────────────
+    //
+    // When --marktrollen / MAKOD_MARKTROLLEN is not set, derive from [[party]].
+    let effective_marktrollen: Vec<String> = if cli.marktrollen.is_empty() {
+        gln_registry
+            .all_roles()
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        cli.marktrollen.iter().map(|s| s.to_uppercase()).collect()
+    };
 
     let store = open_store(&cli).await?;
     // Apply per-stream event quota — a circuit-breaker that prevents
@@ -965,6 +1053,46 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             None
         };
 
+    // ── `makod migrate` subcommand ─────────────────────────────────────────
+    //
+    // Run all pending FV migrations and exit.  This allows operators to use
+    // `makod migrate` as a Kubernetes initContainer or Compose `depends_on`
+    // step without starting the full HTTP/AS4 server.
+    if matches!(cli.command, Some(CliCommand::Migrate)) {
+        // Migrate FV2025-10-01 → FV2026-10-01 (the only active transition).
+        // When more transitions exist, iterate over them here in order.
+        match migration_api::dispatch_migrations("FV2025-10-01", "FV2026-10-01", &store).await {
+            Some((report, _count)) if report.errors.is_empty() => {
+                // Print a JSON summary to stdout for CI log capture.
+                println!(
+                    "{{\"migrated\":{},\"skipped\":{},\"errors\":[]}}",
+                    report.migrated, report.skipped
+                );
+                tracing::info!(
+                    migrated = report.migrated,
+                    skipped = report.skipped,
+                    "makod migrate: all migrations completed successfully",
+                );
+                return Ok(());
+            }
+            Some((report, _count)) => {
+                for err in &report.errors {
+                    tracing::error!(error = %err, "migration error");
+                }
+                anyhow::bail!(
+                    "makod migrate: {} migration error(s) — see log for details",
+                    report.errors.len()
+                );
+            }
+            None => {
+                tracing::info!(
+                    "makod migrate: no applicable migration found for this transition; nothing to do"
+                );
+                return Ok(());
+            }
+        }
+    }
+
     // ── ProcessRegistry startup reconciliation ─────────────────────────
     //
     // On restart after a crash or after an operator accidentally deleted a
@@ -989,11 +1117,151 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // ── Dead-letter sink + worker ────────────────────────────────────
     //
     // The sink enqueues rejected messages into a bounded mpsc channel; the
-    // worker drains the channel to SlateDB in the background.  We keep a
-    // clone of the sink for shutdown signalling (see below).
+    // worker drains the channel to SlateDB in the background.
+    //
+    // Three clones are made:
+    //  • `dl_sink_shutdown` — signals graceful shutdown from the teardown path
+    //  • `dl_sink_ingest`   — shared between the REST and AS4 EdifactApiState
+    //                         instances so ingest-path rejections also land in
+    //                         the durable dead-letter queue (§22 MessZV)
+    //  • the original `dl_sink` — consumed by EngineBuilder below
     let (dl_sink, dl_worker) = store.as_dead_letter_sink();
     let dl_sink_shutdown = dl_sink.clone();
+    let dl_sink_ingest = dl_sink.clone();
     let dl_worker_handle = tokio::spawn(dl_worker.run());
+
+    // ── Domain module selection ────────────────────────────────────────────────
+    //
+    // When role feature flags are compiled in, only the modules relevant to the
+    // declared roles are registered.  This reduces binary size and eliminates
+    // unwanted PID registrations for role-scoped deployments (LF-only, NB-only,
+    // MSB-only, etc.).
+    //
+    // Default (no feature flags active): all modules are registered — fully
+    // backward-compatible with existing deployments.
+    //
+    // Role → module mapping:
+    //   role-nb-strom / role-nb  → GpkeModule (NB-side GPKE + Sperrung)
+    //   role-lf-strom / role-lf  → GpkeModule (LF-side GPKE; GpkeModule handles
+    //                              both sides via PidRouter role dispatch)
+    //   role-msb-strom / role-msb → WimModule (MSB Strom)
+    //   role-nb-strom / role-nb  → WimModule (NB-side WiM coordination)
+    //   role-nb-gas / role-nb    → GeliGasModule + GaBiGasModule
+    //   role-lf-gas  / role-lf   → GeliGasModule (LF-side GeLi Gas)
+    //   role-nb-gas / role-msb-gas → WimGasModule
+    //   role-nb-strom / role-nb  → MabisModule (MABIS PID 13003)
+    //
+    // Clippy's vec_init_then_push fires here because the pushes are
+    // #[cfg]-gated and cannot be merged into a vec![] literal.
+    #[allow(clippy::vec_init_then_push)]
+    let modules: Vec<Box<dyn mako_engine::builder::EngineModule>> = {
+        let mut m: Vec<Box<dyn mako_engine::builder::EngineModule>> = Vec::new();
+        // GpkeModule: GPKE PIDs 55001-55018, 55022-55024, 55555, 55607-55609 +
+        //   INVOIC 31001/31002/31005/31006 + ORDERS Sperrung 17115-17117 +
+        //   ORDERS/ORDRSP Konfiguration 17134/17135/19001/19002 + PARTIN 37000-37006.
+        //   Required for both LF (Strom) and NB (Strom) roles.
+        #[cfg(any(
+            not(any(
+                feature = "role-lf-strom",
+                feature = "role-lf-gas",
+                feature = "role-nb-strom",
+                feature = "role-nb-gas",
+                feature = "role-msb-strom",
+                feature = "role-msb-gas",
+            )),
+            feature = "role-lf-strom",
+            feature = "role-nb-strom",
+        ))]
+        m.push(Box::new(GpkeModule));
+
+        // WimModule: Messstellenbetrieb Strom (55039, 55042, 55051, 55168) +
+        //   ORDERS Geräteübernahme 17001-17011 + INSRPT 23001-23012.
+        //   Required for MSB (Strom) and NB (Strom, WiM coordination) roles.
+        #[cfg(any(
+            not(any(
+                feature = "role-lf-strom",
+                feature = "role-lf-gas",
+                feature = "role-nb-strom",
+                feature = "role-nb-gas",
+                feature = "role-msb-strom",
+                feature = "role-msb-gas",
+            )),
+            feature = "role-msb-strom",
+            feature = "role-nb-strom",
+        ))]
+        m.push(Box::new(WimModule));
+
+        // GeliGasModule: GeLi Gas 3.0 (44001-44024) + ORDERS Sperrung Gas
+        //   17115-17117 + PARTIN Gas 37008-37014 + INVOIC 31011 (AWH Rechnung).
+        //   Required for both LF (Gas) and NB (Gas) roles.
+        #[cfg(any(
+            not(any(
+                feature = "role-lf-strom",
+                feature = "role-lf-gas",
+                feature = "role-nb-strom",
+                feature = "role-nb-gas",
+                feature = "role-msb-strom",
+                feature = "role-msb-gas",
+            )),
+            feature = "role-lf-gas",
+            feature = "role-nb-gas",
+        ))]
+        m.push(Box::new(GeliGasModule));
+
+        // WimGasModule: WiM Gas (44022-44024, 44039-44053, 44168-44170) +
+        //   INVOIC 31003/31004 + INSRPT Gas 23005/23009.
+        //   Required for gMSB (Gas) and GNB (Gas) roles.
+        #[cfg(any(
+            not(any(
+                feature = "role-lf-strom",
+                feature = "role-lf-gas",
+                feature = "role-nb-strom",
+                feature = "role-nb-gas",
+                feature = "role-msb-strom",
+                feature = "role-msb-gas",
+            )),
+            feature = "role-msb-gas",
+            feature = "role-nb-gas",
+        ))]
+        m.push(Box::new(WimGasModule));
+
+        // GaBiGasModule: GaBi Gas (31010/31007/31008 INVOIC + 13013 MSCONS +
+        //   33001 REMADV + 29001 COMDIS).
+        //   Required for NB (Gas) role; BKV/MGV interactions are NB-side.
+        #[cfg(any(
+            not(any(
+                feature = "role-lf-strom",
+                feature = "role-lf-gas",
+                feature = "role-nb-strom",
+                feature = "role-nb-gas",
+                feature = "role-msb-strom",
+                feature = "role-msb-gas",
+            )),
+            feature = "role-nb-gas",
+        ))]
+        m.push(Box::new(GaBiGasModule));
+
+        // MabisModule: MABIS Bilanzkreisabrechnung Strom, PID 13003 only (BKV↔ÜNB).
+        //   Required for NB (Strom) role.
+        #[cfg(any(
+            not(any(
+                feature = "role-lf-strom",
+                feature = "role-lf-gas",
+                feature = "role-nb-strom",
+                feature = "role-nb-gas",
+                feature = "role-msb-strom",
+                feature = "role-msb-gas",
+            )),
+            feature = "role-nb-strom",
+        ))]
+        m.push(Box::new(MabisModule));
+
+        // RedispatchModule: Redispatch 2.0 (§§ 13/13a/14 EnWG); IFTSTA 21037/21038.
+        // Role-specific NB/ÜNB/ANB dispatch is handled inside the module.
+        // Always registered — Redispatch obligations may apply to any NB/ÜNB operator.
+        m.push(Box::new(RedispatchModule));
+        m
+    };
 
     let ctx = EngineBuilder::with_stores(
         store.clone(),
@@ -1027,17 +1295,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                 })
         }
     })
-    .register(Box::new(GpkeModule))
-    .register(Box::new(WimModule))
-    .register(Box::new(GeliGasModule))
-    .register(Box::new(WimGasModule))
-    .register(Box::new(GaBiGasModule))
-    .register(Box::new(MabisModule))
-    // Redispatch 2.0: XML document-type routing + IFTSTA PIDs 21037/21038.
-    // Role-specific behaviour (NB vs ÜNB vs ANB) is handled inside each
-    // workflow via `register_pids_with_roles`. Safe to register for all roles.
-    .register(Box::new(RedispatchModule))
-    .with_deployment_roles(parse_deployment_roles(&cli.deployment_roles))
+    .register_many(modules)
+    .with_deployment_roles(effective_deployment_roles)
     .build();
 
     let inbox_store = store.as_inbox_store();
@@ -1088,6 +1347,11 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // would be silently dead-lettered. Panics on missing coverage.
     startup::validate_adapter_coverage();
 
+    // Verify every PidRouter-registered workflow has a dispatch arm.
+    // Panics if a domain crate registers a new PID without a matching arm in
+    // EdifactIngestDispatcher — prevents silent dead-lettering at runtime.
+    startup::validate_dispatch_completeness(ctx.pid_router());
+
     // Hard-fail if any Noop store is active — a misconfigured deployment
     // (e.g. missing [outbox] section in makod.toml) must never silently
     // start with a Noop backend, whether in check mode or full daemon mode.
@@ -1131,7 +1395,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         Arc::new(store.clone()),
         store.as_snapshot_store(),
         cli.snapshot_interval,
-        mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
+        mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
     ));
 
     // ── Shared health state ───────────────────────────────────────────────────
@@ -1199,21 +1463,24 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             cedar: Arc::clone(&cedar),
             max_body_bytes: cli.http_max_body_bytes,
             partner_store: Some(Arc::new(store.as_partner_store())),
-            tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
+            tenant_id: mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+            dl_sink: Arc::new(dl_sink_ingest.clone()),
             dispatcher: Some(Arc::clone(&ingest_dispatcher)),
             contrl_ack: Some(Arc::new(contrl_ack::ContrlAckService::new(
                 Arc::new(store.clone()),
-                mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
-                cli.tenant_id.clone(),
+                store.as_deadline_store(),
+                mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+                gln_registry.primary_gln().to_owned(),
             ))),
         });
         let admin_state = Arc::new(malo_admin_api::MaloAdminState {
             cache: malo_cache::SlateDbMaloCache::new(store.clone()),
             cedar: Arc::clone(&cedar),
-            tenant_id: cli.tenant_id.to_string(),
+            tenant_id: gln_registry.primary_gln().to_owned(),
         });
         let partner_store = store.as_partner_store();
-        let partner_tenant_id = mako_engine::ids::TenantId::from_party_id(&cli.tenant_id);
+        let partner_tenant_id =
+            mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln());
         partner_api::seed_from_config(&partner_store, partner_tenant_id, &cli.as4_partner)
             .await
             .context("seeding partner store from config")?;
@@ -1223,17 +1490,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             cedar: Arc::clone(&cedar),
             platform: Arc::clone(&platform),
         });
-        if cli.marktrollen.is_empty() {
-            anyhow::bail!(
-                "--marktrollen is required: specify the Marktrollen this instance is \
-                 authorised to use (e.g. `--marktrollen LF,LFG`). \
-                 An empty list rejects every command."
-            );
-        }
         let commands_state = Arc::new(commands_api::CommandsApiState {
-            tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
-            sender_party_id: cli.tenant_id.clone(),
-            configured_marktrollen: cli.marktrollen.iter().map(|s| s.to_uppercase()).collect(),
+            tenant_id: mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+            sender_party_id: gln_registry.primary_gln().to_owned(),
+            configured_marktrollen: effective_marktrollen.to_vec(),
             max_body_bytes: cli.http_max_body_bytes,
             snapshot_interval: cli.snapshot_interval,
             cedar: Arc::clone(&cedar),
@@ -1245,15 +1505,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         let metrics_state = Arc::new(metrics_api::MetricsState::new(
             store.clone(),
             Arc::clone(&cedar),
-            cli.tenant_id.clone(),
+            gln_registry.primary_gln().to_owned(),
         ));
         let migration_state = Arc::new(migration_api::MigrationApiState {
             store: Arc::new(store.clone()),
             cedar: Arc::clone(&cedar),
         });
         let mcp_state = Arc::new(mcp_server::MakodMcpState {
-            tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
-            tenant_id_str: cli.tenant_id.clone(),
+            tenant_id: mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+            tenant_id_str: gln_registry.primary_gln().to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             cedar: Arc::clone(&cedar),
             commands: Arc::clone(&commands_state),
@@ -1300,7 +1560,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         let party_id = cli
             .as4_party_id
             .clone()
-            .unwrap_or_else(|| cli.tenant_id.clone());
+            .unwrap_or_else(|| gln_registry.primary_gln().to_owned());
 
         let key_pem = cli.as4_signing_key_pem.clone().ok_or_else(|| {
             anyhow::anyhow!(
@@ -1383,12 +1643,14 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             ),
             max_body_bytes: mako_as4::bdew_router_config().max_body_bytes,
             partner_store: Some(Arc::new(store.as_partner_store())),
-            tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
+            tenant_id: mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+            dl_sink: Arc::new(dl_sink_ingest),
             dispatcher: Some(Arc::clone(&ingest_dispatcher)),
             contrl_ack: Some(Arc::new(contrl_ack::ContrlAckService::new(
                 Arc::new(store.clone()),
-                mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
-                cli.tenant_id.clone(),
+                store.as_deadline_store(),
+                mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+                gln_registry.primary_gln().to_owned(),
             ))),
         });
 
@@ -1441,8 +1703,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     if let Some(addr) = cli.api_webdienste_addr {
         let handler = Arc::new(webdienste::MakodApiHandler {
             store: store.clone(),
-            tenant_id: mako_engine::ids::TenantId::from_party_id(&cli.tenant_id),
-            sender_party_id: cli.tenant_id.clone(),
+            tenant_id: mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+            sender_party_id: gln_registry.primary_gln().to_owned(),
         });
         let app = webdienste::router(handler).merge(health::router(health_state.clone()));
         let listener = tokio::net::TcpListener::bind(addr)
@@ -1450,7 +1712,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("API-Webdienste server bind {addr}: {e}"))?;
         info!(
             addr = %addr,
-            tenant_id = cli.tenant_id,
+            primary_gln = gln_registry.primary_gln(),
             "API-Webdienste Strom server listening (MaLo Identification active)",
         );
         let wd_token = shutdown_token.clone();
@@ -1478,7 +1740,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         http_client,
         malo_cache: Arc::clone(&malo_cache),
         shutdown_token: shutdown_token.clone(),
-        tenant_id: cli.tenant_id.clone(),
+        gln_registry: Arc::clone(&gln_registry),
         as4_partner: cli.as4_partner.clone(),
         as4_signing_key_pem: cli.as4_signing_key_pem.clone(),
         as4_signing_cert_pem: cli.as4_signing_cert_pem.clone(),
@@ -1579,13 +1841,27 @@ fn parse_deployment_roles(roles: &[String]) -> DeploymentRoles {
             "NMSB" => Some(Marktrolle::Nmsb),
             "AMSB" => Some(Marktrolle::Amsb),
             "BKV" => Some(Marktrolle::Bkv),
-            "UENB" | "ÜNB" => Some(Marktrolle::Uenb),
+            // Strom ÜNB and Gas FNB (Fernleitungsnetzbetreiber) both map to
+            // the Uenb engine role — both are transmission system operators.
+            "UENB" | "ÜNB" | "UNB" | "FNB" => Some(Marktrolle::Uenb),
             "BIKO" => Some(Marktrolle::Biko),
+            // Gas roles that have no distinct engine deployment role — their
+            // PIDs are registered unconditionally by the Gas domain modules.
+            // ANB/VNB are Strom NB sub-types, normalised by deployment_role_strings.
+            "GNB" | "ANB" | "VNB" => Some(Marktrolle::Nb),
+            "LFG" => Some(Marktrolle::Lf),
+            "GMSB" => Some(Marktrolle::Msb),
+            "MGV" => {
+                // No engine deployment role for MGV; GaBi Gas registers its
+                // PIDs unconditionally. Safe to ignore here.
+                None
+            }
             other => {
                 tracing::warn!(
                     role = other,
                     "Unknown Marktrolle in --deployment-roles; valid values: \
-                     NB, LF, MSB, NMSB, AMSB, BKV, UENB, BIKO"
+                     NB, LF, MSB, NMSB, AMSB, BKV, UENB/FNB, BIKO, \
+                     GNB, ANB, VNB, LFG, GMSB, MGV"
                 );
                 None
             }
@@ -1708,17 +1984,11 @@ fn apply_config_file(
     }
 
     // ── Engine ────────────────────────────────────────────────────────────────
-    if let Some(engine) = cfg.engine {
-        if is_default("tenant_id")
-            && let Some(id) = engine.tenant_id
-        {
-            cli.tenant_id = id;
-        }
-        if is_default("shutdown_timeout_secs")
-            && let Some(secs) = engine.shutdown_timeout_secs
-        {
-            cli.shutdown_timeout_secs = secs;
-        }
+    if let Some(engine) = cfg.engine
+        && is_default("shutdown_timeout_secs")
+        && let Some(secs) = engine.shutdown_timeout_secs
+    {
+        cli.shutdown_timeout_secs = secs;
     }
 
     // ── AS4 ───────────────────────────────────────────────────────────────────
@@ -1768,6 +2038,17 @@ fn apply_config_file(
         if cli.erp_webhook_secret.is_none() {
             cli.erp_webhook_secret = erp.webhook_secret.map(|s| SecretString::new(s.into()));
         }
+    }
+
+    // ── [[party]] — multi-GLN identity table ─────────────────────────────────
+    //
+    // Takes precedence over `[engine] tenant_id` when present.  Stored
+    // separately (not merged into the CLI struct's string fields) because the
+    // array-of-tables structure has no CLI equivalent.
+    if let Some(parties) = cfg.party
+        && !parties.is_empty()
+    {
+        cli.parties = parties;
     }
 
     Ok(())

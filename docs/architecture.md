@@ -14,6 +14,8 @@ This document covers the internal design of `mako-engine` and `makod`: the
 event-sourced process runtime, inbound/outbound transport channels, ERP
 integration via BO4E + CloudEvents 1.0, and the SlateDB persistence layer.
 
+For the companion master data service see [`mdmd` Operator Guide](./mdmd.md).
+
 ---
 
 ## Design principles
@@ -51,16 +53,20 @@ integration via BO4E + CloudEvents 1.0, and the SlateDB persistence layer.
 └───────┬──────────────────────────────────────────────────────────┬──┘
         │                                                          │
         ▼  events + outbox (single WriteBatch)                     ▼  HTTP POST
-┌───────────────────────────────┐         ┌────────────────────────────┐
-│  SlateDB (object store)       │         │  ERP system                │
-│  e/ events                    │         │  CloudEvents 1.0 + BO4E    │
-│  om/ outbox messages          │         │  HMAC-SHA256 signed        │
-│  dl/ deadlines                │         │  (application/cloudevents  │
-│  pr/ process registry         │         │   +json)                   │
-│  pt/ partner directory        │         └────────────────────────────┘
-│  ib/ inbox dedup              │
-│  sv/ stream versions          │
-└───────────────────────────────┘
+┌───────────────────────────────┐         ┌────────────────────────────────────┐
+│  SlateDB (object store)       │         │  mdmd :8180                        │
+│  e/ events                    │         │  MaLo / MeLo / contracts           │
+│  om/ outbox messages          │  POST   │  subscriptions / correlations      │
+│  dl/ deadlines                │ ──────► │  PostgreSQL · OIDC/JWT             │
+│  pr/ process registry         │CloudEv. │  fan-out to ERP                    │
+│  pt/ partner directory        │         └────────────────────────┬───────────┘
+│  ib/ inbox dedup              │                                  │ HTTP POST
+│  sv/ stream versions          │                       CloudEvents 1.0 + HMAC
+└───────────────────────────────┘                                  │
+                                           ┌────────────────────────▼───────────┐
+                                           │  ERP system                        │
+                                           │  BO4E JSON · HMAC-SHA256 signed    │
+                                           └────────────────────────────────────┘
 ```
 
 ---
@@ -217,6 +223,7 @@ the entire scheduler implementation.
 | Getting started | [getting-started.md](getting-started.md) |
 | Engine internals | [engine.md](engine.md) |
 | `makod` operator guide | [makod.md](makod.md) |
+| `mdmd` operator guide | [mdmd.md](mdmd.md) |
 | ERP integration | [erp-integration.md](erp-integration.md) |
 | PID reference | [pid-reference.md](pid-reference.md) |
 | Compensation flows | [compensation.md](compensation.md) |

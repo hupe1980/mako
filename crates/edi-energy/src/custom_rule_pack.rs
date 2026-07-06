@@ -62,9 +62,10 @@ impl CustomRulePack {
         self.0 = self
             .0
             .with_named_stateless_rule_fn(rule_id, move |segs, issues| {
-                for (occ, _seg) in segs.iter().enumerate().filter(|(_, s)| s.tag == tag) {
+                for (occ, seg) in segs.iter().enumerate().filter(|(_, s)| s.tag == tag) {
                     issues.push(
                         ValidationIssue::new(ValidationSeverity::Error, (*msg_inner).to_owned())
+                            .with_span(seg.span)
                             .with_rule_id((*rule_id_inner).to_owned())
                             .with_segment(tag.to_owned())
                             .with_segment_occurrence(occ as u16),
@@ -95,6 +96,7 @@ impl CustomRulePack {
                         );
                         issues.push(
                             ValidationIssue::new(ValidationSeverity::Error, msg)
+                                .with_span(seg.span)
                                 .with_rule_id((*rule_id_inner).to_owned())
                                 .with_segment(tag.to_owned())
                                 .with_segment_occurrence(occ as u16)
@@ -108,6 +110,7 @@ impl CustomRulePack {
                         );
                         issues.push(
                             ValidationIssue::new(ValidationSeverity::Error, msg)
+                                .with_span(seg.span)
                                 .with_rule_id((*rule_id_inner).to_owned())
                                 .with_segment(tag.to_owned())
                                 .with_segment_occurrence(occ as u16)
@@ -172,13 +175,112 @@ impl CustomRulePack {
     where
         F: Fn(usize, &[edifact_rs::Segment<'_>], &mut Vec<ValidationIssue>) + Send + Sync + 'static,
     {
-        self.0 = self.0.with_scoped_group_rule_fn(
-            group_id,
-            rule_id,
-            move |group, segs, _ctx, issues| {
-                rule(group.occurrence_index, segs, issues);
-            },
-        );
+        let scope: Arc<str> = group_id.into();
+        let scope_for_annotation = Arc::clone(&scope);
+        self.0 =
+            self.0
+                .with_scoped_group_rule_fn(scope, rule_id, move |group, segs, _ctx, issues| {
+                    let before = issues.len();
+                    rule(group.occurrence_index, segs, issues);
+                    // Auto-annotate any issues the closure emitted with the group scope
+                    // so callers don't have to set it manually.
+                    for issue in &mut issues[before..] {
+                        if issue.segment_group.is_none() {
+                            issue.segment_group = Some(Arc::clone(&scope_for_annotation));
+                        }
+                    }
+                });
+        self
+    }
+
+    /// Add a rule that requires the given segment tag to be present in every
+    /// occurrence of the named segment group.
+    ///
+    /// Emits an `Error`-severity issue when the segment is absent from a group
+    /// occurrence.  The auto-generated rule ID is `CUSTOM-{group_id}-{tag}-REQUIRED`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use edi_energy::CustomRulePack;
+    ///
+    /// // Every SG2 in UTILMD must contain a NAD segment.
+    /// let pack = CustomRulePack::new("my-rules")
+    ///     .require_segment_in_group("SG2", "NAD");
+    /// ```
+    pub fn require_segment_in_group(
+        mut self,
+        group_id: impl Into<Arc<str>>,
+        tag: &'static str,
+    ) -> Self {
+        let scope: Arc<str> = group_id.into();
+        let rule_id: Arc<str> = format!("CUSTOM-{scope}-{tag}-REQUIRED").into();
+        let msg: Arc<str> = format!("mandatory segment {tag} is missing from group {scope}").into();
+        let scope_for_annotation = Arc::clone(&scope);
+        let rule_id_inner = Arc::clone(&rule_id);
+        let msg_inner = Arc::clone(&msg);
+        self.0 =
+            self.0
+                .with_scoped_group_rule_fn(scope, rule_id, move |_group, segs, _ctx, issues| {
+                    if !segs.iter().any(|s| s.tag == tag) {
+                        issues.push(
+                            ValidationIssue::new(
+                                ValidationSeverity::Error,
+                                (*msg_inner).to_owned(),
+                            )
+                            .with_segment(tag.to_owned())
+                            .with_rule_id((*rule_id_inner).to_owned())
+                            .with_segment_group(Arc::clone(&scope_for_annotation)),
+                        );
+                    }
+                });
+        self
+    }
+
+    /// Add a rule that forbids the given segment tag from appearing in any
+    /// occurrence of the named segment group.
+    ///
+    /// Emits an `Error`-severity issue for each occurrence found, with the
+    /// source byte span attached for precise diagnostic highlighting.
+    /// The auto-generated rule ID is `CUSTOM-{group_id}-{tag}-FORBIDDEN`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use edi_energy::CustomRulePack;
+    ///
+    /// // SG4 must not contain a FTX segment for this process.
+    /// let pack = CustomRulePack::new("my-rules")
+    ///     .forbid_segment_in_group("SG4", "FTX");
+    /// ```
+    pub fn forbid_segment_in_group(
+        mut self,
+        group_id: impl Into<Arc<str>>,
+        tag: &'static str,
+    ) -> Self {
+        let scope: Arc<str> = group_id.into();
+        let rule_id: Arc<str> = format!("CUSTOM-{scope}-{tag}-FORBIDDEN").into();
+        let msg: Arc<str> = format!("segment {tag} must not appear in group {scope}").into();
+        let scope_for_annotation = Arc::clone(&scope);
+        let rule_id_inner = Arc::clone(&rule_id);
+        let msg_inner = Arc::clone(&msg);
+        self.0 =
+            self.0
+                .with_scoped_group_rule_fn(scope, rule_id, move |_group, segs, _ctx, issues| {
+                    for (occ, seg) in segs.iter().enumerate().filter(|(_, s)| s.tag == tag) {
+                        issues.push(
+                            ValidationIssue::new(
+                                ValidationSeverity::Error,
+                                (*msg_inner).to_owned(),
+                            )
+                            .with_span(seg.span)
+                            .with_segment(tag.to_owned())
+                            .with_segment_occurrence(occ as u16)
+                            .with_rule_id((*rule_id_inner).to_owned())
+                            .with_segment_group(Arc::clone(&scope_for_annotation)),
+                        );
+                    }
+                });
         self
     }
 
@@ -221,6 +323,7 @@ impl CustomRulePack {
                         );
                         issues.push(
                             ValidationIssue::new(ValidationSeverity::Error, msg)
+                                .with_span(seg.span)
                                 .with_rule_id((*rule_id_inner).to_owned())
                                 .with_segment(tag.to_owned())
                                 .with_segment_occurrence(occ as u16)
@@ -234,6 +337,7 @@ impl CustomRulePack {
                         );
                         issues.push(
                             ValidationIssue::new(ValidationSeverity::Error, msg)
+                                .with_span(seg.span)
                                 .with_rule_id((*rule_id_inner).to_owned())
                                 .with_segment(tag.to_owned())
                                 .with_segment_occurrence(occ as u16)
@@ -289,6 +393,7 @@ impl CustomRulePack {
                         );
                         issues.push(
                             ValidationIssue::new(ValidationSeverity::Error, msg)
+                                .with_span(seg.span)
                                 .with_rule_id((*rule_id_inner).to_owned())
                                 .with_segment(tag.to_owned())
                                 .with_segment_occurrence(occ as u16)

@@ -60,7 +60,10 @@ use mako_engine::{
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 
-// ── PID sets ──────────────────────────────────────────────────────────────────
+// ── PID constants ─────────────────────────────────────────────────────────────
+
+/// Workflow name used for PID routing and `WorkflowId` construction.
+pub const WORKFLOW_NAME: &str = "gpke-konfiguration";
 
 /// Outbound ORDERS PIDs dispatched by this workflow (NB → MSB).
 ///

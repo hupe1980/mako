@@ -218,18 +218,23 @@ impl MessageCore {
         // present.  Messages produced by builders contain UNH…UNT but no UNB/UNZ;
         // skipping the envelope check for bare messages lets callers validate
         // message-level content without first constructing a synthetic interchange.
-        if self.has_interchange_wrapper {
-            let () = edifact_rs::validate_envelope_owned(&self.segments).map_err(Error::Parse)?;
-        }
+        let interchange_header = if self.has_interchange_wrapper {
+            let vi = edifact_rs::validate_envelope_owned(&self.segments).map_err(Error::Parse)?;
+            Some(crate::interchange::InterchangeHeader::from_edifact_envelope(vi.interchange))
+        } else {
+            None
+        };
 
-        // Build the borrowed segment slice, filtering out interchange-envelope segments.
-        // For the common case (builder-produced messages with no UNB/UNZ), the filter
-        // is a no-op and the Vec is allocated from a single pass over segments.
-        let message_segments: Vec<edifact_rs::Segment<'_>> = self
+        // Build the owned message-content segment slice, filtering out interchange-envelope
+        // segments (UNB/UNZ interchange wrapper, UNG/UNE functional group wrapper).
+        // Staying on owned segments avoids a separate Vec<Segment<'_>> borrow allocation.
+        // edifact-rs 0.11 exposes group_owned_segments_indexed and validate_lenient_grouped_owned
+        // so the borrowed intermediary is no longer necessary at this layer.
+        let message_segments: Vec<edifact_rs::OwnedSegment> = self
             .segments
             .iter()
-            .map(|s| s.as_borrowed())
-            .filter(|s| !matches!(s.tag, "UNB" | "UNZ" | "UNG" | "UNE"))
+            .filter(|s| !matches!(s.tag.as_str(), "UNB" | "UNZ" | "UNG" | "UNE"))
+            .cloned()
             .collect();
         match registry.profile_on(self.message_type, release, date) {
             Ok(profile) => {
@@ -250,12 +255,17 @@ impl MessageCore {
                 let mut ctx = edifact_rs::ValidationContext::builder()
                     .with_message_type(self.message_type.as_str())
                     .with_message_ref(&*self.message_ref)
+                    // Short-circuit the entire validation pass on the first Critical-severity
+                    // structural failure.  Critical issues indicate a segment is so malformed
+                    // that further validation would only produce noise (duplicate false positives
+                    // from downstream rules that assume the segment is well-formed).
+                    .bail_on_first_critical(true)
                     .with_validator(
                         edifact_rs::ValidationLayer::Structure,
                         dir_validator.clone(),
                     );
-                // when Pruefidentifikator cannot be determined, inject a Warning-severity
-                // advisory via with_static_issue (edifact-rs 0.10.0) so downstream audit logs
+                // When Pruefidentifikator cannot be determined, inject a Warning-severity
+                // advisory via with_static_issue so downstream audit logs
                 // know AHB Layer 4 was skipped.  Running the union-of-all-PIDs pack would
                 // produce guaranteed false positives from mutually-exclusive qualifier constraints.
                 if pid_result.is_err() {
@@ -278,20 +288,19 @@ impl MessageCore {
                 if let Some(sem) = semantic_pack {
                     ctx = ctx.with_profile_pack(sem);
                 }
-                // Build the segment-group tree and validate using the group-aware path.
-                // `group_segments_indexed` partitions `message_segments` into a
-                // `SegmentGroupIndexed` tree so that `with_scoped_group_rule_fn` closures
-                // receive only the segments within each specific group occurrence via
-                // `group.total_span` — resolving the per-SG-instance window gap,.
-                // `validate_lenient_grouped` short-circuits the group pass in O(1) when no
-                // group rules are registered, so profiles without group rules have negligible
-                // overhead from the tree construction.
+                // Build the segment-group tree from owned segments and validate using the
+                // fully-owned group-aware path.  group_owned_segments_indexed avoids a
+                // second borrow allocation when no group rules are registered (the O(1) early
+                // exit in validate_lenient_grouped_owned skips the borrow entirely).
                 let group_schema = profile.group_schema();
-                let group_tree =
-                    edifact_rs::group_segments_indexed(&message_segments, group_schema, "ROOT");
+                let group_tree = edifact_rs::group_owned_segments_indexed(
+                    &message_segments,
+                    group_schema,
+                    "ROOT",
+                );
                 let report = ctx
                     .build()
-                    .validate_lenient_grouped(&group_tree, &message_segments);
+                    .validate_lenient_grouped_owned(&group_tree, &message_segments);
                 #[cfg(feature = "tracing")]
                 {
                     let error_count = report.errors().len();
@@ -306,10 +315,12 @@ impl MessageCore {
                         tracing::debug!(warnings = warning_count, "validation passed");
                     }
                 }
-                Ok(
-                    EdiEnergyReport::new_with_pid(report, self.pruefidentifikator)
-                        .with_profile_meta(profile.release().clone(), profile.ahb_revision()),
-                )
+                let mut report_out = EdiEnergyReport::new_with_pid(report, self.pruefidentifikator)
+                    .with_profile_meta(profile.release().clone(), profile.ahb_revision());
+                if let Some(hdr) = interchange_header {
+                    report_out = report_out.with_interchange_header(hdr);
+                }
+                Ok(report_out)
             }
             Err(Error::ProfileNotFound { .. }) => {
                 #[cfg(feature = "tracing")]

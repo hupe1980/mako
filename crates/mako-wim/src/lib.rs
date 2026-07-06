@@ -105,7 +105,8 @@ pub use geraeteubernahme::{
     GeraeteubernahmeEvent, GeraeteubernahmeProjection, GeraeteubernahmeRecord,
     GeraeteubernahmeRecordData, GeraeteubernahmeState,
     ORDRSP_DEADLINE_LABEL as GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL,
-    STORNIERUNG_PIDS as GERAETEUBERNAHME_STORNIERUNG_PIDS, WimGeraeteubernahmeWorkflow,
+    STORNIERUNG_PIDS as GERAETEUBERNAHME_STORNIERUNG_PIDS,
+    WORKFLOW_NAME as GERAETEUBERNAHME_WORKFLOW_NAME, WimGeraeteubernahmeWorkflow,
 };
 pub use geraetewechsel::{
     APERAK_WINDOW_LABEL as GERAETEWECHSEL_APERAK_WINDOW_LABEL, DeviceChangeCommand,
@@ -119,11 +120,12 @@ pub use insrpt::{
 };
 pub use preisanfrage::{
     PREISANFRAGE_DEADLINE_LABEL, PreisanfrageCommand, PreisanfrageData, PreisanfrageEvent,
-    PreisanfrageState, QUOTES_PIDS, REQOTE_PIDS, WimPreisanfrageWorkflow,
+    PreisanfrageState, QUOTES_PIDS, REQOTE_PIDS, WORKFLOW_NAME as PREISANFRAGE_WORKFLOW_NAME,
+    WimPreisanfrageWorkflow,
 };
 pub use preisliste::{
     PRICAT_PIDS, PreislisteCommand, PreislisteData, PreislisteEvent, PreislisteState,
-    WimPreislisteWorkflow,
+    WORKFLOW_NAME as PREISLISTE_WORKFLOW_NAME, WimPreislisteWorkflow,
 };
 pub use rechnung::{
     WIM_COMDIS_ABLEHNUNG_PID, WIM_INVOIC_PIDS, WIM_RECHNUNG_WINDOW_LABEL, WIM_REMADV_PIDS,
@@ -133,7 +135,7 @@ pub use rechnung::{
 pub use stammdaten::{
     ANFORDERUNG_PID, STAMMDATEN_DEADLINE_LABEL, StammdatenCommand, StammdatenData, StammdatenEvent,
     StammdatenProjection, StammdatenRecord, StammdatenRecordData, StammdatenState,
-    UEBERMITTLUNG_PIDS, WimStammdatenWorkflow,
+    UEBERMITTLUNG_PIDS, WORKFLOW_NAME as STAMMDATEN_WORKFLOW_NAME, WimStammdatenWorkflow,
 };
 pub use steuerungsauftrag::{
     STEUERUNGSAUFTRAG_DEADLINE_LABEL, SteuerungsCommandType, SteuerungsauftragCommand,
@@ -143,7 +145,8 @@ pub use steuerungsauftrag::{
 pub use stornierung::{
     ABLEHNUNG_PID, BESTAETIGUNG_PID, STORNIERUNG_DEADLINE_LABEL, STORNIERUNG_PID,
     StornierungCommand, StornierungData, StornierungEvent, StornierungProjection,
-    StornierungRecord, StornierungRecordData, StornierungState, WimStornierungWorkflow,
+    StornierungRecord, StornierungRecordData, StornierungState,
+    WORKFLOW_NAME as STORNIERUNG_WORKFLOW_NAME, WimStornierungWorkflow,
 };
 pub use technik_aenderung::{
     AuftragData as TechnikAenderungAuftragData, ORDERS_PIDS as TECHNIK_AENDERUNG_ORDERS_PIDS,

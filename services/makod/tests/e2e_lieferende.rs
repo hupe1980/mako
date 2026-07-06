@@ -58,8 +58,20 @@ use mako_gpke::{
 };
 use makod::{
     adapters::{gpke_lf_anmeldung_registry, gpke_registry},
+    config::PartyConfig,
     edifact_renderer::render_to_wire_bytes,
+    party_registry::GlnRegistry,
 };
+
+fn make_registry(gln: &str, role: &str) -> GlnRegistry {
+    GlnRegistry::from_config(&[PartyConfig {
+        gln: gln.to_owned(),
+        roles: vec![role.to_owned()],
+        primary: true,
+        agency: None,
+    }])
+    .expect("test registry")
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -139,7 +151,8 @@ impl MockLfn {
             "document_date must not appear in outbox payload — set to today at dispatch time"
         );
 
-        render_to_wire_bytes(msg, LFN_ID).expect("LFN: render_to_wire_bytes 55002")
+        render_to_wire_bytes(msg, &make_registry(LFN_ID, "LF"))
+            .expect("LFN: render_to_wire_bytes 55002")
     }
 
     /// ERP notification: receive NB's UTILMD response wire bytes and process them.
@@ -300,7 +313,7 @@ impl MockNb {
             "NB Antwort must be addressed to the LFN"
         );
 
-        render_to_wire_bytes(utilmd, NB_ID).expect("NB: render_to_wire_bytes")
+        render_to_wire_bytes(utilmd, &make_registry(NB_ID, "NB")).expect("NB: render_to_wire_bytes")
     }
 
     async fn state(&self) -> SupplierChangeState {

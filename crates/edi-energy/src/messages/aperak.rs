@@ -255,15 +255,24 @@ fn rule_sem_aperak_ref_missing(
         .iter()
         .filter(|s| s.tag == "RFF")
         .any(|s| s.get_element(0).and_then(|e| e.get_component(0)) == Some("ACW"));
+    // Capture the span of the first RFF for source location (best-effort: span points
+    // to the RFF that was checked, even though the ACW variant is absent).
+    let first_rff_span = segments.iter().find(|s| s.tag == "RFF").map(|s| s.span);
     if !has_acw {
-        issues.push(
-            ValidationIssue::new(
-                ValidationSeverity::Error,
-                "APERAK must contain an RFF+ACW reference to the acknowledged/rejected \
-                 transaction (DE 1153 = ACW)",
-            )
-            .with_rule_id("SEM-APERAK-REF-MISSING")
-            .with_segment("RFF"),
+        let mut issue = ValidationIssue::new(
+            ValidationSeverity::Error,
+            "APERAK must contain an RFF+ACW reference to the acknowledged/rejected \
+             transaction (DE 1153 = ACW)",
+        )
+        .with_rule_id("SEM-APERAK-REF-MISSING")
+        .with_segment("RFF")
+        .with_suggestion(
+            "Add an RFF segment with DE 1153 = ACW and set DE 1154 to the \
+             message reference (UNH DE 0062) of the acknowledged or rejected message",
         );
+        if let Some(span) = first_rff_span {
+            issue = issue.with_span(span);
+        }
+        issues.push(issue);
     }
 }

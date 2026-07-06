@@ -90,11 +90,6 @@ version = "0.16"
 reason  = "foyer-memory/slatedb pull hashbrown 0.16. Resolves when foyer aligns on 0.17."
 
 [[bans.skip]]
-name    = "foldhash"
-version = "0.1"
-reason  = "Companion to hashbrown 0.15; resolves with hashbrown 0.15 dedup."
-
-[[bans.skip]]
 name    = "getrandom"
 version = "0.2"
 reason  = "Some transitive deps still pull getrandom 0.2. Resolve with broader getrandom 0.3/0.4 adoption."
@@ -125,16 +120,6 @@ version = "0.9"
 reason  = "Companion to rand 0.9; same root cause."
 
 [[bans.skip]]
-name    = "rustix"
-version = "0.38"
-reason  = "tokio/mio pull rustix 0.38; newer deps pull 1.x. Resolve when tokio aligns on rustix 1."
-
-[[bans.skip]]
-name    = "linux-raw-sys"
-version = "0.4"
-reason  = "Companion to rustix 0.38; same root cause."
-
-[[bans.skip]]
 name    = "nom"
 version = "7"
 reason  = "edifact-rs (edi-energy grammar layer) depends on nom 7. Resolve when edifact-rs migrates to nom 8."
@@ -149,45 +134,71 @@ name    = "winnow"
 version = "0.6"
 reason  = "toml_edit (build-time dep of cargo) pulls winnow 0.6. Workspace direct deps use 0.7."
 
-[[bans.skip]]
-name    = "lru"
-version = "0.12"
-reason  = "asx-rs pulls lru 0.12. Resolve when asx-rs updates."
-
-# object_store 0.14 pulls digest 0.11 / md-5 0.11 / block-buffer 0.12 / cpufeatures 0.3 /
-# crypto-common 0.2; xtask's pdf-extract (lopdf chain) pins the 0.10 generation.
-# Safe to coexist — no shared serialization state across the version boundary.
+# p256/ecdsa (energy-api) still pins sha2 0.10, pulling the 2022-generation digest
+# chain (digest 0.10 / block-buffer 0.10 / crypto-common 0.1 / cpufeatures 0.2).
+# asx-rs + lopdf 0.43 both use sha2 0.11 (RustCrypto 2024 generation), so that
+# side is no longer a source of these duplicates.
+# Resolve when the p256/ecdsa ecosystem updates to sha2 0.11.
 [[bans.skip]]
 name    = "digest"
 version = "0.10"
-reason  = "lopdf/pdf-extract (xtask) depends on digest 0.10; object_store 0.14 pulls digest 0.11. No shared state."
-
-[[bans.skip]]
-name    = "md-5"
-version = "0.10"
-reason  = "Companion to digest 0.10 (lopdf chain); object_store 0.14 pulls md-5 0.11."
+reason  = "p256/ecdsa/rfc6979 (energy-api) pulls digest 0.10 via sha2 0.10; asx-rs + lopdf 0.43 use digest 0.11 via sha2 0.11. Resolve when p256 ecosystem updates."
 
 [[bans.skip]]
 name    = "block-buffer"
 version = "0.10"
-reason  = "Companion to digest 0.10 (lopdf chain); object_store 0.14 pulls block-buffer 0.12."
+reason  = "Companion to digest 0.10 (p256/sha2 0.10 chain); asx-rs + lopdf 0.43 pull block-buffer 0.12 via digest 0.11."
 
 [[bans.skip]]
 name    = "crypto-common"
 version = "0.1"
-reason  = "Companion to digest 0.10 (lopdf chain); object_store 0.14 pulls crypto-common 0.2."
+reason  = "Companion to digest 0.10 (p256/sha2 0.10 chain); asx-rs + lopdf 0.43 pull crypto-common 0.2 via digest 0.11."
 
 [[bans.skip]]
 name    = "cpufeatures"
 version = "0.2"
-reason  = "Companion to digest 0.10 (lopdf chain); object_store 0.14 pulls cpufeatures 0.3."
+reason  = "p256/sha2 0.10 chain still pulls cpufeatures 0.2; asx-rs + lopdf 0.43 pull cpufeatures 0.3 via sha2 0.11. Resolve when p256 ecosystem updates."
 
-# reqwest version split: energy-api and newer HTTP clients use reqwest 0.13;
-# asx-rs (AS4 transport) still depends on reqwest 0.12. Resolve when asx-rs updates.
+# ── asx-rs vs p256/ecdsa/energy-api crypto split ────────────────────────────────
+# asx-rs uses sha2 0.11 / hmac 0.13 (RustCrypto 2024 update). lopdf 0.43 also uses
+# sha2 0.11, so xtask is no longer a source of crypto version splits.
+# p256/ecdsa/rfc6979 (energy-api ECDSA, makod HMAC) are still on sha2 0.10 / hmac 0.12.
+# No shared key material or verification state across the version boundary.
+# Resolve when p256/ecdsa ecosystem aligns on sha2 0.11 / hmac 0.13.
 [[bans.skip]]
-name    = "reqwest"
+name    = "sha2"
+version = "0.10"
+reason  = "p256/ecdsa/rfc6979 (energy-api) pin sha2 0.10; asx-rs + lopdf 0.43 use sha2 0.11. Resolve when p256 ecosystem updates."
+
+[[bans.skip]]
+name    = "sha2"
+version = "0.11"
+reason  = "asx-rs + lopdf 0.43 use sha2 0.11 (RustCrypto 2024); p256/ecdsa ecosystem pins sha2 0.10. See companion sha2 0.10 entry."
+
+[[bans.skip]]
+name    = "hmac"
 version = "0.12"
-reason  = "asx-rs depends on reqwest 0.12; energy-api and direct workspace deps use reqwest 0.13."
+reason  = "rfc6979/ecdsa/p256 (energy-api, makod) uses hmac 0.12; asx-rs WS-Security uses hmac 0.13. Resolve when p256/ecdsa aligns on hmac 0.13."
+
+[[bans.skip]]
+name    = "hmac"
+version = "0.13"
+reason  = "asx-rs WS-Security uses hmac 0.13 (RustCrypto 2024); p256/ecdsa ecosystem pins hmac 0.12. See companion hmac 0.12 entry."
+
+# ── asx-rs vs object_store/slatedb quick-xml split ──────────────────────────────
+# asx-rs (AS4 SOAP/ebMS3 parsing) pins quick-xml 0.41; object_store (slatedb cloud) pins 0.40.
+# Both versions carry RUSTSEC-2026-0194 / RUSTSEC-2026-0195, exempted in [advisories]
+# with usage-context justification (authenticated XML sources, not attacker-controlled).
+# Resolve when asx-rs or object_store updates to a common quick-xml version.
+[[bans.skip]]
+name    = "quick-xml"
+version = "0.40"
+reason  = "object_store (slatedb cloud backend) pins quick-xml 0.40; asx-rs uses quick-xml 0.41. RUSTSEC-2026-0194/0195 exempted in [advisories]."
+
+[[bans.skip]]
+name    = "quick-xml"
+version = "0.41"
+reason  = "asx-rs AS4 SOAP parsing uses quick-xml 0.41; object_store (slatedb) pins quick-xml 0.40. See companion quick-xml 0.40 entry."
 
 [[bans.skip]]
 name    = "heck"
@@ -227,6 +238,50 @@ reason  = "Windows crate ecosystem version skew (slatedb 0.14.1 update added 0.5
 name    = "itertools"
 version = "0.14"
 reason  = "foyer-memory (via slatedb) depends on itertools 0.14.x while rest of workspace uses 0.15."
+
+# ── mdmd new-dependency version skew ─────────────────────────────────────────
+# sqlx 0.8 / reqwest 0.13 bring in newer minor versions of crates already
+# present through the existing dependency tree.
+
+[[bans.skip]]
+name    = "foldhash"
+version = "0.1"
+reason  = "foldhash 0.1.x pulled by slatedb/foyer; 0.2.x pulled by sqlx 0.8 via hashbrown 0.15."
+
+[[bans.skip]]
+name    = "md-5"
+version = "0.10"
+reason  = "md-5 0.10.x legacy path; 0.11.x pulled by sqlx 0.8 digest chain."
+
+[[bans.skip]]
+name    = "rand_chacha"
+version = "0.3"
+reason  = "rand_chacha 0.3.x pulled by existing workspace; 0.9.x pulled by sqlx 0.8 / rand 0.9."
+
+[[bans.skip]]
+name    = "windows-sys"
+version = "0.48"
+reason  = "windows-sys 0.48 legacy path; newer versions pulled by tokio / sqlx dependencies."
+
+[[bans.skip]]
+name    = "windows-sys"
+version = "0.59"
+reason  = "windows-sys 0.59 pulled by reqwest/hyper; 0.61 pulled by tokio."
+
+[[bans.skip]]
+name    = "windows-targets"
+version = "0.48"
+reason  = "windows-targets 0.48 legacy path; 0.52+ pulled by newer deps."
+
+[[bans.skip]]
+name    = "windows_x86_64_gnu"
+version = "0.48"
+reason  = "windows_x86_64_gnu 0.48 legacy path alongside newer version."
+
+[[bans.skip]]
+name    = "windows_x86_64_msvc"
+version = "0.48"
+reason  = "windows_x86_64_msvc 0.48 legacy path alongside newer version."
 
 [advisories]
 ignore = [

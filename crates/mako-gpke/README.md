@@ -45,15 +45,21 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 
 ### INVOIC billing processes (Netznutzungsabrechnung)
 
+Implemented by `GpkeAbrechnungWorkflow`. Inbound INVOIC messages from the NB
+spawn a new process; the `invoicd` daemon listens for
+`de.mako.process.initiated` events and runs a plausibility check via
+`invoic-checker`. It then calls `gpke.abrechnung.annehmen` (→ REMADV) or
+`gpke.abrechnung.ablehnen` (→ COMDIS) on the Command API. Inbound REMADV and
+COMDIS from the NB are handled via `ReceiveRemadv` and `ReceiveComdis` commands.
+
 | PID   | Process name                                  | Status          |
 |-------|-----------------------------------------------|-----------------|
 | 31001 | Abschlagsrechnung (Netznutzung)               | ✅ Implemented  |
 | 31002 | NN-Rechnung (Netznutzungsabrechnung)          | ✅ Implemented  |
 | 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo)        | ✅ Implemented  |
 | 31006 | MMM-Rechnung (selbst ausgestellt)             | ✅ Implemented  |
-| 31007 | Aggregierte Mehr-/Mindermenge Rechnung        | ✅ Implemented  |
-| 31008 | Aggregierte Mehr-/Mindermenge Rechnung (SA)   | ✅ Implemented  |
 
+> PIDs 31007/31008 (Aggreg. MMM-Rechnung Gas, NB → MGV) belong to `mako-gabi-gas` (BK7-14-020).
 > PIDs 31003 (WiM-Rechnung) and 31009 (MSB-Rechnung) belong to the WiM domain.
 > PID 31004 (Stornorechnung WiM Gas) belongs to `mako-wim-gas` (BK7-24-01-009).
 
@@ -98,6 +104,89 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 
 > PIDs 37008–37014 (PARTIN Gas Kommunikationsdaten) belong to `mako-geli-gas`.
 
+### UTILMD Neuanlage Marktlokation (GPKE Teil 1)
+
+Workflow `gpke-neuanlage` handles Neuanlage requests where the MaLo does not yet
+exist in the grid operator's system.
+
+| PID   | Process name (AHB)                               | Direction  | Status         |
+|-------|--------------------------------------------------|------------|----------------|
+| 55600 | Anmeldung neue verbrauchende MaLo (LF → NB)     | LF → NB    | ✅ Implemented |
+| 55601 | Anmeldung neue erzeugende MaLo (LF → NB)        | LF → NB    | ✅ Implemented |
+| 55602 | Bestätigung Anmeldung neue verb. MaLo (NB → LF) | NB → LF    | ↩ Derived from 55600 accept |
+| 55603 | Bestätigung Anmeldung neue erz. MaLo (NB → LF)  | NB → LF    | ↩ Derived from 55601 accept |
+| 55604 | Ablehnung Anmeldung neue verb. MaLo (NB → LF)   | NB → LF    | ↩ Derived from 55600 reject |
+| 55605 | Ablehnung Anmeldung neue erz. MaLo (NB → LF)    | NB → LF    | ↩ Derived from 55601 reject |
+
+> APERAK Frist: 24 h wall-clock (GPKE). PIDs 55602–55605 are derived response
+> PIDs; they are never routed inbound — the NB emits them outbound.
+
+### UTILMD Abmeldung LF (GPKE Teil 1)
+
+Workflow `gpke-lf-abmeldung` handles LF-side tracking of an Abmeldung/Kündigung
+initiated by the NB that the LF must acknowledge.
+
+| PID   | Process name (AHB)                                    | Direction  | Status         |
+|-------|-------------------------------------------------------|------------|----------------|
+| 55007 | Kündigung Lieferung durch NB (NB → LF)                | NB → LF    | ✅ Implemented |
+| 55008 | Bestätigung Kündigung durch NB (LF → NB)              | LF → NB    | ↩ Derived accept |
+| 55009 | Ablehnung Kündigung durch NB (LF → NB)                | LF → NB    | ↩ Derived reject |
+
+### MSCONS Messwerte Strom — Lieferant (GPKE Teil 2/4)
+
+Workflow `gpke-messwerte` accepts inbound MSCONS messages carrying metered values
+from the NB or MSB to the LF. These are read-only deliveries; no APERAK response
+is required unless the message fails validation.
+
+| PID   | Process name (AHB)                                        | Sender      |
+|-------|-----------------------------------------------------------|-------------|
+| 13005 | EEG-Überführungszeitreihe                                 | NB → LF     |
+| 13006 | Stornierung von Messwerten                                | NB/MSB → LF |
+| 13015 | Arbeit Leistungsmax. Kalenderj. vor Lieferbeginn          | NB → LF     |
+| 13016 | Energiemenge u. Leistungsmax. Strom                       | NB/MSB → LF |
+| 13017 | Zählerstand (Strom)                                       | MSB → LF    |
+| 13018 | Lastgang Messlokation, Netzkoppelpunkt, Netzlokation      | MSB → LF    |
+| 13019 | Energiemenge (Strom)                                      | NB/MSB → LF |
+| 13025 | Lastgang Marktlokation, Tranche                           | MSB → LF    |
+| 13027 | Werte nach Typ 2 (WiM Strom Teil 2)                       | MSB → LF    |
+
+> All MSCONS PIDs here carry metered data. They are stateless deliveries that
+> write no outbox entries on success.
+
+### ORDERS Datenabruf — Anfrage / Ablehnung (GPKE Teil 4)
+
+Workflow `gpke-datenabruf` handles the LF-side of data-request processes: the LF
+sends an ORDERS Anfrage to the NB or MSB and waits for a response or explicit
+rejection within 24 h.
+
+| PID   | Process name (AHB)                                 | Direction   | Status         |
+|-------|----------------------------------------------------|-------------|----------------|
+| 17004 | Anfrage Datenabruf (allgemein)                     | LF → NB/MSB | ✅ Implemented |
+| 17102 | Anfrage Übermittlung Stammdaten Strom              | LF → NB/MSB | ✅ Implemented |
+| 17113 | Anfrage Übermittlung Werte                         | LF → NB/MSB | ✅ Implemented |
+| 19101 | Ablehnung Anfrage Datenabruf (NB → LF)             | NB → LF     | ↩ Derived      |
+| 19102 | Ablehnung Anfrage Stammdaten (NB → LF)             | NB → LF     | ↩ Derived      |
+| 19114 | Ablehnung Anfrage Werte (NB → LF)                  | NB → LF     | ↩ Derived      |
+
+> The response deadline (24 h window `gpke-datenabruf-antwort-24h`) is enforced
+> by a `DeadlineStore` entry registered on every outbound ORDERS Anfrage.
+
+### ORDERS Allokationsliste — MSCONS 13014 (GPKE MSCONS Strom)
+
+Workflow `gpke-allokationsliste` handles requests and rejections for the
+Allokationsliste, exchanged between LF and NB via ORDERS and answered with MSCONS.
+
+| PID   | Process name (AHB)                                      | Direction   | Status         |
+|-------|---------------------------------------------------------|-------------|----------------|
+| 17110 | Anfrage Allokationsliste (LF → NB)                      | LF → NB     | ✅ Implemented |
+| 17114 | Anfrage Allokationsliste alternativ (LF → NB)           | LF → NB     | ✅ Implemented |
+| 19110 | Ablehnung Anfrage Allokationsliste (NB → LF)            | NB → LF     | ↩ Derived      |
+| 19115 | Ablehnung alternativ (NB → LF)                          | NB → LF     | ↩ Derived      |
+| 13014 | Allokationsliste Strom (NB → LF, MSCONS)                | NB → LF     | ↩ Derived      |
+
+> PIDs 17110/19110 here are Strom (GPKE). The same PID numbers also appear in
+> `mako-gabi-gas` for the gas MMMA process (different commodity, different crate).
+
 ## EDIFACT Format Versions
 
 | Format version   | Valid from | Valid until | Profile status                   |
@@ -113,17 +202,24 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 
 ## Modules
 
-| Rust module         | Contents                                                |
-|---------------------|---------------------------------------------------------|
-| `wechselprozesse`   | PIDs 55001–55002, 55017 (UTILMD supplier-switch) |
-| `lf_anmeldung`      | PIDs 55003–55006, 55018 (LF-role: receive NB ANTWORT)   |
-| `anfrage_bestellung`| PID 55555 (Anfrage Daten der individuellen Bestellung, LFN → NB, GPKE Teil 4) |
-| `abrechnung`        | PIDs 31001–31008 (INVOIC Netznutzungsabrechnung)        |
-| `konfiguration`     | PIDs 17134/17135 (ORDERS outbound) + 19001/19002 (ORDRSP inbound) — GPKE Teil 4 |
-| `sperrung`          | PIDs 17115–17117 (ORDERS Sperrung Strom, NB role)       |
-| `stornierung`       | PIDs 55022–55024 (UTILMD Stornierung Zuordnungsprozess) |
-| `ankuendigung_zuordnung_lf` | PIDs 55607–55609 (UTILMD Ankündigung Zuordnung LF) |
-| `partin`            | PIDs 37000–37006 (PARTIN Strom Kommunikationsdaten)     |
+| Rust module                 | Workflow name                    | Contents                                                            |
+|-----------------------------|----------------------------------|---------------------------------------------------------------------|
+| `wechselprozesse`           | `gpke-supplier-change`           | PIDs 55001–55002, 55017, 55022–55024 (UTILMD supplier-switch + stornierung, NB role) |
+| `lf_anmeldung`              | `gpke-lf-anmeldung`              | PIDs 55001/55002/55016/55077 (LF outbound) + 55003–55006/55017–55018/55078/55080 (LF-role receive NB ANTWORT) |
+| `lf_abmeldung`              | `gpke-lf-abmeldung`              | PID 55007 (NB → LF Kündigung) + 55008/55009 derived           |
+| `neuanlage`                 | `gpke-neuanlage`                 | PIDs 55600/55601 (Neuanlage MaLo, LF → NB) + 55602–55605 derived   |
+| `messwerte`                 | `gpke-messwerte`                 | MSCONS PIDs 13005/13006/13015–13019/13025/13027 (Messwerte NB/MSB → LF) |
+| `datenabruf`                | `gpke-datenabruf`                | ORDERS 17004/17102/17113 (Anfrage) + ORDRSP 19101/19102/19114 (Ablehnung) |
+| `allokationsliste`          | `gpke-allokationsliste`          | ORDERS 17110/17114 + ORDRSP 19110/19115 + MSCONS 13014 (Allokationsliste Strom) |
+| `anfrage_bestellung`        | `gpke-anfrage-bestellung`        | PID 55555 (Anfrage Daten der individuellen Bestellung, GPKE Teil 4)  |
+| `abrechnung`                | `gpke-abrechnung`                | PIDs 31001/31002/31005/31006 (INVOIC Netznutzungsabrechnung)        |
+| `konfiguration`             | `gpke-konfiguration`             | PIDs 17134/17135 (ORDERS outbound) + 19001/19002 (ORDRSP inbound) — GPKE Teil 4 |
+| `konfiguration_aenderung`   | `gpke-konfiguration-aenderung`   | ORDERS/ORDRSP for configuration changes (NB role)                   |
+| `sperrung`                  | `gpke-sperrung`                  | PIDs 17115–17117 (ORDERS Sperrung Strom, NB → MSB)                 |
+| `sperrung_lf`               | `gpke-sperrung-lf`               | ORDRSP 19116/19117 + IFTSTA Sperrung (LF-side ANTWORT receiver)    |
+| `ankuendigung_zuordnung_lf` | `gpke-ankuendigung-zuordnung-lf` | PIDs 55607–55609 (UTILMD Ankündigung Zuordnung LF)                 |
+| `partin`                    | `gpke-partin`                    | PIDs 37000–37006 (PARTIN Strom Kommunikationsdaten)                |
+| `utilts`                    | `gpke-utilts`                    | UTILTS PIDs 25001/25004–25010 (Netzzustandsdaten NB → LF)          |
 
 ## Usage
 

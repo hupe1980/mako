@@ -90,7 +90,7 @@ pub mod clearingliste;
 pub use bilanzkreisabrechnung::{
     BillingCommand, BillingData, BillingEvent, BillingProjection, BillingRecord, BillingRecordData,
     BillingState, BillingVersion, DataStatus, IFTSTA_DATENSTATUS_PID, IFTSTA_PIDS,
-    MabisBillingWorkflow, PRUEFMITTEILUNG_DEADLINE_LABEL,
+    MabisBillingWorkflow, PRUEFMITTEILUNG_DEADLINE_LABEL, WORKFLOW_NAME as BILLING_WORKFLOW_NAME,
 };
 pub use clearingliste::{
     CLEARINGLISTE_PIDS, ClearinglisteCommand, ClearinglisteData, ClearinglisteEvent,

@@ -64,16 +64,14 @@ use crate::{
 /// - `W` — the [`Workflow`] implementation. In practice this is a zero-size
 ///   marker struct; the type parameter carries the domain logic as associated
 ///   types.
-/// - `S` — the [`EventStore`] backend. [`InMemoryEventStore`] is the default
+/// - `S` — the [`EventStore`] backend. `InMemoryEventStore` (requires `testing` feature) is the default
 ///   for tests; production deployments wrap a persistent backend in
 ///   [`Arc`][std::sync::Arc] and use `Process<W, Arc<MyStore>>`.
 ///
 /// ## Clone semantics
 ///
-/// If `S: Clone` (e.g. [`InMemoryEventStore`] or `Arc<…>`), `Process` is also
+/// If `S: Clone` (e.g. `InMemoryEventStore` (requires `testing` feature) or `Arc<…>`), `Process` is also
 /// `Clone` and all clones share the same underlying storage.
-///
-/// [`InMemoryEventStore`]: crate::event_store::InMemoryEventStore
 #[allow(clippy::struct_field_names)] // `process_id` and `stream_id` are intentional: they
 // describe engine-layer concepts, not redundant prefixes.
 pub struct Process<W: Workflow, S: EventStore> {
@@ -790,7 +788,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
     /// Like [`execute_and_enqueue`] but co-persists `deadlines` in the same
     /// atomic write as events and outbox entries.
     ///
-    /// On [`SlateDbStore`] this writes events, outbox entries, **and** deadlines
+    /// On `SlateDbStore` (requires `slatedb` feature) this writes events, outbox entries, **and** deadlines
     /// in a single SSI transaction.  On in-memory test stores the default
     /// fallback is used: events and outbox are written atomically, deadlines are
     /// **not** persisted here and must be registered separately.
@@ -799,7 +797,6 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
     /// (GPKE 24h APERAK, WiM 5 WT, GeLi Gas / WiM Gas 10 WT, MABIS 1 WT).
     ///
     /// [`execute_and_enqueue`]: Process::execute_and_enqueue
-    /// [`SlateDbStore`]: crate::store_slatedb::SlateDbStore
     ///
     /// # Errors
     ///

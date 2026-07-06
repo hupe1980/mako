@@ -34,10 +34,12 @@ use mako_engine::{
     envelope::EventEnvelope,
     error::WorkflowError,
     ids::DeadlineId,
+    outbox::PendingOutbox,
     projection::Projection,
     types::{MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
+use rubo4e::v202501::Rechnung;
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
@@ -90,6 +92,13 @@ pub const COMDIS_ABLEHNUNG_REMADV_PID: u32 = 29001;
 /// Register a `Deadline` with this label immediately after `ValidationPassed`.
 pub const ABRECHNUNG_WINDOW_LABEL: &str = "invoic-settlement-deadline";
 
+/// Canonical workflow name registered in the process engine.
+///
+/// Used as the `workflow_name` parameter in `spawn_or_resume` /
+/// `dispatch_to_process` calls.  Must match the string returned by
+/// `GpkeAbrechnungWorkflow::name()`.
+pub const WORKFLOW_NAME: &str = "gpke-abrechnung";
+
 // ── Domain events ─────────────────────────────────────────────────────────────
 
 /// Events emitted by the GPKE billing workflow.
@@ -108,6 +117,16 @@ pub enum AbrechnungEvent {
         document_date: String,
         /// BDEW Prüfidentifikator (31001–31008).
         pruefidentifikator: Pruefidentifikator,
+        /// BO4E invoice domain object produced by the `makod` anti-corruption
+        /// layer (EDIFACT → `Rechnung` translation).  Stored in events so that
+        /// `invoicd` can run [`invoic_checker::InvoicCheckEngine::check`]
+        /// directly from the event store — without re-fetching the original
+        /// EDIFACT message.
+        ///
+        /// `None` for events produced before this field was introduced (for
+        /// graceful deserialization of older event store entries).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rechnung: Option<Box<Rechnung>>,
     },
     /// INVOIC passed profile validation (no rule violations).
     ValidationPassed {
@@ -186,7 +205,6 @@ impl EventPayload for AbrechnungEvent {
 
 /// Business data populated when the INVOIC is first received.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AbrechnungData {
     /// BDEW Prüfidentifikator (31001–31008, GPKE INVOIC range).
     pub pruefidentifikator: Pruefidentifikator,
@@ -198,6 +216,13 @@ pub struct AbrechnungData {
     pub document_date: String,
     /// Invoice reference number from UNH/BGM.
     pub invoice_ref: MessageRef,
+    /// BO4E invoice domain object (EDIFACT → BO4E translation by `makod` adapter).
+    ///
+    /// Downstream services (`invoicd`) read this field from the event store
+    /// to run [`invoic_checker::InvoicCheckEngine::check`] without accessing
+    /// the original EDIFACT archive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rechnung: Option<Box<Rechnung>>,
 }
 
 /// Current state of a GPKE billing process stream.
@@ -301,6 +326,9 @@ pub enum AbrechnungCommand {
         validation_passed: bool,
         /// Human-readable validation issue strings for the `Rejected` event.
         validation_errors: Vec<String>,
+        /// BO4E invoice domain object (EDIFACT → BO4E by `makod` adapter).
+        /// `invoicd` uses this to run automated plausibility checks.
+        rechnung: Option<Box<Rechnung>>,
     },
     /// Settle the invoice — dispatch a positive CONTRL to the sender.
     ///
@@ -413,12 +441,14 @@ impl Workflow for GpkeAbrechnungWorkflow {
                 recipient,
                 document_date,
                 pruefidentifikator,
+                rechnung,
             } => AbrechnungState::InvoicReceived(AbrechnungData {
                 pruefidentifikator: *pruefidentifikator,
                 sender: sender.clone(),
                 recipient: recipient.clone(),
                 document_date: document_date.clone(),
                 invoice_ref: invoice_ref.clone(),
+                rechnung: rechnung.clone(),
             }),
 
             AbrechnungEvent::ValidationPassed { .. } => match state {
@@ -467,6 +497,7 @@ impl Workflow for GpkeAbrechnungWorkflow {
                 recipient: recipient.clone(),
                 document_date: document_date.clone(),
                 invoice_ref: invoice_ref.clone(),
+                rechnung: None,
             }),
 
             AbrechnungEvent::RemadvReceived {
@@ -507,6 +538,7 @@ impl Workflow for GpkeAbrechnungWorkflow {
                 document_date,
                 validation_passed,
                 validation_errors,
+                rechnung,
             } => {
                 if !matches!(state, AbrechnungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -518,19 +550,42 @@ impl Workflow for GpkeAbrechnungWorkflow {
                 }
                 let mut events = vec![AbrechnungEvent::InvoicReceived {
                     invoice_ref: invoice_ref.clone(),
-                    sender,
-                    recipient,
-                    document_date,
+                    sender: sender.clone(),
+                    recipient: recipient.clone(),
+                    document_date: document_date.clone(),
                     pruefidentifikator: pid,
+                    rechnung: rechnung.clone(),
                 }];
+                let mut outbox: Vec<PendingOutbox> = Vec::new();
                 if validation_passed {
-                    events.push(AbrechnungEvent::ValidationPassed { invoice_ref });
+                    events.push(AbrechnungEvent::ValidationPassed {
+                        invoice_ref: invoice_ref.clone(),
+                    });
+                    // Notify invoicd that a validated INVOIC is ready for plausibility
+                    // checking.  The `Rechnung` BO4E object is embedded so that `invoicd`
+                    // can run `InvoicCheckEngine::check` directly from the webhook payload
+                    // without re-fetching the original EDIFACT message.
+                    outbox.push(
+                        PendingOutbox::new(
+                            "ProcessInitiated",
+                            recipient.as_str(),
+                            serde_json::json!({
+                                "pid":         pid.as_u32(),
+                                "invoice_ref": invoice_ref.as_str(),
+                                "sender_gln":  sender.as_str(),
+                                "rechnung":    serde_json::to_value(rechnung.as_deref())
+                                    .unwrap_or(serde_json::Value::Null),
+                            }),
+                        )
+                        // Caused by ValidationPassed (index 1).
+                        .caused_by(1),
+                    );
                 } else {
                     events.push(AbrechnungEvent::Rejected {
                         reason: validation_errors.join("; "),
                     });
                 }
-                Ok(events.into())
+                Ok(WorkflowOutput::with_outbox(events, outbox))
             }
 
             AbrechnungCommand::SettleInvoice => {
@@ -540,7 +595,27 @@ impl Workflow for GpkeAbrechnungWorkflow {
                         state.label(),
                     ));
                 }
-                Ok(vec![AbrechnungEvent::InvoiceSettled].into())
+                let pid = state
+                    .abrechnung_data()
+                    .map(|d| d.pruefidentifikator.as_u32())
+                    .unwrap_or(0);
+                let invoice_ref = state
+                    .abrechnung_data()
+                    .map(|d| d.invoice_ref.to_string())
+                    .unwrap_or_default();
+                let outbox = vec![PendingOutbox::new(
+                    "ProcessCompleted",
+                    "",
+                    serde_json::json!({
+                        "pid":         pid,
+                        "invoice_ref": invoice_ref,
+                        "outcome":     "settled",
+                    }),
+                )];
+                Ok(WorkflowOutput::with_outbox(
+                    vec![AbrechnungEvent::InvoiceSettled],
+                    outbox,
+                ))
             }
 
             AbrechnungCommand::DisputeInvoice { reason } => {
@@ -550,7 +625,28 @@ impl Workflow for GpkeAbrechnungWorkflow {
                         state.label(),
                     ));
                 }
-                Ok(vec![AbrechnungEvent::InvoiceDisputed { reason }].into())
+                let pid = state
+                    .abrechnung_data()
+                    .map(|d| d.pruefidentifikator.as_u32())
+                    .unwrap_or(0);
+                let invoice_ref = state
+                    .abrechnung_data()
+                    .map(|d| d.invoice_ref.to_string())
+                    .unwrap_or_default();
+                let outbox = vec![PendingOutbox::new(
+                    "ProcessCompleted",
+                    "",
+                    serde_json::json!({
+                        "pid":         pid,
+                        "invoice_ref": invoice_ref,
+                        "outcome":     "disputed",
+                        "reason":      &reason,
+                    }),
+                )];
+                Ok(WorkflowOutput::with_outbox(
+                    vec![AbrechnungEvent::InvoiceDisputed { reason }],
+                    outbox,
+                ))
             }
 
             AbrechnungCommand::TimeoutExpired { deadline_id, label } => {

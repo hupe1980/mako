@@ -35,7 +35,50 @@ use secrecy::SecretString;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::{adapters, deadline_dispatch, erp_adapter, ingest_dispatcher, malo_cache};
+use crate::{
+    adapters, deadline_dispatch, erp_adapter, ingest_dispatcher, malo_cache,
+    party_registry::GlnRegistry,
+};
+
+// ── Domain workflow name imports ──────────────────────────────────────────────
+// Import WORKFLOW_NAME constants rather than using inline string literals.
+// This makes typos a compile error instead of a silent dispatch gap.
+
+use mako_gabi_gas::{
+    ALLOCATION_WORKFLOW_NAME, INVOIC_COMDIS_RESUME_PATH, INVOIC_REMADV_RESUME_PATH,
+    INVOIC_WORKFLOW_NAME, NOMINATION_WORKFLOW_NAME,
+};
+use mako_geli_gas::{
+    GAS_MSCONS_WORKFLOW_NAME, GELI_GAS_PARTIN_WORKFLOW_NAME,
+    GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME, GELI_GAS_SPERRUNG_LF_WORKFLOW_NAME,
+    GELI_GAS_SPERRUNG_NB_WORKFLOW_NAME,
+    STORNIERUNG_LF_WORKFLOW_NAME as GELI_GAS_STORNIERUNG_LF_WORKFLOW_NAME,
+    STORNIERUNG_WORKFLOW_NAME as GELI_GAS_STORNIERUNG_WORKFLOW_NAME,
+    WORKFLOW_NAME as GELI_GAS_SUPPLIER_CHANGE_WORKFLOW_NAME,
+};
+use mako_gpke::{
+    ABRECHNUNG_WORKFLOW_NAME, ALLOKATIONSLISTE_WORKFLOW_NAME, ANFRAGE_BESTELLUNG_WORKFLOW_NAME,
+    ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW_NAME, DATENABRUF_WORKFLOW_NAME,
+    KONFIGURATION_AENDERUNG_WORKFLOW_NAME, KONFIGURATION_WORKFLOW_NAME, LF_ABMELDUNG_WORKFLOW_NAME,
+    LF_ANMELDUNG_WORKFLOW_NAME, MESSWERTE_WORKFLOW_NAME, NEUANLAGE_WORKFLOW_NAME,
+    PARTIN_WORKFLOW_NAME, SPERRUNG_LF_WORKFLOW_NAME, SPERRUNG_WORKFLOW_NAME,
+    STORNIERUNG_GPKE_WORKFLOW_NAME, SUPPLIER_CHANGE_WORKFLOW_NAME, UTILTS_WORKFLOW_NAME,
+};
+use mako_mabis::{BILLING_WORKFLOW_NAME, CLEARINGLISTE_WORKFLOW_NAME};
+use mako_wim::{
+    GERAETEUBERNAHME_WORKFLOW_NAME, INSRPT_WORKFLOW_NAME, PREISANFRAGE_WORKFLOW_NAME,
+    PREISLISTE_WORKFLOW_NAME, RECHNUNG_WORKFLOW_NAME, STAMMDATEN_WORKFLOW_NAME,
+    STORNIERUNG_WORKFLOW_NAME as WIM_STORNIERUNG_WORKFLOW_NAME,
+    WORKFLOW_NAME as WIM_DEVICE_CHANGE_WORKFLOW_NAME,
+};
+use mako_wim_gas::{
+    ANMELDUNG_WORKFLOW_NAME as WIM_GAS_ANMELDUNG_WORKFLOW_NAME,
+    INSRPT_GAS_WORKFLOW_NAME as WIM_GAS_INSRPT_WORKFLOW_NAME,
+    INVOIC_WORKFLOW_NAME as WIM_GAS_INVOIC_WORKFLOW_NAME,
+    KUENDIGUNG_WORKFLOW_NAME as WIM_GAS_KUENDIGUNG_WORKFLOW_NAME,
+    STORNIERUNG_WORKFLOW_NAME as WIM_GAS_STORNIERUNG_WORKFLOW_NAME,
+    VERPFLICHTUNGSANFRAGE_WORKFLOW_NAME as WIM_GAS_VERPFLICHTUNGSANFRAGE_WORKFLOW_NAME,
+};
 
 // ── Type aliases ──────────────────────────────────────────────────────────────
 
@@ -84,140 +127,214 @@ pub(crate) fn validate_adapter_coverage() {
 
     let checks: &[(&str, _)] = &[
         (
-            "gpke-supplier-change",
+            SUPPLIER_CHANGE_WORKFLOW_NAME,
             adapters::gpke_registry().validate_policy(fc, &known),
         ),
         (
-            "gpke-lf-anmeldung",
+            LF_ANMELDUNG_WORKFLOW_NAME,
             adapters::gpke_lf_anmeldung_registry().validate_policy(fc, &known),
         ),
         (
-            "gpke-neuanlage",
+            NEUANLAGE_WORKFLOW_NAME,
             adapters::gpke_neuanlage_registry().validate_policy(fc, &known),
         ),
         (
-            "gpke-lf-abmeldung",
+            LF_ABMELDUNG_WORKFLOW_NAME,
             adapters::gpke_lf_abmeldung_registry().validate_policy(fc, &known),
         ),
         (
-            "gpke-ankuendigung-zuordnung-lf",
+            ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW_NAME,
             adapters::gpke_ankuendigung_zuordnung_lf_registry().validate_policy(fc, &known),
         ),
         (
-            "gpke-sperrung",
+            SPERRUNG_WORKFLOW_NAME,
             adapters::gpke_sperrung_registry().validate_policy(fc, &known),
         ),
         (
-            "gpke-stornierung",
+            STORNIERUNG_GPKE_WORKFLOW_NAME,
             adapters::gpke_stornierung_registry().validate_policy(fc, &known),
         ),
         (
-            "gpke-anfrage-bestellung",
+            ANFRAGE_BESTELLUNG_WORKFLOW_NAME,
             adapters::gpke_anfrage_bestellung_registry().validate_policy(fc, &known),
         ),
         (
-            "gpke-abrechnung",
+            ABRECHNUNG_WORKFLOW_NAME,
             adapters::gpke_abrechnung_registry().validate_policy(fc, &known),
         ),
         (
-            "gpke-konfiguration",
+            KONFIGURATION_WORKFLOW_NAME,
             adapters::gpke_konfiguration_registry().validate_policy(fc, &known),
         ),
         (
-            "wim-device-change",
+            WIM_DEVICE_CHANGE_WORKFLOW_NAME,
             adapters::wim_registry().validate_policy(fc, &known),
         ),
         (
-            "wim-geraeteubernahme",
+            GERAETEUBERNAHME_WORKFLOW_NAME,
             adapters::wim_geraeteubernahme_registry().validate_policy(fc, &known),
         ),
         (
-            "wim-stammdaten",
+            STAMMDATEN_WORKFLOW_NAME,
             adapters::wim_stammdaten_registry().validate_policy(fc, &known),
         ),
         (
-            "wim-stornierung",
+            WIM_STORNIERUNG_WORKFLOW_NAME,
             adapters::wim_stornierung_registry().validate_policy(fc, &known),
         ),
         (
-            "wim-rechnung",
+            RECHNUNG_WORKFLOW_NAME,
             adapters::wim_rechnung_registry().validate_policy(fc, &known),
         ),
         (
-            "wim-insrpt",
+            INSRPT_WORKFLOW_NAME,
             adapters::wim_insrpt_registry().validate_policy(fc, &known),
         ),
         (
-            "geli-gas-supplier-change",
+            GELI_GAS_SUPPLIER_CHANGE_WORKFLOW_NAME,
             adapters::geli_gas_registry().validate_policy(fc, &known),
         ),
         (
-            "geli-gas-stornierung",
+            GELI_GAS_STORNIERUNG_WORKFLOW_NAME,
             adapters::geli_gas_stornierung_registry().validate_policy(fc, &known),
         ),
         (
-            "wim-gas-anmeldung",
+            WIM_GAS_ANMELDUNG_WORKFLOW_NAME,
             adapters::wim_gas_anmeldung_registry().validate_policy(fc, &known),
         ),
         (
-            "wim-gas-kuendigung",
+            WIM_GAS_KUENDIGUNG_WORKFLOW_NAME,
             adapters::wim_gas_kuendigung_registry().validate_policy(fc, &known),
         ),
         (
-            "wim-gas-verpflichtungsanfrage",
+            WIM_GAS_VERPFLICHTUNGSANFRAGE_WORKFLOW_NAME,
             adapters::wim_gas_verpflichtungsanfrage_registry().validate_policy(fc, &known),
         ),
         (
-            "wim-gas-invoic",
+            WIM_GAS_INVOIC_WORKFLOW_NAME,
             adapters::wim_gas_invoic_registry().validate_policy(fc, &known),
         ),
         (
-            "wim-gas-insrpt",
+            WIM_GAS_INSRPT_WORKFLOW_NAME,
             adapters::wim_gas_insrpt_registry().validate_policy(fc, &known),
         ),
         (
-            "gabi-gas-invoic",
+            INVOIC_WORKFLOW_NAME,
             adapters::gabi_gas_invoic_registry().validate_policy(fc, &known),
         ),
         // gabi-gas-invoic resume adapters: REMADV 33001 (payment confirmation)
         // and COMDIS 29001 (payment rejection) — both format-version-sensitive.
         (
-            "gabi-gas-invoic/remadv",
+            INVOIC_REMADV_RESUME_PATH,
             adapters::gabi_gas_remadv_registry().validate_policy(fc, &known),
         ),
         (
-            "gabi-gas-invoic/comdis",
+            INVOIC_COMDIS_RESUME_PATH,
             adapters::gabi_gas_comdis_registry().validate_policy(fc, &known),
         ),
         // gabi-gas-nomination: DVGW NOMINT/NOMRES adapter (synthetic PIDs 90011/90012/90021/90022).
         (
-            "gabi-gas-nomination",
+            NOMINATION_WORKFLOW_NAME,
             adapters::gabi_gas_nomination_registry().validate_policy(fc, &known),
         ),
         // gabi-gas-allocation: DVGW ALOCAT adapter (synthetic PIDs 90001/90002/90003).
         (
-            "gabi-gas-allocation",
+            ALLOCATION_WORKFLOW_NAME,
             adapters::gabi_gas_allocation_registry().validate_policy(fc, &known),
         ),
         (
-            "geli-gas-sperrprozesse-invoic",
+            GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME,
             adapters::geli_gas_sperrprozesse_invoic_registry().validate_policy(fc, &known),
         ),
         (
-            "geli-gas-sperrung-nb",
+            GELI_GAS_SPERRUNG_NB_WORKFLOW_NAME,
             adapters::geli_gas_sperrung_nb_registry().validate_policy(fc, &known),
         ),
         // mabis-billing: IFTSTA adapter covers PIDs 21000–21007.
         // MSCONS PID 13003 billing commands are constructed by the aggregation
         // layer; this check validates IFTSTA coverage only.
         (
-            "mabis-billing (IFTSTA)",
+            BILLING_WORKFLOW_NAME,
             adapters::mabis_registry().validate_policy(fc, &known),
         ),
         // mabis-clearingliste: UTILMD adapter covers PIDs 55065, 55069, 55070.
         (
-            "mabis-clearingliste",
+            CLEARINGLISTE_WORKFLOW_NAME,
             adapters::mabis_clearingliste_registry().validate_policy(fc, &known),
+        ),
+        // gpke-partin: PARTIN Kommunikationsdaten (PIDs 37000–37006).
+        (
+            PARTIN_WORKFLOW_NAME,
+            adapters::gpke_partin_registry().validate_policy(fc, &known),
+        ),
+        // gpke-messwerte: MSCONS Messwertelieferung (PIDs 13xxx, Strom).
+        (
+            MESSWERTE_WORKFLOW_NAME,
+            adapters::gpke_messwerte_registry().validate_policy(fc, &known),
+        ),
+        // gpke-utilts: UTILTS Konfigurationsdaten (GPKE Teil 3).
+        (
+            UTILTS_WORKFLOW_NAME,
+            adapters::gpke_utilts_registry().validate_policy(fc, &known),
+        ),
+        // gpke-datenabruf: ORDRSP rejection inbound (GPKE Datenabruf ORDRSP).
+        (
+            DATENABRUF_WORKFLOW_NAME,
+            adapters::gpke_datenabruf_registry().validate_policy(fc, &known),
+        ),
+        // gpke-konfiguration-aenderung: ORDRSP inbound acceptance/rejection.
+        (
+            KONFIGURATION_AENDERUNG_WORKFLOW_NAME,
+            adapters::gpke_konfiguration_aenderung_registry().validate_policy(fc, &known),
+        ),
+        // gpke-allokationsliste: ORDRSP + MSCONS adapters (PIDs 55022–55024).
+        (
+            ALLOKATIONSLISTE_WORKFLOW_NAME,
+            adapters::gpke_allokationsliste_ordrsp_registry().validate_policy(fc, &known),
+        ),
+        (
+            ALLOKATIONSLISTE_WORKFLOW_NAME,
+            adapters::gpke_allokationsliste_mscons_registry().validate_policy(fc, &known),
+        ),
+        // geli-gas-partin: PARTIN Gas Kommunikationsdaten (PIDs 37008–37014).
+        (
+            GELI_GAS_PARTIN_WORKFLOW_NAME,
+            adapters::geli_gas_partin_registry().validate_policy(fc, &known),
+        ),
+        // wim-preisanfrage: REQOTE Preisanfrage (PIDs 35001–35005).
+        (
+            PREISANFRAGE_WORKFLOW_NAME,
+            adapters::wim_preisanfrage_registry().validate_policy(fc, &known),
+        ),
+        // wim-preisliste: PRICAT Preisliste (PIDs 27001–27003).
+        (
+            PREISLISTE_WORKFLOW_NAME,
+            adapters::wim_preisliste_registry().validate_policy(fc, &known),
+        ),
+        // wim-gas-stornierung: UTILMD G PID 44022 (Anfrage Stornierung, LF → GNB).
+        (
+            WIM_GAS_STORNIERUNG_WORKFLOW_NAME,
+            adapters::wim_gas_stornierung_registry().validate_policy(fc, &known),
+        ),
+        // geli-gas-stornierung-lf: UTILMD G PIDs 44023/44024 (GNB response to LF).
+        (
+            GELI_GAS_STORNIERUNG_LF_WORKFLOW_NAME,
+            adapters::geli_gas_stornierung_lf_registry().validate_policy(fc, &known),
+        ),
+        // geli-gas-sperrung-lf: ORDRSP Gas-Sperrung (GNB → LFG).
+        (
+            GELI_GAS_SPERRUNG_LF_WORKFLOW_NAME,
+            adapters::geli_gas_sperrung_lf_registry().validate_policy(fc, &known),
+        ),
+        // gpke-sperrung-lf: ORDRSP/IFTSTA Sperrung-Antwort (NB → LF).
+        (
+            SPERRUNG_LF_WORKFLOW_NAME,
+            adapters::gpke_sperrung_lf_registry().validate_policy(fc, &known),
+        ),
+        // geli-gas-mscons: MSCONS Gas Messdaten (GNB/gMSB → LFG).
+        (
+            GAS_MSCONS_WORKFLOW_NAME,
+            adapters::geli_gas_mscons_registry().validate_policy(fc, &known),
         ),
     ];
 
@@ -239,6 +356,64 @@ pub(crate) fn validate_adapter_coverage() {
             }
         }
     }
+}
+
+// ── validate_dispatch_completeness ───────────────────────────────────────────
+
+/// Validate that every workflow name reachable via `PidRouter` has a
+/// corresponding dispatch arm in [`EdifactIngestDispatcher`].
+///
+/// This is a startup guard against the gap where a domain crate registers a
+/// new PID → workflow mapping, but the developer forgets to add a matching
+/// `match` arm in `ingest_dispatcher.rs`.  Without this check, inbound
+/// messages for the new PID would be silently dead-lettered at runtime.
+///
+/// # How it works
+///
+/// 1. Enumerate all unique workflow names from `router` (both unambiguous and
+///    commodity-qualified entries).
+/// 2. Compare against [`EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES`] — the
+///    compile-time list of workflow names that have a dispatch arm.
+/// 3. Panic with an actionable message listing every undispatched workflow.
+///
+/// # When to update `KNOWN_WORKFLOW_NAMES`
+///
+/// When adding a new PID in a domain crate's `register_pids`:
+/// 1. Add a dispatch arm in `ingest_dispatcher.rs::dispatch`.
+/// 2. Add the workflow name string to `EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES`.
+///
+/// # Panics
+///
+/// Panics when any PidRouter-registered workflow name is absent from
+/// `EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES`.
+pub(crate) fn validate_dispatch_completeness(router: &mako_engine::pid_router::PidRouter) {
+    use std::collections::HashSet;
+    let known: HashSet<&str> = ingest_dispatcher::EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES
+        .iter()
+        .copied()
+        .collect();
+
+    let mut missing: Vec<&str> = router
+        .workflow_names()
+        .into_iter()
+        .filter(|name| !known.contains(name))
+        .collect();
+    missing.sort_unstable();
+
+    if !missing.is_empty() {
+        panic!(
+            "startup failure: the following workflows are registered in the PidRouter \
+             but have no dispatch arm in EdifactIngestDispatcher:\n  {}\n\
+             Add a dispatch arm in ingest_dispatcher.rs AND add the workflow name to \
+             EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES.",
+            missing.join("\n  ")
+        );
+    }
+    info!(
+        dispatched_workflows =
+            ingest_dispatcher::EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES.len(),
+        "dispatch completeness validated"
+    );
 }
 
 // ── spawn_workers ─────────────────────────────────────────────────────────────
@@ -270,7 +445,11 @@ pub(crate) struct WorkersConfig {
     #[allow(dead_code)]
     pub shutdown_token: CancellationToken,
     // ── Outbound AS4 config ──────────────────────────────────────────────
-    pub tenant_id: String,
+    /// GLN registry — maps roles to GLNs and provides own-GLN detection.
+    ///
+    /// Built from `[[party]]` entries in `makod.toml`. The primary GLN is used
+    /// as the storage partition key (`TenantId`) and AS4 `partyId` fallback.
+    pub gln_registry: Arc<GlnRegistry>,
     pub as4_partner: Vec<String>,
     pub as4_signing_key_pem: Option<SecretString>,
     pub as4_signing_cert_pem: Option<String>,
@@ -315,7 +494,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
     use crate::as4_sender::BdewAs4Sender;
     use crate::malo_ident_sender::MaloIdentSender;
     use crate::verzeichnisdienst_worker;
-    use mako_as4::PartnerDirectory;
+    use mako_as4::profile::BdewAs4Profile;
     use secrecy::ExposeSecret as _;
 
     // ── Parse --maloid-partner GLN=URL pairs ─────────────────────────────
@@ -347,7 +526,8 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
                 cfg.http_client.clone(),
             );
             let vz_partner_store = cfg.store.as_partner_store();
-            let vz_tenant_id = mako_engine::ids::TenantId::from_party_id(&cfg.tenant_id);
+            let vz_tenant_id =
+                mako_engine::ids::TenantId::from_party_id(cfg.gln_registry.primary_gln());
             info!(url = %base_url, "Verzeichnisdienst integration enabled");
             let lookup = verzeichnisdienst_worker::VerzeichnisdienstLookup::new(
                 vz_client,
@@ -372,13 +552,37 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
         cfg.store.clone(),
     );
 
-    // ── Parse --as4-partner GLN=URL pairs ────────────────────────────────
-    let partners =
-        PartnerDirectory::from_cli_pairs(&cfg.as4_partner).map_err(|e| anyhow::anyhow!("{e}"))?;
+    // ── Build AS4 partner P-Mode registry from --as4-partner GLN=URL pairs ──
+    let as4_profile = {
+        let mut profile = BdewAs4Profile::new();
+        for pair in &cfg.as4_partner {
+            let (gln, url) = pair.split_once('=').ok_or_else(|| {
+                anyhow::anyhow!("--as4-partner: expected GLN=HTTPS-URL, got {pair:?}")
+            })?;
+            let gln = gln.trim();
+            let url = url.trim();
+            if gln.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "--as4-partner: GLN must not be empty in {pair:?}"
+                ));
+            }
+            if !url.starts_with("https://") {
+                return Err(anyhow::anyhow!(
+                    "--as4-partner: endpoint URL must use HTTPS (got {url:?} for GLN {gln:?})"
+                ));
+            }
+            profile.register_partner_all_actions(gln, url);
+        }
+        profile
+    };
 
-    if !partners.is_empty() {
-        let glns: Vec<&str> = partners.iter().map(|(g, _)| g).collect();
-        info!(partners = ?glns, "AS4 partner directory loaded");
+    if !as4_profile.registry().is_empty() {
+        let mut seen = std::collections::BTreeSet::new();
+        for pm in as4_profile.all_pmodes() {
+            seen.insert(pm.partner_id.as_str());
+        }
+        let glns: Vec<&str> = seen.into_iter().collect();
+        info!(partners = ?glns, "AS4 partner P-Mode registry loaded");
     }
 
     // ── Outbox delivery worker ────────────────────────────────────────────
@@ -392,7 +596,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
         let party_id = cfg
             .as4_party_id
             .clone()
-            .unwrap_or_else(|| cfg.tenant_id.clone());
+            .unwrap_or_else(|| cfg.gln_registry.primary_gln().to_owned());
 
         let outbound_session = {
             let session_id = format!("makod-outbound-{}", uuid::Uuid::new_v4());
@@ -415,9 +619,9 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
         let sender = BdewAs4Sender::new(
             Arc::new(outbound_session),
             outbound_bus,
-            Arc::new(partners),
+            Arc::new(as4_profile),
             malo_sender,
-            cfg.tenant_id.as_str(),
+            Arc::clone(&cfg.gln_registry),
             Some(Arc::new(crate::edifact_api::EdifactApiState {
                 platform: Arc::clone(&cfg.platform),
                 pid_router: cfg.ctx.pid_router().clone(),
@@ -425,9 +629,12 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
                     crate::cedar_authz::CedarAuthorizer::unauthenticated()
                         .expect("CedarAuthorizer::unauthenticated is infallible"),
                 ),
-                max_body_bytes: usize::MAX,
+                max_body_bytes: 256 * 1024 * 1024, // 256 MiB — generous but finite (F-009)
                 partner_store: None,
-                tenant_id: mako_engine::ids::TenantId::from_party_id(&cfg.tenant_id),
+                tenant_id: mako_engine::ids::TenantId::from_party_id(
+                    cfg.gln_registry.primary_gln(),
+                ),
+                dl_sink: std::sync::Arc::new(mako_engine::dead_letter::LogDeadLetterSink),
                 dispatcher: Some(Arc::clone(&cfg.ingest_dispatcher)),
                 // AS4 loopback (self-delivery) does not need a CONTRL ack:
                 // we are both sender and receiver in this code path.
@@ -437,7 +644,8 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
 
         info!(
             party_id        = %party_id,
-            tenant_party_id = %cfg.tenant_id,
+            primary_gln     = %cfg.gln_registry.primary_gln(),
+            own_glns        = ?cfg.gln_registry.own_glns().collect::<Vec<_>>(),
             "AS4 outbound sender active (BdewAs4Sender)",
         );
         let worker = cfg
@@ -448,7 +656,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
         use crate::as4_sender::WebhookEdifactSender;
         let sender = WebhookEdifactSender::new(
             edifact_webhook_url.as_str(),
-            cfg.tenant_id.as_str(),
+            Arc::clone(&cfg.gln_registry),
             cfg.http_client.clone(),
             malo_sender,
         );
@@ -594,5 +802,41 @@ mod tests {
         // validate_adapter_coverage panics on missing coverage — the panic
         // itself is the assertion.
         validate_adapter_coverage();
+    }
+
+    /// Verify that `KNOWN_WORKFLOW_NAMES` is sorted and deduplicated.
+    ///
+    /// The list is maintained by hand; this test catches accidental duplicates
+    /// or missorting that would make the coverage diff harder to read.
+    #[test]
+    fn known_workflow_names_sorted_and_unique() {
+        use ingest_dispatcher::EdifactIngestDispatcher;
+        let names = EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES;
+
+        // Check sorted order.
+        let mut sorted = names.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(
+            names,
+            sorted.as_slice(),
+            "KNOWN_WORKFLOW_NAMES must be sorted alphabetically; \
+             expected {sorted:?}",
+        );
+
+        // Check no duplicates.
+        sorted.dedup();
+        assert_eq!(
+            names.len(),
+            sorted.len(),
+            "KNOWN_WORKFLOW_NAMES contains duplicates: {:?}",
+            {
+                let mut seen = std::collections::HashSet::new();
+                names
+                    .iter()
+                    .filter(|&&n| !seen.insert(n))
+                    .copied()
+                    .collect::<Vec<_>>()
+            }
+        );
     }
 }

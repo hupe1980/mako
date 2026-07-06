@@ -1186,6 +1186,7 @@ fn materialise_outbox(
         created_at: now,
         deliver_after: pending.deliver_after,
         attempt_count: 0,
+        workflow_name: env.workflow_id.name.clone(),
     }
 }
 
@@ -2887,6 +2888,7 @@ mod tests {
             created_at: now,
             deliver_after: Some(now + deliver_in),
             attempt_count: 0,
+            workflow_name: "".into(),
         }
     }
 

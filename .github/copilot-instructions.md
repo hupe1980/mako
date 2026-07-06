@@ -27,8 +27,12 @@ crates/energy-api/        BDEW API-Webdienste Strom REST/WebSocket client+server
 crates/mako-as4/          AS4 transport [placeholder]
 crates/mako-redispatch/   Redispatch 2.0 [placeholder]
 crates/redispatch-xml/    Redispatch 2.0 XML/XSD format parsing
+crates/mako-mdm/          Master data library — MaloId, MeloId, Gln, repository traits, AppState, CloudEvents, testing feature
+crates/invoic-checker/    INVOIC plausibility library — period validity, position arithmetic, document total, tariff match, tariff found
 services/makod/           Production daemon — assembles all modules
   services/makod/src/mcp_server.rs  MCP server (tools, resources, prompts) at /mcp
+services/mdmd/            Master Data Manager daemon — MaLo/MeLo/contracts/subscriptions, PostgreSQL, OIDC/JWT, port :8180
+services/invoicd/         INVOIC plausibility-check daemon (LF role) — auto-settles/disputes GPKE billing via invoic-checker
 xtask/                    Build/codegen/validation tasks
 docs/                     Architecture docs
 Dockerfile                Multi-stage cargo-chef + distroless image for makod
@@ -185,6 +189,85 @@ Only PID **13003** is MABIS (Bilanzkreisabrechnung Strom, BKV↔ÜNB).
 PIDs 13002–13028 (excluding 13003) are Messwesen PIDs — do not register them under MABIS.
 MaBiS IFTSTA PIDs are **21000–21005** (21006 does not exist; 21007 belongs to WiM Strom Teil 1 / WiM Gas, registered in `mako-wim` `wim-device-change`).
 
+### Marktrollen (Rollenmodell V2.2) — authoritative role table
+
+Source: BDEW-AWH Rollenmodell V2.2 (08.01.2026). Only roles with
+`Marktkommunikation: zur Verwendung freigegeben` are listed.
+
+| Abbreviation | Name | Sparte | Notes |
+|---|---|---|---|
+| `NB` | Netzbetreiber | Gas + Strom | In EDIFACT Gas AHBs sometimes qualified as `GNB` (Gasnetzbetreiber) |
+| `LF` | Lieferant | Gas + Strom | In EDIFACT Gas AHBs sometimes qualified as `LFG` |
+| `MSB` | Messstellenbetreiber | Gas + Strom | In EDIFACT Gas AHBs sometimes qualified as `GMSB` |
+| `BKV` | Bilanzkreisverantwortlicher | Gas + Strom | Gas balancing handled via MGV/FNB framework |
+| `ÜNB` | Übertragungsnetzbetreiber | Strom | Maps to `UNB` in config; `FNB` (Gas TSO) maps to `Uenb` in engine |
+| `BIKO` | Bilanzkoordinator | Strom | BNetzA-governed; issues Abrechnungssummenzeitreihe (PID 13003) |
+| `MGV` | Marktgebietsverantwortlicher | Gas | No engine deployment role |
+| `KN` | Kapazitätsnutzer | Gas | GaBi Gas capacity booking; no engine deployment role yet |
+| `DP` | Data Provider | Strom | UTILTS metering data distribution; no engine deployment role yet |
+| `EIV` | Einsatzverantwortlicher | Strom | Redispatch 2.0 (placeholder crate) |
+| `ESA` | Energieserviceanbieter des Anschlussnutzers | Strom | iMS / smart meter context |
+| `RB` | Registerbetreiber | Gas + Strom | MaStR data registry; sparte-neutral |
+
+**Roles that do NOT exist in Rollenmodell V2.2 — never use:**
+- `NBG`, `MSBG`: these abbreviations do not appear in BDEW documents
+- Sub-role qualifiers `GNB`, `LFG`, `GMSB`, `ANB`, `VNB`, `NMSB`, `AMSB`, `FNB` are
+  EDIFACT-AHB sub-qualifiers or operational sub-types used in `[[party]]` config and
+  NAD role fields — they are NOT standalone Rollenmodell roles.
+
+### MP-ID formats and EDIFACT identification codes — never mix these up
+
+Source: BDEW-AWH Identifikatoren V1.2 (07.02.2025) §2.2;
+Allgemeine Festlegungen V6.1d (01.04.2026) §2.13, §3;
+UTILMD AHB Gas 1.2 NAD+MS/MR tables.
+
+#### BDEW-Codenummer vs. DVGW-Codenummer vs. GLN
+
+| Type | Positions 1–2 | Digits | NAD DE3055 | UNB DE0007 | Registry |
+|---|---|---|---|---|---|
+| BDEW-Codenummer (Strom) | `99` | 13 | **`293`** | **`500`** | bdew-codes.de |
+| DVGW-Codenummer (Gas) | `98` | 13 | **`332`** | **`502`** | codevergabe.dvgw-sc.de |
+| GLN (GS1) | varies | 13 | **`9`** | **`14`** | GS1 |
+| EIC | — | 16 | **`ZEW`** | — | ENTSO-E |
+
+- NAD DE3055 and UNB DE0007 use **different code values** for the same organisation.
+- `332` (DVGW in NAD DE3055) ≠ `502` (DVGW in UNB DE0007).
+- `9` (GS1 in NAD DE3055) ≠ `14` (GS1 in UNB DE0007).
+- In `services/makod/src/party_registry.rs` the agency code is auto-derived from the GLN
+  prefix: `99…` → `"293"`, `98…` → `"332"`, other 13-digit → `"9"`, 16-char → `"ZEW"`.
+- Each Marktrolle must have **exactly one MP-ID** (`"einem Marktteilnehmer kann für jede
+  Marktrolle nur genau eine MP-ID zugeordnet sein"` — Identifikatoren AWH §2.1).
+- UNB `NAD+MS` (sender) and `NAD+MR` (receiver) must use **identical** MP-IDs as the
+  corresponding UNB DE0004/DE0010 sender/receiver fields (§2.13).
+
+#### §2.12 Filename convention (Allgemeine Festlegungen V6.1d §2.12)
+
+`<MsgType>_<SenderMPID>_<ReceiverMPID>_<YYMMDD>_<HHMM>_<Ref>.txt`
+(`.txt.gz` when compressed)
+
+#### §2.14 Publication requirement
+
+- Only published MP-IDs may be used in production messages.
+- Strom: https://bdew-codes.de/Codenumbers/BDEWCodes/CodeOverview
+- Gas: https://codevergabe.dvgw-sc.de/MarketParticipants
+- Operator must be reachable within **3 Werktage** after initial contact (§2.14).
+
+### EDIFACT time encoding — never mix UTC and local time
+
+Source: Allgemeine Festlegungen V6.1d §3.
+
+- All **EDIFACT times are in UTC** (DTM qualifier 303: `CCYYMMDDHHMMZZZ`, ZZZ always `+00`).
+- Process **deadlines** use **gesetzliche deutsche Zeit** (CET = UTC+1, CEST = UTC+2).
+- An off-by-one-hour error at DST transitions is a **regulatory deadline violation**.
+
+| Sparte | Event | UTC MEZ (CET) | UTC MESZ (CEST) |
+|---|---|---|---|
+| Strom | Lieferbeginn/-ende (Mitternacht) | `2300` | `2200` |
+| Gas | Gastag-Beginn (06:00 local) | `0500` | `0400` |
+
+- Bilanzierungsmonat uses DTM qualifier **610**: `DTM+492:202106:610'`
+- `DE0035 = 1` in UNB marks a **test message** (do not process as production).
+
 ### APERAK Fristen — never mix these up
 
 #### APERAK *sending* deadline (how quickly the receiver must send the APERAK)
@@ -243,6 +326,7 @@ ISC, Unicode-3.0, Zlib, CDLA-Permissive-2.0, MIT-0.
 | Architecture overview | [docs/architecture.md](../docs/architecture.md) |
 | Process engine guide | [docs/engine.md](../docs/engine.md) |
 | `makod` operator guide | [docs/makod.md](../docs/makod.md) |
+| `mdmd` operator guide | [docs/mdmd.md](../docs/mdmd.md) |
 | MCP server (LLM tooling) | [services/makod/src/mcp_server.rs](../services/makod/src/mcp_server.rs) · [docs/makod.md#mcp-server](../docs/makod.md) |
 | ERP integration (CloudEvents 1.0 webhooks, Command API) | [docs/erp-integration.md](../docs/erp-integration.md) |
 | Parsing guide | [docs/parsing.md](../docs/parsing.md) |

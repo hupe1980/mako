@@ -1,14 +1,16 @@
 //! BDEW MaKo AS4 P-Mode types and factory functions.
 //!
 //! In ebMS3, a **P-Mode** specifies the complete protocol configuration for a
-//! trading relationship: MEP, security, service/action URIs, and payload packaging.
+//! trading relationship: MEP, security, service/action URIs, payload packaging,
+//! and the partner's HTTPS endpoint URL.
 //!
 //! Use [`bdew_pmode`] to build pre-configured [`PMode`]s with BDEW defaults,
 //! then register them with a [`PModeRegistry`]:
 //!
 //! ```rust
-//! use mako_as4::pmode::{bdew_pmode, BdewAction, PModeRegistry};
+//! use mako_as4::pmode::{bdew_pmode, bdew_pmode_with_endpoint, BdewAction, PModeRegistry};
 //!
+//! // Without endpoint (endpoint supplied separately at send time)
 //! let mut registry = PModeRegistry::new();
 //! registry.register(bdew_pmode(
 //!     "pm-utilmd-9900000000001",
@@ -16,6 +18,15 @@
 //!     BdewAction::Utilmd,
 //! ));
 //! assert_eq!(registry.len(), 1);
+//!
+//! // With endpoint baked into the P-Mode (recommended)
+//! let pm = bdew_pmode_with_endpoint(
+//!     "pm-aperak-9900000000001",
+//!     "9900000000001",
+//!     BdewAction::Aperak,
+//!     "https://partner.example/as4/inbox",
+//! );
+//! assert_eq!(pm.endpoint_url.as_deref(), Some("https://partner.example/as4/inbox"));
 //! ```
 
 use crate::constants;
@@ -64,6 +75,33 @@ pub enum BdewAction {
 }
 
 impl BdewAction {
+    /// Returns all standard (non-[`Custom`]) BDEW action variants.
+    ///
+    /// Useful for registering bilateral P-Modes for every known BDEW EDIFACT
+    /// message type in a single call (see
+    /// [`BdewAs4Profile::register_partner_all_actions`]).
+    ///
+    /// [`Custom`]: Self::Custom
+    /// [`BdewAs4Profile::register_partner_all_actions`]: crate::profile::BdewAs4Profile::register_partner_all_actions
+    pub fn all_standard() -> Vec<Self> {
+        vec![
+            Self::Utilmd,
+            Self::Aperak,
+            Self::Contrl,
+            Self::Mscons,
+            Self::Invoic,
+            Self::Remadv,
+            Self::Iftsta,
+            Self::Ordrsp,
+            Self::Orders,
+            Self::Ordchg,
+            Self::Reqote,
+            Self::Insrpt,
+            Self::Pricat,
+            Self::Quotes,
+        ]
+    }
+
     /// Construct a [`BdewAction`] from an EDIFACT message-type string (e.g. `"APERAK"`).
     ///
     /// Matches all known BDEW message types case-sensitively.  Unknown types
@@ -115,7 +153,7 @@ impl BdewAction {
     }
 }
 
-/// Build a BDEW MaKo P-Mode with opinionated defaults (no encryption).
+/// Build a BDEW MaKo P-Mode with opinionated defaults (no encryption, no endpoint).
 ///
 /// The returned [`PMode`] is pre-configured with:
 /// - `mep`: [`MepType::OneWayPush`] — mandatory per BDEW AS4 spec
@@ -124,6 +162,7 @@ impl BdewAction {
 /// - `security.sign = true` — mandatory
 /// - `security.encrypt = false` — optional; use [`bdew_pmode_encrypted`] if needed
 /// - `payload_packaging`: [`PayloadPackagingMode::MimeAttachment`]
+/// - `endpoint_url`: `None` — use [`bdew_pmode_with_endpoint`] to include the URL
 ///
 /// Register the returned value in a [`PModeRegistry`].
 ///
@@ -158,6 +197,41 @@ pub fn bdew_pmode(
             compress: false,
         },
         payload_packaging: PayloadPackagingMode::MimeAttachment,
+        endpoint_url: None,
+    }
+}
+
+/// Build a BDEW MaKo P-Mode with the partner's HTTPS AS4 endpoint baked in.
+///
+/// Same as [`bdew_pmode`] but populates `endpoint_url` so the P-Mode carries
+/// everything needed for outbound delivery — no separate `PartnerDirectory`
+/// lookup required.
+///
+/// The `endpoint_url` is validated for non-emptiness and HTTPS scheme by
+/// `asx-rs` when the P-Mode is materialised at send time.
+///
+/// # Example
+///
+/// ```rust
+/// use mako_as4::pmode::{bdew_pmode_with_endpoint, BdewAction};
+///
+/// let pm = bdew_pmode_with_endpoint(
+///     "pm-utilmd-9900000000001",
+///     "9900000000001",
+///     BdewAction::Utilmd,
+///     "https://partner.example/as4/inbox",
+/// );
+/// assert_eq!(pm.endpoint_url.as_deref(), Some("https://partner.example/as4/inbox"));
+/// ```
+pub fn bdew_pmode_with_endpoint(
+    id: impl Into<String>,
+    partner_gln: impl Into<String>,
+    action: BdewAction,
+    endpoint_url: impl Into<String>,
+) -> PMode {
+    PMode {
+        endpoint_url: Some(endpoint_url.into()),
+        ..bdew_pmode(id, partner_gln, action)
     }
 }
 
@@ -195,6 +269,21 @@ pub fn bdew_pmode_encrypted(
     }
 }
 
+/// Build a BDEW MaKo P-Mode with encryption enabled and endpoint baked in.
+///
+/// Combines [`bdew_pmode_encrypted`] and [`bdew_pmode_with_endpoint`].
+pub fn bdew_pmode_encrypted_with_endpoint(
+    id: impl Into<String>,
+    partner_gln: impl Into<String>,
+    action: BdewAction,
+    endpoint_url: impl Into<String>,
+) -> PMode {
+    PMode {
+        endpoint_url: Some(endpoint_url.into()),
+        ..bdew_pmode_encrypted(id, partner_gln, action)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,6 +316,19 @@ mod tests {
         assert!(pm.security.sign);
         assert!(!pm.security.encrypt);
         assert_eq!(pm.payload_packaging, PayloadPackagingMode::MimeAttachment);
+        assert!(
+            pm.endpoint_url.is_none(),
+            "bdew_pmode leaves endpoint_url unset"
+        );
+    }
+
+    #[test]
+    fn bdew_pmode_with_endpoint_sets_url() {
+        let url = "https://partner.example/as4/inbox";
+        let pm = bdew_pmode_with_endpoint("pm-1", "9900000000001", BdewAction::Utilmd, url);
+        assert_eq!(pm.endpoint_url.as_deref(), Some(url));
+        assert!(pm.security.sign);
+        assert!(!pm.security.encrypt);
     }
 
     #[test]
@@ -235,6 +337,20 @@ mod tests {
         assert!(pm.security.sign);
         assert!(pm.security.encrypt);
         assert_eq!(pm.mep, MepType::OneWayPush);
+        assert!(pm.endpoint_url.is_none());
+    }
+
+    #[test]
+    fn bdew_pmode_encrypted_with_endpoint_sets_both() {
+        let url = "https://enc-partner.example/as4";
+        let pm = bdew_pmode_encrypted_with_endpoint(
+            "pm-enc-ep",
+            "9900000000002",
+            BdewAction::Mscons,
+            url,
+        );
+        assert!(pm.security.encrypt);
+        assert_eq!(pm.endpoint_url.as_deref(), Some(url));
     }
 
     #[test]

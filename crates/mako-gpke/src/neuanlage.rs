@@ -46,6 +46,9 @@ use mako_engine::{
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
+/// Workflow name used for PID routing and `WorkflowId` construction.
+pub const WORKFLOW_NAME: &str = "gpke-neuanlage";
+
 /// Inbound ANFRAGE PIDs for Neuanlage handled by [`GpkeNeuanlageWorkflow`].
 ///
 /// | PID   | Process (AHB name)                                  | AHB profile                    |
