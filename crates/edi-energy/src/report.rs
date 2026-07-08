@@ -256,6 +256,25 @@ impl EdiEnergyReport {
     /// Call this when the message was validated from a full interchange (UNB…UNZ)
     /// so that the report carries both routing metadata and validation findings as
     /// a single audit record.
+    #[cfg(any(
+        feature = "utilmd",
+        feature = "mscons",
+        feature = "aperak",
+        feature = "contrl",
+        feature = "invoic",
+        feature = "remadv",
+        feature = "orders",
+        feature = "iftsta",
+        feature = "insrpt",
+        feature = "reqote",
+        feature = "partin",
+        feature = "ordchg",
+        feature = "ordrsp",
+        feature = "quotes",
+        feature = "comdis",
+        feature = "pricat",
+        feature = "utilts",
+    ))]
     #[must_use]
     pub(crate) fn with_interchange_header(
         mut self,

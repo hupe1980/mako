@@ -57,6 +57,25 @@ impl InterchangeHeader {
     /// Used to attach envelope metadata to [`EdiEnergyReport`] so a single
     /// report carries both the interchange routing data (sender/receiver/control
     /// reference) and the validation findings.
+    #[cfg(any(
+        feature = "utilmd",
+        feature = "mscons",
+        feature = "aperak",
+        feature = "contrl",
+        feature = "invoic",
+        feature = "remadv",
+        feature = "orders",
+        feature = "iftsta",
+        feature = "insrpt",
+        feature = "reqote",
+        feature = "partin",
+        feature = "ordchg",
+        feature = "ordrsp",
+        feature = "quotes",
+        feature = "comdis",
+        feature = "pricat",
+        feature = "utilts",
+    ))]
     #[must_use]
     pub(crate) fn from_edifact_envelope(env: edifact_rs::InterchangeEnvelope) -> Self {
         use time::{Date, Month, OffsetDateTime, Time, UtcOffset};

@@ -10,12 +10,20 @@ Five distinct layers live here:
 - **`dvgw-edi`** — Stateless DVGW EDIFACT library for the gas transport and balancing market (GaBi Gas 2.0): ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES. No async, no I/O.
 - **`redispatch-xml`** — Stateless Redispatch 2.0 XML/XSD parsing library: all 9 document types (`ActivationDocument`, `AcknowledgementDocument`, `PlannedResourceSchedule`, `Stammdaten`, `Unavailability`, `NetworkConstraintDocument`, `Kaskade`, `StatusRequest`, `Kostenblatt`). No async, no I/O.
 - **`mako-engine` + domain crates + `makod`** — Event-sourced process runtime for long-running MaKo workflows with regulatory deadlines, dual-write atomicity, AS4 inbound/outbound transport, Cedar ABAC authorization, OIDC/JWT + API-key auth, CloudEvents 1.0 ERP webhooks, and an MCP server.
-- **`mako-markt` + `mdmd`** — Master data layer: validated domain IDs (`MaloId`, `MeloId`, `Gln`), six repository traits, temporal `Lokationszuordnung`, and the companion `mdmd` daemon (PostgreSQL, OIDC/JWT, ERP webhook subscriptions). Independently deployable; communicates with `makod` exclusively via CloudEvents 1.0.
+- **`mako-markt` + `marktd`** — Market data layer: validated domain IDs (`MaloId`, `MeloId`, `MarktpartnerId`), repository traits, `VersorgungsStatus`, MaLo grid topology, and the companion `marktd` daemon (PostgreSQL, OIDC/JWT, ERP webhook subscriptions, EventBus fan-out). Independently deployable; communicates with `makod` exclusively via CloudEvents 1.0.
 - **`invoic-checker` + `invoicd`** — Autonomous INVOIC plausibility-check pipeline
   for the Lieferant role. `invoicd` subscribes to `de.mako.process.initiated` events
-  from `mdmd`, runs five plausibility checks, persists every receipt to PostgreSQL
+  from `marktd`, runs five plausibility checks, persists every receipt to PostgreSQL
   (§22 MessZV / §41 EnWG 3-year retention), and issues `gpke.abrechnung.annehmen`
   or `gpke.abrechnung.ablehnen` back to `makod` — no ERP round-trip required.
+- **`processd`** — Process Decision Engine: automated NB Anmeldung STP decisions
+  (via pure `netz-checker` library, STP target ≥ 95 %) and LF E_0624 auto-response
+  (45-minute window). Role-gated Cargo features for §7 EnWG binary separation.
+- **`edmd`** — Energy Data Management daemon: MSCONS meter readings, time-series API,
+  `MeterBillingPeriod` (RLM Spitzenleistung + Gas Brennwert/Zustandszahl),
+  Mehr-/Mindermengensaldo imbalance. PostgreSQL-backed.
+- **`obsd`** — Business-process observability daemon: `ProcessProjection`, BNetzA KPI
+  reports, overdue-process detection, §20 EnWG parity (`initiator_is_affiliate`).
 - **`mako-service`** — Shared service infrastructure library: `ServiceBuilder`
   (composable Axum router), `load_config` (typed TOML + env-var interpolation),
   health routes, and HMAC-SHA256 webhook verification. All mako daemons build on this.
@@ -47,10 +55,16 @@ Five distinct layers live here:
 | `redispatch-xml` | Redispatch 2.0 XML/XSD format parsing |
 | `energy-api` | BDEW API-Webdienste Strom — REST/WebSocket client + Axum server for iMS processes |
 | `makod` | Production daemon — assembles all modules, AS4 inbound server, deadline scheduler |
-| `mako-markt` | Master data library — `MaloId`, `MeloId`, `Gln`, repository traits, CloudEvents, test doubles |
-| `mdmd` | Master Data Manager daemon — MaLo/MeLo/contracts/subscriptions, PostgreSQL, OIDC/JWT, `:8180` |
+| `mako-markt` | Master data library — `MaloId`, `MeloId`, `MarktpartnerId`, repository traits, CloudEvents, test doubles |
+| `mako-edm` | Energy data library — `MeterDataReceipt`, `TimeSeriesRepository`, `ImbalanceReport`, MSCONS PID set |
+| `mako-obs` | Observability library — `ProcessProjection`, `KpiReport`, `DeadlineRisk`, `ProcessProjectionRepository` |
+| `makod` | Production daemon — assembles all modules, AS4 inbound server, deadline scheduler |
+| `marktd` | Market Data Hub daemon — MaLo/MeLo/contracts/VersorgungsStatus/preisblaetter/NeLo/malo_grid, PostgreSQL, OIDC/JWT, `:8180` |
+| `processd` | Process Decision Engine — NB Anmeldung STP (netz-checker, ≥ 95 %) + LF E_0624 auto-response; role-gated §7 EnWG features; `:8580` |
 | `invoic-checker` | INVOIC plausibility library — period validity, position arithmetic, document total, tariff match, tariff found |
-| `invoicd` | INVOIC plausibility-check daemon (LF role) — auto-settles or disputes GPKE billing; persists receipts to PostgreSQL for §22 MessZV compliance |
+| `invoicd` | INVOIC plausibility-check daemon (LF role) — auto-settles or disputes GPKE billing; persists receipts to PostgreSQL for §22 MessZV compliance; `:8280` |
+| `edmd` | Energy Data Management daemon — MSCONS meter readings, time-series API, `MeterBillingPeriod`, imbalance; PostgreSQL; `:8380` |
+| `obsd` | Business-process observability daemon — process projections, BNetzA KPI reports, deadline alerts; PostgreSQL; `:8480` |
 | `mako-service` | Shared service infrastructure — `ServiceBuilder`, `load_config`, health routes, HMAC-SHA256 webhook verification |
 
 ---
@@ -94,12 +108,12 @@ Five distinct layers live here:
 
 | Category | Detail |
 |---|---|
-| 🆔 **Validated domain IDs** | `MaloId` (11-digit BDEW check-digit), `MeloId` (DE+31-char), `Gln` (13-digit; auto-derives NAD DE3055 agency code `293`/`332`/`9`) |
+| 🆔 **Validated domain IDs** | `MaloId` (11-digit BDEW check-digit), `MeloId` (DE+31-char), `MarktpartnerId` (13-digit; auto-derives NAD DE3055 agency code `293`/`332`/`9` from prefix) |
 | 🗂️ **Six repository traits** | `MaloRepository`, `MeloRepository`, `ContractRepository`, `SubscriptionRepository`, `CorrelationIndex`, `PartnerRepository` — AFIT, no `dyn Trait` overhead |
 | ⏳ **Temporal role assignments** | `Lokationszuordnung` with `valid_from`/`valid_to` — evaluated against CET/CEST German calendar date at query time |
 | 📨 **CloudEvents 1.0** | Outbound events (`MarktEvent`) with HMAC-SHA256 signing; `InboundMakoEvent` for receiving `makod` lifecycle events |
 | 🧪 **`testing` feature** | `InMemory*` test doubles for all six traits — no PostgreSQL required in unit tests |
-| 🚫 **Zero framework deps** | No axum, sqlx, or async runtime — pure domain library; all I/O lives in `services/mdmd` |
+| 🚫 **Zero framework deps** | No axum, sqlx, or async runtime — pure domain library; all I/O lives in `services/marktd` |
 
 ### Process engine layer (`mako-engine` + domain crates)
 
@@ -228,16 +242,16 @@ mako-markt = { version = "0.7", features = ["testing"] }
 ```
 
 ```rust
-use mako_markt::domain::{MaloId, MeloId, Gln};
+use mako_markt::domain::{MaloId, MeloId, MarktpartnerId};
 
 // Validated identifiers — construction returns Err on malformed input
 let malo_id = MaloId::new("51238696780")?;
 let melo_id = MeloId::new("DE00056266802AO6G00000H")?;
-let gln     = Gln::new("9900357000004")?;
+let mp_id   = "9900357000004".parse::<MarktpartnerId>()?;
 
-// NAD DE3055 agency code derived from GLN prefix automatically:
+// NAD DE3055 agency code derived from MP-ID prefix automatically:
 // "99…" → "293" (BDEW Strom), "98…" → "332" (DVGW Gas), other → "9" (GS1)
-assert_eq!(gln.nad_agency_code(), "293");
+assert_eq!(mako_markt::domain::nad_agency_code(&mp_id), "293");
 
 // In tests — use InMemory* doubles; no PostgreSQL required
 use mako_markt::testing::InMemoryMaloRepository;
@@ -314,8 +328,11 @@ let repo = InMemoryMaloRepository::default();
 | [Platform Guide](./docs/platform.md) | Multi-tenant, test isolation, custom profiles |
 | [API-Webdienste Strom](./docs/api-webdienste.md) | REST/JSON channel for iMS processes (`energy-api`) |
 | [makod Operator Guide](./docs/makod.md) | Production daemon: persistence, ports, auth, MCP, Kubernetes |
-| [mdmd Operator Guide](./docs/mdmd.md) | Master Data Manager daemon: MaLo/MeLo, subscriptions, OIDC, Docker |
-| [invoicd Operator Guide](./services/invoicd/README.md) | INVOIC plausibility-check daemon: PostgreSQL persistence, §22 MessZV, tariff seeding |
+| [marktd Operator Guide](./docs/marktd.md) | Market Data Hub: MaLo/MeLo, subscriptions, VersorgungsStatus, OIDC, Docker |
+| [processd Operator Guide](./docs/processd.md) | NB STP auto-decisions (netz-checker) + LF E_0624 auto-response; §7 EnWG role features |
+| [invoicd Operator Guide](./docs/invoicd.md) | INVOIC plausibility-check daemon: PostgreSQL persistence, §22 MessZV, tariff seeding |
+| [edmd Operator Guide](./docs/edmd.md) | Energy Data Management: MSCONS storage, time-series API, `MeterBillingPeriod` |
+| [obsd Operator Guide](./docs/obsd.md) | Observability: process projections, KPI reports, §20 EnWG parity |
 | [Release Lifecycle](./docs/release-lifecycle.md) | Annual BDEW profile updates, codegen pipeline |
 | [Schema Versioning](./docs/schema-versioning.md) | Profile JSON schema evolution and archive lifecycle |
 | [PID Reference](./docs/pid-reference.md) | Prüfidentifikatoren — authoritative crate ownership table |
@@ -447,15 +464,20 @@ mako/
 │   │                        # partner_api.rs, deadline_dispatch.rs, health.rs
 │   │                        # mcp_server.rs  ← MCP server (tools + resources + prompts)
 │   │                        # CLI: --data-dir, --as4-addr, --http-addr, --tenant-id
-│   ├── mdmd/                # Master Data Manager daemon
-│   │   └── src/             # main.rs, config.rs, handlers/, pg/, fanout.rs, auth.rs
-│   │                        # PostgreSQL · OIDC/JWT · OpenAPI 3.1 · CloudEvents 1.0
-│   │                        # CLI: --database-url, --tenant, --auth-issuer, :8180
-│   └── invoicd/             # INVOIC plausibility-check daemon (LF role)
-│       ├── src/             # handler.rs, server.rs, config.rs, pg/receipts.rs
-│       │                    # invoic-checker pipeline · PostgreSQL receipt store
-│       │                    # CLI: --database-url, --makod-url, --mdmd-url, :8280
-│       └── migrations/      # SQLx migrations (invoic_receipts table)
+│   ├── marktd/              # Market Data Hub daemon
+│   │   └── src/             # main.rs, config.rs, handlers/, pg/, fanout.rs
+│   │                        # PostgreSQL · OIDC/JWT · OpenAPI 3.1 · EventBus fan-out
+│   │                        # CLI: --database-url, --tenant, --oidc-issuer, :8180
+│   ├── processd/            # Process Decision Engine
+│   │   └── src/             # nb_module.rs (netz-checker) + lf_module.rs (E_0624)
+│   │                        # Cedar ABAC · PostgreSQL · MCP server; :8580
+│   ├── invoicd/             # INVOIC plausibility-check daemon (LF role)
+│   │   ├── src/             # handler.rs, server.rs, config.rs, pg/receipts.rs
+│   │   │                    # invoic-checker pipeline · PostgreSQL receipt store
+│   │   │                    # CLI: --database-url, --makod-url, --marktd-url, :8280
+│   │   └── migrations/      # SQLx migrations (invoic_receipts table)
+│   ├── edmd/                # Energy Data Management daemon — meter reads · billing; :8380
+│   └── obsd/                # Observability daemon — projections · KPIs · §20 parity; :8480
 │
 ├── xtask/                   # Dev automation: codegen · validate · release-diff
 └── fuzz/                    # cargo-fuzz targets (1 100+ corpus entries)
@@ -484,21 +506,23 @@ Process::execute_and_enqueue  ──  replay state · Workflow::handle · Atomic
        └─ DeadlineStore ──►  scheduler  ──►  TimeoutExpired → de.mako.aperak.timeout
 
                                           makod ERP webhook
-                                                │ POST /api/v1/events
+                                                │ POST /api/v1/mako/events
                                                 ▼
-                                          mdmd :8180  (optional companion)
+                                          marktd :8180 (Market Data Hub)
                                           MaLo / MeLo / contracts
+                                          VersorgungsStatus · malo_grid
                                           PostgreSQL · OIDC/JWT
                                                 │ fan-out (CloudEvents 1.0 + HMAC)
-                                                ├──────────────────────────────────┐
-                                                ▼                                  ▼
-                                          ERP system                         invoicd :8280
-                                          (SAP, Schleupen, Wilken, …)        invoic-checker pipeline
-                                                                              PostgreSQL (§22 MessZV)
-                                                                                    │ POST /api/v1/commands
-                                                                                    ▼
-                                                                              makod :8080
-                                                                              annehmen / ablehnen
+                               ┌────────────────┼──────────────┬──────────────┐
+                               ▼                ▼              ▼              ▼
+                         processd :8580   invoicd :8280   edmd :8380   obsd :8480
+                         netz-checker     invoic-checker  meter reads  projections
+                         NB STP + LF E0624 §22 MessZV    billing-period §20 parity
+                               │                │
+                               └────────────────┴──► makod :8080 (bestaetigen / ablehnen)
+                               │
+                               ▼
+                         ERP system (SAP, Schleupen, Wilken, …)
 ```
 
 ---

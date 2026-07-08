@@ -260,6 +260,13 @@ pub(super) mod common {
     /// Shared by MSCONS, ORDERS (flat message-level rule) and INSRPT (group rule
     /// via `with_scoped_group_rule_fn`).  The `rule_id` parameter lets each
     /// caller stamp their own `SEM-<TYPE>-PERIOD-ORDER` identifier.
+    #[cfg(any(
+        feature = "insrpt",
+        feature = "remadv",
+        feature = "orders",
+        feature = "invoic",
+        feature = "mscons",
+    ))]
     pub(super) fn check_period_order(
         segments: &[edifact_rs::Segment<'_>],
         rule_id: &'static str,
