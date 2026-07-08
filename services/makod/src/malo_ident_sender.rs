@@ -13,7 +13,7 @@
 //!    b. A [`VerzeichnisdienstLookup`] that queries the BDEW Verzeichnisdienst and caches the result in the `SlateDbPartnerStore`.
 //! 4. Calls `MaloIdentClient::send_positive_response` or
 //!    `MaloIdentClient::send_negative_response` on the LF's callback endpoint.
-//! 5. On a positive callback, writes the resolved `(tx_id, malo_id, nb_gln)`
+//! 5. On a positive callback, writes the resolved `(tx_id, malo_id, nb_mp_id)`
 //!    to the [`MaloIdentResultCache`] (`mc_txres/` prefix) so the ERP can
 //!    trigger `maloid.lieferbeginn.fortsetzen` without knowing the MaLo-ID
 //!    in advance.
@@ -80,7 +80,7 @@ struct MaloIdentCallbackPayload {
 /// After a positive callback is delivered:
 /// - A `MaloIdentified` outbox message is written to the `OutboxStore` so
 ///   the [`OutboxErpWorker`] can forward the event to the ERP system.
-/// - The resolved `(tx_id, malo_id, nb_gln)` is persisted to the
+/// - The resolved `(tx_id, malo_id, nb_mp_id)` is persisted to the
 ///   [`MaloIdentResultCache`] so the ERP can trigger
 ///   `maloid.lieferbeginn.fortsetzen` using only the `tx_id`.
 ///
@@ -294,7 +294,7 @@ impl As4Sender for MaloIdentSender {
                         payload: serde_json::json!({
                             "tx_id":                    cb.tx_id,
                             "malo_id":                  malo_id_str,
-                            "nb_gln":                   nb_gln_str,
+                            "nb_mp_id":                   nb_gln_str,
                             "sender_market_partner_id": cb.sender_market_partner_id,
                             "tenant_id":                cb.tenant_id,
                         }),
@@ -317,14 +317,14 @@ impl As4Sender for MaloIdentSender {
                         );
                     }
 
-                    // Persist resolved (tx_id → malo_id, nb_gln) so the ERP
+                    // Persist resolved (tx_id → malo_id, nb_mp_id) so the ERP
                     // can trigger `maloid.lieferbeginn.fortsetzen`
                     // using only the tx_id without needing to know the malo_id
                     // in advance.
                     let resolved = MaloIdentResolved {
                         tx_id: cb.tx_id.clone(),
                         malo_id: malo_id_str.clone(),
-                        nb_gln: nb_gln_str.clone(),
+                        nb_mp_id: nb_gln_str.clone(),
                         resolved_at: OffsetDateTime::now_utc(),
                     };
                     if let Err(e) = result_cache.store_result(&cb.tenant_id, &resolved).await {
@@ -338,7 +338,7 @@ impl As4Sender for MaloIdentSender {
                         info!(
                             tx_id   = %cb.tx_id,
                             malo_id = %malo_id_str,
-                            nb_gln  = %nb_gln_str,
+                            nb_mp_id  = %nb_gln_str,
                             "MaloIdentCallback: resolved result cached — \
                              ERP may now call maloid.lieferbeginn.fortsetzen"
                         );

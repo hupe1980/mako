@@ -17,6 +17,55 @@ use crate::{
     error::MdmError,
 };
 
+// ── Date serde helpers (ISO 8601 "YYYY-MM-DD" ↔ time::Date) ─────────────────
+mod date_iso {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use time::Date;
+    use time::macros::format_description;
+
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn serialize<S: Serializer>(date: &Date, s: S) -> Result<S::Ok, S::Error> {
+        let fmt = format_description!("[year]-[month]-[day]");
+        s.serialize_str(&date.format(fmt).map_err(serde::ser::Error::custom)?)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Date, D::Error> {
+        let raw = String::deserialize(d)?;
+        let fmt = format_description!("[year]-[month]-[day]");
+        Date::parse(&raw, fmt).map_err(serde::de::Error::custom)
+    }
+
+    pub mod opt {
+        use serde::{Deserialize, Deserializer, Serializer};
+        use time::Date;
+        use time::macros::format_description;
+
+        #[allow(clippy::trivially_copy_pass_by_ref, clippy::ref_option)]
+        pub fn serialize<S: Serializer>(date: &Option<Date>, s: S) -> Result<S::Ok, S::Error> {
+            match date {
+                Some(d) => {
+                    let fmt = format_description!("[year]-[month]-[day]");
+                    s.serialize_some(&d.format(fmt).map_err(serde::ser::Error::custom)?)
+                }
+                None => s.serialize_none(),
+            }
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Date>, D::Error> {
+            let raw: Option<String> = Option::deserialize(d)?;
+            match raw {
+                Some(s) => {
+                    let fmt = format_description!("[year]-[month]-[day]");
+                    Date::parse(&s, fmt)
+                        .map(Some)
+                        .map_err(serde::de::Error::custom)
+                }
+                None => Ok(None),
+            }
+        }
+    }
+}
+
 // ── Type aliases ──────────────────────────────────────────────────────────────
 
 /// Full BO4E `MARKTLOKATION` payload (stored as JSONB; returned as-is to callers).
@@ -25,6 +74,13 @@ pub type MaloPayload = serde_json::Value;
 pub type MeloPayload = serde_json::Value;
 /// Full BO4E `VERTRAG` payload with `_mdm_billing` extension.
 pub type ContractPayload = serde_json::Value;
+
+/// Default BO4E schema version used by `#[serde(default = ...)]` on record
+/// structs. Returns `"v202501.0.0"` so that records written before M5
+/// (the `bo4e_version` migration) are read as the baseline version.
+fn default_bo4e_version() -> String {
+    "v202501.0.0".to_owned()
+}
 
 // ── MaLo ─────────────────────────────────────────────────────────────────────
 
@@ -36,7 +92,9 @@ pub type ContractPayload = serde_json::Value;
 pub struct Lokationszuordnung {
     pub zuordnungstyp: String,
     pub rollencodenummer: String,
+    #[serde(with = "date_iso")]
     pub valid_from: Date,
+    #[serde(default, with = "date_iso::opt")]
     pub valid_to: Option<Date>,
 }
 
@@ -53,6 +111,11 @@ pub struct MaloRecord {
     /// Role assignments valid at the requested reference date.
     pub lokationszuordnung: Vec<Lokationszuordnung>,
     pub updated_at: time::OffsetDateTime,
+    /// BO4E schema version of the `data` payload (e.g. `"v202501.0.0"`).
+    /// Populated from `rubo4e::Bo4eObject::schema_version()` at write time.
+    /// Used by the read-path dispatcher for zero-downtime schema migration.
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
 }
 
 /// Stored MeLo record.
@@ -63,6 +126,9 @@ pub struct MeloRecord {
     pub version: i64,
     pub data: MeloPayload,
     pub updated_at: time::OffsetDateTime,
+    /// BO4E schema version of the `data` payload.
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
 }
 
 /// Stored contract record.
@@ -74,8 +140,23 @@ pub struct ContractRecord {
     pub vertragsart: String,
     pub version: i64,
     pub data: ContractPayload,
+    /// Start date of the contract validity period.
+    ///
+    /// `None` for records created before this field was added (pre-migration).
+    /// Used by [`ContractRepository::find_active_by_malo`] to detect overlapping
+    /// active contracts when validating Wechselprozess requests.
+    #[serde(default, with = "date_iso::opt")]
+    pub valid_from: Option<Date>,
+    /// End date of the contract validity period.
+    ///
+    /// `None` means the contract is open-ended (currently active with no known end).
+    #[serde(default, with = "date_iso::opt")]
+    pub valid_to: Option<Date>,
     pub created_at: time::OffsetDateTime,
     pub updated_at: time::OffsetDateTime,
+    /// BO4E schema version of the `data` payload.
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
 }
 
 /// Stored webhook subscription.
@@ -98,7 +179,7 @@ pub struct Subscription {
 /// Stored trading-partner record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartnerRecord {
-    pub gln: Gln,
+    pub mp_id: Gln,
     pub display_name: Option<String>,
     pub marktrolle: Option<String>,
     pub sparte: Option<Sparte>,
@@ -181,6 +262,7 @@ pub trait MaloRepository: Send + Sync {
         data: MaloPayload,
         lokationszuordnung: Vec<Lokationszuordnung>,
         if_match: Option<i64>,
+        bo4e_version: &str,
     ) -> Result<i64, MdmError>;
 
     /// Return the `MARKTLOKATION` with `lokationszuordnung` valid at `at`.
@@ -206,6 +288,7 @@ pub trait MeloRepository: Send + Sync {
         malo_id: Option<&MaloId>,
         data: MeloPayload,
         if_match: Option<i64>,
+        bo4e_version: &str,
     ) -> Result<i64, MdmError>;
 
     /// Return the `MESSLOKATION` record.
@@ -217,7 +300,12 @@ pub trait MeloRepository: Send + Sync {
 pub trait ContractRepository: Send + Sync {
     /// Insert or update a contract.
     ///
+    /// `valid_from` / `valid_to` define the contract validity period used by
+    /// [`find_active_by_malo`](ContractRepository::find_active_by_malo) to
+    /// detect overlapping active contracts during Wechselprozess validation.
+    ///
     /// Returns the new version number.
+    #[allow(clippy::too_many_arguments)]
     async fn upsert(
         &self,
         contract_id: &str,
@@ -225,11 +313,30 @@ pub trait ContractRepository: Send + Sync {
         sparte: Sparte,
         vertragsart: &str,
         data: ContractPayload,
+        valid_from: Option<Date>,
+        valid_to: Option<Date>,
         if_match: Option<i64>,
+        bo4e_version: &str,
     ) -> Result<i64, MdmError>;
 
     /// Return a contract by its MDM ID.
     async fn find(&self, contract_id: &str) -> Result<Option<ContractRecord>, MdmError>;
+
+    /// Return all contracts for `malo_id` that are active at date `at`.
+    ///
+    /// A contract is considered active when:
+    /// - `valid_from IS NULL OR valid_from <= at`, AND
+    /// - `valid_to IS NULL OR valid_to >= at`
+    ///
+    /// Contracts without `valid_from` / `valid_to` (pre-migration) are always
+    /// returned so callers can apply their own filtering logic.
+    ///
+    /// Results are ordered by `valid_from DESC NULLS LAST`.
+    async fn find_active_by_malo(
+        &self,
+        malo_id: &MaloId,
+        at: Date,
+    ) -> Result<Vec<ContractRecord>, MdmError>;
 }
 
 /// Read/write access to ERP webhook subscriptions.
@@ -302,10 +409,206 @@ pub trait PartnerRepository: Send + Sync {
     async fn upsert(&self, partner: PartnerRecord) -> Result<i64, MdmError>;
 
     /// Return a partner by GLN.
-    async fn find(&self, gln: &Gln) -> Result<Option<PartnerRecord>, MdmError>;
+    async fn find(&self, mp_id: &Gln) -> Result<Option<PartnerRecord>, MdmError>;
 
     /// List all partners.
     async fn list(&self) -> Result<Vec<PartnerRecord>, MdmError>;
+}
+
+// ── Preisblatt ───────────────────────────────────────────────────────────────
+
+/// Discriminates how a price sheet entered the system.
+///
+/// Used for audit trails and to enforce operator-override protection:
+/// an `Api`-sourced sheet is never silently overwritten by a `Mako` ingest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PreisblattSource {
+    /// Uploaded directly via the REST API (operator batch job or manual override).
+    Api,
+    /// Ingested automatically from a PRICAT 27003 message by the mako engine.
+    Mako,
+}
+
+impl std::fmt::Display for PreisblattSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PreisblattSource::Api => f.write_str("api"),
+            PreisblattSource::Mako => f.write_str("mako"),
+        }
+    }
+}
+
+impl std::str::FromStr for PreisblattSource {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "api" => Ok(PreisblattSource::Api),
+            "mako" => Ok(PreisblattSource::Mako),
+            other => Err(format!("unknown PreisblattSource: {other:?}")),
+        }
+    }
+}
+
+/// A stored `PreisblattNetznutzung` record.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PreisblattRecord {
+    /// GLN of the NB that published this price sheet.
+    pub nb_mp_id: String,
+    /// The full BO4E `PreisblattNetznutzung` payload (stored as JSONB).
+    pub data: serde_json::Value,
+    /// BO4E schema version of `data`.
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+    /// How this record entered the system: `api` (operator upload) or `mako` (engine ingest).
+    pub source: PreisblattSource,
+    pub created_at: time::OffsetDateTime,
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Read/write access to NB price sheets.
+#[allow(async_fn_in_trait)]
+pub trait PreisblattRepository: Send + Sync {
+    /// Upsert a `PreisblattNetznutzung` for the given NB GLN.
+    ///
+    /// Multiple records per GLN are stored; they are distinguished by the
+    /// `gueltigkeit.startdatum` inside `data`.
+    ///
+    /// `source` tracks how the record entered the system: `Api` for operator
+    /// REST uploads, `Mako` for engine-ingested PRICAT 27003 messages.
+    /// An `Api`-sourced sheet is never overwritten by a `Mako` ingest unless
+    /// `force = true`.
+    async fn upsert(
+        &self,
+        nb_mp_id: &str,
+        data: serde_json::Value,
+        bo4e_version: &str,
+        source: PreisblattSource,
+    ) -> Result<(), MdmError>;
+
+    /// Return the price sheet for `nb_mp_id` that was valid on `billing_date`
+    /// (ISO 8601 date string, e.g. `"2025-06-15"`).
+    ///
+    /// Returns `None` when no matching entry is found.
+    async fn find_for_date(
+        &self,
+        nb_mp_id: &str,
+        billing_date: &str,
+    ) -> Result<Option<PreisblattRecord>, MdmError>;
+}
+
+// ── NbContract (NB network contracts — typed, not opaque JSONB) ──────────────
+
+/// Billing frequency for NB network contracts.
+///
+/// Governs when `invoicd` triggers selbstausgestellt INVOIC 31006 MMM billing runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BillingSchedule {
+    /// Invoice once per calendar month.
+    #[default]
+    Monthly,
+    /// Invoice every calendar quarter.
+    Quarterly,
+    /// Invoice once per calendar year.
+    Annually,
+}
+
+impl std::fmt::Display for BillingSchedule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Monthly => write!(f, "MONTHLY"),
+            Self::Quarterly => write!(f, "QUARTERLY"),
+            Self::Annually => write!(f, "ANNUALLY"),
+        }
+    }
+}
+
+impl std::str::FromStr for BillingSchedule {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_uppercase().as_str() {
+            "MONTHLY" => Ok(Self::Monthly),
+            "QUARTERLY" => Ok(Self::Quarterly),
+            "ANNUALLY" => Ok(Self::Annually),
+            other => Err(format!("unknown BillingSchedule '{other}'")),
+        }
+    }
+}
+
+impl BillingSchedule {
+    /// Infallible parse; returns `Monthly` on unknown input.
+    #[must_use]
+    pub fn from_str_or_default(s: &str) -> Self {
+        s.parse().unwrap_or_default()
+    }
+}
+
+/// A typed NB (Netzbetreiber) network contract record.
+///
+/// Unlike LF supply contracts (stored as opaque `JSONB`), NB contracts are
+/// fully typed so that `invoicd` can query by
+/// `netzebene` and `bilanzierungsmethode` without JSON path expressions.
+///
+/// Stored in the `nb_contracts` table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NbContractRecord {
+    /// ERP contract number or UUID.
+    pub contract_id: String,
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: crate::domain::MaloId,
+    /// 13-digit BDEW/DVGW GLN of the Netzbetreiber.
+    pub nb_mp_id: String,
+    /// Energy commodity.
+    pub sparte: crate::domain::Sparte,
+    /// Voltage / pressure level: `NS` | `MS` | `MSP` | `HSP` | `HS` | `HöS` | `HöS/HS`
+    pub netzebene: String,
+    /// Metering / balancing method: `RLM` | `SLP`
+    pub bilanzierungsmethode: String,
+    /// How often the NB bills for network usage.
+    pub billing_schedule: BillingSchedule,
+    /// Start of contract validity (local date in MEZ/MESZ).
+    #[serde(with = "date_iso")]
+    pub valid_from: time::Date,
+    /// End of contract validity (`None` = currently active).
+    #[serde(with = "date_iso::opt")]
+    pub valid_to: Option<time::Date>,
+    /// Tenant ID for multi-tenant deployments.
+    pub tenant: String,
+    /// Optimistic-concurrency version counter.
+    pub version: i64,
+}
+
+/// CRUD repository for NB network contracts.
+#[allow(async_fn_in_trait)]
+pub trait NbContractRepository: Send + Sync {
+    /// Upsert a NB contract record.  Returns the new version number.
+    #[must_use]
+    async fn upsert(&self, rec: NbContractRecord) -> Result<i64, MdmError>;
+
+    /// Find a contract by `contract_id`.
+    #[must_use]
+    async fn find(&self, contract_id: &str) -> Result<Option<NbContractRecord>, MdmError>;
+
+    /// Find the contract active on `date` for `malo_id` within `tenant`.
+    ///
+    /// Returns the most recent contract whose `valid_from ≤ date < valid_to`
+    /// (or `valid_to IS NULL`).
+    #[must_use]
+    async fn find_active(
+        &self,
+        malo_id: &str,
+        date: time::Date,
+        tenant: &str,
+    ) -> Result<Option<NbContractRecord>, MdmError>;
+
+    /// List all NB contracts for a given `nb_mp_id` and `tenant`.
+    #[must_use]
+    async fn list_by_nb(
+        &self,
+        nb_mp_id: &str,
+        tenant: &str,
+    ) -> Result<Vec<NbContractRecord>, MdmError>;
 }
 
 /// Convenience bundle of all repositories, passed to handlers via `Arc<AppState<...>>`.
@@ -341,7 +644,11 @@ where
     ///
     /// Uses an unbounded MPSC sender (single consumer: the fan-out worker).
     /// Unlike `broadcast`, this never silently drops events on lag.
-    pub event_tx: tokio::sync::mpsc::UnboundedSender<crate::cloudevents::MdmEvent>,
+    ///
+    /// Payload is a serialised CloudEvent envelope (`serde_json::Value`).
+    /// Callers serialise typed `MdmEvent` structs before sending so the
+    /// fan-out worker and the `EventBus` abstraction share the same channel.
+    pub event_tx: tokio::sync::mpsc::UnboundedSender<serde_json::Value>,
     /// Operator primary GLN (matches `makod.toml` `[[party]] primary = true`).
     pub tenant_gln: String,
 }

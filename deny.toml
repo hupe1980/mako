@@ -239,7 +239,7 @@ name    = "itertools"
 version = "0.14"
 reason  = "foyer-memory (via slatedb) depends on itertools 0.14.x while rest of workspace uses 0.15."
 
-# ── mdmd new-dependency version skew ─────────────────────────────────────────
+# ── marktd new-dependency version skew ─────────────────────────────────────────
 # sqlx 0.8 / reqwest 0.13 bring in newer minor versions of crates already
 # present through the existing dependency tree.
 
@@ -319,4 +319,15 @@ ignore = [
     # mutually-authenticated channels. Neither path is reachable from untrusted input.
     # Resolution: upgrade asx-rs + object_store once they release with quick-xml ≥ 0.41.
     { id = "RUSTSEC-2026-0195", reason = "quick-xml NsReader memory-exhaustion DoS; all XML consumers in this workspace parse from authenticated sources — not attacker-controlled input. Same upstream constraint as RUSTSEC-2026-0194." },
+    # RUSTSEC-2025-0111: rustls-pemfile 1.x unmaintained.
+    # Pulled transitively by testcontainers → bollard. Dev-only dependency (integration
+    # tests only); not present in any production binary. Resolved when testcontainers
+    # upgrades to rustls-pemfile 2.x.
+    { id = "RUSTSEC-2025-0111", reason = "rustls-pemfile 1.x unmaintained; dev-only dep via testcontainers — not in production binaries" },
+    # RUSTSEC-2025-0134: tokio-tar PAX header smuggling vulnerability.
+    # Pulled transitively by testcontainers → bollard. Dev-only dependency (integration
+    # tests only); not present in any production binary. tokio-tar is used to download
+    # Docker images in tests, not to extract user-supplied archives.
+    # Resolve when testcontainers releases with a patched bollard.
+    { id = "RUSTSEC-2025-0134", reason = "tokio-tar PAX smuggling; dev-only dep via testcontainers/bollard — not in production binaries, no user-supplied archive input" },
 ]

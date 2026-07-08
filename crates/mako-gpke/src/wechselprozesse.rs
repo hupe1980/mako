@@ -55,11 +55,12 @@ use mako_engine::{
     deadline::Deadline,
     envelope::EventEnvelope,
     error::WorkflowError,
+    fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at},
     ids::DeadlineId,
     outbox::PendingOutbox,
     projection::Projection,
     types::{MaLo, MarktpartnerCode, MessageRef},
-    workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
+    workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
 
 // ── PID set ───────────────────────────────────────────────────────────────────
@@ -358,6 +359,10 @@ pub enum SupplierChangeCommand {
         process_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// UTC timestamp at which the inbound UTILMD was received at the transport layer.
+        ///
+        /// Used to compute the APERAK 45-minute sending deadline per APERAK AHB 1.0 §2.4.1.
+        received_at: time::OffsetDateTime,
         /// `true` if `msg.validate()` returned a report with no errors.
         validation_passed: bool,
         /// Human-readable validation issue strings for the `Rejected` event.
@@ -503,19 +508,23 @@ fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruefidentifikat
 
 // ── Deadline label constants ──────────────────────────────────────────────────
 
-/// Deadline label used by the scheduler when the 24h APERAK response window
-/// (BK6-22-024) expires without a counterparty response.
+/// Deadline label for the **24-hour process response window** per BK6-22-024 §4(3).
+///
+/// This is the maximum time within which the NB must send a UTILMD
+/// Bestätigung or Ablehnung after receiving the LF's Lieferbeginn UTILMD.
+/// It is **not** the APERAK *sending* deadline (45 min weekday per
+/// APERAK AHB 1.0 §2.4.1 — see `mako_engine::fristen::APERAK_STROM_WINDOW_LABEL`).
 ///
 /// Register the deadline immediately after `ReceiveUtilmd` is processed:
 /// ```rust,ignore
 /// let due = mako_engine::fristen::add_hours(OffsetDateTime::now_utc(), 24);
-/// let deadline = Deadline::new(process.stream_id().clone(), ..., APERAK_WINDOW_LABEL, due);
+/// let deadline = Deadline::new(process.stream_id().clone(), ..., GPKE_PROCESS_RESPONSE_LABEL, due);
 /// deadline_store.register(&deadline).await?;
 /// ```
 ///
 /// The scheduler fires `on_deadline` → `SupplierChangeCommand::TimeoutExpired`
 /// when the window lapses.
-pub const APERAK_WINDOW_LABEL: &str = "aperak-window";
+pub const GPKE_PROCESS_RESPONSE_LABEL: &str = "gpke-response-24h-window";
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
@@ -545,18 +554,16 @@ impl Workflow for GpkeSupplierChangeWorkflow {
     /// deadline as a no-op via `TimeoutExpired`'s idempotent handler.
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         match (deadline.label(), state) {
-            // APERAK response window expired before the NB sent a UTILMD
-            // Bestätigung or Ablehnung → record DeadlineExpired and close
-            // the process as Rejected (BK6-22-024 §4(3)).
-            (APERAK_WINDOW_LABEL, SupplierChangeState::Initiated(_))
-            | (APERAK_WINDOW_LABEL, SupplierChangeState::ValidationPassed(_)) => {
+            // Process response window expired before the NB sent a UTILMD
+            // Bestätigung or Ablehnung → close as Rejected (BK6-22-024 §4(3)).
+            (GPKE_PROCESS_RESPONSE_LABEL, SupplierChangeState::Initiated(_))
+            | (GPKE_PROCESS_RESPONSE_LABEL, SupplierChangeState::ValidationPassed(_)) => {
                 Some(SupplierChangeCommand::TimeoutExpired {
                     deadline_id: deadline.deadline_id(),
                     label: deadline.label().into(),
                 })
             }
             // All other deadline labels, or terminal states — no-op.
-            // TimeoutExpired's handle() is idempotent on Active/Rejected.
             _ => None,
         }
     }
@@ -652,6 +659,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 document_date,
                 process_date,
                 message_ref,
+                received_at,
                 validation_passed,
                 validation_errors,
             } => {
@@ -749,7 +757,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                                 "sender":     receiver.as_str(),
                                 "receiver":   sender.as_str(),
                                 "pid":        29001_u32,
-                                "error_code": "Z29",
+                                "error_code": mako_engine::erc::codes::Z29,
                                 "reason":     validation_errors.join("; "),
                             }),
                         )
@@ -757,7 +765,17 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                     ]
                 };
 
-                Ok(WorkflowOutput::with_outbox(events, outbox))
+                // APERAK AHB 1.0 §2.4.1: register the 45-minute sending deadline.
+                // The engine persists this atomically alongside the events.
+                let aperak_deadline = PendingDeadline::new(
+                    APERAK_STROM_WINDOW_LABEL,
+                    aperak_strom_due_at(received_at),
+                );
+                Ok(WorkflowOutput::with_outbox_and_deadline(
+                    events,
+                    outbox,
+                    aperak_deadline,
+                ))
             }
 
             SupplierChangeCommand::SendAntwort {
@@ -856,7 +874,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                                 "sender":     data.grid_operator.as_str(),
                                 "receiver":   data.new_supplier.as_str(),
                                 "pid":        29001_u32,
-                                "error_code": "Z29",
+                                "error_code": mako_engine::erc::codes::Z29,
                                 "reason":     reason,
                             }),
                         )

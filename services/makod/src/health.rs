@@ -25,12 +25,14 @@
 //! let app = my_router().merge(health::router(health_state));
 //! ```
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
 use mako_engine::store_slatedb::{KvNamespace, SlateDbStore};
 use serde::Serialize;
 use utoipa::ToSchema;
+
+use crate::worker_health::WorkerWatch;
 
 /// Namespace for the health-check sentinel key (`hc/ping`).
 const HC: KvNamespace = KvNamespace::new("hc/");
@@ -42,6 +44,7 @@ const HC: KvNamespace = KvNamespace::new("hc/");
 pub struct HealthState {
     store: SlateDbStore,
     instance_id: Arc<str>,
+    worker_watches: Arc<RwLock<Vec<WorkerWatch>>>,
 }
 
 impl HealthState {
@@ -58,7 +61,19 @@ impl HealthState {
         Self {
             store,
             instance_id: Arc::from(instance_id.as_str()),
+            worker_watches: Arc::new(RwLock::new(Vec::new())),
         }
+    }
+
+    /// Register a [`WorkerWatch`] for liveness monitoring.
+    ///
+    /// The health handler reports `503 degraded` if any registered watch is
+    /// stale.  Call this after spawning each background worker.
+    pub fn register_worker(&self, watch: WorkerWatch) {
+        self.worker_watches
+            .write()
+            .expect("worker_watches RwLock is never poisoned")
+            .push(watch);
     }
 }
 
@@ -82,9 +97,9 @@ pub(crate) struct HealthResponse {
 /// Liveness + readiness probe handler.
 ///
 /// Performs a lightweight SlateDB read and returns:
-/// - `200 OK`  `{"status":"ok","instance_id":"..."}` — store is alive.
+/// - `200 OK`  `{"status":"ok","instance_id":"..."}` — store is alive and all workers are healthy.
 /// - `503 Service Unavailable`  `{"status":"degraded","instance_id":"...","reason":"..."}`
-///   — store is closed or unreachable.
+///   — store is closed, unreachable, or a worker heartbeat is stale.
 #[utoipa::path(
     get,
     path = "/health",
@@ -97,6 +112,28 @@ pub(crate) struct HealthResponse {
 pub(crate) async fn handler(
     State(state): State<HealthState>,
 ) -> (StatusCode, Json<HealthResponse>) {
+    // 1. Check worker heartbeats first (cheap atomic reads).
+    {
+        let watches = state
+            .worker_watches
+            .read()
+            .expect("worker_watches RwLock is never poisoned");
+        for watch in watches.iter() {
+            if watch.is_stale() {
+                tracing::warn!(worker = watch.name, "health check: worker heartbeat stale",);
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(HealthResponse {
+                        status: "degraded",
+                        instance_id: String::from(&*state.instance_id),
+                        reason: Some(format!("worker_stale:{}", watch.name)),
+                    }),
+                );
+            }
+        }
+    }
+
+    // 2. Then verify the store is alive with a sentinel key-value read.
     match state.store.kv_get(HC, "ping").await {
         Ok(_) => (
             StatusCode::OK,

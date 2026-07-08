@@ -37,8 +37,16 @@ All three ports are optional and independently enabled via CLI flags or
 environment variables. A minimal deployment can use a single port; a full
 production deployment uses all three.
 
-The companion **[`mdmd`](./mdmd.md)** Master Data Manager daemon runs separately on `:8180`
-and provides the MaLo/MeLo/contract REST API, webhook subscriptions, and ERP fan-out.
+Companion daemons complete the production stack:
+
+| Daemon | Port | Role |
+|--------|------|------|
+| [`marktd`](./marktd.md) | `:8180` | Master data (MaLo/MeLo/contracts), webhook fan-out, price sheets |
+| `invoicd` | `:8280` | INVOIC plausibility, receipt persistence, REMADV auto-dispatch |
+| `edmd` | `:8380` | Meter-data store (MSCONS), time-series API, Mehr-/Mindermengen |
+| `obsd` | `:8480` | Business-process observability, BNetzA KPI reports, alerting |
+
+See the individual service READMEs for setup details.
 
 ---
 
@@ -951,7 +959,7 @@ loopback** instead of an AS4 round-trip:
 3. Passes each parsed message to `EdifactIngestDispatcher::dispatch`, which
    spawns or resumes the correct workflow process with zero network overhead.
 
-No `--as4-partner OWN_GLN=...` registration is required.  `--marktrollen
+No `--as4-partner` registration is required for own-MP-ID loopback delivery.  `--marktrollen
 NB,MSB` (or `GNB,gMSB`) is still required so the Command API accepts
 multi-role ERP commands.
 
@@ -1356,7 +1364,10 @@ Omit the `[otel]` section entirely to disable telemetry with zero overhead — t
 
 - [Getting Started](./getting-started.md) — first workflow in 5 minutes
 - [Process Engine Guide](./engine.md) — event-sourcing architecture
-- [`mdmd` Operator Guide](./mdmd.md) — Master Data Manager daemon (MaLo/MeLo, subscriptions, ERP webhooks)
+- [`marktd` Operator Guide](./marktd.md) — Master Data Manager daemon (MaLo/MeLo, subscriptions, ERP webhooks)
+- [`invoicd` README](../services/invoicd/README.md) — INVOIC plausibility, receipt persistence, REMADV auto-dispatch
+- [`edmd` README](../services/edmd/README.md) — meter-data store, time-series API, Mehr-/Mindermengen
+- [`obsd` README](../services/obsd/README.md) — business-process observability, BNetzA KPI reports
 - [ERP Integration](./erp-integration.md) — CloudEvents 1.0 webhooks, Command API, receiver implementation guide
 - [API-Webdienste Strom](./api-webdienste.md) — REST/JSON channel for iMS processes
 - [Annual Release Workflow](./annual-release-workflow.md) — incorporating new BDEW specs

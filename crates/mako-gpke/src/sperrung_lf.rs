@@ -100,7 +100,7 @@ pub struct SperrungAuftragData {
     /// EIC/MaLo of the supply location.
     pub location_id: MaLo,
     /// GLN of the NB that will execute the Sperrung.
-    pub nb_gln: MarktpartnerCode,
+    pub nb_mp_id: MarktpartnerCode,
     /// BDEW Prüfidentifikator of the outbound ORDERS (17115 or 17117).
     pub pruefidentifikator: Pruefidentifikator,
     /// EDIFACT message reference of the outbound ORDERS.
@@ -120,7 +120,7 @@ pub enum SperrungLfEvent {
         /// EIC/MaLo of the supply location.
         location_id: MaLo,
         /// GLN of the NB.
-        nb_gln: MarktpartnerCode,
+        nb_mp_id: MarktpartnerCode,
         /// Prüfidentifikator (17115 = Sperrauftrag, 17117 = Entsperrauftrag).
         pruefidentifikator: Pruefidentifikator,
         /// EDIFACT message reference of the outbound ORDERS.
@@ -289,7 +289,7 @@ pub enum SperrungLfCommand {
         /// Prüfidentifikator (17115 = Sperrauftrag, 17117 = Entsperrauftrag).
         pid: Pruefidentifikator,
         /// GLN of the NB to send the Sperrauftrag to.
-        nb_gln: MarktpartnerCode,
+        nb_mp_id: MarktpartnerCode,
         /// EIC/MaLo of the supply location.
         location_id: MaLo,
         /// EDIFACT message reference of the outbound ORDERS.
@@ -377,12 +377,12 @@ impl Workflow for GpkeSperrungLfWorkflow {
         match event {
             SperrungLfEvent::AuftragInitiiert {
                 location_id,
-                nb_gln,
+                nb_mp_id,
                 pruefidentifikator,
                 message_ref,
             } => SperrungLfState::AuftragGesendet(SperrungAuftragData {
                 location_id: location_id.clone(),
-                nb_gln: nb_gln.clone(),
+                nb_mp_id: nb_mp_id.clone(),
                 pruefidentifikator: *pruefidentifikator,
                 message_ref: message_ref.clone(),
             }),
@@ -447,7 +447,7 @@ impl Workflow for GpkeSperrungLfWorkflow {
         match command {
             SperrungLfCommand::InitiateSperrung {
                 pid,
-                nb_gln,
+                nb_mp_id,
                 location_id,
                 message_ref,
             } => {
@@ -461,7 +461,7 @@ impl Workflow for GpkeSperrungLfWorkflow {
                 }
                 let outbox = PendingOutbox::new(
                     "ORDERS",
-                    nb_gln.as_str(),
+                    nb_mp_id.as_str(),
                     serde_json::json!({
                         "type":          "SperrungAuftrag",
                         "pid":           pid.as_u32(),
@@ -471,7 +471,7 @@ impl Workflow for GpkeSperrungLfWorkflow {
                 );
                 let event = SperrungLfEvent::AuftragInitiiert {
                     location_id,
-                    nb_gln,
+                    nb_mp_id,
                     pruefidentifikator: pid,
                     message_ref,
                 };
@@ -533,13 +533,13 @@ impl Workflow for GpkeSperrungLfWorkflow {
                         state.label(),
                     ));
                 }
-                let nb_gln = state
+                let nb_mp_id = state
                     .auftrag_data()
-                    .map(|d| d.nb_gln.as_str().to_owned())
+                    .map(|d| d.nb_mp_id.as_str().to_owned())
                     .unwrap_or_default();
                 let outbox = PendingOutbox::new(
                     "ORDCHG",
-                    nb_gln.as_str(),
+                    nb_mp_id.as_str(),
                     serde_json::json!({
                         "type":        "SperrungStornierung",
                         "pid":         39000_u32,

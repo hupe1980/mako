@@ -41,9 +41,9 @@
 //! - `POST /api/v1/commands` — ERP submits a BO4E object (JSON) to initiate a MaKo process
 //! - `POST /edifact` — submit a raw EDIFACT interchange as an alternative to AS4
 //! - `GET  /admin/partners` — list all trading-partner records for this tenant
-//! - `GET  /admin/partners/{gln}` — retrieve a single partner record
-//! - `PUT  /admin/partners/{gln}` — create or update a partner record (JSON body)
-//! - `DELETE /admin/partners/{gln}` — remove a partner record
+//! - `GET  /admin/partners/{mp_id}` — retrieve a single partner record
+//! - `PUT  /admin/partners/{mp_id}` — create or update a partner record (JSON body)
+//! - `DELETE /admin/partners/{mp_id}` — remove a partner record
 //! - `POST /admin/partners/import` — import partners from a raw PARTIN EDIFACT interchange
 //!
 //! See [`edifact_api`] and [`partner_api`] for full request/response documentation.
@@ -133,6 +133,7 @@ mod projection_worker;
 mod startup;
 mod verzeichnisdienst_worker;
 mod webdienste;
+mod worker_health;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -638,6 +639,20 @@ struct Cli {
     #[arg(long, value_name = "URL", env = "MAKOD_EDIFACT_OUTBOX_WEBHOOK_URL")]
     edifact_outbox_webhook_url: Option<String>,
 
+    /// Allow startup without AS4 signing credentials and without an EDIFACT
+    /// outbox webhook.  By default (when this flag is absent) makod refuses
+    /// to start if neither `--as4-signing-key-pem` nor
+    /// `--edifact-outbox-webhook-url` is set, because outbound EDIFACT
+    /// delivery would silently fail for all messages.
+    ///
+    /// Set this flag only in integration-test or CI environments where
+    /// outbound delivery is intentionally disabled.
+    ///
+    /// Can also be set via the `MAKOD_ALLOW_NO_AS4_SIGNING` environment
+    /// variable.
+    #[arg(long, env = "MAKOD_ALLOW_NO_AS4_SIGNING", default_value_t = false)]
+    allow_no_as4_signing: bool,
+
     /// Validate configuration, adapter coverage, and profile availability, then exit.
     ///
     /// In check mode makod:
@@ -941,7 +956,7 @@ fn main() -> anyhow::Result<()> {
 async fn async_main(cli: Cli) -> anyhow::Result<()> {
     init_tracing(&cli);
 
-    use party_registry::GlnRegistry;
+    use party_registry::MpIdRegistry;
 
     // ── GLN registry ─────────────────────────────────────────────────────────
     //
@@ -954,14 +969,14 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
          Create a config file (--config / MAKOD_CONFIG) with:\n\
          \n\
          [[party]]\n\
-         gln   = \"<13-digit-GLN>\"\n\
+         mp_id   = \"<13-digit-GLN>\"\n\
          roles = [\"NB\", \"LF\", \"MSB\"]  # adjust to operator's Marktrollen\n\
          \n\
          See docs/makod.md for the full configuration reference."
     );
 
-    let gln_registry: Arc<GlnRegistry> =
-        Arc::new(GlnRegistry::from_config(&cli.parties).context("invalid [[party]] config")?);
+    let gln_registry: Arc<MpIdRegistry> =
+        Arc::new(MpIdRegistry::from_config(&cli.parties).context("invalid [[party]] config")?);
 
     info!(
         primary_gln  = %gln_registry.primary_gln(),
@@ -1502,11 +1517,14 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             malo_cache: malo_cache.clone(),
             maloid_result_cache: malo_cache::MaloIdentResultCache::new(store.clone()),
         });
-        let metrics_state = Arc::new(metrics_api::MetricsState::new(
-            store.clone(),
-            Arc::clone(&cedar),
-            gln_registry.primary_gln().to_owned(),
-        ));
+        let metrics_state = Arc::new(
+            metrics_api::MetricsState::new(
+                store.clone(),
+                Arc::clone(&cedar),
+                gln_registry.primary_gln().to_owned(),
+            )
+            .with_volatile_mode(cli.data_dir.is_none() && cli.allow_volatile),
+        );
         let migration_state = Arc::new(migration_api::MigrationApiState {
             store: Arc::new(store.clone()),
             cedar: Arc::clone(&cedar),
@@ -1751,10 +1769,12 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         erp_webhook_url: cli.erp_webhook_url.clone(),
         erp_webhook_secret: cli.erp_webhook_secret.clone(),
         edifact_outbox_webhook_url: cli.edifact_outbox_webhook_url.clone(),
+        allow_no_as4_signing: cli.allow_no_as4_signing,
         snapshot_interval: cli.snapshot_interval,
         deadline_poll_interval_secs: cli.deadline_poll_interval_secs,
         projection_checkpoint_interval: cli.projection_checkpoint_interval,
         no_transport_configured: cli.as4_addr.is_none() && cli.http_addr.is_none(),
+        health_state: health_state.clone(),
     })
     .await?;
 

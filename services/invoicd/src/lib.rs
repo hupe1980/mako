@@ -3,9 +3,9 @@
 //! ## Architecture
 //!
 //! ```text
-//! mdmd ──(POST /webhook)──► invoicd handler
+//! marktd ──(POST /webhook)──► invoicd handler
 //!                               │
-//!                     parse MdmEvent JSON
+//!                     parse MarktEvent JSON
 //!                               │
 //!                     ┌─────────▼──────────┐
 //!                     │  ce_type routing    │
@@ -15,7 +15,7 @@
 //!          ▼                    ▼                           ▼
 //!  "de.mako.process.   "de.mako.process.       all others
 //!   initiated"         completed" + pid==27003  → 204 No Content
-//!  + pid in INVOIC set → seed TariffStore
+//!  + pid in INVOIC set → fetch Preisblatt from marktd
 //!          │
 //!  run InvoicCheckEngine::check()
 //!          │
@@ -38,7 +38,7 @@
 //! |----------------------------|--------------------------------|----------------------------|
 //! | `--listen`                 | `INVOICD_LISTEN`               | `0.0.0.0:8280`             |
 //! | `--makod-url`              | `INVOICD_MAKOD_URL`            | `http://localhost:8180`    |
-//! | `--mdmd-url`               | `INVOICD_MDMD_URL`             | `http://localhost:9180`    |
+//! | `--marktd-url`              | `INVOICD_MARKTD_URL`             | `http://localhost:9180`    |
 //! | `--subscriber-id`          | `INVOICD_SUBSCRIBER_ID`        | `invoicd`                  |
 //! | `--webhook-url`            | `INVOICD_WEBHOOK_URL`          | *(required)*               |
 //! | `--webhook-secret`         | `INVOICD_WEBHOOK_SECRET`       | *(optional)*               |
@@ -51,12 +51,13 @@
 //!
 //! ## Subscription registration
 //!
-//! At startup `invoicd` calls `PUT /api/v1/subscriptions/invoicd` on `mdmd`
+//! At startup `invoicd` calls `PUT /api/v1/subscriptions/invoicd` on `marktd`
 //! to ensure it receives `de.mako.process.initiated` events.  The idempotent
 //! `PUT` is safe to call on every restart.
 
 pub mod config;
 pub mod handler;
-pub mod makod_client;
+pub mod mcp_server;
+pub mod pg;
+pub mod preisblatt_client;
 pub mod server;
-pub mod tariff_store;

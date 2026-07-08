@@ -91,7 +91,7 @@ pub mod stornierung;
 pub mod verpflichtungsanfrage;
 
 pub use anmeldung::{
-    ANMELDUNG_PIDS, APERAK_WINDOW_LABEL as ANMELDUNG_APERAK_WINDOW_LABEL,
+    ANMELDUNG_PIDS, RESPONSE_WINDOW_LABEL as ANMELDUNG_RESPONSE_WINDOW_LABEL,
     WORKFLOW_NAME as ANMELDUNG_WORKFLOW_NAME, WimGasAnmeldungCommand, WimGasAnmeldungData,
     WimGasAnmeldungEvent, WimGasAnmeldungProjection, WimGasAnmeldungRecord,
     WimGasAnmeldungRecordData, WimGasAnmeldungState, WimGasAnmeldungWorkflow,
@@ -108,23 +108,23 @@ pub use invoic::{
     WimGasInvoicRecord, WimGasInvoicState, WimGasInvoicWorkflow,
 };
 pub use kuendigung::{
-    APERAK_WINDOW_LABEL as KUENDIGUNG_APERAK_WINDOW_LABEL, KUENDIGUNG_PIDS,
+    KUENDIGUNG_PIDS, RESPONSE_WINDOW_LABEL as KUENDIGUNG_RESPONSE_WINDOW_LABEL,
     WORKFLOW_NAME as KUENDIGUNG_WORKFLOW_NAME, WimGasKuendigungCommand, WimGasKuendigungData,
     WimGasKuendigungEvent, WimGasKuendigungProjection, WimGasKuendigungRecord,
     WimGasKuendigungRecordData, WimGasKuendigungState, WimGasKuendigungWorkflow,
 };
 pub use stornierung::{
-    STORNIERUNG_APERAK_WINDOW_LABEL, STORNIERUNG_PIDS, WORKFLOW_NAME as STORNIERUNG_WORKFLOW_NAME,
-    WimGasStornierungCommand, WimGasStornierungData, WimGasStornierungEvent,
-    WimGasStornierungState, WimGasStornierungWorkflow,
+    STORNIERUNG_PIDS, STORNIERUNG_RESPONSE_WINDOW_LABEL,
+    WORKFLOW_NAME as STORNIERUNG_WORKFLOW_NAME, WimGasStornierungCommand, WimGasStornierungData,
+    WimGasStornierungEvent, WimGasStornierungState, WimGasStornierungWorkflow,
 };
 pub use verpflichtungsanfrage::{
-    APERAK_WINDOW_LABEL as VERPFLICHTUNGSANFRAGE_APERAK_WINDOW_LABEL, VERPFLICHTUNGSANFRAGE_PIDS,
-    WORKFLOW_NAME as VERPFLICHTUNGSANFRAGE_WORKFLOW_NAME, WimGasVerpflichtungsanfrageCommand,
-    WimGasVerpflichtungsanfrageData, WimGasVerpflichtungsanfrageEvent,
-    WimGasVerpflichtungsanfrageProjection, WimGasVerpflichtungsanfrageRecord,
-    WimGasVerpflichtungsanfrageRecordData, WimGasVerpflichtungsanfrageState,
-    WimGasVerpflichtungsanfrageWorkflow,
+    RESPONSE_WINDOW_LABEL as VERPFLICHTUNGSANFRAGE_RESPONSE_WINDOW_LABEL,
+    VERPFLICHTUNGSANFRAGE_PIDS, WORKFLOW_NAME as VERPFLICHTUNGSANFRAGE_WORKFLOW_NAME,
+    WimGasVerpflichtungsanfrageCommand, WimGasVerpflichtungsanfrageData,
+    WimGasVerpflichtungsanfrageEvent, WimGasVerpflichtungsanfrageProjection,
+    WimGasVerpflichtungsanfrageRecord, WimGasVerpflichtungsanfrageRecordData,
+    WimGasVerpflichtungsanfrageState, WimGasVerpflichtungsanfrageWorkflow,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────

@@ -57,8 +57,8 @@ use tracing::{info, warn};
 ///
 /// Produced by `WebhookErpAdapter` from an [`ErpEvent`].  All mako-specific
 /// metadata is carried as extension attributes (`makoconvid`, `makocausationid`,
-/// `makopid`, `makofailreason`).  Extension attribute names must be lowercase
-/// alphanumeric only (CloudEvents spec §3.3).
+/// `makopid`, `makofailreason`, `makoerc`).  Extension attribute names must be
+/// lowercase alphanumeric only (CloudEvents spec §3.3).
 #[derive(Serialize)]
 struct CloudEventEnvelope<'a> {
     specversion: &'static str,
@@ -78,11 +78,18 @@ struct CloudEventEnvelope<'a> {
     makopid: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     makofailreason: Option<&'a str>,
-    /// Workflow family that produced this event — used by `mdmd` to derive
-    /// `mdmrole` for role-scoped ERP subscriber fan-out.
+    /// Workflow family that produced this event — used by `marktd` to derive
+    /// `marktrole` for role-scoped ERP subscriber fan-out.
     /// Empty string is serialized as an absent field.
     #[serde(skip_serializing_if = "str::is_empty")]
     makoworkflow: &'a str,
+    /// BDEW ERC error code when `type == "de.mako.aperak.rejected"`.
+    ///
+    /// Carries the structured BDEW ERC code (e.g. `"Z29"`, `"E02"`) so ERP
+    /// subscribers can automate the response without parsing `data.error_code`.
+    /// Absent when no ERC code is available (e.g. timeout-initiated rejections).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    makoerc: Option<&'a str>,
     data: &'a serde_json::Value,
 }
 
@@ -90,6 +97,10 @@ impl<'a> CloudEventEnvelope<'a> {
     fn from_erp_event(event: &'a ErpEvent) -> Self {
         let fail_reason = match &event.event_type {
             ErpEventType::ProcessFailed { reason } => Some(reason.as_ref()),
+            _ => None,
+        };
+        let erc_code = match &event.event_type {
+            ErpEventType::AperakRejected { erc_code } => erc_code.as_ref().map(|c| c.as_str()),
             _ => None,
         };
         Self {
@@ -106,6 +117,7 @@ impl<'a> CloudEventEnvelope<'a> {
             makopid: event.pid,
             makofailreason: fail_reason,
             makoworkflow: event.workflow_name.as_ref(),
+            makoerc: erc_code,
             data: &event.payload,
         }
     }
@@ -408,13 +420,28 @@ where
                 // with unrecognised types rather than misclassifying them as
                 // process failures — they may belong to a different delivery
                 // channel.
-                let Some(event_type) = map_message_type_to_erp_event(&msg.message_type) else {
+                let Some(raw_event_type) = map_message_type_to_erp_event(&msg.message_type) else {
                     tracing::debug!(
                         message_id  = %msg.message_id,
                         message_type = %msg.message_type,
                         "OutboxErpWorker: unrecognised message type; skipping",
                     );
                     continue;
+                };
+
+                // For APERAK rejections, promote the structured ERC code from
+                // `payload["error_code"]` into the typed `AperakRejected.erc_code`
+                // field so the CloudEvents `makoerc` extension is populated.
+                let event_type = match raw_event_type {
+                    mako_engine::erp::ErpEventType::AperakRejected { .. } => {
+                        let erc_code = msg
+                            .payload
+                            .get("error_code")
+                            .and_then(|v| v.as_str())
+                            .map(mako_engine::erc::ErcCode::new);
+                        mako_engine::erp::ErpEventType::AperakRejected { erc_code }
+                    }
+                    other => other,
                 };
 
                 let event = ErpEvent {
@@ -502,7 +529,7 @@ fn map_message_type_to_erp_event(msg_type: &str) -> Option<mako_engine::erp::Erp
     use mako_engine::erp::ErpEventType;
     Some(match msg_type {
         "AperakAccepted" => ErpEventType::AperakAccepted,
-        "AperakRejected" => ErpEventType::AperakRejected,
+        "AperakRejected" => ErpEventType::AperakRejected { erc_code: None },
         "AperakTimeout" => ErpEventType::AperakTimeout,
         "ContrlReceived" => ErpEventType::ContrlReceived,
         // Accept both the canonical name and the legacy typo.

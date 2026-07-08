@@ -41,11 +41,11 @@ fn make_process() -> Process<GeliGasDatanabrufWorkflow, InMemoryEventStore> {
     )
 }
 
-fn lf_gln() -> MarktpartnerCode {
+fn lf_mp_id() -> MarktpartnerCode {
     MarktpartnerCode::new("4012345000023")
 }
 
-fn nb_gln() -> MarktpartnerCode {
+fn nb_mp_id() -> MarktpartnerCode {
     MarktpartnerCode::new("9900357000004")
 }
 
@@ -60,8 +60,8 @@ fn pid(n: u32) -> Pruefidentifikator {
 fn receive_anfrage(anfrage_pid: u32) -> GeliGasDatanabrufCommand {
     GeliGasDatanabrufCommand::ReceiveAnfrage {
         pid: pid(anfrage_pid),
-        sender: lf_gln(),
-        receiver: nb_gln(),
+        sender: lf_mp_id(),
+        receiver: nb_mp_id(),
         message_ref: msg("ORDERS-17103-001"),
     }
 }
@@ -92,7 +92,7 @@ async fn receive_msb_gas_anfrage_transitions_to_anfrage_gesendet() {
     p.execute(GeliGasDatanabrufCommand::ReceiveAnfrage {
         pid: pid(17104),
         sender: MarktpartnerCode::new("8888888000001"), // MSB Gas
-        receiver: nb_gln(),
+        receiver: nb_mp_id(),
         message_ref: msg("ORDERS-17104-001"),
     })
     .await
@@ -114,7 +114,7 @@ async fn receive_rejection_19103_transitions_to_abgelehnt() {
 
     p.execute(GeliGasDatanabrufCommand::ReceiveAblehnung {
         pid: pid(19103),
-        sender: nb_gln(),
+        sender: nb_mp_id(),
         message_ref: msg("ORDRSP-19103-001"),
     })
     .await
@@ -136,7 +136,7 @@ async fn receive_rejection_19104_transitions_to_abgelehnt() {
 
     p.execute(GeliGasDatanabrufCommand::ReceiveAblehnung {
         pid: pid(19104),
-        sender: nb_gln(),
+        sender: nb_mp_id(),
         message_ref: msg("ORDRSP-19104-001"),
     })
     .await
@@ -193,12 +193,12 @@ async fn timeout_fires_deadline_expired() {
 async fn anfrage_data_preserved_in_anfrage_gesendet() {
     let p = make_process();
 
-    let sender = lf_gln();
+    let sender = lf_mp_id();
 
     p.execute(GeliGasDatanabrufCommand::ReceiveAnfrage {
         pid: pid(17103),
         sender: sender.clone(),
-        receiver: nb_gln(),
+        receiver: nb_mp_id(),
         message_ref: msg("ORDERS-DATA"),
     })
     .await
@@ -226,7 +226,7 @@ async fn timeout_on_already_abgelehnt_is_idempotent() {
 
     p.execute(GeliGasDatanabrufCommand::ReceiveAblehnung {
         pid: pid(19103),
-        sender: nb_gln(),
+        sender: nb_mp_id(),
         message_ref: msg("ORDRSP-19103-002"),
     })
     .await

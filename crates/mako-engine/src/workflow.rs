@@ -41,10 +41,55 @@ use crate::{
     version::{WorkflowId, WorkflowVersionPolicy},
 };
 
+// ── PendingDeadline ───────────────────────────────────────────────────────────
+
+/// A deadline that a [`Workflow::handle`] function wishes to register,
+/// expressed without the process-identity fields that are only known to the
+/// engine's execution context.
+///
+/// The engine converts `PendingDeadline` into a fully-typed [`Deadline`] by
+/// injecting `stream_id`, `process_id`, `tenant_id`, and `workflow_id` from
+/// the active [`CommandContext`].  Workflows therefore stay pure (no I/O).
+///
+/// ## Usage
+///
+/// Return `PendingDeadline` inside [`WorkflowOutput`] when the command must
+/// register a regulatory deadline alongside its events and outbox messages:
+///
+/// ```rust,ignore
+/// use mako_engine::fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at};
+/// use mako_engine::workflow::PendingDeadline;
+///
+/// let due = aperak_strom_due_at(received_at);
+/// let dl = PendingDeadline::new(APERAK_STROM_WINDOW_LABEL, due);
+/// Ok(WorkflowOutput::with_outbox_and_deadline(events, outbox, dl))
+/// ```
+///
+/// [`Deadline`]: crate::deadline::Deadline
+/// [`CommandContext`]: crate::workflow::CommandContext
+#[derive(Debug, Clone)]
+pub struct PendingDeadline {
+    /// Deadline label (matches the `on_deadline` match arm in the workflow).
+    pub label: String,
+    /// Absolute UTC time at which the deadline fires.
+    pub due_at: time::OffsetDateTime,
+}
+
+impl PendingDeadline {
+    /// Create a new pending deadline with the given label and due time.
+    #[must_use]
+    pub fn new(label: impl Into<String>, due_at: time::OffsetDateTime) -> Self {
+        Self {
+            label: label.into(),
+            due_at,
+        }
+    }
+}
+
 // ── WorkflowOutput ────────────────────────────────────────────────────────────
 
-/// The combined output of [`Workflow::handle`]: domain events and optional
-/// outbox messages to be atomically co-persisted.
+/// The combined output of [`Workflow::handle`]: domain events, optional
+/// outbox messages, and optional deadlines, all atomically co-persisted.
 ///
 /// Use [`WorkflowOutput::events`] or `From<Vec<E>>` when the command produces
 /// only events (no outbox messages). This keeps existing `handle`
@@ -54,6 +99,11 @@ use crate::{
 /// [`PendingOutbox`] entries to `outbox`. The engine materialises them into
 /// fully-typed [`OutboxMessage`] values with correct `causation_event_id` links
 /// inside [`Process::execute_and_enqueue`].
+///
+/// When the command must register a regulatory deadline (e.g. APERAK 45-min
+/// sending window per APERAK AHB 1.0 §2.4.1), add a [`PendingDeadline`].
+/// The engine injects the process-identity fields from [`CommandContext`] and
+/// persists the deadline atomically with the events.
 ///
 /// [`OutboxMessage`]: crate::outbox::OutboxMessage
 /// [`Process::execute_and_enqueue`]: crate::process::Process::execute_and_enqueue
@@ -66,10 +116,15 @@ pub struct WorkflowOutput<E: EventPayload> {
     /// Empty in the vast majority of commands. Only non-empty when the command
     /// needs to trigger an outbound EDIFACT message (e.g. `DispatchAperak`).
     pub outbox: Vec<PendingOutbox>,
+    /// Deadlines to register atomically alongside the events.
+    ///
+    /// Empty in most commands. Non-empty when the command starts a regulatory
+    /// monitoring window (e.g. APERAK 45-min sending deadline).
+    pub deadlines: Vec<PendingDeadline>,
 }
 
 impl<E: EventPayload> WorkflowOutput<E> {
-    /// Construct an output with events and no outbox messages.
+    /// Construct an output with events and no outbox messages or deadlines.
     ///
     /// Equivalent to `events.into()`.
     #[must_use]
@@ -77,18 +132,51 @@ impl<E: EventPayload> WorkflowOutput<E> {
         Self {
             events,
             outbox: Vec::new(),
+            deadlines: Vec::new(),
         }
     }
 
     /// Construct an output with both events and outbox messages.
     #[must_use]
     pub fn with_outbox(events: Vec<E>, outbox: Vec<PendingOutbox>) -> Self {
-        Self { events, outbox }
+        Self {
+            events,
+            outbox,
+            deadlines: Vec::new(),
+        }
+    }
+
+    /// Construct an output with events, outbox messages, and a single deadline.
+    #[must_use]
+    pub fn with_outbox_and_deadline(
+        events: Vec<E>,
+        outbox: Vec<PendingOutbox>,
+        deadline: PendingDeadline,
+    ) -> Self {
+        Self {
+            events,
+            outbox,
+            deadlines: vec![deadline],
+        }
+    }
+
+    /// Construct an output with events, outbox messages, and multiple deadlines.
+    #[must_use]
+    pub fn with_outbox_and_deadlines(
+        events: Vec<E>,
+        outbox: Vec<PendingOutbox>,
+        deadlines: Vec<PendingDeadline>,
+    ) -> Self {
+        Self {
+            events,
+            outbox,
+            deadlines,
+        }
     }
 }
 
 impl<E: EventPayload> From<Vec<E>> for WorkflowOutput<E> {
-    /// Convert a plain event list into a `WorkflowOutput` with no outbox.
+    /// Convert a plain event list into a `WorkflowOutput` with no outbox or deadlines.
     ///
     /// Allows `handle` implementations to write `Ok(vec![…].into())` without
     /// constructing a `WorkflowOutput` explicitly.
@@ -788,13 +876,27 @@ where
         .collect();
     let new_events = new_events?;
 
+    // Merge externally-supplied deadlines with any PendingDeadline values
+    // returned by the workflow's handle function.
+    let mut all_deadlines: Vec<crate::deadline::Deadline> = deadlines.to_vec();
+    for pd in &output.deadlines {
+        all_deadlines.push(crate::deadline::Deadline::new(
+            stream_id.clone(),
+            ctx.process_id,
+            ctx.tenant_id,
+            ctx.workflow_id.clone(),
+            pd.label.as_str(),
+            pd.due_at,
+        ));
+    }
+
     let result = store
         .append_with_outbox_and_deadlines(
             stream_id,
             ExpectedVersion::Exact(current_sequence),
             &new_events,
             &output.outbox,
-            deadlines,
+            &all_deadlines,
         )
         .await?;
 

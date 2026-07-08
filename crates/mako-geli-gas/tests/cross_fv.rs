@@ -26,7 +26,7 @@
 //!
 //! These assertions collectively verify that:
 //! - `WorkflowVersionPolicy::ForwardCompatible` is the default for GeLi Gas.
-//! - The 10-Werktage APERAK window label (`LIEFERBEGINN_APERAK_WINDOW_LABEL`) is
+//! - The 10-Werktage APERAK window label (`LIEFERBEGINN_RESPONSE_WINDOW_LABEL`) is
 //!   consistent with what the engine uses in `deadline_dispatch.rs`.
 //! - A mid-flight version switch (FV2025→FV2026) does not break state continuity.
 
@@ -41,7 +41,7 @@ use mako_engine::{
 };
 use mako_geli_gas::{
     GasSupplierChangeCommand, GasSupplierChangeState, GeliGasSupplierChangeWorkflow,
-    LIEFERBEGINN_APERAK_WINDOW_LABEL,
+    LIEFERBEGINN_RESPONSE_WINDOW_LABEL,
 };
 use time::OffsetDateTime;
 
@@ -116,7 +116,7 @@ async fn cross_fv_antwort_accepted_on_fv_start_process() {
         gnb.process_id(),
         gnb.tenant_id(),
         gnb.workflow_id().clone(),
-        LIEFERBEGINN_APERAK_WINDOW_LABEL,
+        LIEFERBEGINN_RESPONSE_WINDOW_LABEL,
         due_at,
     );
     deadline_store
@@ -164,7 +164,7 @@ async fn cross_fv_antwort_accepted_on_fv_start_process() {
 /// when the 10-Werktage APERAK deadline fires.
 ///
 /// Verifies that the `TimeoutExpired` command is accepted from `ValidationPassed`
-/// and that the `LIEFERBEGINN_APERAK_WINDOW_LABEL` constant matches the workflow's
+/// and that the `LIEFERBEGINN_RESPONSE_WINDOW_LABEL` constant matches the workflow's
 /// deadline guard.
 #[tokio::test]
 async fn cross_fv_aperak_timeout_fires_on_validation_passed() {
@@ -187,7 +187,7 @@ async fn cross_fv_aperak_timeout_fires_on_validation_passed() {
     // Fire the APERAK deadline.
     gnb.execute(GasSupplierChangeCommand::TimeoutExpired {
         deadline_id: DeadlineId::new(),
-        label: LIEFERBEGINN_APERAK_WINDOW_LABEL.into(),
+        label: LIEFERBEGINN_RESPONSE_WINDOW_LABEL.into(),
     })
     .await
     .expect("TimeoutExpired must be accepted from ValidationPassed");

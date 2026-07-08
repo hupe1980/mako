@@ -1,26 +1,57 @@
-# makod demo — docker compose
+# makod demo — full stack docker compose
 #
-# Starts makod in NB (Netzbetreiber Strom) role with an ERP webhook receiver.
+# Runs the complete mako NB STP stack:
+#   • postgres  — shared PostgreSQL database (marktd + processd schemas)
+#   • webhook   :8000 — ERP event receiver (Python, in-memory)
+#   • marktd    :8180 — Market Data Hub (MaLo/contracts/VersorgungsStatus/PRICAT)
+#   • processd  :8580 — NB STP auto-responder (evaluates Anmeldungen, dispatches bestaetigen/ablehnen)
+#   • makod     :8080 — EDIFACT process engine (in-memory, no persistence)
 #
-# Storage: volatile in-memory SlateDB (data lost on restart — fine for demos).
-# For persistent storage, see the "Persistent storage" note in README.md.
+# End-to-end flow:
+#   ERP       → PUT MaLo + preisblatt into marktd        (master data pre-load)
+#   ERP       → POST UTILMD 55001 to makod               (Lieferbeginn Anmeldung)
+#   makod     → POST process.initiated to marktd          (ERP webhook)
+#   marktd    → fan-out process.initiated to processd     (subscription)
+#   processd  → validates against marktd master data      (MaLo + preisblatt + contracts)
+#   processd  → POST gpke.lieferbeginn.bestaetigen to makod  (NB auto-accept)
+#   makod     → enqueues UTILMD 55003 in outbox           (Bestätigung Lieferbeginn)
+#   outbox    → delivers UTILMD 55003 to webhook          (ERP receives confirmation)
 #
-# Usage:
+# Build images first:
+#   docker build --target runtime          -t makod:dev    .
+#   docker build --target marktd-runtime   -t marktd:dev   .
+#   docker build --target processd-runtime -t processd:dev .
+#
+# Run:
 #   docker compose up -d
 #   docker compose logs -f
-#   docker compose logs webhook -f     # watch incoming CloudEvents
+#   MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 bash smoke.sh
 #   docker compose down
-#
-# The demo uses image: makod:dev (local build).
-# To use the published image instead, swap the `image:` line to:
-#   image: ghcr.io/hupe1980/makod:0.6.0
 
 services:
-  # ── ERP webhook receiver ──────────────────────────────────────────────────
-  # Receives CloudEvent POSTs from makod and stores them in memory.
-  # View incoming events:
-  #   curl http://localhost:8000/events | jq '.[].body | {type,subject}'
-  #   docker compose logs webhook -f
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  # One database per service (microservices DB autonomy principle).
+  # Each service owns its schema and _sqlx_migrations table in isolation,
+  # preventing SQLx checksum conflicts when both run migration #1.
+  # init-db.sh creates `marktd` and `processd` databases on first boot.
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER:     demo
+      POSTGRES_PASSWORD: demo-secret
+      # POSTGRES_DB is intentionally not set; init-db.sh creates per-service DBs.
+    volumes:
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── ERP webhook receiver ────────────────────────────────────────────────────
+  # Receives CloudEvent POSTs from makod (outbound EDIFACT + process lifecycle).
+  # View events: curl http://localhost:8000/events | jq '.[] | .body.type'
   webhook:
     image: python:3.12-alpine
     volumes:
@@ -31,29 +62,93 @@ services:
       - "8000:8000"
     restart: unless-stopped
 
-  # ── makod process engine ───────────────────────────────────────────────────
+  # ── marktd — Market Data Hub ────────────────────────────────────────────────
+  # Pure data hub: MaLo/MeLo/contracts/VersorgungsStatus/PRICAT/subscriptions.
+  # Receives process CloudEvents from makod and fans them out to subscribers
+  # (processd, etc.).  Does NOT dispatch NB decisions — that is processd's job.
+  marktd:
+    image: marktd:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8180:8180"
+    volumes:
+      - ./marktd.toml:/etc/marktd/marktd.toml:ro
+    environment:
+      DATABASE_URL:          postgres://demo:demo-secret@postgres/marktd
+      MAKOD_API_KEY:         demo-secret-change-me
+      MAKOD_WEBHOOK_SECRET:  demo-makod-webhook-secret
+    command:
+      - "--config=/etc/marktd/marktd.toml"
+    # distroless has no shell — use service_started dependency instead of healthcheck
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  # ── processd — NB STP Auto-Responder ───────────────────────────────────────
+  # Subscribes to marktd for process.initiated events.
+  # Validates each Anmeldung against marktd master data (MaLo, preisblatt, contracts).
+  # Dispatches bestaetigen (NB_AUTO_ACCEPT=true) or ablehnen to makod automatically.
+  # Stores all decisions in PostgreSQL for §20 EnWG parity reporting.
+  processd:
+    image: processd:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      marktd:
+        condition: service_started
+      makod:
+        condition: service_started
+    ports:
+      - "8580:8580"
+    environment:
+      # PostgreSQL — processd owns its own database (separate from marktd)
+      DATABASE_URL:             postgres://demo:demo-secret@postgres/processd
+      # makod command API
+      MAKOD_URL:                http://makod:8080
+      MAKOD_API_KEY:            demo-secret-change-me
+      # marktd data hub (no auth in demo mode — any non-empty key accepted)
+      MARKTD_URL:               http://marktd:8180
+      MARKTD_API_KEY:           demo-processd-key
+      # Identity (§20 EnWG parity reporting)
+      OWN_MP_ID:                "9900357000004"
+      TENANT:                   "9900357000004"
+      # Inbound webhook secret (marktd signs payloads with this secret)
+      INBOUND_WEBHOOK_SECRET:   processd-webhook-secret
+      # NB auto-accept: dispatch bestaetigen when all STP checks pass
+      NB_AUTO_ACCEPT:           "true"
+      # Self-registration: declare the subscription topology in config,
+      # not in imperative scripts. processd calls marktd on startup.
+      # Helm equivalent: processd.selfRegister.webhookUrl in values.yaml
+      PROCESSD_SELF_REGISTER_WEBHOOK_URL: "http://processd:8580/webhook"
+      PROCESSD_SUBSCRIBER_ID:             "processd-demo"
+      PROCESSD_SUBSCRIBER_EVENT_TYPES:    "de.mako.process.initiated"
+      RUST_LOG:                 info
+    # No extra CLI flags needed — all config comes from env vars above.
+    # Subscription with marktd is registered by smoke.sh on first run.
+    restart: unless-stopped
+
+  # ── makod — EDIFACT Process Engine ─────────────────────────────────────────
+  # In-memory workflow engine: parses inbound EDIFACT, runs BNetzA workflows,
+  # enqueues outbound EDIFACT to the webhook.  No persistence — data is lost
+  # on restart.  For persistent storage use the slatedb feature.
   makod:
     image: makod:dev
-    # image: ghcr.io/hupe1980/makod:0.6.0
     depends_on:
       - webhook
+      - marktd
     ports:
-      - "8080:8080"      # HTTP REST API + Swagger UI + MCP
+      - "8080:8080"     # REST API + Swagger UI (/api/v1/docs/) + MCP (/mcp)
+    volumes:
+      - ./makod.toml:/etc/makod/makod.toml:ro
     environment:
-      # Clear the image's baked-in data-dir default so --allow-volatile
-      # activates the true in-memory SlateDB store (no filesystem I/O).
-      # Docker Desktop named volumes have VirtioFS quirks with SlateDB's
-      # atomic-rename operations; in-memory is the reliable demo default.
-      MAKOD_DATA_DIR: ""
-      MAKOD_ALLOW_VOLATILE: "true"
+      MAKOD_DATA_DIR:                 ""     # in-memory (no persistence)
+      MAKOD_EDIFACT_OUTBOX_WEBHOOK_URL: http://webhook:8000
+      # Push process lifecycle CloudEvents to marktd so processd can react
+      MAKOD_ERP_WEBHOOK_URL:          http://marktd:8180/api/v1/events
+      MAKOD_ERP_WEBHOOK_SECRET:       demo-makod-webhook-secret
     command:
-      - "--tenant-id=9900357000004"       # NB GLN — matches NAD+MR in demo fixtures
-      - "--marktrollen=NB"                # accept messages addressed to this NB
-      - "--auth-key=demo=demo-secret-change-me"   # Bearer token for REST API calls
-      - "--erp-webhook-url=http://webhook:8000"   # deliver ERP CloudEvents to the demo receiver
-      - "--edifact-outbox-webhook-url=http://webhook:8000"  # deliver outbound EDIFACT as CloudEvents
-      - "--log-format=json"
-      - "--log-level=info"
-    # MAKOD_HTTP_ADDR=0.0.0.0:8080 is already the image default.
-    # Override via environment: if you need a different address.
+      - "--config=/etc/makod/makod.toml"
+      - "--auth-key=demo=demo-secret-change-me"
     restart: unless-stopped

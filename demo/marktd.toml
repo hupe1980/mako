@@ -1,0 +1,28 @@
+# marktd.toml — demo configuration (PostgreSQL, auth disabled, no OIDC)
+# DO NOT use in production.
+#
+# marktd is a **pure market-data hub**: MaLo/MeLo/contracts/VersorgungsStatus/PRICAT.
+# It receives CloudEvents from makod via the inbound webhook and fans them out
+# to registered subscribers (processd, invoicd, edmd, obsd, ...).
+#
+# Automated NB decisions (bestaetigen/ablehnen) are made by processd, NOT by
+# marktd.  Start a processd instance pointed at this marktd to enable the NB
+# STP auto-responder.
+
+[storage.postgres]
+url = "env:DATABASE_URL"
+
+[http]
+addr = "0.0.0.0:8180"
+
+# [oidc] is intentionally absent — authentication is disabled in demo mode.
+# All API requests are accepted with synthetic dev-admin claims.
+
+[makod]
+base_url  = "http://makod:8080"
+api_key   = "env:MAKOD_API_KEY"
+tenant_id = "9900357000004"
+
+[webhook]
+inbound_path   = "/api/v1/events"
+inbound_secret = "env:MAKOD_WEBHOOK_SECRET"

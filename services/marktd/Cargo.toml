@@ -1,0 +1,53 @@
+[package]
+name             = "marktd"
+version.workspace = true
+description      = "Market data daemon for German energy market (MaKo/Marktd)"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish          = false
+
+[[bin]]
+name = "marktd"
+path = "src/main.rs"
+
+[lib]
+name = "marktd"
+path = "src/lib.rs"
+
+[dependencies]
+mako-markt = { path = "../../crates/mako-markt", features = ["makod-client"] }
+rubo4e    = { workspace = true, features = ["sqlx"] }
+
+anyhow             = { workspace = true }
+thiserror          = { workspace = true }
+axum               = { version = "0.8", features = [] }
+clap               = { version = "4", features = ["derive", "env"] }
+serde              = { version = "1", features = ["derive"] }
+serde_json         = { workspace = true }
+toml               = { version = "0.8", default-features = false, features = ["parse"] }
+time               = { workspace = true }
+uuid               = { workspace = true }
+tokio              = { version = "1", features = ["full"] }
+tokio-util         = { workspace = true }
+tracing            = "0.1"
+mako-service       = { workspace = true, features = ["otel", "cedar", "oidc"] }
+rmcp               = { workspace = true }
+schemars           = { workspace = true }
+secrecy            = "0.10"
+subtle             = "2"
+hmac               = { version = "0.12", features = ["std"] }
+sha2               = "0.10"
+jiff               = "0.2"
+reqwest            = { workspace = true }
+utoipa             = { version = "5", features = ["axum_extras", "uuid", "time"] }
+utoipa-axum        = "0.2"
+utoipa-swagger-ui  = { version = "9", features = ["axum"] }
+sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "migrate"] }
+
+[dev-dependencies]
+mako-markt  = { path = "../../crates/mako-markt", features = ["testing"] }
+tokio      = { version = "1", features = ["full"] }
+serde_json = { workspace = true }

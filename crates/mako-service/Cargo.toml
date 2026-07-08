@@ -1,0 +1,90 @@
+[package]
+name             = "mako-service"
+version.workspace = true
+description      = "Shared service infrastructure for mako daemons — config loader, health routes, webhook HMAC verification, ServiceBuilder, telemetry"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish          = false
+
+[features]
+## Enables OpenTelemetry OTLP/gRPC exporter and tracing bridge.
+## Wire in via `init_tracing(service_name, level, Some(&otel_config))` and
+## `ServiceBuilder::with_trace_layer()`.
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-semantic-conventions",
+    "dep:tracing-opentelemetry",
+]
+
+## Enables Cedar ABAC enforcement via `CedarEnforcer`.
+## Wire in via `CedarEnforcer::from_policy_str(...)` and `Extension<Arc<CedarEnforcer>>`.
+cedar = ["dep:cedar-policy"]
+
+## Enables OIDC/JWT verification via `OidcVerifier`.
+## Wire in via `OidcVerifier::new(...)` and `Extension<OidcVerifier>`.
+## Provides the `Claims` Axum extractor for use in handlers.
+oidc = ["dep:jsonwebtoken", "dep:reqwest", "dep:tokio-util"]
+
+## Enables the Kafka-backed EventBus via `krafka` (pure Rust, MSRV 1.88, zero-unsafe).
+## Use only when webhook fan-out is a measured bottleneck (>500 MaLo, >20 subscribers).
+## Requires a running Kafka 3.9+ broker; not needed for webhook-based deployments.
+kafka = ["dep:krafka"]
+
+## Enables real Prometheus metrics at `GET /metrics`.
+## Registers `mako_http_requests_total` and `mako_http_request_duration_seconds`
+## on the default Prometheus registry. `ServiceBuilder::with_metrics()` mounts the
+## handler and adds a per-request recording middleware automatically.
+metrics = ["dep:prometheus"]
+
+## Enables `ServiceBuilder::with_rate_limit(RateLimitConfig)`.
+## Adds a global GCRA rate limiter (429 when exhausted) via `governor`.
+rate-limit = ["dep:governor"]
+
+[dependencies]
+thiserror  = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+tracing    = "0.1"
+tracing-subscriber = { workspace = true }
+tower-http = { workspace = true }
+axum       = { version = "0.8" }
+tokio      = { version = "1", features = ["rt", "net", "signal", "macros"] }
+subtle     = "2"
+secrecy    = "0.10"
+toml       = "0.8"
+hmac       = { version = "0.12", default-features = false }
+sha2       = { version = "0.10", default-features = false }
+hex        = { version = "0.4" }
+
+# Optional OTel deps — only compiled when feature=otel is enabled
+opentelemetry             = { workspace = true, optional = true }
+opentelemetry_sdk         = { workspace = true, optional = true }
+opentelemetry-otlp        = { workspace = true, optional = true }
+opentelemetry-semantic-conventions = { workspace = true, optional = true }
+tracing-opentelemetry     = { workspace = true, optional = true }
+
+# Optional Cedar dep — only compiled when feature=cedar is enabled
+cedar-policy              = { workspace = true, optional = true }
+
+# Optional OIDC deps — only compiled when feature=oidc is enabled
+jsonwebtoken              = { workspace = true, optional = true }
+reqwest                   = { workspace = true, optional = true }
+tokio-util                = { workspace = true, optional = true }
+
+# Optional Kafka dep — only compiled when feature=kafka is enabled
+krafka                    = { workspace = true, optional = true }
+
+# Optional Prometheus dep — only compiled when feature=metrics is enabled
+prometheus                = { version = "0.14", default-features = false, features = ["process"], optional = true }
+
+# Optional governor dep — only compiled when feature=rate-limit is enabled
+governor                  = { version = "0.6", optional = true }
+
+[dev-dependencies]
+tower         = { version = "0.5", features = ["util"] }
+tokio         = { version = "1", features = ["rt-multi-thread", "macros"] }

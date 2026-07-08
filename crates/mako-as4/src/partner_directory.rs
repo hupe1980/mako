@@ -53,12 +53,12 @@ impl PartnerDirectory {
     pub fn from_cli_pairs(pairs: &[String]) -> Result<Self, PartnerDirectoryParseError> {
         let mut endpoints = HashMap::new();
         for pair in pairs {
-            let (gln, url) = pair.split_once('=').ok_or_else(|| {
+            let (mp_id, url) = pair.split_once('=').ok_or_else(|| {
                 PartnerDirectoryParseError(format!("{pair:?} — expected format <GLN>=<HTTPS-URL>"))
             })?;
-            let gln = gln.trim();
+            let mp_id = mp_id.trim();
             let url = url.trim();
-            if gln.is_empty() {
+            if mp_id.is_empty() {
                 return Err(PartnerDirectoryParseError(format!(
                     "{pair:?} — GLN must not be empty"
                 )));
@@ -68,7 +68,7 @@ impl PartnerDirectory {
                     "{pair:?} — endpoint URL must use HTTPS (got {url:?})"
                 )));
             }
-            endpoints.insert(gln.into(), url.into());
+            endpoints.insert(mp_id.into(), url.into());
         }
         Ok(Self { endpoints })
     }
@@ -76,8 +76,8 @@ impl PartnerDirectory {
     /// Look up the AS4 endpoint URL for a trading partner identified by GLN.
     ///
     /// Returns `None` when no endpoint is registered for `gln`.
-    pub fn endpoint(&self, gln: &str) -> Option<&str> {
-        self.endpoints.get(gln).map(|s| s.as_ref())
+    pub fn endpoint(&self, mp_id: &str) -> Option<&str> {
+        self.endpoints.get(mp_id).map(|s| s.as_ref())
     }
 
     /// Returns `true` if no partner endpoints are registered.

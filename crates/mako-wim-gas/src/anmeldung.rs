@@ -72,10 +72,10 @@ pub const WORKFLOW_NAME: &str = "wim-gas-anmeldung";
 /// let due = mako_engine::fristen::deadline_at_werktage(
 ///     received_at, 10, HolidayCalendar::BdewMaKo,
 /// );
-/// let deadline = Deadline::new(process.stream_id().clone(), ..., APERAK_WINDOW_LABEL, due);
+/// let deadline = Deadline::new(process.stream_id().clone(), ..., RESPONSE_WINDOW_LABEL, due);
 /// deadline_store.register(&deadline).await?;
 /// ```
-pub const APERAK_WINDOW_LABEL: &str = "wim-gas-aperak-10-werktage";
+pub const RESPONSE_WINDOW_LABEL: &str = "wim-gas-response-10-werktage";
 
 // ── PIDs ─────────────────────────────────────────────────────────────────────
 
@@ -291,7 +291,7 @@ impl Workflow for WimGasAnmeldungWorkflow {
     ) -> Option<Self::Command> {
         match (deadline.label(), state) {
             (
-                APERAK_WINDOW_LABEL,
+                RESPONSE_WINDOW_LABEL,
                 WimGasAnmeldungState::Initiated(_)
                 | WimGasAnmeldungState::ValidationPassed(_)
                 | WimGasAnmeldungState::AperakSent(_),
@@ -382,7 +382,7 @@ impl Workflow for WimGasAnmeldungWorkflow {
                     )));
                 }
                 // Clone before move for APERAK emission in the validation-failed path.
-                let sender_gln = sender.clone();
+                let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
 
                 let mut events = vec![WimGasAnmeldungEvent::Initiated {
@@ -408,12 +408,12 @@ impl Workflow for WimGasAnmeldungWorkflow {
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
-                            sender_gln.as_str(),
+                            sender_mp_id.as_str(),
                             serde_json::json!({
                                 "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_gln.as_str(),
+                                "receiver":   sender_mp_id.as_str(),
                                 "pid":        29001_u32,
-                                "error_code": "Z29",
+                                "error_code": mako_engine::erc::codes::Z29,
                                 "reason":     reason,
                             }),
                         )
@@ -811,7 +811,7 @@ mod tests {
             &state,
             WimGasAnmeldungCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: APERAK_WINDOW_LABEL.into(),
+                label: RESPONSE_WINDOW_LABEL.into(),
             },
         )
         .unwrap();
@@ -838,7 +838,7 @@ mod tests {
             &state,
             WimGasAnmeldungCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: APERAK_WINDOW_LABEL.into(),
+                label: RESPONSE_WINDOW_LABEL.into(),
             },
         )
         .unwrap();

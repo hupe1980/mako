@@ -101,6 +101,86 @@ pub fn contrl_due_at(received: OffsetDateTime) -> OffsetDateTime {
     received + Duration::hours(CONTRL_FRIST_HOURS)
 }
 
+// ── APERAK Strom 45-minute / Saturday-noon sending window ────────────────────
+
+/// Minutes within which a Strom APERAK must be sent on weekdays (Mon–Fri).
+///
+/// Per APERAK AHB 1.0 §2.4.1: "UTILMD und ORDERS: an Werktagen (Montag–Freitag):
+/// 45 Minuten".
+pub const APERAK_STROM_WEEKDAY_MINUTES: i64 = 45;
+
+/// Deadline label for Strom APERAK 45-minute sending obligations.
+///
+/// Register a [`Deadline`](crate::deadline::Deadline) with this label after
+/// enqueuing an outbound Strom APERAK.  If this deadline fires before the APERAK
+/// is delivered, the OutboxWorker has not completed delivery within the 45-minute
+/// window required by APERAK AHB 1.0 §2.4.1.
+pub const APERAK_STROM_WINDOW_LABEL: &str = "aperak-strom-45min-window";
+
+/// Compute the Strom APERAK sending deadline after receiving a Strom UTILMD or
+/// ORDERS message.
+///
+/// Returns the deadline by which the receiver **must dispatch its APERAK**:
+///
+/// | `received` Berlin weekday | Deadline |
+/// |---|---|
+/// | Monday – Friday | `received + 45 minutes` |
+/// | Saturday | next Sunday 12:00 Berlin local time |
+/// | Sunday | `received + 45 minutes` (de-facto — not specified in AHB) |
+///
+/// **Regulatory basis:** APERAK AHB 1.0 §2.4.1:
+/// *"UTILMD und ORDERS: samstags bis spätestens Sonntag 12:00 Uhr,
+/// an Werktagen (Montag–Freitag): 45 Minuten."*
+///
+/// # Panics
+///
+/// Panics if the date arithmetic for the Sunday computation overflows the
+/// calendar (unreachable for any date within the Gregorian calendar range).
+/// Also panics if `12:00:00` cannot be constructed as a `time::Time`
+/// (statically valid — not a reachable panic).
+///
+/// # Example
+///
+/// ```rust
+/// use mako_engine::fristen;
+/// use time::{Date, Month, OffsetDateTime, Time, UtcOffset};
+///
+/// // Monday 2025-01-06 10:00 UTC (= 11:00 CET): deadline = 10:45 UTC
+/// let received = OffsetDateTime::new_utc(
+///     Date::from_calendar_date(2025, Month::January, 6).unwrap(),
+///     Time::from_hms(10, 0, 0).unwrap(),
+/// );
+/// let due = fristen::aperak_strom_due_at(received);
+/// assert_eq!(due - received, time::Duration::minutes(45));
+/// ```
+#[must_use]
+pub fn aperak_strom_due_at(received: OffsetDateTime) -> OffsetDateTime {
+    let berlin = timezones::db::europe::BERLIN;
+    let berlin_dt = received.to_timezone(berlin);
+
+    if berlin_dt.weekday() == Weekday::Saturday {
+        // APERAK AHB 1.0 §2.4.1: received on Saturday → by next Sunday 12:00 Berlin.
+        let sunday = berlin_dt
+            .date()
+            .next_day()
+            .expect("date overflow — unreachable for any practical date");
+        // 12:00 Berlin is never inside a DST gap (transitions happen at 02:00).
+        let noon_primitive =
+            PrimitiveDateTime::new(sunday, Time::from_hms(12, 0, 0).expect("12:00:00 is valid"));
+        match noon_primitive.assume_timezone(berlin) {
+            OffsetResult::Some(dt) => dt.to_offset(time::UtcOffset::UTC),
+            OffsetResult::Ambiguous(earlier, _) => earlier.to_offset(time::UtcOffset::UTC),
+            OffsetResult::None => {
+                // 12:00 is never inside a DST gap for Europe/Berlin.  Should never happen.
+                received + Duration::hours(26)
+            }
+        }
+    } else {
+        // Weekday (Mon–Fri) or Sunday: 45 wall-clock minutes.
+        received + Duration::minutes(APERAK_STROM_WEEKDAY_MINUTES)
+    }
+}
+
 /// Selects which set of public holidays to observe when counting Werktage.
 ///
 /// BDEW MaKo processes use a single Germany-wide holiday calendar defined by
@@ -788,5 +868,82 @@ mod tests {
             date(2025, 1, 13),
             "1 WT from Saturday 2025-01-11 is Monday 2025-01-13 (Sunday not a Werktag)"
         );
+    }
+
+    // ── aperak_strom_due_at ───────────────────────────────────────────────────
+
+    /// Weekday (Monday): deadline is exactly 45 minutes after receipt.
+    /// APERAK AHB 1.0 §2.4.1: "an Werktagen (Montag–Freitag): 45 Minuten".
+    #[test]
+    fn aperak_strom_weekday_is_45_minutes() {
+        // Monday 2025-01-06 10:00 UTC (= 11:00 CET)
+        let received = OffsetDateTime::new_utc(date(2025, 1, 6), Time::from_hms(10, 0, 0).unwrap());
+        let due = aperak_strom_due_at(received);
+        assert_eq!(
+            due - received,
+            time::Duration::minutes(45),
+            "weekday: due at received + 45 min"
+        );
+    }
+
+    /// Friday: deadline is exactly 45 minutes (last workday before weekend).
+    #[test]
+    fn aperak_strom_friday_is_45_minutes() {
+        // Friday 2025-01-10 14:00 UTC (= 15:00 CET)
+        let received =
+            OffsetDateTime::new_utc(date(2025, 1, 10), Time::from_hms(14, 0, 0).unwrap());
+        let due = aperak_strom_due_at(received);
+        assert_eq!(due - received, time::Duration::minutes(45));
+    }
+
+    /// Saturday: deadline is next Sunday 12:00 Berlin.
+    /// APERAK AHB 1.0 §2.4.1: "samstags bis spätestens Sonntag 12:00 Uhr".
+    ///
+    /// 2025-01-11 (Saturday) in CET → 2025-01-12 12:00 CET = 11:00 UTC.
+    #[test]
+    fn aperak_strom_saturday_is_sunday_noon_berlin() {
+        // Saturday 2025-01-11 08:00 UTC (= 09:00 CET)
+        let received = OffsetDateTime::new_utc(date(2025, 1, 11), Time::from_hms(8, 0, 0).unwrap());
+        let due = aperak_strom_due_at(received);
+        // Sunday 2025-01-12 12:00 CET = 11:00 UTC.
+        assert_eq!(due.date(), date(2025, 1, 12), "due date must be Sunday");
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).hour(),
+            11,
+            "12:00 CET (UTC+1 in January) = 11:00 UTC"
+        );
+        assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
+    }
+
+    /// Saturday in summer (CEST): deadline is Sunday 12:00 CEST = 10:00 UTC.
+    #[test]
+    fn aperak_strom_saturday_summer_is_sunday_noon_cest() {
+        // Saturday 2025-07-05 08:00 UTC (= 10:00 CEST)
+        let received = OffsetDateTime::new_utc(date(2025, 7, 5), Time::from_hms(8, 0, 0).unwrap());
+        let due = aperak_strom_due_at(received);
+        // Sunday 2025-07-06 12:00 CEST = 10:00 UTC.
+        assert_eq!(due.date(), date(2025, 7, 6), "due date must be Sunday");
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).hour(),
+            10,
+            "12:00 CEST (UTC+2 in July) = 10:00 UTC"
+        );
+        assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
+    }
+
+    /// Saturday at 23:50 Berlin time (late): deadline is still Sunday 12:00.
+    #[test]
+    fn aperak_strom_saturday_late_night_is_still_sunday_noon() {
+        // Saturday 2025-01-11 22:50 UTC (= 23:50 CET) — one of the last moments on Saturday
+        let received =
+            OffsetDateTime::new_utc(date(2025, 1, 11), Time::from_hms(22, 50, 0).unwrap());
+        let due = aperak_strom_due_at(received);
+        // Still Sunday 12:00 CET = 11:00 UTC — not 45 minutes from receipt.
+        assert_eq!(
+            due.date(),
+            date(2025, 1, 12),
+            "late Saturday → Sunday deadline"
+        );
+        assert_eq!(due.to_offset(time::UtcOffset::UTC).hour(), 11);
     }
 }

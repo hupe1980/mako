@@ -11,7 +11,7 @@
 //!
 //! | Message type | Recommended key |
 //! |---|---|
-//! | UTILMD waiting for APERAK | `RegistryKey::from_conversation_and_sender(conversation_id, sender_gln)` |
+//! | UTILMD waiting for APERAK | `RegistryKey::from_conversation_and_sender(conversation_id, sender_mp_id)` |
 //! | Route follow-up by correlation | `RegistryKey::from_correlation(correlation_id)` |
 //! | Direct lookup by process | `RegistryKey::from_process(process_id)` |
 //!
@@ -29,7 +29,7 @@
 //! ```rust,ignore
 //! // After spawning a process, register it under the UTILMD conversation ID + sender GLN:
 //! ctx.registry
-//!     .register(tenant_id, &RegistryKey::from_conversation_and_sender(utilmd_conv_id, sender_gln), process.identity())
+//!     .register(tenant_id, &RegistryKey::from_conversation_and_sender(utilmd_conv_id, sender_mp_id), process.identity())
 //!     .await?;
 //!
 //! // When the APERAK arrives, look up by conversation ID + APERAK sender GLN:
@@ -42,7 +42,7 @@
 //! process.execute(HandleAperak { .. }).await?;
 //!
 //! // Clean up after process completion:
-//! ctx.registry.remove(tenant_id, &RegistryKey::from_conversation_and_sender(utilmd_conv_id, sender_gln)).await?;
+//! ctx.registry.remove(tenant_id, &RegistryKey::from_conversation_and_sender(utilmd_conv_id, sender_mp_id)).await?;
 //! ```
 
 use std::{fmt, sync::Arc};
@@ -110,10 +110,10 @@ impl RegistryKey {
     ///
     /// # Key format
     ///
-    /// `"{sender_gln}:{conversation_id}"` — stable, URL-safe, human-readable.
+    /// `"{sender_mp_id}:{conversation_id}"` — stable, URL-safe, human-readable.
     #[must_use]
-    pub fn from_conversation_and_sender(id: ConversationId, sender_gln: &str) -> Self {
-        let key = format!("{sender_gln}:{id}");
+    pub fn from_conversation_and_sender(id: ConversationId, sender_mp_id: &str) -> Self {
+        let key = format!("{sender_mp_id}:{id}");
         Self(key.into_boxed_str())
     }
 
@@ -259,6 +259,7 @@ pub trait ProcessRegistry: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Registry`] on storage failure.
+    #[must_use = "dropping a register Result silently loses a process routing key"]
     async fn register(
         &self,
         tenant_id: TenantId,
@@ -272,6 +273,7 @@ pub trait ProcessRegistry: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Registry`] on storage failure.
+    #[must_use = "dropping a lookup Result silently discards a routing error"]
     async fn lookup(
         &self,
         tenant_id: TenantId,
@@ -283,6 +285,7 @@ pub trait ProcessRegistry: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Registry`] on storage failure.
+    #[must_use = "dropping a remove Result silently hides a store error"]
     async fn remove(&self, tenant_id: TenantId, key: &RegistryKey) -> Result<(), EngineError>;
 
     /// Return `true` when `(tenant_id, key)` has a registered mapping.
@@ -299,6 +302,7 @@ pub trait ProcessRegistry: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Registry`] on storage failure.
+    #[must_use = "dropping a len Result silently discards a store error"]
     async fn len(&self) -> Result<usize, EngineError>;
 
     /// Return `true` when no routing keys are registered.
@@ -446,6 +450,10 @@ impl<S: ProcessRegistry> ProcessRegistry for Arc<S> {
 /// [`EngineBuilder::with_stores`]: crate::builder::EngineBuilder::with_stores
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use = "NoopProcessRegistry discards all routing registrations silently — use a persistent ProcessRegistry in production"]
+#[cfg_attr(
+    not(any(test, feature = "testing")),
+    deprecated = "NoopProcessRegistry must not be instantiated in production builds; use a durable ProcessRegistry instead"
+)]
 pub struct NoopProcessRegistry;
 
 #[cfg(any(test, feature = "testing"))]

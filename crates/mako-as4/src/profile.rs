@@ -164,10 +164,10 @@ impl BdewAs4Profile {
     /// ```
     pub fn register_partner_all_actions(
         &mut self,
-        partner_gln: impl Into<String>,
+        partner_mp_id: impl Into<String>,
         endpoint_url: impl Into<String>,
     ) -> &mut Self {
-        let gln: String = partner_gln.into();
+        let mp_id: String = partner_mp_id.into();
         let url: String = endpoint_url.into();
         for action in BdewAction::all_standard() {
             let action_short = action
@@ -176,14 +176,14 @@ impl BdewAs4Profile {
                 .and_then(|s| s.strip_prefix(':'))
                 .unwrap_or("unknown")
                 .to_ascii_lowercase();
-            let id = format!("pm-{gln}-{action_short}");
+            let id = format!("pm-{mp_id}-{action_short}");
             self.registry
-                .register(bdew_pmode_with_endpoint(id, &gln, action, &url));
+                .register(bdew_pmode_with_endpoint(id, &mp_id, action, &url));
         }
         self
     }
 
-    /// Resolve the first P-Mode for `partner_gln` matching this BDEW [`BdewAction`].
+    /// Resolve the first P-Mode for `partner_mp_id` matching this BDEW [`BdewAction`].
     ///
     /// Uses [`PModeRegistry::resolve_by_action`] against the BDEW action URI.
     /// Unlike [`resolve_pmode`](Self::resolve_pmode), the BDEW service URI
@@ -191,14 +191,14 @@ impl BdewAs4Profile {
     /// and action URI are compared.  In BDEW deployments this is the correct
     /// strategy since there is only one service URI.
     ///
-    /// Returns `None` when no P-Mode is registered for `(partner_gln, action)`.
+    /// Returns `None` when no P-Mode is registered for `(partner_mp_id, action)`.
     pub fn resolve_pmode_by_action(
         &self,
-        partner_gln: &str,
+        partner_mp_id: &str,
         action: &BdewAction,
     ) -> Option<&PMode> {
         self.registry
-            .resolve_by_action(partner_gln, &action.as_uri())
+            .resolve_by_action(partner_mp_id, &action.as_uri())
     }
 
     /// All registered P-Modes.
@@ -209,7 +209,7 @@ impl BdewAs4Profile {
         self.registry.all()
     }
 
-    /// Resolve the HTTPS endpoint URL for the first P-Mode matching `partner_gln`,
+    /// Resolve the HTTPS endpoint URL for the first P-Mode matching `partner_mp_id`,
     /// `service`, and `action`.
     ///
     /// Returns `Some(&str)` when a matching P-Mode is registered **and** its
@@ -220,17 +220,27 @@ impl BdewAs4Profile {
     /// URLs are baked into P-Mode registrations via [`bdew_pmode_with_endpoint`].
     ///
     /// [`bdew_pmode_with_endpoint`]: crate::pmode::bdew_pmode_with_endpoint
-    pub fn resolve_endpoint(&self, partner_gln: &str, service: &str, action: &str) -> Option<&str> {
+    pub fn resolve_endpoint(
+        &self,
+        partner_mp_id: &str,
+        service: &str,
+        action: &str,
+    ) -> Option<&str> {
         self.registry
-            .resolve(partner_gln, service, action)
+            .resolve(partner_mp_id, service, action)
             .and_then(|pm| pm.endpoint_url.as_deref())
     }
 
     /// Resolve a P-Mode by partner GLN, service URI, and action URI.
     ///
     /// Returns `None` when no matching P-Mode is registered.
-    pub fn resolve_pmode(&self, partner_gln: &str, service: &str, action: &str) -> Option<&PMode> {
-        self.registry.resolve(partner_gln, service, action)
+    pub fn resolve_pmode(
+        &self,
+        partner_mp_id: &str,
+        service: &str,
+        action: &str,
+    ) -> Option<&PMode> {
+        self.registry.resolve(partner_mp_id, service, action)
     }
 
     /// Validate the profile stack.

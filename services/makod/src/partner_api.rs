@@ -14,9 +14,9 @@
 //! | Method | Path | Description |
 //! |--------|------|-------------|
 //! | `GET` | `/admin/partners` | List all partners for the tenant |
-//! | `GET` | `/admin/partners/{gln}` | Retrieve a single partner record |
-//! | `PUT` | `/admin/partners/{gln}` | Create or update a partner record |
-//! | `DELETE` | `/admin/partners/{gln}` | Remove a partner record |
+//! | `GET` | `/admin/partners/{mp_id}` | Retrieve a single partner record |
+//! | `PUT` | `/admin/partners/{mp_id}` | Create or update a partner record |
+//! | `DELETE` | `/admin/partners/{mp_id}` | Remove a partner record |
 //! | `POST` | `/admin/partners/import` | Import from raw PARTIN EDIFACT |
 //!
 //! # Bootstrap flow
@@ -74,10 +74,10 @@ pub struct PartnerAdminState {
 
 // ── Request / response types ──────────────────────────────────────────────────
 
-/// Request body for `PUT /admin/partners/{gln}`.
+/// Request body for `PUT /admin/partners/{mp_id}`.
 ///
 /// Accepts a full [`PartnerRecord`] as JSON. The `gln` field in the body
-/// must match the `{gln}` path parameter; a mismatch is rejected with `400`.
+/// must match the `{mp_id}` path parameter; a mismatch is rejected with `400`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpsertRequest {
     #[schema(value_type = Object)]
@@ -103,7 +103,7 @@ pub(crate) struct ListResponse {
 #[derive(Serialize, ToSchema)]
 pub(crate) struct DeleteResponse {
     #[schema(example = "9904829000001")]
-    gln: String,
+    mp_id: String,
     deleted: bool,
 }
 
@@ -134,9 +134,9 @@ pub fn router(state: Arc<PartnerAdminState>) -> Router {
     Router::new()
         .route("/admin/partners", get(handle_list))
         .route("/admin/partners/import", post(handle_import))
-        .route("/admin/partners/{gln}", get(handle_get))
-        .route("/admin/partners/{gln}", put(handle_put))
-        .route("/admin/partners/{gln}", delete(handle_delete))
+        .route("/admin/partners/{mp_id}", get(handle_get))
+        .route("/admin/partners/{mp_id}", put(handle_put))
+        .route("/admin/partners/{mp_id}", delete(handle_delete))
         .with_state(state)
 }
 
@@ -187,7 +187,7 @@ pub(crate) async fn handle_list(
         MakoAction::AdminPartnerRead,
         &PartnerResource {
             tenant: &state.tenant_id.to_string(),
-            gln: None,
+            mp_id: None,
         },
     ) {
         return forbidden();
@@ -201,12 +201,12 @@ pub(crate) async fn handle_list(
     }
 }
 
-/// `GET /admin/partners/{gln}` — retrieve a single partner record.
+/// `GET /admin/partners/{mp_id}` — retrieve a single partner record.
 #[utoipa::path(
     get,
-    path = "/admin/partners/{gln}",
+    path = "/admin/partners/{mp_id}",
     tag = "admin",
-    params(("gln" = String, Path, description = "13-digit GLN")),
+    params(("mp_id" = String, Path, description = "13-digit GLN")),
     responses(
         (status = 200, description = "Partner record", body = PartnerResponse),
         (status = 401, description = "Missing or invalid bearer token"),
@@ -228,13 +228,13 @@ pub(crate) async fn handle_get(
         MakoAction::AdminPartnerRead,
         &PartnerResource {
             tenant: &state.tenant_id.to_string(),
-            gln: Some(&gln_str),
+            mp_id: Some(&gln_str),
         },
     ) {
         return forbidden();
     }
-    let gln = MarktpartnerCode::from(gln_str.as_str());
-    match state.store.get(state.tenant_id, &gln).await {
+    let mp_id = MarktpartnerCode::from(gln_str.as_str());
+    match state.store.get(state.tenant_id, &mp_id).await {
         Ok(Some(record)) => {
             let updated_at = record.updated_at.to_string();
             Json(PartnerResponse { record, updated_at }).into_response()
@@ -244,15 +244,15 @@ pub(crate) async fn handle_get(
     }
 }
 
-/// `PUT /admin/partners/{gln}` — create or update a partner record.
+/// `PUT /admin/partners/{mp_id}` — create or update a partner record.
 ///
-/// The `gln` in the path must match `record.gln` in the body; a mismatch is
+/// The `gln` in the path must match `record.mp_id` in the body; a mismatch is
 /// rejected with `400 Bad Request`.
 #[utoipa::path(
     put,
-    path = "/admin/partners/{gln}",
+    path = "/admin/partners/{mp_id}",
     tag = "admin",
-    params(("gln" = String, Path, description = "13-digit GLN")),
+    params(("mp_id" = String, Path, description = "13-digit GLN")),
     request_body(content = UpsertRequest, content_type = "application/json"),
     responses(
         (status = 200, description = "Upserted", body = PartnerResponse),
@@ -276,19 +276,19 @@ pub(crate) async fn handle_put(
         MakoAction::AdminPartnerWrite,
         &PartnerResource {
             tenant: &state.tenant_id.to_string(),
-            gln: Some(&gln_str),
+            mp_id: Some(&gln_str),
         },
     ) {
         return forbidden();
     }
     let path_gln = MarktpartnerCode::from(gln_str.as_str());
-    if body.record.gln != path_gln {
+    if body.record.mp_id != path_gln {
         return (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!(
                     "GLN in path ({path_gln}) does not match GLN in body ({})",
-                    body.record.gln
+                    body.record.mp_id
                 ),
             }),
         )
@@ -296,7 +296,7 @@ pub(crate) async fn handle_put(
     }
     match state.store.upsert(state.tenant_id, &body.record).await {
         Ok(()) => {
-            info!(gln = %path_gln, tenant = %state.tenant_id, "partner upserted via admin API");
+            info!(mp_id = %path_gln, tenant = %state.tenant_id, "partner upserted via admin API");
             let updated_at = body.record.updated_at.to_string();
             (
                 StatusCode::OK,
@@ -311,12 +311,12 @@ pub(crate) async fn handle_put(
     }
 }
 
-/// `DELETE /admin/partners/{gln}` — remove a partner record.
+/// `DELETE /admin/partners/{mp_id}` — remove a partner record.
 #[utoipa::path(
     delete,
-    path = "/admin/partners/{gln}",
+    path = "/admin/partners/{mp_id}",
     tag = "admin",
-    params(("gln" = String, Path, description = "13-digit GLN")),
+    params(("mp_id" = String, Path, description = "13-digit GLN")),
     responses(
         (status = 200, description = "Deletion result", body = DeleteResponse),
         (status = 401, description = "Missing or invalid bearer token"),
@@ -337,17 +337,17 @@ pub(crate) async fn handle_delete(
         MakoAction::AdminPartnerDelete,
         &PartnerResource {
             tenant: &state.tenant_id.to_string(),
-            gln: Some(&gln_str),
+            mp_id: Some(&gln_str),
         },
     ) {
         return forbidden();
     }
-    let gln = MarktpartnerCode::from(gln_str.as_str());
-    match state.store.remove(state.tenant_id, &gln).await {
+    let mp_id = MarktpartnerCode::from(gln_str.as_str());
+    match state.store.remove(state.tenant_id, &mp_id).await {
         Ok(()) => {
-            info!(%gln, tenant = %state.tenant_id, "partner removed via admin API");
+            info!(%mp_id, tenant = %state.tenant_id, "partner removed via admin API");
             Json(DeleteResponse {
-                gln: gln.to_string(),
+                mp_id: mp_id.to_string(),
                 deleted: true,
             })
             .into_response()
@@ -396,7 +396,7 @@ pub(crate) async fn handle_import(
         MakoAction::AdminPartnerImport,
         &PartnerResource {
             tenant: &state.tenant_id.to_string(),
-            gln: None,
+            mp_id: None,
         },
     ) {
         return forbidden();
@@ -431,15 +431,15 @@ pub(crate) async fn handle_import(
             let pid = partin.detect_pruefidentifikator().ok().map(|p| p.as_u32());
             match crate::edifact_api::partin_to_partner_record(&partin, pid) {
                 Some(record) => {
-                    let gln_str = record.gln.to_string();
+                    let gln_str = record.mp_id.to_string();
                     match state.store.upsert(state.tenant_id, &record).await {
                         Ok(()) => {
-                            info!(gln = %gln_str, "PARTIN import: partner upserted");
+                            info!(mp_id = %gln_str, "PARTIN import: partner upserted");
                             glns.push(gln_str);
                             upserted += 1;
                         }
                         Err(e) => {
-                            tracing::warn!(gln = %gln_str, error = %e, "PARTIN import: upsert failed");
+                            tracing::warn!(mp_id = %gln_str, error = %e, "PARTIN import: upsert failed");
                             skipped += 1;
                         }
                     }
@@ -491,7 +491,7 @@ pub async fn seed_from_config(
         store
             .upsert(tenant_id, record)
             .await
-            .with_context(|| format!("seeding partner {}", record.gln))?;
+            .with_context(|| format!("seeding partner {}", record.mp_id))?;
     }
 
     if !records.is_empty() {

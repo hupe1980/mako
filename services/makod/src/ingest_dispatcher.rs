@@ -24,7 +24,7 @@
 //!
 //! ## Combined-role loopback
 //!
-//! When `BdewAs4Sender` detects `recipient == own_gln`, it
+//! When `BdewAs4Sender` detects `recipient == own_mp_id`, it
 //! renders the domain payload to EDIFACT wire bytes, re-parses them, and calls
 //! `dispatch` here instead of transmitting over AS4.  This enables zero-latency
 //! in-process delivery for Stadtwerke deployments (NB+LF, GNB+gMSB).
@@ -127,9 +127,14 @@ impl EdifactIngestDispatcher {
     /// arm in `dispatch` below.
     pub const KNOWN_WORKFLOW_NAMES: &'static [&'static str] = &[
         "gabi-gas-allocation",
+        "gabi-gas-delivery-order",
+        "gabi-gas-imbnot",
         "gabi-gas-invoic",
         "gabi-gas-mmma",
         "gabi-gas-nomination",
+        "gabi-gas-schedl",
+        "gabi-gas-tranot",
+        "geli-gas-datenabruf",
         "geli-gas-mscons",
         "geli-gas-partin",
         "geli-gas-sperrprozesse-invoic",
@@ -157,6 +162,7 @@ impl EdifactIngestDispatcher {
         "gpke-utilts",
         "mabis-billing",
         "mabis-clearingliste",
+        "redispatch-aktivierung",
         "wim-device-change",
         "wim-gas-anmeldung",
         "wim-gas-insrpt",
@@ -171,6 +177,7 @@ impl EdifactIngestDispatcher {
         "wim-rechnung",
         "wim-stammdaten",
         "wim-stornierung",
+        "wim-technik-aenderung",
     ];
 
     /// Construct a new dispatcher backed by the given stores.
@@ -204,6 +211,22 @@ impl EdifactIngestDispatcher {
         workflow_name: &str,
         pid: u32,
     ) -> Result<IngestOutcome, EngineError> {
+        let outcome = self.dispatch_inner(msg, workflow_name, pid).await;
+        let result = match &outcome {
+            Ok(IngestOutcome::Spawned { .. } | IngestOutcome::Dispatched { .. }) => "dispatched",
+            Ok(IngestOutcome::Skipped { .. }) => "skipped",
+            Err(_) => "error",
+        };
+        mako_engine::metrics::EngineMetrics::global().inbound_received(pid, result);
+        outcome
+    }
+
+    async fn dispatch_inner(
+        &self,
+        msg: &AnyMessage,
+        workflow_name: &str,
+        pid: u32,
+    ) -> Result<IngestOutcome, EngineError> {
         let fv = detect_format_version(msg);
         let raw: &dyn Any = msg;
 
@@ -215,14 +238,20 @@ impl EdifactIngestDispatcher {
                 17115 | 17117 => {
                     let cmd = adapters::gpke_sperrung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // APERAK Frist: 24 wall-clock hours (BK6-22-024 §5).
-                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    // Process Frist: 24 wall-clock hours (BK6-22-024 §5).
+                    // APERAK AHB 1.0 §2.4.1: Strom ORDERS — 45 min on weekdays,
+                    // Sunday 12:00 Berlin if received on Saturday.
+                    let process_due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
                     self.spawn_or_resume::<GpkeSperrungWorkflow>(
                         &malo_id,
                         "gpke-sperrung",
                         cmd,
                         &fv,
-                        Some((mako_gpke::SPERRUNG_WINDOW_LABEL, due_at)),
+                        &[
+                            (mako_gpke::SPERRUNG_WINDOW_LABEL, process_due_at),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
                     )
                     .await
                 }
@@ -270,10 +299,10 @@ impl EdifactIngestDispatcher {
                         "geli-gas-sperrung-nb",
                         cmd,
                         &fv,
-                        Some((
+                        &[(
                             mako_geli_gas::GELI_GAS_SPERRUNG_NB_ANTWORT_WINDOW_LABEL,
                             due_at,
-                        )),
+                        )],
                     )
                     .await
                 }
@@ -308,14 +337,20 @@ impl EdifactIngestDispatcher {
                 55001 | 55002 | 55016 => {
                     let cmd = adapters::gpke_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // APERAK Frist: 24 wall-clock hours (BK6-22-024 §5).
-                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    // Process Frist: 24 wall-clock hours (BK6-22-024 §5).
+                    // APERAK AHB 1.0 §2.4.1: Strom UTILMD — 45 min on weekdays,
+                    // Sunday 12:00 Berlin if received on Saturday.
+                    let process_due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
                     self.spawn_or_resume::<GpkeSupplierChangeWorkflow>(
                         &malo_id,
                         "gpke-supplier-change",
                         cmd,
                         &fv,
-                        Some((mako_gpke::APERAK_WINDOW_LABEL, due_at)),
+                        &[
+                            (mako_gpke::GPKE_PROCESS_RESPONSE_LABEL, process_due_at),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
                     )
                     .await
                 }
@@ -342,14 +377,19 @@ impl EdifactIngestDispatcher {
                 55007 => {
                     let cmd = adapters::gpke_lf_abmeldung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // APERAK Frist: 24 wall-clock hours (BK6-22-024 §4).
-                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    // Process Frist: 24 wall-clock hours (BK6-22-024 §4).
+                    // APERAK AHB 1.0 §2.4.1: Strom UTILMD — 45 min on weekdays.
+                    let process_due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
                     self.spawn_or_resume::<GpkeLfAbmeldungWorkflow>(
                         &malo_id,
                         "gpke-lf-abmeldung",
                         cmd,
                         &fv,
-                        Some((mako_gpke::LF_ABMELDUNG_APERAK_WINDOW_LABEL, due_at)),
+                        &[
+                            (mako_gpke::LF_ABMELDUNG_APERAK_WINDOW_LABEL, process_due_at),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
                     )
                     .await
                 }
@@ -395,7 +435,7 @@ impl EdifactIngestDispatcher {
                         "geli-gas-supplier-change",
                         cmd,
                         &fv,
-                        Some((mako_geli_gas::LIEFERBEGINN_APERAK_WINDOW_LABEL, due_at)),
+                        &[(mako_geli_gas::LIEFERBEGINN_RESPONSE_WINDOW_LABEL, due_at)],
                     )
                     .await
                 }
@@ -457,18 +497,23 @@ impl EdifactIngestDispatcher {
                 55042 | 55039 | 55051 | 55168 => {
                     let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_utilmd(msg);
-                    // APERAK Frist: 5 Werktage (BK6-24-174 WiM Strom Teil 1).
-                    let due_at = fristen::deadline_at_werktage(
+                    // Process Frist: 5 Werktage (BK6-24-174 WiM Strom Teil 1).
+                    // APERAK AHB 1.0 §2.4.1: Strom UTILMD — 45 min on weekdays.
+                    let process_due_at = fristen::deadline_at_werktage(
                         OffsetDateTime::now_utc(),
                         5,
                         HolidayCalendar::BdewMaKo,
                     );
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
                     self.spawn_or_resume::<WimDeviceChangeWorkflow>(
                         &melo_id,
                         "wim-device-change",
                         cmd,
                         &fv,
-                        Some((mako_wim::GERAETEWECHSEL_APERAK_WINDOW_LABEL, due_at)),
+                        &[
+                            (mako_wim::GERAETEWECHSEL_APERAK_WINDOW_LABEL, process_due_at),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
                     )
                     .await
                 }
@@ -492,18 +537,26 @@ impl EdifactIngestDispatcher {
                 17001 | 17002 | 17005 | 17009 | 17011 => {
                     let cmd = adapters::wim_geraeteubernahme_registry().dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_orders(msg);
-                    // APERAK Frist: 5 Werktage (BK6-24-174 WiM Strom Teil 1).
-                    let due_at = fristen::deadline_at_werktage(
+                    // Process Frist: 5 Werktage (BK6-24-174 WiM Strom Teil 1).
+                    // APERAK AHB 1.0 §2.4.1: Strom ORDERS — 45 min on weekdays.
+                    let process_due_at = fristen::deadline_at_werktage(
                         OffsetDateTime::now_utc(),
                         5,
                         HolidayCalendar::BdewMaKo,
                     );
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
                     self.spawn_or_resume::<WimGeraeteubernahmeWorkflow>(
                         &melo_id,
                         "wim-geraeteubernahme",
                         cmd,
                         &fv,
-                        Some((mako_wim::GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL, due_at)),
+                        &[
+                            (
+                                mako_wim::GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL,
+                                process_due_at,
+                            ),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
                     )
                     .await
                 }
@@ -535,7 +588,7 @@ impl EdifactIngestDispatcher {
                         "wim-stornierung",
                         cmd,
                         &fv,
-                        None,
+                        &[],
                     )
                     .await
                 }
@@ -571,7 +624,7 @@ impl EdifactIngestDispatcher {
                         "gpke-abrechnung",
                         cmd,
                         &fv,
-                        Some((mako_gpke::ABRECHNUNG_WINDOW_LABEL, due_at)),
+                        &[(mako_gpke::ABRECHNUNG_WINDOW_LABEL, due_at)],
                     )
                     .await
                 }
@@ -620,7 +673,7 @@ impl EdifactIngestDispatcher {
                         "wim-rechnung",
                         cmd,
                         &fv,
-                        Some((mako_wim::WIM_RECHNUNG_WINDOW_LABEL, due_at)),
+                        &[(mako_wim::WIM_RECHNUNG_WINDOW_LABEL, due_at)],
                     )
                     .await
                 }
@@ -648,7 +701,7 @@ impl EdifactIngestDispatcher {
                         "wim-insrpt",
                         cmd,
                         &fv,
-                        Some((mako_wim::insrpt::ANTWORT_WINDOW_LABEL, due_at)),
+                        &[(mako_wim::insrpt::ANTWORT_WINDOW_LABEL, due_at)],
                     )
                     .await
                 }
@@ -674,14 +727,19 @@ impl EdifactIngestDispatcher {
                 17134 | 17135 => {
                     let cmd = adapters::gpke_konfiguration_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // APERAK Frist: 24 wall-clock hours (BK6-22-024 §5).
-                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    // Process Frist: 24 wall-clock hours (BK6-22-024 §5).
+                    // APERAK AHB 1.0 §2.4.1: Strom ORDERS — 45 min on weekdays.
+                    let process_due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
                     self.spawn_or_resume::<GpkeKonfigurationWorkflow>(
                         &malo_id,
                         "gpke-konfiguration",
                         cmd,
                         &fv,
-                        Some((mako_gpke::KONFIGURATION_WINDOW_LABEL, due_at)),
+                        &[
+                            (mako_gpke::KONFIGURATION_WINDOW_LABEL, process_due_at),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
                     )
                     .await
                 }
@@ -707,14 +765,22 @@ impl EdifactIngestDispatcher {
                 55022..=55024 => {
                     let cmd = adapters::gpke_stornierung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // APERAK Frist: 24 wall-clock hours (BK6-22-024 §5).
-                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    // Process Frist: 24 wall-clock hours (BK6-22-024 §5).
+                    // APERAK AHB 1.0 §2.4.1: Strom UTILMD — 45 min on weekdays.
+                    let process_due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
                     self.spawn_or_resume::<GpkeStornierungWorkflow>(
                         &malo_id,
                         "gpke-stornierung",
                         cmd,
                         &fv,
-                        Some((mako_gpke::STORNIERUNG_GPKE_APERAK_WINDOW_LABEL, due_at)),
+                        &[
+                            (
+                                mako_gpke::STORNIERUNG_GPKE_APERAK_WINDOW_LABEL,
+                                process_due_at,
+                            ),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
                     )
                     .await
                 }
@@ -731,17 +797,22 @@ impl EdifactIngestDispatcher {
                     let cmd =
                         adapters::gpke_ankuendigung_zuordnung_lf_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // APERAK Frist: 24 wall-clock hours (BK6-22-024 §5).
-                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    // Process Frist: 24 wall-clock hours (BK6-22-024 §5).
+                    // APERAK AHB 1.0 §2.4.1: Strom UTILMD — 45 min on weekdays.
+                    let process_due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
                     self.spawn_or_resume::<GpkeAnkuendigungZuordnungLfWorkflow>(
                         &malo_id,
                         "gpke-ankuendigung-zuordnung-lf",
                         cmd,
                         &fv,
-                        Some((
-                            mako_gpke::ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL,
-                            due_at,
-                        )),
+                        &[
+                            (
+                                mako_gpke::ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL,
+                                process_due_at,
+                            ),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
                     )
                     .await
                 }
@@ -763,7 +834,7 @@ impl EdifactIngestDispatcher {
                         "geli-gas-mscons",
                         cmd,
                         &fv,
-                        None,
+                        &[],
                     )
                     .await
                 }
@@ -795,7 +866,7 @@ impl EdifactIngestDispatcher {
                         "geli-gas-stornierung",
                         cmd,
                         &fv,
-                        Some((mako_geli_gas::STORNIERUNG_APERAK_WINDOW_LABEL, due_at)),
+                        &[(mako_geli_gas::STORNIERUNG_RESPONSE_WINDOW_LABEL, due_at)],
                     )
                     .await
                 }
@@ -823,7 +894,7 @@ impl EdifactIngestDispatcher {
                         "geli-gas-sperrprozesse-invoic",
                         cmd,
                         &fv,
-                        Some((mako_geli_gas::SPERRPROZESSE_INVOIC_SETTLEMENT_LABEL, due_at)),
+                        &[(mako_geli_gas::SPERRPROZESSE_INVOIC_SETTLEMENT_LABEL, due_at)],
                     )
                     .await
                 }
@@ -851,7 +922,7 @@ impl EdifactIngestDispatcher {
                         "wim-gas-anmeldung",
                         cmd,
                         &fv,
-                        Some((mako_wim_gas::anmeldung::APERAK_WINDOW_LABEL, due_at)),
+                        &[(mako_wim_gas::anmeldung::RESPONSE_WINDOW_LABEL, due_at)],
                     )
                     .await
                 }
@@ -879,7 +950,7 @@ impl EdifactIngestDispatcher {
                         "wim-gas-kuendigung",
                         cmd,
                         &fv,
-                        Some((mako_wim_gas::kuendigung::APERAK_WINDOW_LABEL, due_at)),
+                        &[(mako_wim_gas::kuendigung::RESPONSE_WINDOW_LABEL, due_at)],
                     )
                     .await
                 }
@@ -912,10 +983,10 @@ impl EdifactIngestDispatcher {
                         "wim-gas-verpflichtungsanfrage",
                         cmd,
                         &fv,
-                        Some((
-                            mako_wim_gas::verpflichtungsanfrage::APERAK_WINDOW_LABEL,
+                        &[(
+                            mako_wim_gas::verpflichtungsanfrage::RESPONSE_WINDOW_LABEL,
                             due_at,
-                        )),
+                        )],
                     )
                     .await
                 }
@@ -943,7 +1014,7 @@ impl EdifactIngestDispatcher {
                         "wim-gas-invoic",
                         cmd,
                         &fv,
-                        Some((mako_wim_gas::invoic::SETTLEMENT_WINDOW_LABEL, due_at)),
+                        &[(mako_wim_gas::invoic::SETTLEMENT_WINDOW_LABEL, due_at)],
                     )
                     .await
                 }
@@ -972,7 +1043,7 @@ impl EdifactIngestDispatcher {
                         "wim-gas-insrpt",
                         cmd,
                         &fv,
-                        Some((mako_wim_gas::insrpt::ANTWORT_WINDOW_LABEL, due_at)),
+                        &[(mako_wim_gas::insrpt::ANTWORT_WINDOW_LABEL, due_at)],
                     )
                     .await
                 }
@@ -994,7 +1065,7 @@ impl EdifactIngestDispatcher {
                         "mabis-clearingliste",
                         cmd,
                         &fv,
-                        None,
+                        &[],
                     )
                     .await
                 }
@@ -1026,7 +1097,7 @@ impl EdifactIngestDispatcher {
                         "gabi-gas-invoic",
                         cmd,
                         &fv,
-                        Some((mako_gabi_gas::INVOIC_SETTLEMENT_WINDOW_LABEL, due_at)),
+                        &[(mako_gabi_gas::INVOIC_SETTLEMENT_WINDOW_LABEL, due_at)],
                     )
                     .await
                 }
@@ -1091,14 +1162,22 @@ impl EdifactIngestDispatcher {
                 55600 | 55601 => {
                     let cmd = adapters::gpke_neuanlage_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // GPKE 24h wall-clock deadline (BK6-22-024 §5).
-                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    // Process Frist: 24 wall-clock hours (BK6-22-024 §5).
+                    // APERAK AHB 1.0 §2.4.1: Strom UTILMD — 45 min on weekdays.
+                    let process_due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
                     self.spawn_or_resume::<GpkeNeuanlageWorkflow>(
                         &malo_id,
                         "gpke-neuanlage",
                         cmd,
                         &fv,
-                        Some((mako_gpke::neuanlage::NEUANLAGE_APERAK_WINDOW_LABEL, due_at)),
+                        &[
+                            (
+                                mako_gpke::neuanlage::NEUANLAGE_APERAK_WINDOW_LABEL,
+                                process_due_at,
+                            ),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
                     )
                     .await
                 }
@@ -1113,14 +1192,22 @@ impl EdifactIngestDispatcher {
                 55555 => {
                     let cmd = adapters::gpke_anfrage_bestellung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // GPKE 24h wall-clock deadline (BK6-22-024 §5).
-                    let due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    // Process Frist: 24 wall-clock hours (BK6-22-024 §5).
+                    // APERAK AHB 1.0 §2.4.1: Strom UTILMD — 45 min on weekdays.
+                    let process_due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
                     self.spawn_or_resume::<GpkeAnfrageBestellungWorkflow>(
                         &malo_id,
                         "gpke-anfrage-bestellung",
                         cmd,
                         &fv,
-                        Some((mako_gpke::anfrage_bestellung::ANFRAGE_WINDOW_LABEL, due_at)),
+                        &[
+                            (
+                                mako_gpke::anfrage_bestellung::ANFRAGE_WINDOW_LABEL,
+                                process_due_at,
+                            ),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
                     )
                     .await
                 }
@@ -1141,7 +1228,7 @@ impl EdifactIngestDispatcher {
                         "gpke-partin",
                         cmd,
                         &fv,
-                        None,
+                        &[],
                     )
                     .await
                 } else {
@@ -1163,7 +1250,7 @@ impl EdifactIngestDispatcher {
                         "gpke-messwerte",
                         cmd,
                         &fv,
-                        None,
+                        &[],
                     )
                     .await
                 } else {
@@ -1184,7 +1271,7 @@ impl EdifactIngestDispatcher {
                         "gpke-utilts",
                         cmd,
                         &fv,
-                        None,
+                        &[],
                     )
                     .await
                 } else {
@@ -1244,7 +1331,7 @@ impl EdifactIngestDispatcher {
                         "geli-gas-partin",
                         cmd,
                         &fv,
-                        None,
+                        &[],
                     )
                     .await
                 } else {
@@ -1271,7 +1358,7 @@ impl EdifactIngestDispatcher {
                         "mabis-billing",
                         cmd,
                         &fv,
-                        Some((mako_mabis::PRUEFMITTEILUNG_DEADLINE_LABEL, due_at)),
+                        &[(mako_mabis::PRUEFMITTEILUNG_DEADLINE_LABEL, due_at)],
                     )
                     .await
                 } else {
@@ -1287,18 +1374,26 @@ impl EdifactIngestDispatcher {
                 17132 => {
                     let cmd = adapters::wim_stammdaten_registry().dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_orders(msg);
-                    // Stammdaten deadline: 5 Werktage (BK6-24-174).
-                    let due_at = fristen::deadline_at_werktage(
+                    // Process Frist: 5 Werktage (BK6-24-174).
+                    // APERAK AHB 1.0 §2.4.1: Strom ORDERS — 45 min on weekdays.
+                    let process_due_at = fristen::deadline_at_werktage(
                         OffsetDateTime::now_utc(),
                         5,
                         HolidayCalendar::BdewMaKo,
                     );
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
                     self.spawn_or_resume::<WimStammdatenWorkflow>(
                         &melo_id,
                         "wim-stammdaten",
                         cmd,
                         &fv,
-                        Some((mako_wim::stammdaten::STAMMDATEN_DEADLINE_LABEL, due_at)),
+                        &[
+                            (
+                                mako_wim::stammdaten::STAMMDATEN_DEADLINE_LABEL,
+                                process_due_at,
+                            ),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
                     )
                     .await
                 }
@@ -1324,7 +1419,7 @@ impl EdifactIngestDispatcher {
                         "wim-preisanfrage",
                         cmd,
                         &fv,
-                        Some((mako_wim::preisanfrage::PREISANFRAGE_DEADLINE_LABEL, due_at)),
+                        &[(mako_wim::preisanfrage::PREISANFRAGE_DEADLINE_LABEL, due_at)],
                     )
                     .await
                 } else {
@@ -1346,7 +1441,7 @@ impl EdifactIngestDispatcher {
                         "wim-preisliste",
                         cmd,
                         &fv,
-                        None,
+                        &[],
                     )
                     .await
                 } else {
@@ -1378,7 +1473,7 @@ impl EdifactIngestDispatcher {
                         "gabi-gas-nomination",
                         cmd,
                         &fv,
-                        Some((mako_gabi_gas::nomination::NOMRES_DEADLINE_LABEL, due_at)),
+                        &[(mako_gabi_gas::nomination::NOMRES_DEADLINE_LABEL, due_at)],
                     )
                     .await
                 } else {
@@ -1403,7 +1498,7 @@ impl EdifactIngestDispatcher {
                         "gabi-gas-allocation",
                         cmd,
                         &fv,
-                        None,
+                        &[],
                     )
                     .await
                 } else {
@@ -1433,7 +1528,7 @@ impl EdifactIngestDispatcher {
                         "wim-gas-stornierung",
                         cmd,
                         &fv,
-                        Some((mako_wim_gas::STORNIERUNG_APERAK_WINDOW_LABEL, due_at)),
+                        &[(mako_wim_gas::STORNIERUNG_RESPONSE_WINDOW_LABEL, due_at)],
                     )
                     .await
                 }
@@ -1463,6 +1558,45 @@ impl EdifactIngestDispatcher {
                 }),
             },
 
+            // ── Workflows registered in PidRouter but Phase 2 dispatch not yet implemented ─
+            //
+            // These workflows handle inbound PIDs that are registered in their
+            // respective domain modules. Full dispatch arms with typed adapters and
+            // workflow commands will be added in a follow-up. Until then, inbound
+            // messages are explicitly acknowledged as "not yet dispatched" rather
+            // than silently falling through to the catch-all warn arm.
+            //
+            // To implement one of these: add an AdapterRegistry<WorkflowType> function
+            // to adapters.rs and add a proper spawn_or_resume arm above.
+            "geli-gas-datenabruf" => Ok(IngestOutcome::Skipped {
+                workflow_name: "geli-gas-datenabruf",
+                reason: "phase2_dispatch_not_yet_implemented",
+            }),
+            "gabi-gas-schedl" => Ok(IngestOutcome::Skipped {
+                workflow_name: "gabi-gas-schedl",
+                reason: "phase2_dispatch_not_yet_implemented",
+            }),
+            "gabi-gas-imbnot" => Ok(IngestOutcome::Skipped {
+                workflow_name: "gabi-gas-imbnot",
+                reason: "phase2_dispatch_not_yet_implemented",
+            }),
+            "gabi-gas-tranot" => Ok(IngestOutcome::Skipped {
+                workflow_name: "gabi-gas-tranot",
+                reason: "phase2_dispatch_not_yet_implemented",
+            }),
+            "gabi-gas-delivery-order" => Ok(IngestOutcome::Skipped {
+                workflow_name: "gabi-gas-delivery-order",
+                reason: "phase2_dispatch_not_yet_implemented",
+            }),
+            "redispatch-aktivierung" => Ok(IngestOutcome::Skipped {
+                workflow_name: "redispatch-aktivierung",
+                reason: "phase2_dispatch_not_yet_implemented",
+            }),
+            "wim-technik-aenderung" => Ok(IngestOutcome::Skipped {
+                workflow_name: "wim-technik-aenderung",
+                reason: "phase2_dispatch_not_yet_implemented",
+            }),
+
             // ── All other workflows: not yet in Phase 2 dispatch table ────────
             //
             // WARNING: messages routed here are dead-lettered. Any workflow name
@@ -1491,19 +1625,23 @@ impl EdifactIngestDispatcher {
     /// `cmd`, register the process under the MaLo tag, and return
     /// [`IngestOutcome::Spawned`].
     ///
-    /// `spawn_deadline`: when `Some((label, due_at))`, the deadline is written
+    /// `spawn_deadlines`: zero or more `(label, due_at)` pairs to register
     /// atomically with the events in a single `WriteBatch` via
-    /// [`Process::execute_and_enqueue_with_deadlines`].  Pass `None` for
-    /// workflows that have no APERAK Frist (e.g. pure continuation handlers).
-    /// The deadline is only registered for freshly-spawned processes — resuming
-    /// an existing process must not re-register (the deadline was set at spawn).
+    /// [`Process::execute_and_enqueue_with_deadlines`].  Pass `&[]` for
+    /// workflows that have no deadlines (e.g. pure continuation handlers).
+    /// Deadlines are only registered for freshly-spawned processes — resuming
+    /// an existing process must not re-register (deadlines were set at spawn).
+    ///
+    /// To satisfy APERAK AHB 1.0 §2.4.1 for Strom UTILMD/ORDERS, callers
+    /// should pass **two** deadlines: the process-response window and the
+    /// 45-minute APERAK sending window (`fristen::APERAK_STROM_WINDOW_LABEL`).
     async fn spawn_or_resume<W>(
         &self,
         malo_id: &str,
         workflow_name_static: &'static str,
         cmd: W::Command,
         fv: &FormatVersion,
-        spawn_deadline: Option<(&'static str, time::OffsetDateTime)>,
+        spawn_deadlines: &[(&'static str, time::OffsetDateTime)],
     ) -> Result<IngestOutcome, EngineError>
     where
         W: Workflow + 'static,
@@ -1563,23 +1701,11 @@ impl EdifactIngestDispatcher {
         );
         let process_id = process.process_id();
 
-        // Atomically persist events and (when applicable) the APERAK Frist deadline.
-        // Using `execute_and_enqueue_with_deadlines` ensures a crash between event
-        // write and deadline registration cannot produce a process with no monitoring
-        // window (dual-write atomicity requirement).
-        if let Some((label, due_at)) = spawn_deadline {
-            let deadline = Deadline::new(
-                process.stream_id().clone(),
-                process_id,
-                self.tenant_id,
-                workflow_id,
-                label,
-                due_at,
-            );
-            process
-                .execute_and_enqueue_with_deadlines(cmd, &[deadline])
-                .await?;
-        } else {
+        // Atomically persist events and (when applicable) the APERAK/process Frist
+        // deadlines.  Using `execute_and_enqueue_with_deadlines` ensures a crash
+        // between event write and deadline registration cannot produce a process with
+        // no monitoring window (dual-write atomicity requirement).
+        if spawn_deadlines.is_empty() {
             process
                 .execute_and_enqueue_with_snapshot_and_retry(
                     cmd,
@@ -1587,6 +1713,23 @@ impl EdifactIngestDispatcher {
                     &self.snap_store,
                     self.snapshot_interval,
                 )
+                .await?;
+        } else {
+            let deadlines: Vec<Deadline> = spawn_deadlines
+                .iter()
+                .map(|&(label, due_at)| {
+                    Deadline::new(
+                        process.stream_id().clone(),
+                        process_id,
+                        self.tenant_id,
+                        workflow_id.clone(),
+                        label,
+                        due_at,
+                    )
+                })
+                .collect();
+            process
+                .execute_and_enqueue_with_deadlines(cmd, &deadlines)
                 .await?;
         }
 

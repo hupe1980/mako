@@ -612,7 +612,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
-| 35001 | Anfrage Geräteübernahmeangebot | WiM Gas / WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-preisanfrage` (Strom 5WT · Gas-only deployment: TODO `wim-gas-preisanfrage` 10WT) |
+| 35001 | Anfrage Geräteübernahmeangebot | WiM Gas / WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-preisanfrage` (Strom 5WT) · Gas-only deployment: `mako-wim-gas` `wim-gas-preisanfrage` (10WT) |
 | 35002 | Anfrage Rechnungsabwicklung MSB über LF | WiM Strom Teil 1 | LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
 | 35003 | Anfrage von Werten | WiM Strom Teil 2 | ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
 | 35004 | Anfrage einer Konfiguration | GPKE Teil 3 | NB → MSB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
@@ -622,7 +622,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
-| 15001 | Angebot Geräteübernahme | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-preisanfrage` (Strom 5WT · Gas-only deployment: TODO `wim-gas-preisanfrage` 10WT) |
+| 15001 | Angebot Geräteübernahme | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-preisanfrage` (Strom 5WT) · Gas-only deployment: `mako-wim-gas` `wim-gas-preisanfrage` (10WT) |
 | 15002 | Angebot Abrechnung Messstellenbetrieb MSB | WiM Strom Teil 1 | MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
 | 15003 | Angebot zur Anfrage von Werten | WiM Strom Teil 2 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
 | 15004 | Angebot  einer Konfiguration | GPKE Teil 3 | MSB → NB · MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
@@ -634,7 +634,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
 | 27001 | Übermittlung Ausgleichsenergiepreis | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisliste` |
 | 27002 | Preisblätter MSB-Leistungen | GPKE Teil 3 / WiM Strom Teil 1 / AWH Änd. Technik | MSB → NB · MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisliste` |
-| 27003 | Preisblätter NB-Leistungen | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-preisliste` (Strom · Gas-only deployment: TODO `mako-geli-gas` `geli-gas-preisliste` 10WT) |
+| 27003 | Preisblätter NB-Leistungen | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-preisliste` (Strom) · Gas-only deployment: `mako-geli-gas` `geli-gas-preisliste` (10WT) |
 
 ## INSRPT AHB
 

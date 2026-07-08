@@ -99,6 +99,17 @@ pub struct MigrationApiState {
     pub cedar: Arc<CedarAuthorizer>,
 }
 
+/// Every `(from, to)` FV pair that is registered in [`dispatch_migrations`].
+///
+/// **Maintenance rule:** whenever a new `match` arm is added to
+/// `dispatch_migrations`, the corresponding `(from, to)` pair must also be
+/// added here.  The `migration_dispatch_table_covers_active_fv_transitions`
+/// integration test panics if any active transition is absent from this list.
+///
+/// Add a new entry each October release cycle.
+#[allow(dead_code)] // used by integration tests via the lib target
+pub const KNOWN_FV_TRANSITIONS: &[(&str, &str)] = &[("FV2025-10-01", "FV2026-10-01")];
+
 // ── Request / response types ──────────────────────────────────────────────────
 
 /// `POST /admin/migrations` request body.

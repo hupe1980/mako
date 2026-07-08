@@ -53,3 +53,33 @@ fn all_registered_workflows_covered_by_dispatch_table() {
     // from the dispatch table — that panic is the test-failure signal.
     deadline_dispatch::assert_dispatch_coverage(ctx.registered_workflows());
 }
+
+/// Assert that every active FV transition is registered in the migration
+/// dispatch table.
+///
+/// This is the guard against the "missing dispatch arm" scenario described in
+/// F-009: a developer adds a new `StateMigration` in a domain crate but forgets
+/// to add a corresponding arm to `migration_api::dispatch_migrations` and to
+/// `migration_api::KNOWN_FV_TRANSITIONS`.
+///
+/// **Maintenance rule for each October release cycle:**
+/// 1. Add the new `(from, to)` pair to `KNOWN_FV_TRANSITIONS` in `migration_api.rs`.
+/// 2. Add the corresponding `match` arm to `dispatch_migrations`.
+/// 3. Add the new pair to `active_transitions` below.
+///
+/// If any of the three steps is missing, this test panics with a clear message.
+#[tokio::test]
+async fn migration_dispatch_table_covers_active_fv_transitions() {
+    let active_transitions: &[(&str, &str)] = &[("FV2025-10-01", "FV2026-10-01")];
+
+    let known = makod::migration_api::KNOWN_FV_TRANSITIONS;
+    for (from, to) in active_transitions {
+        assert!(
+            known.contains(&(*from, *to)),
+            "migration_api::KNOWN_FV_TRANSITIONS does not contain ({from:?}, {to:?}). \
+             Add a `match` arm to `dispatch_migrations` in migration_api.rs and \
+             add the pair to KNOWN_FV_TRANSITIONS. \
+             This is a mandatory step in the annual October release workflow.",
+        );
+    }
+}

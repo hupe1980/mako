@@ -30,17 +30,17 @@
 //!
 //! ```rust
 //! use invoic_checker::check::{CheckConfig, CheckOutcome, InvoicCheckEngine};
-//! use invoic_checker::tariff::InMemoryTariffStore;
+//! use invoic_checker::tariff::InMemoryPreisblattStore;
 //! use rubo4e::v202501::Rechnung;
 //!
-//! // An empty tariff store yields a TariffNotFound *warning* (not a dispute)
+//! // An empty preisblatt store yields a TariffNotFound *warning* (not a dispute)
 //! // even for an invoice with no line items, because the tariff check always
 //! // runs and flags unknown sender GLNs with is_dispute = require_tariff.
 //! let report = InvoicCheckEngine::check(
 //!     31001,
 //!     "9900357000004",
 //!     &Rechnung::default(),
-//!     &InMemoryTariffStore::new(),
+//!     &InMemoryPreisblattStore::new(),
 //!     &CheckConfig::default(),
 //! );
 //! assert_eq!(report.outcome, CheckOutcome::Warn);
@@ -48,7 +48,7 @@
 
 use rubo4e::v202501::{Rechnung, Rechnungsposition};
 
-use crate::{amount::EuroAmount, tariff::TariffStore};
+use crate::{amount::EuroAmount, tariff::PreisblattStore};
 
 // ── CheckConfig ───────────────────────────────────────────────────────────────
 
@@ -68,8 +68,7 @@ pub struct CheckConfig {
 
     /// Tolerance for tariff deviation findings.
     ///
-    /// Default: `0.02` (2 %).  The more permissive of this and
-    /// [`TariffEntry::tolerance`][crate::tariff::TariffEntry::tolerance] is used.
+    /// Default: `0.02` (2 %).
     pub tariff_tolerance: f64,
 
     /// When `true`, a missing tariff entry for the sender GLN produces a
@@ -250,7 +249,7 @@ impl InvoicCheckEngine {
     /// # Arguments
     ///
     /// - `pid` — BDEW Prüfidentifikator (31001–31011) from `AbrechnungData`.
-    /// - `sender_gln` — verified sender GLN from `AbrechnungData.sender`
+    /// - `sender_mp_id` — verified sender GLN from `AbrechnungData.sender`
     ///   (identity-checked at transport layer; used for tariff lookups).
     /// - `rechnung` — BO4E invoice object stored in the event.
     /// - `tariff_store` — tariff database seeded from PRICAT 27003.
@@ -258,9 +257,9 @@ impl InvoicCheckEngine {
     #[must_use]
     pub fn check(
         pid: u32,
-        sender_gln: &str,
+        sender_mp_id: &str,
         rechnung: &Rechnung,
-        tariff_store: &dyn TariffStore,
+        preisblatt_store: &dyn PreisblattStore,
         config: &CheckConfig,
     ) -> CheckReport {
         let mut findings: Vec<Finding> = Vec::new();
@@ -275,7 +274,13 @@ impl InvoicCheckEngine {
         let computed_total = Self::check_total(rechnung, config, &mut findings);
 
         // ── Stage 4: Tariff check (PRICAT vs INVOIC unit price) ───────────────
-        Self::check_tariffs(rechnung, sender_gln, tariff_store, config, &mut findings);
+        Self::check_tariffs(
+            rechnung,
+            sender_mp_id,
+            preisblatt_store,
+            config,
+            &mut findings,
+        );
 
         // ── Derive overall outcome ────────────────────────────────────────────
         let outcome = findings
@@ -314,8 +319,8 @@ impl InvoicCheckEngine {
 
     /// Stage 1: Verify that every billing period has start < end.
     ///
-    /// Dates are ISO 8601 (`YYYY-MM-DD`) strings — lexicographic comparison is
-    /// correct for ISO dates.
+    /// `Zeitraum.startdatum/enddatum` and `Rechnungsposition.lieferung_von/bis`
+    /// are all `time::Date` in rubo4e v0.3 — compared directly, no string parsing.
     fn check_periods(rechnung: &Rechnung, findings: &mut Vec<Finding>) {
         // Message-level period (Rechnungsperiode).
         if let Some(periode) = &rechnung.rechnungsperiode
@@ -323,11 +328,9 @@ impl InvoicCheckEngine {
                 (periode.startdatum.as_ref(), periode.enddatum.as_ref())
             && start >= end
         {
-            let start_s = fmt_date(start);
-            let end_s = fmt_date(end);
             findings.push(Finding::dispute(
                 FindingKind::PeriodInvalid,
-                format!("Message-level billing period invalid: start {start_s} ≥ end {end_s}"),
+                format!("Message-level billing period invalid: start {start} ≥ end {end}"),
                 None,
                 None,
                 None,
@@ -336,7 +339,7 @@ impl InvoicCheckEngine {
         // Line-level periods (Lieferung von/bis).
         for pos in rechnung.rechnungspositionen.iter().flatten() {
             if let (Some(start), Some(end)) =
-                (pos.lieferung_von.as_deref(), pos.lieferung_bis.as_deref())
+                (pos.lieferung_von.as_ref(), pos.lieferung_bis.as_ref())
                 && start >= end
             {
                 let (line_no, malo) = pos_ident(pos);
@@ -449,34 +452,27 @@ impl InvoicCheckEngine {
     /// Stage 4: Compare `einzelpreis` against the tariff store (PRICAT 27003).
     fn check_tariffs(
         rechnung: &Rechnung,
-        sender_gln: &str,
-        tariff_store: &dyn TariffStore,
+        sender_mp_id: &str,
+        preisblatt_store: &dyn PreisblattStore,
         config: &CheckConfig,
         findings: &mut Vec<Finding>,
     ) {
-        // Use the invoice period start (or document date) as the billing date.
-        let start_date_str;
-        let rechnung_datum_str;
-        let billing_date = if let Some(dt) = rechnung
+        // Use the invoice period start (Date, Copy) or fall back to the invoice
+        // document datetime's date component.  Both field types are now native
+        // time types in rubo4e v0.3 — no string formatting needed for the lookup.
+        let billing_date: time::Date = rechnung
             .rechnungsperiode
             .as_ref()
-            .and_then(|z| z.startdatum.as_ref())
-        {
-            start_date_str = fmt_date(dt);
-            &*start_date_str
-        } else if let Some(dt) = rechnung.rechnungsdatum.as_ref() {
-            rechnung_datum_str = fmt_date(dt);
-            &*rechnung_datum_str
-        } else {
-            ""
-        };
+            .and_then(|z| z.startdatum) // Option<time::Date> (Copy)
+            .or_else(|| rechnung.rechnungsdatum.as_ref().map(|dt| dt.date()))
+            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
 
-        if !tariff_store.has_tariff_for(sender_gln) {
+        if !preisblatt_store.has_preisblatt_for(sender_mp_id) {
             findings.push(Finding {
                 kind: FindingKind::TariffNotFound,
                 is_dispute: config.require_tariff,
                 message: format!(
-                    "No PRICAT tariff found for sender GLN {sender_gln} on {billing_date}. \
+                    "No PRICAT tariff found for sender GLN {sender_mp_id} on {billing_date}. \
                      Tariff check skipped — seed the tariff store from PRICAT 27003.",
                 ),
                 line_number: None,
@@ -497,14 +493,19 @@ impl InvoicCheckEngine {
                 continue;
             };
             let (line_no, malo) = pos_ident(pos);
-            let line_date = pos.lieferung_von.as_deref().unwrap_or(billing_date);
+            // lieferung_von is Option<OffsetDateTime> in rubo4e v0.3; extract the
+            // date component for the price-sheet lookup key.
+            let line_date = pos
+                .lieferung_von
+                .map(|dt| dt.date())
+                .unwrap_or(billing_date);
 
-            let Some(tariff) = tariff_store.get(sender_gln, line_date) else {
+            let Some(preisblatt) = preisblatt_store.get(sender_mp_id, line_date) else {
                 findings.push(Finding::warn(
                     FindingKind::TariffNotFound,
                     format!(
-                        "Line {line_no} ({malo}): no tariff entry effective on {line_date} \
-                         for GLN {sender_gln}",
+                        "Line {line_no} ({malo}): no Preisblatt effective on {line_date} \
+                         for GLN {sender_mp_id}",
                     ),
                     Some(line_no),
                     None,
@@ -513,21 +514,52 @@ impl InvoicCheckEngine {
                 continue;
             };
 
-            // Apply the stricter of the two tolerances.
-            let tol = config.tariff_tolerance.min(tariff.tolerance);
+            // Collect all published Einheitspreise from all Preispositionen and
+            // their Preisstaffeln.  If the INVOIC Einzelpreis is within tolerance
+            // of ANY published rate, the line passes.
+            let tol = config.tariff_tolerance;
+            let published: Vec<EuroAmount> = preisblatt
+                .preispositionen
+                .iter()
+                .flatten()
+                .flat_map(|pp| pp.preisstaffeln.iter().flatten())
+                .filter_map(|ps| ps.einheitspreis)
+                .filter_map(|d| EuroAmount::parse(&d.to_string()))
+                .collect();
 
-            if !invoic_price.within_tolerance(tariff.unit_price, tol) {
+            if published.is_empty() {
+                findings.push(Finding::warn(
+                    FindingKind::TariffNotFound,
+                    format!(
+                        "Line {line_no} ({malo}): Preisblatt for GLN {sender_mp_id} \
+                         on {line_date} contains no Preisstaffeln — skipping price check",
+                    ),
+                    Some(line_no),
+                    None,
+                    Some(invoic_price),
+                ));
+                continue;
+            }
+
+            if !published
+                .iter()
+                .any(|p| invoic_price.within_tolerance(*p, tol))
+            {
+                // Report the closest published rate for diagnostics.
+                let closest = *published
+                    .iter()
+                    .min_by_key(|p| (invoic_price.0 - p.0).unsigned_abs())
+                    .unwrap_or(&EuroAmount::ZERO);
                 findings.push(Finding::dispute(
                     FindingKind::TariffDeviation,
                     format!(
-                        "Line {line_no} ({malo}): einzelpreis {invoic_price} EUR/kWh deviates \
-                         from PRICAT {pid} tariff {tp} EUR/kWh (tolerance {pct:.1}%)",
-                        pid = tariff.pricat_pid,
-                        tp = tariff.unit_price,
+                        "Line {line_no} ({malo}): einzelpreis {invoic_price} EUR/kWh \
+                         does not match any published rate in Preisblatt for GLN {sender_mp_id} \
+                         on {line_date} (closest: {closest} EUR/kWh, tolerance {pct:.1}%)",
                         pct = tol * 100.0,
                     ),
                     Some(line_no),
-                    Some(tariff.unit_price),
+                    Some(closest),
                     Some(invoic_price),
                 ));
             }
@@ -536,12 +568,6 @@ impl InvoicCheckEngine {
 }
 
 // ── Helper ────────────────────────────────────────────────────────────────────
-
-/// Format an [`time::OffsetDateTime`] as an ISO 8601 date string (`YYYY-MM-DD`).
-fn fmt_date(dt: &time::OffsetDateTime) -> String {
-    let d = dt.date();
-    format!("{:04}-{:02}-{:02}", d.year(), d.month() as u8, d.day())
-}
 
 /// Extract a stable (line_number, malo_id) pair for error messages.
 fn pos_ident(pos: &Rechnungsposition) -> (u32, &str) {
@@ -560,10 +586,8 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::*;
-    use crate::{
-        amount::EuroAmount,
-        tariff::{InMemoryTariffStore, TariffEntry},
-    };
+    use crate::{amount::EuroAmount, tariff::InMemoryPreisblattStore};
+    use rubo4e::v202501::{PreisblattNetznutzung, Preisposition, Preisstaffel};
 
     const SENDER: &str = "9900357000004";
 
@@ -574,11 +598,18 @@ mod tests {
         }
     }
 
-    fn parse_date(s: &str) -> time::OffsetDateTime {
-        // Parse YYYY-MM-DD as midnight UTC.
-        let d = time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT)
-            .expect("valid ISO date");
-        d.with_time(time::Time::MIDNIGHT).assume_utc()
+    /// Parse a `"YYYY-MM-DD"` string to `time::Date` (rubo4e v0.3 field type).
+    fn parse_date(s: &str) -> time::Date {
+        time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT)
+            .expect("valid ISO date")
+    }
+
+    /// Parse a `"YYYY-MM-DD"` string to midnight UTC `OffsetDateTime`.
+    ///
+    /// Used only for fields that remain `OffsetDateTime` in rubo4e v0.3
+    /// (e.g. `Rechnung.rechnungsdatum`).
+    fn parse_datetime(s: &str) -> time::OffsetDateTime {
+        parse_date(s).with_time(time::Time::MIDNIGHT).assume_utc()
     }
 
     fn periode(start: &str, end: &str) -> Zeitraum {
@@ -599,8 +630,8 @@ mod tests {
         Rechnungsposition {
             positionsnummer: Some(n),
             lokations_id: Some(malo.to_owned()),
-            lieferung_von: Some("2024-12-01".to_owned()),
-            lieferung_bis: Some("2024-12-31".to_owned()),
+            lieferung_von: Some(parse_datetime("2024-12-01")),
+            lieferung_bis: Some(parse_datetime("2024-12-31")),
             positions_menge: qty.map(|q| Menge {
                 wert: Some(Decimal::try_from(q).expect("valid f64")),
                 einheit: Some(Mengeneinheit::Kwh),
@@ -621,7 +652,7 @@ mod tests {
     ) -> Rechnung {
         Rechnung {
             rechnungsperiode: Some(periode("2024-12-01", "2024-12-31")),
-            rechnungsdatum: Some(parse_date("2025-01-15")),
+            rechnungsdatum: Some(parse_datetime("2025-01-15")),
             gesamtnetto: gesamtnetto.map(betrag),
             rechnungspositionen: if positions.is_empty() {
                 None
@@ -632,21 +663,27 @@ mod tests {
         }
     }
 
-    fn empty_store() -> InMemoryTariffStore {
-        InMemoryTariffStore::new()
+    fn empty_store() -> InMemoryPreisblattStore {
+        InMemoryPreisblattStore::new()
     }
 
-    fn seeded_store(price: EuroAmount) -> InMemoryTariffStore {
-        let mut store = InMemoryTariffStore::new();
-        store.insert(TariffEntry {
-            publisher_gln: SENDER.to_owned(),
-            pricat_pid: 27003,
-            valid_from: "2024-01-01".to_owned(),
-            valid_to: None,
-            charge_category: "NNE".to_owned(),
-            unit_price: price,
-            tolerance: 0.01,
-        });
+    fn seeded_store(price: EuroAmount) -> InMemoryPreisblattStore {
+        use rust_decimal::Decimal;
+        let mut store = InMemoryPreisblattStore::new();
+        let einheitspreis = Decimal::from_str_exact(&price.to_eur_string()).expect("valid decimal");
+        let sheet = PreisblattNetznutzung {
+            gueltigkeit: None,
+            herausgeber: None,
+            preispositionen: Some(vec![Preisposition {
+                preisstaffeln: Some(vec![Preisstaffel {
+                    einheitspreis: Some(einheitspreis),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        store.insert(SENDER.to_owned(), sheet);
         store
     }
 
@@ -683,8 +720,8 @@ mod tests {
     #[test]
     fn line_period_invalid_is_dispute() {
         let mut pos = make_pos(1, "DE001", None, None, None);
-        pos.lieferung_von = Some("2024-12-31".to_owned());
-        pos.lieferung_bis = Some("2024-12-01".to_owned());
+        pos.lieferung_von = Some(parse_datetime("2024-12-31"));
+        pos.lieferung_bis = Some(parse_datetime("2024-12-01"));
         let r = make_rechnung(vec![pos], None);
         let report =
             InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());

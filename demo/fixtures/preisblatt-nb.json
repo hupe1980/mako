@@ -1,0 +1,49 @@
+{
+  "data": {
+    "bo_typ": "PREISBLATT_NETZNUTZUNG",
+    "version_struktur": "1",
+    "typ": "NETZNUTZUNG_STROM",
+    "bezeichnung": "Demo Netznutzungspreise FV2026 — NB 9900357000004",
+    "gueltigkeit": {
+      "startdatum": "2026-10-01",
+      "enddatum": "2027-09-30"
+    },
+    "marktteilnehmer": {
+      "bo_typ": "MARKTTEILNEHMER",
+      "marktrolle": "NB",
+      "rollencodenummer": "9900357000004",
+      "rollencodetyp": "BDEW"
+    },
+    "preispositionen": [
+      {
+        "bo_typ": "PREISPOSITION",
+        "berechnungsmethode": "STAFFELN",
+        "leistungstyp": "LEISTUNGSABHAENGIGE_NETZENTGELTE_STROM",
+        "messebene": "HV",
+        "bezeichnung": "Arbeitspreis HV",
+        "preisstaffeln": [
+          {
+            "bo_typ": "PREISSTAFFEL",
+            "einheitspreis": 0.0412,
+            "mengengrenzeunten": 0
+          }
+        ]
+      },
+      {
+        "bo_typ": "PREISPOSITION",
+        "berechnungsmethode": "STAFFELN",
+        "leistungstyp": "LEISTUNGSABHAENGIGE_NETZENTGELTE_STROM",
+        "messebene": "MS",
+        "bezeichnung": "Arbeitspreis MS",
+        "preisstaffeln": [
+          {
+            "bo_typ": "PREISSTAFFEL",
+            "einheitspreis": 0.0589,
+            "mengengrenzeunten": 0
+          }
+        ]
+      }
+    ]
+  },
+  "bo4e_version": "v202501.0.0"
+}

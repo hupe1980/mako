@@ -285,6 +285,7 @@ pub trait DeadlineStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Deadline`] on storage failure.
+    #[must_use = "dropping a register Result silently loses a regulatory APERAK deadline"]
     async fn register(&self, deadline: &Deadline) -> Result<(), EngineError>;
 
     /// Cancel a registered deadline by ID.
@@ -294,6 +295,7 @@ pub trait DeadlineStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Deadline`] on storage failure.
+    #[must_use = "dropping a cancel Result silently hides a storage failure"]
     async fn cancel(&self, id: DeadlineId) -> Result<(), EngineError>;
 
     /// Return up to `limit` deadlines whose `due_at <= now_utc()`, ordered
@@ -306,6 +308,7 @@ pub trait DeadlineStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Deadline`] on storage failure.
+    #[must_use = "dropping a due_now Result silently discards fired deadlines"]
     async fn due_now(&self, limit: usize) -> Result<DueNowResult, EngineError>;
 
     /// Return all active deadlines for `stream_id`, in registration order.
@@ -313,6 +316,7 @@ pub trait DeadlineStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Deadline`] on storage failure.
+    #[must_use = "dropping a for_stream Result silently discards deadline data"]
     async fn for_stream(&self, stream_id: &StreamId) -> Result<Vec<Deadline>, EngineError>;
 
     /// Total number of registered deadlines.
@@ -320,6 +324,7 @@ pub trait DeadlineStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Deadline`] on storage failure.
+    #[must_use = "dropping a len Result silently discards a store error"]
     async fn len(&self) -> Result<usize, EngineError>;
 
     /// Return `true` when no deadlines are registered.
@@ -407,6 +412,10 @@ impl<S: DeadlineStore> DeadlineStore for Arc<S> {
 /// [`EngineBuilder::with_stores`]: crate::builder::EngineBuilder::with_stores
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use = "NoopDeadlineStore discards all deadlines silently — use a persistent DeadlineStore in production"]
+#[cfg_attr(
+    not(any(test, feature = "testing")),
+    deprecated = "NoopDeadlineStore must not be instantiated in production builds; use a durable DeadlineStore instead"
+)]
 pub struct NoopDeadlineStore;
 
 #[cfg(any(test, feature = "testing"))]

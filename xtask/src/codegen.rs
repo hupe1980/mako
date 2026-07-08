@@ -182,6 +182,21 @@ struct AhbProfile {
         reason = "supersession metadata; codegen reads supersedes_directory from MIG profile"
     )]
     supersedes_directory: Option<String>,
+    /// Reviewer identity for provenance tracking (F-013).
+    /// Required for FV2026+ profiles; validated by `validate_profiles`.
+    #[serde(default)]
+    #[expect(
+        dead_code,
+        reason = "provenance metadata; checked by validate_profiles, not emitted into generated code"
+    )]
+    reviewed_by: Option<String>,
+    /// ISO 8601 review date (F-013).
+    #[serde(default)]
+    #[expect(
+        dead_code,
+        reason = "provenance metadata; checked by validate_profiles, not emitted into generated code"
+    )]
+    reviewed_at: Option<String>,
     pruefidentifikatoren: Vec<PruefidentifikatorEntry>,
 }
 

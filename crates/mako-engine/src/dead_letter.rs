@@ -29,9 +29,10 @@
 //!
 //! ```rust
 //! use mako_engine::dead_letter::{AuditContext, DeadLetterReason, DeadLetterSink, LogDeadLetterSink};
+//! use mako_engine::ids::Pid;
 //!
 //! let sink = LogDeadLetterSink;
-//! sink.reject(&DeadLetterReason::UnknownPid { pid: 99999, context: AuditContext::now() });
+//! sink.reject(&DeadLetterReason::UnknownPid { pid: Pid::new(99999), context: AuditContext::now() });
 //! ```
 //!
 //! [`EngineBuilder::with_dead_letter_sink`]: crate::builder::EngineBuilder::with_dead_letter_sink
@@ -70,7 +71,7 @@ pub struct AuditContext {
     /// BDEW release code (e.g. `"S2.1"`, `"G1.1"`, `"2.4c"`).
     pub release_code: Option<String>,
     /// BDEW Prüfidentifikator numeric code.
-    pub pid: Option<u32>,
+    pub pid: Option<crate::ids::Pid>,
     /// GLN of the AS4 sender.
     pub sender_eic: Option<String>,
     /// GLN of the AS4 receiver.
@@ -97,10 +98,11 @@ impl AuditContext {
     /// Use builder-style setters to fill in known fields:
     /// ```rust
     /// use mako_engine::dead_letter::AuditContext;
+    /// use mako_engine::ids::Pid;
     ///
     /// let ctx = AuditContext::now()
     ///     .with_message_type("UTILMD")
-    ///     .with_pid(55001)
+    ///     .with_pid(Pid::new(55001))
     ///     .with_sender_eic("4012345000023");
     /// ```
     #[must_use]
@@ -156,7 +158,7 @@ impl AuditContext {
 
     /// Set the Prüfidentifikator.
     #[must_use]
-    pub fn with_pid(mut self, pid: u32) -> Self {
+    pub fn with_pid(mut self, pid: crate::ids::Pid) -> Self {
         self.pid = Some(pid);
         self
     }
@@ -230,7 +232,7 @@ pub enum DeadLetterReason {
     /// [`PidRouter`]: crate::pid_router::PidRouter
     UnknownPid {
         /// The numeric Prüfidentifikator that had no registered workflow.
-        pid: u32,
+        pid: crate::ids::Pid,
         /// §22 MessZV structured audit context.
         context: AuditContext,
     },
@@ -435,13 +437,17 @@ pub struct LogDeadLetterSink;
 
 impl DeadLetterSink for LogDeadLetterSink {
     fn reject(&self, reason: &DeadLetterReason) {
+        // Increment Prometheus counter for every rejection, regardless of
+        // which sink is wired — mirrors SlateDbDeadLetterSink behaviour so
+        // alerting works in non-SlateDB and smoke environments too.
+        crate::metrics::EngineMetrics::global().dead_letter_recorded(reason.label());
         // Emit all §22 MessZV structured audit fields when available.
         if let Some(ctx) = reason.audit_context() {
             tracing::warn!(
                 reason = reason.label(),
                 message_type = ctx.message_type.as_deref().unwrap_or(""),
                 release_code = ctx.release_code.as_deref().unwrap_or(""),
-                pid = ctx.pid.unwrap_or(0),
+                pid = ctx.pid.map_or(0, crate::ids::Pid::as_u32),
                 sender_eic = ctx.sender_eic.as_deref().unwrap_or(""),
                 receiver_eic = ctx.receiver_eic.as_deref().unwrap_or(""),
                 message_ref = ctx.message_ref.as_deref().unwrap_or(""),
@@ -489,6 +495,10 @@ impl DeadLetterSink for LogDeadLetterSink {
 /// without any diagnostic output, violating BDEW AS4 requirements.
 #[derive(Debug, Clone, Default)]
 #[must_use = "NoopDeadLetterSink discards all rejections; use LogDeadLetterSink in production"]
+#[cfg_attr(
+    not(any(test, feature = "testing")),
+    deprecated = "NoopDeadLetterSink must not be used in production builds; use LogDeadLetterSink instead"
+)]
 pub struct NoopDeadLetterSink;
 
 #[cfg(any(test, feature = "testing"))]
@@ -516,7 +526,7 @@ mod tests {
     fn dead_letter_reason_labels() {
         assert_eq!(
             DeadLetterReason::UnknownPid {
-                pid: 55001,
+                pid: crate::ids::Pid::new(55001),
                 context: AuditContext::now()
             }
             .label(),
@@ -561,7 +571,7 @@ mod tests {
     fn log_sink_does_not_panic() {
         let sink = LogDeadLetterSink;
         sink.reject(&DeadLetterReason::UnknownPid {
-            pid: 99999,
+            pid: crate::ids::Pid::new(99999),
             context: AuditContext::now(),
         });
         sink.reject(&DeadLetterReason::UnknownConversation {
@@ -587,7 +597,7 @@ mod tests {
     fn noop_sink_does_not_panic() {
         let sink = NoopDeadLetterSink;
         sink.reject(&DeadLetterReason::UnknownPid {
-            pid: 55001,
+            pid: crate::ids::Pid::new(55001),
             context: AuditContext::now(),
         });
     }
@@ -596,7 +606,7 @@ mod tests {
     fn arc_blanket_impl_works() {
         let sink: Arc<LogDeadLetterSink> = Arc::new(LogDeadLetterSink);
         sink.reject(&DeadLetterReason::UnknownPid {
-            pid: 1,
+            pid: crate::ids::Pid::new(1),
             context: AuditContext::now(),
         });
     }
@@ -605,7 +615,7 @@ mod tests {
     fn dead_letter_reason_display() {
         assert_eq!(
             DeadLetterReason::UnknownPid {
-                pid: 55001,
+                pid: crate::ids::Pid::new(55001),
                 context: AuditContext::now()
             }
             .to_string(),
@@ -626,7 +636,7 @@ mod tests {
     fn audit_context_builder() {
         let ctx = AuditContext::now()
             .with_message_type("UTILMD")
-            .with_pid(55001)
+            .with_pid(crate::ids::Pid::new(55001))
             .with_sender_eic("4012345000023")
             .with_receiver_eic("9900357000004")
             .with_message_ref("00001")
@@ -634,7 +644,7 @@ mod tests {
             .with_correlation_id("conv-xyz");
 
         assert_eq!(ctx.message_type.as_deref(), Some("UTILMD"));
-        assert_eq!(ctx.pid, Some(55001));
+        assert_eq!(ctx.pid, Some(crate::ids::Pid::new(55001)));
         assert_eq!(ctx.sender_eic.as_deref(), Some("4012345000023"));
         assert_eq!(ctx.correlation_id.as_deref(), Some("conv-xyz"));
     }
@@ -642,8 +652,8 @@ mod tests {
     #[test]
     fn audit_context_returned_for_inbound_reasons() {
         let r = DeadLetterReason::UnknownPid {
-            pid: 99,
-            context: AuditContext::now().with_pid(99),
+            pid: crate::ids::Pid::new(99),
+            context: AuditContext::now().with_pid(crate::ids::Pid::new(99)),
         };
         assert!(r.audit_context().is_some());
     }

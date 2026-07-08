@@ -15,11 +15,18 @@ members = [
     "crates/mako-gabi-gas",
     "crates/mako-wim-gas",
     "crates/mako-nbw",
-    "crates/mako-mdm",
+    "crates/mako-markt",
+    "crates/mako-edm",
+    "crates/mako-obs",
+    "crates/mako-service",
     "crates/invoic-checker",
+    "crates/netz-checker",
     "services/invoicd",
     "services/makod",
-    "services/mdmd",
+    "services/marktd",
+    "services/edmd",
+    "services/obsd",
+    "services/processd",
     "xtask",
 ]
 exclude = ["fuzz"]
@@ -37,7 +44,7 @@ anyhow      = "1"
 dashmap     = "6"
 edifact-rs   = "~0.11"
 miette       = { version = "7", features = ["fancy-no-syscall"] }
-rubo4e       = { version = "0.2", features = ["versioned", "decimal", "time"] }
+rubo4e       = { version = "0.3", features = ["versioned", "decimal", "time"] }
 rust_decimal = "1"
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
@@ -45,11 +52,43 @@ thiserror    = "2"
 time         = { version = "0.3", features = ["std", "macros", "serde-well-known", "parsing", "formatting"] }
 time-tz      = { version = "2", features = ["db"] }
 uuid         = { version = "1", features = ["v4", "v5", "serde"] }
+tower-http   = { version = "0.6", features = ["trace", "request-id", "propagate-header"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# OpenTelemetry — used by mako-service (feature=otel) and services
+opentelemetry             = "0.32"
+opentelemetry_sdk         = { version = "0.32", features = ["rt-tokio"] }
+opentelemetry-otlp        = { version = "0.32", features = ["grpc-tonic"] }
+opentelemetry-semantic-conventions = "0.32"
+cedar-policy              = { version = "4.11", default-features = false }
+tracing-opentelemetry     = "0.33"
+jsonwebtoken              = "9"
+reqwest                   = { version = "0.13", default-features = false, features = ["json", "rustls", "query"] }
+tokio-util                = { version = "0.7", features = ["rt"] }
+rmcp                      = { version = "2.0.0", features = ["transport-io", "transport-streamable-http-server"] }
+schemars                  = { version = "1.2.1" }
 
 # ── Internal workspace crates (path + version so domain crates can be published) ─
 edi-energy       = { path = "crates/edi-energy",  version = "0.7" }
 mako-engine      = { path = "crates/mako-engine", version = "0.7" }
+mako-markt       = { path = "crates/mako-markt",   version = "0.7" }
+mako-edm         = { path = "crates/mako-edm",    version = "0.7" }
+mako-obs         = { path = "crates/mako-obs",    version = "0.7" }
+mako-service     = { path = "crates/mako-service", version = "0.7" }
 invoic-checker   = { path = "crates/invoic-checker", version = "0.7" }
+netz-checker     = { path = "crates/netz-checker", version = "0.7" }
+
+# Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.
+# Required by mako-service feature "kafka" (EventBus scale-out backend).
+# Activate at >500 MaLo or >20 webhook subscribers — see event_bus.rs.
+# Default features include: compression (gzip/snappy/lz4), ring (rustls crypto).
+krafka           = { version = "0.12" }
+
+# ── Testing utilities ───────────────────────────────────────────────────────
+# testcontainers: spin up Docker containers in Rust integration tests.
+# Used by services' `tests/` to validate SQL queries against a real PostgreSQL
+# instance (see `just sqlx-prepare` and `just test-integration`).
+testcontainers   = { version = "0.23", features = ["blocking"] }
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
 
 # ── Release profile ─────────────────────────────────────────────────────────
 [profile.release]

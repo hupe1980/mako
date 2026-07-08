@@ -35,7 +35,7 @@
 //! | URI template | Description |
 //! |---|---|
 //! | `malo://{malo_id}` | Marktlokation master-data record |
-//! | `partner://{gln}` | Trading-partner record |
+//! | `partner://{mp_id}` | Trading-partner record |
 //!
 //! ## Prompts
 //!
@@ -154,7 +154,7 @@ pub struct GetMaloParams {
 pub struct GetPartnerParams {
     /// 13-digit GLN of the trading partner.
     #[schemars(description = "13-digit Global Location Number of the trading partner")]
-    pub gln: String,
+    pub mp_id: String,
 }
 
 /// Parameters for `list_partners`.
@@ -398,17 +398,17 @@ impl MakodMcpHandler {
     /// roles, and communication channel configuration. Returns an error if
     /// the partner is not registered.
     #[tool(description = "Get a trading partner record by 13-digit GLN")]
-    #[instrument(skip(self), fields(gln = %p.gln))]
+    #[instrument(skip(self), fields(mp_id = %p.mp_id))]
     async fn get_partner(
         &self,
         Parameters(p): Parameters<GetPartnerParams>,
     ) -> Result<CallToolResult, McpError> {
-        let gln = mako_engine::types::MarktpartnerCode::new(p.gln.as_str());
+        let mp_id = mako_engine::types::MarktpartnerCode::new(p.mp_id.as_str());
 
         match self
             .state
             .partner_store
-            .get(self.state.tenant_id, &gln)
+            .get(self.state.tenant_id, &mp_id)
             .await
         {
             Ok(Some(record)) => ContentBlock::json(&record)
@@ -417,7 +417,7 @@ impl MakodMcpHandler {
             Ok(None) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "partner_not_found: Partner '{}' is not registered. \
                  Register it via PUT /admin/partners/{}.",
-                p.gln, p.gln
+                p.mp_id, p.mp_id
             ))])),
             Err(e) => Err(McpError::internal_error(
                 format!("Partner store read failed: {e}"),
@@ -567,7 +567,7 @@ impl ServerHandler for MakodMcpHandler {
                          the BDEW API-Webdienste Strom.",
                     )
                     .with_mime_type("application/json"),
-                ResourceTemplate::new("partner://{gln}", "Trading partner")
+                ResourceTemplate::new("partner://{mp_id}", "Trading partner")
                     .with_description(
                         "Trading-partner record identified by its 13-digit GLN. \
                          Contains the AS4 inbox URL, market roles, and communication \
@@ -613,11 +613,11 @@ impl ServerHandler for MakodMcpHandler {
         }
 
         if let Some(gln_str) = uri.strip_prefix("partner://") {
-            let gln = mako_engine::types::MarktpartnerCode::new(gln_str);
+            let mp_id = mako_engine::types::MarktpartnerCode::new(gln_str);
             return match self
                 .state
                 .partner_store
-                .get(self.state.tenant_id, &gln)
+                .get(self.state.tenant_id, &mp_id)
                 .await
             {
                 Ok(Some(record)) => {

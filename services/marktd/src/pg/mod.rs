@@ -1,0 +1,30 @@
+//! PostgreSQL repository implementations for `marktd`.
+//!
+//! Each `Pg*` struct is a thin `PgPool` wrapper.  The pool is `Clone + Send + Sync`
+//! and can be passed to axum `State<Arc<AppState<...>>>` without extra `Arc` wrapping.
+
+pub mod contract;
+pub mod correlation;
+pub mod malo;
+pub mod malo_grid;
+pub mod melo;
+pub mod nb_contract;
+pub mod nelo;
+pub mod partner;
+pub mod preisblatt;
+pub mod pricat;
+pub mod subscription;
+pub mod versorgung;
+
+pub use contract::PgContractRepository;
+pub use correlation::PgCorrelationIndex;
+pub use malo::PgMaloRepository;
+pub use malo_grid::PgMaloGridRepository;
+pub use melo::PgMeloRepository;
+pub use nb_contract::PgNbContractRepository;
+pub use nelo::PgNeLoRepository;
+pub use partner::PgPartnerRepository;
+pub use preisblatt::PgPreisblattRepository;
+pub use pricat::PgPriCatRepository;
+pub use subscription::PgSubscriptionRepository;
+pub use versorgung::PgVersorgungsStatusRepository;

@@ -46,11 +46,11 @@ fn lf_process() -> Process<GpkeSperrungLfWorkflow, InMemoryEventStore> {
     )
 }
 
-fn nb_gln() -> MarktpartnerCode {
+fn nb_mp_id() -> MarktpartnerCode {
     MarktpartnerCode::new("9900357000004")
 }
 
-fn lf_gln() -> MarktpartnerCode {
+fn lf_mp_id() -> MarktpartnerCode {
     MarktpartnerCode::new("4012345000023")
 }
 
@@ -69,8 +69,8 @@ fn pid(n: u32) -> Pruefidentifikator {
 fn receive_sperrauftrag(validation_passed: bool) -> SperrungCommand {
     SperrungCommand::ReceiveSperrung {
         pid: pid(17115),
-        sender: lf_gln(),
-        receiver: nb_gln(),
+        sender: lf_mp_id(),
+        receiver: nb_mp_id(),
         location_id: malo(),
         document_date: "20250601".to_owned(),
         message_ref: msg("LF-SPERR-001"),
@@ -176,7 +176,7 @@ async fn nb_receive_stornierung_transitions_to_storniert() {
 
     p.execute(SperrungCommand::ReceiveStornierung {
         pid: pid(39000),
-        sender: lf_gln(),
+        sender: lf_mp_id(),
         message_ref: msg("LF-STORNO-001"),
     })
     .await
@@ -244,12 +244,12 @@ async fn nb_domain_data_preserved_in_validation_passed() {
     let p = nb_process();
 
     let location = malo();
-    let sender = lf_gln();
+    let sender = lf_mp_id();
 
     p.execute(SperrungCommand::ReceiveSperrung {
         pid: pid(17115),
         sender: sender.clone(),
-        receiver: nb_gln(),
+        receiver: nb_mp_id(),
         location_id: location.clone(),
         document_date: "20250601".to_owned(),
         message_ref: msg("NB-DATA-001"),
@@ -276,8 +276,8 @@ async fn nb_receive_entsperrauftrag_valid() {
 
     p.execute(SperrungCommand::ReceiveSperrung {
         pid: pid(17117),
-        sender: lf_gln(),
-        receiver: nb_gln(),
+        sender: lf_mp_id(),
+        receiver: nb_mp_id(),
         location_id: malo(),
         document_date: "20250601".to_owned(),
         message_ref: msg("LF-ENTSPERR-001"),
@@ -303,7 +303,7 @@ async fn lf_initiate_sperrauftrag_transitions_to_auftrag_gesendet() {
 
     p.execute(SperrungLfCommand::InitiateSperrung {
         pid: pid(17115),
-        nb_gln: nb_gln(),
+        nb_mp_id: nb_mp_id(),
         location_id: malo(),
         message_ref: msg("LF-SPERR-002"),
     })
@@ -324,7 +324,7 @@ async fn lf_initiate_entsperrauftrag_transitions_to_auftrag_gesendet() {
 
     p.execute(SperrungLfCommand::InitiateSperrung {
         pid: pid(17117),
-        nb_gln: nb_gln(),
+        nb_mp_id: nb_mp_id(),
         location_id: malo(),
         message_ref: msg("LF-ENTSPERR-002"),
     })
@@ -345,7 +345,7 @@ async fn lf_happy_path_auftrag_bestaetigt_then_ausgefuehrt() {
 
     p.execute(SperrungLfCommand::InitiateSperrung {
         pid: pid(17115),
-        nb_gln: nb_gln(),
+        nb_mp_id: nb_mp_id(),
         location_id: malo(),
         message_ref: msg("LF-SPERR-003"),
     })
@@ -357,7 +357,7 @@ async fn lf_happy_path_auftrag_bestaetigt_then_ausgefuehrt() {
         pid: pid(19116),
         is_confirmed: true,
         message_ref: msg("NB-ORDRSP-001"),
-        sender: nb_gln(),
+        sender: nb_mp_id(),
         reason: None,
     })
     .await
@@ -373,7 +373,7 @@ async fn lf_happy_path_auftrag_bestaetigt_then_ausgefuehrt() {
     p.execute(SperrungLfCommand::ReceiveIftsta {
         pid: pid(21039),
         message_ref: msg("NB-IFTSTA-001"),
-        sender: nb_gln(),
+        sender: nb_mp_id(),
     })
     .await
     .expect("ReceiveIftsta must succeed from OrdrsepBestaetigt");
@@ -393,7 +393,7 @@ async fn lf_rejection_transitions_to_ordrsp_abgelehnt() {
 
     p.execute(SperrungLfCommand::InitiateSperrung {
         pid: pid(17115),
-        nb_gln: nb_gln(),
+        nb_mp_id: nb_mp_id(),
         location_id: malo(),
         message_ref: msg("LF-SPERR-004"),
     })
@@ -404,7 +404,7 @@ async fn lf_rejection_transitions_to_ordrsp_abgelehnt() {
         pid: pid(19117),
         is_confirmed: false,
         message_ref: msg("NB-ORDRSP-002"),
-        sender: nb_gln(),
+        sender: nb_mp_id(),
         reason: Some("Keine Sperrpflicht an dieser Messlokation".to_owned()),
     })
     .await
@@ -425,7 +425,7 @@ async fn lf_stornierung_before_ordrsp() {
 
     p.execute(SperrungLfCommand::InitiateSperrung {
         pid: pid(17115),
-        nb_gln: nb_gln(),
+        nb_mp_id: nb_mp_id(),
         location_id: malo(),
         message_ref: msg("LF-SPERR-005"),
     })
@@ -452,7 +452,7 @@ async fn lf_stornierung_accepted_path() {
 
     p.execute(SperrungLfCommand::InitiateSperrung {
         pid: pid(17115),
-        nb_gln: nb_gln(),
+        nb_mp_id: nb_mp_id(),
         location_id: malo(),
         message_ref: msg("LF-SPERR-006"),
     })
@@ -470,7 +470,7 @@ async fn lf_stornierung_accepted_path() {
         pid: pid(19128),
         is_confirmed: true,
         message_ref: msg("NB-STORNO-001"),
-        sender: nb_gln(),
+        sender: nb_mp_id(),
     })
     .await
     .expect("ReceiveStornoOrdrsp (Bestätigung) must succeed from StornierungGesendet");
@@ -490,7 +490,7 @@ async fn lf_timeout_fires_deadline_expired() {
 
     p.execute(SperrungLfCommand::InitiateSperrung {
         pid: pid(17115),
-        nb_gln: nb_gln(),
+        nb_mp_id: nb_mp_id(),
         location_id: malo(),
         message_ref: msg("LF-SPERR-007"),
     })

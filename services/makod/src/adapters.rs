@@ -173,6 +173,7 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
+                received_at: time::OffsetDateTime::now_utc(),
                 validation_passed,
                 validation_errors,
             })
@@ -1220,13 +1221,6 @@ pub fn mabis_registry() -> AdapterRegistry<MabisBillingWorkflow> {
 /// Extracts UTILMD header fields (sender, receiver, document date, message ref)
 /// and constructs a [`ClearinglisteCommand::ReceiveClearingliste`].
 ///
-/// **Vacuous-validation guard**: AHB profiles for 55065/55069/55070 are not yet
-/// imported into the `edi-energy` profile registry. Until `cargo xtask
-/// import-xml-ahb` populates those rules, validation would return a vacuous
-/// pass (zero rules → always valid → `validation_passed = true`). This adapter
-/// detects the missing profile and forces `validation_passed = false` in that
-/// case, preventing false-positive "valid" records from entering the stream.
-///
 /// The `billing_period` field is derived from the UTILMD document date
 /// (DTM qualifier `"137"`) by truncating to `YYYYMM` format. If no document
 /// date segment is present, the field is left empty.
@@ -1261,7 +1255,7 @@ pub fn mabis_clearingliste_registry() -> AdapterRegistry<MabisClearinglisteWorkf
                 .and_then(convert_pid)?;
 
             let validation_result = msg.validate().ok();
-            let mut validation_passed = validation_result
+            let validation_passed = validation_result
                 .as_ref()
                 .map(|r| r.is_valid())
                 .unwrap_or(false);
@@ -1269,29 +1263,6 @@ pub fn mabis_clearingliste_registry() -> AdapterRegistry<MabisClearinglisteWorkf
                 .as_ref()
                 .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
                 .unwrap_or_default();
-
-            // ── Vacuous-validation guard ──────────────────────────────────
-            // PIDs 55065/55069/55070 have no AHB profiles yet. Guard against
-            // false positives from empty rule sets.
-            if validation_passed {
-                let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
-                    .map(|edi_pid| {
-                        edi_energy::registry::ReleaseRegistry::global()
-                            .pid_has_ahb_rules(edi_energy::MessageType::Utilmd, edi_pid)
-                    })
-                    .unwrap_or(false);
-                if !has_ahb_rules {
-                    tracing::warn!(
-                        pid = pid.as_u32(),
-                        message_ref = msg.message_ref(),
-                        "MaBiS Clearingliste adapter: PID {} has no UTILMD AHB profile \
-                         in the compiled profile set — import gap; \
-                         vacuous validation forced to failed.",
-                        pid.as_u32(),
-                    );
-                    validation_passed = false;
-                }
-            }
 
             // ── Field extraction ──────────────────────────────────────────
             let document_date_str = u
@@ -1577,14 +1548,6 @@ fn is_known_fv(fv: &FormatVersion) -> bool {
 /// Acceptance/rejection is decided by the NB ERP via a subsequent
 /// `SendAntwort` command.
 ///
-/// # AHB validation note
-///
-/// PIDs 55600/55601 are not yet present in the UTILMD Strom AHB profile JSON
-/// files. Until they are imported via `cargo xtask import-xml-ahb`, `msg.validate()`
-/// would return a vacuous pass (zero rules → always valid → `validation_passed = true`).
-/// This guard forces `validation_passed = false` when no AHB rules are registered,
-/// preventing structurally invalid or adversarially crafted messages from being
-/// accepted with an empty MaLo ID.
 #[must_use]
 pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -1612,7 +1575,7 @@ pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
                 })
                 .and_then(convert_pid)?;
             let validation_result = msg.validate().ok();
-            let mut validation_passed = validation_result
+            let validation_passed = validation_result
                 .as_ref()
                 .map(|r| r.is_valid())
                 .unwrap_or(false);
@@ -1620,31 +1583,6 @@ pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
                 .as_ref()
                 .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
                 .unwrap_or_default();
-
-            // ── GPKE Neuanlage PIDs 55600/55601 — vacuous-validation guard ──
-            // These PIDs are not yet in the UTILMD Strom AHB profile set.
-            // Without a profile, validate() returns is_valid()=true (zero rules
-            // checked). Guard against that false positive.
-            if validation_passed {
-                let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
-                    .map(|edi_pid| {
-                        edi_energy::registry::ReleaseRegistry::global()
-                            .pid_has_ahb_rules(edi_energy::MessageType::Utilmd, edi_pid)
-                    })
-                    .unwrap_or(false);
-                if !has_ahb_rules {
-                    tracing::error!(
-                        pid = pid.as_u32(),
-                        message_ref = msg.message_ref(),
-                        "GPKE Neuanlage adapter: PID {} has no UTILMD AHB profile — \
-                         validation was vacuous. Forcing validation_passed = false to \
-                         prevent accepting invalid messages with empty MaLo IDs. \
-                         Import the profile with `cargo xtask import-xml-ahb`.",
-                        pid.as_u32(),
-                    );
-                    validation_passed = false;
-                }
-            }
 
             Ok(NeuanlageCommand::ReceiveAnmeldung {
                 pid,
@@ -1677,6 +1615,7 @@ pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
+                received_at: time::OffsetDateTime::now_utc(),
                 validation_passed,
                 validation_errors,
             })
@@ -3958,12 +3897,12 @@ pub fn gabi_gas_allocation_registry() -> AdapterRegistry<GaBiGasAllocationWorkfl
 /// construction.  All downstream domain logic and the `invoic-checker` engine
 /// work exclusively with the resulting [`bo4e::Rechnung`].
 ///
-/// # Date format
+/// # Date types
 ///
-/// EDIFACT DTM values are in `YYYYMMDD` format.  This function converts them
-/// to ISO 8601 (`YYYY-MM-DD`) so that `Zeitraum.startdatum / enddatum` and
-/// `Rechnungsposition.lieferung_von / bis` are lexicographically sortable and
-/// compatible with BO4E JSON consumers.
+/// In rubo4e v0.3, `Zeitraum.startdatum / enddatum` are `time::Date` (date-only)
+/// and `Rechnungsposition.lieferung_von / bis` are `time::OffsetDateTime`.
+/// EDIFACT DTM `YYYYMMDD` values are parsed to `time::Date` for period fields
+/// and to midnight-UTC `OffsetDateTime` for delivery-period fields.
 #[must_use]
 fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
     // Split at the first LIN segment: header vs. detail sections.
@@ -3973,8 +3912,10 @@ fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
         .unwrap_or(segs.len());
     let header = &segs[..lin_start];
 
-    let period_start = dtm(header, "163").and_then(edifact_date_to_offset_datetime);
-    let period_end = dtm(header, "164").and_then(edifact_date_to_offset_datetime);
+    // Zeitraum.startdatum/enddatum are time::Date in rubo4e v0.3.
+    let period_start = dtm(header, "163").and_then(edifact_date_to_date);
+    let period_end = dtm(header, "164").and_then(edifact_date_to_date);
+    // Rechnung.rechnungsdatum is still OffsetDateTime.
     let invoice_date = dtm(header, "137").and_then(edifact_date_to_offset_datetime);
 
     let gesamtnetto = moa_betrag(header, "79");
@@ -4046,8 +3987,9 @@ fn build_position(group: &[&OwnedSegment]) -> bo4e::Rechnungsposition {
         .and_then(|s| s.component_str(1, 0))
         .map(str::to_owned);
 
-    let lieferung_von = dtm_in_group(group, "163").map(edifact_date_to_iso);
-    let lieferung_bis = dtm_in_group(group, "164").map(edifact_date_to_iso);
+    // lieferung_von/bis are OffsetDateTime in rubo4e v0.3.
+    let lieferung_von = dtm_in_group(group, "163").and_then(edifact_date_to_offset_datetime);
+    let lieferung_bis = dtm_in_group(group, "164").and_then(edifact_date_to_offset_datetime);
 
     let positions_menge = group
         .iter()
@@ -4143,12 +4085,23 @@ fn moa_betrag_in_group(group: &[&OwnedSegment], qualifier: &str) -> Option<bo4e:
 /// Lexicographic comparison of ISO dates is correct — required by
 /// `invoic_checker`'s period-validity check (string comparison on
 /// `Zeitraum.startdatum` / `enddatum`).
-fn edifact_date_to_iso(yyyymmdd: &str) -> String {
-    if yyyymmdd.len() == 8 {
-        format!("{}-{}-{}", &yyyymmdd[..4], &yyyymmdd[4..6], &yyyymmdd[6..8])
-    } else {
-        yyyymmdd.to_owned()
+/// Parse an EDIFACT date string (`YYYYMMDD`) to a `time::Date`.
+///
+/// Used for BO4E fields typed as `Option<time::Date>` in rubo4e v0.3
+/// (e.g. `Zeitraum.startdatum`, `Zeitraum.enddatum`).
+///
+/// Returns `None` if the string is not exactly 8 digits or cannot be parsed as a
+/// valid calendar date.
+fn edifact_date_to_date(yyyymmdd: &str) -> Option<time::Date> {
+    use time::{Date, Month};
+    if yyyymmdd.len() != 8 {
+        return None;
     }
+    let year: i32 = yyyymmdd[..4].parse().ok()?;
+    let month: u8 = yyyymmdd[4..6].parse().ok()?;
+    let day: u8 = yyyymmdd[6..8].parse().ok()?;
+    let month = Month::try_from(month).ok()?;
+    Date::from_calendar_date(year, month, day).ok()
 }
 
 /// Parse an EDIFACT date string (`YYYYMMDD`) to an `OffsetDateTime` at midnight UTC.

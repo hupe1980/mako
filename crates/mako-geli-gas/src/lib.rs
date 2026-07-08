@@ -127,10 +127,10 @@ pub use lf_stornierung::{
 };
 pub use lieferbeginn::{
     ANFRAGE_PIDS as LIEFERBEGINN_ANFRAGE_PIDS, ANTWORT_PIDS as LIEFERBEGINN_ANTWORT_PIDS,
-    APERAK_WINDOW_LABEL as LIEFERBEGINN_APERAK_WINDOW_LABEL, GasProcessVariant,
-    GasSupplierChangeCommand, GasSupplierChangeData, GasSupplierChangeEvent,
+    GasProcessVariant, GasSupplierChangeCommand, GasSupplierChangeData, GasSupplierChangeEvent,
     GasSupplierChangeProjection, GasSupplierChangeRecord, GasSupplierChangeRecordData,
-    GasSupplierChangeState, GeliGasSupplierChangeWorkflow, UTILMD_PIDS, WORKFLOW_NAME,
+    GasSupplierChangeState, GeliGasSupplierChangeWorkflow,
+    RESPONSE_WINDOW_LABEL as LIEFERBEGINN_RESPONSE_WINDOW_LABEL, UTILMD_PIDS, WORKFLOW_NAME,
     response_pid_for,
 };
 pub use mscons::{
@@ -160,8 +160,8 @@ pub use sperrung_nb::{
 };
 pub use stornierung::{
     GeliGasStornierungCommand, GeliGasStornierungData, GeliGasStornierungEvent,
-    GeliGasStornierungState, GeliGasStornierungWorkflow, STORNIERUNG_APERAK_WINDOW_LABEL,
-    STORNIERUNG_PIDS, WORKFLOW_NAME as STORNIERUNG_WORKFLOW_NAME,
+    GeliGasStornierungState, GeliGasStornierungWorkflow, STORNIERUNG_PIDS,
+    STORNIERUNG_RESPONSE_WINDOW_LABEL, WORKFLOW_NAME as STORNIERUNG_WORKFLOW_NAME,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────

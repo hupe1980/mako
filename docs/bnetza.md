@@ -207,7 +207,9 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 - Lieferbeginn Gas / Lieferende Gas (UTILMD G, PIDs 44001–44006, 44017–44018)
   — 44001–44002 Anmeldung/Abmeldung (LFN → GNB); 44003–44006 Bestätigung/Ablehnung;
     44017–44018 Kündigung Lieferbeginn (LFN ↔ LFA); PIDs 44007–44016 do not exist
-- Sperr-/Entsperrprozess Gas (ORDERS, PIDs 17115–17117) — *not yet implemented in `mako-geli-gas`; same PID numbers as Strom Sperrung but separate Gas process under BK7-24-01-009*
+- Sperr-/Entsperrprozess Gas (ORDERS, PIDs 17115–17117) — same PID numbers as
+  Strom Sperrung; implemented in `mako-geli-gas` as `geli-gas-sperrung-lf` (LF role)
+  and `geli-gas-sperrung-nb` (GNB role) under BK7-24-01-009
 - APERAK / CONTRL acknowledgements
 - **Does NOT cover** INVOIC billing or Mehr-/Mindermengen Gas — these belong to GaBi Gas (BK7 Bilanzierung)
 

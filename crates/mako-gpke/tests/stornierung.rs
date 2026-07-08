@@ -40,11 +40,11 @@ fn make_process() -> Process<GpkeStornierungWorkflow, InMemoryEventStore> {
     )
 }
 
-fn lf_gln() -> MarktpartnerCode {
+fn lf_mp_id() -> MarktpartnerCode {
     MarktpartnerCode::new("4012345000023")
 }
 
-fn nb_gln() -> MarktpartnerCode {
+fn nb_mp_id() -> MarktpartnerCode {
     MarktpartnerCode::new("9900357000004")
 }
 
@@ -60,8 +60,8 @@ fn msg(r: &str) -> MessageRef {
 fn receive_stornierung_cmd(validation_passed: bool) -> GpkeStornierungCommand {
     GpkeStornierungCommand::ReceiveUtilmd {
         pid: Pruefidentifikator::new(55022).unwrap(),
-        sender: lf_gln(),
-        receiver: nb_gln(),
+        sender: lf_mp_id(),
+        receiver: nb_mp_id(),
         vorgang_id: vorgang(),
         document_date: "20250601".to_owned(),
         message_ref: msg("MSG-STORNO-001"),
@@ -199,13 +199,13 @@ async fn timeout_fires_while_awaiting_aperak() {
 async fn domain_data_preserved_in_validation_passed() {
     let p = make_process();
 
-    let sender = lf_gln();
+    let sender = lf_mp_id();
     let vorgangsnr = vorgang();
 
     p.execute(GpkeStornierungCommand::ReceiveUtilmd {
         pid: Pruefidentifikator::new(55022).unwrap(),
         sender: sender.clone(),
-        receiver: nb_gln(),
+        receiver: nb_mp_id(),
         vorgang_id: vorgangsnr.clone(),
         document_date: "20250601".to_owned(),
         message_ref: msg("MSG-STORNO-DATA"),
@@ -245,8 +245,8 @@ fn terminal_states_are_terminal() {
         },
         GpkeStornierungState::Completed(mako_gpke::GpkeStornierungData {
             pruefidentifikator: Pruefidentifikator::new(55022).unwrap(),
-            sender: lf_gln(),
-            receiver: nb_gln(),
+            sender: lf_mp_id(),
+            receiver: nb_mp_id(),
             vorgang_id: vorgang(),
             document_date: "20250601".to_owned(),
             message_ref: Some(msg("x")),

@@ -1,0 +1,28 @@
+# makod.toml — demo configuration (NB role, in-memory store, no OIDC)
+# DO NOT use in production.
+
+[logging]
+level  = "info"
+format = "json"
+
+[storage]
+allow_volatile = true   # in-memory only — data is lost on restart
+
+[[party]]
+mp_id   = "9900357000004"
+roles   = ["NB"]
+primary = true
+
+[http]
+addr = "0.0.0.0:8080"
+
+[erp]
+# Push process lifecycle CloudEvents (ProcessInitiated, ProcessCompleted, …) to
+# marktd's ingest endpoint.  marktd fans them out to subscribers — processd
+# receives ProcessInitiated and evaluates whether to dispatch bestaetigen or
+# ablehnen based on master data (MaLo, preisblatt, contracts).
+#
+# Both values are supplied by docker-compose environment variables; they are NOT
+# hardcoded here so the TOML can be used outside Docker without modification.
+webhook_url    = "env:MAKOD_ERP_WEBHOOK_URL"
+webhook_secret = "env:MAKOD_ERP_WEBHOOK_SECRET"

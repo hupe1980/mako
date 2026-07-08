@@ -70,7 +70,7 @@ pub struct StorungsmeldungData {
     /// BDEW Prüfidentifikator of the INSRPT.
     pub pruefidentifikator: Pruefidentifikator,
     /// GLN of the MSB the Störungsmeldung was sent to.
-    pub msb_gln: MarktpartnerCode,
+    pub msb_mp_id: MarktpartnerCode,
     /// EDIFACT document date.
     pub document_date: String,
     /// EDIFACT message reference.
@@ -88,7 +88,7 @@ pub enum StorungsmeldungEvent {
         /// Prüfidentifikator (always 23001).
         pruefidentifikator: Pruefidentifikator,
         /// GLN of the receiving MSB.
-        msb_gln: MarktpartnerCode,
+        msb_mp_id: MarktpartnerCode,
         /// Document date.
         document_date: String,
         /// Message reference.
@@ -200,7 +200,7 @@ pub enum StorungsmeldungCommand {
         /// Prüfidentifikator (always 23001).
         pid: Pruefidentifikator,
         /// GLN of the receiving MSB.
-        msb_gln: MarktpartnerCode,
+        msb_mp_id: MarktpartnerCode,
         /// Document date.
         document_date: String,
         /// Message reference of the outbound INSRPT.
@@ -262,12 +262,12 @@ impl Workflow for WimInsrptWorkflow {
         match event {
             StorungsmeldungEvent::StorungsmeldungGesendet {
                 pruefidentifikator,
-                msb_gln,
+                msb_mp_id,
                 document_date,
                 message_ref,
             } => StorungsmeldungState::StorungsmeldungGesendet(StorungsmeldungData {
                 pruefidentifikator: *pruefidentifikator,
-                msb_gln: msb_gln.clone(),
+                msb_mp_id: msb_mp_id.clone(),
                 document_date: document_date.clone(),
                 message_ref: message_ref.clone(),
             }),
@@ -309,7 +309,7 @@ impl Workflow for WimInsrptWorkflow {
         match command {
             StorungsmeldungCommand::SendStorungsmeldung {
                 pid,
-                msb_gln,
+                msb_mp_id,
                 document_date,
                 message_ref,
             } => {
@@ -323,7 +323,7 @@ impl Workflow for WimInsrptWorkflow {
                 }
                 let outbox = PendingOutbox::new(
                     "INSRPT",
-                    msb_gln.as_str(),
+                    msb_mp_id.as_str(),
                     serde_json::json!({
                         "type":         "Stoerungsmeldung",
                         "pid":          pid.as_u32(),
@@ -333,7 +333,7 @@ impl Workflow for WimInsrptWorkflow {
                 Ok(WorkflowOutput::with_outbox(
                     vec![StorungsmeldungEvent::StorungsmeldungGesendet {
                         pruefidentifikator: pid,
-                        msb_gln,
+                        msb_mp_id,
                         document_date,
                         message_ref,
                     }],

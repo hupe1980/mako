@@ -286,7 +286,7 @@ pub enum DeviceChangeCommand {
         /// REST transaction UUID (idempotency key; carried through to events).
         tx_id: String,
         /// 13-digit GLN of the Netzbetreiber (order sender).
-        sender_gln: MarktpartnerCode,
+        sender_mp_id: MarktpartnerCode,
         /// EIC of the Messlokation at which the device should be installed.
         melo_id: MeLo,
         /// Requested device category (e.g. `"iMSys"`, `"mME"`, `"mME+KME"`).
@@ -455,7 +455,7 @@ impl Workflow for WimDeviceChangeWorkflow {
         match command {
             DeviceChangeCommand::ReceiveRestOrder {
                 tx_id,
-                sender_gln,
+                sender_mp_id,
                 melo_id,
                 device_category,
                 process_date,
@@ -480,7 +480,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                 Ok(vec![
                     DeviceChangeEvent::Initiated {
                         melo_id,
-                        incoming_msb: sender_gln,
+                        incoming_msb: sender_mp_id,
                         // REST orders target the MSB (self); grid_operator is
                         // not known at this point — carry device_category in
                         // document_date for now (process_date holds the date).
@@ -523,7 +523,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                     )));
                 }
                 // Clone before move for APERAK emission in the validation-failed path.
-                let sender_gln = sender.clone();
+                let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
 
                 let mut events = vec![DeviceChangeEvent::Initiated {
@@ -552,12 +552,12 @@ impl Workflow for WimDeviceChangeWorkflow {
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
-                            sender_gln.as_str(),
+                            sender_mp_id.as_str(),
                             serde_json::json!({
                                 "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_gln.as_str(),
+                                "receiver":   sender_mp_id.as_str(),
                                 "pid":        29001_u32,
-                                "error_code": "Z29",
+                                "error_code": mako_engine::erc::codes::Z29,
                                 "reason":     reason,
                             }),
                         )

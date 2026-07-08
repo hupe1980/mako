@@ -24,7 +24,7 @@
 //!
 //! These assertions collectively verify that:
 //! - `WorkflowVersionPolicy::ForwardCompatible` is the default for WiM Gas.
-//! - The 10-Werktage APERAK window label (`ANMELDUNG_APERAK_WINDOW_LABEL`) is
+//! - The 10-Werktage APERAK window label (`ANMELDUNG_RESPONSE_WINDOW_LABEL`) is
 //!   consistent with what the engine uses in `deadline_dispatch.rs`.
 //! - A mid-flight version switch (FV2025→FV2026) does not break state continuity.
 
@@ -38,7 +38,7 @@ use mako_engine::{
     version::WorkflowId,
 };
 use mako_wim_gas::{
-    ANMELDUNG_APERAK_WINDOW_LABEL, WimGasAnmeldungCommand, WimGasAnmeldungState,
+    ANMELDUNG_RESPONSE_WINDOW_LABEL, WimGasAnmeldungCommand, WimGasAnmeldungState,
     WimGasAnmeldungWorkflow,
 };
 use time::OffsetDateTime;
@@ -112,7 +112,7 @@ async fn cross_fv_full_lifecycle_fv_start_process() {
         nb.process_id(),
         nb.tenant_id(),
         nb.workflow_id().clone(),
-        ANMELDUNG_APERAK_WINDOW_LABEL,
+        ANMELDUNG_RESPONSE_WINDOW_LABEL,
         due_at,
     );
     deadline_store
@@ -168,7 +168,7 @@ async fn cross_fv_full_lifecycle_fv_start_process() {
 /// A WiM Gas 44042 process in `ValidationPassed` must transition to `Rejected`
 /// when the 10-Werktage APERAK deadline fires.
 ///
-/// Verifies that `TimeoutExpired` with `ANMELDUNG_APERAK_WINDOW_LABEL` is accepted
+/// Verifies that `TimeoutExpired` with `ANMELDUNG_RESPONSE_WINDOW_LABEL` is accepted
 /// from the `ValidationPassed` state.
 #[tokio::test]
 async fn cross_fv_aperak_timeout_fires_on_validation_passed() {
@@ -187,7 +187,7 @@ async fn cross_fv_aperak_timeout_fires_on_validation_passed() {
     // Fire the APERAK deadline.
     nb.execute(WimGasAnmeldungCommand::TimeoutExpired {
         deadline_id: DeadlineId::new(),
-        label: ANMELDUNG_APERAK_WINDOW_LABEL.into(),
+        label: ANMELDUNG_RESPONSE_WINDOW_LABEL.into(),
     })
     .await
     .expect("TimeoutExpired must be accepted from ValidationPassed");

@@ -188,7 +188,7 @@ async fn aperak_deadline_timeout_rejects_process() {
     let deadline_id = DeadlineId::new();
     p.execute(GasSupplierChangeCommand::TimeoutExpired {
         deadline_id,
-        label: "geli-gas-aperak-10-werktage".into(),
+        label: "geli-gas-response-10-werktage".into(),
     })
     .await
     .expect("TimeoutExpired on ValidationPassed must succeed");
@@ -210,7 +210,7 @@ async fn deadline_on_rejected_is_absorbed() {
     let deadline_id = DeadlineId::new();
     p.execute(GasSupplierChangeCommand::TimeoutExpired {
         deadline_id,
-        label: "geli-gas-aperak-10-werktage".into(),
+        label: "geli-gas-response-10-werktage".into(),
     })
     .await
     .expect("TimeoutExpired on already-Rejected must be absorbed");
@@ -240,7 +240,7 @@ async fn deadline_on_active_is_absorbed() {
     let deadline_id = DeadlineId::new();
     p.execute(GasSupplierChangeCommand::TimeoutExpired {
         deadline_id,
-        label: "geli-gas-aperak-10-werktage".into(),
+        label: "geli-gas-response-10-werktage".into(),
     })
     .await
     .expect("TimeoutExpired on Active must be absorbed");

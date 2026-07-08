@@ -252,9 +252,12 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                         }
                         Ok(msg) => {
                             let message_type = msg.try_message_type().map(|t| t.to_string());
-                            let pid = msg.detect_pruefidentifikator().ok().map(|p| p.as_u32());
+                            let pid = msg
+                                .detect_pruefidentifikator()
+                                .ok()
+                                .and_then(|p| mako_engine::ids::Pid::from_u32(p.as_u32()));
                             let workflow = pid
-                                .and_then(|p| self.ingest.pid_router.route(p))
+                                .and_then(|p| self.ingest.pid_router.route(p.as_u32()))
                                 .map(str::to_owned);
 
                             let status = match (pid, workflow.as_deref()) {
@@ -267,10 +270,15 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                             if matches!(status, MessageStatus::UnknownPid) {
                                 use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
                                 let ctx = AuditContext::now()
-                                    .with_message_type(message_type.as_deref().unwrap_or(""))
-                                    .with_pid(pid.unwrap_or(0));
+                                    .with_message_type(message_type.as_deref().unwrap_or(""));
+                                let ctx = if let Some(p) = pid {
+                                    ctx.with_pid(p)
+                                } else {
+                                    ctx
+                                };
+                                let dead_pid = pid.unwrap_or(mako_engine::ids::Pid::new(1));
                                 self.ingest.dl_sink.reject(&DeadLetterReason::UnknownPid {
-                                    pid: pid.unwrap_or(0),
+                                    pid: dead_pid,
                                     context: ctx,
                                 });
                             }
@@ -278,7 +286,7 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                             tracing::info!(
                                 as4_message_id = %msg_id,
                                 message_type   = ?message_type,
-                                pid,
+                                pid            = pid.map(|p| p.as_u32()),
                                 workflow       = ?workflow,
                                 status         = ?status,
                                 "AS4 ingest: EDIFACT message dispatched",
@@ -288,7 +296,7 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                             if let (Some(pid_val), Some(wf_name)) = (pid, workflow.as_deref())
                                 && let Some(dispatcher) = self.ingest.dispatcher.as_deref()
                             {
-                                match dispatcher.dispatch(&msg, wf_name, pid_val).await {
+                                match dispatcher.dispatch(&msg, wf_name, pid_val.as_u32()).await {
                                     Ok(outcome) => tracing::debug!(
                                         as4_message_id = %msg_id,
                                         workflow       = %wf_name,

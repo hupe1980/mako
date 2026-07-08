@@ -35,7 +35,7 @@ use mako_engine::{
 pub const WORKFLOW_NAME: &str = "wim-gas-kuendigung";
 
 /// Deadline label for the 10-Werktage APERAK window (BK7-24-01-009).
-pub const APERAK_WINDOW_LABEL: &str = "wim-gas-kuendigung-aperak-10-werktage";
+pub const RESPONSE_WINDOW_LABEL: &str = "wim-gas-kuendigung-response-10-werktage";
 
 /// PIDs handled by this workflow (WiM Gas Kündigung MSB Gas).
 ///
@@ -91,7 +91,7 @@ pub enum WimGasKuendigungEvent {
     DeadlineExpired {
         /// Unique deadline identifier.
         deadline_id: DeadlineId,
-        /// Deadline label (matches [`APERAK_WINDOW_LABEL`]).
+        /// Deadline label (matches [`RESPONSE_WINDOW_LABEL`]).
         label: Box<str>,
     },
 }
@@ -214,7 +214,7 @@ pub enum WimGasKuendigungCommand {
     TimeoutExpired {
         /// Unique deadline identifier.
         deadline_id: DeadlineId,
-        /// Deadline label (matches [`APERAK_WINDOW_LABEL`]).
+        /// Deadline label (matches [`RESPONSE_WINDOW_LABEL`]).
         label: Box<str>,
     },
 }
@@ -237,7 +237,7 @@ impl Workflow for WimGasKuendigungWorkflow {
     ) -> Option<Self::Command> {
         match (deadline.label(), state) {
             (
-                APERAK_WINDOW_LABEL,
+                RESPONSE_WINDOW_LABEL,
                 WimGasKuendigungState::Initiated(_)
                 | WimGasKuendigungState::ValidationPassed(_)
                 | WimGasKuendigungState::AperakSent(_),
@@ -330,7 +330,7 @@ impl Workflow for WimGasKuendigungWorkflow {
                     )));
                 }
                 // Clone before move for APERAK emission in the validation-failed path.
-                let sender_gln = sender.clone();
+                let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
 
                 let mut events = vec![WimGasKuendigungEvent::Initiated {
@@ -356,12 +356,12 @@ impl Workflow for WimGasKuendigungWorkflow {
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
-                            sender_gln.as_str(),
+                            sender_mp_id.as_str(),
                             serde_json::json!({
                                 "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_gln.as_str(),
+                                "receiver":   sender_mp_id.as_str(),
                                 "pid":        29001_u32,
-                                "error_code": "Z29",
+                                "error_code": mako_engine::erc::codes::Z29,
                                 "reason":     reason,
                             }),
                         )

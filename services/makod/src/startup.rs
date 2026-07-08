@@ -37,7 +37,7 @@ use tracing::info;
 
 use crate::{
     adapters, deadline_dispatch, erp_adapter, ingest_dispatcher, malo_cache,
-    party_registry::GlnRegistry,
+    party_registry::MpIdRegistry,
 };
 
 // ── Domain workflow name imports ──────────────────────────────────────────────
@@ -449,7 +449,7 @@ pub(crate) struct WorkersConfig {
     ///
     /// Built from `[[party]]` entries in `makod.toml`. The primary GLN is used
     /// as the storage partition key (`TenantId`) and AS4 `partyId` fallback.
-    pub gln_registry: Arc<GlnRegistry>,
+    pub gln_registry: Arc<MpIdRegistry>,
     pub as4_partner: Vec<String>,
     pub as4_signing_key_pem: Option<SecretString>,
     pub as4_signing_cert_pem: Option<String>,
@@ -463,6 +463,14 @@ pub(crate) struct WorkersConfig {
     pub erp_webhook_secret: Option<SecretString>,
     // ── EDIFACT outbox webhook (dev/no-AS4 mode) ─────────────────────────
     pub edifact_outbox_webhook_url: Option<String>,
+    /// When `true`, allow the daemon to start without AS4 signing credentials
+    /// and without an EDIFACT outbox webhook configured.  Defaults to `false`
+    /// for production safety — set to `true` only in integration-test or
+    /// CI environments where outbound EDIFACT delivery is intentionally
+    /// disabled.
+    ///
+    /// Pass `--allow-no-as4-signing` on the CLI to set this flag.
+    pub allow_no_as4_signing: bool,
     // ── Scheduler / timing config ────────────────────────────────────────
     pub snapshot_interval: u64,
     pub deadline_poll_interval_secs: u64,
@@ -473,6 +481,8 @@ pub(crate) struct WorkersConfig {
     /// because a daemon that can receive no inbound messages is almost always
     /// a misconfiguration.
     pub no_transport_configured: bool,
+    /// Health state — worker heartbeats are registered here after spawning.
+    pub health_state: crate::health::HealthState,
 }
 
 /// Spawn all background workers and return immediately.
@@ -494,6 +504,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
     use crate::as4_sender::BdewAs4Sender;
     use crate::malo_ident_sender::MaloIdentSender;
     use crate::verzeichnisdienst_worker;
+    use crate::worker_health::new_heartbeat;
     use mako_as4::profile::BdewAs4Profile;
     use secrecy::ExposeSecret as _;
 
@@ -501,12 +512,12 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
     let maloid_partners = {
         let mut map = std::collections::HashMap::new();
         for pair in &cfg.maloid_partner {
-            let (gln, url_str) = pair.split_once('=').ok_or_else(|| {
+            let (mp_id, url_str) = pair.split_once('=').ok_or_else(|| {
                 anyhow::anyhow!("--maloid-partner: expected GLN=URL, got {pair:?}")
             })?;
             let url = reqwest::Url::parse(url_str)
                 .map_err(|e| anyhow::anyhow!("--maloid-partner: invalid URL {url_str:?}: {e}"))?;
-            map.insert(gln.to_owned(), url);
+            map.insert(mp_id.to_owned(), url);
         }
         if !map.is_empty() {
             let glns: Vec<&str> = map.keys().map(String::as_str).collect();
@@ -556,22 +567,22 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
     let as4_profile = {
         let mut profile = BdewAs4Profile::new();
         for pair in &cfg.as4_partner {
-            let (gln, url) = pair.split_once('=').ok_or_else(|| {
+            let (mp_id, url) = pair.split_once('=').ok_or_else(|| {
                 anyhow::anyhow!("--as4-partner: expected GLN=HTTPS-URL, got {pair:?}")
             })?;
-            let gln = gln.trim();
+            let mp_id = mp_id.trim();
             let url = url.trim();
-            if gln.is_empty() {
+            if mp_id.is_empty() {
                 return Err(anyhow::anyhow!(
                     "--as4-partner: GLN must not be empty in {pair:?}"
                 ));
             }
             if !url.starts_with("https://") {
                 return Err(anyhow::anyhow!(
-                    "--as4-partner: endpoint URL must use HTTPS (got {url:?} for GLN {gln:?})"
+                    "--as4-partner: endpoint URL must use HTTPS (got {url:?} for GLN {mp_id:?})"
                 ));
             }
-            profile.register_partner_all_actions(gln, url);
+            profile.register_partner_all_actions(mp_id, url);
         }
         profile
     };
@@ -648,9 +659,12 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
             own_glns        = ?cfg.gln_registry.own_glns().collect::<Vec<_>>(),
             "AS4 outbound sender active (BdewAs4Sender)",
         );
+        let (outbox_hb, outbox_watch) = new_heartbeat("outbox-worker", 120);
         let worker = cfg
             .ctx
-            .run_outbox_worker(sender, 50, Duration::from_secs(5), 48);
+            .run_outbox_worker(sender, 50, Duration::from_secs(5), 48)
+            .with_heartbeat(outbox_hb.last_tick_raw());
+        cfg.health_state.register_worker(outbox_watch);
         tokio::spawn(async move { worker.run().await });
     } else if let Some(ref edifact_webhook_url) = cfg.edifact_outbox_webhook_url {
         use crate::as4_sender::WebhookEdifactSender;
@@ -665,20 +679,37 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
             "EDIFACT outbox webhook sender active (WebhookEdifactSender) — \
              outbound EDIFACT will be POSTed as CloudEvents",
         );
+        let (outbox_hb, outbox_watch) = new_heartbeat("outbox-worker", 120);
         let worker = cfg
             .ctx
-            .run_outbox_worker(sender, 50, Duration::from_secs(5), 48);
+            .run_outbox_worker(sender, 50, Duration::from_secs(5), 48)
+            .with_heartbeat(outbox_hb.last_tick_raw());
+        cfg.health_state.register_worker(outbox_watch);
         tokio::spawn(async move { worker.run().await });
     } else {
+        if !cfg.allow_no_as4_signing {
+            anyhow::bail!(
+                "AS4 signing credentials not configured \
+                 (--as4-signing-key-pem / --as4-signing-cert-pem not set) and no \
+                 --edifact-outbox-webhook-url fallback is configured. \
+                 Outbound EDIFACT delivery would silently fail for all messages. \
+                 To suppress this error in non-production environments, pass \
+                 --allow-no-as4-signing.",
+            );
+        }
         tracing::warn!(
             "AS4 signing credentials not configured \
              (--as4-signing-key-pem / --as4-signing-cert-pem not set). \
              Outbox delivery is running in MaloIdentCallback-only mode — \
-             all EDIFACT messages will be logged and rescheduled without transmission.",
+             all EDIFACT messages will be logged and rescheduled without transmission. \
+             Pass --allow-no-as4-signing to silence this warning.",
         );
+        let (outbox_hb, outbox_watch) = new_heartbeat("outbox-worker", 120);
         let worker = cfg
             .ctx
-            .run_outbox_worker(malo_sender, 50, Duration::from_secs(5), 48);
+            .run_outbox_worker(malo_sender, 50, Duration::from_secs(5), 48)
+            .with_heartbeat(outbox_hb.last_tick_raw());
+        cfg.health_state.register_worker(outbox_watch);
         tokio::spawn(async move { worker.run().await });
     }
 
@@ -722,12 +753,18 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
 
     // ── Deadline scheduler ────────────────────────────────────────────────
     let event_store_for_scheduler = Arc::clone(cfg.ctx.event_store());
+    let (deadline_hb, deadline_watch) = new_heartbeat(
+        "deadline-scheduler",
+        (cfg.deadline_poll_interval_secs.max(1) * 3) as i64,
+    );
     let scheduler = deadline_dispatch::build_scheduler(
         &cfg.ctx,
         event_store_for_scheduler,
         cfg.snapshot_interval,
         Duration::from_secs(cfg.deadline_poll_interval_secs.max(1)),
-    );
+    )
+    .with_heartbeat(deadline_hb.last_tick_raw());
+    cfg.health_state.register_worker(deadline_watch);
     tokio::spawn(async move { scheduler.run().await });
     info!(
         poll_interval_secs = cfg.deadline_poll_interval_secs.max(1),
@@ -738,20 +775,32 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
     if cfg.projection_checkpoint_interval > 0 {
         let interval = Duration::from_secs(cfg.projection_checkpoint_interval);
 
+        let (proj1_hb, proj1_watch) = new_heartbeat(
+            "projection-worker:gpke-konfiguration",
+            (cfg.projection_checkpoint_interval * 5).max(300) as i64,
+        );
         let worker = crate::projection_worker::ProjectionWorker::new(
             cfg.store.clone(),
             mako_gpke::KonfigurationProjection::default(),
             Some("gpke/"),
             interval,
-        );
+        )
+        .with_heartbeat(proj1_hb.last_tick_raw());
+        cfg.health_state.register_worker(proj1_watch);
         tokio::spawn(async move { worker.run().await });
 
+        let (proj2_hb, proj2_watch) = new_heartbeat(
+            "projection-worker:gpke-supplier-change",
+            (cfg.projection_checkpoint_interval * 5).max(300) as i64,
+        );
         let worker = crate::projection_worker::ProjectionWorker::new(
             cfg.store.clone(),
             mako_gpke::SupplierChangeProjection::default(),
             Some("gpke/"),
             interval,
-        );
+        )
+        .with_heartbeat(proj2_hb.last_tick_raw());
+        cfg.health_state.register_worker(proj2_watch);
         tokio::spawn(async move { worker.run().await });
 
         info!(

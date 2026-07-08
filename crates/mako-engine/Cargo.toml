@@ -58,3 +58,8 @@ required-features = ["testing"]
 name     = "storage"
 harness  = false
 required-features = ["testing"]
+
+[[bench]]
+name     = "workers"
+harness  = false
+required-features = ["testing"]

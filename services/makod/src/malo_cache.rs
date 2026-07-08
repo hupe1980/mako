@@ -24,12 +24,12 @@
 //! The `mc_addr/` secondary index enables address-based lookups when the
 //! Lieferant does not supply a MaLo-ID.
 //!
-//! The `mc_txres/` index holds the resolved `(malo_id, nb_gln)` for each
+//! The `mc_txres/` index holds the resolved `(malo_id, nb_mp_id)` for each
 //! completed MaLo-ID identification request, keyed by the LF-supplied `tx_id`.
 //! This is the correlation bridge used by `maloid.lieferbeginn.fortsetzen`
 //!: the ERP receives `MaloIdentified` via the ERP webhook, then
 //! calls the command endpoint with only the `tx_id` and `lieferbeginn_datum` —
-//! `makod` resolves the `malo_id` and `nb_gln` from this index.
+//! `makod` resolves the `malo_id` and `nb_mp_id` from this index.
 
 use energy_api::models::electricity::{IdentificationParameter, MaloIdentResultPositive};
 use energy_api::server::malo_ident::MaloRegistry;
@@ -366,7 +366,7 @@ pub struct MaloCacheStats {
 /// Stored under key `mc_txres/{tenant_id}/{tx_id}` after a successful
 /// positive MaLo-ID callback delivery. The ERP uses the `tx_id` it received
 /// when calling `POST /maloId/request/v1` to look up the resolved `malo_id`
-/// and `nb_gln` for the follow-on PID 55001 Lieferbeginn dispatch.
+/// and `nb_mp_id` for the follow-on PID 55001 Lieferbeginn dispatch.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MaloIdentResolved {
     /// The `tx_id` from the original `POST /maloId/request/v1` request.
@@ -375,7 +375,7 @@ pub struct MaloIdentResolved {
     pub malo_id: String,
     /// The NB's GLN (13-digit), resolved from the MaLo record at callback
     /// delivery time.
-    pub nb_gln: String,
+    pub nb_mp_id: String,
     /// When the positive callback was successfully delivered.
     #[serde(with = "time::serde::rfc3339")]
     pub resolved_at: OffsetDateTime,

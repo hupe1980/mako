@@ -171,6 +171,7 @@ impl MockNb {
                     document_date,
                     process_date,
                     message_ref,
+                    received_at: time::OffsetDateTime::now_utc(),
                     validation_passed: true,
                     validation_errors: vec![],
                 }
@@ -326,6 +327,7 @@ async fn e2e_neuanlage_validation_failure_rejects() {
         document_date: "20250115".to_owned(),
         process_date: "20250401".to_owned(),
         message_ref: MessageRef::new("MSG-BAD-001"),
+        received_at: time::OffsetDateTime::now_utc(),
         validation_passed: false,
         validation_errors: vec!["BGM qualifier missing".to_owned()],
     };

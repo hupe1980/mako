@@ -6,6 +6,6 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum CheckError {
     /// No tariff entry found for the given GLN and billing period.
-    #[error("tariff not found for sender GLN '{gln}' on date '{date}'")]
-    TariffNotFound { gln: String, date: String },
+    #[error("tariff not found for sender GLN '{mp_id}' on date '{date}'")]
+    TariffNotFound { mp_id: String, date: String },
 }

@@ -1,0 +1,22 @@
+{
+  "malo_id": "51238696780",
+  "sparte": "STROM",
+  "vertragsart": "Liefervertrag",
+  "valid_from": "2025-10-01",
+  "valid_to": "2026-09-30",
+  "data": {
+    "bo_typ": "VERTRAG",
+    "vertragsnummer": "DEMO-LFV-2025",
+    "vertragsart": "NETZNUTZUNGSVERTRAG",
+    "vertragsstatus": "AKTIV",
+    "sparte": "STROM",
+    "vertragsbeginn": "2025-10-01",
+    "vertragsende": "2026-09-30",
+    "vertragspartner": "4012345000023",
+    "_mdm_billing": {
+      "billing_cycle": "MONTHLY",
+      "payment_terms_days": 30
+    }
+  },
+  "bo4e_version": "v202501.0.0"
+}

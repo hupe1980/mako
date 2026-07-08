@@ -52,7 +52,7 @@ use mako_engine::{
 pub const WORKFLOW_NAME: &str = "geli-gas-supplier-change";
 
 /// Deadline label for the 10-Werktage response window (GeLi Gas BK7-24-01-009).
-pub const APERAK_WINDOW_LABEL: &str = "geli-gas-aperak-10-werktage";
+pub const RESPONSE_WINDOW_LABEL: &str = "geli-gas-response-10-werktage";
 
 // ── PID sets ──────────────────────────────────────────────────────────────────
 
@@ -522,7 +522,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         match (deadline.label(), state) {
             (
-                APERAK_WINDOW_LABEL,
+                RESPONSE_WINDOW_LABEL,
                 GasSupplierChangeState::Initiated(_)
                 | GasSupplierChangeState::ValidationPassed(_)
                 | GasSupplierChangeState::AntwortGesendet { .. }
@@ -688,7 +688,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     })?;
 
                 // Clone before move for APERAK emission in the validation-failed path.
-                let sender_gln = sender.clone();
+                let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
 
                 let mut events = vec![GasSupplierChangeEvent::Initiated {
@@ -719,12 +719,12 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
-                            sender_gln.as_str(),
+                            sender_mp_id.as_str(),
                             serde_json::json!({
                                 "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_gln.as_str(),
+                                "receiver":   sender_mp_id.as_str(),
                                 "pid":        29001_u32,
-                                "error_code": "Z29",
+                                "error_code": mako_engine::erc::codes::Z29,
                                 "reason":     reason,
                             }),
                         )
@@ -1562,7 +1562,7 @@ mod tests {
             &state,
             GasSupplierChangeCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: APERAK_WINDOW_LABEL.into(),
+                label: RESPONSE_WINDOW_LABEL.into(),
             },
         )
         .unwrap();
@@ -1594,7 +1594,7 @@ mod tests {
             &state,
             GasSupplierChangeCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: APERAK_WINDOW_LABEL.into(),
+                label: RESPONSE_WINDOW_LABEL.into(),
             },
         )
         .unwrap();

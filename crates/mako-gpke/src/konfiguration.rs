@@ -101,7 +101,7 @@ pub enum KonfigurationEvent {
         /// Prüfidentifikator of the sent ORDERS (17134 = NB an MSB).
         orders_pid: Pruefidentifikator,
         /// GLN of the MSB that received the ORDERS.
-        msb_gln: MarktpartnerCode,
+        msb_mp_id: MarktpartnerCode,
         /// EIC/MaLo of the supply location.
         malo: MaLo,
         /// GLN of the new supplier (LFN).
@@ -154,7 +154,7 @@ pub struct BeauftragungData {
     /// Prüfidentifikator of the sent ORDERS (17134).
     pub orders_pid: Pruefidentifikator,
     /// GLN of the addressed MSB.
-    pub msb_gln: MarktpartnerCode,
+    pub msb_mp_id: MarktpartnerCode,
     /// EIC/MaLo of the supply location.
     pub malo: MaLo,
     /// GLN of the new supplier (LFN).
@@ -229,7 +229,7 @@ pub enum KonfigurationCommand {
         /// Prüfidentifikator of the ORDERS sent (17134 or 17135).
         orders_pid: Pruefidentifikator,
         /// GLN of the MSB receiving the ORDERS.
-        msb_gln: MarktpartnerCode,
+        msb_mp_id: MarktpartnerCode,
         /// EIC/MaLo of the affected supply location.
         malo: MaLo,
         /// GLN of the new supplier (LFN).
@@ -296,13 +296,13 @@ impl Workflow for GpkeKonfigurationWorkflow {
         match event {
             KonfigurationEvent::BeauftragungGesendet {
                 orders_pid,
-                msb_gln,
+                msb_mp_id,
                 malo,
                 new_supplier,
                 message_ref,
             } => KonfigurationState::Beauftragt(BeauftragungData {
                 orders_pid: *orders_pid,
-                msb_gln: msb_gln.clone(),
+                msb_mp_id: msb_mp_id.clone(),
                 malo: malo.clone(),
                 new_supplier: new_supplier.clone(),
                 message_ref: message_ref.clone(),
@@ -345,7 +345,7 @@ impl Workflow for GpkeKonfigurationWorkflow {
         match command {
             KonfigurationCommand::NbSendsBeauftragung {
                 orders_pid,
-                msb_gln,
+                msb_mp_id,
                 malo,
                 new_supplier,
                 message_ref,
@@ -362,14 +362,14 @@ impl Workflow for GpkeKonfigurationWorkflow {
                 // message to the MSB in the same atomic write.
                 let event = KonfigurationEvent::BeauftragungGesendet {
                     orders_pid,
-                    msb_gln: msb_gln.clone(),
+                    msb_mp_id: msb_mp_id.clone(),
                     malo: malo.clone(),
                     new_supplier: new_supplier.clone(),
                     message_ref: message_ref.clone(),
                 };
                 let outbox = vec![PendingOutbox::new(
                     "ORDERS",
-                    msb_gln.as_str(),
+                    msb_mp_id.as_str(),
                     serde_json::json!({
                         "type":         "Beauftragung",
                         "pid":          orders_pid.as_u32(),
@@ -432,7 +432,7 @@ pub struct KonfigurationRecord {
     /// Current lifecycle status label.
     pub status: &'static str,
     /// MSB GLN once `BeauftragungGesendet` is applied.
-    pub msb_gln: Option<MarktpartnerCode>,
+    pub msb_mp_id: Option<MarktpartnerCode>,
     /// MaLo once `BeauftragungGesendet` is applied.
     pub malo: Option<MaLo>,
     /// Total events processed.
@@ -443,7 +443,7 @@ impl Default for KonfigurationRecord {
     fn default() -> Self {
         Self {
             status: "New",
-            msb_gln: None,
+            msb_mp_id: None,
             malo: None,
             event_count: 0,
         }
@@ -478,9 +478,11 @@ impl Projection for KonfigurationProjection {
         };
 
         match event {
-            KonfigurationEvent::BeauftragungGesendet { msb_gln, malo, .. } => {
+            KonfigurationEvent::BeauftragungGesendet {
+                msb_mp_id, malo, ..
+            } => {
                 record.status = "Beauftragt";
-                record.msb_gln = Some(msb_gln);
+                record.msb_mp_id = Some(msb_mp_id);
                 record.malo = Some(malo);
             }
             KonfigurationEvent::BestaetigungErhalten { .. } => {

@@ -21,7 +21,7 @@ time        = { workspace = true }
 anyhow      = { workspace = true }
 edi-energy  = { workspace = true, features = ["utilmd", "aperak"] }
 mako-engine = { workspace = true, features = ["testing"] }
-mako-wim    = { path = "../mako-wim" }
+mako-wim    = { path = "../mako-wim" }  # dev-only: insrpt_routing.rs verifies cross-package PID constant alignment (F-011)
 serde_json  = { workspace = true }
 time        = { workspace = true }
 tokio       = { version = "1", features = ["full"] }

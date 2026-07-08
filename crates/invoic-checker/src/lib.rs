@@ -22,8 +22,8 @@
 //!   the BO4E domain model. EDIFACT → BO4E translation belongs in the `makod`
 //!   transport adapter (anti-corruption layer).
 //! - **Pure library** — no I/O, no async, no Tokio dependency.
-//! - **Trait-injected stores** — [`TariffStore`] is injected by the caller
-//!   (e.g. `invoicd` injects an in-memory store seeded from PRICAT 27003).
+//! - **Trait-injected stores** — [`PreisblattStore`] is injected by the caller
+//!   (e.g. `invoicd` injects an in-memory store seeded from `marktd`'s price-sheet API).
 //! - **No floating-point money** — all amounts are [`EuroAmount`] (`i64` ×10⁻⁵ EUR).
 //!
 //! # Monetary precision
@@ -40,28 +40,19 @@
 //! ```rust,no_run
 //! use invoic_checker::{
 //!     check::{CheckConfig, CheckOutcome, InvoicCheckEngine},
-//!     tariff::{InMemoryTariffStore, TariffEntry},
+//!     tariff::InMemoryPreisblattStore,
 //!     amount::EuroAmount,
 //! };
-//! use rubo4e::v202501::Rechnung;
+//! use rubo4e::v202501::{PreisblattNetznutzung, Rechnung};
 //!
-//! let mut tariff_store = InMemoryTariffStore::default();
-//! tariff_store.insert(TariffEntry {
-//!     publisher_gln: "9900357000004".into(),
-//!     valid_from: "2025-01-01".into(),
-//!     valid_to: None,
-//!     pricat_pid: 27003,
-//!     charge_category: "NNE".into(),
-//!     unit_price: EuroAmount(3_456),
-//!     tolerance: 0.01,
-//! });
+//! let preisblatt_store = InMemoryPreisblattStore::default();
 //!
 //! let rechnung = Rechnung::default();
 //! let report = InvoicCheckEngine::check(
 //!     31001,
 //!     "9900357000004",
 //!     &rechnung,
-//!     &tariff_store,
+//!     &preisblatt_store,
 //!     &CheckConfig::default(),
 //! );
 //! assert_eq!(report.outcome, CheckOutcome::Ok);
@@ -78,4 +69,4 @@ pub mod tariff;
 pub use amount::EuroAmount;
 pub use check::{CheckConfig, CheckOutcome, CheckReport, Finding, FindingKind, InvoicCheckEngine};
 pub use error::CheckError;
-pub use tariff::{InMemoryTariffStore, TariffEntry, TariffStore};
+pub use tariff::{InMemoryPreisblattStore, PreisblattStore};

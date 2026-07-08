@@ -339,13 +339,13 @@ pub struct CommandsApiState {
     pub snapshot_store: mako_engine::store_slatedb::SlateDbSnapshotStore,
     /// MaLo master-data cache — used to resolve NB/MSB GLNs from MaLo IDs.
     pub malo_cache: Arc<SlateDbMaloCache>,
-    /// MaLo-ID result cache — maps `tx_id → (malo_id, nb_gln)` for the
+    /// MaLo-ID result cache — maps `tx_id → (malo_id, nb_mp_id)` for the
     /// `maloid.lieferbeginn.fortsetzen` continuation command.
     ///
     /// Written by `MaloIdentSender` after a positive callback is delivered.
     /// The ERP receives `MaloIdentified` via the ERP webhook and then calls
     /// `maloid.lieferbeginn.fortsetzen` with only the `tx_id` and
-    /// `lieferbeginn_datum` — `makod` resolves the `malo_id` and `nb_gln`
+    /// `lieferbeginn_datum` — `makod` resolves the `malo_id` and `nb_mp_id`
     /// from this cache.
     pub maloid_result_cache: MaloIdentResultCache,
     /// Number of events between automatic process snapshots.
@@ -705,6 +705,25 @@ pub(crate) async fn handle_command(
                 .into_response();
         }
         Err(DispatchError::Engine(e)) => {
+            // InvalidState is a business-logic conflict (e.g. bestaetigen on an
+            // already-accepted process) — map to 409 so callers can distinguish
+            // it from a true server error.
+            if e.as_workflow_error().is_some_and(|w| w.is_invalid_state()) {
+                tracing::warn!(
+                    idempotency_key = %idempotency_key,
+                    command         = %cmd_lower,
+                    error           = %e,
+                    "ERP dispatch: command rejected — invalid state transition",
+                );
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error":  "invalid_state",
+                        "detail": e.to_string(),
+                    })),
+                )
+                    .into_response();
+            }
             tracing::error!(
                 idempotency_key = %idempotency_key,
                 command         = %cmd_lower,
@@ -1292,7 +1311,7 @@ async fn dispatch_lf_anmeldung(
         .map_err(|e| DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string())))?
         .ok_or_else(|| DispatchError::MaloNotFound(malo_id.clone()))?;
 
-    let nb_gln = malo_record
+    let nb_mp_id = malo_record
         .data_market_location
         .data_market_location_network_operators
         .iter()
@@ -1312,7 +1331,7 @@ async fn dispatch_lf_anmeldung(
     let domain_cmd = LfAnmeldungCommand::InitiateAnmeldung {
         pid,
         sender: MarktpartnerCode::new(state.sender_party_id.clone()),
-        receiver: nb_gln,
+        receiver: nb_mp_id,
         location_id: MaLo::new(malo_id.clone()),
         process_date,
     };
@@ -1427,7 +1446,7 @@ async fn dispatch_lf_anmeldung(
 ///      }
 ///    }
 ///    ```
-/// 3. `makod` looks up `(malo_id, nb_gln)` from the `mc_txres/` cache using
+/// 3. `makod` looks up `(malo_id, nb_mp_id)` from the `mc_txres/` cache using
 ///    the `tx_id` — no need for the ERP to track the MaLo-ID.
 /// 4. Dispatches `LfAnmeldungCommand::InitiateAnmeldung` (PID 55001) with the
 ///    resolved data, exactly like `gpke.lieferbeginn.anmelden`.
@@ -1435,7 +1454,7 @@ async fn dispatch_lf_anmeldung(
 /// ## Error cases
 ///
 /// - `tx_id` unknown or result not yet cached → `422 tx_id_not_resolved`.
-/// - `tx_id` resolved but `nb_gln` is empty → falls back to MaLo cache lookup.
+/// - `tx_id` resolved but `nb_mp_id` is empty → falls back to MaLo cache lookup.
 async fn dispatch_maloid_lieferbeginn_fortsetzen(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -1486,7 +1505,7 @@ async fn dispatch_maloid_lieferbeginn_fortsetzen(
     tracing::info!(
         tx_id            = %tx_id,
         malo_id          = %resolved.malo_id,
-        nb_gln           = %resolved.nb_gln,
+        nb_mp_id           = %resolved.nb_mp_id,
         lieferbeginn_dat = %lieferbeginn_datum,
         "maloid.lieferbeginn.fortsetzen: resolved tx_id — dispatching PID 55001"
     );
@@ -1851,7 +1870,7 @@ async fn dispatch_steuerungsauftrag_endantwort(
 /// Expected payload fields:
 /// - `stream_id`     — Process stream ID (UUID)
 /// - `pid`           — IFTSTA Prüfidentifikator (21024–21033)
-/// - `sender_gln`    — Sender party GLN
+/// - `sender_mp_id`    — Sender party GLN
 /// - `receiver_gln`  — Receiver party GLN
 /// - `message_ref`   — EDIFACT message reference string
 async fn dispatch_gpke_iftsta(
@@ -1871,7 +1890,7 @@ async fn dispatch_gpke_iftsta(
     let pid = Pruefidentifikator::new(pid_code).map_err(DispatchError::InvalidPayload)?;
     let sender = MarktpartnerCode::new(
         payload
-            .get("sender_gln")
+            .get("sender_mp_id")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
     );
@@ -1910,7 +1929,7 @@ async fn dispatch_gpke_iftsta(
 /// Constructs [`DeviceChangeCommand::ReceiveIftsta`] and executes it on the
 /// existing `wim-device-change` process identified by `stream_id` in the payload.
 ///
-/// Expected payload fields: `stream_id`, `pid`, `sender_gln`, `receiver_gln`,
+/// Expected payload fields: `stream_id`, `pid`, `sender_mp_id`, `receiver_gln`,
 /// `message_ref`.
 async fn dispatch_wim_iftsta(
     state: &CommandsApiState,
@@ -1929,7 +1948,7 @@ async fn dispatch_wim_iftsta(
     let pid = Pruefidentifikator::new(pid_code).map_err(DispatchError::InvalidPayload)?;
     let sender = MarktpartnerCode::new(
         payload
-            .get("sender_gln")
+            .get("sender_mp_id")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
     );
@@ -2259,7 +2278,7 @@ async fn dispatch_mabis_billing_begleichen(
 /// [`MABIS_IFTSTA_PIDS`].
 ///
 /// Expected payload fields: `stream_id`, `pid` (optional for datenstatus),
-/// `sender_gln`, `receiver_gln`, `message_ref`. For datenstatus: `data_status`.
+/// `sender_mp_id`, `receiver_gln`, `message_ref`. For datenstatus: `data_status`.
 async fn dispatch_mabis_iftsta(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -2289,7 +2308,7 @@ async fn dispatch_mabis_iftsta(
     let pid = Pruefidentifikator::new(pid_code).map_err(DispatchError::InvalidPayload)?;
     let sender = MarktpartnerCode::new(
         payload
-            .get("sender_gln")
+            .get("sender_mp_id")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
     );
@@ -2449,7 +2468,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     },
     // ── GPKE MaLo-ID continuation (ERP callback after MaloIdentified event) ───
     // Primary key is `tx_id` from the `MaloIdentified` ERP event.  The engine
-    // resolves malo_id + nb_gln from the mc_txres/ cache.
+    // resolves malo_id + nb_mp_id from the mc_txres/ cache.
     CommandDescriptor {
         name: "maloid.lieferbeginn.fortsetzen",
         permitted_roles: &["LF"],

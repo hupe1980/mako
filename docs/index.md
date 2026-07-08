@@ -66,7 +66,7 @@ permalink: /
     <span class="mako-kpi__label">event-sourced workflows</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">242</span>
+    <span class="mako-kpi__value">247</span>
     <span class="mako-kpi__label">Prüfidentifikatoren</span>
   </div>
   <div class="mako-kpi">
@@ -182,13 +182,21 @@ permalink: /
     <div class="mako-feature__icon">🏭</div>
     <h3>Production Daemons</h3>
     <p>
-      <code>makod</code> — all domain modules behind a durable SlateDB event
-      store. <code>mdmd</code> — PostgreSQL-backed master data manager for
-      MaLo, MeLo, contracts, and ERP webhook subscriptions. Both are
-      Docker-ready, Kubernetes-native, and independently deployable.
+      Six independently deployable, Docker-ready services:
+      <code>makod</code> — all 45+ workflows behind durable SlateDB.
+      <code>marktd</code> — PostgreSQL master data (MaLo/MeLo/contracts/price sheets/VersorgungsStatus/NeLo/MaLo grid topology), Cedar ABAC, OIDC/JWT, EventBus fan-out.
+      <code>processd</code> — automated NB Anmeldung STP decisions (≥ 95% via <code>netz-checker</code>) + LF E_0624 auto-response (45 min window). Role-gated for §7 EnWG separation.
+      <code>invoicd</code> — autonomous INVOIC settlement (GPKE billing), §22 MessZV receipts, selbstausstellen 31006, overdue-REMADV monitoring.
+      <code>edmd</code> — MSCONS meter-reading storage, time-series API, `MeterBillingPeriod` (RLM spitzenleistung + Gas brennwert), Mehr-/Mindermengen imbalance.
+      <code>obsd</code> — process projections, BNetzA KPI reports, deadline-risk alerts, §20 EnWG parity.
+      All share <code>mako-service</code> scaffolding and emit OTLP traces.
     </p>
     <a href="{{ '/makod' | relative_url }}">makod guide →</a> ·
-    <a href="{{ '/mdmd' | relative_url }}">mdmd guide →</a>
+    <a href="{{ '/marktd' | relative_url }}">marktd guide →</a> ·
+    <a href="{{ '/processd' | relative_url }}">processd guide →</a> ·
+    <a href="{{ '/invoicd' | relative_url }}">invoicd guide →</a> ·
+    <a href="{{ '/edmd' | relative_url }}">edmd guide →</a> ·
+    <a href="{{ '/obsd' | relative_url }}">obsd guide →</a>
   </div>
 
   <div class="mako-feature">
@@ -209,10 +217,14 @@ permalink: /
     <h3>Automated Billing Settlement</h3>
     <p>
       <code>invoicd</code> runs the <code>invoic-checker</code> plausibility
-      pipeline on every inbound INVOIC and issues <code>gpke.abrechnung.annehmen</code>
-      or <code>gpke.abrechnung.ablehnen</code> automatically — no ERP
-      round-trip required. Five check types: period validity, position
-      arithmetic, document total, tariff match, and tariff found.
+      pipeline on every inbound INVOIC and issues the settlement command
+      automatically — no ERP round-trip required. Five checks: period validity,
+      position arithmetic, document total, tariff match, tariff found.
+      Every receipt (including <code>pay_by</code> deadline) is written to
+      PostgreSQL in a single transaction before dispatching, satisfying the
+      3-year retention requirement under §22 MessZV and §41 EnWG.
+      Approaching <code>pay_by</code> deadlines trigger a rolling REMADV
+      overdue alert.
     </p>
     <a href="{{ '/erp-integration' | relative_url }}#automated-billing-settlement">Billing automation →</a>
   </div>
@@ -296,6 +308,50 @@ let envelopes = process.execute_and_enqueue(SupplierChangeCommand::ReceiveUtilmd
 
 ---
 
+## System Overview
+{: .mt-8 }
+
+```mermaid
+graph LR
+    NB["BDEW counterparty<br/>(NB · MSB · LF)"]
+    subgraph makod [makod :8080 / :4080]
+        ENG["edi-energy<br/>Parse · Validate"]
+        RT["mako-engine<br/>45+ workflows"]
+        DB[("SlateDB")]
+        ENG --> RT --> DB
+    end
+    subgraph marktd [marktd :8180 — Market Data Hub]
+        MDM_DB[("PostgreSQL<br/>MaLo · MeLo · preisblaetter<br/>VersorgungsStatus · NeLo")]
+    end
+    subgraph processd [processd :8580]
+        STP["netz-checker<br/>NB STP ≥95% · LF E_0624"]
+        PROC_DB[("PostgreSQL<br/>decisions · queue")]
+        STP --> PROC_DB
+    end
+    subgraph invoicd [invoicd :8280]
+        CHK["invoic-checker<br/>§22 MessZV receipt"]
+        CHK_DB[("PostgreSQL<br/>invoic_receipts")]
+        CHK --> CHK_DB
+    end
+    subgraph edmd [edmd :8380]
+        EDM[("PostgreSQL<br/>meter reads · imbalance")]
+    end
+    subgraph obsd [obsd :8480]
+        OBS[("PostgreSQL<br/>projections · KPIs")]
+    end
+    ERP["ERP · Alertmanager<br/>Grafana · MCP client"]
+
+    NB <-->|AS4 · REST · iMS| makod
+    DB -->|"de.mako.* CloudEvents"| marktd
+    marktd -->|"de.mako.process.initiated"| processd
+    processd -->|"bestaetigen / ablehnen"| makod
+    processd -->|"GET versorgung / grid / partners"| marktd
+    marktd -->|"EventBus fan-out"| invoicd & edmd & obsd & ERP
+    invoicd -->|"annehmen / ablehnen"| makod
+```
+
+---
+
 ## Workspace at a Glance
 {: .mt-8 }
 
@@ -314,11 +370,16 @@ let envelopes = process.execute_and_enqueue(SupplierChangeCommand::ReceiveUtilmd
 | `mako-gabi-gas` | GaBi Gas — 8 workflows: INVOIC 31007/31008/31010, MSCONS 13013 Allokationsliste MMMA (ORDERS 17110/ORDRSP 19110), ALOCAT (90001–90003), NOMINT/NOMRES (90011–90022), SCHEDL, IMBNOT, TRANOT, DELORD/DELRES |
 | `mako-nbw` | Netzbetreiberwechsel — PARTIN bulk DSO handover *(placeholder)* |
 | `energy-api` | BDEW API-Webdienste Strom — REST/WebSocket client + Axum server |
-| `mako-mdm` | Master data library — `MaloId`, `MeloId`, `Gln`, repository traits, CloudEvents, testing doubles |
-| `makod` | Protocol daemon — all 45 workflows, three ports (`:8080`/`:4080`/`:8090`), SlateDB, OTLP, Cedar ABAC, OIDC/JWT |
-| `mdmd` | Master Data Manager daemon — MaLo/MeLo/contracts/subscriptions, PostgreSQL, OIDC/JWT, `:8180` |
-| `invoicd` | INVOIC plausibility-check daemon (LF role) — auto-settles or disputes GPKE billing via `invoic-checker` |
+| `mako-markt` | Master data library — `MaloId`, `MeloId`, `MarktpartnerId`, repository traits, CloudEvents, testing doubles |
+| `mako-edm` | Energy data library — `MeterDataReceipt`, `TimeSeriesRepository`, `ImbalanceReport`, MSCONS PID set |
+| `mako-obs` | Observability library — `ProcessProjection`, `KpiReport`, `DeadlineRisk`, `ProcessProjectionRepository` |
+| `makod` | Protocol daemon — all 45+ workflows, three ports (`:8080`/`:4080`/`:8090`), SlateDB, OTLP, Cedar ABAC, OIDC/JWT |
+| `marktd` | Market Data Hub — MaLo/MeLo/contracts/price sheets, VersorgungsStatus (with history + `?at=` point-in-time), NeLo (Redispatch 2.0), Cedar ABAC, OIDC/JWT, `:8180` |
+| `invoicd` | INVOIC plausibility-check daemon (LF role) — auto-settles or disputes GPKE billing; persists receipts (§22 MessZV), `:8280` |
+| `edmd` | Energy Data Management daemon — MSCONS meter readings, time-series API, Mehr-/Mindermengen imbalance; PostgreSQL, `:8380` |
+| `obsd` | Business-process observability daemon — process projections, BNetzA KPI reports, overdue alerts; PostgreSQL, `:8480` |
 | `invoic-checker` | INVOIC plausibility library — period, arithmetic, total, tariff-match, and tariff-found checks |
+| `mako-service` | Shared service infrastructure — `ServiceBuilder`, `load_config`, health routes, HMAC-SHA256 webhook verification |
 
 ---
 

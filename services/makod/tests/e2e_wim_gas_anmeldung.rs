@@ -372,13 +372,13 @@ async fn wim_gas_anmeldung_duplicate_receive_rejected() {
     }
 }
 
-// ── Test: APERAK_WINDOW_LABEL is correct ─────────────────────────────────────
+// ── Test: RESPONSE_WINDOW_LABEL is correct ──────────────────────────────────
 
 #[test]
-fn wim_gas_aperak_window_label_is_canonical() {
+fn wim_gas_response_window_label_is_canonical() {
     assert_eq!(
-        mako_wim_gas::ANMELDUNG_APERAK_WINDOW_LABEL,
-        "wim-gas-aperak-10-werktage",
-        "APERAK_WINDOW_LABEL must match the string used in the deadline scheduler",
+        mako_wim_gas::ANMELDUNG_RESPONSE_WINDOW_LABEL,
+        "wim-gas-response-10-werktage",
+        "RESPONSE_WINDOW_LABEL must match the string used in the deadline scheduler",
     );
 }

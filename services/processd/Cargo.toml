@@ -1,0 +1,84 @@
+[package]
+name             = "processd"
+version.workspace = true
+description      = "Process decision engine for German energy market (LF auto-response + NB Anmeldung STP)"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish          = false
+
+# ── Role-gated feature flags ──────────────────────────────────────────────────
+# Compile with exactly the Marktrolle(n) you operate.
+#
+# §7 EnWG (>= 100k Netzkunden): require separate binaries compiled with
+# `lf-only` and `nb-only` respectively. BNetzA examines binary SHA.
+#
+# Features:
+#   role-lf-strom  — LFA E_0624 auto-response, LFN Strom bootstrap
+#   role-lf-gas    — LFA GeLi Gas auto-response
+#   role-nb-strom  — GPKE Anmeldung STP (55001, 55016) via netz-checker
+#   role-nb-gas    — GeLi Gas Anmeldung STP (44001) via netz-checker
+#
+# Compound feature flags:
+#   lf-only    = ["role-lf-strom", "role-lf-gas"]
+#   nb-only    = ["role-nb-strom", "role-nb-gas"]
+#   integrated = all four roles (§6b EnWG combined deployment)
+[features]
+default = []
+
+## LFA E_0624 auto-response + LFN Strom bootstrap.
+role-lf-strom = []
+## LFA GeLi Gas auto-response.
+role-lf-gas   = []
+## GPKE Anmeldung STP for Strom (PIDs 55001, 55016) via `netz-checker`.
+role-nb-strom = []
+## GeLi Gas Anmeldung STP (PID 44001) via `netz-checker`.
+role-nb-gas   = []
+
+## Pure LF deployment (§7 EnWG separated binary — no NB logic compiled in).
+lf-only    = ["role-lf-strom", "role-lf-gas"]
+## Pure NB deployment (§7 EnWG separated binary — no LF logic compiled in).
+nb-only    = ["role-nb-strom", "role-nb-gas"]
+## Integrated §6b EnWG deployment (both LF and NB in one binary).
+integrated = ["role-lf-strom", "role-lf-gas", "role-nb-strom", "role-nb-gas"]
+
+[[bin]]
+name = "processd"
+path = "src/main.rs"
+
+[lib]
+name = "processd"
+path = "src/lib.rs"
+
+[dependencies]
+mako-markt    = { workspace = true, features = ["makod-client", "marktd-client"] }
+netz-checker  = { path = "../../crates/netz-checker" }
+
+anyhow             = { workspace = true }
+thiserror          = { workspace = true }
+axum               = { version = "0.8", features = [] }
+clap               = { version = "4", features = ["derive", "env"] }
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+time               = { workspace = true }
+uuid               = { workspace = true }
+tokio              = { version = "1", features = ["full"] }
+tokio-util         = { workspace = true }
+tracing            = "0.1"
+mako-service       = { workspace = true, features = ["otel", "cedar", "oidc"] }
+rmcp               = { workspace = true }
+schemars           = { workspace = true }
+secrecy            = "0.10"
+subtle             = "2"
+reqwest            = { workspace = true }
+sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "migrate"] }
+
+[dev-dependencies]
+mako-markt   = { workspace = true, features = ["testing"] }
+netz-checker = { path = "../../crates/netz-checker" }
+tokio        = { version = "1", features = ["full"] }
+serde_json   = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }

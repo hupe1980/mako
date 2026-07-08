@@ -87,7 +87,7 @@ pub struct MaloIdentResponsePositive {
     /// The resolved MaLo ID.
     pub malo_id: String,
     /// Metering point operator (MSB) GLN for the MaLo.
-    pub msb_gln: Option<String>,
+    pub msb_mp_id: Option<String>,
 }
 
 /// A negative response from the NB.

@@ -93,7 +93,7 @@ impl MockMsb {
         self.process
             .execute(SteuerungsauftragCommand::ReceiveKonfiguration {
                 tx_id: tx_id.to_owned(),
-                sender_gln: MarktpartnerCode::new(NB_ID),
+                sender_mp_id: MarktpartnerCode::new(NB_ID),
                 location_id: LOCATION_ID.to_owned(),
                 execution_time_from: "2025-01-15T06:00:00Z".to_owned(),
                 max_power_kw: max_power_kw.to_owned(),
@@ -108,7 +108,7 @@ impl MockMsb {
         self.process
             .execute(SteuerungsauftragCommand::ReceiveInitialZustand {
                 tx_id: tx_id.to_owned(),
-                sender_gln: MarktpartnerCode::new(NB_ID),
+                sender_mp_id: MarktpartnerCode::new(NB_ID),
                 location_id: LOCATION_ID.to_owned(),
                 execution_time_from: "2025-01-15T06:00:00Z".to_owned(),
             })
@@ -158,7 +158,7 @@ async fn e2e_wim_steuerungsauftrag_konfiguration_positive() {
     match &state {
         SteuerungsauftragState::Received(d) => {
             assert_eq!(d.tx_id, "TX-STEU-001");
-            assert_eq!(d.sender_gln.as_str(), NB_ID);
+            assert_eq!(d.sender_mp_id.as_str(), NB_ID);
             assert_eq!(d.location_id, LOCATION_ID);
             assert_eq!(d.command_type, SteuerungsCommandType::Konfiguration);
             assert_eq!(d.max_power_kw.as_deref(), Some("7.5"));
@@ -315,7 +315,7 @@ async fn e2e_wim_steuerungsauftrag_duplicate_receive_rejected() {
         .process
         .execute(SteuerungsauftragCommand::ReceiveKonfiguration {
             tx_id: "TX-DUP-002".to_owned(),
-            sender_gln: MarktpartnerCode::new(NB_ID),
+            sender_mp_id: MarktpartnerCode::new(NB_ID),
             location_id: LOCATION_ID.to_owned(),
             execution_time_from: "2025-01-16T06:00:00Z".to_owned(),
             max_power_kw: "6.0".to_owned(),

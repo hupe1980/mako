@@ -175,6 +175,7 @@ pub trait SnapshotStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Snapshot`] on storage failure.
+    #[must_use = "dropping a save Result silently discards a snapshot error"]
     async fn save(&self, snapshot: &Snapshot) -> Result<(), EngineError>;
 
     /// Load the most recent snapshot for `stream_id`.
@@ -184,6 +185,7 @@ pub trait SnapshotStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Snapshot`] on storage failure.
+    #[must_use = "dropping a load Result silently discards a snapshot error"]
     async fn load(&self, stream_id: &StreamId) -> Result<Option<Snapshot>, EngineError>;
 }
 
@@ -217,6 +219,10 @@ impl<S: SnapshotStore> SnapshotStore for Arc<S> {
 /// `EngineBuilder::with_snapshot_store` with a durable backend.
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use = "NoopSnapshotStore discards all snapshots silently — use a persistent SnapshotStore in production"]
+#[cfg_attr(
+    not(any(test, feature = "testing")),
+    deprecated = "NoopSnapshotStore must not be instantiated in production builds; use a durable SnapshotStore instead"
+)]
 pub struct NoopSnapshotStore;
 
 #[cfg(any(test, feature = "testing"))]

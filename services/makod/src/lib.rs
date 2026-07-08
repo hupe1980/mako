@@ -48,3 +48,4 @@ pub mod projection_worker;
 pub mod startup;
 pub mod verzeichnisdienst_worker;
 pub mod webdienste;
+pub mod worker_health;

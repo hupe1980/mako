@@ -1,19 +1,23 @@
 //! Benchmark: event-stream replay latency vs. stream length.
 //!
 //! Measures `EventStore::fold_stream` — the inner loop that `Process::state()`
-//! executes on every command dispatch — over streams of 10, 100, 1 000, and
-//! 10 000 events using [`InMemoryEventStore`].
+//! executes on every command dispatch — over streams of varying length using
+//! [`InMemoryEventStore`].
+//!
+//! The parametric sweep `[10, 50, 100, 200, 500, 2000, 10_000]` provides
+//! fine-grained evidence for:
+//!
+//! - **Linearity guard**: latency / n should remain approximately constant
+//!   across the sweep.  A super-linear growth (e.g. O(n²) from accidental
+//!   Vec cloning) is immediately visible as a diverging ratio.
+//!
+//! - **Snapshot break-even point**: after snapshot integration, the benchmark
+//!   should show the latency plateau at ≤ `snapshot_interval` events once
+//!   snapshots are loaded, regardless of raw stream length.
 //!
 //! Keeping the benchmark on `InMemoryEventStore` eliminates I/O noise so the
 //! numbers reflect deserialization cost (`serde_json::from_slice`) and state
 //! accumulation overhead in isolation.
-//!
-//! # What to look for
-//!
-//! - Latency should scale **linearly** with stream length (baseline O(n)).
-//! - After snapshot integration (`state_with_snapshot`), the 10 000-event case
-//!   should converge toward the 10-event baseline (bounded to ≤100 tail events
-//!   per snapshot interval), validating this.
 //!
 //! # `serde_json::Value` allocation baseline
 //!
@@ -38,7 +42,7 @@
 
 use std::hint::black_box;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mako_engine::{
     envelope::NewEvent,
     error::EngineError,
@@ -47,6 +51,14 @@ use mako_engine::{
     version::WorkflowId,
 };
 use tokio::runtime::Runtime;
+
+/// Stream lengths used for the parametric sweep.
+///
+/// The fine-grained spacing (10 → 50 → 100 → 200 → 500 → 2 000 → 10 000) lets
+/// the Criterion regression harness detect a slope change early: an O(n²) bug
+/// becomes detectable between the 200 and 500 data points rather than only at
+/// the 10 000 endpoint.
+const STREAM_LENGTHS: &[usize] = &[10, 50, 100, 200, 500, 2_000, 10_000];
 
 fn make_rt() -> Runtime {
     tokio::runtime::Builder::new_current_thread()
@@ -104,8 +116,14 @@ fn bench_replay_latency(c: &mut Criterion) {
     let rt = make_rt();
     let mut group = c.benchmark_group("replay_latency");
 
-    for &n in &[10usize, 100, 1_000, 10_000] {
+    for &n in STREAM_LENGTHS {
         let (store, stream) = seeded_store(&rt, n);
+
+        // Throughput expressed as "events per second" — lets Criterion
+        // compute MB/s only if we were measuring bytes; here it normalises
+        // the Y-axis to ns/event which makes the O(n) slope immediately
+        // visible in the HTML report.
+        group.throughput(Throughput::Elements(n as u64));
 
         group.bench_with_input(BenchmarkId::new("fold_stream", n), &n, |b, _| {
             b.to_async(&rt).iter(|| async {
@@ -152,7 +170,9 @@ fn bench_payload_parse_value(c: &mut Criterion) {
     let raw: std::sync::Arc<[u8]> = SAMPLE_PAYLOAD_JSON.as_bytes().into();
     let mut group = c.benchmark_group("payload_allocation");
 
-    for &n in &[10usize, 100, 1_000, 10_000] {
+    for &n in STREAM_LENGTHS {
+        group.throughput(Throughput::Elements(n as u64));
+
         group.bench_with_input(BenchmarkId::new("parse_value", n), &n, |b, &n| {
             b.iter(|| {
                 let mut total: usize = 0;

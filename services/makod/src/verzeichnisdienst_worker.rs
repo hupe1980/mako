@@ -96,9 +96,9 @@ impl VerzeichnisdienstLookup {
     /// Returns [`mako_engine::error::EngineError`] on storage errors.
     pub async fn lookup_malo_ident_url(
         &self,
-        gln: &str,
+        mp_id: &str,
     ) -> Result<Option<Url>, mako_engine::error::EngineError> {
-        let gln_code = MarktpartnerCode::new(gln);
+        let gln_code = MarktpartnerCode::new(mp_id);
 
         // 1. Check the partner store for a cached AW channel.
         if let Some(record) = self.partner_store.get(self.tenant_id, &gln_code).await?
@@ -106,11 +106,11 @@ impl VerzeichnisdienstLookup {
         {
             match Url::parse(url_str) {
                 Ok(url) => {
-                    debug!(gln, url = %url, "Verzeichnisdienst: cache hit in partner store");
+                    debug!(mp_id, url = %url, "Verzeichnisdienst: cache hit in partner store");
                     return Ok(Some(url));
                 }
                 Err(e) => {
-                    warn!(gln, url = url_str, error = %e, "Verzeichnisdienst: stored URL is invalid — re-fetching");
+                    warn!(mp_id, url = url_str, error = %e, "Verzeichnisdienst: stored URL is invalid — re-fetching");
                 }
             }
         }
@@ -118,52 +118,60 @@ impl VerzeichnisdienstLookup {
         // 2. Query the Verzeichnisdienst.
         match self
             .client
-            .get_record(gln, MALO_IDENT_API_ID, MALO_IDENT_MAJOR_VERSION)
+            .get_record(mp_id, MALO_IDENT_API_ID, MALO_IDENT_MAJOR_VERSION)
             .await
         {
             Ok((record, _cert, _sig)) => {
                 let api_url = record.url.clone();
                 info!(
-                    gln,
+                    mp_id,
                     url = %api_url,
                     "Verzeichnisdienst: discovered MaLo-ID endpoint — persisting to partner store"
                 );
 
                 // 3. Persist to partner store so future lookups are instant.
-                self.persist_api_webdienste_url(gln, &gln_code, api_url.as_str())
+                self.persist_api_webdienste_url(mp_id, &gln_code, api_url.as_str())
                     .await;
 
                 Ok(Some(api_url))
             }
             Err(ApiError::NotFound) => {
-                debug!(gln, "Verzeichnisdienst: partner not registered (NotFound)");
+                debug!(
+                    mp_id,
+                    "Verzeichnisdienst: partner not registered (NotFound)"
+                );
                 Ok(None)
             }
             Err(ApiError::Redirect { url }) => {
                 // Follow a single redirect level: re-issue using the redirect URL.
-                info!(gln, redirect_to = %url, "Verzeichnisdienst: received 307 redirect — following");
+                info!(mp_id, redirect_to = %url, "Verzeichnisdienst: received 307 redirect — following");
                 match Url::parse(url.as_ref()) {
                     Ok(redirected_url) => {
                         // Store the redirect target URL as the partner's API-Webdienste endpoint.
-                        self.persist_api_webdienste_url(gln, &gln_code, redirected_url.as_str())
+                        self.persist_api_webdienste_url(mp_id, &gln_code, redirected_url.as_str())
                             .await;
                         Ok(Some(redirected_url))
                     }
                     Err(e) => {
-                        warn!(gln, redirect = %url, error = %e, "Verzeichnisdienst: redirect URL is invalid");
+                        warn!(mp_id, redirect = %url, error = %e, "Verzeichnisdienst: redirect URL is invalid");
                         Ok(None)
                     }
                 }
             }
             Err(e) => {
-                warn!(gln, error = %e, "Verzeichnisdienst: lookup failed — using no URL");
+                warn!(mp_id, error = %e, "Verzeichnisdienst: lookup failed — using no URL");
                 Ok(None)
             }
         }
     }
 
     /// Upsert the `"AW"` channel into the partner store for the given GLN.
-    async fn persist_api_webdienste_url(&self, gln: &str, gln_code: &MarktpartnerCode, url: &str) {
+    async fn persist_api_webdienste_url(
+        &self,
+        mp_id: &str,
+        gln_code: &MarktpartnerCode,
+        url: &str,
+    ) {
         let record = match self.partner_store.get(self.tenant_id, gln_code).await {
             Ok(Some(mut existing)) => {
                 // Update or insert the AW channel.
@@ -184,7 +192,7 @@ impl VerzeichnisdienstLookup {
             Ok(None) => {
                 // Create a minimal record if this partner is not yet in the store.
                 PartnerRecord {
-                    gln: gln_code.clone(),
+                    mp_id: gln_code.clone(),
                     display_name: None,
                     channels: vec![CommunicationChannel::api_webdienste(url)],
                     roles: Vec::new(),
@@ -195,13 +203,13 @@ impl VerzeichnisdienstLookup {
                 }
             }
             Err(e) => {
-                warn!(gln, error = %e, "Verzeichnisdienst: failed to read partner record before upsert");
+                warn!(mp_id, error = %e, "Verzeichnisdienst: failed to read partner record before upsert");
                 return;
             }
         };
 
         if let Err(e) = self.partner_store.upsert(self.tenant_id, &record).await {
-            warn!(gln, error = %e, "Verzeichnisdienst: failed to persist discovered URL to partner store");
+            warn!(mp_id, error = %e, "Verzeichnisdienst: failed to persist discovered URL to partner store");
         }
     }
 }
@@ -240,9 +248,9 @@ pub async fn verzeichnisdienst_refresh_task(lookup: VerzeichnisdienstLookup, int
         );
 
         for partner in partners {
-            let gln = partner.gln.as_str().to_owned();
-            if let Err(e) = lookup.lookup_malo_ident_url(&gln).await {
-                warn!(gln, error = %e, "Verzeichnisdienst refresh: lookup error");
+            let mp_id = partner.mp_id.as_str().to_owned();
+            if let Err(e) = lookup.lookup_malo_ident_url(&mp_id).await {
+                warn!(mp_id, error = %e, "Verzeichnisdienst refresh: lookup error");
             }
         }
 

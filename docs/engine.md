@@ -488,7 +488,9 @@ let endpoint = record.as4_endpoint()
 
 ```
 PartnerRecord {
-    gln:          GlnCode,              // 13-digit GLN (partition key)
+    gln:          MarktpartnerId,       // 13-digit Marktpartner-ID (partition key)
+                                        // May be BDEW-Codenummer (99…), DVGW-Codenummer (98…),
+                                        // or GS1 GLN — use nad_agency_code() to derive NAD DE3055
     display_name: Option<Box<str>>,     // NAD company name
     channels:     Vec<CommunicationChannel>,  // COM segments
       ├── qualifier "AK" → AS4 endpoint URL  (PARTIN AHB 1.0f DE 3155)

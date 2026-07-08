@@ -627,6 +627,9 @@ pub struct OutboxWorker<OS: OutboxStore, S: As4Sender> {
     max_attempts: u32,
     /// Sink for messages that exceed `max_attempts`.
     dead_letter_sink: std::sync::Arc<dyn crate::dead_letter::DeadLetterSink>,
+    /// Optional liveness heartbeat — stores the current UTC Unix timestamp
+    /// (seconds) after each poll cycle so health probes can detect stale workers.
+    heartbeat: Option<std::sync::Arc<std::sync::atomic::AtomicI64>>,
 }
 
 /// Compute a full-jitter exponential backoff delay.
@@ -745,6 +748,26 @@ impl<OS: OutboxStore, S: As4Sender> OutboxWorker<OS, S> {
                                 );
                             }
                         }
+                        // APERAK AHB 1.0 §2.4.1: Strom UTILMD/ORDERS APERAK must be
+                        // delivered within 45 minutes on weekdays, or by Sunday 12:00
+                        // if received on Saturday.  Log a compliance warning if the
+                        // delivery window was missed so operators can investigate.
+                        if msg.message_type.as_ref() == "APERAK" {
+                            let elapsed = time::OffsetDateTime::now_utc() - msg.created_at;
+                            if elapsed
+                                > time::Duration::minutes(
+                                    crate::fristen::APERAK_STROM_WEEKDAY_MINUTES,
+                                )
+                            {
+                                tracing::warn!(
+                                    message_id   = %msg.message_id,
+                                    elapsed_mins = elapsed.whole_minutes(),
+                                    "outbox worker: APERAK delivered after the 45-minute Strom \
+                                     sending window (APERAK AHB 1.0 §2.4.1) — \
+                                     check OutboxWorker and AS4 transport health"
+                                );
+                            }
+                        }
                     }
                     // Permanent error: dead-letter immediately without retrying.
                     // PartnerUnknown requires operator intervention (add --as4-partner);
@@ -809,6 +832,14 @@ impl<OS: OutboxStore, S: As4Sender> OutboxWorker<OS, S> {
                     }
                 }
             }
+            // Tick liveness heartbeat at the end of every poll cycle so the
+            // health endpoint can detect a stale (hung) outbox worker.
+            if let Some(ref hb) = self.heartbeat {
+                hb.store(
+                    time::OffsetDateTime::now_utc().unix_timestamp(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
         }
     }
 }
@@ -848,7 +879,24 @@ where
             poll_interval,
             max_attempts,
             dead_letter_sink: self.dead_letter_sink.clone(),
+            heartbeat: None,
         }
+    }
+}
+
+impl<OS: OutboxStore, S: As4Sender> OutboxWorker<OS, S> {
+    /// Attach a liveness heartbeat to this worker.
+    ///
+    /// The worker will store the current UTC Unix timestamp (seconds) into
+    /// `heartbeat` at the end of every poll cycle.  Pass the same
+    /// `Arc<AtomicI64>` to the health endpoint so it can detect stale workers.
+    #[must_use]
+    pub fn with_heartbeat(
+        mut self,
+        heartbeat: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    ) -> Self {
+        self.heartbeat = Some(heartbeat);
+        self
     }
 }
 
@@ -962,6 +1010,9 @@ pub struct DeadlineScheduler<DS: DeadlineStore> {
     >,
     batch_size: usize,
     poll_interval: std::time::Duration,
+    /// Optional liveness heartbeat — stores the current UTC Unix timestamp
+    /// (seconds) after each poll cycle.
+    heartbeat: Option<std::sync::Arc<std::sync::atomic::AtomicI64>>,
 }
 
 impl<DS: DeadlineStore> DeadlineScheduler<DS> {
@@ -1022,7 +1073,31 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
             }
 
             // If has_more, loop immediately to drain the batch.
+
+            // Tick liveness heartbeat at the end of every poll cycle so the
+            // health endpoint can detect a stale (hung) deadline scheduler.
+            if let Some(ref hb) = self.heartbeat {
+                hb.store(
+                    time::OffsetDateTime::now_utc().unix_timestamp(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
         }
+    }
+}
+
+impl<DS: DeadlineStore> DeadlineScheduler<DS> {
+    /// Attach a liveness heartbeat to this scheduler.
+    ///
+    /// The scheduler will store the current UTC Unix timestamp (seconds) into
+    /// `heartbeat` at the end of every poll cycle.
+    #[must_use]
+    pub fn with_heartbeat(
+        mut self,
+        heartbeat: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    ) -> Self {
+        self.heartbeat = Some(heartbeat);
+        self
     }
 }
 
@@ -1069,6 +1144,7 @@ where
             dispatch: Box::new(move |d| Box::pin(dispatch(d))),
             batch_size,
             poll_interval,
+            heartbeat: None,
         }
     }
 }
@@ -1617,6 +1693,12 @@ where
         // errors or incorrect audit trails.
         let mut pid_router = PidRouter::new();
         let mut pid_owners: std::collections::HashMap<u32, &str> = std::collections::HashMap::new();
+        // Keep each module's scratch router so we can build `pid_router` from
+        // them in a second pass with the resolved ownership table.
+        let mut module_scratches: Vec<PidRouter> = Vec::with_capacity(self.modules.len());
+
+        // Pass 1 — detect conflicts, determine PID ownership (first-wins for
+        // explicit roles, last-wins for DeploymentRoles::all()).
         for module in &self.modules {
             // Temporarily build a scratch router to read this module's PIDs
             // for cross-module overlap detection (module-ownership level).
@@ -1645,22 +1727,48 @@ where
                         );
                         let _ = prev; // suppress unused-variable warning when tracing is off
                     } else {
-                        panic!(
-                            "EngineBuilder::build: PID {pid} is claimed by both \
-                             '{prev}' and '{}' — overlapping PID registrations are \
-                             not allowed with explicit DeploymentRoles; each PID must be \
-                             owned by exactly one module.\n  \
-                             Hint: use EngineBuilder::with_deployment_roles to restrict \
-                             role-conditional PIDs so only one module registers each PID.\n  \
-                             Example: with_deployment_roles(DeploymentRoles::nb()) ensures \
-                             GPKE registers ORDRSP 19001/19002, not WiM.",
+                        // Explicit roles: the FIRST module to register a PID retains ownership.
+                        // Restore the previous (first) owner and emit a warning so the operator
+                        // can investigate.  A panic would be too strict: some shared PIDs
+                        // (e.g. REMADV 33001/33002) are legitimately claimed by both GPKE and
+                        // WiM billing; conversation-ID routing is the long-term solution, but
+                        // first-wins gives correct behaviour for all current deployments.
+                        pid_owners.insert(pid, prev); // restore first owner
+                        #[cfg(feature = "tracing")]
+                        tracing::warn!(
+                            pid,
+                            first_module = prev,
+                            second_module = module.name(),
+                            "PID {pid} claimed by both '{prev}' and '{}' with explicit \
+                             DeploymentRoles; first module ('{prev}') retains ownership. \
+                             Verify PID registration is correct for this deployment.",
                             module.name(),
                         );
+                        #[cfg(not(feature = "tracing"))]
+                        let _ = prev; // suppress unused-variable warning when tracing is off
                     }
                 }
             }
-            // Register into the real router with conflict detection.
-            module.register_pids_with_roles(&mut pid_router, &self.deployment_roles);
+            module_scratches.push(scratch);
+        }
+
+        // Pass 2 — build the real `pid_router` from the scratch pads, respecting
+        // the ownership table built in pass 1.
+        for (module, scratch) in self.modules.iter().zip(module_scratches.iter()) {
+            // Unambiguous (Sparte-agnostic) entries: only register if this module
+            // owns the PID in the resolved ownership table.
+            for pid in scratch.registered_pids() {
+                if pid_owners.get(&pid).copied() == Some(module.name())
+                    && let Some(wf) = scratch.route(pid)
+                {
+                    pid_router.register(pid, wf);
+                }
+            }
+            // Commodity (Sparte-qualified) entries use distinct (pid, Sparte) keys
+            // and never conflict across modules; register them all unconditionally.
+            for (pid, sparte, wf) in scratch.registered_commodity_entries() {
+                pid_router.register_with_sparte(pid, sparte, wf);
+            }
         }
         let registered_modules = self.modules.iter().map(|m| m.name()).collect();
         let registered_workflows = self
@@ -1933,10 +2041,10 @@ mod tests {
         assert_eq!(ctx.pid_router().route(19_015), Some("workflow-b"));
     }
 
-    /// Verify that explicit roles with two conflicting modules panic at build time.
+    /// Verify that explicit roles with two conflicting modules use first-wins semantics
+    /// (the first module to register a PID retains ownership; the second is silently skipped).
     #[test]
-    #[should_panic(expected = "overlapping PID registrations")]
-    fn register_pids_with_roles_conflict_panics_with_explicit_roles() {
+    fn register_pids_with_roles_conflict_uses_first_wins_with_explicit_roles() {
         use crate::marktrolle::{DeploymentRoles, Marktrolle};
 
         struct ConflictA;
@@ -1963,8 +2071,9 @@ mod tests {
             }
         }
 
-        // from_roles([Nb, Nmsb]): both modules fire → panic (overlapping PIDs).
-        let _ = EngineBuilder::new()
+        // from_roles([Nb, Nmsb]): both modules fire for PID 19_001.
+        // First-wins: ConflictA (registered first) retains ownership → "workflow-a".
+        let ctx = EngineBuilder::new()
             .with_event_store(InMemoryEventStore::new())
             .with_deployment_roles(DeploymentRoles::from_roles([
                 Marktrolle::Nb,
@@ -1973,5 +2082,10 @@ mod tests {
             .register(Box::new(ConflictA))
             .register(Box::new(ConflictB))
             .build();
+        assert_eq!(
+            ctx.pid_router().route(19_001),
+            Some("workflow-a"),
+            "first module should win on PID conflict with explicit roles"
+        );
     }
 }

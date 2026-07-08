@@ -1,0 +1,47 @@
+[package]
+name             = "mako-markt"
+version.workspace = true
+description      = "Market data library for German energy market (MaKo/marktd)"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords         = ["energy", "mako", "bdew", "market-data", "bo4e"]
+categories       = ["data-structures", "web-programming"]
+
+[features]
+## Enables `InMemoryMaloRepository`, `InMemoryCorrelationIndex`, and other
+## in-memory test doubles.  Must never appear in production builds.
+testing = []
+## Enables `MakodClient` — the typed HTTP client for the `makod` admin and
+## command APIs.  Pulls in `reqwest` (TLS, JSON).  Enable this only in
+## binaries that call `makod` directly (e.g. `marktd`).
+makod-client = ["dep:reqwest"]
+## Enables `MarktdClient` — the typed HTTP client for the `marktd` data hub APIs.
+## Pulls in `reqwest`.  Enable in binaries that read from `marktd`
+## (e.g. `processd`, `invoicd`).
+marktd-client = ["dep:reqwest"]
+
+[dependencies]
+rubo4e      = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+time        = { workspace = true }
+time-tz     = { workspace = true }
+uuid        = { workspace = true }
+# reqwest: HTTP *client* only — no server framework dependency.
+# Gated behind the `makod-client` feature so library users that don't call
+# makod don't pay the binary-size and compile-time cost of reqwest.
+reqwest     = { version = "0.13", default-features = false, features = ["json", "rustls", "query"], optional = true }
+tokio       = { version = "1", features = ["sync", "rt"] }
+tracing     = { version = "0.1", default-features = false, features = ["log", "attributes"] }
+hmac        = { version = "0.12", features = ["std"] }
+sha2        = { version = "0.10" }
+subtle      = "2"
+secrecy     = "0.10"
+
+[dev-dependencies]
+tokio      = { version = "1", features = ["full"] }
+serde_json = { workspace = true }

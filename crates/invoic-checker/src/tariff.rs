@@ -1,154 +1,128 @@
-//! Tariff store — seeded from PRICAT EDIFACT messages.
+//! Price-sheet store — seeded from PRICAT 27003 EDIFACT messages.
 //!
-//! [`TariffStore`] is the trait that the check engine uses to validate INVOIC
-//! unit prices against the NB's published tariff.  [`InMemoryTariffStore`] is
-//! the reference implementation used by `invoicd` (seeded from PRICAT 27003)
-//! and in unit tests.
+//! [`PreisblattStore`] is the trait the check engine uses to validate INVOIC
+//! unit prices against the NB's published [`PreisblattNetznutzung`].
+//! [`InMemoryPreisblattStore`] is the reference implementation used by
+//! `invoicd` (seeded at startup from `marktd`'s price-sheet API) and in tests.
 //!
-//! # Tariff seeding pipeline
+//! # Price-sheet seeding pipeline
 //!
 //! ```text
 //! PRICAT 27003 (NB → LF via AS4)
 //!   → makod processes + emits de.mako.process.completed{pid=27003}
-//!   → invoicd TariffStore::upsert(nb_gln, entry)
-//!   → INVOIC 31001 from same NB GLN arrives
-//!   → InvoicCheckEngine::check(&summary, &tariff_store, &config)
-//!       → TariffStore::get(nb_gln, billing_date) → Some(TariffEntry)
-//!       → compare INVOIC unit_price against TariffEntry::unit_price ± tolerance
+//!   → marktd: PUT /api/v1/preisblaetter/{nb_mp_id}  (persisted to PostgreSQL)
+//!   → invoicd: GET /api/v1/preisblaetter/{nb_mp_id}?date={billing_date}
+//!       → MdmdPreisblattClient (1h LRU cache, circuit breaker)
+//!   → InvoicCheckEngine::check(&rechnung, &preisblatt_store, &config)
+//!       → PreisblattStore::get(nb_mp_id, billing_date) → Some(PreisblattNetznutzung)
+//!       → compare INVOIC einzelpreis against preisblatt.preispositionen[*].preisstaffeln[*].einheitspreis ± tolerance
 //! ```
 //!
 //! # Temporal lookup
 //!
-//! Tariff entries are keyed by `(publisher_gln, pricat_pid)`.  Multiple entries
-//! for the same GLN + PID can coexist at different effective dates.
-//! [`TariffStore::get`] returns the entry whose `valid_from ≤ billing_date` and
-//! `valid_to.is_none() || valid_to > billing_date`.  When multiple entries match,
-//! the most recent `valid_from` wins.
+//! Entries are keyed by `nb_mp_id`.  Multiple `PreisblattNetznutzung` records
+//! for the same GLN can coexist at different validity periods.
+//! [`PreisblattStore::get`] returns the sheet whose
+//! `gueltigkeit.startdatum ≤ billing_date < gueltigkeit.enddatum`
+//! (open-ended `enddatum` is treated as ∞).
+//! When multiple sheets match, the one with the most recent `startdatum` wins.
 
 use std::collections::HashMap;
 
-use crate::amount::EuroAmount;
-
-// ── Domain types ──────────────────────────────────────────────────────────────
-
-/// A single tariff entry extracted from a PRICAT message.
-///
-/// `TariffEntry` represents one price list item — typically the NNE
-/// (Netznutzungsentgelt), Messentgelt, or Ausgleichsenergiepreis published
-/// by an NB/MSB/BIKO via PRICAT.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct TariffEntry {
-    /// GLN of the price list publisher (NB / MSB / BIKO).
-    pub publisher_gln: String,
-    /// BDEW Prüfidentifikator of the source PRICAT message:
-    /// - `27001` — Ausgleichsenergiepreise (BIKO → LF)
-    /// - `27002` — MSB service price list (MSB → LF)
-    /// - `27003` — NB service price list (NB → LF)
-    pub pricat_pid: u32,
-    /// Effective start date (YYYYMMDD) of this tariff.
-    pub valid_from: String,
-    /// Effective end date (YYYYMMDD), exclusive.  `None` = open-ended.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub valid_to: Option<String>,
-    /// Charge category identifier (e.g. `"NNE"`, `"MESSUNG"`, `"MMM"`).
-    pub charge_category: String,
-    /// Published unit price (EUR per kWh or EUR per period, depending on category).
-    pub unit_price: EuroAmount,
-    /// Tolerance fraction for price comparison.
-    ///
-    /// `0.01` = 1 %.  When the INVOIC unit price is within this tolerance of
-    /// `unit_price`, the tariff check passes.
-    pub tolerance: f64,
-}
+use rubo4e::v202501::PreisblattNetznutzung;
 
 // ── Trait ─────────────────────────────────────────────────────────────────────
 
-/// Read-only access to the LF's tariff database.
+/// Read-only access to the NB price-sheet database.
 ///
-/// `invoicd` injects a concrete implementation (e.g. [`InMemoryTariffStore`])
-/// seeded from incoming PRICAT messages.
-pub trait TariffStore {
-    /// Find the most recent tariff entry for `publisher_gln` that was effective
-    /// on `billing_date` (YYYYMMDD string, e.g. `"20250101"`).
+/// `invoicd` injects a concrete implementation (e.g. [`InMemoryPreisblattStore`]
+/// seeded from `marktd`'s price-sheet API) at check time.
+pub trait PreisblattStore {
+    /// Find the most recent `PreisblattNetznutzung` for `nb_mp_id` that was
+    /// effective on `billing_date`.
     ///
-    /// Returns `None` when no matching entry is found — the check engine treats
-    /// a missing tariff as a warning (not a dispute) by default.
-    fn get(&self, publisher_gln: &str, billing_date: &str) -> Option<&TariffEntry>;
+    /// Returns `None` when no matching price sheet is found — the check engine
+    /// treats a missing price sheet as a warning (never a hard dispute) by
+    /// default.
+    fn get(&self, nb_mp_id: &str, billing_date: time::Date) -> Option<&PreisblattNetznutzung>;
 
     /// Return `true` when the store has at least one entry for the given GLN.
-    fn has_tariff_for(&self, publisher_gln: &str) -> bool {
-        self.get(publisher_gln, "99991231").is_some()
+    fn has_preisblatt_for(&self, nb_mp_id: &str) -> bool {
+        self.get(nb_mp_id, time::macros::date!(9999 - 12 - 31))
+            .is_some()
     }
 }
 
-// ── InMemoryTariffStore ───────────────────────────────────────────────────────
+// ── InMemoryPreisblattStore ───────────────────────────────────────────────────
 
-/// In-memory tariff store backed by a `HashMap<gln, Vec<TariffEntry>>`.
+/// In-memory price-sheet store backed by a `HashMap<gln, Vec<PreisblattNetznutzung>>`.
 ///
-/// Entries are stored sorted by `valid_from` descending so that
-/// [`TariffStore::get`] can find the most recent valid entry in O(n) per GLN.
+/// Entries are stored sorted by `gueltigkeit.startdatum` descending so that
+/// [`PreisblattStore::get`] can find the most recent valid sheet in O(n) per GLN.
 ///
-/// Suitable for `invoicd` (persist entries via PostgreSQL; load into this
-/// store at startup) and for unit tests.
+/// Suitable for `invoicd` (cache populated from `marktd`'s price-sheet API at
+/// startup) and for unit tests.
 #[derive(Debug, Default)]
-pub struct InMemoryTariffStore {
-    /// Entries grouped by publisher GLN.  Within each list, entries are
-    /// stored in descending `valid_from` order so we scan from newest to oldest.
-    entries: HashMap<String, Vec<TariffEntry>>,
+pub struct InMemoryPreisblattStore {
+    inner: HashMap<String, Vec<PreisblattNetznutzung>>,
 }
 
-impl InMemoryTariffStore {
+impl InMemoryPreisblattStore {
     /// Create an empty store.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Insert a [`TariffEntry`].
-    ///
-    /// Entries with the same `publisher_gln + pricat_pid + valid_from` replace
-    /// each other (last write wins).
-    pub fn insert(&mut self, entry: TariffEntry) {
-        let list = self.entries.entry(entry.publisher_gln.clone()).or_default();
-        // Replace existing entry with the same primary key or insert.
-        if let Some(existing) = list.iter_mut().find(|e| {
-            e.pricat_pid == entry.pricat_pid
-                && e.valid_from == entry.valid_from
-                && e.charge_category == entry.charge_category
-        }) {
-            *existing = entry;
-        } else {
-            list.push(entry);
-            // Keep sorted newest-first.
-            list.sort_by(|a, b| b.valid_from.cmp(&a.valid_from));
+        Self {
+            inner: HashMap::new(),
         }
     }
 
-    /// Return all entries for a given publisher GLN.
-    #[must_use]
-    pub fn entries_for(&self, publisher_gln: &str) -> &[TariffEntry] {
-        self.entries
-            .get(publisher_gln)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
+    /// Insert a `PreisblattNetznutzung` for the given NB GLN.
+    ///
+    /// After insertion the list is **not** automatically re-sorted; call
+    /// [`sort`][Self::sort] once all entries are loaded if insertion order
+    /// matters.
+    pub fn insert(&mut self, nb_mp_id: String, sheet: PreisblattNetznutzung) {
+        self.inner.entry(nb_mp_id).or_default().push(sheet);
     }
 
-    /// Number of distinct GLNs with at least one tariff entry.
-    #[must_use]
-    pub fn publisher_count(&self) -> usize {
-        self.entries.len()
+    /// Sort all entry lists by `gueltigkeit.startdatum` descending so that
+    /// [`PreisblattStore::get`] returns the most-recently-valid sheet first.
+    ///
+    /// Uses the `validity()` convenience method from rubo4e v0.3 — direct
+    /// `time::Date` comparison with no intermediate string allocation.
+    pub fn sort(&mut self) {
+        for sheets in self.inner.values_mut() {
+            sheets.sort_by(|a, b| {
+                let a_start = a.validity().map(|(s, _)| s);
+                let b_start = b.validity().map(|(s, _)| s);
+                b_start.cmp(&a_start)
+            });
+        }
     }
 }
 
-impl TariffStore for InMemoryTariffStore {
-    fn get(&self, publisher_gln: &str, billing_date: &str) -> Option<&TariffEntry> {
-        let entries = self.entries.get(publisher_gln)?;
-        // Entries are sorted newest-first.  Find the first entry where
-        // valid_from ≤ billing_date AND (valid_to is None OR valid_to > billing_date).
-        entries.iter().find(|e| {
-            e.valid_from.as_str() <= billing_date
-                && e.valid_to.as_deref().is_none_or(|to| to > billing_date)
-        })
+impl PreisblattStore for InMemoryPreisblattStore {
+    fn get(&self, nb_mp_id: &str, billing_date: time::Date) -> Option<&PreisblattNetznutzung> {
+        let sheets = self.inner.get(nb_mp_id)?;
+        sheets.iter().find(|s| sheet_is_valid(s, billing_date))
+    }
+}
+
+// ── Helper functions ──────────────────────────────────────────────────────────
+
+/// Return `true` when `billing_date` falls within the sheet's validity window.
+///
+/// Uses the `validity()` convenience method from rubo4e v0.3 for direct
+/// `time::Date` comparison — no string allocation or formatting needed.
+///
+/// Window: `startdatum <= billing_date` AND (`enddatum` absent OR `billing_date < enddatum`)
+/// A missing `gueltigkeit` or missing `startdatum` means open-started (always valid from the past).
+/// A missing `enddatum` means open-ended (valid until replaced).
+fn sheet_is_valid(sheet: &PreisblattNetznutzung, billing_date: time::Date) -> bool {
+    match sheet.validity() {
+        None => true,
+        Some((start, None)) => billing_date >= start,
+        Some((start, Some(end))) => billing_date >= start && billing_date < end,
     }
 }
 
@@ -156,109 +130,53 @@ impl TariffStore for InMemoryTariffStore {
 
 #[cfg(test)]
 mod tests {
+    use rubo4e::v202501::{PreisblattNetznutzung, Zeitraum};
+    use time::macros::date;
+
     use super::*;
 
-    fn make_entry(gln: &str, valid_from: &str, valid_to: Option<&str>, price: i64) -> TariffEntry {
-        TariffEntry {
-            publisher_gln: gln.to_owned(),
-            pricat_pid: 27003,
-            valid_from: valid_from.to_owned(),
-            valid_to: valid_to.map(|s| s.to_owned()),
-            charge_category: "NNE".to_owned(),
-            unit_price: EuroAmount(price),
-            tolerance: 0.01,
+    fn make_sheet(start: Option<time::Date>, end: Option<time::Date>) -> PreisblattNetznutzung {
+        let gueltigkeit = if start.is_some() || end.is_some() {
+            Some(Zeitraum {
+                startdatum: start,
+                enddatum: end,
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+        PreisblattNetznutzung {
+            gueltigkeit,
+            ..Default::default()
         }
     }
 
     #[test]
-    fn insert_and_get_single_entry() {
-        let mut store = InMemoryTariffStore::new();
-        store.insert(make_entry("9900357000004", "20250101", None, 3_456));
+    fn test_store_get_finds_valid_sheet() {
+        let mut store = InMemoryPreisblattStore::new();
+        let sheet = make_sheet(Some(date!(2025 - 01 - 01)), Some(date!(2026 - 01 - 01)));
+        store.insert("9900000000001".to_owned(), sheet);
 
-        let entry = store.get("9900357000004", "20250601");
-        assert!(entry.is_some());
-        assert_eq!(entry.unwrap().unit_price, EuroAmount(3_456));
+        assert!(store.get("9900000000001", date!(2025 - 06 - 01)).is_some());
+        assert!(store.get("9900000000001", date!(2024 - 12 - 31)).is_none());
+        assert!(store.get("9900000000001", date!(2026 - 01 - 01)).is_none()); // exclusive end
+        assert!(store.get("9900000000999", date!(2025 - 06 - 01)).is_none()); // unknown mp_id
     }
 
     #[test]
-    fn get_unknown_gln_returns_none() {
-        let store = InMemoryTariffStore::new();
-        assert!(store.get("unknown", "20250601").is_none());
+    fn test_store_open_ended_sheet() {
+        let mut store = InMemoryPreisblattStore::new();
+        let sheet = make_sheet(Some(date!(2025 - 01 - 01)), None);
+        store.insert("9900000000002".to_owned(), sheet);
+        assert!(store.get("9900000000002", date!(2099 - 12 - 30)).is_some());
     }
 
     #[test]
-    fn get_before_valid_from_returns_none() {
-        let mut store = InMemoryTariffStore::new();
-        store.insert(make_entry("9900357000004", "20250101", None, 3_456));
-        // Query for a date before the tariff is effective.
-        assert!(store.get("9900357000004", "20241231").is_none());
-    }
-
-    #[test]
-    fn get_after_valid_to_returns_none() {
-        let mut store = InMemoryTariffStore::new();
-        store.insert(make_entry(
-            "9900357000004",
-            "20250101",
-            Some("20251231"),
-            3_456,
-        ));
-        // Query for a date after validity ended.
-        assert!(store.get("9900357000004", "20260101").is_none());
-    }
-
-    #[test]
-    fn get_returns_most_recent_effective_entry() {
-        let mut store = InMemoryTariffStore::new();
-        // Old tariff: 2024 rate.
-        store.insert(make_entry(
-            "9900357000004",
-            "20240101",
-            Some("20241231"),
-            3_000,
-        ));
-        // New tariff: 2025 rate.
-        store.insert(make_entry("9900357000004", "20250101", None, 3_456));
-
-        // Query mid-2025 — should return the 2025 entry.
-        let entry = store.get("9900357000004", "20250601").unwrap();
-        assert_eq!(entry.unit_price, EuroAmount(3_456));
-        assert_eq!(entry.valid_from, "20250101");
-    }
-
-    #[test]
-    fn get_returns_old_entry_within_its_validity() {
-        let mut store = InMemoryTariffStore::new();
-        store.insert(make_entry(
-            "9900357000004",
-            "20240101",
-            Some("20241231"),
-            3_000,
-        ));
-        store.insert(make_entry("9900357000004", "20250101", None, 3_456));
-
-        // Query mid-2024 — should return the 2024 entry.
-        let entry = store.get("9900357000004", "20240601").unwrap();
-        assert_eq!(entry.unit_price, EuroAmount(3_000));
-    }
-
-    #[test]
-    fn has_tariff_for_present_and_absent() {
-        let mut store = InMemoryTariffStore::new();
-        store.insert(make_entry("9900357000004", "20250101", None, 3_456));
-        assert!(store.has_tariff_for("9900357000004"));
-        assert!(!store.has_tariff_for("unknown"));
-    }
-
-    #[test]
-    fn insert_replaces_same_primary_key() {
-        let mut store = InMemoryTariffStore::new();
-        store.insert(make_entry("9900357000004", "20250101", None, 3_456));
-        // Upsert same key with updated price.
-        store.insert(make_entry("9900357000004", "20250101", None, 4_000));
-        let entry = store.get("9900357000004", "20250601").unwrap();
-        // Should return updated price.
-        assert_eq!(entry.unit_price, EuroAmount(4_000));
-        assert_eq!(store.entries_for("9900357000004").len(), 1);
+    fn test_has_preisblatt_for() {
+        let mut store = InMemoryPreisblattStore::new();
+        let sheet = make_sheet(None, None);
+        store.insert("9900000000003".to_owned(), sheet);
+        assert!(store.has_preisblatt_for("9900000000003"));
+        assert!(!store.has_preisblatt_for("9900000000999"));
     }
 }

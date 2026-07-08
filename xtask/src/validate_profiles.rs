@@ -109,6 +109,15 @@ struct AhbProfile {
     // Added in  source document title.
     #[serde(default)]
     source_document: Option<String>,
+    /// Human reviewer of this profile before promotion to production.
+    ///
+    /// Required for `fv2026*` and later profiles to ensure no draft-extracted
+    /// profile is shipped without human validation (F-013).
+    #[serde(default)]
+    reviewed_by: Option<String>,
+    /// ISO 8601 date when this profile was reviewed and promoted.
+    #[serde(default)]
+    reviewed_at: Option<String>,
     pruefidentifikatoren: Vec<PruefidentifikatorEntry>,
 }
 
@@ -489,6 +498,31 @@ fn check_profile(
     // In that case we skip the folder-name vs release check but still require all
     // three JSON files to agree on the release value.
     let is_fv_dir = expected_release.starts_with("fv");
+
+    // F-013: For FV2026-10-01 and later profiles, require human review provenance.
+    // Profiles promoted from an auto-generated draft without review risk incorrect
+    // segment-group validation against the AHB. We require `reviewed_by` in
+    // ahb.json for all `fv2026*` (and later) profiles.
+    //
+    // FV2025 profiles are grandfathered. FV2026+ must have been reviewed.
+    if is_fv_dir {
+        let after_2025 = expected_release
+            .trim_start_matches("fv")
+            .split('_')
+            .next()
+            .and_then(|s| s.parse::<u32>().ok())
+            .map(|v| v > 20_260_101) // any date after 2026-01-01
+            .unwrap_or(false);
+        if after_2025 && ahb.reviewed_by.is_none() {
+            warnings.push(format!(
+                "{rel_prefix}/ahb.json  missing `reviewed_by` field — \
+                 FV2026+ profiles must be reviewed before production use. \
+                 Add {{\"reviewed_by\": \"<reviewer>\", \"reviewed_at\": \"<ISO-date>\"}} \
+                 to confirm a human validated this profile against the BDEW AHB PDF. \
+                 See FINDINGS.md F-013."
+            ));
+        }
+    }
 
     if !is_fv_dir {
         if mig.release != expected_release {

@@ -474,7 +474,7 @@ async fn dead_letter_persists_and_lists() {
     let handle = tokio::spawn(worker.run());
 
     sink.reject(&DeadLetterReason::UnknownPid {
-        pid: 55001,
+        pid: mako_engine::ids::Pid::new(55001),
         context: mako_engine::dead_letter::AuditContext::now(),
     });
 
@@ -506,7 +506,7 @@ async fn dead_letter_list_recent_order_and_limit() {
 
     let reasons = [
         DeadLetterReason::UnknownPid {
-            pid: 55001,
+            pid: mako_engine::ids::Pid::new(55001),
             context: mako_engine::dead_letter::AuditContext::now(),
         },
         DeadLetterReason::UnknownConversation {

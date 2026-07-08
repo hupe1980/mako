@@ -43,7 +43,7 @@ fn gnb_gln() -> MarktpartnerCode {
     MarktpartnerCode::new("9900357000004")
 }
 
-fn lf_gln() -> MarktpartnerCode {
+fn lf_mp_id() -> MarktpartnerCode {
     MarktpartnerCode::new("4012345000023")
 }
 
@@ -55,7 +55,7 @@ fn receive_invoic_cmd(validation_passed: bool) -> GeliGasSperrprozesseInvoicComm
     GeliGasSperrprozesseInvoicCommand::ReceiveInvoic {
         pid: Pruefidentifikator::new(31011).unwrap(),
         sender: gnb_gln(),
-        recipient: lf_gln(),
+        recipient: lf_mp_id(),
         invoice_ref: msg("INV-2025-001"),
         document_date: "20250601".to_owned(),
         validation_passed,
@@ -181,7 +181,7 @@ async fn domain_data_preserved_in_validation_passed() {
     let p = make_process();
 
     let sender = gnb_gln();
-    let recipient = lf_gln();
+    let recipient = lf_mp_id();
     let inv_ref = msg("INV-DATA-001");
 
     p.execute(GeliGasSperrprozesseInvoicCommand::ReceiveInvoic {

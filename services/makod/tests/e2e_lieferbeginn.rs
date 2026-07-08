@@ -48,12 +48,12 @@ use makod::{
     adapters::{gpke_lf_anmeldung_registry, gpke_registry},
     config::PartyConfig,
     edifact_renderer::render_to_wire_bytes,
-    party_registry::GlnRegistry,
+    party_registry::MpIdRegistry,
 };
 
-fn make_registry(gln: &str, role: &str) -> GlnRegistry {
-    GlnRegistry::from_config(&[PartyConfig {
-        gln: gln.to_owned(),
+fn make_registry(mp_id: &str, role: &str) -> MpIdRegistry {
+    MpIdRegistry::from_config(&[PartyConfig {
+        mp_id: mp_id.to_owned(),
         roles: vec![role.to_owned()],
         primary: true,
         agency: None,
@@ -248,6 +248,7 @@ impl MockNb {
                     document_date,
                     process_date,
                     message_ref,
+                    received_at: time::OffsetDateTime::now_utc(),
                     validation_passed: true, // bypass AHB profile check
                     validation_errors: vec![],
                 }

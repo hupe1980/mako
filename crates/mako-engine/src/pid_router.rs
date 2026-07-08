@@ -296,6 +296,21 @@ impl PidRouter {
         self.table.keys().copied()
     }
 
+    /// Return an iterator over all commodity-qualified routing entries.
+    ///
+    /// Yields `(pid, sparte, workflow_name)` tuples.
+    ///
+    /// Used by [`EngineBuilder`] to copy sparte-qualified entries from a scratch
+    /// router into the real [`PidRouter`] without conflict detection (commodity
+    /// entries use distinct `(pid, sparte)` keys and never conflict across modules).
+    ///
+    /// [`EngineBuilder`]: crate::builder::EngineBuilder
+    pub fn registered_commodity_entries(&self) -> impl Iterator<Item = (u32, Sparte, &str)> + '_ {
+        self.commodity_table
+            .iter()
+            .map(|((pid, sparte), wf)| (*pid, *sparte, wf.as_ref()))
+    }
+
     /// Return a sorted, deduplicated list of all workflow names registered in
     /// this router (across both the unambiguous table and commodity-qualified
     /// table).

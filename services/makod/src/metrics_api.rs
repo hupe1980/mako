@@ -74,6 +74,12 @@ pub struct MetricsState {
     cedar: Arc<CedarAuthorizer>,
     /// Operator tenant identifier (GLN).
     tenant_id: String,
+    /// Whether the daemon started with volatile (in-memory) storage.
+    ///
+    /// Exposed as `makod_volatile_mode_active 1` in the Prometheus scrape so
+    /// operators can alert when a production instance accidentally runs without
+    /// a persistent `--data-dir`.
+    pub volatile_mode: bool,
 }
 
 impl MetricsState {
@@ -87,7 +93,15 @@ impl MetricsState {
             store,
             cedar,
             tenant_id: tenant_id.into(),
+            volatile_mode: false,
         }
+    }
+
+    /// Set to `true` when the daemon started with in-memory (volatile) storage.
+    #[must_use]
+    pub fn with_volatile_mode(mut self, volatile: bool) -> Self {
+        self.volatile_mode = volatile;
+        self
     }
 }
 
@@ -152,6 +166,7 @@ async fn handler(
     let dead_letter_total = dead_letter_total.map(|v| v.len()).unwrap_or(usize::MAX);
 
     let version = env!("CARGO_PKG_VERSION");
+    let volatile_mode = u8::from(state.volatile_mode);
 
     // Snapshot the per-family / per-outcome event counters from the global
     // EngineMetrics instance (AtomicU64 reads, no I/O).
@@ -174,6 +189,9 @@ async fn handler(
          # HELP makod_dead_letter_recent_total Number of dead-letter records in the durable DLQ (last 1000 scanned).\n\
          # TYPE makod_dead_letter_recent_total gauge\n\
          makod_dead_letter_recent_total {dead_letter_total}\n\
+         # HELP makod_volatile_mode_active 1 when the daemon started with in-memory (volatile) storage — all state is lost on restart.\n\
+         # TYPE makod_volatile_mode_active gauge\n\
+         makod_volatile_mode_active {volatile_mode}\n\
          # HELP makod_build_info A metric with a constant value 1 labelled with version information.\n\
          # TYPE makod_build_info gauge\n\
          makod_build_info{{version=\"{version}\"}} 1\n\

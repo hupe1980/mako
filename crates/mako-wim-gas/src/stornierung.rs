@@ -55,10 +55,10 @@ pub const WORKFLOW_NAME: &str = "wim-gas-stornierung";
 /// let due = mako_engine::fristen::deadline_at_werktage(
 ///     received_at, 10, HolidayCalendar::BdewMaKo,
 /// );
-/// let deadline = Deadline::new(process.stream_id().clone(), ..., STORNIERUNG_APERAK_WINDOW_LABEL, due);
+/// let deadline = Deadline::new(process.stream_id().clone(), ..., STORNIERUNG_RESPONSE_WINDOW_LABEL, due);
 /// deadline_store.register(&deadline).await?;
 /// ```
-pub const STORNIERUNG_APERAK_WINDOW_LABEL: &str = "wim-gas-stornierung-aperak-10-werktage";
+pub const STORNIERUNG_RESPONSE_WINDOW_LABEL: &str = "wim-gas-stornierung-response-10-werktage";
 
 /// PIDs handled by the WiM Gas Stornierung workflow (UTILMD G).
 ///
@@ -241,7 +241,7 @@ pub enum WimGasStornierungCommand {
     TimeoutExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
-        /// Label of the expired deadline (matches `STORNIERUNG_APERAK_WINDOW_LABEL`).
+        /// Label of the expired deadline (matches `STORNIERUNG_RESPONSE_WINDOW_LABEL`).
         label: Box<str>,
     },
 }
@@ -268,7 +268,7 @@ impl Workflow for WimGasStornierungWorkflow {
     ) -> Option<Self::Command> {
         match (deadline.label(), state) {
             (
-                STORNIERUNG_APERAK_WINDOW_LABEL,
+                STORNIERUNG_RESPONSE_WINDOW_LABEL,
                 WimGasStornierungState::Initiated(_)
                 | WimGasStornierungState::ValidationPassed(_)
                 | WimGasStornierungState::AperakSent(_),
@@ -361,7 +361,7 @@ impl Workflow for WimGasStornierungWorkflow {
                         "unsupported WiM Gas Stornierung PID {pid} (expected one of: {STORNIERUNG_PIDS:?})",
                     )));
                 }
-                let sender_gln = sender.clone();
+                let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
 
                 let mut events = vec![WimGasStornierungEvent::StornierungReceived {
@@ -386,12 +386,12 @@ impl Workflow for WimGasStornierungWorkflow {
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
-                            sender_gln.as_str(),
+                            sender_mp_id.as_str(),
                             serde_json::json!({
                                 "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_gln.as_str(),
+                                "receiver":   sender_mp_id.as_str(),
                                 "pid":        29001_u32,
-                                "error_code": "Z29",
+                                "error_code": mako_engine::erc::codes::Z29,
                                 "reason":     reason,
                             }),
                         )
@@ -591,7 +591,7 @@ mod tests {
             &state,
             WimGasStornierungCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: STORNIERUNG_APERAK_WINDOW_LABEL.into(),
+                label: STORNIERUNG_RESPONSE_WINDOW_LABEL.into(),
             },
         )
         .unwrap();
@@ -624,7 +624,7 @@ mod tests {
             &state,
             WimGasStornierungCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: STORNIERUNG_APERAK_WINDOW_LABEL.into(),
+                label: STORNIERUNG_RESPONSE_WINDOW_LABEL.into(),
             },
         )
         .unwrap();

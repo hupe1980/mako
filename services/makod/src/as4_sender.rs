@@ -65,7 +65,7 @@ use mako_as4::profile::BdewAs4Profile;
 
 use crate::edifact_renderer;
 use crate::malo_ident_sender::MaloIdentSender;
-use crate::party_registry::GlnRegistry;
+use crate::party_registry::MpIdRegistry;
 
 // ── WebhookEdifactSender ──────────────────────────────────────────────────────
 
@@ -103,7 +103,7 @@ use crate::party_registry::GlnRegistry;
 #[derive(Clone)]
 pub struct WebhookEdifactSender {
     webhook_url: Arc<str>,
-    gln_registry: Arc<GlnRegistry>,
+    gln_registry: Arc<MpIdRegistry>,
     http_client: reqwest::Client,
     malo_sender: MaloIdentSender,
 }
@@ -113,7 +113,7 @@ impl WebhookEdifactSender {
     #[must_use]
     pub fn new(
         webhook_url: impl Into<Arc<str>>,
-        gln_registry: Arc<GlnRegistry>,
+        gln_registry: Arc<MpIdRegistry>,
         http_client: reqwest::Client,
         malo_sender: MaloIdentSender,
     ) -> Self {
@@ -132,7 +132,7 @@ impl As4Sender for WebhookEdifactSender {
         msg: &OutboxMessage,
     ) -> impl std::future::Future<Output = Result<(), EngineError>> + Send {
         let webhook_url = Arc::clone(&self.webhook_url);
-        let gln_registry: Arc<GlnRegistry> = Arc::clone(&self.gln_registry);
+        let gln_registry: Arc<MpIdRegistry> = Arc::clone(&self.gln_registry);
         let http_client = self.http_client.clone();
         let malo_sender = self.malo_sender.clone();
         let msg_owned = msg.clone();
@@ -261,7 +261,7 @@ pub struct BdewAs4Sender {
     /// and by the loopback path to detect own-GLN recipients (combined-role
     /// deployments where NB and MSB, or GNB and gMSB, have different GLNs on
     /// the same instance).
-    gln_registry: Arc<GlnRegistry>,
+    gln_registry: Arc<MpIdRegistry>,
     /// Optional in-process loopback handle for combined-role deployments.
     ///
     /// When `Some`, outbox messages addressed to `tenant_party_id` (own GLN)
@@ -284,7 +284,7 @@ impl BdewAs4Sender {
         event_bus: Arc<EventBus>,
         profile: Arc<BdewAs4Profile>,
         malo_sender: MaloIdentSender,
-        gln_registry: Arc<GlnRegistry>,
+        gln_registry: Arc<MpIdRegistry>,
         loopback: Option<Arc<crate::edifact_api::EdifactApiState>>,
     ) -> anyhow::Result<Self> {
         let transport = As4HttpTransport::new(TransportConfig::default())
@@ -322,7 +322,7 @@ impl As4Sender for BdewAs4Sender {
         let recipient = msg.recipient.clone();
         let message_id_str = msg.message_id.to_string();
         let conversation_id = msg.conversation_id.to_string();
-        let gln_registry: Arc<GlnRegistry> = Arc::clone(&self.gln_registry);
+        let gln_registry: Arc<MpIdRegistry> = Arc::clone(&self.gln_registry);
         async move {
             // Route MaloIdentCallback to the existing cache-lookup path.
             if message_type.as_ref() == "MaloIdentCallback" {

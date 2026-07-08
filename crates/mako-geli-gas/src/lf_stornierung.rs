@@ -432,7 +432,7 @@ mod tests {
 
     use super::*;
 
-    fn lf_gln() -> MarktpartnerCode {
+    fn lf_mp_id() -> MarktpartnerCode {
         MarktpartnerCode::new("9900000000001")
     }
 
@@ -474,7 +474,7 @@ mod tests {
         let state = LfStornierungState::New;
         let cmd = LfStornierungCommand::InitiateStornierung {
             pid: pid(44022),
-            sender: lf_gln(),
+            sender: lf_mp_id(),
             receiver: gnb_gln(),
             vorgang_id: vorgang(),
             bgm_qualifier: "E01".to_owned(),
@@ -495,7 +495,7 @@ mod tests {
     fn handle_antwort_accepted_transitions_to_accepted() {
         let state = LfStornierungState::Pending(LfStornierungData {
             pruefidentifikator: pid(44022),
-            sender: lf_gln(),
+            sender: lf_mp_id(),
             receiver: gnb_gln(),
             vorgang_id: vorgang(),
             bgm_qualifier: "E01".to_owned(),
@@ -518,7 +518,7 @@ mod tests {
     fn handle_antwort_rejected_transitions_to_rejected() {
         let state = LfStornierungState::Pending(LfStornierungData {
             pruefidentifikator: pid(44022),
-            sender: lf_gln(),
+            sender: lf_mp_id(),
             receiver: gnb_gln(),
             vorgang_id: vorgang(),
             bgm_qualifier: "E02".to_owned(),
@@ -542,7 +542,7 @@ mod tests {
         let state = LfStornierungState::New;
         let cmd = LfStornierungCommand::InitiateStornierung {
             pid: pid(44001), // wrong PID
-            sender: lf_gln(),
+            sender: lf_mp_id(),
             receiver: gnb_gln(),
             vorgang_id: vorgang(),
             bgm_qualifier: "E01".to_owned(),
@@ -554,7 +554,7 @@ mod tests {
     fn wrong_antwort_pid_returns_error() {
         let state = LfStornierungState::Pending(LfStornierungData {
             pruefidentifikator: pid(44022),
-            sender: lf_gln(),
+            sender: lf_mp_id(),
             receiver: gnb_gln(),
             vorgang_id: vorgang(),
             bgm_qualifier: "E01".to_owned(),
@@ -573,7 +573,7 @@ mod tests {
         use mako_engine::ids::DeadlineId;
         let state = LfStornierungState::Pending(LfStornierungData {
             pruefidentifikator: pid(44022),
-            sender: lf_gln(),
+            sender: lf_mp_id(),
             receiver: gnb_gln(),
             vorgang_id: vorgang(),
             bgm_qualifier: "E35".to_owned(),
@@ -595,7 +595,7 @@ mod tests {
         use mako_engine::ids::DeadlineId;
         let state = LfStornierungState::Accepted(LfStornierungData {
             pruefidentifikator: pid(44022),
-            sender: lf_gln(),
+            sender: lf_mp_id(),
             receiver: gnb_gln(),
             vorgang_id: vorgang(),
             bgm_qualifier: "E01".to_owned(),

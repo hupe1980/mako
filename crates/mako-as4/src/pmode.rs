@@ -180,12 +180,12 @@ impl BdewAction {
 /// ```
 pub fn bdew_pmode(
     id: impl Into<String>,
-    partner_gln: impl Into<String>,
+    partner_mp_id: impl Into<String>,
     action: BdewAction,
 ) -> PMode {
     PMode {
         id: id.into(),
-        partner_id: partner_gln.into(),
+        partner_id: partner_mp_id.into(),
         service: constants::SERVICE.to_string(),
         service_type: constants::SERVICE_TYPE.to_string(),
         action: action.as_uri(),
@@ -225,13 +225,13 @@ pub fn bdew_pmode(
 /// ```
 pub fn bdew_pmode_with_endpoint(
     id: impl Into<String>,
-    partner_gln: impl Into<String>,
+    partner_mp_id: impl Into<String>,
     action: BdewAction,
     endpoint_url: impl Into<String>,
 ) -> PMode {
     PMode {
         endpoint_url: Some(endpoint_url.into()),
-        ..bdew_pmode(id, partner_gln, action)
+        ..bdew_pmode(id, partner_mp_id, action)
     }
 }
 
@@ -255,7 +255,7 @@ pub fn bdew_pmode_with_endpoint(
 /// ```
 pub fn bdew_pmode_encrypted(
     id: impl Into<String>,
-    partner_gln: impl Into<String>,
+    partner_mp_id: impl Into<String>,
     action: BdewAction,
 ) -> PMode {
     PMode {
@@ -265,7 +265,7 @@ pub fn bdew_pmode_encrypted(
             encrypt_soap_headers: false,
             compress: false,
         },
-        ..bdew_pmode(id, partner_gln, action)
+        ..bdew_pmode(id, partner_mp_id, action)
     }
 }
 
@@ -274,13 +274,13 @@ pub fn bdew_pmode_encrypted(
 /// Combines [`bdew_pmode_encrypted`] and [`bdew_pmode_with_endpoint`].
 pub fn bdew_pmode_encrypted_with_endpoint(
     id: impl Into<String>,
-    partner_gln: impl Into<String>,
+    partner_mp_id: impl Into<String>,
     action: BdewAction,
     endpoint_url: impl Into<String>,
 ) -> PMode {
     PMode {
         endpoint_url: Some(endpoint_url.into()),
-        ..bdew_pmode_encrypted(id, partner_gln, action)
+        ..bdew_pmode_encrypted(id, partner_mp_id, action)
     }
 }
 

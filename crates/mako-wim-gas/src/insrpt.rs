@@ -84,7 +84,7 @@ pub struct GasStorungsmeldungData {
     /// BDEW Prüfidentifikator of the INSRPT.
     pub pruefidentifikator: Pruefidentifikator,
     /// GLN of the gMSB the Störungsmeldung was directed to.
-    pub msb_gln: MarktpartnerCode,
+    pub msb_mp_id: MarktpartnerCode,
     /// EDIFACT document date (YYYYMMDD).
     pub document_date: String,
     /// EDIFACT message reference.
@@ -102,7 +102,7 @@ pub enum GasStorungsmeldungEvent {
         /// Prüfidentifikator.
         pruefidentifikator: Pruefidentifikator,
         /// GLN of the gMSB.
-        msb_gln: MarktpartnerCode,
+        msb_mp_id: MarktpartnerCode,
         /// Document date (YYYYMMDD).
         document_date: String,
         /// EDIFACT message reference.
@@ -194,7 +194,7 @@ pub enum GasStorungsmeldungCommand {
         /// Prüfidentifikator (must be in `INSRPT_GAS_ONLY_PIDS` or `INSRPT_SHARED_PIDS`).
         pid: Pruefidentifikator,
         /// GLN of the gMSB.
-        msb_gln: MarktpartnerCode,
+        msb_mp_id: MarktpartnerCode,
         /// Document date.
         document_date: String,
         /// EDIFACT message reference.
@@ -246,12 +246,12 @@ impl Workflow for WimGasInsrptWorkflow {
         match event {
             GasStorungsmeldungEvent::StorungsmeldungInitiated {
                 pruefidentifikator,
-                msb_gln,
+                msb_mp_id,
                 document_date,
                 message_ref,
             } => GasStorungsmeldungState::AwaitingResponse(GasStorungsmeldungData {
                 pruefidentifikator: *pruefidentifikator,
-                msb_gln: msb_gln.clone(),
+                msb_mp_id: msb_mp_id.clone(),
                 document_date: document_date.clone(),
                 message_ref: message_ref.clone(),
             }),
@@ -281,7 +281,7 @@ impl Workflow for WimGasInsrptWorkflow {
         match command {
             GasStorungsmeldungCommand::SendStorungsmeldung {
                 pid,
-                msb_gln,
+                msb_mp_id,
                 document_date,
                 message_ref,
             } => {
@@ -295,7 +295,7 @@ impl Workflow for WimGasInsrptWorkflow {
                 }
                 Ok(vec![GasStorungsmeldungEvent::StorungsmeldungInitiated {
                     pruefidentifikator: pid,
-                    msb_gln,
+                    msb_mp_id,
                     document_date,
                     message_ref,
                 }]

@@ -572,7 +572,7 @@ impl Workflow for GpkeAbrechnungWorkflow {
                             serde_json::json!({
                                 "pid":         pid.as_u32(),
                                 "invoice_ref": invoice_ref.as_str(),
-                                "sender_gln":  sender.as_str(),
+                                "sender_mp_id":  sender.as_str(),
                                 "rechnung":    serde_json::to_value(rechnung.as_deref())
                                     .unwrap_or(serde_json::Value::Null),
                             }),

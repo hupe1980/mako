@@ -17,7 +17,7 @@
 //! dt/{due_nanos:016x}/{id}        →  ""                     [deadline time index]
 //! pr/{tenant_id}/{routing_key}    →  JSON(ProcessIdentity)  [process routing 1:1]
 //! ci/{tenant_id}/{tag}/{process_id} → JSON(ProcessIdentity) [correlated 1:many index]
-//! pt/{tenant_id}/{gln}            →  JSON(PartnerRecord)    [trading-partner master data]
+//! pt/{tenant_id}/{mp_id}            →  JSON(PartnerRecord)    [trading-partner master data]
 //! ib/{inbox_key}                  →  ""                     [inbox dedup sentinel]
 //! it/{ts_nanos:016x}/{nonce_uuid} →  "{inbox_key}"          [inbox time index for TTL purge]
 //! dr/{ts_nanos:016x}/{uuid}       →  JSON(DeadLetterRecord) [durable dead-letter queue]
@@ -2625,7 +2625,7 @@ impl SlateDbStore {
 /// Durable [`crate::partner::PartnerStore`] backed by SlateDB.
 ///
 /// Key schema:
-/// - `pt/{tenant_id}/{gln}` → `JSON(PartnerRecord)`
+/// - `pt/{tenant_id}/{mp_id}` → `JSON(PartnerRecord)`
 ///
 /// `TenantId` is always a 36-character UUID and GLN is always 13 digits,
 /// giving a fixed-width `pt/{36-chars}/{13-chars}` key that bounds efficient
@@ -2641,8 +2641,8 @@ pub struct SlateDbPartnerStore {
     db: Db,
 }
 
-fn pt_key(tenant_id: TenantId, gln: &crate::types::MarktpartnerCode) -> String {
-    format!("pt/{tenant_id}/{gln}")
+fn pt_key(tenant_id: TenantId, mp_id: &crate::types::MarktpartnerCode) -> String {
+    format!("pt/{tenant_id}/{mp_id}")
 }
 
 fn pt_tenant_prefix(tenant_id: TenantId) -> String {
@@ -2665,7 +2665,7 @@ impl crate::partner::PartnerStore for SlateDbPartnerStore {
         record: &crate::partner::PartnerRecord,
     ) -> Result<(), EngineError> {
         const MAX_UPSERT_RETRIES: usize = 8;
-        let key = pt_key(tenant_id, &record.gln);
+        let key = pt_key(tenant_id, &record.mp_id);
 
         // Read-then-merge inside a serializable-snapshot transaction to
         // prevent two concurrent PARTIN upserts from racing.
@@ -2709,9 +2709,9 @@ impl crate::partner::PartnerStore for SlateDbPartnerStore {
     async fn get(
         &self,
         tenant_id: TenantId,
-        gln: &crate::types::MarktpartnerCode,
+        mp_id: &crate::types::MarktpartnerCode,
     ) -> Result<Option<crate::partner::PartnerRecord>, EngineError> {
-        let key = pt_key(tenant_id, gln);
+        let key = pt_key(tenant_id, mp_id);
         match self
             .db
             .get(key.as_bytes())
@@ -2730,9 +2730,9 @@ impl crate::partner::PartnerStore for SlateDbPartnerStore {
     async fn remove(
         &self,
         tenant_id: TenantId,
-        gln: &crate::types::MarktpartnerCode,
+        mp_id: &crate::types::MarktpartnerCode,
     ) -> Result<(), EngineError> {
-        let key = pt_key(tenant_id, gln);
+        let key = pt_key(tenant_id, mp_id);
         let mut batch = WriteBatch::new();
         batch.delete(key.as_bytes());
         self.db.write(batch).await.map_err(|e| to_partner_err(&e))?;

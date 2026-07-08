@@ -1,0 +1,24 @@
+[package]
+name             = "mako-obs"
+version.workspace = true
+description      = "Business-process observability library — process projection, KPI computation, BNetzA regulatory reports"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+## Enables in-memory repository implementations for tests.
+testing = []
+
+[dependencies]
+thiserror    = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+time         = { workspace = true }
+uuid         = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

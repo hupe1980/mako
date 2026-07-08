@@ -76,24 +76,24 @@ pub struct ConfigFile {
     /// `[[party]]` — one entry per BDEW market-participant identity.
     ///
     /// Use this instead of `[engine] tenant_id` + `--marktrollen` when the
-    /// operator holds **multiple GLNs** (e.g. separate BDEW registrations for
-    /// NB, LF, and MSB roles).  The first entry marked `primary = true` (or
+    /// operator holds **multiple Marktpartner-IDs** (e.g. separate BDEW registrations
+    /// for NB, LF, and MSB roles).  The first entry marked `primary = true` (or
     /// the first entry in document order when none is marked) becomes the
-    /// storage partition key and the default EDIFACT sender GLN fallback.
+    /// storage partition key and the default EDIFACT sender MP-ID fallback.
     ///
     /// Example:
     /// ```toml
     /// [[party]]
-    /// gln     = "9900001000001"
+    /// mp_id   = "9900001000001"
     /// roles   = ["NB"]
     /// primary = true
     ///
     /// [[party]]
-    /// gln   = "9900001000002"
+    /// mp_id = "9900001000002"
     /// roles = ["LF"]
     ///
     /// [[party]]
-    /// gln   = "9900001000003"
+    /// mp_id = "9900001000003"
     /// roles = ["LFG", "MSB"]
     /// ```
     pub party: Option<Vec<PartyConfig>>,
@@ -105,19 +105,22 @@ pub struct ConfigFile {
 /// operator who has registered separate BDEW GLNs for different roles
 /// (e.g. a large utility with distinct NB, LF, and MSB subsidiaries).
 ///
-/// For the common case — a single company GLN covering all roles — a single
+/// For the common case — a single company covering all roles — a single
 /// entry with all relevant roles is sufficient:
 ///
 /// ```toml
 /// [[party]]
-/// gln   = "9900001000001"
+/// mp_id = "9900001000001"
 /// roles = ["NB", "LF", "MSB", "GNB", "LFG"]
 /// ```
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PartyConfig {
-    /// 13-digit BDEW GLN or 16-char EIC.  Must be globally unique per entry.
-    pub gln: String,
+    /// 13-digit BDEW-Codenummer, DVGW-Codenummer, or 16-char EIC (Marktpartner-ID).
+    /// Must be globally unique per entry.
+    /// BDEW-Codenummern start with `99`, DVGW-Codenummern with `98`.
+    /// Only GS1-issued 13-digit codes are true GLNs (Allgemeine Festlegungen §2.13).
+    pub mp_id: String,
     /// BDEW Marktrollen this GLN is authorised for.
     ///
     /// Valid values: `NB`, `LF`, `MSB`, `GNB`, `LFG`, `gMSB`, `MGV`, `BKV`,
@@ -323,7 +326,7 @@ pub struct As4Config {
     /// startup and survive restarts without requiring a redeploy. Once seeded,
     /// individual records can be updated at runtime via:
     ///
-    /// - `PUT /admin/partners/{gln}` — manual JSON upsert
+    /// - `PUT /admin/partners/{mp_id}` — manual JSON upsert
     /// - `POST /admin/partners/import` — ingest a raw PARTIN EDIFACT interchange
     ///
     /// When a partner sends an inbound PARTIN message (PIDs 37000–37014), the

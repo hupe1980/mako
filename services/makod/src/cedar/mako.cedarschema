@@ -7,7 +7,7 @@
 // MaKo::Command            — ERP command resource (name, marktrolle, pid, tenant)
 // MaKo::EdifactIngest      — EDIFACT ingest endpoint (tenant)
 // MaKo::AdminMaloRecord    — MaLo admin resource (tenant, malo_id?)
-// MaKo::AdminPartnerRecord — partner admin resource (tenant, gln?)
+// MaKo::AdminPartnerRecord — partner admin resource (tenant, mp_id?)
 // MaKo::MetricsEndpoint    — Prometheus /metrics endpoint (tenant)
 //
 // Action groups (use in Cedar policies as `action in MaKo::Action::"AdminMalo"`)
@@ -36,7 +36,7 @@ namespace MaKo {
 
   entity AdminPartnerRecord = {
     tenant: String,
-    gln?:   String,
+    mp_id?: String,
   };
 
   entity MetricsEndpoint = {

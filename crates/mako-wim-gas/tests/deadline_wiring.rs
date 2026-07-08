@@ -5,7 +5,7 @@
 //! - The APERAK Frist is **10 Werktage** (BK7-24-01-009), not 5.
 //! - Saturday counts as a Werktag; Sunday and public holidays do not.
 //! - `deadline_at_werktage` fires at 17:00 Europe/Berlin, not midnight UTC.
-//! - The deadline label matches `APERAK_WINDOW_LABEL` in the workflow constants.
+//! - The deadline label matches `RESPONSE_WINDOW_LABEL` in the workflow constants.
 //! - A timeout fires `DeadlineExpired` and transitions the process to `Rejected`.
 
 use mako_engine::event_store::InMemoryEventStore;
@@ -17,7 +17,7 @@ use mako_engine::{
     version::WorkflowId,
 };
 use mako_wim_gas::{
-    ANMELDUNG_APERAK_WINDOW_LABEL, ANMELDUNG_PIDS, WimGasAnmeldungCommand, WimGasAnmeldungState,
+    ANMELDUNG_PIDS, ANMELDUNG_RESPONSE_WINDOW_LABEL, WimGasAnmeldungCommand, WimGasAnmeldungState,
     WimGasAnmeldungWorkflow,
 };
 use time::{Date, Month, OffsetDateTime, Time, UtcOffset};
@@ -53,10 +53,10 @@ fn receive_utilmd(pid: u32, validation_passed: bool) -> WimGasAnmeldungCommand {
 
 /// The APERAK window label must match the constant declared in `anmeldung`.
 #[test]
-fn aperak_window_label_matches_constant() {
+fn response_window_label_matches_constant() {
     assert_eq!(
-        ANMELDUNG_APERAK_WINDOW_LABEL, "wim-gas-aperak-10-werktage",
-        "APERAK label must be 'wim-gas-aperak-10-werktage' (BK7-24-01-009)"
+        ANMELDUNG_RESPONSE_WINDOW_LABEL, "wim-gas-response-10-werktage",
+        "response window label must be 'wim-gas-response-10-werktage' (BK7-24-01-009)"
     );
 }
 
@@ -219,7 +219,7 @@ async fn timeout_leads_to_rejected() {
     process
         .execute(WimGasAnmeldungCommand::TimeoutExpired {
             deadline_id: DeadlineId::new(),
-            label: ANMELDUNG_APERAK_WINDOW_LABEL.into(),
+            label: ANMELDUNG_RESPONSE_WINDOW_LABEL.into(),
         })
         .await
         .expect("TimeoutExpired should not panic");
@@ -243,7 +243,7 @@ async fn timeout_on_terminal_state_is_absorbed() {
     let result = process
         .execute(WimGasAnmeldungCommand::TimeoutExpired {
             deadline_id: DeadlineId::new(),
-            label: ANMELDUNG_APERAK_WINDOW_LABEL.into(),
+            label: ANMELDUNG_RESPONSE_WINDOW_LABEL.into(),
         })
         .await;
     assert!(

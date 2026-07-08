@@ -46,7 +46,7 @@ use edi_energy::{
 };
 use mako_engine::outbox::OutboxMessage;
 
-use crate::party_registry::GlnRegistry;
+use crate::party_registry::MpIdRegistry;
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
@@ -136,7 +136,7 @@ pub fn is_suppressed(err: &RenderError) -> bool {
 /// sender GLN is resolved from `payload["sender"]` when present; otherwise the
 /// registry's static PID → role table is used.
 /// For all other fallbacks (ORDRSP, INVOIC, REMADV without explicit `sender`)
-/// [`GlnRegistry::primary_gln`] is used.
+/// [`MpIdRegistry::primary_gln`] is used.
 ///
 /// # Errors
 ///
@@ -147,7 +147,7 @@ pub fn is_suppressed(err: &RenderError) -> bool {
 /// - [`RenderError::BuilderError`] — the `edi-energy` builder failed.
 pub fn render_to_wire_bytes(
     msg: &OutboxMessage,
-    registry: &GlnRegistry,
+    registry: &MpIdRegistry,
 ) -> Result<Vec<u8>, RenderError> {
     let p = &msg.payload;
     match msg.message_type.as_ref() {
@@ -430,8 +430,8 @@ fn render_contrl(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
 /// **Sender resolution** (in priority order):
 /// 1. `payload["sender"]` — set this in the workflow for deterministic
 ///    multi-GLN deployments.
-/// 2. [`GlnRegistry::sender_gln_for_orders_pid`] — static PID → role lookup.
-/// 3. [`GlnRegistry::primary_gln`] — final fallback.
+/// 2. [`MpIdRegistry::sender_gln_for_orders_pid`] — static PID → role lookup.
+/// 3. [`MpIdRegistry::primary_gln`] — final fallback.
 ///
 /// The receiver comes from `msg.recipient`.
 ///
@@ -446,7 +446,7 @@ fn render_contrl(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
 fn render_orders(
     p: &serde_json::Value,
     msg: &OutboxMessage,
-    registry: &GlnRegistry,
+    registry: &MpIdRegistry,
 ) -> Result<Vec<u8>, RenderError> {
     let mt = "ORDERS";
 
@@ -504,7 +504,7 @@ fn render_orders(
 fn render_ordrsp(
     p: &serde_json::Value,
     msg: &OutboxMessage,
-    registry: &GlnRegistry,
+    registry: &MpIdRegistry,
 ) -> Result<Vec<u8>, RenderError> {
     let mt = "ORDRSP";
 
@@ -575,7 +575,7 @@ fn render_ordrsp(
 fn render_invoic(
     p: &serde_json::Value,
     msg: &OutboxMessage,
-    registry: &GlnRegistry,
+    registry: &MpIdRegistry,
 ) -> Result<Vec<u8>, RenderError> {
     let mt = "INVOIC";
 
@@ -646,7 +646,7 @@ fn render_invoic(
 fn render_remadv(
     p: &serde_json::Value,
     msg: &OutboxMessage,
-    registry: &GlnRegistry,
+    registry: &MpIdRegistry,
 ) -> Result<Vec<u8>, RenderError> {
     let mt = "REMADV";
 
@@ -783,18 +783,18 @@ fn msg_ref_from_uuid(uuid_str: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::PartyConfig;
-    use crate::party_registry::GlnRegistry;
+    use crate::party_registry::MpIdRegistry;
     use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId};
     use mako_engine::outbox::OutboxMessage;
 
-    fn test_registry(gln: &str) -> GlnRegistry {
+    fn test_registry(mp_id: &str) -> MpIdRegistry {
         let party = PartyConfig {
-            gln: gln.to_owned(),
+            mp_id: mp_id.to_owned(),
             roles: vec!["NB".to_owned()],
             primary: true,
             agency: None,
         };
-        GlnRegistry::from_config(&[party]).expect("test registry")
+        MpIdRegistry::from_config(&[party]).expect("test registry")
     }
 
     fn fake_msg(message_type: &str, recipient: &str, payload: serde_json::Value) -> OutboxMessage {

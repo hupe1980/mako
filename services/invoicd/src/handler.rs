@@ -1,4 +1,4 @@
-//! Axum webhook handler for inbound `MdmEvent` CloudEvents.
+//! Axum webhook handler for inbound `MarktEvent` CloudEvents.
 //!
 //! ## Inbound event routing
 //!
@@ -30,20 +30,26 @@ use axum::{
     response::IntoResponse,
 };
 use invoic_checker::{CheckConfig, CheckOutcome, InvoicCheckEngine};
-use mako_mdm::cloudevents::verify_signature;
+use mako_markt::{
+    cloudevents::verify_signature,
+    makod_client::{ForwardCommand, MakodClient},
+};
 use rubo4e::v202501::Rechnung;
 use secrecy::{ExposeSecret, SecretString};
+use time::OffsetDateTime;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::{makod_client::MakodClient, tariff_store::TariffStoreHandle};
+use crate::pg;
 
-/// GPKE INVOIC PIDs that `invoicd` handles.
+/// GPKE INVOIC PIDs that `invoicd` handles via the embedded `rechnung` path.
 ///
-/// Only the PIDs whose `GpkeAbrechnungWorkflow` outbox embeds a `Rechnung`
-/// BO4E object in `ProcessInitiated`.  PIDs 31003/31004/31009/31011 belong
-/// to other workflows; their outbox payloads do NOT contain `rechnung` so
-/// they must never appear here.
+/// Only the PIDs whose workflow outbox embeds a `Rechnung` BO4E object in
+/// `ProcessInitiated`.  PIDs 31003/31004/31011 belong to other billing workflows;
+/// their outbox payloads do NOT contain `rechnung` so they must never appear here.
+///
+/// PID 31009 (WiM MSB-Rechnung) is handled separately by `Wim31009Ingestor`
+/// because `wim-rechnung` does not embed `rechnung` in `ProcessInitiated`.
 ///
 /// Source: PID ownership table, BK6-24-174.
 const INVOIC_PIDS: &[u32] = &[31001, 31002, 31005, 31006];
@@ -51,7 +57,7 @@ const INVOIC_PIDS: &[u32] = &[31001, 31002, 31005, 31006];
 /// Shared application state for the webhook handler.
 #[derive(Clone)]
 pub struct HandlerState {
-    pub tariff_store: TariffStoreHandle,
+    pub preisblatt_client: mako_markt::marktd_client::MarktdClient,
     pub makod: MakodClient,
     pub check_config: Arc<CheckConfig>,
     pub inbound_secret: Arc<Option<SecretString>>,
@@ -59,9 +65,14 @@ pub struct HandlerState {
     /// outcome is escalated to a `Dispute` instead of automatic approval.
     /// `0` means `Warn` is always approved.
     pub auto_dispute_threshold_eur_cents: i64,
+    /// PostgreSQL pool for persisting receipts (§22 MessZV compliance).
+    /// `None` in development mode — receipts are NOT persisted.
+    pub pool: Option<sqlx::PgPool>,
+    /// Operator tenant identifier written to every receipt row.
+    pub tenant: String,
 }
 
-/// `POST /webhook` — receive a `MdmEvent` from `mdmd`.
+/// `POST /webhook` — receive a `MarktEvent` from `marktd`.
 pub async fn handle_webhook(
     State(state): State<HandlerState>,
     headers: HeaderMap,
@@ -70,7 +81,7 @@ pub async fn handle_webhook(
     // ── 1. Verify signature if configured ────────────────────────────────────
     if let Some(secret) = (*state.inbound_secret).as_ref() {
         let provided = headers
-            .get("x-mdm-signature")
+            .get("x-mako-signature")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         if !verify_signature(secret.expose_secret().as_bytes(), &body, provided) {
@@ -80,12 +91,12 @@ pub async fn handle_webhook(
     }
 
     // ── 2. Parse JSON body ────────────────────────────────────────────────────
-    // `MdmEvent` implements only `Serialize`; parse as a generic JSON value to
+    // `MarktEvent` implements only `Serialize`; parse as a generic JSON value to
     // avoid coupling to an internal `Deserialize` impl.
     let event: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(e) => e,
         Err(err) => {
-            warn!(%err, "invoicd: failed to parse MdmEvent");
+            warn!(%err, "invoicd: failed to parse MarktEvent");
             return (StatusCode::BAD_REQUEST, "invalid JSON").into_response();
         }
     };
@@ -100,6 +111,12 @@ pub async fn handle_webhook(
     if ce_type == "de.mako.process.initiated" && INVOIC_PIDS.contains(&pid) {
         let subject = event["subject"].as_str().unwrap_or("").to_owned();
         handle_invoic_initiated(state, subject, data.clone()).await;
+    } else if ce_type == "de.mako.process.initiated" && pid == 31009 {
+        // WiM MSB-Rechnung (PID 31009): the rechnung is in a separate outbox event,
+        // not embedded in ProcessInitiated.  Queue to DLQ for the Wim31009Ingestor
+        // to process once makod exposes GET /api/v1/invoic/{process_id}/rechnung.
+        let subject = event["subject"].as_str().unwrap_or("").to_owned();
+        handle_wim_31009_initiated(state, subject, data.clone()).await;
     } else {
         debug!(ce_type, pid, "invoicd: event ignored");
     }
@@ -123,7 +140,7 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
 
     // Extract fields from the event data payload.
     let pid = extract_pid(&data);
-    let sender_gln = data["sender_gln"].as_str().unwrap_or("").to_owned();
+    let sender_mp_id = data["sender_mp_id"].as_str().unwrap_or("").to_owned();
     // `invoice_ref` is the EDIFACT INVOIC message-reference used as the
     // business key in `dispatch_to_process`.  It must be forwarded to makod
     // so the command can be routed to the correct billing process.
@@ -136,9 +153,14 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
         return;
     }
     let rechnung_value = data["rechnung"].clone();
+    // GLN of the invoice receiver (tenant = our own GLN for all Inbound PIDs).
+    let receiver_gln = data["receiver_gln"]
+        .as_str()
+        .unwrap_or(&state.tenant)
+        .to_owned();
 
     // Deserialize the Rechnung BO4E object embedded by GpkeAbrechnungWorkflow.
-    let rechnung: Rechnung = match serde_json::from_value(rechnung_value) {
+    let rechnung: Rechnung = match serde_json::from_value(rechnung_value.clone()) {
         Ok(r) => r,
         Err(err) => {
             warn!(%err, pid, "invoicd: could not deserialize Rechnung from event payload — skipping check");
@@ -146,11 +168,44 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
         }
     };
 
+    let received_at = OffsetDateTime::now_utc();
+
+    // Derive billing_date from the invoice period start (Date, Copy) or the
+    // invoice document datetime's date component.  Both are native time types in
+    // rubo4e v0.3 — no string formatting needed for the price-sheet lookup.
+    let billing_date: time::Date = rechnung
+        .rechnungsperiode
+        .as_ref()
+        .and_then(|z| z.startdatum) // Option<time::Date> (Copy)
+        .or_else(|| rechnung.rechnungsdatum.as_ref().map(|dt| dt.date()))
+        .unwrap_or(time::macros::date!(2025 - 01 - 01));
+
     // Run the stateless plausibility check.
     let report = {
-        let store = state.tariff_store.0.read().await;
-        InvoicCheckEngine::check(pid, &sender_gln, &rechnung, &*store, &state.check_config)
+        let sheet = state
+            .preisblatt_client
+            .get_preisblatt(&sender_mp_id, billing_date)
+            .await
+            .ok()
+            .flatten();
+        let preisblatt_store = {
+            use invoic_checker::tariff::InMemoryPreisblattStore;
+            let mut store = InMemoryPreisblattStore::new();
+            if let Some(s) = sheet {
+                store.insert(sender_mp_id.clone(), s);
+            }
+            store
+        };
+        InvoicCheckEngine::check(
+            pid,
+            &sender_mp_id,
+            &rechnung,
+            &preisblatt_store,
+            &state.check_config,
+        )
     };
+
+    let checked_at = OffsetDateTime::now_utc();
 
     info!(
         process_id = %process_id,
@@ -175,6 +230,57 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
         CheckOutcome::Dispute => true,
     };
 
+    let outcome_str = match (report.outcome, should_dispute) {
+        (CheckOutcome::Ok, _) => "Ok",
+        (CheckOutcome::Warn, false) => "Warn",
+        _ => "Dispute",
+    };
+
+    // ── §22 MessZV: persist receipt BEFORE dispatching ────────────────────────
+    //
+    // The receipt must be written before the REMADV/COMDIS command is sent.
+    // If persistence fails we log an error but still dispatch — the REMADV
+    // deadline is regulatory; a DB failure is an operational incident.
+    // Operators must monitor `invoic_receipts WHERE dispatched_at IS NULL`.
+    if let Some(pool) = &state.pool {
+        let findings_json =
+            serde_json::to_value(&report.findings).unwrap_or(serde_json::Value::Array(vec![]));
+        // Extract Zahlungsziel (DTM+92) from the Rechnung for the pay_by column.
+        // rubo4e v0.3 `Rechnung.faelligkeitsdatum` carries `Option<time::OffsetDateTime>`.
+        let pay_by: Option<time::OffsetDateTime> = rechnung.faelligkeitsdatum;
+        let row = pg::ReceiptRow {
+            process_id,
+            pid: pid as i16,
+            direction: "Inbound".to_owned(),
+            sender_mp_id: sender_mp_id.clone(),
+            receiver_gln,
+            rechnung: rechnung_value,
+            bo4e_version: "v202501.0.0".to_owned(),
+            outcome: outcome_str.to_owned(),
+            findings: findings_json,
+            pay_by,
+            received_at,
+            checked_at,
+            dispatched_at: None,
+            tenant: state.tenant.clone(),
+        };
+        if let Err(err) = pg::upsert_receipt(pool, &row).await {
+            warn!(
+                %err,
+                process_id = %process_id,
+                pid,
+                "invoicd: failed to persist receipt — §22 MessZV compliance gap; continuing with dispatch"
+            );
+        }
+    } else {
+        warn!(
+            process_id = %process_id,
+            pid,
+            "invoicd: no database configured — receipt NOT persisted (§22 MessZV violation in production)"
+        );
+    }
+
+    // ── Dispatch REMADV or COMDIS to makod ────────────────────────────────────
     if should_dispute {
         let reason = dispute_reason(&report.findings);
         warn!(
@@ -183,18 +289,108 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
             reason = %reason,
             "invoicd: disputing invoice"
         );
-        if let Err(err) = state
-            .makod
-            .dispute_invoice(process_id, &invoice_ref, &reason)
-            .await
-        {
-            warn!(%err, process_id = %process_id, "invoicd: failed to submit dispute command");
+        let idempotency_key = Uuid::new_v5(&process_id, b"dispute").to_string();
+        let cmd = ForwardCommand {
+            marktrolle: None,
+            command: "gpke.abrechnung.ablehnen".to_owned(),
+            malo_id: None,
+            melo_id: None,
+            payload: serde_json::json!({ "invoice_ref": invoice_ref, "ablehnungsgrund": reason }),
+        };
+        match state.makod.post_command(&idempotency_key, &cmd).await {
+            Ok(_) => {
+                if let Some(pool) = &state.pool
+                    && let Err(err) =
+                        pg::receipts::mark_dispatched(pool, process_id, OffsetDateTime::now_utc())
+                            .await
+                {
+                    warn!(%err, process_id = %process_id, "invoicd: failed to mark receipt as dispatched");
+                }
+            }
+            Err(err) => {
+                warn!(%err, process_id = %process_id, "invoicd: failed to submit dispute command");
+            }
         }
     } else {
         info!(process_id = %process_id, pid, invoice_ref = %invoice_ref, "invoicd: approving invoice");
-        if let Err(err) = state.makod.settle_invoice(process_id, &invoice_ref).await {
-            warn!(%err, process_id = %process_id, "invoicd: failed to submit settle command");
+        let idempotency_key = Uuid::new_v5(&process_id, b"settle").to_string();
+        let cmd = ForwardCommand {
+            marktrolle: None,
+            command: "gpke.abrechnung.annehmen".to_owned(),
+            malo_id: None,
+            melo_id: None,
+            payload: serde_json::json!({ "invoice_ref": invoice_ref }),
+        };
+        match state.makod.post_command(&idempotency_key, &cmd).await {
+            Ok(_) => {
+                if let Some(pool) = &state.pool
+                    && let Err(err) =
+                        pg::receipts::mark_dispatched(pool, process_id, OffsetDateTime::now_utc())
+                            .await
+                {
+                    warn!(%err, process_id = %process_id, "invoicd: failed to mark receipt as dispatched");
+                }
+            }
+            Err(err) => {
+                warn!(%err, process_id = %process_id, "invoicd: failed to submit settle command");
+            }
         }
+    }
+}
+
+// ── WiM 31009 ingestor ────────────────────────────────────────────────────────
+
+/// Handle a `de.mako.process.initiated` event for PID 31009 (WiM MSB-Rechnung).
+///
+/// # Design note
+///
+/// Unlike GPKE PIDs 31001/31002/31005/31006, the `wim-rechnung` workflow does
+/// **not** embed the `Rechnung` BO4E object in `ProcessInitiated`.  The INVOIC
+/// arrives later in a separate `InvoicIssued` outbox event.
+///
+/// The full M16 solution requires `GET /api/v1/invoic/{process_id}/rechnung` on
+/// `makod` so `invoicd` can fetch the rechnung separately.  Until that endpoint
+/// is live, we write a DLQ entry for operator visibility and to prevent silent
+/// data loss (§22 MessZV obligation).
+///
+/// Source: WiM AHB BK6-24-174 PID 31009 (MSB-Rechnung, MSB → LF).
+async fn handle_wim_31009_initiated(state: HandlerState, subject: String, data: serde_json::Value) {
+    let process_id = match subject.parse::<Uuid>() {
+        Ok(id) => id,
+        Err(_) => {
+            warn!(
+                subject,
+                "invoicd: WiM 31009 event has no parseable UUID subject"
+            );
+            return;
+        }
+    };
+
+    let sender_mp_id = data["sender_mp_id"].as_str().unwrap_or("").to_owned();
+
+    warn!(
+        process_id = %process_id,
+        pid = 31009,
+        sender_mp_id = %sender_mp_id,
+        "invoicd: WiM MSB-Rechnung (31009) received — writing to DLQ. \
+         Full M16 requires makod GET /api/v1/invoic/{process_id}/rechnung. \
+         Operator must reconcile this invoice manually until M16 is complete."
+    );
+
+    // Write a DLQ entry so the operator can see and reconcile the invoice.
+    if let Some(pool) = &state.pool {
+        let _ = sqlx::query(
+            r"INSERT INTO invoic_dlq (malo_id, raw_event, failure_reason, failed_at)
+              VALUES (NULL, $1, $2, now())
+              ON CONFLICT DO NOTHING",
+        )
+        .bind(&data)
+        .bind("WiM 31009: rechnung not embedded in ProcessInitiated — requires makod /api/v1/invoic endpoint (M16)")
+        .execute(pool)
+        .await
+        .inspect_err(|e| {
+            warn!(%e, process_id = %process_id, "invoicd: failed to write 31009 DLQ entry");
+        });
     }
 }
 

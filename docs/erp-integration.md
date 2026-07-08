@@ -27,9 +27,9 @@ ERP  ←─────────── BO4E JSON ─────────�
               EDIFACT / AS4 / BDEW network
 ```
 
-> **Master data management via `mdmd`** — if you deploy the companion
-> [`mdmd`](./mdmd.md) service, configure `makod` to push process lifecycle
-> events to `mdmd`'s ingest endpoint (`POST /api/v1/events`). `mdmd` then
+> **Master data management via `marktd`** — if you deploy the companion
+> [`marktd`](./marktd.md) service, configure `makod` to push process lifecycle
+> events to `marktd`'s ingest endpoint (`POST /api/v1/events`). `marktd` then
 > fans out to your registered ERP subscribers, eliminating the need to
 > configure a webhook endpoint directly in `makod`.
 
@@ -154,12 +154,42 @@ message is dead-lettered.
 | ERP → makod | `PUT /admin/malo/{malo_id}` | Push MaLo master data to the local cache |
 | ERP → makod | `PUT /admin/partners/{gln}` | Register or update a trading-partner endpoint |
 | ERP → makod | `ErpCommandSource` trait | Fully event-driven inbound (Kafka, SFTP, CDC, …) |
-| mdmd → invoicd | `POST /webhook` CloudEvents | GPKE billing notifications for automatic plausibility check |
+| marktd → invoicd | `POST /webhook` CloudEvents | GPKE billing notifications for automatic plausibility check |
 | invoicd → makod | `POST /api/v1/commands` | `gpke.abrechnung.annehmen` or `gpke.abrechnung.ablehnen` |
+| edmd API → ERP | `GET /api/v1/timeseries` | Retrieve aggregated meter-data for billing basis |
+| obsd API → ERP | `GET /api/v1/kpi` | BNetzA process KPIs (§12 Abs. 1 EnWG reporting) |
 
----
+### Full service topology
 
-## Outbound: makod notifies the ERP
+```
+                    ┌─────────────────────────────────────────────┐
+                    │              makod :8080 / :4080             │
+                    │  EDIFACT ↔ AS4 · SlateDB event store         │
+                    │  GPKE / WiM / GeLi Gas / MABIS workflows     │
+                    └──────┬──────────────────────────────────────┘
+                           │ CloudEvents (HMAC-signed outbox)
+                    ┌──────▼──────────────────────────────────────┐
+                    │              marktd :8180                       │
+                    │  MaLo/MeLo/contracts · price sheets          │
+                    │  subscriber fan-out · auto-responder         │
+                    └──────┬──────────────────────────────────────┘
+          ┌────────────────┼────────────────────────────────┐
+          ▼                ▼                                 ▼
+  ┌───────────────┐ ┌─────────────────┐           ┌──────────────────┐
+  │ invoicd :8280 │ │   edmd :8380    │           │    obsd :8480    │
+  │ INVOIC check  │ │  Meter data /   │           │  KPI reports /   │
+  │ §22 MessZV    │ │  Time-series /  │           │  BNetzA alerts   │
+  │ REMADV/COMDIS │ │  M+M imbalance  │           │  Prometheus      │
+  └───────┬───────┘ └────────┬────────┘           └──────────────────┘
+          │                  │
+          └──── commands ────┘
+                    │
+             makod :8080
+```
+
+Every cloud event produced by `makod` flows through `marktd`'s subscription
+fan-out. The three satellite daemons subscribe independently and process
+events at their own pace.
 
 ### Delivery pipeline
 
@@ -795,7 +825,7 @@ With BO4E:
 | `POST /api/v1/commands` REST endpoint | ✅ Implemented (`makod/src/commands_api.rs`) |
 | `PUT /admin/malo/{malo_id}` cache | ✅ Implemented |
 | `PUT /admin/partners/{gln}` | ✅ Implemented |
-| `bo4e-rs` typed Rust crate | 🔲 Planned — currently `serde_json::Value` |
+| BO4E typed Rust crate (`rubo4e`) | ✅ In use — `rubo4e = "0.3"` in workspace dependencies |
 
 ---
 
@@ -804,6 +834,10 @@ With BO4E:
 | Topic | File |
 |---|---|
 | `makod` operator reference | [docs/makod.md](makod.md) |
+| `marktd` operator reference | [docs/marktd.md](marktd.md) |
+| `invoicd` service README | [services/invoicd/README.md](../services/invoicd/README.md) |
+| `edmd` service README | [services/edmd/README.md](../services/edmd/README.md) |
+| `obsd` service README | [services/obsd/README.md](../services/obsd/README.md) |
 | Engine architecture | [docs/engine.md](engine.md) |
 | API-Webdienste Strom (MaLo-ID) | [docs/api-webdienste.md](api-webdienste.md) |
 | Annual release workflow | [docs/annual-release-workflow.md](annual-release-workflow.md) |
@@ -816,7 +850,9 @@ For the Lieferant (LF) role, received INVOIC messages (PIDs 31001, 31002, 31005,
 31006) require a plausibility check before settlement. Rather than routing every
 invoice through the ERP, deploy [`invoicd`](../services/invoicd/README.md) as
 an autonomous sidecar. It subscribes to `de.mako.process.initiated` events from
-`mdmd` and runs the `invoic-checker` pipeline without any ERP involvement.
+`marktd`, runs the `invoic-checker` pipeline, **persists every receipt to PostgreSQL**
+(satisfying the 3-year retention requirement under §22 MessZV and §41 EnWG), and
+issues the settlement command — all without any ERP involvement.
 
 ### Full billing flow
 
@@ -830,16 +866,17 @@ makod :8080
     │  emits: de.mako.process.initiated
     │  outbox: invoice_ref, Rechnung BO4E object
     ▼
-mdmd :8180
+marktd :8180
     │  fan-out to registered subscribers
     ▼
 invoicd :8280
     │  InvoicCheckEngine::check(tariff_store, check_config, &rechnung)
+    │  upsert_receipt(pool, row)  ← persist to PostgreSQL BEFORE dispatching
     │
     ├─ no dispute findings ──► POST /api/v1/commands
     │                              {"command": "gpke.abrechnung.annehmen",
     │                               "payload": {"invoice_ref": "..."}}
-    │                              ↓
+    │                              ↓  mark_dispatched(pool, process_id)
     │                          makod emits REMADV (PID 33001/33002)
     │                          AS4 → NB
     │
@@ -847,7 +884,7 @@ invoicd :8280
                                    {"command": "gpke.abrechnung.ablehnen",
                                     "payload": {"invoice_ref": "...",
                                                 "ablehnungsgrund": "..."}}
-                                   ↓
+                                   ↓  mark_dispatched(pool, process_id)
                                makod emits COMDIS (PID 29001)
                                AS4 → NB
 ```
@@ -862,26 +899,33 @@ invoicd :8280
 | Tariff match | Each position's unit price falls within the registered tariff band ± `tariff_tolerance` |
 | Tariff found | A tariff entry for the MaLo + period exists in the tariff store (only when `require_tariff = true`) |
 
-### Tariff seeding
+### Payment deadline tracking (`pay_by`)
 
-Seed the tariff store via `invoicd`'s admin endpoint:
+`invoicd` extracts the `faelligkeitsdatum` from each `Rechnung` and stores it as
+`pay_by TIMESTAMPTZ` in `invoic_receipts`. A background query (every 6 h) alerts
+on accepted invoices with `pay_by < now() + 3 days` where the REMADV has not yet
+been dispatched — giving operators a rolling REMADV overdue alert that is also
+queryable from the ERP:
 
 ```http
-PUT /admin/tariff
-Content-Type: application/json
-Authorization: Bearer <token>
-
-{
-  "malo_id": "51238696782",
-  "artikel_id": "NT-4x20",
-  "preis_eur_ct_per_kwh": 4.85,
-  "valid_from": "2025-10-01",
-  "valid_to": "2026-09-30"
-}
+GET http://invoicd:8280/api/v1/receipts?outcome=Ok&dispatched=false
 ```
 
-The in-memory store is ephemeral. Populate it at startup from your ERP or a
-tariff export — `invoicd` does not connect to any database directly.
+### Tariff seeding
+
+Price sheets (`PreisblattNetznutzung`) are managed in `marktd`, not in `invoicd`.
+Upload a price sheet to make it available for the plausibility check:
+
+```bash
+curl -X PUT http://marktd:8180/api/v1/preisblaetter/9904234560001 \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d @preisblatt_netznutzung.json   # rubo4e::v202501::PreisblattNetznutzung
+```
+
+`invoicd` fetches the price sheet from `marktd` at check time (1-hour TTL cache,
+circuit breaker: 3 failures → 30 s open). No static tariff file or in-process
+store is needed.
 
 ### ERP involvement
 
@@ -889,7 +933,7 @@ With `invoicd` deployed, the ERP's billing integration is narrowed to:
 
 1. Seeding tariffs in `invoicd` when rates change.
 2. Receiving `de.mako.process.completed` (settlement confirmed) or
-   `de.mako.process.failed` (manual review required) events from `mdmd`
+   `de.mako.process.failed` (manual review required) events from `marktd`
    to update the ERP's payment status.
 
 No ERP webhook response is required for the settlement decision itself — that is

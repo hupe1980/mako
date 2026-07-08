@@ -388,7 +388,8 @@ impl Workflow for GpkeStornierungWorkflow {
                     "document_code": if positive { "312" } else { "313" },
                 });
                 if !positive {
-                    aperak_payload["error_code"] = serde_json::Value::String("Z29".to_owned());
+                    aperak_payload["error_code"] =
+                        serde_json::Value::String(mako_engine::erc::codes::Z29.to_owned());
                 }
                 if let Some(ref r) = reason {
                     aperak_payload["reason"] = serde_json::Value::String(r.clone());

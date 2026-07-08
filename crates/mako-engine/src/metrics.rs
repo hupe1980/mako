@@ -183,6 +183,13 @@ pub struct EngineMetrics {
     /// `makod_dead_letter_recorded_total{reason}` — incremented when a message
     /// is sent to the dead-letter sink.
     dead_letter_recorded: MetricVec,
+
+    /// `makod_inbound_messages_total{pid,result}` — incremented for every
+    /// inbound EDIFACT message that enters the dispatch pipeline.
+    ///
+    /// - `pid`: the 5-digit EDIFACT Prüfidentifikator (e.g. `"55001"`)
+    /// - `result`: `"dispatched"`, `"skipped"`, or `"error"`
+    inbound_received: MetricVec,
 }
 
 impl EngineMetrics {
@@ -194,6 +201,7 @@ impl EngineMetrics {
             outbox_delivery_attempts: MetricVec::default(),
             deadline_fired: MetricVec::default(),
             dead_letter_recorded: MetricVec::default(),
+            inbound_received: MetricVec::default(),
         }
     }
 
@@ -263,6 +271,18 @@ impl EngineMetrics {
         self.dead_letter_recorded.increment(reason);
     }
 
+    /// Increment `makod_inbound_messages_total{pid=<pid>,result=<result>}`.
+    ///
+    /// Call once per inbound EDIFACT message after the dispatch pipeline
+    /// completes (whether it succeeded or failed).
+    ///
+    /// - `pid` — the EDIFACT Prüfidentifikator (e.g. `55001`)
+    /// - `result` — `"dispatched"`, `"skipped"`, or `"error"`
+    pub fn inbound_received(&self, pid: u32, result: &str) {
+        let label = format!("{pid},{result}");
+        self.inbound_received.increment(&label);
+    }
+
     // ── Snapshot ──────────────────────────────────────────────────────────────
 
     /// Return a snapshot of all counters as a [`MetricsSnapshot`].
@@ -279,6 +299,7 @@ impl EngineMetrics {
             outbox_delivery_attempts: self.outbox_delivery_attempts.snapshot(),
             deadline_fired: self.deadline_fired.snapshot(),
             dead_letter_recorded: self.dead_letter_recorded.snapshot(),
+            inbound_received: self.inbound_received.snapshot(),
         }
     }
 }
@@ -309,6 +330,8 @@ pub struct MetricsSnapshot {
     pub deadline_fired: Vec<(Box<str>, u64)>,
     /// `(reason, count)` pairs for `makod_dead_letter_recorded_total`.
     pub dead_letter_recorded: Vec<(Box<str>, u64)>,
+    /// `("pid,result", count)` pairs for `makod_inbound_messages_total`.
+    pub inbound_received: Vec<(Box<str>, u64)>,
 }
 
 impl MetricsSnapshot {
@@ -368,6 +391,14 @@ impl MetricsSnapshot {
             "Total number of messages sent to the durable dead-letter sink.",
             &["reason"],
             &self.dead_letter_recorded,
+        );
+        Self::write_counter_vec(
+            &mut out,
+            "makod_inbound_messages_total",
+            "Total number of inbound EDIFACT messages that entered the dispatch pipeline, \
+             by PID and outcome.",
+            &["pid", "result"],
+            &self.inbound_received,
         );
 
         out

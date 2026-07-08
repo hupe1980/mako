@@ -192,7 +192,7 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
 
             let domain_cmd = SteuerungsauftragCommand::ReceiveKonfiguration {
                 tx_id: tx_id.clone(),
-                sender_gln: party_id_to_marktpartner(sender_party_id),
+                sender_mp_id: party_id_to_marktpartner(sender_party_id),
                 location_id: location_id_to_string(&location_id),
                 execution_time_from: command.execution_time_from.clone(),
                 max_power_kw: command.maximum_power_value.0.clone(),
@@ -247,7 +247,7 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
 
             let domain_cmd = SteuerungsauftragCommand::ReceiveInitialZustand {
                 tx_id: tx_id.clone(),
-                sender_gln: party_id_to_marktpartner(sender_party_id),
+                sender_mp_id: party_id_to_marktpartner(sender_party_id),
                 location_id: location_id_to_string(&location_id),
                 execution_time_from: command.execution_time_from.clone(),
             };
@@ -308,7 +308,7 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
                 return Ok(());
             }
 
-            let sender_gln = party_id_to_marktpartner(request.netzbetreiber_id.to_string());
+            let sender_mp_id = party_id_to_marktpartner(request.netzbetreiber_id.to_string());
             let melo_id = MeLo::new(&*request.melo_id);
             // Represent device_category as a string; the workflow records it
             // in DeviceChangeData.document_date (process_date|category=...).
@@ -316,7 +316,7 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
 
             let domain_cmd = DeviceChangeCommand::ReceiveRestOrder {
                 tx_id: tx_id.clone(),
-                sender_gln,
+                sender_mp_id,
                 melo_id,
                 device_category,
                 process_date: request.process_date.clone(),

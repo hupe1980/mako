@@ -20,7 +20,7 @@
 //!     anfrage_pid.as_u32(),
 //!     &data.location_id,
 //!     &data.new_supplier,
-//!     Some(&msb_gln),
+//!     Some(&msb_mp_id),
 //! );
 //! process.execute(SupplierChangeCommand::SendAntwort {
 //!     accepted: true,
@@ -48,7 +48,7 @@ use mako_engine::{
 ///
 /// - **ORDERS 17134** — "Einrichtung Konfiguration aufgrund Zuordnung LF (NB an
 ///   MSB)": The NB orders the MSB to configure the metering point for the new
-///   supplier assignment. Emitted only when `msb_gln` is `Some`.
+///   supplier assignment. Emitted only when `msb_mp_id` is `Some`.
 ///
 /// Both entries are intended to be passed as `obligations` to
 /// [`crate::SupplierChangeCommand::SendAntwort`] so they are co-persisted
@@ -59,7 +59,7 @@ use mako_engine::{
 /// - `anfrage_pid` — The Prüfidentifikator of the inbound ANFRAGE (e.g. `55001`).
 /// - `malo` — The Marktlokation identifier for the delivery point.
 /// - `new_supplier` — The GLN/EIC of the incoming Lieferant (LFN).
-/// - `msb_gln` — The GLN/EIC of the Messstellenbetreiber (MSB). Pass `None`
+/// - `msb_mp_id` — The GLN/EIC of the Messstellenbetreiber (MSB). Pass `None`
 ///   when the MSB is unknown at dispatch time; the ORDERS 17134 obligation is
 ///   then omitted and must be fulfilled via a separate process.
 #[must_use]
@@ -67,7 +67,7 @@ pub fn lieferbeginn_obligations(
     anfrage_pid: u32,
     malo: &MaLo,
     new_supplier: &MarktpartnerCode,
-    msb_gln: Option<&MarktpartnerCode>,
+    msb_mp_id: Option<&MarktpartnerCode>,
 ) -> Vec<PendingOutbox> {
     if anfrage_pid != 55001 {
         return vec![];
@@ -83,7 +83,7 @@ pub fn lieferbeginn_obligations(
             "anfrage_pid":  anfrage_pid,
         }),
     )];
-    if let Some(msb) = msb_gln {
+    if let Some(msb) = msb_mp_id {
         obligations.push(PendingOutbox::new(
             "ORDERS",
             msb.as_str(),

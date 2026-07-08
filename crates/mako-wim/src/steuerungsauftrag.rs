@@ -89,7 +89,7 @@ pub struct SteuerungsauftragData {
     /// Transaction ID from the NB/LF (unique per command).
     pub tx_id: String,
     /// GLN of the NB or LF that sent the command.
-    pub sender_gln: MarktpartnerCode,
+    pub sender_mp_id: MarktpartnerCode,
     /// Location identifier — either a NeLo-ID (`E…`) or SR-ID (`C…`).
     pub location_id: String,
     /// Whether this is a power-regulation or reset command.
@@ -113,7 +113,7 @@ pub enum SteuerungsauftragEvent {
         /// Transaction ID from NB/LF (idempotency key).
         tx_id: String,
         /// GLN of the NB/LF sending the command.
-        sender_gln: MarktpartnerCode,
+        sender_mp_id: MarktpartnerCode,
         /// NeLo-ID or SR-ID of the controlled location.
         location_id: String,
         /// ISO-8601 UTC timestamp from which the limit takes effect.
@@ -128,7 +128,7 @@ pub enum SteuerungsauftragEvent {
         /// Transaction ID from NB/LF (idempotency key).
         tx_id: String,
         /// GLN of the NB/LF sending the command.
-        sender_gln: MarktpartnerCode,
+        sender_mp_id: MarktpartnerCode,
         /// NeLo-ID or SR-ID of the controlled location.
         location_id: String,
         /// ISO-8601 UTC timestamp from which the reset takes effect.
@@ -217,7 +217,7 @@ pub enum SteuerungsauftragCommand {
         /// Transaction ID from NB/LF (idempotency key).
         tx_id: String,
         /// GLN of the NB/LF sending the command.
-        sender_gln: MarktpartnerCode,
+        sender_mp_id: MarktpartnerCode,
         /// NeLo-ID or SR-ID of the controlled location.
         location_id: String,
         /// ISO-8601 UTC timestamp from which the limit takes effect.
@@ -232,7 +232,7 @@ pub enum SteuerungsauftragCommand {
         /// Transaction ID from NB/LF (idempotency key).
         tx_id: String,
         /// GLN of the NB/LF sending the command.
-        sender_gln: MarktpartnerCode,
+        sender_mp_id: MarktpartnerCode,
         /// NeLo-ID or SR-ID of the controlled location.
         location_id: String,
         /// ISO-8601 UTC timestamp from which the reset takes effect.
@@ -300,14 +300,14 @@ impl Workflow for WimSteuerungsauftragWorkflow {
         match event {
             SteuerungsauftragEvent::KonfigurationReceived {
                 tx_id,
-                sender_gln,
+                sender_mp_id,
                 location_id,
                 execution_time_from,
                 max_power_kw,
                 execution_time_until,
             } => SteuerungsauftragState::Received(SteuerungsauftragData {
                 tx_id: tx_id.clone(),
-                sender_gln: sender_gln.clone(),
+                sender_mp_id: sender_mp_id.clone(),
                 location_id: location_id.clone(),
                 command_type: SteuerungsCommandType::Konfiguration,
                 execution_time_from: execution_time_from.clone(),
@@ -316,12 +316,12 @@ impl Workflow for WimSteuerungsauftragWorkflow {
             }),
             SteuerungsauftragEvent::InitialZustandReceived {
                 tx_id,
-                sender_gln,
+                sender_mp_id,
                 location_id,
                 execution_time_from,
             } => SteuerungsauftragState::Received(SteuerungsauftragData {
                 tx_id: tx_id.clone(),
-                sender_gln: sender_gln.clone(),
+                sender_mp_id: sender_mp_id.clone(),
                 location_id: location_id.clone(),
                 command_type: SteuerungsCommandType::InitialZustand,
                 execution_time_from: execution_time_from.clone(),
@@ -373,7 +373,7 @@ impl Workflow for WimSteuerungsauftragWorkflow {
         match command {
             SteuerungsauftragCommand::ReceiveKonfiguration {
                 tx_id,
-                sender_gln,
+                sender_mp_id,
                 location_id,
                 execution_time_from,
                 max_power_kw,
@@ -384,7 +384,7 @@ impl Workflow for WimSteuerungsauftragWorkflow {
                 }
                 Ok(vec![SteuerungsauftragEvent::KonfigurationReceived {
                     tx_id,
-                    sender_gln,
+                    sender_mp_id,
                     location_id,
                     execution_time_from,
                     max_power_kw,
@@ -395,7 +395,7 @@ impl Workflow for WimSteuerungsauftragWorkflow {
 
             SteuerungsauftragCommand::ReceiveInitialZustand {
                 tx_id,
-                sender_gln,
+                sender_mp_id,
                 location_id,
                 execution_time_from,
             } => {
@@ -404,7 +404,7 @@ impl Workflow for WimSteuerungsauftragWorkflow {
                 }
                 Ok(vec![SteuerungsauftragEvent::InitialZustandReceived {
                     tx_id,
-                    sender_gln,
+                    sender_mp_id,
                     location_id,
                     execution_time_from,
                 }]

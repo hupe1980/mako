@@ -525,7 +525,7 @@ use super::ahb_helpers::{
     ahb_check_qualifier, ahb_check_required_qualifier, ahb_check_soll,
 };
 
-/// Bedingungsoperator I — I: when BGM DE[0]="E03" is present // [301] Wenn BGM+E03 (Änderungsmeldung) vorhanden, ist STS (Bearbeitungsstatus) Pflicht
+/// Bedingungsoperator I — I: when BGM DE[0]="E03" is present
 fn rule_ahb_55555_sts_cond_0(
     segments: &[edifact_rs::Segment<'_>],
     issues: &mut Vec<ValidationIssue>,
@@ -600,7 +600,7 @@ static AHB_55001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A06" is present in SG4 // [358] Wenn STS+E01++A06 (Status: in Bearbeitung) vorhanden, ist DTM+Z07 (Lieferbeginndatum in Bearbeitung) Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A06" is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55001-SG4-DTM-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A06")) && !segs.iter().any(|s| s.tag == "DTM" && s.element_str(0).is_some_and(|v| v == "Z07")) {
@@ -611,7 +611,7 @@ static AHB_55001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4 // [48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55001-SG4-FTX-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A99")) && !segs.iter().any(|s| s.tag == "FTX") {
@@ -680,7 +680,7 @@ static AHB_55002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A06" is present in SG4 // [358] Wenn STS+E01++A06 (Status: in Bearbeitung) vorhanden, ist DTM+Z07 (Lieferbeginndatum in Bearbeitung) Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A06" is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55002-SG4-DTM-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A06")) && !segs.iter().any(|s| s.tag == "DTM" && s.element_str(0).is_some_and(|v| v == "Z07")) {
@@ -691,7 +691,7 @@ static AHB_55002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4 // [48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55002-SG4-FTX-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A99")) && !segs.iter().any(|s| s.tag == "FTX") {
@@ -760,7 +760,7 @@ static AHB_55003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A06" is present in SG4 // [358] Wenn STS+E01++A06 (Status: in Bearbeitung) vorhanden, ist DTM+Z07 (Lieferbeginndatum in Bearbeitung) Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A06" is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55003-SG4-DTM-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A06")) && !segs.iter().any(|s| s.tag == "DTM" && s.element_str(0).is_some_and(|v| v == "Z07")) {
@@ -771,7 +771,7 @@ static AHB_55003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4 // [48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55003-SG4-FTX-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A99")) && !segs.iter().any(|s| s.tag == "FTX") {
@@ -840,7 +840,7 @@ static AHB_55004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4 // [7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55004-SG4-DTM-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "7") && s.element_str(2).is_some_and(|v| v == "ZG9" || v == "ZH1" || v == "ZH2")) && !segs.iter().any(|s| s.tag == "DTM") {
@@ -851,7 +851,7 @@ static AHB_55004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4 // [11] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+36 (Ende) Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55004-SG4-DTM-I1", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "7") && s.element_str(2).is_some_and(|v| v == "ZG9" || v == "ZH1" || v == "ZH2")) && !segs.iter().any(|s| s.tag == "DTM" && s.element_str(0).is_some_and(|v| v == "36")) {
@@ -862,7 +862,7 @@ static AHB_55004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4 // [48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55004-SG4-FTX-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A99")) && !segs.iter().any(|s| s.tag == "FTX") {
@@ -931,7 +931,7 @@ static AHB_55005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4 // [7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55005-SG4-DTM-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "7") && s.element_str(2).is_some_and(|v| v == "ZG9" || v == "ZH1" || v == "ZH2")) && !segs.iter().any(|s| s.tag == "DTM") {
@@ -942,7 +942,7 @@ static AHB_55005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4 // [11] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+36 (Ende) Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55005-SG4-DTM-I1", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "7") && s.element_str(2).is_some_and(|v| v == "ZG9" || v == "ZH1" || v == "ZH2")) && !segs.iter().any(|s| s.tag == "DTM" && s.element_str(0).is_some_and(|v| v == "36")) {
@@ -953,7 +953,7 @@ static AHB_55005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4 // [48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55005-SG4-FTX-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A99")) && !segs.iter().any(|s| s.tag == "FTX") {
@@ -1022,7 +1022,7 @@ static AHB_55006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4 // [7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55006-SG4-DTM-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "7") && s.element_str(2).is_some_and(|v| v == "ZG9" || v == "ZH1" || v == "ZH2")) && !segs.iter().any(|s| s.tag == "DTM") {
@@ -1033,7 +1033,7 @@ static AHB_55006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4 // [11] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+36 (Ende) Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="7"+DE[2]∈{ZG9|ZH1|ZH2} is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55006-SG4-DTM-I1", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "7") && s.element_str(2).is_some_and(|v| v == "ZG9" || v == "ZH1" || v == "ZH2")) && !segs.iter().any(|s| s.tag == "DTM" && s.element_str(0).is_some_and(|v| v == "36")) {
@@ -1044,7 +1044,7 @@ static AHB_55006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4 // [48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]="A99" is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55006-SG4-FTX-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A99")) && !segs.iter().any(|s| s.tag == "FTX") {
@@ -1113,7 +1113,7 @@ static AHB_55016_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]∈{A04|A05} is present in SG4 // [351] Wenn STS+E01++A04/A05 (Status: Zustimmung/Teilzustimmung) vorhanden, ist DTM+Vertragsende Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]∈{A04|A05} is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55016-SG4-DTM-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A04" || v == "A05")) && !segs.iter().any(|s| s.tag == "DTM") {
@@ -1182,7 +1182,7 @@ static AHB_55017_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]∈{A04|A05} is present in SG4 // [351] Wenn STS+E01++A04/A05 (Status: Zustimmung/Teilzustimmung) vorhanden, ist DTM+Vertragsende Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]∈{A04|A05} is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55017-SG4-DTM-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A04" || v == "A05")) && !segs.iter().any(|s| s.tag == "DTM") {
@@ -1251,7 +1251,7 @@ static AHB_55018_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 }
             })
 
-            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]∈{A04|A05} is present in SG4 // [351] Wenn STS+E01++A04/A05 (Status: Zustimmung/Teilzustimmung) vorhanden, ist DTM+Vertragsende Pflicht
+            // Bedingungsoperator I — I: when STS DE[0]="E01"+DE[2]∈{A04|A05} is present in SG4
             .with_scoped_group_rule_fn("SG4", "AHB-55018-SG4-DTM-I0", |group, segs, _ctx, issues| {
                 let __gs_start = issues.len();
                 if segs.iter().any(|s| s.tag == "STS" && s.element_str(0).is_some_and(|v| v == "E01") && s.element_str(2).is_some_and(|v| v == "A04" || v == "A05")) && !segs.iter().any(|s| s.tag == "DTM") {
@@ -1626,6 +1626,120 @@ fn ahb_55051_pack() -> Arc<ProfileRulePack> {
     Arc::clone(&AHB_55051_PACK)
 }
 
+static AHB_55065_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55065")
+            .for_message_type("UTILMD")
+            .for_release("S2.1")
+            .with_named_stateless_rule_fn("AHB-55065-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-55065-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55065", "55065", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55065-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-55065-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z05']", |q| matches!(q, "Z05"), "55065", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55065-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-55065-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 55065", "55065", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55065-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-55065-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "55065", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55065-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-55065-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 55065", "55065", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55065-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-55065-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "55065", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-55065-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-55065-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-55065-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "55065", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_55065_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_55065_PACK)
+}
+
+static AHB_55069_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55069")
+            .for_message_type("UTILMD")
+            .for_release("S2.1")
+            .with_named_stateless_rule_fn("AHB-55069-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-55069-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55069", "55069", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55069-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-55069-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z05']", |q| matches!(q, "Z05"), "55069", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55069-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-55069-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 55069", "55069", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55069-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-55069-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "55069", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55069-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-55069-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 55069", "55069", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55069-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-55069-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "55069", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-55069-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-55069-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-55069-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "55069", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_55069_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_55069_PACK)
+}
+
+static AHB_55070_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55070")
+            .for_message_type("UTILMD")
+            .for_release("S2.1")
+            .with_named_stateless_rule_fn("AHB-55070-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-55070-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55070", "55070", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55070-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-55070-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['Z05']", |q| matches!(q, "Z05"), "55070", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55070-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-55070-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 55070", "55070", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55070-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-55070-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "55070", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55070-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-55070-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 55070", "55070", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55070-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-55070-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "55070", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-55070-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-55070-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-55070-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "55070", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_55070_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_55070_PACK)
+}
+
 static AHB_55168_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55168")
             .for_message_type("UTILMD")
@@ -1749,6 +1863,122 @@ fn ahb_55555_pack() -> Arc<ProfileRulePack> {
     Arc::clone(&AHB_55555_PACK)
 }
 
+static AHB_55600_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55600")
+            .for_message_type("UTILMD")
+            .for_release("S2.1")
+            .with_named_stateless_rule_fn("AHB-55600-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-55600-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55600", "55600", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55600-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-55600-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E01']", |q| matches!(q, "E01"), "55600", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55600-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-55600-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 55600", "55600", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55600-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-55600-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "55600", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55600-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-55600-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 55600", "55600", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55600-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-55600-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "55600", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55600-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-55600-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 55600", "55600", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55600-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-55600-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "55600", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55600-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-55600-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 55600", "55600", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55600-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-55600-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "55600", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-55600-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-55600-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-55600-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "55600", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-55600-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-55600-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-55600-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "55600", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_55600_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_55600_PACK)
+}
+
+static AHB_55601_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(ProfileRulePack::new("UTILMD-AHB-S2.1-55601")
+            .for_message_type("UTILMD")
+            .for_release("S2.1")
+            .with_named_stateless_rule_fn("AHB-55601-BGM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "BGM", "AHB-55601-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55601", "55601", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55601-BGM-1001-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "BGM", "AHB-55601-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E01']", |q| matches!(q, "E01"), "55601", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55601-DTM-M", |segs, issues| {
+                ahb_check_mandatory(segs, "DTM", "AHB-55601-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 55601", "55601", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55601-DTM-2005-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "DTM", "AHB-55601-DTM-2005-RQ", "mandatory segment DTM with DE 2005 qualifier '137' is missing", |q| matches!(q, "137"), "55601", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55601-NAD-M", |segs, issues| {
+                ahb_check_mandatory(segs, "NAD", "AHB-55601-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 55601", "55601", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55601-NAD-3035-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "NAD", "AHB-55601-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "55601", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55601-IDE-M", |segs, issues| {
+                ahb_check_mandatory(segs, "IDE", "AHB-55601-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 55601", "55601", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55601-IDE-7495-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "IDE", "AHB-55601-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "55601", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55601-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-55601-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 55601", "55601", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-55601-RFF-1153-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "RFF", "AHB-55601-RFF-1153-Q", "segment RFF DE 1153 (element 0, component 0): qualifier is not one of the allowed values ['Z13']", |q| matches!(q, "Z13"), "55601", issues);
+            })
+            .require_segment_in_group("SG2", "NAD", "AHB-55601-SG2-NAD-M")
+            .with_scoped_group_rule_fn("SG2", "AHB-55601-SG2-NAD-3035-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "NAD", "AHB-55601-SG2-NAD-3035-Q", "in group SG2: segment NAD DE 3035 qualifier is not one of ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "55601", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .require_segment_in_group("SG6", "RFF", "AHB-55601-SG6-RFF-M")
+            .with_scoped_group_rule_fn("SG6", "AHB-55601-SG6-RFF-1153-Q", |group, segs, _ctx, issues| {
+                let __gs_start = issues.len();
+                ahb_check_qualifier(segs, "RFF", "AHB-55601-SG6-RFF-1153-Q", "in group SG6: segment RFF DE 1153 qualifier is not one of ['Z13']", |q| matches!(q, "Z13"), "55601", issues);
+                for __gi in &mut issues[__gs_start..] {
+                    __gi.context.push(("group_occurrence".to_owned(), group.occurrence_index.to_string()));
+                }
+            })
+            .with_max_issues_per_rule(50)
+        )
+});
+
+fn ahb_55601_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_55601_PACK)
+}
+
 static AHB_ALL_PACK_UTILMD_S2_1: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     let pack = ProfileRulePack::new("UTILMD-AHB-S2.1-ALL")
         .for_message_type("UTILMD")
@@ -1799,10 +2029,25 @@ static AHB_ALL_PACK_UTILMD_S2_1: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(
         .merge_with_override(ahb_55051_pack().as_ref().clone())
         .expect("AHB union pack merge_with_override failed");
     let pack = pack
+        .merge_with_override(ahb_55065_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_55069_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_55070_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
         .merge_with_override(ahb_55168_pack().as_ref().clone())
         .expect("AHB union pack merge_with_override failed");
     let pack = pack
         .merge_with_override(ahb_55555_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_55600_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_55601_pack().as_ref().clone())
         .expect("AHB union pack merge_with_override failed");
     Arc::new(pack)
 });
@@ -1824,8 +2069,13 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             Some(55039) => ahb_55039_pack(),
             Some(55042) => ahb_55042_pack(),
             Some(55051) => ahb_55051_pack(),
+            Some(55065) => ahb_55065_pack(),
+            Some(55069) => ahb_55069_pack(),
+            Some(55070) => ahb_55070_pack(),
             Some(55168) => ahb_55168_pack(),
             Some(55555) => ahb_55555_pack(),
+            Some(55600) => ahb_55600_pack(),
+            Some(55601) => ahb_55601_pack(),
             None => Arc::clone(&AHB_ALL_PACK_UTILMD_S2_1),
             Some(_unknown) => Arc::new(ProfileRulePack::new("unknown-pid")
                 .for_message_type("UTILMD")

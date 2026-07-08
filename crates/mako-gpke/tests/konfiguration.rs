@@ -40,7 +40,7 @@ fn spawn_process()
 fn beauftragung_cmd() -> KonfigurationCommand {
     KonfigurationCommand::NbSendsBeauftragung {
         orders_pid: Pruefidentifikator::new(17134).unwrap(),
-        msb_gln: MarktpartnerCode::new("9904357000003"),
+        msb_mp_id: MarktpartnerCode::new("9904357000003"),
         malo: MaLo::new("51238696781"),
         new_supplier: MarktpartnerCode::new("4012345000023"),
         message_ref: MessageRef::new("ORD-2025-001"),
@@ -85,7 +85,7 @@ fn wrong_orders_pid_returns_error() {
         &state,
         KonfigurationCommand::NbSendsBeauftragung {
             orders_pid: Pruefidentifikator::new(17001).unwrap(), // GeLi Gas PID — wrong
-            msb_gln: MarktpartnerCode::new("9904357000003"),
+            msb_mp_id: MarktpartnerCode::new("9904357000003"),
             malo: MaLo::new("51238696781"),
             new_supplier: MarktpartnerCode::new("4012345000023"),
             message_ref: MessageRef::new("ORD-WRONG"),
@@ -283,7 +283,7 @@ fn send_antwort_lieferbeginn_accepted_emits_mscons_13015_outbox() {
     assert_eq!(entry.payload["malo"].as_str().unwrap(), "51238696781");
 }
 
-/// When `msb_gln` is provided to `lieferbeginn_obligations`, a second outbox
+/// When `msb_mp_id` is provided to `lieferbeginn_obligations`, a second outbox
 /// entry (ORDERS 17134) must be emitted alongside MSCONS 13015.
 ///
 /// The workflow routes all obligations from the command — no PID knowledge
@@ -297,7 +297,7 @@ fn send_antwort_lieferbeginn_with_msb_emits_orders_17134_outbox() {
 
     let malo = MaLo::new("51238696781");
     let new_supplier = MarktpartnerCode::new("4012345000023");
-    let msb_gln = MarktpartnerCode::new("9904357000003");
+    let msb_mp_id = MarktpartnerCode::new("9904357000003");
     let data = InitiatedData {
         location_id: malo.clone(),
         new_supplier: new_supplier.clone(),
@@ -308,7 +308,7 @@ fn send_antwort_lieferbeginn_with_msb_emits_orders_17134_outbox() {
     };
     let state = SupplierChangeState::ValidationPassed(data);
     let obligations =
-        post_acceptance::lieferbeginn_obligations(55001, &malo, &new_supplier, Some(&msb_gln));
+        post_acceptance::lieferbeginn_obligations(55001, &malo, &new_supplier, Some(&msb_mp_id));
 
     let output = GpkeSupplierChangeWorkflow::handle(
         &state,

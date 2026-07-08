@@ -99,6 +99,7 @@ pub trait EventStore: Send + Sync {
     ///   [`ExpectedVersion::NoStream`] or [`ExpectedVersion::Exact`] and the
     ///   actual stream version does not match.
     /// - [`EngineError::Store`] for underlying storage failures.
+    #[must_use = "dropping an append Result silently discards a version-conflict or store error"]
     async fn append(
         &self,
         stream_id: &StreamId,
@@ -113,6 +114,7 @@ pub trait EventStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Store`] for underlying storage failures.
+    #[must_use = "dropping a load Result silently discards a store error"]
     async fn load(&self, stream_id: &StreamId) -> Result<Vec<EventEnvelope>, EngineError>;
 
     /// Load events from `stream_id` starting after `from_sequence` (exclusive).
@@ -125,6 +127,7 @@ pub trait EventStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Store`] for underlying storage failures.
+    #[must_use = "dropping a load_from Result silently discards a store error"]
     async fn load_from(
         &self,
         stream_id: &StreamId,
@@ -148,6 +151,7 @@ pub trait EventStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Store`] for underlying storage failures.
+    #[must_use = "dropping a stream_version Result silently discards a store error"]
     async fn stream_version(&self, stream_id: &StreamId) -> Result<u64, EngineError>;
 
     /// Return all known stream identifiers in this store, optionally filtered
@@ -173,6 +177,7 @@ pub trait EventStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Store`] for underlying storage failures.
+    #[must_use = "dropping a list_streams Result silently discards a store error"]
     async fn list_streams(&self, prefix: Option<&str>) -> Result<Vec<StreamId>, EngineError>;
 
     /// Paginated stream enumeration — equivalent to `list_streams` but returns
@@ -219,6 +224,7 @@ pub trait EventStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Store`] for underlying storage failures.
+    #[must_use = "dropping a list_streams_page Result silently discards a store error"]
     async fn list_streams_page(
         &self,
         prefix: Option<&str>,
@@ -261,7 +267,7 @@ pub trait EventStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Store`] for underlying storage failures.
-    /// Returns any error produced by `f`.
+    #[must_use = "dropping a fold_stream Result silently discards a store or fold error"]
     async fn fold_stream<T, F>(
         &self,
         stream_id: &StreamId,
@@ -417,6 +423,7 @@ pub trait AtomicAppend: EventStore {
     /// - [`EngineError::Store`] or [`EngineError::Outbox`] — storage failure.
     ///
     /// [`Workflow::handle`]: crate::workflow::Workflow::handle
+    #[must_use = "dropping an append_with_outbox Result silently discards a version-conflict or store error"]
     async fn append_with_outbox(
         &self,
         stream_id: &StreamId,
@@ -451,6 +458,7 @@ pub trait AtomicAppend: EventStore {
     /// [`append_with_outbox`]: AtomicAppend::append_with_outbox
     /// [`DeadlineStore::register`]: crate::deadline::DeadlineStore::register
     /// `SlateDbStore`: see `crate::store_slatedb` (requires `slatedb` feature)
+    #[must_use = "dropping an append_with_outbox_and_deadlines Result silently discards a version-conflict or store error"]
     async fn append_with_outbox_and_deadlines(
         &self,
         stream_id: &StreamId,

@@ -272,7 +272,7 @@ pub use utilts::{
     UtiltsKonfigState, WORKFLOW_NAME as UTILTS_WORKFLOW_NAME,
 };
 pub use wechselprozesse::{
-    APERAK_WINDOW_LABEL, GpkeSupplierChangeWorkflow, IFTSTA_PIDS as IFTSTA_VOLLZUGS_PIDS,
+    GPKE_PROCESS_RESPONSE_LABEL, GpkeSupplierChangeWorkflow, IFTSTA_PIDS as IFTSTA_VOLLZUGS_PIDS,
     InitiatedData, InitiatedDetails, SupplierChangeCommand, SupplierChangeEvent,
     SupplierChangeProjection, SupplierChangeRecord, SupplierChangeState, UTILMD_PIDS,
     WORKFLOW_NAME as SUPPLIER_CHANGE_WORKFLOW_NAME,

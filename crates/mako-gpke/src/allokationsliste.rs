@@ -82,7 +82,7 @@ pub enum AllokationslisteEvent {
         /// ORDERS Prüfidentifikator (17114 for Strom; 17110 for Gas/shared).
         orders_pid: Pruefidentifikator,
         /// NB GLN.
-        nb_gln: MarktpartnerCode,
+        nb_mp_id: MarktpartnerCode,
         /// Affected MaLo (optional).
         malo: Option<MaLo>,
         /// Message reference.
@@ -131,7 +131,7 @@ pub struct AnforderungData {
     /// ORDERS PID.
     pub orders_pid: Pruefidentifikator,
     /// NB GLN.
-    pub nb_gln: MarktpartnerCode,
+    pub nb_mp_id: MarktpartnerCode,
     /// Optional MaLo.
     pub malo: Option<MaLo>,
     /// Message reference.
@@ -212,7 +212,7 @@ pub enum AllokationslisteCommand {
         /// ORDERS PID (17114 for Strom; 17110 for Gas/shared).
         orders_pid: Pruefidentifikator,
         /// NB GLN.
-        nb_gln: MarktpartnerCode,
+        nb_mp_id: MarktpartnerCode,
         /// Affected MaLo (optional).
         malo: Option<MaLo>,
         /// Message reference.
@@ -274,12 +274,12 @@ impl Workflow for GpkeAllokationslisteWorkflow {
         match event {
             AllokationslisteEvent::AnforderungGesendet {
                 orders_pid,
-                nb_gln,
+                nb_mp_id,
                 malo,
                 message_ref,
             } => AllokationslisteState::AnforderungGesendet(AnforderungData {
                 orders_pid: *orders_pid,
-                nb_gln: nb_gln.clone(),
+                nb_mp_id: nb_mp_id.clone(),
                 malo: malo.clone(),
                 message_ref: message_ref.clone(),
             }),
@@ -317,7 +317,7 @@ impl Workflow for GpkeAllokationslisteWorkflow {
         match command {
             AllokationslisteCommand::SendAnforderung {
                 orders_pid,
-                nb_gln,
+                nb_mp_id,
                 malo,
                 message_ref,
                 payload,
@@ -332,13 +332,13 @@ impl Workflow for GpkeAllokationslisteWorkflow {
                 }
                 let event = AllokationslisteEvent::AnforderungGesendet {
                     orders_pid,
-                    nb_gln: nb_gln.clone(),
+                    nb_mp_id: nb_mp_id.clone(),
                     malo: malo.clone(),
                     message_ref: message_ref.clone(),
                 };
                 let outbox = vec![PendingOutbox::new(
                     "ORDERS",
-                    nb_gln.as_str(),
+                    nb_mp_id.as_str(),
                     serde_json::json!({
                         "pid":        orders_pid.as_u32(),
                         "malo":       malo.as_ref().map(|m| m.as_str()),

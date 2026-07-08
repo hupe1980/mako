@@ -87,6 +87,7 @@ pub mod builder;
 pub mod dead_letter;
 pub mod deadline;
 pub mod envelope;
+pub mod erc;
 pub mod erp;
 pub mod error;
 pub mod event_store;

@@ -1,6 +1,13 @@
-# makod demo
+# mako demo
 
-Quick-start guide for running and testing `makod` — the Mako process engine daemon for German energy market communication (GPKE, WiM, GeLi Gas, MABIS, GaBi Gas, Redispatch 2.0).
+Quick-start guide for running and testing the full mako stack:
+
+- **`makod`** `:8080` — EDIFACT process engine (GPKE, WiM, GeLi Gas, MABIS, GaBi Gas)
+- **`marktd`** `:8180` — Market Data Hub (MaLo/MeLo, contracts, VersorgungsStatus, PRICAT, subscriptions)
+- **`processd`** `:8580` — NB STP auto-responder (validates Anmeldungen, dispatches bestaetigen/ablehnen)
+- **`webhook`** `:8000` — In-memory ERP event receiver
+
+Both daemons run with authentication **disabled** in the demo (`--auth-disabled` / `--auth-key`) — suitable for local development only. See the [production guide](../docs/getting-started.md) for OIDC setup.
 
 ---
 
@@ -8,123 +15,112 @@ Quick-start guide for running and testing `makod` — the Mako process engine da
 
 | Tool | Purpose |
 |---|---|
-| Docker (with Compose v2) | Run the daemon |
+| Docker (with Compose v2) | Run the stack |
 | `curl` | HTTP smoke tests |
 | `jq` | Parse JSON responses |
 
-For the `makod:dev` image used in the examples below, build it first from the repo root:
+Build images from the repo root (shared builder layer — both finish in roughly the same time as one build):
 
 ```bash
-docker build \
-  --build-arg OCI_REVISION=$(git rev-parse HEAD) \
-  --build-arg OCI_CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-  -t makod:dev \
-  .
+docker build --target runtime          -t makod:dev     .
+docker build --target marktd-runtime   -t marktd:dev    .
+docker build --target processd-runtime -t processd:dev  .
 ```
 
-Or pull the published image and tag it locally:
+Or pull published images:
 
 ```bash
-docker pull ghcr.io/hupe1980/makod:0.7.0
-docker tag  ghcr.io/hupe1980/makod:0.7.0 makod:dev
+docker pull ghcr.io/hupe1980/makod:0.7.0 && docker tag ghcr.io/hupe1980/makod:0.7.0 makod:dev
+docker pull ghcr.io/hupe1980/marktd:0.7.0  && docker tag ghcr.io/hupe1980/marktd:0.7.0  marktd:dev
 ```
 
 ---
 
 ## Demo configuration
 
-The demo runs makod as the **Netzbetreiber Strom (NB)** with GLN `9900357000004`. This matches the `NAD+MR` (receiver) in the bundled EDIFACT fixture, so all routing steps succeed without extra setup.
+The demo runs the stack as **Netzbetreiber Strom (NB)** with GLN `9900357000004`. This matches the `NAD+MR` (receiver) in the bundled EDIFACT fixture, so all routing steps succeed without extra setup.
 
-| Parameter | Value |
-|---|---|
-| Tenant ID | `9900357000004` |
-| Marktrolle | `NB` |
-| HTTP port | `8080` |
-| Bearer token | `demo-secret-change-me` |
+| Service | Parameter | Value |
+|---|---|---|
+| makod | Tenant ID / Marktrolle | `9900357000004` / `NB` |
+| makod | HTTP port | `:8080` |
+| makod | Bearer token | `demo-secret-change-me` |
+| marktd | Tenant GLN | `9900357000004` |
+| marktd | HTTP port | `:8180` |
+| marktd | Auth | disabled (dev mode) |
 
 ---
 
 ## Quick start — docker compose
 
 ```bash
-# from the repo root:
 cd demo
 docker compose up -d
-docker compose logs -f makod
+docker compose ps          # wait for all services (healthy)
+docker compose logs -f
 ```
 
-The container is healthy when `docker compose ps` shows `(healthy)`.
+Services are healthy when `docker compose ps` shows `(healthy)` for both `makod` and `marktd`.
 
-Stop and keep data:
+Watch events arrive:
 ```bash
-docker compose down
+docker compose logs webhook -f   # ERP CloudEvents from makod/marktd
 ```
 
-Stop and wipe data volume:
+Stop:
 ```bash
-docker compose down -v
-```
-
----
-
-## Quick start — plain docker run
-
-```bash
-# volatile / ephemeral mode — data lost on restart, fine for local testing
-# Mount a tmpfs at the image's data path with nonroot uid ownership.
-# The distroless runtime user is uid/gid 65532.
-docker run --rm -p 8080:8080 \
-  --tmpfs /var/lib/makod:uid=65532,gid=65532 \
-  makod:dev \
-  --tenant-id  9900357000004 \
-  --marktrollen NB \
-  --auth-key   demo=demo-secret-change-me
-
-# with persistent storage (survives restarts)
-docker run -d -p 8080:8080 \
-  -v "$PWD/makod-data:/var/lib/makod" \
-  makod:dev \
-  --tenant-id   9900357000004 \
-  --marktrollen NB \
-  --auth-key    demo=demo-secret-change-me
+docker compose down       # keep PostgreSQL volume
+docker compose down -v    # wipe all data
 ```
 
 ---
 
 ## Smoke test — automated
 
-The `smoke.sh` script runs all API checks end-to-end and prints a pass/fail summary:
-
 ```bash
 cd demo
+
+# Test makod only:
 ./smoke.sh
+
+# Test full stack (makod + marktd):
+MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 ./smoke.sh
 ```
 
-Override defaults if needed:
-```bash
-BASE_URL=http://localhost:8080 AUTH_TOKEN=demo-secret-change-me ./smoke.sh
-```
-
-Expected output:
+Expected output (full stack):
 ```
 ▶ Waiting for makod at http://localhost:8080 ...
 ✓ makod is ready
 =================================================
-  makod smoke test  →  http://localhost:8080
+  mako smoke test  →  http://localhost:8080
+  marktd           →  http://localhost:8180
 =================================================
 
-✓ GET /health → ok  (instance: <hostname>-<pid>)
+✓ GET /health → ok  (instance: ...)
 ✓ GET /api/v1/openapi.json → makod REST API
 ✓ PUT /admin/partners/4012345000023 → 200
 ✓ GET /admin/partners → 1 partner(s) registered
 ✓ POST /edifact → HTTP 200  accepted=1  rejected=0  status=routed  pid=55001
+✓ Automatic outbox: APERAK BGM+312 + ProcessInitiated CloudEvent
+✓ POST /api/v1/commands bestaetigen → HTTP 202
+✓ Outbound EDIFACT: UTILMD 55003 Bestätigung delivered
 ✓ DELETE /admin/partners/4012345000023 → 200
+
+─────────────────────────────────────────────────
+  marktd smoke tests  →  http://localhost:8180
+─────────────────────────────────────────────────
+
+✓ GET /health → ok
+✓ PUT /api/v1/preisblaetter/9900357000004 → 204 (price sheet stored)
+✓ GET /api/v1/preisblaetter/9900357000004 → source=api  bezeichnung=Demo Netznutzungspreise 2025 ...
+✓ Operator-override protection verified via source=api field
 
 =================================================
 All smoke tests passed.
 
-  Swagger UI : http://localhost:8080/api/v1/docs/
-  MCP server : http://localhost:8080/mcp
+  makod Swagger UI : http://localhost:8080/api/v1/docs/
+  makod MCP server : http://localhost:8080/mcp
+  marktd  REST API   : http://localhost:8180/api/v1/docs/
 =================================================
 ```
 
@@ -132,73 +128,47 @@ All smoke tests passed.
 
 ## Manual curl examples
 
-All REST endpoints require a Bearer token.  Replace `demo-secret-change-me` with the value you passed to `--auth-key`.
-
-### Health check (no auth required)
+### makod
 
 ```bash
-curl http://localhost:8080/health
-```
+# Health check (no auth)
+curl http://localhost:8080/health | jq .
 
-```json
-{"status":"ok","instance_id":"<hostname>-<pid>"}
-```
-
-### Interactive API documentation
-
-Open in your browser — no token needed to browse the schema:
-
-```
-http://localhost:8080/api/v1/docs/
-```
-
-### Register a trading partner
-
-```bash
-curl -X PUT http://localhost:8080/admin/partners/4012345000023 \
-  -H "Authorization: Bearer demo-secret-change-me" \
-  -H "Content-Type: application/json" \
-  -d @fixtures/partner-lf.json
-```
-
-### List partners
-
-```bash
-curl http://localhost:8080/admin/partners \
-  -H "Authorization: Bearer demo-secret-change-me" | jq .
-```
-
-### Submit a UTILMD EDIFACT interchange
-
-```bash
+# Submit EDIFACT interchange
 curl -X POST http://localhost:8080/edifact \
   -H "Authorization: Bearer demo-secret-change-me" \
   -H "Content-Type: text/plain; charset=utf-8" \
-  --data-binary @fixtures/utilmd-55001.edi | jq .
+  --data-binary "@fixtures/utilmd-55001.edi" | jq .
+
+# Accept a Lieferbeginn Anmeldung (replace <process_id>)
+curl -X POST http://localhost:8080/api/v1/commands \
+  -H "Authorization: Bearer demo-secret-change-me" \
+  -H "Content-Type: application/json" \
+  -d '{"command":"bestaetigen","process_id":"<process_id>"}' | jq .
 ```
 
-Response:
-```json
-{
-  "accepted": 1,
-  "rejected": 0,
-  "messages": [
-    {
-      "message_type": "UTILMD",
-      "pid": 55001,
-      "workflow": "GpkeSupplierChange",
-      "status": "routed"
-    }
-  ]
-}
-```
-
-### Download the OpenAPI spec
+### marktd (auth disabled in demo)
 
 ```bash
-curl http://localhost:8080/api/v1/openapi.json \
-  -H "Authorization: Bearer demo-secret-change-me" \
-  -o makod-openapi.json
+# Health check
+curl http://localhost:8180/health | jq .
+
+# Upload a NB price sheet (source=api — operator override)
+curl -X PUT http://localhost:8180/api/v1/preisblaetter/9900357000004 \
+  -H "Content-Type: application/json" \
+  --data-binary "@fixtures/preisblatt-nb.json" \
+  -w "\nHTTP %{http_code}\n"
+
+# Read back the price sheet valid on a billing date
+curl "http://localhost:8180/api/v1/preisblaetter/9900357000004?date=2025-10-15" | jq '{
+  source: .source,
+  bo4e_version: .bo4e_version,
+  bezeichnung: .data.bezeichnung,
+  updated_at: .updated_at
+}'
+
+# View incoming CloudEvents from makod
+curl http://localhost:8000/events | jq '.[].body | {type,subject}'
 ```
 
 ---
@@ -207,54 +177,20 @@ curl http://localhost:8080/api/v1/openapi.json \
 
 | File | Description |
 |---|---|
-| `fixtures/utilmd-55001.edi` | UTILMD PID 55001 — Lieferbeginn Strom.  Sender: LF `4012345000023`, Receiver: NB `9900357000004`.  Routes when tenant is configured as this NB. |
-| `fixtures/partner-lf.json` | `PartnerRecord` for the LF `4012345000023` with AS4 endpoint, email channel, and `LfStrom` role. |
+| `fixtures/utilmd-55001.edi` | UTILMD PID 55001 — Anmeldung Lieferbeginn Strom (LFN→NB) |
+| `fixtures/partner-lf.json` | Trading partner record for LFN GLN `4012345000023` |
+| `fixtures/preisblatt-nb.json` | `PreisblattNetznutzung` for NB `9900357000004` (2025-10-01..2026-09-30) |
 
 ---
 
-## MCP integration (Claude Desktop / VS Code Copilot)
+## Service URLs
 
-`makod` exposes an MCP server at `/mcp` on the same port as the REST API.
+| Service | URL | Purpose |
+|---|---|---|
+| makod REST API | http://localhost:8080 | EDIFACT ingest, process commands |
+| makod Swagger UI | http://localhost:8080/api/v1/docs/ | Interactive API docs |
+| makod MCP server | http://localhost:8080/mcp | LLM tooling (Claude Desktop, VS Code) |
+| marktd REST API | http://localhost:8180 | Master data (MaLo/MeLo, price sheets) |
+| marktd Swagger UI | http://localhost:8180/api/v1/docs/ | Interactive API docs |
+| ERP webhook receiver | http://localhost:8000/events | View delivered CloudEvents |
 
-Add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "makod": {
-      "url": "http://localhost:8080/mcp",
-      "headers": { "Authorization": "Bearer demo-secret-change-me" }
-    }
-  }
-}
-```
-
-Available MCP tools: `list_commands`, `submit_command`, `get_malo`, `list_partners`, `get_partner`, `get_health`.
-
----
-
-## Startup validation only (no server)
-
-Run the `--check` mode to validate profiles, adapters, and config without starting any workers:
-
-```bash
-docker run --rm makod:dev --check
-```
-
-Exit code 0 means all checks passed. Use this in CI pipelines before a full deployment.
-
----
-
-## Common issues
-
-**`403 Forbidden` on API calls**
-The bearer token doesn't match. Check `--auth-key` value; the token is the part after `name=`.
-
-**`422 Unprocessable Entity` on POST /edifact**
-The EDIFACT body could not be parsed at all (syntax error). Check the `"error"` field in the response.
-
-**`"status": "unknown_pid"` in edifact response**
-The PID was detected but no workflow is registered for it on this instance.  Check that `--marktrollen` includes the role that handles the PID (e.g., `NB` for PID 55001).
-
-**Container exits immediately**
-`--data-dir` was omitted without `--allow-volatile`. Either mount a volume (`-v`) and pass `--data-dir`, or add `--allow-volatile` for ephemeral mode.

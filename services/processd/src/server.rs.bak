@@ -1,0 +1,532 @@
+//! Axum router and startup logic for `processd`.
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::{
+    Router,
+    routing::{get, post},
+};
+use mako_markt::makod_client::MakodClient;
+use secrecy::SecretString;
+use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
+use tracing::info;
+
+use mako_service::{cedar::CedarEnforcer, oidc::OidcVerifier};
+
+use crate::{
+    handler::handle_webhook,
+    mcp_server::ProcessdMcpState,
+    pg::{PgAnmeldungRepository, PgApprovalQueue},
+};
+
+// ── Module state bundles ───────────────────────────────────────────────────────
+
+/// State bundle for the NB module.
+#[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+pub struct NbState {
+    pub config: crate::nb_module::NbModuleConfig,
+    pub reader: mako_markt::marktd_client::MarktdClient,
+    pub makod: MakodClient,
+    pub repo: PgAnmeldungRepository,
+}
+
+/// State bundle for the LF module.
+#[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
+pub struct LfState {
+    pub config: crate::lf_module::LfModuleConfig,
+    pub reader: mako_markt::marktd_client::MarktdClient,
+    pub makod: MakodClient,
+    pub queue: PgApprovalQueue,
+}
+
+// ── Shared application state ──────────────────────────────────────────────────
+
+#[derive(Clone)]
+pub struct ProcessdState {
+    pub inbound_secret: Arc<Option<SecretString>>,
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    pub nb: Option<Arc<NbState>>,
+    #[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
+    pub lf: Option<Arc<LfState>>,
+    /// Shared `MakodClient` for REST handlers that dispatch commands.
+    /// Approve/reject approval-queue entries require dispatching to makod.
+    pub makod: MakodClient,
+    pub tenant: String,
+    /// Operator's own Marktpartner-ID (used for LFA command routing).
+    pub own_mp_id: String,
+}
+
+// ── RunConfig ─────────────────────────────────────────────────────────────────
+
+pub struct RunConfig {
+    pub listen: SocketAddr,
+    pub database_url: String,
+    pub db_pool_size: u32,
+    pub inbound_secret: Option<SecretString>,
+    pub makod_url: String,
+    pub makod_api_key: SecretString,
+    pub marktd_url: String,
+    pub marktd_api_key: SecretString,
+    pub own_mp_id: String,
+    pub tenant: String,
+    pub nb_auto_accept: bool,
+    pub lf_auto_respond: bool,
+    pub lf_queue_ttl_secs: u64,
+    /// Webhook URL to register with `marktd` on startup (self-registration).
+    /// `None` → skip self-registration (useful in tests / standalone mode).
+    pub self_register_webhook_url: Option<String>,
+    /// Subscriber ID for the `marktd` subscription upsert.
+    pub subscriber_id: String,
+    /// Comma-separated event types to subscribe to.
+    pub subscriber_event_types: String,
+    pub oidc: OidcVerifier,
+    pub cedar: Arc<CedarEnforcer>,
+    pub shutdown: CancellationToken,
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
+    // ── Startup validation ────────────────────────────────────────────────────
+    // §20 EnWG parity: validate own_mp_id prefix matches the expected coding authority.
+    // BDEW-Codenummern start with "99" (NAD DE3055 = 293), DVGW with "98" (332).
+    // A mismatch silently breaks `initiator_is_affiliate` comparisons for gas roles.
+    {
+        use mako_markt::domain::nad_agency_code;
+        // Parse own_mp_id as MarktpartnerId; if malformed, warn but continue.
+        match cfg.own_mp_id.parse::<mako_markt::domain::MarktpartnerId>() {
+            Ok(id) => {
+                let agency = nad_agency_code(&id);
+                tracing::info!(
+                    own_mp_id = %cfg.own_mp_id,
+                    coding_authority = agency,
+                    "processd: operator identity validated (293=BDEW, 332=DVGW, 9=GS1)"
+                );
+                if agency == "9" {
+                    tracing::warn!(
+                        own_mp_id = %cfg.own_mp_id,
+                        "processd: own_mp_id appears to be a GS1 GLN (non-99/98 prefix). \
+                         §20 EnWG parity reporting may be incorrect for BDEW/DVGW market participants. \
+                         Expected: BDEW-Codenummer (99…) for Strom, DVGW-Codenummer (98…) for Gas."
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    own_mp_id = %cfg.own_mp_id,
+                    error = %e,
+                    "processd: own_mp_id is not a valid 13-digit MarktpartnerId — \
+                     §20 EnWG parity comparisons will fail silently"
+                );
+            }
+        }
+    }
+
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(cfg.db_pool_size)
+        .connect(&cfg.database_url)
+        .await
+        .map_err(|e| anyhow::anyhow!("processd: failed to connect to PostgreSQL: {e}"))?;
+
+    info!("processd: running migrations");
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("processd: migration error: {e}"))?;
+
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent("processd/0.1")
+        .build()
+        .map_err(|e| anyhow::anyhow!("processd: failed to build HTTP client: {e}"))?;
+
+    // ── Self-register subscription with marktd ────────────────────────────────
+    // Driven entirely by config (env var / Helm values.yaml). No imperative
+    // bootstrap scripts needed. Idempotent: PUT is an upsert.
+    // Retries for up to 30 s to tolerate marktd startup ordering in compose/K8s.
+    if let Some(ref self_webhook_url) = cfg.self_register_webhook_url {
+        use secrecy::ExposeSecret;
+        let sub_url = format!(
+            "{}/api/v1/subscriptions/{}",
+            cfg.marktd_url.trim_end_matches('/'),
+            cfg.subscriber_id
+        );
+        let event_types: Vec<&str> = cfg
+            .subscriber_event_types
+            .split(',')
+            .map(str::trim)
+            .collect();
+        let body = serde_json::json!({
+            "webhook_url":    self_webhook_url,
+            "webhook_secret": cfg.inbound_secret.as_ref().map(|s| s.expose_secret()),
+            "event_types":    event_types,
+            "active":         true
+        });
+        info!(
+            subscriber_id = %cfg.subscriber_id,
+            webhook_url   = %self_webhook_url,
+            marktd_url    = %cfg.marktd_url,
+            "processd: self-registering subscription with marktd"
+        );
+        let mut remaining = 15u32;
+        loop {
+            match http.put(&sub_url).json(&body).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    info!(
+                        subscriber_id = %cfg.subscriber_id,
+                        status        = %resp.status(),
+                        "processd: subscription registered with marktd"
+                    );
+                    break;
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    remaining -= 1;
+                    if remaining == 0 {
+                        return Err(anyhow::anyhow!(
+                            "processd: self-registration failed: marktd returned HTTP {status}"
+                        ));
+                    }
+                    tracing::warn!(
+                        %status, remaining,
+                        "processd: self-registration failed, retrying in 2 s"
+                    );
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+                Err(e) => {
+                    remaining -= 1;
+                    if remaining == 0 {
+                        return Err(anyhow::anyhow!(
+                            "processd: self-registration failed: {e}"
+                        ));
+                    }
+                    tracing::warn!(
+                        error = %e, remaining,
+                        "processd: self-registration failed, retrying in 2 s"
+                    );
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+
+    let makod = MakodClient::new(&cfg.makod_url, cfg.makod_api_key.clone());
+
+    // ── NB module state ───────────────────────────────────────────────────
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    let nb_state: Option<Arc<NbState>> = {
+        let nb_config = crate::nb_module::NbModuleConfig {
+            marktd_url: cfg.marktd_url.clone(),
+            marktd_api_key: cfg.marktd_api_key.clone(),
+            own_mp_id: cfg.own_mp_id.clone(),
+            tenant: cfg.tenant.clone(),
+            auto_accept: cfg.nb_auto_accept,
+        };
+        Some(Arc::new(NbState {
+            config: nb_config,
+            reader: mako_markt::marktd_client::MarktdClient::new(
+                &cfg.marktd_url,
+                cfg.marktd_api_key.clone(),
+                http.clone(),
+            ),
+            makod: makod.clone(),
+            repo: PgAnmeldungRepository::new(pool.clone()),
+        }))
+    };
+
+    // ── LF module state ───────────────────────────────────────────────────
+    #[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
+    let lf_state: Option<Arc<LfState>> = {
+        let lf_config = crate::lf_module::LfModuleConfig {
+            marktd_url: cfg.marktd_url.clone(),
+            marktd_api_key: cfg.marktd_api_key.clone(),
+            own_mp_id: cfg.own_mp_id.clone(),
+            tenant: cfg.tenant.clone(),
+            auto_respond: cfg.lf_auto_respond,
+            queue_ttl_secs: cfg.lf_queue_ttl_secs,
+        };
+        Some(Arc::new(LfState {
+            config: lf_config,
+            reader: mako_markt::marktd_client::MarktdClient::new(
+                &cfg.marktd_url,
+                cfg.marktd_api_key.clone(),
+                http.clone(),
+            ),
+            makod: makod.clone(),
+            queue: PgApprovalQueue::new(pool.clone()),
+        }))
+    };
+
+    // ── Background: expire stale approval queue entries ───────────────────
+    #[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
+    {
+        let expiry_pool = pool.clone();
+        let expiry_shutdown = cfg.shutdown.clone();
+        tokio::spawn(async move {
+            let queue = PgApprovalQueue::new(expiry_pool);
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        match queue.expire_stale().await {
+                            Ok(n) if n > 0 => {
+                                    // REGULATORY WARNING: Expired entries mean the LFA did not
+                                    // respond within the 45-minute deadline (BK6-22-024 §5).
+                                    // Operator must reconcile via GET /api/v1/queue?status=Expired.
+                                    tracing::warn!(
+                                        expired = n,
+                                        "processd: {n} approval queue entries expired past \
+                                         LFA E_0624 45-min deadline — operator must reconcile"
+                                    );
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "processd: approval queue expiry failed");
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ = expiry_shutdown.cancelled() => break,
+                }
+            }
+        });
+    }
+
+    // ── Assemble shared handler state ──────────────────────────────────────
+    let state = ProcessdState {
+        inbound_secret: Arc::new(cfg.inbound_secret),
+        #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+        nb: nb_state,
+        #[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
+        lf: lf_state,
+        makod: makod.clone(),
+        tenant: cfg.tenant.clone(),
+        own_mp_id: cfg.own_mp_id.clone(),
+    };
+
+    // ── MCP state ──────────────────────────────────────────────────────────
+    let mcp_state = Arc::new(ProcessdMcpState {
+        pool: pool.clone(),
+        tenant: cfg.tenant.clone(),
+        oidc: cfg.oidc.clone(),
+        cedar: cfg.cedar.clone(),
+    });
+
+    // ── Router ─────────────────────────────────────────────────────────────
+    let app = Router::new()
+        .route("/webhook", post(handle_webhook))
+        .route("/health/live", get(|| async { axum::http::StatusCode::OK }))
+        .route(
+            "/health/ready",
+            get(|| async { axum::http::StatusCode::OK }),
+        )
+        .route("/api/v1/decisions", get(rest::list_decisions))
+        .route("/api/v1/queue", get(rest::list_queue))
+        .route(
+            "/api/v1/queue/{id}/approve",
+            post(rest::approve_queue_entry),
+        )
+        .route("/api/v1/queue/{id}/reject", post(rest::reject_queue_entry))
+        .route("/metrics", get(rest::metrics))
+        .with_state(state)
+        .layer(axum::Extension(cfg.oidc.clone()))
+        .layer(axum::Extension(cfg.cedar.clone()))
+        .layer(axum::Extension(pool.clone()))
+        .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
+        .merge(crate::mcp_server::router(mcp_state, cfg.shutdown.clone()));
+
+    let listener = TcpListener::bind(cfg.listen)
+        .await
+        .map_err(|e| anyhow::anyhow!("processd: bind error: {e}"))?;
+
+    info!(addr = %cfg.listen, "processd: listening");
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move { cfg.shutdown.cancelled().await })
+        .await
+        .map_err(|e| anyhow::anyhow!("processd: serve error: {e}"))?;
+
+    info!("processd: shutdown complete");
+    Ok(())
+}
+
+// ── REST handlers ──────────────────────────────────────────────────────────────
+
+mod rest {
+    use axum::{
+        Extension, Json,
+        extract::{Path, State},
+        http::StatusCode,
+        response::IntoResponse,
+    };
+
+    use sqlx::PgPool;
+
+    use crate::{
+        pg::{PgAnmeldungRepository, PgApprovalQueue},
+        server::ProcessdState,
+    };
+
+    pub async fn list_decisions(
+        State(state): State<ProcessdState>,
+        Extension(pool): Extension<PgPool>,
+    ) -> impl IntoResponse {
+        let repo = PgAnmeldungRepository::new(pool);
+        match repo.list(&state.tenant, 100).await {
+            Ok(records) => Json(serde_json::to_value(records).unwrap_or_default()).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    }
+
+    pub async fn list_queue(
+        State(state): State<ProcessdState>,
+        Extension(pool): Extension<PgPool>,
+    ) -> impl IntoResponse {
+        let queue = PgApprovalQueue::new(pool);
+        match queue.list(&state.tenant, None, 100).await {
+            Ok(entries) => Json(serde_json::to_value(entries).unwrap_or_default()).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    }
+
+    /// Approve a LFA E_0624 approval queue entry.
+    ///
+    /// This dispatches `gpke.lfa.einwilligung` (or Gas equivalent) to `makod`
+    /// AND marks the entry as `Approved` in the database.
+    ///
+    /// **Regulatory note:** The 45-min deadline applies from the original
+    /// process.initiated event.  Operators must act before `expires_at`.
+    pub async fn approve_queue_entry(
+        State(state): State<ProcessdState>,
+        Extension(pool): Extension<PgPool>,
+        Path(id_str): Path<String>,
+    ) -> impl IntoResponse {
+        let Ok(id) = id_str.parse::<uuid::Uuid>() else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        let queue = PgApprovalQueue::new(pool.clone());
+
+        // Fetch entry first to get process_id, pid, malo_id for dispatch.
+        let entry = match queue.find_by_id(id, &state.tenant).await {
+            Ok(Some(e)) => e,
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+
+        // Determine the command name from PID.
+        let command = match entry.pid as u32 {
+            55008 => "gpke.lfa.einwilligung",
+            44022 | 44023 => "geli.lfa.einwilligung",
+            _ => "gpke.lfa.einwilligung",
+        };
+
+        // Dispatch einwilligung to makod — BEFORE marking as Approved.
+        // If dispatch fails, the entry stays Pending so the operator can retry.
+        let idempotency_key = format!("processd-lf-approve-{id}");
+        let cmd = mako_markt::makod_client::ForwardCommand {
+            command: command.to_owned(),
+            malo_id: entry.malo_id.clone(),
+            melo_id: None,
+            payload: serde_json::json!({
+                "process_id": entry.process_id,
+                "approved_by": "operator",
+            }),
+        };
+        if let Err(e) = state.makod.post_command(&idempotency_key, &cmd).await {
+            tracing::warn!(
+                %id,
+                process_id = %entry.process_id,
+                error = %e,
+                "processd: failed to dispatch einwilligung for approved queue entry"
+            );
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("makod dispatch failed: {e}"),
+            )
+                .into_response();
+        }
+
+        // Mark as Approved in DB.
+        match queue.approve(id, &state.tenant).await {
+            Ok(true) => {
+                tracing::info!(%id, process_id = %entry.process_id, "processd: E_0624 approved — einwilligung dispatched");
+                StatusCode::NO_CONTENT.into_response()
+            }
+            Ok(false) => StatusCode::NOT_FOUND.into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    }
+
+    /// Reject a LFA E_0624 approval queue entry.
+    ///
+    /// This dispatches `gpke.lfa.ablehnen` (or Gas equivalent) to `makod`
+    /// AND marks the entry as `Rejected` in the database.
+    pub async fn reject_queue_entry(
+        State(state): State<ProcessdState>,
+        Extension(pool): Extension<PgPool>,
+        Path(id_str): Path<String>,
+    ) -> impl IntoResponse {
+        let Ok(id) = id_str.parse::<uuid::Uuid>() else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        let queue = PgApprovalQueue::new(pool.clone());
+
+        // Fetch entry first to get process_id, pid, malo_id for dispatch.
+        let entry = match queue.find_by_id(id, &state.tenant).await {
+            Ok(Some(e)) => e,
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+
+        // Determine the command name from PID.
+        let command = match entry.pid as u32 {
+            55008 => "gpke.lfa.ablehnen",
+            44022 | 44023 => "geli.lfa.ablehnen",
+            _ => "gpke.lfa.ablehnen",
+        };
+
+        // Dispatch ablehnen to makod — BEFORE marking as Rejected.
+        let idempotency_key = format!("processd-lf-reject-{id}");
+        let cmd = mako_markt::makod_client::ForwardCommand {
+            command: command.to_owned(),
+            malo_id: entry.malo_id.clone(),
+            melo_id: None,
+            payload: serde_json::json!({
+                "process_id": entry.process_id,
+                "reason": entry.reason,
+                "rejected_by": "operator",
+            }),
+        };
+        if let Err(e) = state.makod.post_command(&idempotency_key, &cmd).await {
+            tracing::warn!(
+                %id,
+                process_id = %entry.process_id,
+                error = %e,
+                "processd: failed to dispatch ablehnen for rejected queue entry"
+            );
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("makod dispatch failed: {e}"),
+            )
+                .into_response();
+        }
+
+        // Mark as Rejected in DB.
+        match queue.reject(id, &state.tenant).await {
+            Ok(true) => {
+                tracing::info!(%id, process_id = %entry.process_id, "processd: E_0624 rejected — ablehnen dispatched");
+                StatusCode::NO_CONTENT.into_response()
+            }
+            Ok(false) => StatusCode::NOT_FOUND.into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    }
+
+    pub async fn metrics() -> impl IntoResponse {
+        // Minimal metrics endpoint — TODO: integrate with Prometheus metrics registry
+        (StatusCode::OK, "# processd metrics placeholder\n")
+    }
+}

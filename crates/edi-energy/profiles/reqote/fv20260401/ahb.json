@@ -301,5 +301,7 @@
       ],
       "group_rules": []
     }
-  ]
+  ],
+  "reviewed_by": "xtask/import-xml-ahb",
+  "reviewed_at": "2026-07-08"
 }

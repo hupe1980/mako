@@ -79,43 +79,35 @@
         },
         {
           "tag": "AGR",
-          "requirement": "O",
-          "_description": "AGR is optional per MIG S2.1 (no AHB constraint for PID 55001)"
+          "requirement": "O"
         },
         {
           "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG S2.1 (no AHB constraint for PID 55001)"
+          "requirement": "O"
         },
         {
           "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG S2.1 (no AHB constraint for PID 55001)"
+          "requirement": "O"
         },
         {
           "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG S2.1 (no AHB constraint for PID 55001)"
+          "requirement": "O"
         },
         {
           "tag": "LOC",
-          "requirement": "O",
-          "_description": "LOC is optional per MIG S2.1 (no AHB constraint for PID 55001)"
+          "requirement": "O"
         },
         {
           "tag": "QTY",
-          "requirement": "O",
-          "_description": "QTY is optional per MIG S2.1 (no AHB constraint for PID 55001)"
+          "requirement": "O"
         },
         {
           "tag": "SEQ",
-          "requirement": "O",
-          "_description": "SEQ is optional per MIG S2.1 (no AHB constraint for PID 55001)"
+          "requirement": "O"
         },
         {
           "tag": "STS",
-          "requirement": "O",
-          "_description": "STS is optional per MIG S2.1 (no AHB constraint for PID 55001)"
+          "requirement": "O"
         }
       ],
       "group_rules": [
@@ -128,8 +120,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+          }
         },
         {
           "group_id": "SG6",
@@ -139,8 +130,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+          }
         },
         {
           "group_id": "SG4",
@@ -159,11 +149,9 @@
               ],
               "then_requirement": "M",
               "then_qualifier_index": 0,
-              "then_qualifier_value": "Z07",
-              "_description": "[358] Wenn STS+E01++A06 (Status: in Bearbeitung) vorhanden, ist DTM+Z07 (Lieferbeginndatum in Bearbeitung) Pflicht"
+              "then_qualifier_value": "Z07"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         },
         {
           "group_id": "SG4",
@@ -180,11 +168,9 @@
                   "value": "A99"
                 }
               ],
-              "then_requirement": "M",
-              "_description": "[48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht"
+              "then_requirement": "M"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         }
       ]
     },
@@ -263,43 +249,35 @@
         },
         {
           "tag": "AGR",
-          "requirement": "O",
-          "_description": "AGR is optional per MIG S2.1 (no AHB constraint for PID 55002)"
+          "requirement": "O"
         },
         {
           "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG S2.1 (no AHB constraint for PID 55002)"
+          "requirement": "O"
         },
         {
           "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG S2.1 (no AHB constraint for PID 55002)"
+          "requirement": "O"
         },
         {
           "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG S2.1 (no AHB constraint for PID 55002)"
+          "requirement": "O"
         },
         {
           "tag": "LOC",
-          "requirement": "O",
-          "_description": "LOC is optional per MIG S2.1 (no AHB constraint for PID 55002)"
+          "requirement": "O"
         },
         {
           "tag": "QTY",
-          "requirement": "O",
-          "_description": "QTY is optional per MIG S2.1 (no AHB constraint for PID 55002)"
+          "requirement": "O"
         },
         {
           "tag": "SEQ",
-          "requirement": "O",
-          "_description": "SEQ is optional per MIG S2.1 (no AHB constraint for PID 55002)"
+          "requirement": "O"
         },
         {
           "tag": "STS",
-          "requirement": "O",
-          "_description": "STS is optional per MIG S2.1 (no AHB constraint for PID 55002)"
+          "requirement": "O"
         }
       ],
       "group_rules": [
@@ -312,8 +290,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+          }
         },
         {
           "group_id": "SG6",
@@ -323,8 +300,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+          }
         },
         {
           "group_id": "SG4",
@@ -343,11 +319,9 @@
               ],
               "then_requirement": "M",
               "then_qualifier_index": 0,
-              "then_qualifier_value": "Z07",
-              "_description": "[358] Wenn STS+E01++A06 (Status: in Bearbeitung) vorhanden, ist DTM+Z07 (Lieferbeginndatum in Bearbeitung) Pflicht"
+              "then_qualifier_value": "Z07"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         },
         {
           "group_id": "SG4",
@@ -364,11 +338,9 @@
                   "value": "A99"
                 }
               ],
-              "then_requirement": "M",
-              "_description": "[48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht"
+              "then_requirement": "M"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         }
       ]
     },
@@ -447,43 +419,35 @@
         },
         {
           "tag": "AGR",
-          "requirement": "O",
-          "_description": "AGR is optional per MIG S2.1 (no AHB constraint for PID 55003)"
+          "requirement": "O"
         },
         {
           "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG S2.1 (no AHB constraint for PID 55003)"
+          "requirement": "O"
         },
         {
           "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG S2.1 (no AHB constraint for PID 55003)"
+          "requirement": "O"
         },
         {
           "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG S2.1 (no AHB constraint for PID 55003)"
+          "requirement": "O"
         },
         {
           "tag": "LOC",
-          "requirement": "O",
-          "_description": "LOC is optional per MIG S2.1 (no AHB constraint for PID 55003)"
+          "requirement": "O"
         },
         {
           "tag": "QTY",
-          "requirement": "O",
-          "_description": "QTY is optional per MIG S2.1 (no AHB constraint for PID 55003)"
+          "requirement": "O"
         },
         {
           "tag": "SEQ",
-          "requirement": "O",
-          "_description": "SEQ is optional per MIG S2.1 (no AHB constraint for PID 55003)"
+          "requirement": "O"
         },
         {
           "tag": "STS",
-          "requirement": "O",
-          "_description": "STS is optional per MIG S2.1 (no AHB constraint for PID 55003)"
+          "requirement": "O"
         }
       ],
       "group_rules": [
@@ -496,8 +460,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+          }
         },
         {
           "group_id": "SG6",
@@ -507,8 +470,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+          }
         },
         {
           "group_id": "SG4",
@@ -527,11 +489,9 @@
               ],
               "then_requirement": "M",
               "then_qualifier_index": 0,
-              "then_qualifier_value": "Z07",
-              "_description": "[358] Wenn STS+E01++A06 (Status: in Bearbeitung) vorhanden, ist DTM+Z07 (Lieferbeginndatum in Bearbeitung) Pflicht"
+              "then_qualifier_value": "Z07"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         },
         {
           "group_id": "SG4",
@@ -548,11 +508,9 @@
                   "value": "A99"
                 }
               ],
-              "then_requirement": "M",
-              "_description": "[48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht"
+              "then_requirement": "M"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         }
       ]
     },
@@ -631,43 +589,35 @@
         },
         {
           "tag": "AGR",
-          "requirement": "O",
-          "_description": "AGR is optional per MIG S2.1 (no AHB constraint for PID 55004)"
+          "requirement": "O"
         },
         {
           "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG S2.1 (no AHB constraint for PID 55004)"
+          "requirement": "O"
         },
         {
           "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG S2.1 (no AHB constraint for PID 55004)"
+          "requirement": "O"
         },
         {
           "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG S2.1 (no AHB constraint for PID 55004)"
+          "requirement": "O"
         },
         {
           "tag": "LOC",
-          "requirement": "O",
-          "_description": "LOC is optional per MIG S2.1 (no AHB constraint for PID 55004)"
+          "requirement": "O"
         },
         {
           "tag": "QTY",
-          "requirement": "O",
-          "_description": "QTY is optional per MIG S2.1 (no AHB constraint for PID 55004)"
+          "requirement": "O"
         },
         {
           "tag": "SEQ",
-          "requirement": "O",
-          "_description": "SEQ is optional per MIG S2.1 (no AHB constraint for PID 55004)"
+          "requirement": "O"
         },
         {
           "tag": "STS",
-          "requirement": "O",
-          "_description": "STS is optional per MIG S2.1 (no AHB constraint for PID 55004)"
+          "requirement": "O"
         }
       ],
       "group_rules": [
@@ -680,8 +630,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+          }
         },
         {
           "group_id": "SG6",
@@ -691,8 +640,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+          }
         },
         {
           "group_id": "SG4",
@@ -713,8 +661,7 @@
                   ]
                 }
               ],
-              "then_requirement": "M",
-              "_description": "[7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht"
+              "then_requirement": "M"
             },
             {
               "when_tag": "STS",
@@ -732,11 +679,9 @@
               ],
               "then_requirement": "M",
               "then_qualifier_index": 0,
-              "then_qualifier_value": "36",
-              "_description": "[11] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+36 (Ende) Pflicht"
+              "then_qualifier_value": "36"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         },
         {
           "group_id": "SG4",
@@ -753,11 +698,9 @@
                   "value": "A99"
                 }
               ],
-              "then_requirement": "M",
-              "_description": "[48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht"
+              "then_requirement": "M"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         }
       ]
     },
@@ -836,43 +779,35 @@
         },
         {
           "tag": "AGR",
-          "requirement": "O",
-          "_description": "AGR is optional per MIG S2.1 (no AHB constraint for PID 55005)"
+          "requirement": "O"
         },
         {
           "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG S2.1 (no AHB constraint for PID 55005)"
+          "requirement": "O"
         },
         {
           "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG S2.1 (no AHB constraint for PID 55005)"
+          "requirement": "O"
         },
         {
           "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG S2.1 (no AHB constraint for PID 55005)"
+          "requirement": "O"
         },
         {
           "tag": "LOC",
-          "requirement": "O",
-          "_description": "LOC is optional per MIG S2.1 (no AHB constraint for PID 55005)"
+          "requirement": "O"
         },
         {
           "tag": "QTY",
-          "requirement": "O",
-          "_description": "QTY is optional per MIG S2.1 (no AHB constraint for PID 55005)"
+          "requirement": "O"
         },
         {
           "tag": "SEQ",
-          "requirement": "O",
-          "_description": "SEQ is optional per MIG S2.1 (no AHB constraint for PID 55005)"
+          "requirement": "O"
         },
         {
           "tag": "STS",
-          "requirement": "O",
-          "_description": "STS is optional per MIG S2.1 (no AHB constraint for PID 55005)"
+          "requirement": "O"
         }
       ],
       "group_rules": [
@@ -885,8 +820,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+          }
         },
         {
           "group_id": "SG6",
@@ -896,8 +830,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+          }
         },
         {
           "group_id": "SG4",
@@ -918,8 +851,7 @@
                   ]
                 }
               ],
-              "then_requirement": "M",
-              "_description": "[7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht"
+              "then_requirement": "M"
             },
             {
               "when_tag": "STS",
@@ -937,11 +869,9 @@
               ],
               "then_requirement": "M",
               "then_qualifier_index": 0,
-              "then_qualifier_value": "36",
-              "_description": "[11] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+36 (Ende) Pflicht"
+              "then_qualifier_value": "36"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         },
         {
           "group_id": "SG4",
@@ -958,11 +888,9 @@
                   "value": "A99"
                 }
               ],
-              "then_requirement": "M",
-              "_description": "[48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht"
+              "then_requirement": "M"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         }
       ]
     },
@@ -1041,43 +969,35 @@
         },
         {
           "tag": "AGR",
-          "requirement": "O",
-          "_description": "AGR is optional per MIG S2.1 (no AHB constraint for PID 55006)"
+          "requirement": "O"
         },
         {
           "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG S2.1 (no AHB constraint for PID 55006)"
+          "requirement": "O"
         },
         {
           "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG S2.1 (no AHB constraint for PID 55006)"
+          "requirement": "O"
         },
         {
           "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG S2.1 (no AHB constraint for PID 55006)"
+          "requirement": "O"
         },
         {
           "tag": "LOC",
-          "requirement": "O",
-          "_description": "LOC is optional per MIG S2.1 (no AHB constraint for PID 55006)"
+          "requirement": "O"
         },
         {
           "tag": "QTY",
-          "requirement": "O",
-          "_description": "QTY is optional per MIG S2.1 (no AHB constraint for PID 55006)"
+          "requirement": "O"
         },
         {
           "tag": "SEQ",
-          "requirement": "O",
-          "_description": "SEQ is optional per MIG S2.1 (no AHB constraint for PID 55006)"
+          "requirement": "O"
         },
         {
           "tag": "STS",
-          "requirement": "O",
-          "_description": "STS is optional per MIG S2.1 (no AHB constraint for PID 55006)"
+          "requirement": "O"
         }
       ],
       "group_rules": [
@@ -1090,8 +1010,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+          }
         },
         {
           "group_id": "SG6",
@@ -1101,8 +1020,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+          }
         },
         {
           "group_id": "SG4",
@@ -1123,8 +1041,7 @@
                   ]
                 }
               ],
-              "then_requirement": "M",
-              "_description": "[7] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+Beginn Pflicht"
+              "then_requirement": "M"
             },
             {
               "when_tag": "STS",
@@ -1142,11 +1059,9 @@
               ],
               "then_requirement": "M",
               "then_qualifier_index": 0,
-              "then_qualifier_value": "36",
-              "_description": "[11] Wenn STS+7++ZG9/ZH1/ZH2 (Transaktionsgrund: Aufhebung zukünftiger Zuordnung) vorhanden, ist DTM+36 (Ende) Pflicht"
+              "then_qualifier_value": "36"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         },
         {
           "group_id": "SG4",
@@ -1163,11 +1078,9 @@
                   "value": "A99"
                 }
               ],
-              "then_requirement": "M",
-              "_description": "[48] Wenn STS+E01++A99 (Status: Sonstiges) vorhanden, ist FTX (allgemeine Hinweise) Pflicht"
+              "then_requirement": "M"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         }
       ]
     },
@@ -1241,48 +1154,39 @@
         },
         {
           "tag": "AGR",
-          "requirement": "O",
-          "_description": "AGR is optional per MIG S2.1 (no AHB constraint for PID 55016)"
+          "requirement": "O"
         },
         {
           "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG S2.1 (no AHB constraint for PID 55016)"
+          "requirement": "O"
         },
         {
           "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG S2.1 (no AHB constraint for PID 55016)"
+          "requirement": "O"
         },
         {
           "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG S2.1 (no AHB constraint for PID 55016)"
+          "requirement": "O"
         },
         {
           "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG S2.1 (no AHB constraint for PID 55016)"
+          "requirement": "O"
         },
         {
           "tag": "LOC",
-          "requirement": "O",
-          "_description": "LOC is optional per MIG S2.1 (no AHB constraint for PID 55016)"
+          "requirement": "O"
         },
         {
           "tag": "QTY",
-          "requirement": "O",
-          "_description": "QTY is optional per MIG S2.1 (no AHB constraint for PID 55016)"
+          "requirement": "O"
         },
         {
           "tag": "SEQ",
-          "requirement": "O",
-          "_description": "SEQ is optional per MIG S2.1 (no AHB constraint for PID 55016)"
+          "requirement": "O"
         },
         {
           "tag": "STS",
-          "requirement": "O",
-          "_description": "STS is optional per MIG S2.1 (no AHB constraint for PID 55016)"
+          "requirement": "O"
         }
       ],
       "group_rules": [
@@ -1295,8 +1199,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+          }
         },
         {
           "group_id": "SG6",
@@ -1306,8 +1209,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+          }
         },
         {
           "group_id": "SG4",
@@ -1327,11 +1229,9 @@
                   ]
                 }
               ],
-              "then_requirement": "M",
-              "_description": "[351] Wenn STS+E01++A04/A05 (Status: Zustimmung/Teilzustimmung) vorhanden, ist DTM+Vertragsende Pflicht"
+              "then_requirement": "M"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         }
       ]
     },
@@ -1405,48 +1305,39 @@
         },
         {
           "tag": "AGR",
-          "requirement": "O",
-          "_description": "AGR is optional per MIG S2.1 (no AHB constraint for PID 55017)"
+          "requirement": "O"
         },
         {
           "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG S2.1 (no AHB constraint for PID 55017)"
+          "requirement": "O"
         },
         {
           "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG S2.1 (no AHB constraint for PID 55017)"
+          "requirement": "O"
         },
         {
           "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG S2.1 (no AHB constraint for PID 55017)"
+          "requirement": "O"
         },
         {
           "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG S2.1 (no AHB constraint for PID 55017)"
+          "requirement": "O"
         },
         {
           "tag": "LOC",
-          "requirement": "O",
-          "_description": "LOC is optional per MIG S2.1 (no AHB constraint for PID 55017)"
+          "requirement": "O"
         },
         {
           "tag": "QTY",
-          "requirement": "O",
-          "_description": "QTY is optional per MIG S2.1 (no AHB constraint for PID 55017)"
+          "requirement": "O"
         },
         {
           "tag": "SEQ",
-          "requirement": "O",
-          "_description": "SEQ is optional per MIG S2.1 (no AHB constraint for PID 55017)"
+          "requirement": "O"
         },
         {
           "tag": "STS",
-          "requirement": "O",
-          "_description": "STS is optional per MIG S2.1 (no AHB constraint for PID 55017)"
+          "requirement": "O"
         }
       ],
       "group_rules": [
@@ -1459,8 +1350,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+          }
         },
         {
           "group_id": "SG6",
@@ -1470,8 +1360,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+          }
         },
         {
           "group_id": "SG4",
@@ -1491,11 +1380,9 @@
                   ]
                 }
               ],
-              "then_requirement": "M",
-              "_description": "[351] Wenn STS+E01++A04/A05 (Status: Zustimmung/Teilzustimmung) vorhanden, ist DTM+Vertragsende Pflicht"
+              "then_requirement": "M"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         }
       ]
     },
@@ -1569,48 +1456,39 @@
         },
         {
           "tag": "AGR",
-          "requirement": "O",
-          "_description": "AGR is optional per MIG S2.1 (no AHB constraint for PID 55018)"
+          "requirement": "O"
         },
         {
           "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG S2.1 (no AHB constraint for PID 55018)"
+          "requirement": "O"
         },
         {
           "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG S2.1 (no AHB constraint for PID 55018)"
+          "requirement": "O"
         },
         {
           "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG S2.1 (no AHB constraint for PID 55018)"
+          "requirement": "O"
         },
         {
           "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG S2.1 (no AHB constraint for PID 55018)"
+          "requirement": "O"
         },
         {
           "tag": "LOC",
-          "requirement": "O",
-          "_description": "LOC is optional per MIG S2.1 (no AHB constraint for PID 55018)"
+          "requirement": "O"
         },
         {
           "tag": "QTY",
-          "requirement": "O",
-          "_description": "QTY is optional per MIG S2.1 (no AHB constraint for PID 55018)"
+          "requirement": "O"
         },
         {
           "tag": "SEQ",
-          "requirement": "O",
-          "_description": "SEQ is optional per MIG S2.1 (no AHB constraint for PID 55018)"
+          "requirement": "O"
         },
         {
           "tag": "STS",
-          "requirement": "O",
-          "_description": "STS is optional per MIG S2.1 (no AHB constraint for PID 55018)"
+          "requirement": "O"
         }
       ],
       "group_rules": [
@@ -1623,8 +1501,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+          }
         },
         {
           "group_id": "SG6",
@@ -1634,8 +1511,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+          }
         },
         {
           "group_id": "SG4",
@@ -1655,11 +1531,9 @@
                   ]
                 }
               ],
-              "then_requirement": "M",
-              "_description": "[351] Wenn STS+E01++A04/A05 (Status: Zustimmung/Teilzustimmung) vorhanden, ist DTM+Vertragsende Pflicht"
+              "then_requirement": "M"
             }
-          ],
-          "_description": "Migrated from flat segment_rules: intra-SG4 conditional (F-001 fix)"
+          ]
         }
       ]
     },
@@ -1724,8 +1598,7 @@
         },
         {
           "tag": "STS",
-          "requirement": "M",
-          "_description": "STS Transaktionsgrund (9015=7) + Stornierung (9013=E05) — mandatory per AHB Strom 2.1 (GPKE Teil 4)"
+          "requirement": "M"
         },
         {
           "tag": "RFF",
@@ -1739,13 +1612,11 @@
         },
         {
           "tag": "CTA",
-          "requirement": "O",
-          "_description": "SG3 CTA — Kann"
+          "requirement": "O"
         },
         {
           "tag": "COM",
-          "requirement": "O",
-          "_description": "SG3 COM — Kann"
+          "requirement": "O"
         }
       ],
       "group_rules": [
@@ -1758,8 +1629,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+          }
         },
         {
           "group_id": "SG6",
@@ -1769,8 +1639,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+          }
         }
       ]
     },
@@ -1835,8 +1704,7 @@
         },
         {
           "tag": "STS",
-          "requirement": "M",
-          "_description": "STS Transaktionsgrund (9015=7) + Stornierung (9013=E05) + Bestätigung (E01) — mandatory"
+          "requirement": "M"
         },
         {
           "tag": "RFF",
@@ -1850,13 +1718,11 @@
         },
         {
           "tag": "CTA",
-          "requirement": "O",
-          "_description": "SG3 CTA — Kann"
+          "requirement": "O"
         },
         {
           "tag": "COM",
-          "requirement": "O",
-          "_description": "SG3 COM — Kann"
+          "requirement": "O"
         }
       ],
       "group_rules": [
@@ -1869,8 +1735,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+          }
         },
         {
           "group_id": "SG6",
@@ -1880,8 +1745,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+          }
         }
       ]
     },
@@ -1946,8 +1810,7 @@
         },
         {
           "tag": "STS",
-          "requirement": "M",
-          "_description": "STS Transaktionsgrund (9015=7) + Stornierung (9013=E05) + Ablehnung — mandatory"
+          "requirement": "M"
         },
         {
           "tag": "RFF",
@@ -1961,18 +1824,15 @@
         },
         {
           "tag": "CTA",
-          "requirement": "O",
-          "_description": "SG3 CTA — Kann"
+          "requirement": "O"
         },
         {
           "tag": "COM",
-          "requirement": "O",
-          "_description": "SG3 COM — Kann"
+          "requirement": "O"
         },
         {
           "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX — Ablehnungsgrund (Kann)"
+          "requirement": "O"
         }
       ],
       "group_rules": [
@@ -1985,8 +1845,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+          }
         },
         {
           "group_id": "SG6",
@@ -1996,8 +1855,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+          }
         }
       ]
     },
@@ -2080,8 +1938,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "WiM SG2 NAD: sender NAD+MS and receiver NAD+MR mandatory. Source: UTILMD WiM AHB S2.1 BK6-24-174."
+          }
         },
         {
           "group_id": "SG6",
@@ -2091,8 +1948,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "WiM SG6 RFF: Prüfidentifikator Z13 mandatory in every SG6 within SG4. Source: UTILMD WiM AHB S2.1 BK6-24-174."
+          }
         }
       ]
     },
@@ -2175,8 +2031,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "WiM SG2 NAD: sender NAD+MS and receiver NAD+MR mandatory. Source: UTILMD WiM AHB S2.1 BK6-24-174."
+          }
         },
         {
           "group_id": "SG6",
@@ -2186,8 +2041,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "WiM SG6 RFF: Prüfidentifikator Z13 mandatory in every SG6 within SG4. Source: UTILMD WiM AHB S2.1 BK6-24-174."
+          }
         }
       ]
     },
@@ -2270,8 +2124,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "WiM SG2 NAD: sender NAD+MS and receiver NAD+MR mandatory. Source: UTILMD WiM AHB S2.1 BK6-24-174."
+          }
         },
         {
           "group_id": "SG6",
@@ -2281,8 +2134,310 @@
             "1153": [
               "Z13"
             ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55065,
+      "name": "Lieferantenclearingliste (NB an LF)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z05"
+            ]
           },
-          "_description": "WiM SG6 RFF: Prüfidentifikator Z13 mandatory in every SG6 within SG4. Source: UTILMD WiM AHB S2.1 BK6-24-174."
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O"
+        },
+        {
+          "tag": "IDE",
+          "requirement": "O"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55069,
+      "name": "Clearingliste DZR (BIKO an NB/ÜNB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z05"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O"
+        },
+        {
+          "tag": "IDE",
+          "requirement": "O"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55070,
+      "name": "Clearingliste BAS (BIKO an BKV)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "Z05"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O"
+        },
+        {
+          "tag": "IDE",
+          "requirement": "O"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "O"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
         }
       ]
     },
@@ -2365,8 +2520,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "WiM SG2 NAD: sender NAD+MS and receiver NAD+MR mandatory. Source: UTILMD WiM AHB S2.1 BK6-24-174."
+          }
         },
         {
           "group_id": "SG6",
@@ -2376,8 +2530,7 @@
             "1153": [
               "Z13"
             ]
-          },
-          "_description": "WiM SG6 RFF: Prüfidentifikator Z13 mandatory in every SG6 within SG4. Source: UTILMD WiM AHB S2.1 BK6-24-174."
+          }
         }
       ]
     },
@@ -2453,8 +2606,7 @@
               "when_tag": "BGM",
               "when_element_index": 0,
               "when_value": "E03",
-              "then_requirement": "M",
-              "_description": "[301] Wenn BGM+E03 (Änderungsmeldung) vorhanden, ist STS (Bearbeitungsstatus) Pflicht"
+              "then_requirement": "M"
             }
           ]
         },
@@ -2470,43 +2622,35 @@
         },
         {
           "tag": "AGR",
-          "requirement": "O",
-          "_description": "AGR is optional per MIG S2.1 (no AHB constraint for PID 55555)"
+          "requirement": "O"
         },
         {
           "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG S2.1 (no AHB constraint for PID 55555)"
+          "requirement": "O"
         },
         {
           "tag": "COM",
-          "requirement": "O",
-          "_description": "COM is optional per MIG S2.1 (no AHB constraint for PID 55555)"
+          "requirement": "O"
         },
         {
           "tag": "CTA",
-          "requirement": "O",
-          "_description": "CTA is optional per MIG S2.1 (no AHB constraint for PID 55555)"
+          "requirement": "O"
         },
         {
           "tag": "FTX",
-          "requirement": "O",
-          "_description": "FTX is optional per MIG S2.1 (no AHB constraint for PID 55555)"
+          "requirement": "O"
         },
         {
           "tag": "LOC",
-          "requirement": "O",
-          "_description": "LOC is optional per MIG S2.1 (no AHB constraint for PID 55555)"
+          "requirement": "O"
         },
         {
           "tag": "QTY",
-          "requirement": "O",
-          "_description": "QTY is optional per MIG S2.1 (no AHB constraint for PID 55555)"
+          "requirement": "O"
         },
         {
           "tag": "SEQ",
-          "requirement": "O",
-          "_description": "SEQ is optional per MIG S2.1 (no AHB constraint for PID 55555)"
+          "requirement": "O"
         }
       ],
       "group_rules": [
@@ -2519,8 +2663,7 @@
               "MS",
               "MR"
             ]
-          },
-          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+          }
         },
         {
           "group_id": "SG6",
@@ -2530,8 +2673,267 @@
             "1153": [
               "Z13"
             ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55600,
+      "name": "Anmeldung neue verbrauchende Marktlokation (LF an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
           },
-          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "Z19"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55601,
+      "name": "Anmeldung neue erzeugende Marktlokation (LF an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "Z19"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "conditional_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O"
+        },
+        {
+          "tag": "STS",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
         }
       ]
     }

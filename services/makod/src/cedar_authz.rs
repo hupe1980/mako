@@ -276,7 +276,7 @@ pub struct PartnerResource<'a> {
     /// Operator tenant (GLN).
     pub tenant: &'a str,
     /// Partner GLN, present for single-record operations; `None` for list/import.
-    pub gln: Option<&'a str>,
+    pub mp_id: Option<&'a str>,
 }
 
 /// Resource descriptor for metrics endpoint checks.
@@ -590,12 +590,12 @@ impl CedarAuthorizer {
                 | MakoAction::AdminPartnerDelete
                 | MakoAction::AdminPartnerImport
         ));
-        let resource_id = res.gln.unwrap_or(res.tenant);
+        let resource_id = res.mp_id.unwrap_or(res.tenant);
         let resource_uid = entity_uid("MaKo::AdminPartnerRecord", resource_id);
         let mut attrs =
             std::collections::HashMap::from([("tenant".to_owned(), cedar_str(res.tenant))]);
-        if let Some(gln) = res.gln {
-            attrs.insert("gln".to_owned(), cedar_str(gln));
+        if let Some(mp_id) = res.mp_id {
+            attrs.insert("mp_id".to_owned(), cedar_str(mp_id));
         }
         let resource = match Entity::new(
             resource_uid.clone(),
@@ -952,7 +952,7 @@ mod tests {
             MakoAction::AdminPartnerWrite,
             &PartnerResource {
                 tenant: "9900357000004",
-                gln: Some("9900000000001")
+                mp_id: Some("9900000000001")
             },
         ));
     }
@@ -1203,7 +1203,7 @@ unless {
             MakoAction::AdminPartnerRead,
             &PartnerResource {
                 tenant: "9900357000004",
-                gln: None,
+                mp_id: None,
             },
         ));
         // Write / delete / import denied
@@ -1218,7 +1218,7 @@ unless {
                     action,
                     &PartnerResource {
                         tenant: "9900357000004",
-                        gln: Some("9900000000001"),
+                        mp_id: Some("9900000000001"),
                     },
                 ),
                 "expected {action:?} to be denied",

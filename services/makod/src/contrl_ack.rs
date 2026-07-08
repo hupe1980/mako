@@ -70,7 +70,7 @@ pub struct ContrlAckService {
     tenant_id: TenantId,
     /// The tenant's own market-participant identifier (GLN), emitted as the
     /// CONTRL `sender` field (the party acknowledging the inbound interchange).
-    own_gln: Box<str>,
+    own_mp_id: Box<str>,
 }
 
 impl ContrlAckService {
@@ -79,19 +79,19 @@ impl ContrlAckService {
     /// - `outbox`: shared `SlateDbStore` for enqueuing the CONTRL message.
     /// - `deadline_store`: persists the 6h CONTRL delivery deadline (CONTRL AHB 1.0 §2.3.1).
     /// - `tenant_id`: the active tenant identifier.
-    /// - `own_gln`: the tenant's market-participant code (BDEW GLN, 13 digits).
+    /// - `own_mp_id`: the tenant's market-participant code (BDEW GLN, 13 digits).
     #[must_use]
     pub fn new(
         outbox: Arc<SlateDbStore>,
         deadline_store: SlateDbDeadlineStore,
         tenant_id: TenantId,
-        own_gln: impl Into<Box<str>>,
+        own_mp_id: impl Into<Box<str>>,
     ) -> Self {
         Self {
             outbox,
             deadline_store,
             tenant_id,
-            own_gln: own_gln.into(),
+            own_mp_id: own_mp_id.into(),
         }
     }
 
@@ -138,7 +138,7 @@ impl ContrlAckService {
         }
 
         // Extract sender GLN from the first Gas message that has one.
-        let Some(sender_gln) = gas_messages.iter().find_map(|m| sender_gln(m)) else {
+        let Some(sender_mp_id) = gas_messages.iter().find_map(|m| sender_mp_id(m)) else {
             tracing::warn!(
                 message_count = gas_messages.len(),
                 "CONTRL ack: Gas interchange received but no sender GLN found \
@@ -161,10 +161,10 @@ impl ContrlAckService {
             ConversationId::new(),
             EventId::new(),
             "CONTRL",
-            sender_gln.as_ref(),
+            sender_mp_id.as_ref(),
             serde_json::json!({
-                "sender":          self.own_gln.as_ref(),
-                "receiver":        sender_gln.as_ref(),
+                "sender":          self.own_mp_id.as_ref(),
+                "receiver":        sender_mp_id.as_ref(),
                 "accepted":        true,
                 // UNB DE0020 interchange control reference.
                 // Surfaced from the parsed interchange header; the CONTRL
@@ -205,13 +205,13 @@ impl ContrlAckService {
                 if let Err(e) = self.deadline_store.register(&deadline).await {
                     tracing::error!(
                         error      = %e,
-                        sender_gln = sender_gln.as_ref(),
+                        sender_mp_id = sender_mp_id.as_ref(),
                         "CONTRL ack: failed to register 6h deadline — escalation \
                          will not fire if OutboxWorker is delayed (CONTRL AHB 1.0 §2.3.1)",
                     );
                 }
                 tracing::debug!(
-                    sender_gln = sender_gln.as_ref(),
+                    sender_mp_id = sender_mp_id.as_ref(),
                     "CONTRL ack: Empfangsbestätigung enqueued for Gas interchange",
                 );
             }
@@ -220,7 +220,7 @@ impl ContrlAckService {
                 // obligations on the counterparty side (6h deadline violation).
                 tracing::error!(
                     error      = %e,
-                    sender_gln = sender_gln.as_ref(),
+                    sender_mp_id = sender_mp_id.as_ref(),
                     "CONTRL ack: outbox enqueue failed — regulatory 6h CONTRL window \
                      at risk (CONTRL AHB 1.0 §1.2 / APERAK AHB 1.0 §1.2)",
                 );
@@ -313,7 +313,7 @@ fn is_strom_only_pid(pid: u32) -> bool {
 ///
 /// Returns `None` when the message has no NAD section (e.g. CONTRL) or when
 /// the party_id field is absent or empty.
-fn sender_gln(msg: &AnyMessage) -> Option<Box<str>> {
+fn sender_mp_id(msg: &AnyMessage) -> Option<Box<str>> {
     let nad = match msg {
         AnyMessage::Utilmd(m) => m.sender()?,
         AnyMessage::Mscons(m) => m.sender()?,
@@ -326,8 +326,8 @@ fn sender_gln(msg: &AnyMessage) -> Option<Box<str>> {
         AnyMessage::Remadv(m) => m.sender()?,
         _ => return None,
     };
-    let gln = nad.party_id.as_deref().filter(|s| !s.is_empty())?;
-    Some(gln.into())
+    let mp_id = nad.party_id.as_deref().filter(|s| !s.is_empty())?;
+    Some(mp_id.into())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

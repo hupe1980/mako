@@ -89,7 +89,7 @@ pub struct EdifactApiState {
     ///
     /// When `Some`, every valid inbound PARTIN message (PIDs 37000–37014) is
     /// automatically extracted and upserted into the partner directory — no ERP
-    /// integration or manual `PUT /admin/partners/{gln}` required.
+    /// integration or manual `PUT /admin/partners/{mp_id}` required.
     ///
     /// `None` disables auto-upsert (e.g. in unit tests or read-only contexts).
     pub partner_store: Option<Arc<SlateDbPartnerStore>>,
@@ -285,7 +285,7 @@ pub(crate) fn partin_to_partner_record(
         .unwrap_or_default();
 
     Some(PartnerRecord {
-        gln: MarktpartnerCode::from(gln_str),
+        mp_id: MarktpartnerCode::from(gln_str),
         display_name: sender.party_name.as_deref().map(Into::into),
         channels,
         roles,
@@ -467,9 +467,12 @@ pub(crate) async fn ingest_edifact(
         let msg = env.message;
 
         let message_type = msg.try_message_type().map(|t| t.to_string());
-        let pid = msg.detect_pruefidentifikator().ok().map(|p| p.as_u32());
+        let pid = msg
+            .detect_pruefidentifikator()
+            .ok()
+            .and_then(|p| mako_engine::ids::Pid::from_u32(p.as_u32()));
         let workflow = pid
-            .and_then(|p| state.pid_router.route(p))
+            .and_then(|p| state.pid_router.route(p.as_u32()))
             .map(str::to_owned);
 
         let status = match (pid, workflow.as_deref()) {
@@ -485,11 +488,16 @@ pub(crate) async fn ingest_edifact(
                 &env.header.receiver_id,
                 &env.header.control_ref,
             )
-            .with_message_type(message_type.as_deref().unwrap_or(""))
-            .with_pid(pid.unwrap_or(0))
-            .with_tenant_id(state.tenant_id.to_string());
+            .with_message_type(message_type.as_deref().unwrap_or(""));
+            let ctx = if let Some(p) = pid {
+                ctx.with_pid(p)
+            } else {
+                ctx
+            };
+            let ctx = ctx.with_tenant_id(state.tenant_id.to_string());
+            let dead_pid = pid.unwrap_or(mako_engine::ids::Pid::new(1));
             state.dl_sink.reject(&DeadLetterReason::UnknownPid {
-                pid: pid.unwrap_or(0),
+                pid: dead_pid,
                 context: ctx,
             });
         }
@@ -498,25 +506,25 @@ pub(crate) async fn ingest_edifact(
         // PartnerStore is wired, extract the sender's communication data
         // and store it immediately — no ERP integration needed.
         if let (AnyMessage::Partin(partin), Some(ps)) = (&msg, state.partner_store.as_deref()) {
-            match partin_to_partner_record(partin, pid) {
+            match partin_to_partner_record(partin, pid.map(|p| p.as_u32())) {
                 Some(record) => {
                     if let Err(e) = ps.upsert(state.tenant_id, &record).await {
                         tracing::warn!(
-                            gln = %record.gln,
+                            mp_id = %record.mp_id,
                             error = %e,
                             "PARTIN auto-upsert failed — partner data not stored",
                         );
                     } else {
                         tracing::info!(
-                            gln = %record.gln,
-                            pid,
+                            mp_id = %record.mp_id,
+                            pid = pid.map(|p| p.as_u32()),
                             "PARTIN auto-upsert: partner record stored",
                         );
                     }
                 }
                 None => {
                     tracing::warn!(
-                        pid,
+                        pid = pid.map(|p| p.as_u32()),
                         "PARTIN received but sender GLN missing — skipping auto-upsert",
                     );
                 }
@@ -525,7 +533,7 @@ pub(crate) async fn ingest_edifact(
 
         tracing::info!(
             message_type = ?message_type,
-            pid,
+            pid          = pid.map(|p| p.as_u32()),
             workflow = ?workflow,
             status   = ?status,
             "EDIFACT message received via REST",
@@ -538,7 +546,7 @@ pub(crate) async fn ingest_edifact(
             (pid, workflow.as_deref(), state.dispatcher.as_deref())
             && matches!(status, MessageStatus::Routed)
         {
-            match dispatcher.dispatch(&msg, wf_name, pid_val).await {
+            match dispatcher.dispatch(&msg, wf_name, pid_val.as_u32()).await {
                 Ok(outcome) => {
                     use crate::ingest_dispatcher::IngestOutcome;
                     match &outcome {
@@ -553,7 +561,7 @@ pub(crate) async fn ingest_edifact(
                         .filter(|s| !s.is_empty());
                     tracing::debug!(
                         workflow    = %wf_name,
-                        pid         = pid_val,
+                        pid         = pid_val.as_u32(),
                         outcome     = ?outcome,
                         process_id  = ?dispatch_process_id,
                         malo_id     = ?dispatch_malo_id,
@@ -563,7 +571,7 @@ pub(crate) async fn ingest_edifact(
                 Err(e) => {
                     tracing::warn!(
                         workflow = %wf_name,
-                        pid      = pid_val,
+                        pid      = pid_val.as_u32(),
                         error    = %e,
                         "EDIFACT REST ingest: Phase 2 command dispatch failed \
                          (non-fatal — message was routed)",
@@ -574,7 +582,7 @@ pub(crate) async fn ingest_edifact(
 
         messages.push(MessageResult {
             message_type,
-            pid,
+            pid: pid.map(|p| p.as_u32()),
             workflow,
             status,
             process_id: dispatch_process_id,

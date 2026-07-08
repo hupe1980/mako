@@ -1,0 +1,28 @@
+{
+  "sparte": "STROM",
+  "data": {
+    "bo_typ": "MARKTLOKATION",
+    "marktlokations_id": "51238696780",
+    "sparte": "STROM",
+    "netzebene_messung": "NS",
+    "bilanzierungsgebiet": "11YN100000015097",
+    "netzgebietsnummer": "DE-D-NB9900357000004",
+    "lokationsadresse": {
+      "bo_typ": "ADRESSE",
+      "strasse": "Musterstraße",
+      "hausnummer": "1",
+      "postleitzahl": "10115",
+      "ort": "Berlin",
+      "landescode": "DE"
+    }
+  },
+  "lokationszuordnung": [
+    {
+      "zuordnungstyp": "NB",
+      "rollencodenummer": "9900357000004",
+      "valid_from": "2024-01-01",
+      "valid_to": null
+    }
+  ],
+  "bo4e_version": "v202501.0.0"
+}

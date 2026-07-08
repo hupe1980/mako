@@ -123,6 +123,27 @@ pub async fn dispatch_deadline(
     // "gpke-supplier-change" → "gpke", "wim-device-change" → "wim", etc.
     let family = wf_name.split('-').next().unwrap_or(wf_name);
 
+    // ── APERAK Strom 45-minute sending-window obligation (APERAK AHB 1.0 §2.4.1) ──
+    //
+    // If this deadline fires, the OutboxWorker has not delivered the outbound
+    // APERAK within 45 minutes (weekday) or by Sunday 12:00 (Saturday).
+    // This is a BNetzA regulatory compliance violation.
+    //
+    // This label is purely a monitoring marker: it does NOT carry a workflow
+    // command.  Log the alert and return early — do NOT dispatch TimeoutExpired
+    // to the process (the process is waiting for an AS4 delivery, not a timer).
+    if label.as_ref() == mako_engine::fristen::APERAK_STROM_WINDOW_LABEL {
+        tracing::error!(
+            deadline_id = %deadline_id,
+            workflow    = %wf_name,
+            "REGULATORY ALERT: APERAK 45-minute Strom sending-window expired \
+             (APERAK AHB 1.0 §2.4.1). The outbound APERAK was not delivered \
+             within 45 minutes of receipt (or by Sunday 12:00 on Saturday). \
+             Check the OutboxWorker health and AS4 transport immediately.",
+        );
+        return Ok(());
+    }
+
     let result = match wf_name {
         "gpke-supplier-change" => {
             let p = Process::<GpkeSupplierChangeWorkflow, _>::from_identity(
@@ -626,6 +647,16 @@ pub async fn dispatch_deadline(
             );
             Ok(())
         }
+        "gabi-gas-mmma" => {
+            // MMMA (Gas Allokationsliste) is a receive-and-record workflow with no deadline
+            // obligation on the receiving side; it delegates delivery to gpke-allokationsliste.
+            // This arm exists solely to satisfy assert_dispatch_coverage.
+            tracing::debug!(
+                deadline_id = %deadline_id,
+                "gabi-gas-mmma: no deadline action (delegated to gpke-allokationsliste)",
+            );
+            Ok(())
+        }
         "gabi-gas-schedl" => {
             // SCHEDL is a simple receive-and-record workflow with no deadline obligation.
             // This arm exists solely to satisfy assert_dispatch_coverage.
@@ -970,6 +1001,7 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "wim-gas-stornierung",
     "wim-gas-insrpt",
     "gabi-gas-invoic",
+    "gabi-gas-mmma",
     "gabi-gas-nomination",
     "gabi-gas-allocation",
     "gabi-gas-schedl",

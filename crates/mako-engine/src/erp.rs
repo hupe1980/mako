@@ -91,6 +91,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::erc::ErcCode;
 use crate::ids::{ConversationId, EventId, ProcessId, TenantId};
 
 // ── ErpAdapterError ───────────────────────────────────────────────────────────
@@ -152,7 +153,18 @@ pub enum ErpEventType {
     /// The counterparty sent an APERAK accepting our UTILMD.
     AperakAccepted,
     /// The counterparty sent an APERAK rejecting our UTILMD.
-    AperakRejected,
+    ///
+    /// `erc_code` is `Some` when the APERAK carried a structured ERC segment
+    /// (BDEW APERAK AHB 1.0 §2.2).  It is `None` for legacy outbox messages
+    /// that predate the typed ERC code field.
+    AperakRejected {
+        /// Structured BDEW ERC error code from the APERAK ERC segment.
+        ///
+        /// Use [`crate::erc::recommended_action`] to derive the
+        /// recommended automated ERP response.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        erc_code: Option<ErcCode>,
+    },
     /// No APERAK received within the regulatory SLA window (deadline expired).
     AperakTimeout,
     /// A CONTRL syntax acknowledgement was received.
@@ -180,7 +192,7 @@ impl ErpEventType {
         match self {
             Self::ProcessInitiated => "process_initiated",
             Self::AperakAccepted => "aperak_accepted",
-            Self::AperakRejected => "aperak_rejected",
+            Self::AperakRejected { .. } => "aperak_rejected",
             Self::AperakTimeout => "aperak_timeout",
             Self::ContrlReceived => "contrl_received",
             Self::ProcessCompleted => "process_completed",
@@ -199,7 +211,7 @@ impl ErpEventType {
         match self {
             Self::ProcessInitiated => "de.mako.process.initiated",
             Self::AperakAccepted => "de.mako.aperak.accepted",
-            Self::AperakRejected => "de.mako.aperak.rejected",
+            Self::AperakRejected { .. } => "de.mako.aperak.rejected",
             Self::AperakTimeout => "de.mako.aperak.timeout",
             Self::ContrlReceived => "de.mako.contrl.received",
             Self::ProcessCompleted => "de.mako.process.completed",
@@ -276,7 +288,7 @@ pub struct ErpEvent {
     ///
     /// Carried through from `OutboxMessage::workflow_name`.  Emitted as the
     /// `makoworkflow` CloudEvents extension attribute by `WebhookErpAdapter`.
-    /// `mdmd` maps this to `mdmrole` for role-scoped ERP subscriber fan-out.
+    /// `marktd` maps this to `marktrole` for role-scoped ERP subscriber fan-out.
     ///
     /// Empty string for events produced by legacy outbox messages that
     /// predate this field.

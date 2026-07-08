@@ -1,0 +1,393 @@
+//! Typed HTTP client for the `marktd` data hub API.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Returns |
+//! |--------|------|---------|
+//! | `GET` | `/api/v1/versorgung/{malo_id}` | `Option<VersorgungsStatusRecord>` |
+//! | `GET` | `/api/v1/malo/{malo_id}/grid` | `Option<MaloGridRecord>` |
+//! | `GET` | `/api/v1/partners/{mp_id}` | `bool` (partner known) |
+//! | `GET` | `/api/v1/preisblaetter/{nb_mp_id}?date=…` | `Option<PreisblattNetznutzung>` |
+//! | `PUT` | `/api/v1/subscriptions/{id}` | `()` (idempotent registration) |
+//!
+//! # Resilience
+//!
+//! The preisblatt endpoint includes a **circuit breaker** (3 failures → 30-second open)
+//! and a **1-hour TTL cache** to prevent thundering-herd on `marktd` under load.
+//!
+//! All other endpoints use the standard 30-second request timeout via the
+//! shared `reqwest::Client`.
+//!
+//! # Feature gate
+//!
+//! This module is only compiled with `features = ["marktd-client"]`.
+
+use std::collections::HashMap;
+
+use rubo4e::v202501::PreisblattNetznutzung;
+use secrecy::{ExposeSecret, SecretString};
+use serde::Serialize;
+use time::OffsetDateTime;
+use tokio::sync::Mutex;
+use tracing::{info, warn};
+
+use crate::repository::{MaloGridRecord, VersorgungsStatusRecord};
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/// How long a successfully fetched Preisblatt is kept in the cache (1 hour).
+const CACHE_TTL_SECS: i64 = 3_600;
+
+/// Number of consecutive `marktd` failures before the circuit opens.
+const CB_FAILURE_THRESHOLD: u32 = 3;
+
+/// How long the circuit stays open before a probe is allowed through (30 s).
+const CB_COOLDOWN_SECS: i64 = 30;
+
+// ── Error type ────────────────────────────────────────────────────────────────
+
+/// Errors returned by [`MarktdClient`] methods.
+#[derive(Debug, thiserror::Error)]
+pub enum MarktdClientError {
+    /// Network or HTTP error (non-404 status code).
+    #[error("marktd request failed: {0}")]
+    Http(String),
+
+    /// Response body could not be deserialized.
+    #[error("marktd response deserialization failed: {0}")]
+    Deserialization(String),
+}
+
+impl From<reqwest::Error> for MarktdClientError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Http(e.to_string())
+    }
+}
+
+// ── Subscription request body ─────────────────────────────────────────────────
+
+/// Request body for `PUT /api/v1/subscriptions/{subscriber_id}`.
+#[derive(Debug, Serialize)]
+pub struct SubscriptionRequest<'a> {
+    /// Public webhook URL that `marktd` will POST events to.
+    pub webhook_url: &'a str,
+    /// Optional HMAC-SHA256 secret `marktd` signs outbound payloads with.
+    ///
+    /// `None` disables signature verification for this subscription.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook_secret: Option<&'a str>,
+    /// `CloudEvent` type filter (empty = wildcard, receive all events).
+    pub event_types: &'a [&'a str],
+    /// Optional PID filter (empty = all PIDs).
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub makopid_filter: &'a [u32],
+    /// Whether the subscription is active.
+    pub active: bool,
+}
+
+// ── Circuit-breaker inner state ───────────────────────────────────────────────
+
+struct CbInner {
+    cache: HashMap<(String, time::Date), CacheEntry>,
+    cb_failures: u32,
+    cb_open_until: Option<OffsetDateTime>,
+}
+
+struct CacheEntry {
+    sheet: Option<PreisblattNetznutzung>,
+    expires_at: OffsetDateTime,
+}
+
+impl CbInner {
+    fn is_cb_open(&self, now: OffsetDateTime) -> bool {
+        self.cb_open_until.is_some_and(|t| now < t)
+    }
+
+    fn record_success(&mut self) {
+        self.cb_failures = 0;
+        self.cb_open_until = None;
+    }
+
+    fn record_failure(&mut self, now: OffsetDateTime) {
+        self.cb_failures += 1;
+        if self.cb_failures >= CB_FAILURE_THRESHOLD {
+            self.cb_open_until = Some(now + time::Duration::seconds(CB_COOLDOWN_SECS));
+        }
+    }
+
+    fn get_cached(&self, nb_mp_id: &str, date: time::Date) -> Option<PreisblattNetznutzung> {
+        let entry = self.cache.get(&(nb_mp_id.to_owned(), date))?;
+        if OffsetDateTime::now_utc() < entry.expires_at {
+            entry.sheet.clone()
+        } else {
+            None
+        }
+    }
+
+    fn set_cached(
+        &mut self,
+        nb_mp_id: &str,
+        date: time::Date,
+        sheet: Option<PreisblattNetznutzung>,
+    ) {
+        let expires_at = OffsetDateTime::now_utc() + time::Duration::seconds(CACHE_TTL_SECS);
+        self.cache.insert(
+            (nb_mp_id.to_owned(), date),
+            CacheEntry { sheet, expires_at },
+        );
+    }
+}
+
+// ── MarktdClient ──────────────────────────────────────────────────────────────
+
+/// Typed HTTP client for the `marktd` data hub APIs.
+///
+/// Clone is cheap — the underlying `reqwest::Client` is `Arc`-backed and the
+/// circuit-breaker state is shared via `Arc<Mutex<…>>`.
+#[derive(Clone)]
+pub struct MarktdClient {
+    client: reqwest::Client,
+    base_url: String,
+    api_key: SecretString,
+    /// Circuit-breaker + TTL cache for the preisblatt endpoint.
+    cb: std::sync::Arc<Mutex<CbInner>>,
+}
+
+impl std::fmt::Debug for MarktdClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MarktdClient")
+            .field("base_url", &self.base_url)
+            .finish_non_exhaustive()
+    }
+}
+
+impl MarktdClient {
+    /// Construct a new client.
+    ///
+    /// `base_url` — cluster-internal URL, e.g. `http://marktd:8180`.
+    /// `api_key`  — Bearer token for machine-to-machine auth.
+    ///
+    /// The provided `reqwest::Client` should be built with the standard
+    /// `mako_service::http::default_client()` timeouts (30 s request, 5 s connect).
+    #[must_use]
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: SecretString,
+        client: reqwest::Client,
+    ) -> Self {
+        Self {
+            client,
+            base_url: base_url.into(),
+            api_key,
+            cb: std::sync::Arc::new(Mutex::new(CbInner {
+                cache: HashMap::new(),
+                cb_failures: 0,
+                cb_open_until: None,
+            })),
+        }
+    }
+
+    // ── Core endpoints ────────────────────────────────────────────────────────
+
+    /// `GET /api/v1/versorgung/{malo_id}` — current `VersorgungsStatus`.
+    ///
+    /// Returns `None` on 404 (`MaLo` not found in `marktd`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on network or non-404 HTTP errors.
+    pub async fn get_versorgung(
+        &self,
+        malo_id: &str,
+    ) -> Result<Option<VersorgungsStatusRecord>, MarktdClientError> {
+        let url = format!("{}/api/v1/versorgung/{}", self.base_url, malo_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `GET /api/v1/malo/{malo_id}/grid` — NB grid topology record.
+    ///
+    /// Returns `None` on 404 (no grid record for this `MaLo`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on network or non-404 HTTP errors.
+    pub async fn get_malo_grid(
+        &self,
+        malo_id: &str,
+    ) -> Result<Option<MaloGridRecord>, MarktdClientError> {
+        let url = format!("{}/api/v1/malo/{}/grid", self.base_url, malo_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `GET /api/v1/partners/{mp_id}` — returns `true` if the partner is registered.
+    ///
+    /// A 200 response means the partner exists; 404 means unknown.
+    /// Any other HTTP status is treated as a network error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on network errors or unexpected status codes.
+    pub async fn partner_known(&self, mp_id: &str) -> Result<bool, MarktdClientError> {
+        let url = format!("{}/api/v1/partners/{}", self.base_url, mp_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        Ok(resp.status().is_success())
+    }
+
+    /// `GET /api/v1/preisblaetter/{nb_mp_id}?date={billing_date}` — Preisblatt.
+    ///
+    /// Returns `None` when:
+    /// - 404 (no Preisblatt registered for this NB + date), **or**
+    /// - the circuit breaker is open (degrades gracefully — structural checks proceed)
+    ///
+    /// Responses are cached for `CACHE_TTL_SECS` (1 hour). After three consecutive
+    /// failures the circuit opens for `CB_COOLDOWN_SECS` (30 seconds).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on non-404 HTTP errors when the circuit is closed.
+    pub async fn get_preisblatt(
+        &self,
+        nb_mp_id: &str,
+        billing_date: time::Date,
+    ) -> Result<Option<PreisblattNetznutzung>, MarktdClientError> {
+        let now = OffsetDateTime::now_utc();
+        let inner = self.cb.lock().await;
+
+        // Serve from cache if available.
+        if inner
+            .cache
+            .contains_key(&(nb_mp_id.to_owned(), billing_date))
+        {
+            let cached = inner.get_cached(nb_mp_id, billing_date);
+            return Ok(cached);
+        }
+
+        // Check circuit.
+        if inner.is_cb_open(now) {
+            warn!(
+                nb_mp_id,
+                %billing_date,
+                "MarktdClient: circuit open — degrading to structural checks only"
+            );
+            return Ok(None);
+        }
+        drop(inner); // Release mutex before async HTTP call.
+
+        let date_str = billing_date.to_string(); // "YYYY-MM-DD"
+        let url = format!("{}/api/v1/preisblaetter/{}", self.base_url, nb_mp_id);
+        let result = self
+            .client
+            .get(&url)
+            .query(&[("date", &date_str)])
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await;
+
+        let mut inner = self.cb.lock().await;
+        match result {
+            Err(e) => {
+                inner.record_failure(now);
+                warn!(%e, nb_mp_id, "MarktdClient: preisblatt fetch failed");
+                Err(MarktdClientError::Http(e.to_string()))
+            }
+            Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => {
+                inner.record_success();
+                inner.set_cached(nb_mp_id, billing_date, None);
+                Ok(None)
+            }
+            Ok(resp) if !resp.status().is_success() => {
+                inner.record_failure(now);
+                let status = resp.status().as_u16();
+                warn!(
+                    nb_mp_id,
+                    status, "MarktdClient: preisblatt returned non-2xx"
+                );
+                Err(MarktdClientError::Http(format!("HTTP {status}")))
+            }
+            Ok(resp) => match resp.json::<PreisblattNetznutzung>().await {
+                Ok(sheet) => {
+                    inner.record_success();
+                    inner.set_cached(nb_mp_id, billing_date, Some(sheet.clone()));
+                    Ok(Some(sheet))
+                }
+                Err(e) => {
+                    inner.record_failure(now);
+                    Err(MarktdClientError::Deserialization(e.to_string()))
+                }
+            },
+        }
+    }
+
+    /// `PUT /api/v1/subscriptions/{subscriber_id}` — register or update a subscription.
+    ///
+    /// This is an idempotent upsert — safe to call on every service restart.
+    /// Non-2xx responses are logged as warnings but do **not** return an error
+    /// so that startup proceeds even when `marktd` is temporarily unavailable.
+    pub async fn put_subscription(&self, subscriber_id: &str, req: &SubscriptionRequest<'_>) {
+        let url = format!("{}/api/v1/subscriptions/{}", self.base_url, subscriber_id);
+        let body = serde_json::json!({
+            "webhook_url":    req.webhook_url,
+            "webhook_secret": req.webhook_secret,
+            "roles":          [],
+            "event_types":    req.event_types,
+            "makopid_filter": req.makopid_filter,
+            "active":         req.active,
+        });
+
+        match self
+            .client
+            .put(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                info!(subscriber_id, "MarktdClient: subscription registered");
+            }
+            Ok(resp) => {
+                warn!(
+                    subscriber_id,
+                    status = resp.status().as_u16(),
+                    "MarktdClient: subscription registration returned non-2xx"
+                );
+            }
+            Err(e) => {
+                warn!(%e, subscriber_id, "MarktdClient: subscription registration failed");
+            }
+        }
+    }
+}

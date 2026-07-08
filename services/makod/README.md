@@ -76,7 +76,7 @@ cargo build -p makod --release
 Every enabled port exposes `GET /health`:
 
 ```
-HTTP 200  {"status":"ok","version":"0.6.0","uptime_secs":142}
+HTTP 200  {"status":"ok","version":"0.7.0","uptime_secs":142}
 HTTP 503  {"status":"degraded","reason":"deadline_scheduler not running"}
 ```
 

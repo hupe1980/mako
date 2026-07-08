@@ -386,3 +386,101 @@ impl ProcessIdentity {
         &self.stream_id
     }
 }
+
+// ── Pid ───────────────────────────────────────────────────────────────────────
+
+/// A BDEW Prüfidentifikator — the 5-digit numeric code that identifies a MaKo
+/// process family and is used to route inbound EDIFACT messages.
+///
+/// Valid range: `1..=99999`. Zero is reserved and never a valid PID.
+/// PIDs are 5 digits in BDEW documents (e.g. `55001`, `44022`, `17115`).
+///
+/// # Construction
+///
+/// - [`Pid::new`] — unchecked compile-time const (panics on out-of-range);
+///   use for known-valid literals only.
+/// - [`Pid::from_u32`] — checked runtime parse; returns `None` on invalid range.
+/// - [`Pid::parse_str`] — parse from a decimal string (leading zeros allowed).
+///
+/// # Display
+///
+/// `Pid` formats as a zero-padded 5-digit string (`55001`, not `55_001`).
+///
+/// # Example
+///
+/// ```rust
+/// use mako_engine::ids::Pid;
+///
+/// // Compile-time known literal:
+/// const LIEFERANTENWECHSEL: Pid = Pid::new(55001);
+///
+/// // Runtime-checked parse:
+/// let pid = Pid::from_u32(44022).expect("valid PID");
+/// assert_eq!(pid.as_u32(), 44022);
+/// assert_eq!(pid.to_string(), "44022");
+///
+/// // Out-of-range:
+/// assert!(Pid::from_u32(0).is_none());
+/// assert!(Pid::from_u32(100_000).is_none());
+/// ```
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct Pid(u32);
+
+impl Pid {
+    /// Create a `Pid` from a known-valid compile-time literal.
+    ///
+    /// This is a `const fn` so it can be used in `const` context.
+    ///
+    /// # Panics
+    ///
+    /// Panics at compile time (or runtime in debug builds) if `value == 0`
+    /// or `value > 99_999`.
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        assert!(
+            value > 0 && value <= 99_999,
+            "Pid must be in range 1..=99999"
+        );
+        Self(value)
+    }
+
+    /// Parse a `Pid` from a runtime `u32`, returning `None` on invalid range.
+    #[must_use]
+    pub fn from_u32(value: u32) -> Option<Self> {
+        if value > 0 && value <= 99_999 {
+            Some(Self(value))
+        } else {
+            None
+        }
+    }
+
+    /// Parse a `Pid` from a decimal string, returning `None` if the string is
+    /// not a valid decimal integer in `1..=99999`.
+    ///
+    /// Leading zeros are allowed (e.g. `"05001"` → `Pid(5001)`).
+    #[must_use]
+    pub fn parse_str(s: &str) -> Option<Self> {
+        s.trim().parse::<u32>().ok().and_then(Self::from_u32)
+    }
+
+    /// Return the raw `u32` value.
+    #[must_use]
+    pub const fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+
+impl fmt::Display for Pid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:05}", self.0)
+    }
+}
+
+impl From<Pid> for u32 {
+    fn from(p: Pid) -> u32 {
+        p.0
+    }
+}

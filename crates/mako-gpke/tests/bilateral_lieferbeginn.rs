@@ -52,9 +52,9 @@ use mako_engine::{
     workflow::Workflow,
 };
 use mako_gpke::{
-    APERAK_WINDOW_LABEL, GpkeLfAnmeldungWorkflow, GpkeSupplierChangeWorkflow, LfAnmeldungCommand,
-    LfAnmeldungState, NB_RESPONSE_WINDOW_LABEL, SupplierChangeCommand, SupplierChangeState,
-    post_acceptance,
+    GPKE_PROCESS_RESPONSE_LABEL, GpkeLfAnmeldungWorkflow, GpkeSupplierChangeWorkflow,
+    LfAnmeldungCommand, LfAnmeldungState, NB_RESPONSE_WINDOW_LABEL, SupplierChangeCommand,
+    SupplierChangeState, post_acceptance,
 };
 use time::OffsetDateTime;
 
@@ -273,6 +273,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
         // Force validation_passed=true: this test exercises the bilateral state-machine
         // flow (routing, commands, outbox), not AHB profile conformance.  Profile
         // validation is exercised separately in crates/edi-energy/tests/conformance.rs.
+        received_at: time::OffsetDateTime::now_utc(),
         validation_passed: true,
         validation_errors: vec![],
     })
@@ -294,7 +295,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
         nb.process_id(),
         nb.tenant_id(),
         nb.workflow_id().clone(),
-        APERAK_WINDOW_LABEL,
+        GPKE_PROCESS_RESPONSE_LABEL,
         aperak_due,
     );
     let aperak_dl_id = aperak_dl.deadline_id();
@@ -492,6 +493,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
         process_date: "20250301".to_owned(),
         message_ref: msg_ref,
         // Bypass AHB validation: bilateral test checks state-machine flow only.
+        received_at: time::OffsetDateTime::now_utc(),
         validation_passed: true,
         validation_errors: vec![],
     })
@@ -581,6 +583,7 @@ async fn bilateral_24h_aperak_deadline_fires_on_timeout() {
         process_date: "20250301".to_owned(),
         message_ref: msg_ref,
         // Bypass AHB validation: bilateral test checks state-machine flow only.
+        received_at: time::OffsetDateTime::now_utc(),
         validation_passed: true,
         validation_errors: vec![],
     })
@@ -596,7 +599,7 @@ async fn bilateral_24h_aperak_deadline_fires_on_timeout() {
         nb.process_id(),
         nb.tenant_id(),
         nb.workflow_id().clone(),
-        APERAK_WINDOW_LABEL,
+        GPKE_PROCESS_RESPONSE_LABEL,
         already_past,
     );
     let nb_dl_id = nb_dl.deadline_id();
@@ -623,7 +626,7 @@ async fn bilateral_24h_aperak_deadline_fires_on_timeout() {
     // Dispatch TimeoutExpired to both processes.
     nb.execute(SupplierChangeCommand::TimeoutExpired {
         deadline_id: nb_dl_id,
-        label: APERAK_WINDOW_LABEL.into(),
+        label: GPKE_PROCESS_RESPONSE_LABEL.into(),
     })
     .await
     .unwrap();

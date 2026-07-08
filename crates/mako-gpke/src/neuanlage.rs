@@ -38,10 +38,11 @@ use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
     error::WorkflowError,
+    fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at},
     ids::DeadlineId,
     outbox::PendingOutbox,
     types::{MaLo, MarktpartnerCode, MessageRef},
-    workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
+    workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
 
 // ── PID set ───────────────────────────────────────────────────────────────────
@@ -51,14 +52,10 @@ pub const WORKFLOW_NAME: &str = "gpke-neuanlage";
 
 /// Inbound ANFRAGE PIDs for Neuanlage handled by [`GpkeNeuanlageWorkflow`].
 ///
-/// | PID   | Process (AHB name)                                  | AHB profile                    |
-/// |-------|-----------------------------------------------------|--------------------------------|
-/// | 55600 | Anmeldung neue verb. MaLo (LF → NB)                | S2.1–S2.2 — import pending ⚠  |
-/// | 55601 | Anmeldung neue erz. MaLo (LF → NB)                 | S2.1–S2.2 — import pending ⚠  |
-///
-/// **Action required:** Run `cargo xtask import-xml-ahb --message-type UTILMD --pid 55600 --pid 55601`
-/// to populate AHB rules. Until then, the adapter applies a vacuous-validation guard
-/// that forces `validation_passed = false` for all inbound 55600/55601 messages.
+/// | PID   | Process (AHB name)                                  | AHB profile  |
+/// |-------|-----------------------------------------------------|--------------|
+/// | 55600 | Anmeldung neue verb. MaLo (LF → NB)                | S2.1, S2.2   |
+/// | 55601 | Anmeldung neue erz. MaLo (LF → NB)                 | S2.1, S2.2   |
 ///
 /// Response PIDs (55602–55605) are derived internally and never routed.
 pub const NEUANLAGE_PIDS: &[u32] = &[55600, 55601];
@@ -286,6 +283,10 @@ pub enum NeuanlageCommand {
         process_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// UTC timestamp at which the inbound UTILMD was received at the transport layer.
+        ///
+        /// Used to compute the APERAK 45-minute sending deadline per APERAK AHB 1.0 §2.4.1.
+        received_at: time::OffsetDateTime,
         /// `true` if validation returned no errors.
         validation_passed: bool,
         /// Validation error strings (for the `Rejected` event).
@@ -428,6 +429,7 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 document_date,
                 process_date,
                 message_ref,
+                received_at,
                 validation_passed,
                 validation_errors,
             } => {
@@ -440,7 +442,7 @@ impl Workflow for GpkeNeuanlageWorkflow {
                     )));
                 }
                 // Clone before move for APERAK emission in the validation-failed path.
-                let sender_gln = sender.clone();
+                let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
 
                 let mut events = vec![NeuanlageEvent::AnmeldungErhalten {
@@ -459,17 +461,23 @@ impl Workflow for GpkeNeuanlageWorkflow {
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
-                            sender_gln.as_str(),
+                            sender_mp_id.as_str(),
                             serde_json::json!({
                                 "sender":        receiver_gln.as_str(),
-                                "receiver":      sender_gln.as_str(),
+                                "receiver":      sender_mp_id.as_str(),
                                 "pid":           29001_u32,
                                 "document_code": "312",
                             }),
                         )
                         .caused_by(1),
                     ];
-                    Ok(WorkflowOutput::with_outbox(events, outbox))
+                    let aperak_dl = PendingDeadline::new(
+                        APERAK_STROM_WINDOW_LABEL,
+                        aperak_strom_due_at(received_at),
+                    );
+                    Ok(WorkflowOutput::with_outbox_and_deadline(
+                        events, outbox, aperak_dl,
+                    ))
                 } else {
                     let reason = validation_errors.join("; ");
                     events.push(NeuanlageEvent::Rejected {
@@ -480,18 +488,24 @@ impl Workflow for GpkeNeuanlageWorkflow {
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
-                            sender_gln.as_str(),
+                            sender_mp_id.as_str(),
                             serde_json::json!({
                                 "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_gln.as_str(),
+                                "receiver":   sender_mp_id.as_str(),
                                 "pid":        29001_u32,
-                                "error_code": "Z29",
+                                "error_code": mako_engine::erc::codes::Z29,
                                 "reason":     reason,
                             }),
                         )
                         .caused_by(0),
                     ];
-                    Ok(WorkflowOutput::with_outbox(events, outbox))
+                    let aperak_dl = PendingDeadline::new(
+                        APERAK_STROM_WINDOW_LABEL,
+                        aperak_strom_due_at(received_at),
+                    );
+                    Ok(WorkflowOutput::with_outbox_and_deadline(
+                        events, outbox, aperak_dl,
+                    ))
                 }
             }
 
@@ -591,6 +605,7 @@ mod tests {
             document_date: "20251001".to_owned(),
             process_date: "20260101".to_owned(),
             message_ref: mref("NEUA-001"),
+            received_at: time::OffsetDateTime::now_utc(),
             validation_passed: ok,
             validation_errors: if ok {
                 vec![]
@@ -693,6 +708,7 @@ mod tests {
                 document_date: "20251001".to_owned(),
                 process_date: "20260101".to_owned(),
                 message_ref: mref("NEUA-X"),
+                received_at: time::OffsetDateTime::now_utc(),
                 validation_passed: true,
                 validation_errors: vec![],
             },

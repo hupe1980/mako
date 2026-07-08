@@ -44,8 +44,9 @@ use mako_engine::{
     version::WorkflowId,
 };
 use mako_gpke::{
-    APERAK_WINDOW_LABEL, GpkeLfAnmeldungWorkflow, GpkeSupplierChangeWorkflow, LfAnmeldungCommand,
-    LfAnmeldungState, SupplierChangeCommand, SupplierChangeState, post_acceptance,
+    GPKE_PROCESS_RESPONSE_LABEL, GpkeLfAnmeldungWorkflow, GpkeSupplierChangeWorkflow,
+    LfAnmeldungCommand, LfAnmeldungState, SupplierChangeCommand, SupplierChangeState,
+    post_acceptance,
 };
 use time::OffsetDateTime;
 
@@ -192,6 +193,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
         document_date: "20250115".to_owned(),
         process_date: "20250201".to_owned(),
         message_ref: MessageRef::new(anfrage_ref),
+        received_at: time::OffsetDateTime::now_utc(),
         validation_passed: anfrage_report.is_valid(),
         validation_errors: anfrage_report
             .errors()
@@ -216,7 +218,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
         nb.process_id(),
         nb.tenant_id(),
         nb.workflow_id().clone(),
-        APERAK_WINDOW_LABEL,
+        GPKE_PROCESS_RESPONSE_LABEL,
         aperak_due,
     );
     deadline_store
@@ -239,7 +241,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
         .expect("for_stream query must succeed");
     assert_eq!(
         registered[0].label(),
-        APERAK_WINDOW_LABEL,
+        GPKE_PROCESS_RESPONSE_LABEL,
         "deadline must carry the APERAK window label",
     );
 
@@ -409,6 +411,7 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
         document_date: "20250115".to_owned(),
         process_date: "20250201".to_owned(),
         message_ref: MessageRef::new(anfrage_ref),
+        received_at: time::OffsetDateTime::now_utc(),
         validation_passed: anfrage_report.is_valid(),
         validation_errors: anfrage_report
             .errors()

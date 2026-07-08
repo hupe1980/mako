@@ -76,7 +76,7 @@
 //!
 //! The following roles are valid in `[[party]]` but have no PID routing in the
 //! current engine version.  They are accepted at startup and stored in the
-//! registry but never appear in [`GlnRegistry::deployment_role_strings`]:
+//! registry but never appear in [`MpIdRegistry::deployment_role_strings`]:
 //!
 //! | Role | Reason |
 //! |---|---|
@@ -100,9 +100,9 @@
 //!   `[[party]]` roles into the strings accepted by `parse_deployment_roles`,
 //!   enabling auto-derivation of `--deployment-roles` and `--marktrollen`.
 //!
-//! [`is_own_gln`]: GlnRegistry::is_own_gln
-//! [`sender_gln_for_orders_pid`]: GlnRegistry::sender_gln_for_orders_pid
-//! [`deployment_role_strings`]: GlnRegistry::deployment_role_strings
+//! [`is_own_gln`]: MpIdRegistry::is_own_gln
+//! [`sender_gln_for_orders_pid`]: MpIdRegistry::sender_gln_for_orders_pid
+//! [`deployment_role_strings`]: MpIdRegistry::deployment_role_strings
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -265,10 +265,10 @@ fn find_role(upper: &str) -> Option<&'static RoleEntry> {
 /// Returns the [`RoleSparte`] for the given role abbreviation (case-insensitive).
 ///
 /// Returns `None` when the abbreviation is not a known BDEW Marktrolle.
-/// Useful for external callers (e.g. `mdmd` event routing) that need to
+/// Useful for external callers (e.g. `marktd` event routing) that need to
 /// determine a role's energy sector without constructing a full registry.
 #[must_use]
-#[allow(dead_code)] // public API for mdmd; not yet called within the binary
+#[allow(dead_code)] // public API for marktd; not yet called within the binary
 pub fn sparte_for_role(abbrev: &str) -> Option<RoleSparte> {
     find_role(&abbrev.to_uppercase()).map(|e| e.sparte)
 }
@@ -292,23 +292,23 @@ const DEFAULT_AGENCY: &str = "293"; // BDEW-Codenummer Strom
 /// | 16 | — | `"ZEW"` | EIC (ENTSO-E) |
 ///
 /// Note: UNB DE0007 codes differ — `500` (BDEW), `502` (DVGW), `14` (GS1).
-fn derive_agency(gln: &str) -> &'static str {
-    match gln.len() {
-        13 if gln.starts_with("99") => "293",
-        13 if gln.starts_with("98") => "332",
+fn derive_agency(mp_id: &str) -> &'static str {
+    match mp_id.len() {
+        13 if mp_id.starts_with("99") => "293",
+        13 if mp_id.starts_with("98") => "332",
         13 => "9",
         _ => "ZEW",
     }
 }
 
-// ── GlnRegistry ───────────────────────────────────────────────────────────────
+// ── MpIdRegistry ───────────────────────────────────────────────────────────────
 
 /// Role → GLN mapping for this `makod` instance.
 ///
 /// Built at startup from `[[party]]` entries in `makod.toml` via
-/// [`GlnRegistry::from_config`].  At least one entry is required.
+/// [`MpIdRegistry::from_config`].  At least one entry is required.
 #[derive(Debug, Clone)]
-pub struct GlnRegistry {
+pub struct MpIdRegistry {
     /// Primary GLN (storage partition key / default sender).
     primary_gln: Arc<str>,
     /// NAD DE3055 agency code for the primary GLN.
@@ -328,7 +328,7 @@ pub struct GlnRegistry {
     all_roles: Vec<Box<str>>,
 }
 
-impl GlnRegistry {
+impl MpIdRegistry {
     // ── Constructor ───────────────────────────────────────────────────────────
 
     /// Build from `[[party]]` config entries.
@@ -356,7 +356,7 @@ impl GlnRegistry {
             "makod.toml requires at least one [[party]] entry.\n\
              \n\
              [[party]]\n\
-             gln     = \"<13-digit BDEW/DVGW code or GS1 GLN>\"\n\
+             mp_id     = \"<13-digit BDEW/DVGW code or GS1 GLN>\"\n\
              roles   = [\"NB\"]  # or LF, MSB, GNB, LFG, …\n\
              primary = true"
         );
@@ -372,14 +372,14 @@ impl GlnRegistry {
         let mut seen_roles: HashMap<Box<str>, &str> = HashMap::new();
 
         for party in parties {
-            validate_gln(&party.gln)?;
+            validate_gln(&party.mp_id)?;
 
-            if !seen_glns.insert(party.gln.as_str()) {
+            if !seen_glns.insert(party.mp_id.as_str()) {
                 anyhow::bail!(
                     "duplicate GLN {:?} — each [[party]] entry must have a unique GLN \
                      (BDEW issues separate Codenummern per Marktrolle; use separate \
                      entries with different GLNs)",
-                    party.gln
+                    party.mp_id
                 );
             }
 
@@ -391,7 +391,7 @@ impl GlnRegistry {
             for role in &party.roles {
                 let upper = role.to_uppercase();
                 let entry = validate_role(&upper)
-                    .map_err(|e| anyhow::anyhow!("in [[party]] gln = {:?}: {e}", party.gln))?;
+                    .map_err(|e| anyhow::anyhow!("in [[party]] mp_id = {:?}: {e}", party.mp_id))?;
 
                 let key: Box<str> = upper.into_boxed_str();
                 if let Some(prev_gln) = seen_roles.get(&key) {
@@ -400,10 +400,10 @@ impl GlnRegistry {
                          each Marktrolle must belong to exactly one [[party]] entry",
                         role,
                         prev_gln,
-                        party.gln
+                        party.mp_id
                     );
                 }
-                seen_roles.insert(key, party.gln.as_str());
+                seen_roles.insert(key, party.mp_id.as_str());
 
                 match entry.sparte {
                     RoleSparte::Strom => strom_roles.push(role.as_str()),
@@ -415,14 +415,14 @@ impl GlnRegistry {
             // §2.13: a single [[party]] entry must not mix Strom and Gas roles.
             if !strom_roles.is_empty() && !gas_roles.is_empty() {
                 anyhow::bail!(
-                    "[[party]] gln = {:?} mixes Strom roles {strom_roles:?} with Gas \
+                    "[[party]] mp_id = {:?} mixes Strom roles {strom_roles:?} with Gas \
                      roles {gas_roles:?}.\n\
                      Per BDEW §2.13 (Allgemeine Festlegungen V6.1d), each Marktrolle \
                      requires a separate MP-ID; operators active in both sectors must \
                      use different GLNs per energy type and role. Use separate \
                      [[party]] entries — one for Strom (BDEW code, 99…) and one for \
                      Gas (DVGW code, 98…).",
-                    party.gln,
+                    party.mp_id,
                 );
             }
         }
@@ -434,11 +434,11 @@ impl GlnRegistry {
             .or_else(|| parties.first())
             .expect("non-empty — checked above");
 
-        let primary_gln: Arc<str> = primary.gln.as_str().into();
+        let primary_gln: Arc<str> = primary.mp_id.as_str().into();
         let primary_agency: Arc<str> = primary
             .agency
             .as_deref()
-            .unwrap_or_else(|| derive_agency(&primary.gln))
+            .unwrap_or_else(|| derive_agency(&primary.mp_id))
             .into();
 
         let mut own_glns: HashSet<Arc<str>> = HashSet::new();
@@ -447,11 +447,11 @@ impl GlnRegistry {
         let mut all_roles: Vec<Box<str>> = Vec::new();
 
         for party in parties {
-            let gln_arc: Arc<str> = party.gln.as_str().into();
+            let gln_arc: Arc<str> = party.mp_id.as_str().into();
             let agency: Arc<str> = party
                 .agency
                 .as_deref()
-                .unwrap_or_else(|| derive_agency(&party.gln))
+                .unwrap_or_else(|| derive_agency(&party.mp_id))
                 .into();
             own_glns.insert(Arc::clone(&gln_arc));
             gln_to_agency.insert(Arc::clone(&gln_arc), agency);
@@ -504,7 +504,7 @@ impl GlnRegistry {
 
     /// Returns the GLN for the given BDEW Marktrolle, or [`primary_gln`] as fallback.
     ///
-    /// [`primary_gln`]: GlnRegistry::primary_gln
+    /// [`primary_gln`]: MpIdRegistry::primary_gln
     #[must_use]
     pub fn gln_for_role_or_primary(&self, role: &str) -> &str {
         self.gln_for_role(role).unwrap_or(self.primary_gln())
@@ -516,9 +516,9 @@ impl GlnRegistry {
     /// falls back to `"293"` (BDEW Strom) for unknown GLNs.
     #[must_use]
     #[allow(dead_code)]
-    pub fn agency_for_gln(&self, gln: &str) -> &str {
+    pub fn agency_for_gln(&self, mp_id: &str) -> &str {
         self.gln_to_agency
-            .get(gln)
+            .get(mp_id)
             .map(Arc::as_ref)
             .unwrap_or(DEFAULT_AGENCY)
     }
@@ -530,8 +530,8 @@ impl GlnRegistry {
     /// so loopback works even when `NB` and `MSB` have different GLNs on the
     /// same `makod` instance.
     #[must_use]
-    pub fn is_own_gln(&self, gln: &str) -> bool {
-        self.own_glns.contains(gln)
+    pub fn is_own_gln(&self, mp_id: &str) -> bool {
+        self.own_glns.contains(mp_id)
     }
 
     /// Iterates over all own GLNs (one per `[[party]]` entry).
@@ -595,7 +595,7 @@ impl GlnRegistry {
     /// different GLNs) emit a `warn!` log and fall back to [`primary_gln`].
     /// Set `"sender"` explicitly in the ORDERS payload to resolve the ambiguity.
     ///
-    /// [`primary_gln`]: GlnRegistry::primary_gln
+    /// [`primary_gln`]: MpIdRegistry::primary_gln
     #[must_use]
     pub fn sender_gln_for_orders_pid(&self, pid: u32) -> &str {
         match pid {
@@ -653,14 +653,19 @@ impl GlnRegistry {
 // ── Validation ────────────────────────────────────────────────────────────────
 
 /// Validate a BDEW/DVGW MP-ID (13 ASCII digits) or EIC (16 alphanumeric chars).
-fn validate_gln(gln: &str) -> anyhow::Result<()> {
-    match gln.len() {
-        13 if gln.bytes().all(|b| b.is_ascii_digit()) => Ok(()),
-        16 if gln.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') => Ok(()),
+fn validate_gln(mp_id: &str) -> anyhow::Result<()> {
+    match mp_id.len() {
+        13 if mp_id.bytes().all(|b| b.is_ascii_digit()) => Ok(()),
+        16 if mp_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-') =>
+        {
+            Ok(())
+        }
         _ => anyhow::bail!(
             "GLN {:?} is not a valid 13-digit BDEW/DVGW/GS1 code or 16-char EIC.\n\
              Examples: BDEW \"9900001000001\", DVGW \"9800001000001\", GS1 \"4012345000023\"",
-            gln
+            mp_id
         ),
     }
 }
@@ -688,9 +693,9 @@ mod tests {
     use super::*;
     use crate::config::PartyConfig;
 
-    fn party(gln: &str, roles: &[&str], primary: bool) -> PartyConfig {
+    fn party(mp_id: &str, roles: &[&str], primary: bool) -> PartyConfig {
         PartyConfig {
-            gln: gln.to_owned(),
+            mp_id: mp_id.to_owned(),
             roles: roles.iter().map(|s| s.to_string()).collect(),
             primary,
             agency: None,
@@ -751,7 +756,7 @@ mod tests {
     #[test]
     fn single_party_no_primary_flag() {
         let reg =
-            GlnRegistry::from_config(&[party("9900001000001", &["NB", "LF"], false)]).unwrap();
+            MpIdRegistry::from_config(&[party("9900001000001", &["NB", "LF"], false)]).unwrap();
         assert_eq!(reg.primary_gln(), "9900001000001");
         assert_eq!(reg.gln_for_role("NB"), Some("9900001000001"));
         assert_eq!(reg.gln_for_role("LF"), Some("9900001000001"));
@@ -765,7 +770,7 @@ mod tests {
             party("9900001000002", &["LF"], true), // primary
             party("9900001000003", &["MSB"], false),
         ];
-        let reg = GlnRegistry::from_config(&parties).unwrap();
+        let reg = MpIdRegistry::from_config(&parties).unwrap();
         assert_eq!(reg.primary_gln(), "9900001000002");
         assert_eq!(reg.gln_for_role("NB"), Some("9900001000001"));
         assert_eq!(reg.gln_for_role("LF"), Some("9900001000002"));
@@ -778,14 +783,14 @@ mod tests {
 
     #[test]
     fn gln_for_role_or_primary_fallback() {
-        let reg = GlnRegistry::from_config(&[party("9900001000001", &["NB"], true)]).unwrap();
+        let reg = MpIdRegistry::from_config(&[party("9900001000001", &["NB"], true)]).unwrap();
         assert_eq!(reg.gln_for_role_or_primary("NB"), "9900001000001");
         assert_eq!(reg.gln_for_role_or_primary("LF"), "9900001000001"); // fallback to primary
     }
 
     #[test]
     fn case_insensitive_role_lookup() {
-        let reg = GlnRegistry::from_config(&[party("9900001000001", &["nb"], true)]).unwrap();
+        let reg = MpIdRegistry::from_config(&[party("9900001000001", &["nb"], true)]).unwrap();
         assert_eq!(reg.gln_for_role("nb"), Some("9900001000001"));
         assert_eq!(reg.gln_for_role("NB"), Some("9900001000001"));
     }
@@ -795,15 +800,15 @@ mod tests {
     #[test]
     fn agency_auto_derived_from_gln_prefix() {
         // 99-prefix → BDEW-Codenummer Strom → NAD DE3055 = 293
-        let reg = GlnRegistry::from_config(&[party("9900001000001", &["NB"], true)]).unwrap();
+        let reg = MpIdRegistry::from_config(&[party("9900001000001", &["NB"], true)]).unwrap();
         assert_eq!(reg.primary_agency(), "293");
 
         // 98-prefix → DVGW-Codenummer Gas → NAD DE3055 = 332
-        let reg = GlnRegistry::from_config(&[party("9800001000001", &["GNB"], true)]).unwrap();
+        let reg = MpIdRegistry::from_config(&[party("9800001000001", &["GNB"], true)]).unwrap();
         assert_eq!(reg.primary_agency(), "332");
 
         // Other 13-digit → GS1 GLN → NAD DE3055 = 9
-        let reg = GlnRegistry::from_config(&[party("4012345000023", &["LF"], true)]).unwrap();
+        let reg = MpIdRegistry::from_config(&[party("4012345000023", &["LF"], true)]).unwrap();
         assert_eq!(reg.primary_agency(), "9");
     }
 
@@ -811,7 +816,7 @@ mod tests {
     fn agency_explicit_override() {
         let mut p = party("9900001000001", &["NB"], true);
         p.agency = Some("9".to_owned()); // force GS1 code despite 99-prefix
-        let reg = GlnRegistry::from_config(&[p]).unwrap();
+        let reg = MpIdRegistry::from_config(&[p]).unwrap();
         assert_eq!(reg.primary_agency(), "9");
         assert_eq!(reg.agency_for_gln("9900001000001"), "9");
         assert_eq!(reg.agency_for_gln("9900001000099"), "293"); // unknown GLN → DEFAULT_AGENCY
@@ -828,7 +833,7 @@ mod tests {
             party("9800001000003", &["FNB"], false),         // FNB→UNB
             party("9800001000004", &["MGV"], false),         // excluded (no engine role)
         ];
-        let reg = GlnRegistry::from_config(&parties).unwrap();
+        let reg = MpIdRegistry::from_config(&parties).unwrap();
         let mut roles = reg.deployment_role_strings();
         roles.sort();
         assert_eq!(roles, ["LF", "MSB", "NB", "UNB"]);
@@ -843,7 +848,7 @@ mod tests {
             party("9800001000001", &["KN"], false),
             party("4012345000023", &["RB"], false),
         ];
-        let reg = GlnRegistry::from_config(&parties).unwrap();
+        let reg = MpIdRegistry::from_config(&parties).unwrap();
         assert!(reg.deployment_role_strings().is_empty());
     }
 
@@ -855,7 +860,7 @@ mod tests {
             party("9900001000001", &["BIKO"], true),
             party("9800001000001", &["FNB"], false),
         ];
-        let reg = GlnRegistry::from_config(&parties).unwrap();
+        let reg = MpIdRegistry::from_config(&parties).unwrap();
         assert_eq!(reg.gln_for_role("BIKO"), Some("9900001000001"));
         assert_eq!(reg.gln_for_role("FNB"), Some("9800001000001"));
         // FNB maps to UNB in engine canonical.
@@ -871,7 +876,7 @@ mod tests {
             party("9800001000001", &["KN"], false),
             party("4012345000023", &["RB"], false),
         ];
-        let reg = GlnRegistry::from_config(&parties).unwrap();
+        let reg = MpIdRegistry::from_config(&parties).unwrap();
         assert_eq!(reg.gln_for_role("DP"), Some("9900001000001"));
         assert_eq!(reg.gln_for_role("KN"), Some("9800001000001"));
         assert_eq!(reg.gln_for_role("RB"), Some("4012345000023"));
@@ -883,7 +888,7 @@ mod tests {
     #[test]
     fn err_mixed_sparte_roles() {
         let p = party("9900001000001", &["NB", "GNB"], true);
-        let err = GlnRegistry::from_config(&[p]).unwrap_err();
+        let err = MpIdRegistry::from_config(&[p]).unwrap_err();
         assert!(
             err.to_string().contains("§2.13"),
             "must reference §2.13: {err}"
@@ -893,17 +898,17 @@ mod tests {
     #[test]
     fn err_mixed_sparte_lf_lfg() {
         let p = party("9900001000001", &["LF", "LFG"], true);
-        assert!(GlnRegistry::from_config(&[p]).is_err());
+        assert!(MpIdRegistry::from_config(&[p]).is_err());
     }
 
     #[test]
     fn rb_is_sparte_neutral() {
         // RB alongside Strom roles must not trigger §2.13.
-        let r = GlnRegistry::from_config(&[party("9900001000001", &["NB", "RB"], true)]);
+        let r = MpIdRegistry::from_config(&[party("9900001000001", &["NB", "RB"], true)]);
         assert!(r.is_ok(), "NB+RB should be ok: {r:?}");
 
         // RB alongside Gas roles must not trigger §2.13.
-        let r = GlnRegistry::from_config(&[party("9800001000001", &["GNB", "RB"], true)]);
+        let r = MpIdRegistry::from_config(&[party("9800001000001", &["GNB", "RB"], true)]);
         assert!(r.is_ok(), "GNB+RB should be ok: {r:?}");
     }
 
@@ -914,7 +919,7 @@ mod tests {
             party("9800001000001", &["GNB", "GMSB"], false), // Gas
             party("9800001000002", &["LFG"], false),      // Gas LF
         ];
-        let reg = GlnRegistry::from_config(&parties).unwrap();
+        let reg = MpIdRegistry::from_config(&parties).unwrap();
         assert_eq!(reg.gln_for_role("NB"), Some("9900001000001"));
         assert_eq!(reg.gln_for_role("GNB"), Some("9800001000001"));
         assert_eq!(reg.gln_for_role("LFG"), Some("9800001000002"));
@@ -924,12 +929,12 @@ mod tests {
 
     #[test]
     fn err_empty_parties() {
-        assert!(GlnRegistry::from_config(&[]).is_err());
+        assert!(MpIdRegistry::from_config(&[]).is_err());
     }
 
     #[test]
     fn err_invalid_gln() {
-        assert!(GlnRegistry::from_config(&[party("not-a-gln", &["NB"], true)]).is_err());
+        assert!(MpIdRegistry::from_config(&[party("not-a-mp_id", &["NB"], true)]).is_err());
     }
 
     #[test]
@@ -938,7 +943,7 @@ mod tests {
             party("9900001000001", &["NB"], true),
             party("9900001000001", &["LF"], false),
         ];
-        assert!(GlnRegistry::from_config(&parties).is_err());
+        assert!(MpIdRegistry::from_config(&parties).is_err());
     }
 
     #[test]
@@ -947,7 +952,7 @@ mod tests {
             party("9900001000001", &["NB", "LF"], true),
             party("9900001000002", &["LF", "MSB"], false), // LF in both
         ];
-        assert!(GlnRegistry::from_config(&parties).is_err());
+        assert!(MpIdRegistry::from_config(&parties).is_err());
     }
 
     #[test]
@@ -956,11 +961,11 @@ mod tests {
             party("9900001000001", &["NB"], true),
             party("9900001000002", &["LF"], true),
         ];
-        assert!(GlnRegistry::from_config(&parties).is_err());
+        assert!(MpIdRegistry::from_config(&parties).is_err());
     }
 
     #[test]
     fn err_unknown_role() {
-        assert!(GlnRegistry::from_config(&[party("9900001000001", &["INVALID"], true)]).is_err());
+        assert!(MpIdRegistry::from_config(&[party("9900001000001", &["INVALID"], true)]).is_err());
     }
 }

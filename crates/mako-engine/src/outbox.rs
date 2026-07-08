@@ -241,7 +241,7 @@ pub struct OutboxMessage {
     ///
     /// Stamped from the `EventEnvelope::workflow_id.name` at materialisation
     /// time.  Used by the `OutboxErpWorker` to populate the `makoworkflow`
-    /// CloudEvents extension attribute, which `mdmd` maps to `mdmrole` for
+    /// CloudEvents extension attribute, which `marktd` maps to `marktrole` for
     /// role-scoped ERP fan-out.
     ///
     /// Empty string for messages materialised before this field was introduced
@@ -338,6 +338,7 @@ pub trait OutboxStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Outbox`] on storage failure.
+    #[must_use = "dropping an enqueue Result silently loses outbound EDIFACT messages"]
     async fn enqueue(&self, messages: &[OutboxMessage]) -> Result<(), EngineError>;
 
     /// Return up to `limit` messages ready for delivery as of `now`.
@@ -348,6 +349,7 @@ pub trait OutboxStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Outbox`] on storage failure.
+    #[must_use = "dropping a pending Result silently discards outbox delivery work"]
     async fn pending(
         &self,
         limit: usize,
@@ -373,6 +375,7 @@ pub trait OutboxStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Outbox`] on storage failure.
+    #[must_use = "dropping an acknowledge Result silently hides a store error"]
     async fn acknowledge(&self, id: OutboxMessageId) -> Result<(), EngineError>;
 
     /// Reschedule a message for a future delivery attempt.
@@ -383,6 +386,7 @@ pub trait OutboxStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Outbox`] on storage failure.
+    #[must_use = "dropping a reschedule Result silently hides a store error"]
     async fn reschedule(
         &self,
         id: OutboxMessageId,
@@ -394,6 +398,7 @@ pub trait OutboxStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Outbox`] on storage failure.
+    #[must_use = "dropping a len Result silently discards a store error"]
     async fn len(&self) -> Result<usize, EngineError>;
 
     /// Return `true` when the outbox contains no messages.
@@ -462,6 +467,10 @@ impl<S: OutboxStore> OutboxStore for Arc<S> {
 /// [`EngineBuilder::with_stores`]: crate::builder::EngineBuilder::with_stores
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use = "NoopOutboxStore discards all outbound messages silently — use a persistent OutboxStore in production"]
+#[cfg_attr(
+    not(any(test, feature = "testing")),
+    deprecated = "NoopOutboxStore must not be instantiated in production builds; use a durable OutboxStore instead"
+)]
 pub struct NoopOutboxStore;
 
 #[cfg(any(test, feature = "testing"))]

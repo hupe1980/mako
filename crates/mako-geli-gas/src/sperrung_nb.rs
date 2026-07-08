@@ -433,7 +433,7 @@ impl Workflow for GeliGasSperrungNbWorkflow {
                     )));
                 }
                 // Clone before move for APERAK emission in the validation-failed path.
-                let sender_gln = sender.clone();
+                let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
 
                 let mut events = vec![GasSperrungNbEvent::AnweisungErhalten {
@@ -457,12 +457,12 @@ impl Workflow for GeliGasSperrungNbWorkflow {
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
-                            sender_gln.as_str(),
+                            sender_mp_id.as_str(),
                             serde_json::json!({
                                 "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_gln.as_str(),
+                                "receiver":   sender_mp_id.as_str(),
                                 "pid":        29001_u32,
-                                "error_code": "Z29",
+                                "error_code": mako_engine::erc::codes::Z29,
                                 "reason":     reason,
                             }),
                         )
@@ -560,7 +560,7 @@ mod tests {
         MaLo::new(s)
     }
 
-    fn gln(s: &str) -> MarktpartnerCode {
+    fn mp_id(s: &str) -> MarktpartnerCode {
         MarktpartnerCode::new(s)
     }
 
@@ -569,8 +569,8 @@ mod tests {
         let state = GasSperrungNbState::New;
         let cmd = GasSperrungNbCommand::ReceiveSperrung {
             pid: pid(17115),
-            sender: gln("9900000000001"),
-            receiver: gln("9900357000004"),
+            sender: mp_id("9900000000001"),
+            receiver: mp_id("9900357000004"),
             location_id: malo("DE0000000000000000000000000000001"),
             document_date: "20260101".into(),
             message_ref: make_ref("REF001"),
@@ -595,8 +595,8 @@ mod tests {
         let state = GasSperrungNbState::New;
         let cmd = GasSperrungNbCommand::ReceiveSperrung {
             pid: pid(17117),
-            sender: gln("9900000000001"),
-            receiver: gln("9900357000004"),
+            sender: mp_id("9900000000001"),
+            receiver: mp_id("9900357000004"),
             location_id: malo("DE0000000000000000000000000000001"),
             document_date: "20260101".into(),
             message_ref: make_ref("REF002"),
@@ -617,14 +617,14 @@ mod tests {
     fn stornierung_accepted_when_pending() {
         let data = GasSperrungNbData {
             location_id: malo("DE0000000000000000000000000000001"),
-            sender: gln("9900000000001"),
+            sender: mp_id("9900000000001"),
             document_date: "20260101".into(),
             pruefidentifikator: pid(17115),
         };
         let state = GasSperrungNbState::ValidationPassed(data);
         let cmd = GasSperrungNbCommand::ReceiveStornierung {
             pid: pid(39000),
-            sender: gln("9900000000001"),
+            sender: mp_id("9900000000001"),
             message_ref: make_ref("STORNO001"),
         };
         let out = GeliGasSperrungNbWorkflow::handle(&state, cmd).unwrap();
@@ -638,7 +638,7 @@ mod tests {
     fn timeout_on_active_state_emits_deadline_expired() {
         let data = GasSperrungNbData {
             location_id: malo("DE0000000000000000000000000000001"),
-            sender: gln("9900000000001"),
+            sender: mp_id("9900000000001"),
             document_date: "20260101".into(),
             pruefidentifikator: pid(17115),
         };
@@ -658,7 +658,7 @@ mod tests {
     fn apply_state_machine_transitions() {
         let data = GasSperrungNbData {
             location_id: malo("DE0000000000000000000000000000001"),
-            sender: gln("9900000000001"),
+            sender: mp_id("9900000000001"),
             document_date: "20260101".into(),
             pruefidentifikator: pid(17115),
         };

@@ -438,7 +438,7 @@ impl Workflow for GpkeSperrungWorkflow {
                     )));
                 }
                 // Clone before move for APERAK emission in the validation-failed path.
-                let sender_gln = sender.clone();
+                let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
 
                 let mut events = vec![SperrungEvent::AnweisungErhalten {
@@ -455,10 +455,10 @@ impl Workflow for GpkeSperrungWorkflow {
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
-                            sender_gln.as_str(),
+                            sender_mp_id.as_str(),
                             serde_json::json!({
                                 "sender":        receiver_gln.as_str(),
-                                "receiver":      sender_gln.as_str(),
+                                "receiver":      sender_mp_id.as_str(),
                                 "pid":           29001_u32,
                                 "document_code": "312",
                             }),
@@ -476,12 +476,12 @@ impl Workflow for GpkeSperrungWorkflow {
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
-                            sender_gln.as_str(),
+                            sender_mp_id.as_str(),
                             serde_json::json!({
                                 "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_gln.as_str(),
+                                "receiver":   sender_mp_id.as_str(),
                                 "pid":        29001_u32,
-                                "error_code": "Z29",
+                                "error_code": mako_engine::erc::codes::Z29,
                                 "reason":     reason,
                             }),
                         )

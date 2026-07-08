@@ -64,10 +64,10 @@ pub const WORKFLOW_NAME: &str = "geli-gas-stornierung";
 /// let due = mako_engine::fristen::deadline_at_werktage(
 ///     received_at, 10, HolidayCalendar::BdewMaKo,
 /// );
-/// let deadline = Deadline::new(process.stream_id().clone(), ..., STORNIERUNG_APERAK_WINDOW_LABEL, due);
+/// let deadline = Deadline::new(process.stream_id().clone(), ..., STORNIERUNG_RESPONSE_WINDOW_LABEL, due);
 /// deadline_store.register(&deadline).await?;
 /// ```
-pub const STORNIERUNG_APERAK_WINDOW_LABEL: &str = "geli-gas-stornierung-aperak-10-werktage";
+pub const STORNIERUNG_RESPONSE_WINDOW_LABEL: &str = "geli-gas-stornierung-response-10-werktage";
 
 /// PIDs handled by the GeLi Gas Stornierung workflow (UTILMD G).
 ///
@@ -257,7 +257,7 @@ pub enum GeliGasStornierungCommand {
     TimeoutExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
-        /// Label of the expired deadline (matches `STORNIERUNG_APERAK_WINDOW_LABEL`).
+        /// Label of the expired deadline (matches `STORNIERUNG_RESPONSE_WINDOW_LABEL`).
         label: Box<str>,
     },
 }
@@ -284,7 +284,7 @@ impl Workflow for GeliGasStornierungWorkflow {
     ) -> Option<Self::Command> {
         match (deadline.label(), state) {
             (
-                STORNIERUNG_APERAK_WINDOW_LABEL,
+                STORNIERUNG_RESPONSE_WINDOW_LABEL,
                 GeliGasStornierungState::Initiated(_)
                 | GeliGasStornierungState::ValidationPassed(_)
                 | GeliGasStornierungState::AperakSent(_),
@@ -376,7 +376,7 @@ impl Workflow for GeliGasStornierungWorkflow {
                         "unsupported GeLi Gas Stornierung PID {pid} (expected one of: {STORNIERUNG_PIDS:?})",
                     )));
                 }
-                let sender_gln = sender.clone();
+                let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
 
                 let mut events = vec![GeliGasStornierungEvent::StornierungReceived {
@@ -401,12 +401,12 @@ impl Workflow for GeliGasStornierungWorkflow {
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
-                            sender_gln.as_str(),
+                            sender_mp_id.as_str(),
                             serde_json::json!({
                                 "sender":     receiver_gln.as_str(),
-                                "receiver":   sender_gln.as_str(),
+                                "receiver":   sender_mp_id.as_str(),
                                 "pid":        29001_u32,
-                                "error_code": "Z29",
+                                "error_code": mako_engine::erc::codes::Z29,
                                 "reason":     reason,
                             }),
                         )
@@ -611,7 +611,7 @@ mod tests {
             &state,
             GeliGasStornierungCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: STORNIERUNG_APERAK_WINDOW_LABEL.into(),
+                label: STORNIERUNG_RESPONSE_WINDOW_LABEL.into(),
             },
         )
         .unwrap();
@@ -644,7 +644,7 @@ mod tests {
             &state,
             GeliGasStornierungCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: STORNIERUNG_APERAK_WINDOW_LABEL.into(),
+                label: STORNIERUNG_RESPONSE_WINDOW_LABEL.into(),
             },
         )
         .unwrap();

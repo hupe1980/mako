@@ -162,6 +162,7 @@ async fn end_to_end_lieferbeginn_strom_pipeline() {
         document_date,
         process_date,
         message_ref,
+        received_at: time::OffsetDateTime::now_utc(),
         validation_passed,
         validation_errors,
     };
@@ -269,6 +270,7 @@ async fn wrong_pid_returns_workflow_error() {
             document_date: "20250115".into(),
             process_date: "20251001".into(),
             message_ref: "REF-001".into(),
+            received_at: time::OffsetDateTime::now_utc(),
             validation_passed: true,
             validation_errors: vec![],
         })

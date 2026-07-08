@@ -46,14 +46,14 @@
 //!
 //! // Outbound AS4 dispatch:
 //! let partner = store.get(tenant_id, &gln).await?
-//!     .ok_or(EngineError::partner(format!("no endpoint for {gln}")))?;
+//!     .ok_or(EngineError::partner(format!("no endpoint for {mp_id}")))?;
 //! let endpoint = partner.as4_endpoint
-//!     .ok_or(EngineError::partner(format!("{gln} has no AS4 endpoint")))?;
+//!     .ok_or(EngineError::partner(format!("{mp_id} has no AS4 endpoint")))?;
 //! ```
 //!
 //! # Key schema (SlateDB)
 //!
-//! `pt/{tenant_id}/{gln}` → `JSON(PartnerRecord)`
+//! `pt/{tenant_id}/{mp_id}` → `JSON(PartnerRecord)`
 //!
 //! Both `TenantId` and GLN are fixed-width strings, giving a
 //! `pt/{36-chars}/{13-chars}` prefix that bounds efficient per-tenant scans.
@@ -241,7 +241,7 @@ impl MarketRole {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PartnerRecord {
     /// The partner's 13-digit Global Location Number.
-    pub gln: MarktpartnerCode,
+    pub mp_id: MarktpartnerCode,
 
     /// Company name from the PARTIN `NAD` segment.
     pub display_name: Option<Box<str>>,
@@ -285,9 +285,9 @@ impl PartnerRecord {
     /// `makod.toml`. The record has no PARTIN-derived metadata — only the
     /// GLN and a single AS4 channel.
     #[must_use]
-    pub fn minimal(gln: impl Into<MarktpartnerCode>, as4_url: impl Into<Box<str>>) -> Self {
+    pub fn minimal(mp_id: impl Into<MarktpartnerCode>, as4_url: impl Into<Box<str>>) -> Self {
         Self {
-            gln: gln.into(),
+            mp_id: mp_id.into(),
             display_name: None,
             channels: vec![CommunicationChannel::as4(as4_url)],
             roles: Vec::new(),
@@ -311,14 +311,14 @@ impl PartnerRecord {
             .iter()
             .map(|entry| {
                 let pair = entry.as_ref();
-                let (gln, url) = pair.split_once('=').ok_or_else(|| {
+                let (mp_id, url) = pair.split_once('=').ok_or_else(|| {
                     EngineError::partner(format!(
                         "invalid partner entry {pair:?} — expected <GLN>=<HTTPS-URL>"
                     ))
                 })?;
-                let gln = gln.trim();
+                let mp_id = mp_id.trim();
                 let url = url.trim();
-                if gln.is_empty() {
+                if mp_id.is_empty() {
                     return Err(EngineError::partner(format!(
                         "invalid partner entry {pair:?} — GLN must not be empty"
                     )));
@@ -328,7 +328,7 @@ impl PartnerRecord {
                         "invalid partner entry {pair:?} — endpoint URL must use HTTPS (got {url:?})"
                     )));
                 }
-                Ok(Self::minimal(gln, url))
+                Ok(Self::minimal(mp_id, url))
             })
             .collect()
     }
@@ -379,7 +379,7 @@ impl PartnerRecord {
     /// The GLN must match — mismatches are silently ignored (the caller is
     /// responsible for routing PARTIN messages to the correct record).
     pub fn merge_from_partin(&mut self, incoming: PartnerRecord) {
-        if incoming.gln != self.gln {
+        if incoming.mp_id != self.mp_id {
             return;
         }
         let should_update = match (self.valid_from, incoming.valid_from) {
@@ -415,7 +415,7 @@ impl PartnerRecord {
 /// `Arc<S>` implements `PartnerStore` whenever `S: PartnerStore`.
 #[allow(async_fn_in_trait)]
 pub trait PartnerStore: Send + Sync {
-    /// Insert or update the record for `(tenant_id, record.gln)`.
+    /// Insert or update the record for `(tenant_id, record.mp_id)`.
     ///
     /// If a record already exists for this GLN, it is **merged** via
     /// [`PartnerRecord::merge_from_partin`] — i.e. the newer PARTIN-derived
@@ -434,7 +434,7 @@ pub trait PartnerStore: Send + Sync {
     async fn get(
         &self,
         tenant_id: TenantId,
-        gln: &MarktpartnerCode,
+        mp_id: &MarktpartnerCode,
     ) -> Result<Option<PartnerRecord>, EngineError>;
 
     /// Remove the record for `(tenant_id, gln)`.
@@ -444,7 +444,11 @@ pub trait PartnerStore: Send + Sync {
     /// # Errors
     ///
     /// Returns [`EngineError::Partner`] on storage failure.
-    async fn remove(&self, tenant_id: TenantId, gln: &MarktpartnerCode) -> Result<(), EngineError>;
+    async fn remove(
+        &self,
+        tenant_id: TenantId,
+        mp_id: &MarktpartnerCode,
+    ) -> Result<(), EngineError>;
 
     /// Return all records registered for `tenant_id`.
     ///
@@ -463,10 +467,10 @@ pub trait PartnerStore: Send + Sync {
     async fn as4_endpoint(
         &self,
         tenant_id: TenantId,
-        gln: &MarktpartnerCode,
+        mp_id: &MarktpartnerCode,
     ) -> Result<Option<Box<str>>, EngineError> {
         Ok(self
-            .get(tenant_id, gln)
+            .get(tenant_id, mp_id)
             .await?
             .and_then(|r| r.as4_endpoint().map(std::convert::Into::into)))
     }
@@ -484,10 +488,10 @@ pub trait PartnerStore: Send + Sync {
     async fn api_webdienste_endpoint(
         &self,
         tenant_id: TenantId,
-        gln: &MarktpartnerCode,
+        mp_id: &MarktpartnerCode,
     ) -> Result<Option<Box<str>>, EngineError> {
         Ok(self
-            .get(tenant_id, gln)
+            .get(tenant_id, mp_id)
             .await?
             .and_then(|r| r.api_webdienste_endpoint().map(std::convert::Into::into)))
     }
@@ -503,13 +507,17 @@ impl<S: PartnerStore> PartnerStore for Arc<S> {
     async fn get(
         &self,
         tenant_id: TenantId,
-        gln: &MarktpartnerCode,
+        mp_id: &MarktpartnerCode,
     ) -> Result<Option<PartnerRecord>, EngineError> {
-        self.as_ref().get(tenant_id, gln).await
+        self.as_ref().get(tenant_id, mp_id).await
     }
 
-    async fn remove(&self, tenant_id: TenantId, gln: &MarktpartnerCode) -> Result<(), EngineError> {
-        self.as_ref().remove(tenant_id, gln).await
+    async fn remove(
+        &self,
+        tenant_id: TenantId,
+        mp_id: &MarktpartnerCode,
+    ) -> Result<(), EngineError> {
+        self.as_ref().remove(tenant_id, mp_id).await
     }
 
     async fn list(&self, tenant_id: TenantId) -> Result<Vec<PartnerRecord>, EngineError> {
@@ -542,7 +550,7 @@ impl PartnerStore for NoopPartnerStore {
     async fn get(
         &self,
         _tenant_id: TenantId,
-        _gln: &MarktpartnerCode,
+        _mp_id: &MarktpartnerCode,
     ) -> Result<Option<PartnerRecord>, EngineError> {
         Ok(None)
     }
@@ -550,7 +558,7 @@ impl PartnerStore for NoopPartnerStore {
     async fn remove(
         &self,
         _tenant_id: TenantId,
-        _gln: &MarktpartnerCode,
+        _mp_id: &MarktpartnerCode,
     ) -> Result<(), EngineError> {
         Ok(())
     }
@@ -588,7 +596,7 @@ impl InMemoryPartnerStore {
 impl PartnerStore for InMemoryPartnerStore {
     async fn upsert(&self, tenant_id: TenantId, record: &PartnerRecord) -> Result<(), EngineError> {
         let mut guard = self.inner.write().await;
-        let key = (tenant_id, record.gln.clone());
+        let key = (tenant_id, record.mp_id.clone());
         match guard.get_mut(&key) {
             Some(existing) => existing.merge_from_partin(record.clone()),
             None => {
@@ -601,18 +609,22 @@ impl PartnerStore for InMemoryPartnerStore {
     async fn get(
         &self,
         tenant_id: TenantId,
-        gln: &MarktpartnerCode,
+        mp_id: &MarktpartnerCode,
     ) -> Result<Option<PartnerRecord>, EngineError> {
         Ok(self
             .inner
             .read()
             .await
-            .get(&(tenant_id, gln.clone()))
+            .get(&(tenant_id, mp_id.clone()))
             .cloned())
     }
 
-    async fn remove(&self, tenant_id: TenantId, gln: &MarktpartnerCode) -> Result<(), EngineError> {
-        self.inner.write().await.remove(&(tenant_id, gln.clone()));
+    async fn remove(
+        &self,
+        tenant_id: TenantId,
+        mp_id: &MarktpartnerCode,
+    ) -> Result<(), EngineError> {
+        self.inner.write().await.remove(&(tenant_id, mp_id.clone()));
         Ok(())
     }
 
@@ -634,7 +646,7 @@ impl PartnerStore for InMemoryPartnerStore {
 mod tests {
     use super::*;
 
-    fn gln(s: &str) -> MarktpartnerCode {
+    fn mp_id(s: &str) -> MarktpartnerCode {
         MarktpartnerCode::new(s)
     }
     fn tid() -> TenantId {
@@ -642,7 +654,7 @@ mod tests {
     }
 
     fn minimal_record(gln_str: &str, url: &str) -> PartnerRecord {
-        PartnerRecord::minimal(gln(gln_str), url)
+        PartnerRecord::minimal(mp_id(gln_str), url)
     }
 
     // ── from_cli_pairs ────────────────────────────────────────────────────────
@@ -655,12 +667,12 @@ mod tests {
         ];
         let records = PartnerRecord::from_cli_pairs(&pairs).unwrap();
         assert_eq!(records.len(), 2);
-        assert_eq!(records[0].gln.as_str(), "9900000000002");
+        assert_eq!(records[0].mp_id.as_str(), "9900000000002");
         assert_eq!(
             records[0].as4_endpoint(),
             Some("https://partner-a.example/as4/inbox")
         );
-        assert_eq!(records[1].gln.as_str(), "9900000000003");
+        assert_eq!(records[1].mp_id.as_str(), "9900000000003");
     }
 
     #[test]
@@ -677,7 +689,7 @@ mod tests {
 
     #[test]
     fn from_cli_pairs_rejects_empty_gln() {
-        let pairs = vec!["=https://no-gln.example/as4"];
+        let pairs = vec!["=https://no-mp_id.example/as4"];
         assert!(PartnerRecord::from_cli_pairs(&pairs).is_err());
     }
 
@@ -692,7 +704,7 @@ mod tests {
     #[test]
     fn as4_endpoint_returns_none_when_absent() {
         let r = PartnerRecord {
-            gln: gln("9900000000002"),
+            mp_id: mp_id("9900000000002"),
             display_name: None,
             channels: vec![CommunicationChannel::email("info@example.de")],
             roles: vec![],
@@ -710,7 +722,7 @@ mod tests {
     fn merge_overwrites_config_record_with_partin_data() {
         let mut base = minimal_record("9900000000002", "https://old.example/as4");
         let newer = PartnerRecord {
-            gln: gln("9900000000002"),
+            mp_id: mp_id("9900000000002"),
             display_name: Some("Stadtwerke AG".into()),
             channels: vec![
                 CommunicationChannel::as4("https://new.example/as4"),
@@ -735,7 +747,7 @@ mod tests {
         let new_ts = OffsetDateTime::now_utc();
 
         let mut current = PartnerRecord {
-            gln: gln("9900000000002"),
+            mp_id: mp_id("9900000000002"),
             display_name: Some("Current Name".into()),
             channels: vec![CommunicationChannel::as4("https://current.example/as4")],
             roles: vec![MarketRole::NbStrom],
@@ -746,7 +758,7 @@ mod tests {
         };
 
         let stale = PartnerRecord {
-            gln: gln("9900000000002"),
+            mp_id: mp_id("9900000000002"),
             display_name: Some("Stale Name".into()),
             channels: vec![CommunicationChannel::as4("https://stale.example/as4")],
             roles: vec![],
@@ -798,7 +810,7 @@ mod tests {
 
         store.upsert(tenant, &record).await.unwrap();
         let found = store
-            .get(tenant, &gln("9900000000001"))
+            .get(tenant, &mp_id("9900000000001"))
             .await
             .unwrap()
             .unwrap();
@@ -810,7 +822,7 @@ mod tests {
         let store = InMemoryPartnerStore::new();
         assert!(
             store
-                .get(tid(), &gln("9900000000099"))
+                .get(tid(), &mp_id("9900000000099"))
                 .await
                 .unwrap()
                 .is_none()
@@ -825,7 +837,7 @@ mod tests {
         store.upsert(tenant, &base).await.unwrap();
 
         let newer = PartnerRecord {
-            gln: gln("9900000000001"),
+            mp_id: mp_id("9900000000001"),
             display_name: Some("Partner AG".into()),
             channels: vec![CommunicationChannel::as4("https://new.example/as4")],
             roles: vec![MarketRole::LfStrom],
@@ -837,7 +849,7 @@ mod tests {
         store.upsert(tenant, &newer).await.unwrap();
 
         let found = store
-            .get(tenant, &gln("9900000000001"))
+            .get(tenant, &mp_id("9900000000001"))
             .await
             .unwrap()
             .unwrap();
@@ -852,10 +864,10 @@ mod tests {
         let record = minimal_record("9900000000001", "https://a.example/as4");
 
         store.upsert(tenant, &record).await.unwrap();
-        store.remove(tenant, &gln("9900000000001")).await.unwrap();
+        store.remove(tenant, &mp_id("9900000000001")).await.unwrap();
         assert!(
             store
-                .get(tenant, &gln("9900000000001"))
+                .get(tenant, &mp_id("9900000000001"))
                 .await
                 .unwrap()
                 .is_none()
@@ -885,11 +897,11 @@ mod tests {
 
         let t1_list = store.list(t1).await.unwrap();
         assert_eq!(t1_list.len(), 1);
-        assert_eq!(t1_list[0].gln.as_str(), "9900000000001");
+        assert_eq!(t1_list[0].mp_id.as_str(), "9900000000001");
 
         let t2_list = store.list(t2).await.unwrap();
         assert_eq!(t2_list.len(), 1);
-        assert_eq!(t2_list[0].gln.as_str(), "9900000000002");
+        assert_eq!(t2_list[0].mp_id.as_str(), "9900000000002");
     }
 
     #[tokio::test]
@@ -900,13 +912,13 @@ mod tests {
 
         store.upsert(tenant, &record).await.unwrap();
         let url = store
-            .as4_endpoint(tenant, &gln("9900000000001"))
+            .as4_endpoint(tenant, &mp_id("9900000000001"))
             .await
             .unwrap();
         assert_eq!(url.as_deref(), Some("https://a.example/as4"));
 
         let none = store
-            .as4_endpoint(tenant, &gln("9900000000099"))
+            .as4_endpoint(tenant, &mp_id("9900000000099"))
             .await
             .unwrap();
         assert!(none.is_none());

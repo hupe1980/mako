@@ -52,6 +52,8 @@ pub struct ProjectionWorker<P> {
     projection: P,
     prefix: Option<&'static str>,
     poll_interval: Duration,
+    /// Optional liveness heartbeat — updated after each tick.
+    heartbeat: Option<std::sync::Arc<std::sync::atomic::AtomicI64>>,
 }
 
 impl<P: Projection + Send> ProjectionWorker<P> {
@@ -76,7 +78,20 @@ impl<P: Projection + Send> ProjectionWorker<P> {
             projection,
             prefix,
             poll_interval,
+            heartbeat: None,
         }
+    }
+
+    /// Attach a liveness heartbeat to this worker.
+    ///
+    /// Updated with the current UTC Unix timestamp after each tick.
+    #[must_use]
+    pub fn with_heartbeat(
+        mut self,
+        heartbeat: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    ) -> Self {
+        self.heartbeat = Some(heartbeat);
+        self
     }
 
     /// Run the worker loop forever.
@@ -118,6 +133,13 @@ impl<P: Projection + Send> ProjectionWorker<P> {
                         "projection catch-up failed; will retry on next tick",
                     );
                 }
+            }
+            // Tick heartbeat after every cycle so health probes can detect stale workers.
+            if let Some(ref hb) = self.heartbeat {
+                hb.store(
+                    ::time::OffsetDateTime::now_utc().unix_timestamp(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
             }
         }
     }

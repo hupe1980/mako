@@ -189,6 +189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             document_date: document_date.clone(),
             process_date: process_date.clone(),
             message_ref: msg_ref.clone(),
+            received_at: time::OffsetDateTime::now_utc(),
             validation_passed,
             validation_errors: validation_errors.clone(),
         })
@@ -369,6 +370,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             document_date: document_date.clone(),
             process_date: process_date.clone(),
             message_ref: msg_ref.clone(),
+            received_at: time::OffsetDateTime::now_utc(),
             validation_passed: true,
             validation_errors: vec![],
         })
