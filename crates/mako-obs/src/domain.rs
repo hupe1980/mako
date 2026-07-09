@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime};
 use uuid::Uuid;
-
 /// Lifecycle state of a MaKo process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -103,8 +102,9 @@ pub struct ProcessProjection {
     pub last_event_at: OffsetDateTime,
     /// BDEW ERC error code when `state == Rejected` (e.g. `"E01"`, `"Z29"`).
     pub erc_code: Option<String>,
-    /// Tenant ID for multi-tenant deployments.
-    pub tenant_id: Option<Uuid>,
+    /// Operator tenant — MP-ID (GLN) of the deploying market participant.
+    /// Used for multi-tenant deployments and DB-level row isolation.
+    pub tenant: String,
 }
 
 /// Query filters for process projections.
@@ -116,7 +116,8 @@ pub struct ObsQuery {
     pub mdm_role: Option<String>,
     /// Include only processes started on or after this time.
     pub since: Option<OffsetDateTime>,
-    pub tenant_id: Option<Uuid>,
+    /// Filter by operator tenant (MP-ID). `None` = no tenant filter.
+    pub tenant: Option<String>,
     /// Maximum number of results (default 100).
     pub limit: u32,
 }
@@ -129,7 +130,7 @@ impl Default for ObsQuery {
             partner_mp_id: None,
             mdm_role: None,
             since: None,
-            tenant_id: None,
+            tenant: None,
             limit: 100,
         }
     }

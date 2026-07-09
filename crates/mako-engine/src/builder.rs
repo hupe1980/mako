@@ -63,6 +63,10 @@
 // `type_complexity` lint; suppress it for this module only.
 #![allow(clippy::type_complexity)]
 
+// The Noop* types are marked #[deprecated] to guard against accidental
+// production use.  The builder is the only place they're instantiated as
+// defaults; suppress the lint here explicitly.
+#[allow(deprecated)]
 use crate::{
     dead_letter::{DeadLetterSink, LogDeadLetterSink},
     deadline::{Deadline, DeadlineStore, NoopDeadlineStore},

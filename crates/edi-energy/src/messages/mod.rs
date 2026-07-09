@@ -265,7 +265,6 @@ pub(super) mod common {
         feature = "remadv",
         feature = "orders",
         feature = "invoic",
-        feature = "mscons",
     ))]
     pub(super) fn check_period_order(
         segments: &[edifact_rs::Segment<'_>],

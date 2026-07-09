@@ -152,7 +152,7 @@ message is dead-lettered.
 | makod → ERP | `--erp-webhook-url` / `WebhookErpAdapter` | POST BO4E JSON on every process event |
 | ERP → makod | `POST /api/v1/commands` | Initiate a MaKo process (Lieferbeginn, Gerätewechsel, …) |
 | ERP → makod | `PUT /admin/malo/{malo_id}` | Push MaLo master data to the local cache |
-| ERP → makod | `PUT /admin/partners/{gln}` | Register or update a trading-partner endpoint |
+| ERP → makod | `PUT /admin/partners/{mp_id}` | Register or update a trading-partner endpoint |
 | ERP → makod | `ErpCommandSource` trait | Fully event-driven inbound (Kafka, SFTP, CDC, …) |
 | marktd → invoicd | `POST /webhook` CloudEvents | GPKE billing notifications for automatic plausibility check |
 | invoicd → makod | `POST /api/v1/commands` | `gpke.abrechnung.annehmen` or `gpke.abrechnung.ablehnen` |
@@ -824,8 +824,8 @@ With BO4E:
 | `OutboxErpWorker` with exponential back-off | ✅ Implemented (`makod/src/erp_adapter.rs`) |
 | `POST /api/v1/commands` REST endpoint | ✅ Implemented (`makod/src/commands_api.rs`) |
 | `PUT /admin/malo/{malo_id}` cache | ✅ Implemented |
-| `PUT /admin/partners/{gln}` | ✅ Implemented |
-| BO4E typed Rust crate (`rubo4e`) | ✅ In use — `rubo4e = "0.3"` in workspace dependencies |
+| `PUT /admin/partners/{mp_id}` | ✅ Implemented |
+| BO4E typed Rust crate (`rubo4e`) | ✅ In use — `rubo4e = "0.4.0"` in workspace dependencies |
 
 ---
 
@@ -835,9 +835,9 @@ With BO4E:
 |---|---|
 | `makod` operator reference | [docs/makod.md](makod.md) |
 | `marktd` operator reference | [docs/marktd.md](marktd.md) |
-| `invoicd` service README | [services/invoicd/README.md](../services/invoicd/README.md) |
-| `edmd` service README | [services/edmd/README.md](../services/edmd/README.md) |
-| `obsd` service README | [services/obsd/README.md](../services/obsd/README.md) |
+| `invoicd` operator guide | [docs/invoicd.md](invoicd.md) |
+| `edmd` operator guide | [docs/edmd.md](edmd.md) |
+| `obsd` operator guide | [docs/obsd.md](obsd.md) |
 | Engine architecture | [docs/engine.md](engine.md) |
 | API-Webdienste Strom (MaLo-ID) | [docs/api-webdienste.md](api-webdienste.md) |
 | Annual release workflow | [docs/annual-release-workflow.md](annual-release-workflow.md) |
@@ -848,7 +848,7 @@ With BO4E:
 
 For the Lieferant (LF) role, received INVOIC messages (PIDs 31001, 31002, 31005,
 31006) require a plausibility check before settlement. Rather than routing every
-invoice through the ERP, deploy [`invoicd`](../services/invoicd/README.md) as
+invoice through the ERP, deploy [`invoicd`](invoicd.md) as
 an autonomous sidecar. It subscribes to `de.mako.process.initiated` events from
 `marktd`, runs the `invoic-checker` pipeline, **persists every receipt to PostgreSQL**
 (satisfying the 3-year retention requirement under §22 MessZV and §41 EnWG), and

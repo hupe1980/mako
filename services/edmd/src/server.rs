@@ -36,6 +36,7 @@ pub fn router(state: HandlerState) -> Router {
             get(get_imbalance),
         )
         .route("/api/v1/billing-period/{malo_id}", get(get_billing_period))
+        .route("/metrics", get(metrics))
         .route("/health/live", get(|| async { StatusCode::OK }))
         .route("/health/ready", get(health_ready))
         .with_state(state)
@@ -53,6 +54,46 @@ async fn health_ready(State(state): State<HandlerState>) -> impl IntoResponse {
             StatusCode::SERVICE_UNAVAILABLE
         }
     }
+}
+
+/// `GET /metrics` — Prometheus-compatible operational metrics.
+/// No authentication required; restrict network access at the ingress layer.
+async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
+    let mut out = String::with_capacity(512);
+    let pool = state.repo.pool();
+
+    let meter_reads: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meter_reads")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let billing_periods: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meter_billing_periods")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let pool_size = pool.size();
+    let pool_idle = pool.num_idle();
+
+    out.push_str("# HELP edmd_meter_reads_total Total meter read entries stored.\n");
+    out.push_str("# TYPE edmd_meter_reads_total gauge\n");
+    out.push_str(&format!("edmd_meter_reads_total {meter_reads}\n"));
+    out.push_str("# HELP edmd_billing_periods_total Pre-aggregated MeterBillingPeriod records.\n");
+    out.push_str("# TYPE edmd_billing_periods_total gauge\n");
+    out.push_str(&format!("edmd_billing_periods_total {billing_periods}\n"));
+    out.push_str("# HELP edmd_db_pool_size Current PostgreSQL connection pool size.\n");
+    out.push_str("# TYPE edmd_db_pool_size gauge\n");
+    out.push_str(&format!("edmd_db_pool_size {pool_size}\n"));
+    out.push_str("# HELP edmd_db_pool_idle Idle PostgreSQL connections.\n");
+    out.push_str("# TYPE edmd_db_pool_idle gauge\n");
+    out.push_str(&format!("edmd_db_pool_idle {pool_idle}\n"));
+
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
+        out,
+    )
 }
 
 #[derive(Debug, Deserialize)]

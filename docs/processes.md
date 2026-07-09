@@ -956,9 +956,9 @@ The AS4 endpoint URL is carried in the `COM` segment with qualifier `"AK"`
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/admin/partners` | List all trading-partner records |
-| `GET` | `/admin/partners/{gln}` | Retrieve a single partner record |
-| `PUT` | `/admin/partners/{gln}` | Create or update a partner record |
-| `DELETE` | `/admin/partners/{gln}` | Remove a partner record |
+| `GET` | `/admin/partners/{mp_id}` | Retrieve a single partner record |
+| `PUT` | `/admin/partners/{mp_id}` | Create or update a partner record |
+| `DELETE` | `/admin/partners/{mp_id}` | Remove a partner record |
 | `POST` | `/admin/partners/import` | Bulk-import from a raw PARTIN interchange |
 
 ---

@@ -170,12 +170,12 @@ waits up to **10 Werktage** for the GNB's ORDRSP response.
 use mako_geli_gas::{
     GeliGasSperrungLfWorkflow, GasSperrungLfCommand, GasSperrungAuftragData,
 };
-use mako_engine::ids::{MaloId, GlnId};
+use mako_engine::{ids::MaloId, types::MarktpartnerCode};
 
 // Initiate a gas disconnection order (LF → GNB):
 let cmd = GasSperrungLfCommand::InitiateSperrung {
     pid: Pruefidentifikator::new(17115).expect("Sperrauftrag"),
-    gnb_gln: GlnId::parse("9900357000004").expect("valid GLN"),
+    gnb_gln: MarktpartnerCode::new("9900357000004"),
     location_id: MaloId::parse("50123456789").expect("valid MaLo"),
     message_ref: MessageRef::from("MSG-2025-001"),
 };

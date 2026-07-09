@@ -100,43 +100,42 @@ where
             if is_lf {
                 let nb_gln_for_dispatch = state.tenant_gln.clone();
                 let tenant_for_dispatch = state.tenant_gln.clone();
-                tokio::spawn(async move {
-                    match pricat_repo
-                        .find_latest(&nb_gln_for_dispatch, &tenant_for_dispatch)
-                        .await
+                // Inline instead of spawn — avoids silently swallowed panics.
+                match pricat_repo
+                    .find_latest(&nb_gln_for_dispatch, &tenant_for_dispatch)
+                    .await
+                {
+                    Ok(Some(v))
+                        if !matches!(
+                            v.dispatch_state,
+                            mako_markt::repository::PriCatDispatchState::Done
+                        ) =>
                     {
-                        Ok(Some(v))
-                            if !matches!(
-                                v.dispatch_state,
-                                mako_markt::repository::PriCatDispatchState::Done
-                            ) =>
-                        {
-                            // Already pending/queued/error — don't double-queue
-                        }
-                        Ok(Some(v)) => {
-                            // Latest version is Done — re-queue it so the LF gets the sheet.
-                            if let Err(e) = pricat_repo.mark_queued(v.id).await {
-                                tracing::warn!(
-                                    lf_mp_id = %lf_mp_id,
-                                    nb_mp_id = %nb_gln_for_dispatch,
-                                    error  = %e,
-                                    "put_partner: PRICAT re-queue for new LF failed (non-fatal)",
-                                );
-                            }
-                        }
-                        Ok(None) => {
-                            // No PRICAT published yet for this NB — nothing to dispatch.
-                        }
-                        Err(e) => {
+                        // Already pending/queued/error — don't double-queue
+                    }
+                    Ok(Some(v)) => {
+                        // Latest version is Done — re-queue it so the LF gets the sheet.
+                        if let Err(e) = pricat_repo.mark_queued(v.id).await {
                             tracing::warn!(
                                 lf_mp_id = %lf_mp_id,
                                 nb_mp_id = %nb_gln_for_dispatch,
                                 error  = %e,
-                                "put_partner: PRICAT lookup for new LF failed (non-fatal)",
+                                "put_partner: PRICAT re-queue for new LF failed (non-fatal)",
                             );
                         }
                     }
-                });
+                    Ok(None) => {
+                        // No PRICAT published yet for this NB — nothing to dispatch.
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            lf_mp_id = %lf_mp_id,
+                            nb_mp_id = %nb_gln_for_dispatch,
+                            error  = %e,
+                            "put_partner: PRICAT lookup for new LF failed (non-fatal)",
+                        );
+                    }
+                }
             }
 
             Json(serde_json::json!({ "version": version })).into_response()
@@ -144,7 +143,6 @@ where
         Err(e) => e.into_response(),
     }
 }
-
 /// `GET /api/v1/partners/:gln`
 pub async fn get_partner<Ma, Me, Co, Su, Ci, Pa>(
     State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,

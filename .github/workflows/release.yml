@@ -172,7 +172,47 @@ jobs:
           echo "$out"
           if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
 
-      # Domain crates depend on mako-engine — publish after it.
+      - name: Publish mako-markt
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish -p mako-markt 2>&1) && rc=0 || rc=$?
+          echo "$out"
+          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+
+      - name: Publish invoic-checker
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish -p invoic-checker 2>&1) && rc=0 || rc=$?
+          echo "$out"
+          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+
+      - name: Publish mako-edm
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish -p mako-edm 2>&1) && rc=0 || rc=$?
+          echo "$out"
+          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+
+      - name: Publish mako-obs
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish -p mako-obs 2>&1) && rc=0 || rc=$?
+          echo "$out"
+          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+
+      # netz-checker depends on mako-markt — publish after it.
+      - name: Publish netz-checker
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish -p netz-checker 2>&1) && rc=0 || rc=$?
+          echo "$out"
+          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+
       - name: Publish mako-gpke
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -240,24 +280,48 @@ jobs:
 
   # ── Docker build + push ──────────────────────────────────────────────────────
   #
-  # Pushes to GitHub Container Registry (ghcr.io) as:
-  #   ghcr.io/<owner>/makod:<version>   (e.g. ghcr.io/hupe1980/makod:0.6.0)
-  #   ghcr.io/<owner>/makod:latest
+  # Builds all six production daemon images and pushes to ghcr.io:
+  #   ghcr.io/<owner>/makod:<version>    — EDIFACT process engine   :8080/:4080/:8090
+  #   ghcr.io/<owner>/marktd:<version>   — Market Data Hub          :8180
+  #   ghcr.io/<owner>/processd:<version> — Process Decision Engine  :8580
+  #   ghcr.io/<owner>/invoicd:<version>  — INVOIC plausibility      :8280
+  #   ghcr.io/<owner>/edmd:<version>     — Energy Data Management   :8380
+  #   ghcr.io/<owner>/obsd:<version>     — Observability            :8480
   #
-  # Requires:
-  #   - packages: write  permission (granted below)
-  #   - No additional secret: GITHUB_TOKEN is used automatically for ghcr.io
+  # Each service uses its own Dockerfile target (see multi-stage Dockerfile).
+  # Builds run in parallel via matrix. Cache scopes are per-service so that
+  # layer reuse is maximised without cross-service cache pollution.
   #
-  # The build uses the 4-stage cargo-chef + distroless Dockerfile at the
-  # workspace root. Multi-platform: linux/amd64 + linux/arm64.
-  # Dep layers are cached in the GitHub Actions cache backend.
+  # Multi-platform: linux/amd64 + linux/arm64 (QEMU for arm64 cross-build).
   docker:
-    name: Docker build + push (ghcr.io)
+    name: Docker — ${{ matrix.service }}
     runs-on: ubuntu-latest
     needs: publish
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: makod
+            target: runtime
+            description: "Mako process engine daemon — German energy market communication (MaKo/BDEW EDI@Energy)"
+          - service: marktd
+            target: marktd-runtime
+            description: "Market Data Hub daemon — MaLo/MeLo/VersorgungsStatus/preisblaetter/EventBus fan-out"
+          - service: processd
+            target: processd-runtime
+            description: "Process Decision Engine — NB STP (netz-checker) + LF E_0624 auto-response"
+          - service: invoicd
+            target: invoicd-runtime
+            description: "INVOIC plausibility-check daemon — LF role, §22 MessZV receipt retention"
+          - service: edmd
+            target: edmd-runtime
+            description: "Energy Data Management daemon — MSCONS meter readings, MeterBillingPeriod"
+          - service: obsd
+            target: obsd-runtime
+            description: "Business-process observability daemon — KPI reports, §20 EnWG parity"
     steps:
       - uses: actions/checkout@v4
 
@@ -276,25 +340,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Derive tags and OCI labels from the git tag (e.g. v0.6.0 → 0.6.0 + latest).
+      # Derive versioned tags from the git tag (e.g. v0.7.0 → 0.7.0, 0.7, latest).
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/makod
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
           labels: |
-            org.opencontainers.image.title=makod
-            org.opencontainers.image.description=Mako process engine daemon — German energy market communication (MaKo/BDEW EDI@Energy)
+            org.opencontainers.image.title=${{ matrix.service }}
+            org.opencontainers.image.description=${{ matrix.description }}
             org.opencontainers.image.licenses=MIT OR Apache-2.0
 
-      - name: Build and push
+      - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: ${{ matrix.target }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -302,7 +367,7 @@ jobs:
           build-args: |
             OCI_REVISION=${{ github.sha }}
             OCI_CREATED=${{ github.event.head_commit.timestamp }}
-          # Cache dep layer between releases using the GitHub Actions cache backend.
-          cache-from: type=gha,scope=makod-docker
-          cache-to:   type=gha,scope=makod-docker,mode=max
+          # Separate cache scope per service — avoids cross-service layer eviction.
+          cache-from: type=gha,scope=${{ matrix.service }}-docker
+          cache-to:   type=gha,scope=${{ matrix.service }}-docker,mode=max
 

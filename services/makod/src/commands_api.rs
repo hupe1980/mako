@@ -146,7 +146,7 @@
 //! |---------|----------------------------|
 //! | `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum` |
 //! | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
-//! | `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `alter_lf_gln`¹ |
+//! | `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `alter_lf_mp_id`¹ |
 //! | `gpke.sperrung.bestaetigen` | `malo_id`, `ausfuehrungsdatum` |
 //! | `gpke.abrechnung.annehmen` | `rechnung` (RECHNUNG BO4E) |
 //! | `gpke.abrechnung.ablehnen` | `rechnung` (RECHNUNG BO4E), `ablehnungsgrund` |
@@ -155,7 +155,7 @@
 //! | `wim.geraetewechsel.beauftragen` | `melo_id`, `wechseldatum`² |
 //! | `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |
 //!
-//! ¹ `alter_lf_gln` is required only when the old supplier is a different legal
+//! ¹ `alter_lf_mp_id` is required only when the old supplier is a different legal
 //!   entity; derived from contract data in the ERP, not from the engine.
 //!
 //! ² For WiM Gerätewechsel the primary key is the `melo_id` (Messlokation),
@@ -1291,11 +1291,11 @@ async fn dispatch_lf_anmeldung(
         })?
         .to_owned();
 
-    // Optional: ERP may supply `alter_lf_gln` for Kündigung (PID 55016) when
+    // Optional: ERP may supply `alter_lf_mp_id` for Kündigung (PID 55016) when
     // the old supplier is a different legal entity.  Not yet used in the domain
     // command but extracted here for future use.
-    let _alter_lf_gln = payload
-        .get("alter_lf_gln")
+    let _alter_lf_mp_id = payload
+        .get("alter_lf_mp_id")
         .and_then(|v| v.as_str())
         .map(str::to_owned);
 

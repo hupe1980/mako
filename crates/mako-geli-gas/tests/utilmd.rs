@@ -156,6 +156,7 @@ async fn end_to_end_lieferbeginn_gas_pipeline() {
         message_ref,
         validation_passed,
         validation_errors,
+        received_at: time::OffsetDateTime::now_utc(),
     };
 
     // ── Step 5: Execute against in-memory engine ──────────────────────────────
@@ -226,6 +227,7 @@ async fn wrong_pid_returns_workflow_error() {
             message_ref: "GAS-REF-001".into(),
             validation_passed: true,
             validation_errors: vec![],
+            received_at: time::OffsetDateTime::now_utc(),
         })
         .await;
 

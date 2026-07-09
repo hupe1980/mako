@@ -4,6 +4,8 @@
 //! 1. Query the subscription repository (in the worker task)
 //! 2. Collect the matching subscriber URLs and secrets
 //! 3. For each subscriber, spawn a separate `Send` delivery task using reqwest
+//! 4. On final retry failure, write the event to the `fanout_dlq` table — no
+//!    events are silently dropped (§22 MessZV compliance)
 //!
 //! The channel carries `serde_json::Value` (CloudEvent envelopes) so the
 //! worker is decoupled from the typed `MarktEvent` struct.  This also means
@@ -17,9 +19,10 @@ use mako_markt::{
     repository::{Subscription, SubscriptionRepository},
 };
 use serde_json::Value;
+use sqlx::PgPool;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Fan-out configuration.
 #[derive(Debug, Clone)]
@@ -32,11 +35,17 @@ pub struct FanoutConfig {
 ///
 /// Uses `mpsc::UnboundedReceiver` — unlike `broadcast`, this never silently
 /// drops events when the receiver falls behind.
+///
+/// `dlq_pool`: PostgreSQL pool used to persist events that exhaust all retry
+/// attempts into the `fanout_dlq` table.  On a DLQ write failure the entry
+/// is still logged at `error` level so it can be recovered from application
+/// logs, but the operational guarantee is best-effort for the DLQ write itself.
 pub fn spawn<S>(
     mut rx: mpsc::UnboundedReceiver<Value>,
     sub_repo: S,
     http: reqwest::Client,
     config: FanoutConfig,
+    dlq_pool: PgPool,
     shutdown: CancellationToken,
 ) where
     S: SubscriptionRepository + Clone + Send + Sync + 'static,
@@ -67,8 +76,21 @@ pub fn spawn<S>(
                                         continue;
                                     }
                                 };
+                                let event_type = event
+                                    .get("type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_owned();
                                 for sub in subs {
-                                    deliver(sub, Arc::clone(&body), http.clone(), config.clone());
+                                    deliver(
+                                        sub,
+                                        Arc::clone(&body),
+                                        event.clone(),
+                                        event_type.clone(),
+                                        http.clone(),
+                                        config.clone(),
+                                        dlq_pool.clone(),
+                                    );
                                 }
                             }
                             None => {
@@ -111,7 +133,18 @@ where
 }
 
 /// Spawn a `Send + 'static` delivery task.  Only reqwest is used here — no repo calls.
-fn deliver(sub: Subscription, body: Arc<Vec<u8>>, http: reqwest::Client, config: FanoutConfig) {
+///
+/// On final retry exhaustion the event is written to `fanout_dlq` via `dlq_pool`
+/// so no events are silently dropped (§22 MessZV compliance).
+fn deliver(
+    sub: Subscription,
+    body: Arc<Vec<u8>>,
+    event: Value,
+    event_type: String,
+    http: reqwest::Client,
+    config: FanoutConfig,
+    dlq_pool: PgPool,
+) {
     tokio::task::spawn_local(async move {
         let sig = sub
             .webhook_secret
@@ -130,23 +163,64 @@ fn deliver(sub: Subscription, body: Arc<Vec<u8>>, http: reqwest::Client, config:
                 req = req.header("X-Mako-Signature", sig);
             }
 
-            match req.send().await {
+            // `last_error` is the failure description for this attempt.
+            // The success arm returns, so the `!` type coerces to String.
+            let last_error: String = match req.send().await {
                 Ok(resp) if resp.status().is_success() => {
                     debug!(subscriber_id = %sub.subscriber_id, attempt, "fanout: delivered");
-                    break;
+                    return;
                 }
                 Ok(resp) => {
                     warn!(subscriber_id = %sub.subscriber_id, status = resp.status().as_u16(), attempt, "fanout: non-2xx");
+                    format!("HTTP {}", resp.status().as_u16())
                 }
                 Err(e) => {
                     warn!(subscriber_id = %sub.subscriber_id, error = %e, attempt, "fanout: error");
+                    e.to_string()
                 }
-            }
+            };
 
             attempt += 1;
             if attempt >= config.max_retry_attempts {
-                warn!(subscriber_id = %sub.subscriber_id, "fanout: max retries, dropping event");
-                break;
+                // Write to DLQ instead of silently dropping — §22 MessZV compliance.
+                error!(
+                    subscriber_id = %sub.subscriber_id,
+                    webhook_url   = %sub.webhook_url,
+                    event_type    = %event_type,
+                    attempts      = attempt,
+                    last_error    = %last_error,
+                    "fanout: max retries exhausted — writing to fanout_dlq",
+                );
+                let event_json = serde_json::to_value(&event).unwrap_or(event.clone());
+                if let Err(e) = sqlx::query(
+                    r#"INSERT INTO fanout_dlq
+                       (subscriber_id, webhook_url, event_type, event_body, attempts, last_error)
+                       VALUES ($1, $2, $3, $4, $5, $6)"#,
+                )
+                .bind(&sub.subscriber_id)
+                .bind(&sub.webhook_url)
+                .bind(&event_type)
+                .bind(&event_json)
+                .bind(attempt as i32)
+                .bind(&last_error)
+                .execute(&dlq_pool)
+                .await
+                {
+                    // DLQ write failed — log at error level so it can be
+                    // recovered from application logs / log-aggregation.
+                    error!(
+                        subscriber_id = %sub.subscriber_id,
+                        event_type    = %event_type,
+                        dlq_error     = %e,
+                        "fanout: DLQ write failed — event data follows for manual recovery",
+                    );
+                    error!(
+                        subscriber_id = %sub.subscriber_id,
+                        event_body    = ?event,
+                        "fanout: undelivered event body",
+                    );
+                }
+                return;
             }
 
             let delay = Duration::from_secs(1 << attempt.min(6));

@@ -52,7 +52,7 @@ impl NbContractRepository for PgNbContractRepository {
                    updated_at            = now()"#,
         )
         .bind(&rec.contract_id)
-        .bind(rec.malo_id.as_ref())
+        .bind(&rec.malo_id)
         .bind(&rec.nb_mp_id)
         .bind(rec.sparte.to_string())
         .bind(&rec.netzebene)

@@ -144,7 +144,7 @@ pub async fn handle_webhook(
         started_at,
         last_event_at: event_time,
         erc_code,
-        tenant_id: None,
+        tenant: state.tenant.clone(),
     };
 
     match state.repo.upsert(&projection).await {

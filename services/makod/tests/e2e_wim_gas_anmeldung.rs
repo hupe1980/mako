@@ -171,6 +171,7 @@ impl MockNb {
                     message_ref,
                     validation_passed: true, // bypass: no AHB profile for WiM Gas PIDs yet
                     validation_errors: vec![],
+                    received_at: time::OffsetDateTime::now_utc(),
                 }
             }
             _ => panic!("expected WimGasAnmeldungCommand::ReceiveUtilmd"),
@@ -354,6 +355,7 @@ async fn wim_gas_anmeldung_duplicate_receive_rejected() {
             message_ref,
             validation_passed: true,
             validation_errors: vec![],
+            received_at: time::OffsetDateTime::now_utc(),
         },
         _ => panic!("expected ReceiveUtilmd"),
     };

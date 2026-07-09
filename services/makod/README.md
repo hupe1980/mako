@@ -247,7 +247,7 @@ it to inspect process state and submit commands without writing integration code
 | `get_partner` | Get a trading partner by 13-digit GLN |
 | `get_health` | Daemon version, tenant ID, Marktrollen, MaLo cache stats |
 
-**Resources:** `malo://{malo_id}`, `partner://{gln}`
+**Resources:** `malo://{malo_id}`, `partner://{mp_id}`
 
 **Prompts:** `gpke-lieferbeginn`, `geli-lieferbeginn`, `wim-geraetewechsel` — guided step-by-step workflows
 

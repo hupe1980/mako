@@ -97,6 +97,7 @@ async fn cross_fv_antwort_accepted_on_fv_start_process() {
         message_ref: MessageRef::new(anfrage_ref),
         validation_passed: true,
         validation_errors: vec![],
+        received_at: time::OffsetDateTime::now_utc(),
     })
     .await
     .expect("GNB ReceiveUtilmd must succeed");
@@ -180,6 +181,7 @@ async fn cross_fv_aperak_timeout_fires_on_validation_passed() {
         message_ref: MessageRef::new("TIMEOUT-TEST-001"),
         validation_passed: true,
         validation_errors: vec![],
+        received_at: time::OffsetDateTime::now_utc(),
     })
     .await
     .expect("ReceiveUtilmd must succeed");

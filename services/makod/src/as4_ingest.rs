@@ -42,7 +42,7 @@ use asx_rs::storage::{BoxFuture, DedupStorage};
 use asx_rs::transport::ingress::As4HttpIngress;
 use asx_rs::transport::server::{As4AxumHandler, HandlerOutcome, as4_router};
 use axum::Router;
-use edi_energy::EdiEnergyMessage;
+use edi_energy::{AnyMessage, EdiEnergyMessage};
 use mako_as4::server::RouterConfig;
 use mako_engine::inbox::InboxStore;
 use mako_engine::metrics::EngineMetrics;
@@ -131,6 +131,14 @@ pub struct BdewAs4IngestHandler {
     event_bus: Arc<EventBus>,
     /// Deduplication backend.
     dedup: Arc<dyn DedupStorage>,
+    /// CONTRL Empfangsbestätigung emitter for Gas interchanges.
+    ///
+    /// Per CONTRL AHB 1.0 §2.3.1 and APERAK AHB 1.0 §2.3 (Gas rules),
+    /// a CONTRL must be sent for every inbound Gas interchange (except
+    /// CONTRL-on-CONTRL) within 6 wall-clock hours. The AS4-level
+    /// `eb:Receipt` is a separate protocol acknowledgement and does NOT
+    /// satisfy this obligation. Set to `None` for Strom-only deployments.
+    pub contrl_ack: Option<Arc<crate::contrl_ack::ContrlAckService>>,
 }
 
 impl BdewAs4IngestHandler {
@@ -145,7 +153,16 @@ impl BdewAs4IngestHandler {
             session,
             event_bus,
             dedup,
+            contrl_ack: None,
         }
+    }
+
+    /// Wire a `ContrlAckService` to emit Gas CONTRL Empfangsbestätigungen
+    /// on every inbound Gas interchange (CONTRL AHB 1.0 §2.3.1).
+    #[must_use]
+    pub fn with_contrl_ack(mut self, svc: Arc<crate::contrl_ack::ContrlAckService>) -> Self {
+        self.contrl_ack = Some(svc);
+        self
     }
 }
 
@@ -232,8 +249,17 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                     );
                 }
                 // ── EDIFACT dispatch ──────────────────────────────────────────
+                // Collect parsed messages so they can be passed to ContrlAckService
+                // after the dispatch loop (CONTRL AHB 1.0 §2.3.1 Gas obligation).
+                let interchange_ref: String =
+                    if let Ok(pi) = self.ingest.platform.parse_interchange_full(&edifact[..]) {
+                        pi.header.control_ref.to_string()
+                    } else {
+                        msg_id.clone()
+                    };
                 let mut accepted = 0usize;
                 let mut rejected = 0usize;
+                let mut parsed_msgs: Vec<edi_energy::AnyMessage> = Vec::new();
                 for result in self
                     .ingest
                     .platform
@@ -313,6 +339,8 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                             }
 
                             accepted += 1;
+                            // Collect for CONTRL Empfangsbestätigung (Gas interchanges).
+                            parsed_msgs.push(msg);
                         }
                     }
                 }
@@ -321,6 +349,19 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                     return HandlerOutcome::bad_request(
                         "AS4 payload contained no valid EDIFACT messages",
                     );
+                }
+
+                // ── Gas CONTRL Empfangsbestätigung ────────────────────────────
+                // CONTRL AHB 1.0 §2.3.1: for every inbound Gas interchange
+                // (except CONTRL-on-CONTRL) the receiver must send a CONTRL
+                // Empfangsbestätigung within 6 wall-clock hours.
+                // The AS4 eb:Receipt above is a *protocol* acknowledgement and
+                // does not satisfy this EDIFACT-level obligation.
+                if let Some(contrl_svc) = self.contrl_ack.as_deref() {
+                    let refs: Vec<&AnyMessage> = parsed_msgs.iter().collect();
+                    contrl_svc
+                        .emit_for_interchange(&refs, &interchange_ref)
+                        .await;
                 }
 
                 // ── Synchronous receipt ───────────────────────────────────────

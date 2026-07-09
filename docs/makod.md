@@ -162,7 +162,7 @@ party_id = "9900357000004"
 signing_key_pem_file  = "/etc/makod/signing.key.pem"
 signing_cert_pem_file = "/etc/makod/signing.cert.pem"
 # Trading partners — bootstrapped into the durable PartnerStore at startup.
-# Runtime updates via PUT /admin/partners/{gln} or inbound PARTIN messages.
+# Runtime updates via PUT /admin/partners/{mp_id} or inbound PARTIN messages.
 partners = [
   "9900000000001=https://partner-a.example/as4/inbox",
   "9900000000002=https://partner-b.example/as4/inbox",
@@ -551,7 +551,7 @@ MAKOD_AS4_PARTNER="9900000000001=https://a.example/as4,9900000000002=https://b.e
 ```
 
 Partners are bootstrapped into the durable `PartnerStore` on startup. Changes
-made at runtime via the REST API (`PUT /admin/partners/{gln}`) survive restarts
+made at runtime via the REST API (`PUT /admin/partners/{mp_id}`) survive restarts
 without requiring a redeploy.
 
 ### `[webdienste]` — BDEW API-Webdienste Strom
@@ -914,7 +914,7 @@ GLNs resolved by the engine (sender, receiver) are intentionally absent.
 |---------|-----------------------------|
 | `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum` |
 | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
-| `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `alter_lf_gln`¹ |
+| `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `alter_lf_mp_id`¹ |
 | `gpke.sperrung.bestaetigen` | `malo_id`, `ausfuehrungsdatum` |
 | `gpke.abrechnung.annehmen` | `rechnung` (BO4E `RECHNUNG` object) |
 | `gpke.abrechnung.ablehnen` | `rechnung` (BO4E `RECHNUNG` object), `ablehnungsgrund` |
@@ -923,7 +923,7 @@ GLNs resolved by the engine (sender, receiver) are intentionally absent.
 | `wim.geraetewechsel.beauftragen` | `melo_id`², `wechseldatum` |
 | `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |
 
-¹ `alter_lf_gln` is required only when the old supplier is a different legal entity.
+¹ `alter_lf_mp_id` is required only when the old supplier is a different legal entity.
   The ERP derives it from contract data; the engine does not know the previous LF.
 
 ² For WiM Gerätewechsel the primary key is the `melo_id` (Messlokation), not the MaLo.
@@ -1002,15 +1002,15 @@ curl -X POST http://localhost:8080/api/v1/commands \
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/admin/partners` | List all trading-partner records for this tenant |
-| `GET` | `/admin/partners/{gln}` | Retrieve a single partner record |
-| `PUT` | `/admin/partners/{gln}` | Create or update a partner record |
-| `DELETE` | `/admin/partners/{gln}` | Remove a partner record |
+| `GET` | `/admin/partners/{mp_id}` | Retrieve a single partner record |
+| `PUT` | `/admin/partners/{mp_id}` | Create or update a partner record |
+| `DELETE` | `/admin/partners/{mp_id}` | Remove a partner record |
 | `POST` | `/admin/partners/import` | Import from a raw PARTIN EDIFACT interchange |
 
-**`PUT /admin/partners/{gln}` request body:**
+**`PUT /admin/partners/{mp_id}` request body:**
 ```json
 {
-  "gln": "9900000000001",
+  "mp_id": "9900000000001",
   "display_name": "Stadtwerke Beispiel GmbH",
   "channels": [
     { "qualifier": "AK", "address": "https://partner.example/as4/inbox" },

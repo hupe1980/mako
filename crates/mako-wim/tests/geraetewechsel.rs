@@ -56,6 +56,7 @@ fn receive_utilmd_cmd(validation_passed: bool) -> DeviceChangeCommand {
         } else {
             vec!["UTILMD segment RFF missing mandatory Z13 reference".to_owned()]
         },
+        received_at: time::OffsetDateTime::now_utc(),
     }
 }
 

@@ -29,18 +29,22 @@ pub trait ProcessProjectionRepository: Send + Sync + 'static {
     async fn get(&self, process_id: Uuid) -> Result<Option<ProcessProjection>, ObsError>;
 
     /// Compute a KPI report for one PID over a calendar period.
+    ///
+    /// `tenant` is the operator MP-ID (GLN). Filters results to that tenant.
     async fn kpi_report(
         &self,
         pid: u32,
         from: Date,
         to: Date,
-        tenant_id: Option<Uuid>,
+        tenant: &str,
     ) -> Result<KpiReport, ObsError>;
 
     /// Return all non-terminal processes whose `deadline_at` is in the past.
+    ///
+    /// `tenant` is the operator MP-ID (GLN). Filters results to that tenant.
     async fn overdue_processes(
         &self,
         now: time::OffsetDateTime,
-        tenant_id: Option<Uuid>,
+        tenant: &str,
     ) -> Result<Vec<ProcessProjection>, ObsError>;
 }

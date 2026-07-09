@@ -29,6 +29,15 @@ struct Cli {
     /// Log level override (RUST_LOG syntax: `info`, `debug`, `processd=trace`).
     #[arg(long, default_value = "info", env = "RUST_LOG")]
     log_level: String,
+
+    /// Validate configuration and database connectivity, then exit 0.
+    ///
+    /// Parses the TOML file, resolves all `env:` secrets, connects to
+    /// PostgreSQL, runs migrations, and exits 0 on success, non-zero on
+    /// any failure. No HTTP server or background workers are started.
+    /// Suitable for Dockerfile HEALTHCHECK and Kubernetes init containers.
+    #[arg(long, env = "PROCESSD_CHECK", default_value_t = false)]
+    check: bool,
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -114,6 +123,24 @@ async fn main() -> anyhow::Result<()> {
         .addr
         .parse()
         .with_context(|| format!("invalid http.addr '{}'", cfg.http.addr))?;
+
+    // ── --check mode: validate config + DB, then exit ─────────────────────────
+    if cli.check {
+        // Connect and ping PostgreSQL to verify credentials and reachability.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .context("processd --check: connecting to PostgreSQL")?;
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .context("processd --check: running migrations")?;
+        tracing::info!(
+            "processd: check mode — config, secrets, and database connectivity verified"
+        );
+        return Ok(());
+    }
 
     let tenant = if cfg.identity.tenant.is_empty() {
         cfg.identity.own_mp_id.clone()

@@ -177,6 +177,7 @@ impl MockGnb {
                     message_ref,
                     validation_passed: true, // bypass AHB profile check
                     validation_errors: vec![],
+                    received_at: time::OffsetDateTime::now_utc(),
                 }
             }
             _ => panic!("expected GasSupplierChangeCommand::ReceiveUtilmd"),
@@ -389,6 +390,7 @@ async fn e2e_lieferbeginn_gas_ahb_validation_failure() {
             validation_errors: vec![
                 "UTILMD G segment IDE missing mandatory Z18 Marktlokation reference".to_owned(),
             ],
+            received_at: time::OffsetDateTime::now_utc(),
         })
         .await
         .expect("ReceiveUtilmd with invalid message must not panic");
@@ -433,6 +435,7 @@ async fn e2e_lieferbeginn_gas_duplicate_message_rejected() {
             message_ref: mako_engine::types::MessageRef::new("MSG-GAS-DUP"),
             validation_passed: true,
             validation_errors: vec![],
+            received_at: time::OffsetDateTime::now_utc(),
         })
         .await
         .expect_err("second ReceiveUtilmd must be rejected");

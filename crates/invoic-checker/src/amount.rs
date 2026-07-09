@@ -35,6 +35,40 @@ impl EuroAmount {
     /// Internal scale factor: 1 EUR = 100_000 units.
     const SCALE: i64 = 100_000;
 
+    /// Construct from a `rust_decimal::Decimal` value.
+    ///
+    /// Multiplies by `100_000` and rounds to the nearest integer, matching the
+    /// 5-decimal-place precision of [`EuroAmount::parse`] but without the
+    /// overhead of a string round-trip.  Returns `None` on overflow.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use invoic_checker::amount::EuroAmount;
+    /// use rust_decimal::Decimal;
+    /// use std::str::FromStr;
+    ///
+    /// assert_eq!(
+    ///     EuroAmount::from_decimal(Decimal::from_str("0.03456").unwrap()),
+    ///     Some(EuroAmount(3_456))
+    /// );
+    /// assert_eq!(
+    ///     EuroAmount::from_decimal(Decimal::from_str("1.00000").unwrap()),
+    ///     Some(EuroAmount(100_000))
+    /// );
+    /// ```
+    #[must_use]
+    pub fn from_decimal(d: rust_decimal::Decimal) -> Option<Self> {
+        use rust_decimal::prelude::ToPrimitive;
+        let scaled = d * rust_decimal::Decimal::from(Self::SCALE);
+        scaled.round().to_i64().map(Self)
+    }
+
+    /// Convert to `rust_decimal::Decimal` (lossless, exact 5-decimal representation).
+    #[must_use]
+    pub fn into_decimal(self) -> rust_decimal::Decimal {
+        rust_decimal::Decimal::new(self.0, 5)
+    }
+
     /// Parse an EDIFACT decimal string to `EuroAmount`.
     ///
     /// Accepts both `.` and `,` as decimal separators (EDIFACT allows `,`).

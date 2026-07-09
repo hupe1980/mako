@@ -35,6 +35,7 @@ pub fn router(state: HandlerState) -> Router {
         .route("/obs/processes/{process_id}", get(get_process))
         .route("/obs/kpis", get(get_kpis))
         .route("/obs/overdue", get(get_overdue))
+        .route("/metrics", get(metrics))
         .route("/health/live", get(|| async { StatusCode::OK }))
         .route("/health/ready", get(health_ready))
         .with_state(state)
@@ -52,6 +53,61 @@ async fn health_ready(State(state): State<HandlerState>) -> impl IntoResponse {
             StatusCode::SERVICE_UNAVAILABLE
         }
     }
+}
+
+/// `GET /metrics` — Prometheus-compatible operational metrics.
+/// No authentication required; restrict network access at the ingress layer.
+async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
+    let mut out = String::with_capacity(512);
+    let pool = state.repo.pool();
+
+    let total_processes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM process_projections")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let open_processes: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM process_projections WHERE state = 'Open'")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+    let overdue_processes: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM process_projections \
+         WHERE state = 'Open' AND deadline_at < now()",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    let pool_size = pool.size();
+    let pool_idle = pool.num_idle();
+
+    out.push_str("# HELP obsd_process_projections_total Total ProcessProjection records.\n");
+    out.push_str("# TYPE obsd_process_projections_total gauge\n");
+    out.push_str(&format!(
+        "obsd_process_projections_total {total_processes}\n"
+    ));
+    out.push_str("# HELP obsd_open_processes_total Open (in-progress) MaKo processes.\n");
+    out.push_str("# TYPE obsd_open_processes_total gauge\n");
+    out.push_str(&format!("obsd_open_processes_total {open_processes}\n"));
+    out.push_str("# HELP obsd_overdue_processes_total Processes past their regulatory deadline.\n");
+    out.push_str("# TYPE obsd_overdue_processes_total gauge\n");
+    out.push_str(&format!(
+        "obsd_overdue_processes_total {overdue_processes}\n"
+    ));
+    out.push_str("# HELP obsd_db_pool_size Current PostgreSQL connection pool size.\n");
+    out.push_str("# TYPE obsd_db_pool_size gauge\n");
+    out.push_str(&format!("obsd_db_pool_size {pool_size}\n"));
+    out.push_str("# HELP obsd_db_pool_idle Idle PostgreSQL connections.\n");
+    out.push_str("# TYPE obsd_db_pool_idle gauge\n");
+    out.push_str(&format!("obsd_db_pool_idle {pool_idle}\n"));
+
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
+        out,
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,7 +159,7 @@ async fn get_processes(
         partner_mp_id: params.partner_mp_id,
         mdm_role: params.mdm_role,
         since,
-        tenant_id: None,
+        tenant: Some(state.tenant.clone()),
         limit: params.limit.unwrap_or(100).min(1000),
     };
 
@@ -204,7 +260,11 @@ async fn get_kpis(
         (from, today)
     };
 
-    match state.repo.kpi_report(params.pid, from, to, None).await {
+    match state
+        .repo
+        .kpi_report(params.pid, from, to, &state.tenant)
+        .await
+    {
         Ok(report) => Json(serde_json::to_value(report).unwrap_or_default()).into_response(),
         Err(mako_obs::error::ObsError::NoKpiData { .. }) => {
             (StatusCode::NOT_FOUND, "no data for this PID / period").into_response()
@@ -230,7 +290,7 @@ async fn get_overdue(
             .into_response();
     }
     let now = OffsetDateTime::now_utc();
-    match state.repo.overdue_processes(now, None).await {
+    match state.repo.overdue_processes(now, &state.tenant).await {
         Ok(processes) => Json(serde_json::to_value(processes).unwrap_or_default()).into_response(),
         Err(err) => {
             tracing::warn!(%err, "obsd: get_overdue failed");

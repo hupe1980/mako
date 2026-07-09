@@ -9,7 +9,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::Context;
 use axum::{
     Extension, Router,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 use clap::Parser;
 use mako_markt::repository::AppState;
@@ -26,11 +26,13 @@ use marktd::{
         TenantGln,
         contract::{get_contract, put_contract},
         correlation::{get_correlation, list_correlations},
+        dlq::{delete_dlq_entry, list_dlq, retry_dlq_entry},
         event_ingest::{InboundWebhookSecret, ingest_event},
         health::{health, health_ready},
         malo::{get_malo, list_malo, put_malo},
         malo_grid::{get_malo_grid, put_malo_grid},
         melo::{get_melo, put_melo},
+        metrics::metrics_handler,
         nb_contract::{get_nb_contract, list_nb_contracts, put_nb_contract},
         nelo::{get_nelo, list_nelos, put_nelo},
         partner::{get_partner, list_partners, put_partner},
@@ -64,6 +66,15 @@ struct Cli {
     /// Log level override (default: INFO).
     #[arg(long, default_value = "info", env = "RUST_LOG")]
     log_level: String,
+
+    /// Validate configuration and database connectivity, then exit 0.
+    ///
+    /// Parses the TOML file, resolves all `env:` secrets, connects to
+    /// PostgreSQL, runs migrations, and exits 0 on success, non-zero on
+    /// any failure. No HTTP server or background workers are started.
+    /// Suitable for Dockerfile HEALTHCHECK and Kubernetes init containers.
+    #[arg(long, env = "MARKTD_CHECK", default_value_t = false)]
+    check: bool,
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -127,6 +138,15 @@ async fn main() -> anyhow::Result<()> {
         .run(&pool)
         .await
         .context("running database migrations")?;
+
+    // ── --check mode early exit ────────────────────────────────────────────────
+    //
+    // Config parsed, secrets resolved, PostgreSQL reachable, migrations applied.
+    // In check mode we exit here — no HTTP server, no background workers.
+    if cli.check {
+        info!("marktd: check mode — config, secrets, and database connectivity verified");
+        return Ok(());
+    }
 
     // ── Repositories ──────────────────────────────────────────────────────────
     let malo_repo = PgMaloRepository::new(pool.clone());
@@ -216,6 +236,7 @@ async fn main() -> anyhow::Result<()> {
             delivery_timeout: Duration::from_secs(cfg.webhook.delivery_timeout_secs),
             max_retry_attempts: cfg.webhook.max_retry_attempts,
         },
+        pool.clone(), // DLQ writes on delivery failure — §22 MessZV compliance
         shutdown.clone(),
     );
 
@@ -397,6 +418,12 @@ async fn main() -> anyhow::Result<()> {
             )
             // Inbound makod events
             .route(&inbound_path, post(ingest_event::<_, _, _, _, _, _>))
+            // Dead-letter queue admin (F-003 — §22 MessZV compliance)
+            .route("/admin/fanout/dlq", get(list_dlq))
+            .route("/admin/fanout/dlq/{id}", delete(delete_dlq_entry))
+            .route("/admin/fanout/dlq/{id}/retry", post(retry_dlq_entry))
+            // Prometheus-compatible metrics (F-006)
+            .route("/metrics", get(metrics_handler))
             // Swagger UI
             .merge(swagger_ui())
             // State + extensions

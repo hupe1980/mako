@@ -145,6 +145,7 @@ impl MockGnb {
                     message_ref,
                     validation_passed: true,
                     validation_errors: vec![],
+                    received_at: time::OffsetDateTime::now_utc(),
                 }
             }
             _ => panic!("expected GasSupplierChangeCommand::ReceiveUtilmd"),
@@ -326,6 +327,7 @@ async fn e2e_lieferende_gas_ahb_validation_failure() {
             validation_errors: vec![
                 "UTILMD G segment IDE missing mandatory Z18 Marktlokation reference".to_owned(),
             ],
+            received_at: time::OffsetDateTime::now_utc(),
         })
         .await
         .expect("ReceiveUtilmd with invalid message must not panic");

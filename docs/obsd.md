@@ -50,6 +50,7 @@ graph TB
 │  GET  /obs/processes/{id}   ← single process by UUID           │
 │  GET  /obs/kpis             ← BNetzA KPI report                │
 │  GET  /obs/overdue          ← processes near or past deadline   │
+│  GET  /metrics              ← Prometheus metrics               │
 │  GET  /health/live  /health/ready                               │
 │  POST|GET /mcp      ← MCP Streamable HTTP (LLM tooling)         │
 └─────────────────────────────────────────────────────────────────┘
@@ -126,6 +127,14 @@ curl -s "http://obsd:8480/obs/overdue" \
 
 `obsd` reads its configuration from a **TOML file** (default: `obsd.toml`),
 with secrets deferred to environment variables via `"env:VAR_NAME"` values.
+
+### CLI flags
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--config` / `-c` | `OBSD_CONFIG` | `obsd.toml` | Path to `obsd.toml` |
+| `--log-level` | `RUST_LOG` | `info` | Log level |
+| `--check` | `OBSD_CHECK` | `false` | Validate config + DB connectivity, then exit 0. Used by Dockerfile HEALTHCHECK. |
 
 ```bash
 obsd --config /etc/obsd/obsd.toml

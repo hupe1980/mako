@@ -1672,12 +1672,21 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             ))),
         });
 
-        let handler = Arc::new(as4_ingest::BdewAs4IngestHandler::new(
-            ingest_state,
-            Arc::new(session),
-            event_bus,
-            dedup,
+        let contrl_svc = Arc::new(contrl_ack::ContrlAckService::new(
+            Arc::new(store.clone()),
+            store.as_deadline_store(),
+            mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+            gln_registry.primary_gln().to_owned(),
         ));
+        let handler = Arc::new(
+            as4_ingest::BdewAs4IngestHandler::new(
+                ingest_state,
+                Arc::new(session),
+                event_bus,
+                dedup,
+            )
+            .with_contrl_ack(Arc::clone(&contrl_svc)),
+        );
 
         let app = as4_ingest::router(handler, mako_as4::bdew_router_config())
             .merge(health::router(health_state.clone()));

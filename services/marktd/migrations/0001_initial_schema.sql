@@ -401,3 +401,27 @@ CREATE INDEX IF NOT EXISTS malo_grid_nb_gln
 CREATE INDEX IF NOT EXISTS malo_grid_big
     ON malo_grid (bilanzierungsgebiet, tenant)
     WHERE bilanzierungsgebiet IS NOT NULL;
+
+-- ── Fanout dead-letter queue ─────────────────────────────────────────────────
+-- When the fan-out worker exhausts all retry attempts for a subscriber,
+-- the failed event is persisted here instead of being silently dropped.
+-- Operators inspect via GET /admin/fanout/dlq; retry via POST /admin/fanout/dlq/{id}/retry;
+-- discard via DELETE /admin/fanout/dlq/{id}.
+--
+-- §22 MessZV: silent drop of an `de.mako.process.initiated` event to invoicd
+-- would cause the INVOIC plausibility check never to run, violating the
+-- 3-year receipt retention obligation. This table provides the recovery path.
+CREATE TABLE IF NOT EXISTS fanout_dlq (
+    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    subscriber_id  TEXT        NOT NULL,
+    webhook_url    TEXT        NOT NULL,
+    event_type     TEXT        NOT NULL,    -- CloudEvents `type` for quick filtering
+    event_body     JSONB       NOT NULL,
+    attempts       INT         NOT NULL DEFAULT 0,
+    last_error     TEXT,
+    failed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at    TIMESTAMPTZ             -- set when retried successfully or discarded
+);
+
+CREATE INDEX IF NOT EXISTS fanout_dlq_subscriber ON fanout_dlq (subscriber_id, failed_at DESC);
+CREATE INDEX IF NOT EXISTS fanout_dlq_unresolved  ON fanout_dlq (failed_at DESC) WHERE resolved_at IS NULL;

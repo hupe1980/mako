@@ -49,6 +49,7 @@ graph TB
 │  GET  /api/v1/deliveries/{malo_id}      ← meter reads / TS      │
 │  GET  /api/v1/billing-period/{malo_id}  ← MeterBillingPeriod    │
 │  GET  /api/v1/imbalance/{malo_id}/{y}/{m} ← Mehr-/Mindermengen  │
+│  GET  /metrics                          ← Prometheus metrics    │
 │  GET  /health/live  /health/ready                               │
 │  POST|GET /mcp      ← MCP Streamable HTTP (LLM tooling)         │
 └─────────────────────────────────────────────────────────────────┘
@@ -89,6 +90,14 @@ and Gas quantity conversion (m³ × Brennwert × Zustandszahl = kWh).
 
 `edmd` reads its configuration from a **TOML file** (default: `edmd.toml`),
 with secrets deferred to environment variables via `"env:VAR_NAME"` values.
+
+### CLI flags
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--config` / `-c` | `EDMD_CONFIG` | `edmd.toml` | Path to `edmd.toml` |
+| `--log-level` | `RUST_LOG` | `info` | Log level |
+| `--check` | `EDMD_CHECK` | `false` | Validate config + DB connectivity, then exit 0. Used by Dockerfile HEALTHCHECK. |
 
 ```bash
 edmd --config /etc/edmd/edmd.toml

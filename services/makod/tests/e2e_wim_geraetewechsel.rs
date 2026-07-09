@@ -184,6 +184,7 @@ impl MockNb {
                     message_ref,
                     validation_passed: true,
                     validation_errors: vec![],
+                    received_at: time::OffsetDateTime::now_utc(),
                 }
             }
             _ => panic!("expected DeviceChangeCommand::ReceiveUtilmd"),
@@ -393,6 +394,7 @@ async fn e2e_wim_geraetewechsel_ahb_validation_failure() {
             validation_errors: vec![
                 "UTILMD WiM segment RFF missing mandatory Z13 Auftragsreferenz".to_owned(),
             ],
+            received_at: time::OffsetDateTime::now_utc(),
         })
         .await
         .expect("ReceiveUtilmd with invalid message must not panic");

@@ -1,11 +1,14 @@
 # makod demo — full stack docker compose
 #
-# Runs the complete mako NB STP stack:
-#   • postgres  — shared PostgreSQL database (marktd + processd schemas)
-#   • webhook   :8000 — ERP event receiver (Python, in-memory)
-#   • marktd    :8180 — Market Data Hub (MaLo/contracts/VersorgungsStatus/PRICAT)
-#   • processd  :8580 — NB STP auto-responder (evaluates Anmeldungen, dispatches bestaetigen/ablehnen)
-#   • makod     :8080 — EDIFACT process engine (in-memory, no persistence)
+# Runs the complete mako 8-service stack:
+#   • postgres  — PostgreSQL (one database per service: marktd, processd, invoicd, edmd, obsd)
+#   • webhook   :8000 — ERP CloudEvent receiver (Python, in-memory)
+#   • marktd    :8180 — Market Data Hub (MaLo/MeLo/contracts/VersorgungsStatus/PRICAT/NeLo/malo_grid)
+#   • processd  :8580 — NB STP auto-responder + LF E_0624 auto-response (netz-checker, §20 parity)
+#   • makod     :8080 — EDIFACT process engine (in-memory; use slatedb feature for persistent storage)
+#   • invoicd   :8280 — INVOIC plausibility-check daemon (LF role, §22 MessZV receipt retention)
+#   • edmd      :8380 — Energy Data Management (MSCONS meter readings, MeterBillingPeriod)
+#   • obsd      :8480 — Business-process observability (ProcessProjection, BNetzA KPI, §20 parity)
 #
 # End-to-end flow:
 #   ERP       → PUT MaLo + preisblatt into marktd        (master data pre-load)
@@ -18,9 +21,12 @@
 #   outbox    → delivers UTILMD 55003 to webhook          (ERP receives confirmation)
 #
 # Build images first:
-#   docker build --target runtime          -t makod:dev    .
-#   docker build --target marktd-runtime   -t marktd:dev   .
-#   docker build --target processd-runtime -t processd:dev .
+#   docker build --target runtime          -t makod:dev     .
+#   docker build --target marktd-runtime   -t marktd:dev    .
+#   docker build --target processd-runtime -t processd:dev  .
+#   docker build --target invoicd-runtime  -t invoicd:dev   .
+#   docker build --target edmd-runtime     -t edmd:dev      .
+#   docker build --target obsd-runtime     -t obsd:dev      .
 #
 # Run:
 #   docker compose up -d
@@ -139,4 +145,84 @@ services:
     command:
       - "--config=/etc/makod/makod.toml"
       - "--auth-key=demo=demo-secret-change-me"
+    restart: unless-stopped
+
+  # ── invoicd — INVOIC Plausibility-Check Daemon ──────────────────────────────
+  # LF-role daemon: validates inbound INVOIC (31001/31002/31005/31006) against
+  # PRICAT tariffs, persists every receipt for §22 MessZV compliance, and
+  # dispatches REMADV 33001 (accept) or COMDIS 29001 / REMADV 33002 (dispute).
+  # Self-registers with marktd on startup — no manual subscription required.
+  invoicd:
+    image: invoicd:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      marktd:
+        condition: service_started
+      makod:
+        condition: service_started
+    ports:
+      - "8280:8280"
+    volumes:
+      - ./invoicd.toml:/etc/invoicd/invoicd.toml:ro
+    environment:
+      DATABASE_URL:           postgres://demo:demo-secret@postgres/invoicd
+      INVOICD_MAKOD_API_KEY:  demo-secret-change-me
+      INVOICD_MARKTD_API_KEY: demo-invoicd-key
+      INVOICD_INBOUND_SECRET: invoicd-webhook-secret
+    command:
+      - "--config=/etc/invoicd/invoicd.toml"
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  # ── edmd — Energy Data Management Daemon ────────────────────────────────────
+  # Stores MSCONS meter readings received via marktd EventBus.
+  # Provides time-series query API and MeterBillingPeriod for invoicd and ERP.
+  # Self-registers with marktd on startup.
+  edmd:
+    image: edmd:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      marktd:
+        condition: service_started
+    ports:
+      - "8380:8380"
+    volumes:
+      - ./edmd.toml:/etc/edmd/edmd.toml:ro
+    environment:
+      DATABASE_URL:        postgres://demo:demo-secret@postgres/edmd
+      EDMD_MARKTD_API_KEY: demo-edmd-key
+      EDMD_INBOUND_SECRET: edmd-webhook-secret
+    command:
+      - "--config=/etc/edmd/edmd.toml"
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  # ── obsd — Business-Process Observability Daemon ────────────────────────────
+  # Projects all de.mako.process.* events into ProcessProjection records.
+  # Exposes BNetzA KPI reports, overdue-process detection, and §20 parity data.
+  # Bridges deadline breaches to Alertmanager (configure OBSD_ALERTMANAGER_URL).
+  # Self-registers with marktd on startup.
+  obsd:
+    image: obsd:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      marktd:
+        condition: service_started
+    ports:
+      - "8480:8480"
+    volumes:
+      - ./obsd.toml:/etc/obsd/obsd.toml:ro
+    environment:
+      DATABASE_URL:        postgres://demo:demo-secret@postgres/obsd
+      OBSD_MARKTD_API_KEY: demo-obsd-key
+      OBSD_INBOUND_SECRET: obsd-webhook-secret
+    command:
+      - "--config=/etc/obsd/obsd.toml"
+    healthcheck:
+      disable: true
     restart: unless-stopped

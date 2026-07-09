@@ -57,7 +57,7 @@ let anfrage = AnmeldungAnfrage {
 
 let grid = MaloGridRecord {
     malo_id: "51238696780".to_owned(),
-    nb_gln: "9900000000002".to_owned(),
+    nb_mp_id: "9900000000002".to_owned(),
     bilanzierungsgebiet: Some("11YB-TENNET-----W".to_owned()),
     netzgebiet: None,
     sparte: Sparte::Strom,

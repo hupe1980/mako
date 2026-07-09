@@ -254,7 +254,7 @@ let state = Arc::new(AppState {
 `PriCatRepository` stores versioned PRICAT snapshots and an audit log of every
 outbound dispatch attempt.
 
-Every `PUT /api/v1/preisblaetter/{nb_gln}` call in `marktd`:
+Every `PUT /api/v1/preisblaetter/{nb_mp_id}` call in `marktd`:
 1. Writes to `preisblaetter` (existing single-row store for `invoicd`)
 2. Inserts a versioned snapshot in `pricat_versions`
 3. Emits `de.markt.pricat.published` via the internal event channel
@@ -263,7 +263,7 @@ Every `PUT /api/v1/preisblaetter/{nb_gln}` call in `marktd`:
 pub trait PriCatRepository: Send + Sync {
     async fn upsert_version(
         &self,
-        nb_gln: &str,
+        nb_mp_id: &str,
         tenant: &str,
         valid_from: time::Date,
         valid_to: Option<time::Date>,
@@ -272,10 +272,10 @@ pub trait PriCatRepository: Send + Sync {
         source: PreisblattSource,
     ) -> Result<uuid::Uuid, MdmError>;
 
-    async fn find_latest(&self, nb_gln: &str, tenant: &str)
+    async fn find_latest(&self, nb_mp_id: &str, tenant: &str)
         -> Result<Option<PriCatVersion>, MdmError>;
 
-    async fn list_versions(&self, nb_gln: &str, tenant: &str)
+    async fn list_versions(&self, nb_mp_id: &str, tenant: &str)
         -> Result<Vec<PriCatVersion>, MdmError>;
 
     async fn list_pending(&self, tenant: &str)
@@ -301,7 +301,7 @@ pub trait PriCatRepository: Send + Sync {
 | `Error` | Last attempt failed; retried on next background scan |
 
 **Auto-dispatch on LF partner registration:** when a new LF partner is upserted
-via `PUT /api/v1/partners/{gln}` in `marktd`, the latest PRICAT version for the
+via `PUT /api/v1/partners/{mp_id}` in `marktd`, the latest PRICAT version for the
 operator's NB GLN is automatically re-queued for dispatch to the new partner.
 
 ---

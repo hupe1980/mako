@@ -77,6 +77,7 @@ fn receive_utilmd_cmd(pid: u32) -> WimGasAnmeldungCommand {
         message_ref: MessageRef::new("CROSS-FV-WIM-GAS-001"),
         validation_passed: true,
         validation_errors: vec![],
+        received_at: time::OffsetDateTime::now_utc(),
     }
 }
 

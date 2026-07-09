@@ -45,7 +45,7 @@ impl ProcessProjectionRepository for InMemoryProcessProjectionRepository {
                         .as_deref()
                         .is_none_or(|r| p.mdm_role.as_deref() == Some(r))
                     && q.since.is_none_or(|s| p.started_at >= s)
-                    && q.tenant_id.is_none_or(|t| p.tenant_id == Some(t))
+                    && q.tenant.as_deref().is_none_or(|t| p.tenant == t)
             })
             .cloned()
             .collect();
@@ -65,7 +65,7 @@ impl ProcessProjectionRepository for InMemoryProcessProjectionRepository {
         pid: u32,
         from: Date,
         to: Date,
-        _tenant_id: Option<Uuid>,
+        _tenant: &str,
     ) -> Result<KpiReport, ObsError> {
         let guard = self.projections.lock().unwrap();
         let relevant: Vec<_> = guard
@@ -123,7 +123,7 @@ impl ProcessProjectionRepository for InMemoryProcessProjectionRepository {
     async fn overdue_processes(
         &self,
         now: time::OffsetDateTime,
-        _tenant_id: Option<Uuid>,
+        _tenant: &str,
     ) -> Result<Vec<ProcessProjection>, ObsError> {
         let guard = self.projections.lock().unwrap();
         Ok(guard
@@ -162,7 +162,7 @@ mod tests {
             started_at: OffsetDateTime::now_utc(),
             last_event_at: OffsetDateTime::now_utc(),
             erc_code: None,
-            tenant_id: None,
+            tenant: "9900357000004".into(),
         };
         repo.upsert(&proj).await.unwrap();
         let found = repo.get(process_id).await.unwrap();
@@ -188,7 +188,7 @@ mod tests {
                 started_at: OffsetDateTime::now_utc(),
                 last_event_at: OffsetDateTime::now_utc(),
                 erc_code: None,
-                tenant_id: None,
+                tenant: "9900357000004".into(),
             };
             repo.upsert(&proj).await.unwrap();
         }

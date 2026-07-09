@@ -56,17 +56,17 @@ without manual intervention, and any historical state can be retrieved by date.
 | `GET` | `/api/v1/contracts` | List contracts (paginated) |
 | `GET` | `/api/v1/contracts/{id}` | Fetch single contract |
 | `PUT` | `/api/v1/contracts/{id}` | Upsert contract |
-| `GET` | `/api/v1/nb-contracts/{nb_gln}` | Fetch NB network contract |
-| `PUT` | `/api/v1/nb-contracts/{nb_gln}` | Upsert NB network contract |
+| `GET` | `/api/v1/nb-contracts/{id}` | Fetch NB network contract |
+| `PUT` | `/api/v1/nb-contracts/{id}` | Upsert NB network contract |
 | `GET` | `/api/v1/partners` | List trading partners (paginated) |
-| `GET` | `/api/v1/partners/{gln}` | Fetch partner by GLN |
-| `PUT` | `/api/v1/partners/{gln}` | Upsert partner |
+| `GET` | `/api/v1/partners/{mp_id}` | Fetch partner by GLN |
+| `PUT` | `/api/v1/partners/{mp_id}` | Upsert partner |
 | `GET` | `/api/v1/versorgung/{malo_id}` | Fetch VersorgungsStatus — add `?at=YYYY-MM-DD` for point-in-time |
 | `GET` | `/api/v1/versorgung/{malo_id}/history` | Full supply-state change history (newest first, paged) |
 | `PUT` | `/api/v1/versorgung/{malo_id}` | Admin override for VersorgungsStatus |
 | `GET` | `/api/v1/malo/{id}/grid` | Fetch NB grid topology record for a MaLo (read by `processd` NB module) |
 | `PUT` | `/api/v1/malo/{id}/grid` | Upsert NB grid topology (sourced from NIS/GIS; read by `processd`) |
-| `GET` | `/api/v1/nelo` | List Netz-Element-Lokationen (`?nb_gln=` filter) |
+| `GET` | `/api/v1/nelo` | List Netz-Element-Lokationen (`?nb_mp_id=` filter) |
 | `GET` | `/api/v1/nelo/{id}` | Fetch a NeLo by EIC or BDEW Codenummer |
 | `PUT` | `/api/v1/nelo/{id}` | Upsert a NeLo (NB role required) |
 | `GET` | `/api/v1/subscriptions` | List event subscriptions |
@@ -75,11 +75,11 @@ without manual intervention, and any historical state can be retrieved by date.
 | `POST` | `/api/v1/subscriptions/{id}/test` | Send test event to one subscription endpoint |
 | `POST` | `/api/v1/events` | Ingest inbound CloudEvent (idempotent) |
 | `GET` | `/api/v1/correlations/{malo_id}` | Query active process correlations for a MaLo |
-| `GET` | `/api/v1/preisblaetter/{nb_gln}` | Fetch price sheet valid on query date |
-| `PUT` | `/api/v1/preisblaetter/{nb_gln}` | Upsert price sheet + store versioned snapshot + emit `de.markt.pricat.published` |
-| `GET` | `/api/v1/pricat/{nb_gln}/history` | PRICAT version history (newest first) |
-| `GET` | `/api/v1/pricat/{nb_gln}/dispatch-log/{version_id}` | Dispatch audit log for a PRICAT version |
-| `POST` | `/api/v1/pricat/{nb_gln}/dispatch` | Enqueue (re-)dispatch to all active LF partners |
+| `GET` | `/api/v1/preisblaetter/{nb_mp_id}` | Fetch price sheet valid on query date |
+| `PUT` | `/api/v1/preisblaetter/{nb_mp_id}` | Upsert price sheet + store versioned snapshot + emit `de.markt.pricat.published` |
+| `GET` | `/api/v1/pricat/{nb_mp_id}/history` | PRICAT version history (newest first) |
+| `GET` | `/api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}` | Dispatch audit log for a PRICAT version |
+| `POST` | `/api/v1/pricat/{nb_mp_id}/dispatch` | Enqueue (re-)dispatch to all active LF partners |
 
 ---
 
@@ -211,7 +211,7 @@ curl -s -X POST http://localhost:8180/api/v1/subscriptions \
   -d '{
     "endpoint_url": "https://erp.example.com/markt/events",
     "secret":       "mysecret",
-    "event_types":  ["de.markt.malo.updated", "de.markt.contract.updated"],
+    "event_types":  ["de.markt.malo.updated", "de.markt.pricat.published"],
     "sparte":       "STROM",
     "role":         "NB"
   }'

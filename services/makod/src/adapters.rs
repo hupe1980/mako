@@ -40,7 +40,6 @@ use mako_engine::{
 };
 use rubo4e::v202501 as bo4e;
 use rust_decimal::Decimal;
-use time::OffsetDateTime;
 
 /// Convert an `edi_energy::Pruefidentifikator` to the domain `Pruefidentifikator`.
 ///
@@ -735,6 +734,7 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
+                received_at: time::OffsetDateTime::now_utc(),
             })
         },
     ));
@@ -1108,6 +1108,7 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
+                received_at: time::OffsetDateTime::now_utc(),
             })
         },
     ));
@@ -2562,6 +2563,7 @@ pub fn wim_gas_anmeldung_registry() -> AdapterRegistry<WimGasAnmeldungWorkflow> 
                 message_ref: MessageRef::new(msg.message_ref()),
                 validation_passed,
                 validation_errors,
+                received_at: time::OffsetDateTime::now_utc(),
             })
         },
     ));
@@ -3916,7 +3918,8 @@ fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
     let period_start = dtm(header, "163").and_then(edifact_date_to_date);
     let period_end = dtm(header, "164").and_then(edifact_date_to_date);
     // Rechnung.rechnungsdatum is still OffsetDateTime.
-    let invoice_date = dtm(header, "137").and_then(edifact_date_to_offset_datetime);
+    // rechnungsdatum is time::Date in rubo4e v0.4 (follows *datum convention).
+    let invoice_date = dtm(header, "137").and_then(edifact_date_to_date);
 
     let gesamtnetto = moa_betrag(header, "79");
     let gesamtbrutto = moa_betrag(header, "9");
@@ -3987,9 +3990,9 @@ fn build_position(group: &[&OwnedSegment]) -> bo4e::Rechnungsposition {
         .and_then(|s| s.component_str(1, 0))
         .map(str::to_owned);
 
-    // lieferung_von/bis are OffsetDateTime in rubo4e v0.3.
-    let lieferung_von = dtm_in_group(group, "163").and_then(edifact_date_to_offset_datetime);
-    let lieferung_bis = dtm_in_group(group, "164").and_then(edifact_date_to_offset_datetime);
+    // lieferung_von/bis are time::Date in rubo4e v0.4 (B-03 fixed).
+    let lieferung_von = dtm_in_group(group, "163").and_then(edifact_date_to_date);
+    let lieferung_bis = dtm_in_group(group, "164").and_then(edifact_date_to_date);
 
     let positions_menge = group
         .iter()
@@ -4102,22 +4105,4 @@ fn edifact_date_to_date(yyyymmdd: &str) -> Option<time::Date> {
     let day: u8 = yyyymmdd[6..8].parse().ok()?;
     let month = Month::try_from(month).ok()?;
     Date::from_calendar_date(year, month, day).ok()
-}
-
-/// Parse an EDIFACT date string (`YYYYMMDD`) to an `OffsetDateTime` at midnight UTC.
-///
-/// Returns `None` if the string is not exactly 8 digits or cannot be parsed as a
-/// valid calendar date.
-fn edifact_date_to_offset_datetime(yyyymmdd: &str) -> Option<OffsetDateTime> {
-    use time::{Date, Month, PrimitiveDateTime, Time};
-    if yyyymmdd.len() != 8 {
-        return None;
-    }
-    let year: i32 = yyyymmdd[..4].parse().ok()?;
-    let month: u8 = yyyymmdd[4..6].parse().ok()?;
-    let day: u8 = yyyymmdd[6..8].parse().ok()?;
-    let month = Month::try_from(month).ok()?;
-    let date = Date::from_calendar_date(year, month, day).ok()?;
-    let dt = PrimitiveDateTime::new(date, Time::MIDNIGHT);
-    Some(dt.assume_utc())
 }

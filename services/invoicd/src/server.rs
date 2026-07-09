@@ -7,6 +7,7 @@
 //! - `GET  /api/v1/disputes`                     — list open disputes (OIDC+Cedar)
 //! - `GET  /api/v1/overdue-remadv`               — receipts approaching `pay_by` without dispatch
 //! - `POST /api/v1/selbstausstellen/{malo_id}`   — trigger outbound selbstausgestellt INVOIC 31006 (M16)
+//! - `GET  /metrics`                             — Prometheus metrics (no auth, internal only)
 //! - `GET  /health/live`                         — liveness probe (always 200)
 //! - `GET  /health/ready`                        — readiness probe (200 OK)
 
@@ -52,6 +53,7 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/selbstausstellen/{malo_id}",
             post(post_selbstausstellen),
         )
+        .route("/metrics", get(metrics))
         .route("/health/live", get(|| async { StatusCode::OK }))
         .route("/health/ready", get(health_ready))
         .with_state(state)
@@ -61,7 +63,57 @@ async fn health_ready(State(_state): State<HandlerState>) -> impl IntoResponse {
     StatusCode::OK
 }
 
-// ── Receipt query DTOs ────────────────────────────────────────────────────────
+/// `GET /metrics` — Prometheus-compatible operational metrics.
+/// No authentication required; restrict network access at the ingress layer.
+async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
+    let mut out = String::with_capacity(512);
+
+    let (receipt_count, dispute_count) = if let Some(pool) = state.pool.as_ref() {
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invoic_receipts")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+        let disputes: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM invoic_receipts WHERE outcome = 'Dispute'")
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
+        (total, disputes)
+    } else {
+        (0, 0)
+    };
+
+    let overdue: i64 = if let Some(pool) = state.pool.as_ref() {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM invoic_receipts \
+             WHERE pay_by < now() + INTERVAL '3 days' AND dispatched_at IS NULL",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0)
+    } else {
+        0
+    };
+
+    out.push_str("# HELP invoicd_receipts_total Total INVOIC receipts persisted (§22 MessZV).\n");
+    out.push_str("# TYPE invoicd_receipts_total gauge\n");
+    out.push_str(&format!("invoicd_receipts_total {receipt_count}\n"));
+    out.push_str("# HELP invoicd_disputes_total Receipts with Dispute outcome.\n");
+    out.push_str("# TYPE invoicd_disputes_total gauge\n");
+    out.push_str(&format!("invoicd_disputes_total {dispute_count}\n"));
+    out.push_str("# HELP invoicd_overdue_remadv_total Receipts approaching pay_by without REMADV dispatch.\n");
+    out.push_str("# TYPE invoicd_overdue_remadv_total gauge\n");
+    out.push_str(&format!("invoicd_overdue_remadv_total {overdue}\n"));
+
+    (
+        axum::http::StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
+        out,
+    )
+}
 
 #[derive(Debug, Deserialize)]
 struct ReceiptListQuery {

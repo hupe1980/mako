@@ -28,12 +28,16 @@ use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     envelope::EventEnvelope,
     error::WorkflowError,
+    fristen::{
+        APERAK_STROM_WINDOW_LABEL, HolidayCalendar, aperak_strom_due_at, deadline_at_werktage,
+    },
     ids::DeadlineId,
     outbox::PendingOutbox,
     projection::Projection,
     types::{DeviceId, MarktpartnerCode, MeLo, MessageRef},
-    workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
+    workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
+use time::OffsetDateTime;
 
 /// Stable workflow name used as the `WorkflowId.name` and in the `ProcessRegistry`.
 pub const WORKFLOW_NAME: &str = "wim-device-change";
@@ -275,6 +279,13 @@ pub enum DeviceChangeCommand {
         validation_passed: bool,
         /// Human-readable validation issue strings for the `Rejected` event.
         validation_errors: Vec<String>,
+        /// UTC wall-clock time when the inbound UTILMD was received.
+        ///
+        /// Used to compute the APERAK 45-minute sending deadline
+        /// (APERAK AHB 1.0 §2.4.1) and the 5-Werktage process deadline
+        /// (WiM BK6-24-174 §2a) that are registered atomically with
+        /// the `Initiated` event.
+        received_at: OffsetDateTime,
     },
     /// Inbound iMS Universalbestellprozess order received via REST
     /// (BDEW API-Webdienste Strom, valid 2026-01-29+, PIDs 11021–11023).
@@ -508,6 +519,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                 message_ref,
                 validation_passed,
                 validation_errors,
+                received_at,
             } => {
                 if !matches!(state, DeviceChangeState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
@@ -537,18 +549,42 @@ impl Workflow for WimDeviceChangeWorkflow {
                 }];
                 if validation_passed {
                     events.push(DeviceChangeEvent::ValidationPassed { message_ref });
-                    // WiM Gerätewechsel: the APERAK is dispatched by the ERP within 5 Werktage
-                    // (BK6-24-174 §2a) — NOT auto-emitted here. DispatchAperak is the single
+                    // WiM Ger\u00e4tewechsel: the APERAK is dispatched by the ERP within 5 Werktage
+                    // (BK6-24-174 \u00a72a) \u2014 NOT auto-emitted here. DispatchAperak is the single
                     // APERAK decision point for both positive (BGM+312) and negative (BGM+313).
-                    // This is different from GPKE workflows where the APERAK is immediate.
-                    Ok(WorkflowOutput::events(events))
+                    //
+                    // Register TWO deadlines atomically with the events:
+                    //   1. APERAK Strom *sending* deadline (APERAK AHB 1.0 \u00a72.4.1):
+                    //      weekday = 45 min; Saturday = Sunday noon.
+                    //      Label: APERAK_STROM_WINDOW_LABEL
+                    //   2. WiM 5-Werktage *process response* deadline (BK6-24-174 \u00a72a):
+                    //      the NB must issue the positive/negative APERAK within 5 WT.
+                    //      Label: APERAK_WINDOW_LABEL ("wim-aperak-5-werktage")
+                    let aperak_send_dl = PendingDeadline::new(
+                        APERAK_STROM_WINDOW_LABEL,
+                        aperak_strom_due_at(received_at),
+                    );
+                    let process_dl = PendingDeadline::new(
+                        APERAK_WINDOW_LABEL,
+                        deadline_at_werktage(received_at, 5, HolidayCalendar::BdewMaKo),
+                    );
+                    Ok(WorkflowOutput::with_outbox_and_deadlines(
+                        events,
+                        vec![],
+                        vec![aperak_send_dl, process_dl],
+                    ))
                 } else {
                     let reason = validation_errors.join("; ");
                     events.push(DeviceChangeEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
-                    // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
+                    // F-035: APERAK BGM+313 \u2014 mandatory per APERAK AHB 1.0 \u00a72.1.1.
+                    // Validation failed \u2192 APERAK sent immediately: register the 45-min
+                    // *sending* deadline so the OutboxWorker is monitored (APERAK AHB 1.0 \u00a72.4.1).
+                    let aperak_send_dl = PendingDeadline::new(
+                        APERAK_STROM_WINDOW_LABEL,
+                        aperak_strom_due_at(received_at),
+                    );
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
@@ -563,7 +599,11 @@ impl Workflow for WimDeviceChangeWorkflow {
                         )
                         .caused_by(0),
                     ];
-                    Ok(WorkflowOutput::with_outbox(events, outbox))
+                    Ok(WorkflowOutput::with_outbox_and_deadlines(
+                        events,
+                        outbox,
+                        vec![aperak_send_dl],
+                    ))
                 }
             }
 
@@ -856,6 +896,7 @@ mod tests {
             } else {
                 vec!["AHB rule violation".to_owned()]
             },
+            received_at: time::OffsetDateTime::now_utc(),
         }
     }
 

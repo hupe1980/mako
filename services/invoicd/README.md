@@ -27,7 +27,7 @@ marktd ──(POST /webhook)──► invoicd
                               │
                ┌──────────────▼───────────────┐
                │ fetch PreisblattNetznutzung   │◄── GET marktd :8180
-               │   1-hour cache · CB(3/30s)   │    /api/v1/preisblaetter/{nb_gln}
+               │   1-hour cache · CB(3/30s)   │    /api/v1/preisblaetter/{nb_mp_id}
                └──────────────┬───────────────┘
                               │
                ┌──────────────▼───────────────┐
@@ -177,10 +177,10 @@ OIDC+Cedar layer as REST endpoints).
 (`PreisblattNetznutzung`) are fetched from `marktd` at check time:
 
 ```
-GET marktd :8180 /api/v1/preisblaetter/{nb_gln}?date={billing_date}
+GET marktd :8180 /api/v1/preisblaetter/{nb_mp_id}?date={billing_date}
 ```
 
-**1-hour TTL cache** keyed by `(nb_gln, billing_date)` avoids redundant calls
+**1-hour TTL cache** keyed by `(nb_mp_id, billing_date)` avoids redundant calls
 for high-volume billing periods.
 
 **Circuit breaker** (3 consecutive failures → open for 30 s):

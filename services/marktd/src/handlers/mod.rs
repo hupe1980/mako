@@ -8,11 +8,13 @@
 
 pub mod contract;
 pub mod correlation;
+pub mod dlq;
 pub mod event_ingest;
 pub mod health;
 pub mod malo;
 pub mod malo_grid;
 pub mod melo;
+pub mod metrics;
 pub mod nb_contract;
 pub mod nelo;
 pub mod partner;

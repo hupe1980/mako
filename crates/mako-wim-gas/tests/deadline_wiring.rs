@@ -46,6 +46,7 @@ fn receive_utilmd(pid: u32, validation_passed: bool) -> WimGasAnmeldungCommand {
         } else {
             vec!["Pflichtfeld SG2:NAD+MS fehlt".to_owned()]
         },
+        received_at: time::OffsetDateTime::now_utc(),
     }
 }
 

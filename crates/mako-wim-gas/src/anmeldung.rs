@@ -53,13 +53,18 @@ use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     envelope::EventEnvelope,
     error::WorkflowError,
+    fristen::{
+        APERAK_GAS_FOLGEPROZESS_LABEL, HolidayCalendar, aperak_gas_folgeprozess_due_at,
+        deadline_at_werktage,
+    },
     ids::DeadlineId,
     outbox::PendingOutbox,
     projection::Projection,
     types::{MaLo, MarktpartnerCode, MessageRef},
-    workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
+    workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
 use std::collections::HashMap;
+use time::OffsetDateTime;
 
 /// Stable workflow name used as the `WorkflowId.name` and in the `ProcessRegistry`.
 pub const WORKFLOW_NAME: &str = "wim-gas-anmeldung";
@@ -250,6 +255,12 @@ pub enum WimGasAnmeldungCommand {
         validation_passed: bool,
         /// Human-readable validation issue strings.
         validation_errors: Vec<String>,
+        /// UTC wall-clock time when the inbound UTILMD G was received.
+        ///
+        /// Used to compute the APERAK Gas *sending* deadline (nächster Werktag
+        /// 12:00 Uhr, APERAK AHB 1.0 §2.3.1) and the 10-Werktage process
+        /// deadline (BK7-24-01-009) registered atomically with the `Initiated` event.
+        received_at: OffsetDateTime,
     },
     /// Dispatch a positive or negative APERAK (within 10 Werktage, BK7-24-01-009).
     DispatchAperak {
@@ -372,6 +383,7 @@ impl Workflow for WimGasAnmeldungWorkflow {
                 message_ref,
                 validation_passed,
                 validation_errors,
+                received_at,
             } => {
                 if !matches!(state, WimGasAnmeldungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
@@ -395,16 +407,33 @@ impl Workflow for WimGasAnmeldungWorkflow {
                 }];
                 if validation_passed {
                     events.push(WimGasAnmeldungEvent::ValidationPassed { message_ref });
-                    Ok(events.into())
+                    // WiM Gas Anmeldungen are always Folgeprozesse (they follow up on a
+                    // GeLi Gas Lieferbeginn confirmation). APERAK sending deadline:
+                    // nächster Werktag 12:00 Uhr (APERAK AHB 1.0 §2.3.1).
+                    let aperak_send_dl = PendingDeadline::new(
+                        APERAK_GAS_FOLGEPROZESS_LABEL,
+                        aperak_gas_folgeprozess_due_at(received_at),
+                    );
+                    let process_dl = PendingDeadline::new(
+                        RESPONSE_WINDOW_LABEL,
+                        deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo),
+                    );
+                    Ok(WorkflowOutput::with_outbox_and_deadlines(
+                        events,
+                        vec![],
+                        vec![aperak_send_dl, process_dl],
+                    ))
                 } else {
                     let reason = validation_errors.join("; ");
                     events.push(WimGasAnmeldungEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // F-035: APERAK BGM+313 (Verarbeitbarkeitsfehlermeldung) — mandatory
-                    // per APERAK AHB 1.0 §2.1.1.
-                    // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
-                    // Note: 10 Werktage is the WiM Gas process window (BK7-24-01-009), NOT the APERAK sending deadline.
+                    // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
+                    // Register APERAK sending deadline even on rejection (APERAK already enqueued).
+                    let aperak_send_dl = PendingDeadline::new(
+                        APERAK_GAS_FOLGEPROZESS_LABEL,
+                        aperak_gas_folgeprozess_due_at(received_at),
+                    );
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
@@ -419,7 +448,11 @@ impl Workflow for WimGasAnmeldungWorkflow {
                         )
                         .caused_by(0),
                     ];
-                    Ok(WorkflowOutput::with_outbox(events, outbox))
+                    Ok(WorkflowOutput::with_outbox_and_deadlines(
+                        events,
+                        outbox,
+                        vec![aperak_send_dl],
+                    ))
                 }
             }
 
@@ -713,6 +746,7 @@ mod tests {
             } else {
                 vec!["rule violation".to_owned()]
             },
+            received_at: time::OffsetDateTime::now_utc(),
         }
     }
 

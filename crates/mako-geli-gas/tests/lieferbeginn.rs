@@ -57,6 +57,7 @@ fn receive_utilmd_cmd(validation_passed: bool) -> GasSupplierChangeCommand {
         } else {
             vec!["UTILMD G segment IDE missing mandatory Z18 Marktlokation reference".to_owned()]
         },
+        received_at: time::OffsetDateTime::now_utc(),
     }
 }
 
@@ -166,6 +167,7 @@ async fn unsupported_pid_is_rejected() {
             message_ref: MessageRef::new("MSG-001"),
             validation_passed: true,
             validation_errors: vec![],
+            received_at: time::OffsetDateTime::now_utc(),
         })
         .await;
 

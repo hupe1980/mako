@@ -152,7 +152,7 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
                     version          = $12
                 WHERE malo_id = $1 AND tenant = $2 AND EXISTS (SELECT 1 FROM cte)"#,
             )
-            .bind(rec.malo_id.as_ref())
+            .bind(&rec.malo_id)
             .bind(&rec.tenant)
             .bind(expected)
             .bind(rec.lieferstatus.to_string())
@@ -187,7 +187,7 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
                        updated_at     = now(),
                        version        = versorgungsstatus.version + 1"#,
             )
-            .bind(rec.malo_id.as_ref())
+            .bind(&rec.malo_id)
             .bind(&rec.tenant)
             .bind(rec.lieferstatus.to_string())
             .bind(&rec.lf_mp_id)
@@ -221,7 +221,7 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
                 last_process_id, version, valid_from)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())"#,
         )
-        .bind(rec.malo_id.as_ref())
+        .bind(&rec.malo_id)
         .bind(&rec.tenant)
         .bind(rec.lieferstatus.to_string())
         .bind(&rec.lf_mp_id)
@@ -249,7 +249,7 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         tenant: &str,
     ) -> Result<Option<VersorgungsStatusRecord>, MdmError> {
         let opt = sqlx::query("SELECT * FROM versorgungsstatus WHERE malo_id = $1 AND tenant = $2")
-            .bind(malo_id.as_ref())
+            .bind(malo_id)
             .bind(tenant)
             .fetch_optional(&self.pool)
             .await
@@ -277,7 +277,7 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
                ORDER BY valid_from DESC
                LIMIT 1"#,
         )
-        .bind(malo_id.as_ref())
+        .bind(malo_id)
         .bind(tenant)
         .bind(at)
         .fetch_optional(&self.pool)
@@ -303,7 +303,7 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         let total: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM versorgungsstatus_history WHERE malo_id = $1 AND tenant = $2",
         )
-        .bind(malo_id.as_ref())
+        .bind(malo_id)
         .bind(tenant)
         .fetch_one(&self.pool)
         .await
@@ -316,7 +316,7 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
                ORDER BY valid_from DESC
                LIMIT $3 OFFSET $4"#,
         )
-        .bind(malo_id.as_ref())
+        .bind(malo_id)
         .bind(tenant)
         .bind(limit)
         .bind(offset)

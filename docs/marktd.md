@@ -26,9 +26,7 @@ Beyond data storage, `marktd` includes:
 
 - **EventBus fan-out** — enriches inbound `de.mako.*` events with `marktrole` and fans out
   to all registered subscribers (ERP, `processd`, `invoicd`, `obsd`) via HMAC-signed webhooks.
-- **VersorgungsStatus derivation** — derives semantic `de.markt.versorgung.*` events from
-  `de.mako.process.completed`, persists supply state per MaLo, and maintains a full
-  audit history for `?at=YYYY-MM-DD` point-in-time queries.
+- **VersorgungsStatus derivation** — on `de.mako.process.completed` with PIDs 55003/44003/55013/44013, derives and persists supply state per MaLo; maintains a full audit history for `?at=YYYY-MM-DD` point-in-time queries.
 
 `marktd` is a **pure data hub**. Automated Anmeldung STP decisions are the
 responsibility of `processd`'s NB module, which subscribes to `marktd`'s EventBus
@@ -49,11 +47,11 @@ graph TB
 
     makod -->|"de.mako.process.*\nHMAC-signed POST"| marktd
     marktd -->|"VersorgungsStatus\nderivation"| pg
-    marktd -->|"de.markt.* events\nHMAC webhooks"| erp
+    marktd -->|"de.mako.* + de.markt.*\nHMAC webhooks"| erp
     marktd -->|"de.mako.process.initiated"| processd
-    marktd -->|"de.markt.* events"| invoicd
-    marktd -->|"de.markt.* events"| edmd
-    marktd -->|"de.mako.* events"| obsd
+    marktd -->|"de.mako.process.initiated"| invoicd
+    marktd -->|"de.mako.*"| edmd
+    marktd -->|"de.mako.*"| obsd
     marktd --- pg
     erp -->|"PUT /api/v1/malo\nPUT /api/v1/contracts"| marktd
     invoicd -->|"GET /api/v1/preisblaetter\nGET /api/v1/nb-contracts"| marktd
@@ -89,6 +87,11 @@ The clean separation of concerns:
 │   ├─ Fan-out to all EventBus subscribers                       │
 │   └─ Derive VersorgungsStatus (PIDs 55003/44003/55013/44013)  │
 │                                                                 │
+│  GET  /admin/fanout/dlq             ← DLQ inspection           │
+│  POST /admin/fanout/dlq/{id}/retry  ← re-deliver entry         │
+│  DEL  /admin/fanout/dlq/{id}        ← discard entry            │
+│  GET  /metrics                      ← Prometheus metrics       │
+│                                                                 │
 │  Note: Automated STP decisions live in processd :8580          │
 │  marktd is a pure data hub — no domain policy.                  │
 │                                                                 │
@@ -103,10 +106,10 @@ The clean separation of concerns:
 
 ### With Docker Compose (full stack)
 
-See `demo/docker-compose.yml` for a complete 4-service stack (postgres + webhook +
-marktd + makod).
+See `demo/docker-compose.yml` for the complete 8-service stack (postgres + webhook +
+marktd + processd + makod + invoicd + edmd + obsd).
 
-Minimal compose snippet:
+Minimal compose snippet for marktd alone:
 
 ```yaml
 services:
@@ -126,60 +129,66 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - ./marktd.toml:/etc/marktd/marktd.toml:ro
     environment:
-      DATABASE_URL: postgres://marktd:secret@postgres/marktd
-    command:
-      - "--tenant=9900357000004"
-      - "--auth-issuer=https://auth.example.com/realms/mako"
-      - "--auth-audience=marktd"
+      DATABASE_URL:         postgres://marktd:secret@postgres/marktd
+      MAKOD_API_KEY:        my-makod-api-key
+      MAKOD_WEBHOOK_SECRET: my-webhook-secret
+    command: ["--config=/etc/marktd/marktd.toml"]
     ports: ["8180:8180"]
 ```
 
 ### Binary
 
 ```bash
-marktd \
-  --database-url postgres://marktd:secret@localhost/marktd \
-  --tenant        9900357000004 \
-  --auth-issuer  https://auth.example.com/realms/mako \
-  --auth-audience marktd
+marktd --config /etc/marktd/marktd.toml
+# or: MARKTD_CONFIG=/etc/marktd/marktd.toml marktd
 ```
 
 Migrations run automatically at startup via `sqlx migrate run`.
-
-### Development — auth disabled
-
-```bash
-marktd \
-  --database-url postgres://marktd:secret@localhost/marktd \
-  --tenant        9900357000004 \
-  --auth-disabled
-```
-
-> **⚠ Never use `--auth-disabled` in production.**
-> All requests are treated as authenticated with an empty role set.
 
 ---
 
 ## Configuration
 
+`marktd` reads its configuration from a **TOML file** (default: `marktd.toml`),
+with secrets deferred to environment variables via `"env:VAR_NAME"` values.
+
+### Full `marktd.toml` reference
+
+```toml
+[http]
+addr = "0.0.0.0:8180"     # default
+
+[storage.postgres]
+url = "env:DATABASE_URL"  # required; use env: for secrets
+
+[makod]
+base_url  = "http://makod:8080"   # required
+api_key   = "env:MAKOD_API_KEY"   # required
+tenant_id = "9900357000004"        # required — operator primary MP-ID
+
+[webhook]
+inbound_path   = "/api/v1/events"             # default
+inbound_secret = "env:MAKOD_WEBHOOK_SECRET"   # optional; omit for dev
+
+# [oidc]            # omit to disable auth (dev only — never omit in production)
+# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "api://mako-marktd"
+# jwks_refresh_secs = 300
+
+# [otel]            # omit to disable tracing
+# endpoint = "http://otel-collector:4317"
+```
+
+### CLI flags
+
 | Flag | Env var | Default | Description |
 |---|---|---|---|
-| `--database-url` | `DATABASE_URL` | required | PostgreSQL connection string |
-| `--tenant` | `MARKTD_TENANT` | required | Operator GLN — tenant isolation boundary |
-| `--addr` | `MARKTD_ADDR` | `0.0.0.0:8180` | Bind address |
-| `--auth-issuer` | `MARKTD_AUTH_ISSUER` | required* | OIDC issuer URL |
-| `--auth-audience` | `MARKTD_AUTH_AUDIENCE` | required* | OIDC audience claim |
-| `--auth-jwks-refresh-secs` | `MARKTD_AUTH_JWKS_REFRESH_SECS` | `3600` | JWKS cache TTL (seconds) |
-| `--auth-disabled` | `MARKTD_AUTH_DISABLED` | `false` | Skip JWT validation — dev/demo only |
-| `--cedar-policy-file` | `MARKTD_CEDAR_POLICY_FILE` | `policies/marktd.cedar` | Cedar policy file path |
-| `--makod-base-url` | — | optional | makod URL for push notifications |
-| `--makod-api-key` | — | optional | Bearer token for makod calls |
-| `--webhook-inbound-secret` | — | optional | HMAC secret for makod→marktd ingest |
-| `--log-level` | `MARKTD_LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` |
-| `--log-format` | `MARKTD_LOG_FORMAT` | `json` | `text` or `json` |
-
-\* Required unless `--auth-disabled`.
+| `--config` / `-c` | `MARKTD_CONFIG` | `marktd.toml` | Path to `marktd.toml` |
+| `--log-level` | `RUST_LOG` | `info` | Log level (`info`, `debug`, `marktd=trace`) |
+| `--check` | `MARKTD_CHECK` | `false` | Validate config + DB connectivity, then exit 0. Used by Dockerfile HEALTHCHECK. |
 
 ---
 
@@ -247,6 +256,18 @@ when {
     principal.tenant == resource.tenant &&
     principal.roles.contains("NB")
 };
+
+// Only operator-admin principals may manage the fanout dead-letter queue.
+// Grant this action to your on-call / operations service account.
+permit(
+    principal,
+    action == Action::"manage-fanout",
+    resource
+)
+when {
+    principal.tenant == resource.tenant &&
+    principal.roles.contains("ADMIN")
+};
 ```
 
 ### Context fields
@@ -291,21 +312,25 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/melo/{melo_id}` | `read-melo` | Get Messlokation |
 | `PUT` | `/api/v1/contracts/{id}` | `write-contract` | Upsert contract (with `valid_from` / `valid_to`) |
 | `GET` | `/api/v1/contracts/{id}` | `read-contract` | Get contract |
-| `PUT` | `/api/v1/partners/{gln}` | `write-partner` | Upsert trading partner |
-| `GET` | `/api/v1/partners/{gln}` | `read-partner` | Get trading partner |
+| `PUT` | `/api/v1/partners/{mp_id}` | `write-partner` | Upsert trading partner |
+| `GET` | `/api/v1/partners/{mp_id}` | `read-partner` | Get trading partner |
 | `GET` | `/api/v1/partners` | `read-partner` | List partners |
-| `PUT` | `/api/v1/preisblaetter/{nb_gln}` | `write-preisblatt` | Upsert price sheet + store versioned snapshot + emit `de.markt.pricat.published` |
-| `GET` | `/api/v1/preisblaetter/{nb_gln}` | `read-preisblatt` | Get price sheet valid on date |
-| `GET` | `/api/v1/pricat/{nb_gln}/history` | `read-preisblatt` | List PRICAT version history (newest first) |
-| `GET` | `/api/v1/pricat/{nb_gln}/dispatch-log/{version_id}` | `read-preisblatt` | PRICAT dispatch audit log for a version |
-| `POST` | `/api/v1/pricat/{nb_gln}/dispatch` | `write-preisblatt` | Enqueue (re-)dispatch of latest PRICAT to all active LF partners |
+| `PUT` | `/api/v1/preisblaetter/{nb_mp_id}` | `write-preisblatt` | Upsert price sheet + store versioned snapshot + emit `de.markt.pricat.published` |
+| `GET` | `/api/v1/preisblaetter/{nb_mp_id}` | `read-preisblatt` | Get price sheet valid on date |
+| `GET` | `/api/v1/pricat/{nb_mp_id}/history` | `read-preisblatt` | List PRICAT version history (newest first) |
+| `GET` | `/api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}` | `read-preisblatt` | PRICAT dispatch audit log for a version |
+| `POST` | `/api/v1/pricat/{nb_mp_id}/dispatch` | `write-preisblatt` | Enqueue (re-)dispatch of latest PRICAT to all active LF partners |
 | `GET` | `/api/v1/versorgung/{malo_id}` | `read-versorgungsstatus` | Current VersorgungsStatus; add `?at=YYYY-MM-DD` for point-in-time |
 | `GET` | `/api/v1/versorgung/{malo_id}/history` | `read-versorgungsstatus` | Full supply-state change history (newest first, paged) |
 | `PUT` | `/api/v1/versorgung/{malo_id}` | `write-versorgungsstatus` | Upsert VersorgungsStatus (ERP-driven override) |
-| `GET` | `/api/v1/nelo` | `read-nelo` | List NeLos (`?nb_gln=` filters by Netzbetreiber) |
+| `GET` | `/api/v1/nelo` | `read-nelo` | List NeLos (`?nb_mp_id=` filters by Netzbetreiber) |
 | `GET` | `/api/v1/nelo/{id}` | `read-nelo` | Get a NeLo by EIC / BDEW Codenummer |
 | `PUT` | `/api/v1/nelo/{id}` | `write-nelo` (NB role) | Insert or update a NeLo |
 | `POST` | `/api/v1/events` | — | Inbound CloudEvent from `makod` (HMAC-verified) |
+| `GET` | `/admin/fanout/dlq` | `manage-fanout` | List unresolved DLQ entries |
+| `POST` | `/admin/fanout/dlq/{id}/retry` | `manage-fanout` | Re-deliver a DLQ entry |
+| `DELETE` | `/admin/fanout/dlq/{id}` | `manage-fanout` | Discard a DLQ entry |
+| `GET` | `/metrics` | — | Prometheus metrics (no auth, internal only) |
 
 ---
 
@@ -354,7 +379,7 @@ Every price sheet row carries a `source` field:
 
 | Source | Set by | Semantics |
 |---|---|---|
-| `api` | REST `PUT /api/v1/preisblaetter/{nb_gln}` | Operator-supplied via REST API or ERP export |
+| `api` | REST `PUT /api/v1/preisblaetter/{nb_mp_id}` | Operator-supplied via REST API or ERP export |
 | `mako` | Future: PRICAT 27003 ingest path in invoicd/makod | Received as EDIFACT from the NB |
 
 **Operator-override rule:** an `api` entry always supersedes a `mako` entry for
@@ -364,17 +389,17 @@ cannot be silently overwritten by an incoming EDIFACT PRICAT.
 Enforced in SQL:
 
 ```sql
-ON CONFLICT (nb_gln, valid_from)
+ON CONFLICT (nb_mp_id, valid_from)
 DO UPDATE SET data = EXCLUDED.data, ...
 WHERE preisblaetter.source <> 'api' OR EXCLUDED.source = 'api';
 ```
 
 ### PRICAT 27003 dispatch pipeline
 
-Every `PUT /api/v1/preisblaetter/{nb_gln}` call:
+Every `PUT /api/v1/preisblaetter/{nb_mp_id}` call:
 
 1. Writes or updates the current price sheet in `preisblaetter` (existing behaviour)
-2. Inserts a versioned snapshot in `pricat_versions` keyed on `(nb_gln, tenant, valid_from)`
+2. Inserts a versioned snapshot in `pricat_versions` keyed on `(nb_mp_id, tenant, valid_from)`
 3. Emits `de.markt.pricat.published` → fan-out to ERP webhook subscribers
 4. A background task dispatches PRICAT 27003 per active LF partner via `MakodClient`
 
@@ -389,7 +414,7 @@ sequenceDiagram
     participant MakodClient
     participant AS4
 
-    ERP->>marktd: PUT /api/v1/preisblaetter/{nb_gln}
+    ERP->>marktd: PUT /api/v1/preisblaetter/{nb_mp_id}
     marktd->>preisblaetter: UPSERT (existing)
     marktd->>pricat_versions: UPSERT versioned snapshot
     marktd-->>ERP: 204 No Content
@@ -399,16 +424,16 @@ sequenceDiagram
     loop per active LF partner
         marktd->>MakodClient: POST /api/v1/commands dispatch-pricat-27003
         MakodClient->>AS4: PRICAT 27003
-        marktd->>pricat_dispatch_log: log(lf_gln, outcome)
+        marktd->>pricat_dispatch_log: log(lf_mp_id, outcome)
     end
     marktd->>pricat_versions: mark_done(version_id)
 ```
 
-**Auto-dispatch on LF partner registration:** when `PUT /api/v1/partners/{gln}` registers
+**Auto-dispatch on LF partner registration:** when `PUT /api/v1/partners/{mp_id}` registers
 a partner with `marktrolle = "LF"`, the latest PRICAT version for the operator's NB GLN is
 automatically re-queued for dispatch to the new partner.
 
-**Manual re-dispatch:** `POST /api/v1/pricat/{nb_gln}/dispatch` resets dispatch state to
+**Manual re-dispatch:** `POST /api/v1/pricat/{nb_mp_id}/dispatch` resets dispatch state to
 `queued` so the background task picks it up again. Use this after AS4 outages or to
 force distribution to newly on-boarded partners.
 
@@ -444,7 +469,7 @@ Migrations run automatically at startup via `sqlx migrate run`.
 | `versorgungsstatus` | VersorgungsStatus per MaLo — `LieferStatus CHECK`, optimistic concurrency `version BIGINT` |
 | `versorgungsstatus_history` | Append-only audit log of every supply-state transition — powers `?at=` and `/history` |
 | `nb_contracts` | NB network contracts — billing schedule, netzebene, bilanzierungsmethode |
-| `pricat_versions` | Versioned PRICAT snapshots — `(nb_gln, tenant, valid_from)` unique, dispatch state |
+| `pricat_versions` | Versioned PRICAT snapshots — `(nb_mp_id, tenant, valid_from)` unique, dispatch state |
 | `pricat_dispatch_log` | Dispatch audit log — one row per NB × LF dispatch attempt |
 | `nelo` | Netz-Element-Lokationen (Redispatch 2.0) — EIC or BDEW Codenummer, owner NB GLN, JSONB data |
 
@@ -556,7 +581,7 @@ Fields forwarded to `makod`:
 
 | Field | Source |
 |---|---|
-| `nb_gln` | `lokationszuordnung[]` entry with `zuordnungstyp == "NB"` or `"GNB"` |
+| `nb_mp_id` | `lokationszuordnung[]` entry with `zuordnungstyp == "NB"` or `"GNB"` |
 | `msb_gln` | `lokationszuordnung[]` entry with `zuordnungstyp == "MSB"` or `"GMSB"` |
 | `bilanzierungsgebiet` | `data.bilanzierungsgebiet` |
 | `netzgebiet` | `data.netzgebietsnummer` or `data.netzgebiet` |
@@ -573,17 +598,15 @@ Fields forwarded to `makod`:
 | Source | Event type | Trigger |
 |---|---|---|
 | marktd master data | `de.markt.malo.updated` | `PUT /api/v1/malo/{malo_id}` |
-| marktd master data | `de.markt.melo.updated` | `PUT /api/v1/melo/{melo_id}` |
-| marktd master data | `de.markt.contract.updated` | `PUT /api/v1/contracts/{id}` |
-| marktd master data | `de.markt.partner.updated` | `PUT /api/v1/partners/{gln}` |
-| marktd master data | `de.markt.preisblatt.updated` | `PUT /api/v1/preisblaetter/{nb_gln}` |
-| marktd PRICAT | `de.markt.pricat.published` | `PUT /api/v1/preisblaetter/{nb_gln}` |
-| marktd VersorgungsStatus | `de.markt.versorgung.beliefert` | derived from PID 55003/44003 |
-| marktd VersorgungsStatus | `de.markt.versorgung.unbeliefert` | derived from PID 55013/44013 |
+| marktd master data | `de.markt.partner.updated` | `PUT /api/v1/partners/{mp_id}` |
+| marktd PRICAT | `de.markt.pricat.published` | `PUT /api/v1/preisblaetter/{nb_mp_id}` |
 | makod process relay | `de.mako.process.initiated` | forwarded from `makod` ingest |
+| makod process relay | `de.mako.aperak.accepted` | forwarded from `makod` ingest |
+| makod process relay | `de.mako.aperak.rejected` | forwarded from `makod` ingest |
+| makod process relay | `de.mako.aperak.timeout` | forwarded from `makod` ingest |
 | makod process relay | `de.mako.process.completed` | forwarded from `makod` ingest |
-| makod process relay | `de.mako.process.timed_out` | forwarded from `makod` ingest |
 | makod process relay | `de.mako.process.failed` | forwarded from `makod` ingest |
+| makod process relay | `de.mako.edifact.inbound` | forwarded from `makod` ingest |
 
 > `de.mako.*` events carry the CloudEvents extensions `makoconvid`, `makopid`,
 > `makoworkflow`, and `marktrole` (role of the counterparty: `NB`, `LF`, `MSB`,
@@ -599,7 +622,7 @@ curl -X POST http://localhost:8180/api/v1/subscriptions \
   -d '{
     "endpoint_url": "https://erp.example.com/mdm/events",
     "secret":       "mysecret64hexchars",
-    "event_types":  ["de.markt.malo.updated", "de.markt.preisblatt.updated",
+    "event_types":  ["de.markt.malo.updated", "de.markt.pricat.published",
                      "de.mako.process.completed"]
   }'
 ```
@@ -644,6 +667,59 @@ def verify(body: bytes, secret: str, header: str) -> bool:
 
 Return `200 OK` for duplicates — fan-out retries on non-2xx.
 
+### Retry behaviour
+
+The fan-out worker retries failed deliveries with exponential back-off
+(1 s → 2 s → 4 s → … → 64 s, capped). After exhausting all attempts the event
+is written to the `fanout_dlq` table rather than silently dropped.
+
+This durable failure path is required by **§22 MessZV / §41 EnWG**: a silent
+drop of a `de.mako.process.initiated` event to `invoicd` would mean the INVOIC
+plausibility check never runs, and the 3-year receipt retention obligation
+cannot be satisfied.
+
+### Dead-letter queue (DLQ)
+
+Events that exhaust all retry attempts land in `fanout_dlq`. Operators inspect
+and remediate via the admin endpoints:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/admin/fanout/dlq` | List unresolved DLQ entries (newest first, paged; `?include_resolved=true` for history) |
+| `POST` | `/admin/fanout/dlq/{id}/retry` | Re-deliver and mark resolved on HTTP 2xx |
+| `DELETE` | `/admin/fanout/dlq/{id}` | Discard without retry (marks resolved) |
+
+```bash
+# Inspect failures
+curl http://localhost:8180/admin/fanout/dlq \
+  -H "Authorization: Bearer $TOKEN" | jq '.[] | {id, subscriber_id, event_type, attempts, last_error}'
+
+# Re-deliver a specific entry
+curl -X POST http://localhost:8180/admin/fanout/dlq/$ENTRY_ID/retry \
+  -H "Authorization: Bearer $TOKEN" | jq .
+
+# Discard after manual ERP re-import
+curl -X DELETE http://localhost:8180/admin/fanout/dlq/$ENTRY_ID \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+The DLQ uses the current webhook secret at retry time — if the subscription secret
+was rotated, re-register the subscription before retrying.
+
+### Prometheus metrics (`/metrics`)
+
+`GET /metrics` exposes operational counters in Prometheus text format:
+
+| Metric | Description |
+|--------|-------------|
+| `marktd_fanout_dlq_depth` | Unresolved entries in `fanout_dlq` |
+| `marktd_active_subscriptions` | Registered EventBus subscribers |
+| `marktd_processed_events_total` | Events ingested from `makod` (all time) |
+| `marktd_db_pool_size` | Current PostgreSQL connection pool size |
+| `marktd_db_pool_idle` | Idle connections in the pool |
+
+Scrape via Prometheus `static_configs` or a `ServiceMonitor` in Kubernetes.
+
 ---
 
 ## Process Correlations
@@ -677,11 +753,12 @@ docker pull ghcr.io/hupe1980/marktd:0.7.0
 docker run -d \
   --name marktd \
   -p 8180:8180 \
+  -v /etc/marktd/marktd.toml:/etc/marktd/marktd.toml:ro \
   -e DATABASE_URL=postgres://marktd:secret@postgres/marktd \
-  -e MARKTD_TENANT=9900357000004 \
-  -e MARKTD_AUTH_ISSUER=https://auth.example.com/realms/mako \
-  -e MARKTD_AUTH_AUDIENCE=marktd \
-  ghcr.io/hupe1980/marktd:0.7.0
+  -e MAKOD_API_KEY=my-api-key \
+  -e MAKOD_WEBHOOK_SECRET=my-webhook-secret \
+  ghcr.io/hupe1980/marktd:0.7.0 \
+  --config=/etc/marktd/marktd.toml
 ```
 
 ---
@@ -707,7 +784,7 @@ Cedar denied the request. Check: `mako_tenant` matches tenant GLN in URL,
 
 **`404 Not Found` on GET preisblatt**
 No price sheet valid on the requested date. Upload one first with
-`PUT /api/v1/preisblaetter/{nb_gln}`.
+`PUT /api/v1/preisblaetter/{nb_mp_id}`.
 
 **Price sheet not updating (`mako` source rejected)**
 Intentional. An existing `source=api` row cannot be overwritten by
@@ -725,7 +802,7 @@ pre-loaded into marktd.  Use `PUT /api/v1/malo/{malo_id}` to register it.
 
 **Auto-responder rejecting with Z0C (Preisblatt missing)**
 Only triggered when `auto_accept = true`.  Upload a price sheet covering the
-`process_date` with `PUT /api/v1/preisblaetter/{nb_gln}`.  Check that
+`process_date` with `PUT /api/v1/preisblaetter/{nb_mp_id}`.  Check that
 `gueltigkeit.startdatum` and `gueltigkeit.enddatum` in the BO4E payload
 bracket the `process_date` from the UTILMD.
 
@@ -756,12 +833,12 @@ Migrations have not run. Check `DATABASE_URL` and PostgreSQL connectivity.
 `marktd` maintains one `VersorgungsStatus` record per MaLo.  Records are derived
 automatically from `de.mako.process.completed` events:
 
-| PID | Transition | Event emitted |
+| PID | Transition | DB action |
 |---|---|---|
-| 55003 (GPKE) | `Unbeliefert → Beliefert` | `de.markt.versorgung.beliefert` |
-| 44003 (GeLi Gas) | `Unbeliefert → Beliefert` | `de.markt.versorgung.beliefert` |
-| 55013 (GPKE) | `Beliefert → Unbeliefert` | `de.markt.versorgung.unbeliefert` |
-| 44013 (GeLi Gas) | `Beliefert → Unbeliefert` | `de.markt.versorgung.unbeliefert` |
+| 55003 (GPKE) | `Unbeliefert → Beliefert` | upsert `lieferstatus = Beliefert`, set `lf_mp_id` |
+| 44003 (GeLi Gas) | `Unbeliefert → Beliefert` | upsert `lieferstatus = Beliefert`, set `lf_mp_id` |
+| 55013 (GPKE) | `Beliefert → Unbeliefert` | upsert `lieferstatus = Unbeliefert`, clear `lf_mp_id` |
+| 44013 (GeLi Gas) | `Beliefert → Unbeliefert` | upsert `lieferstatus = Unbeliefert`, clear `lf_mp_id` |
 
 **State machine:**
 
@@ -843,7 +920,7 @@ for additional Redispatch 2.0 attributes.
 ```http
 # List all NeLos for this tenant (optionally filter by Netzbetreiber GLN)
 GET  /api/v1/nelo
-GET  /api/v1/nelo?nb_gln=9900357000004&page=0&size=50
+GET  /api/v1/nelo?nb_mp_id=9900357000004&page=0&size=50
 
 # Get a single NeLo by EIC or BDEW Codenummer
 GET  /api/v1/nelo/{nelo_id}
@@ -859,7 +936,7 @@ PUT  /api/v1/nelo/{nelo_id}
   "sparte": "STROM",
   "name": "Umspannwerk Musterstadt 110/20 kV",
   "netzebene": "HS",
-  "nb_gln": "9900357000004",
+  "nb_mp_id": "9900357000004",
   "data": {
     "eic": "10XDE-EON-NETZ--G",
     "regelzone": "10YDE-EON------1"

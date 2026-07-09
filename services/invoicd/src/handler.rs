@@ -170,14 +170,11 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
 
     let received_at = OffsetDateTime::now_utc();
 
-    // Derive billing_date from the invoice period start (Date, Copy) or the
-    // invoice document datetime's date component.  Both are native time types in
-    // rubo4e v0.3 — no string formatting needed for the price-sheet lookup.
+    // Use billing_period() start or invoice document date for price-sheet lookup.
     let billing_date: time::Date = rechnung
-        .rechnungsperiode
-        .as_ref()
-        .and_then(|z| z.startdatum) // Option<time::Date> (Copy)
-        .or_else(|| rechnung.rechnungsdatum.as_ref().map(|dt| dt.date()))
+        .billing_period()
+        .map(|(start, _)| start)
+        .or(rechnung.rechnungsdatum)
         .unwrap_or(time::macros::date!(2025 - 01 - 01));
 
     // Run the stateless plausibility check.
@@ -246,8 +243,11 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
         let findings_json =
             serde_json::to_value(&report.findings).unwrap_or(serde_json::Value::Array(vec![]));
         // Extract Zahlungsziel (DTM+92) from the Rechnung for the pay_by column.
-        // rubo4e v0.3 `Rechnung.faelligkeitsdatum` carries `Option<time::OffsetDateTime>`.
-        let pay_by: Option<time::OffsetDateTime> = rechnung.faelligkeitsdatum;
+        // rubo4e v0.4 `Rechnung.faelligkeitsdatum` is `Option<time::Date>`;
+        // the DB column is TIMESTAMPTZ — store as midnight UTC.
+        let pay_by: Option<time::OffsetDateTime> = rechnung
+            .faelligkeitsdatum
+            .map(|d| d.with_time(time::Time::MIDNIGHT).assume_utc());
         let row = pg::ReceiptRow {
             process_id,
             pid: pid as i16,

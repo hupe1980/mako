@@ -138,6 +138,7 @@ where
     )
     .with_extensions(EventExtensions {
         marktrole,
+        makoconvid: event.makoconvid,
         makopid: event.makopid,
         makoworkflow: event.makoworkflow,
         ..Default::default()
@@ -203,16 +204,16 @@ where
                 version: 0,
             };
             let vs = Arc::clone(&vs_repo);
-            tokio::spawn(async move {
-                if let Err(e) = vs.upsert(rec, None).await {
-                    tracing::warn!(
-                        malo_id = %subject,
-                        pid,
-                        error = %e,
-                        "event_ingest: failed to upsert VersorgungsStatus"
-                    );
-                }
-            });
+            // Inline the upsert — avoids an unjoined spawn whose panic would be
+            // silently swallowed. The DB call is already non-blocking (sqlx async).
+            if let Err(e) = vs.upsert(rec, None).await {
+                tracing::warn!(
+                    malo_id = %subject,
+                    pid,
+                    error = %e,
+                    "event_ingest: failed to upsert VersorgungsStatus"
+                );
+            }
         }
     }
 

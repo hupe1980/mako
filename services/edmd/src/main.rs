@@ -16,6 +16,9 @@ struct Cli {
     config: std::path::PathBuf,
     #[arg(long, default_value = "info", env = "RUST_LOG")]
     log_level: String,
+    /// Validate configuration and database connectivity, then exit 0.
+    #[arg(long, env = "EDMD_CHECK", default_value_t = false)]
+    check: bool,
 }
 
 #[tokio::main]
@@ -74,6 +77,19 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("invalid http.addr '{}'", cfg.http.addr))?;
 
     let database_url = config::resolve_env_secret(&cfg.database.url).context("database.url")?;
+
+    // ── --check mode early exit ────────────────────────────────────────────────
+    if cli.check {
+        use secrecy::ExposeSecret as _;
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(database_url.expose_secret())
+            .await
+            .context("edmd --check: connecting to PostgreSQL")?;
+        tracing::info!("edmd: check mode — config and database connectivity verified");
+        return Ok(());
+    }
+
     let marktd_api_key =
         config::resolve_env_secret(&cfg.marktd.api_key).context("marktd.api_key")?;
     let inbound_secret = cfg

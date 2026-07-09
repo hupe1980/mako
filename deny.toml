@@ -132,7 +132,12 @@ reason  = "miette 7.x depends directly on unicode-width 0.1 AND pulls 0.2 via te
 [[bans.skip]]
 name    = "winnow"
 version = "0.6"
-reason  = "toml_edit (build-time dep of cargo) pulls winnow 0.6. Workspace direct deps use 0.7."
+reason  = "cargo's build-time toml_edit pulls winnow 0.6; runtime toml 0.8 (mako-service, invoicd, edmd, obsd, processd) pulls 0.7 via toml_edit 0.22."
+
+[[bans.skip]]
+name    = "winnow"
+version = "0.7"
+reason  = "Runtime toml 0.8 → toml_edit 0.22 pulls winnow 0.7; cargo's build-time toml_edit still pins 0.6. Both are expected co-residents."
 
 # p256/ecdsa (energy-api) still pins sha2 0.10, pulling the 2022-generation digest
 # chain (digest 0.10 / block-buffer 0.10 / crypto-common 0.1 / cpufeatures 0.2).

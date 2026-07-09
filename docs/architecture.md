@@ -208,6 +208,13 @@ Beliefert, 55013/44013 → Unbeliefert). Every supply-state change is written
 to `versorgungsstatus_history`, enabling both full audit logs and bitemporal
 "as-of" queries by date.
 
+Fan-out deliveries are retried with exponential back-off. Events that exhaust
+all retry attempts are written to `fanout_dlq` rather than silently dropped.
+This durable failure path ensures §22 MessZV compliance — a silent drop of a
+`de.mako.process.initiated` event to `invoicd` would prevent the INVOIC
+plausibility check from running. Operators inspect and retry via
+`GET|POST|DELETE /admin/fanout/dlq`.
+
 `marktd` is a **pure data hub** — it stores market entity state and fans out
 CloudEvents to subscribers but contains no domain policy. Automated Anmeldung
 decisions live in `processd`’s NB module.
@@ -420,9 +427,9 @@ the entire scheduler implementation.
 | Engine internals | [engine.md](engine.md) |
 | `makod` operator guide | [makod.md](makod.md) |
 | `marktd` operator guide | [marktd.md](marktd.md) |
-| `invoicd` operator guide | [services/invoicd/README.md](https://github.com/hupe1980/mako/blob/main/services/invoicd/README.md) |
-| `edmd` operator guide | [services/edmd/README.md](https://github.com/hupe1980/mako/blob/main/services/edmd/README.md) |
-| `obsd` operator guide | [services/obsd/README.md](https://github.com/hupe1980/mako/blob/main/services/obsd/README.md) |
+| `invoicd` operator guide | [invoicd.md](invoicd.md) |
+| `edmd` operator guide | [edmd.md](edmd.md) |
+| `obsd` operator guide | [obsd.md](obsd.md) |
 | ERP integration | [erp-integration.md](erp-integration.md) |
 | PID reference | [pid-reference.md](pid-reference.md) |
 | Compensation flows | [compensation.md](compensation.md) |

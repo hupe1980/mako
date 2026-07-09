@@ -21,6 +21,9 @@ struct Cli {
     config: std::path::PathBuf,
     #[arg(long, default_value = "info", env = "RUST_LOG")]
     log_level: String,
+    /// Validate configuration and database connectivity, then exit 0.
+    #[arg(long, env = "INVOICD_CHECK", default_value_t = false)]
+    check: bool,
 }
 
 #[tokio::main]
@@ -85,6 +88,19 @@ async fn main() -> anyhow::Result<()> {
     let database_url = config::resolve_env(&cfg.database.url)
         .context("database.url")
         .ok();
+
+    // ── --check mode early exit ───────────────────────────────────────────────
+    if cli.check {
+        if let Some(ref url) = database_url {
+            sqlx::postgres::PgPoolOptions::new()
+                .max_connections(1)
+                .connect(url)
+                .await
+                .context("invoicd --check: connecting to PostgreSQL")?;
+        }
+        tracing::info!("invoicd: check mode — config and database connectivity verified");
+        return Ok(());
+    }
     let makod_api_key = cfg
         .makod
         .api_key

@@ -121,6 +121,13 @@ pub struct MarktEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub markterpref: Option<String>,
     // ── Forwarded `mako*` extension attributes from the originating makod event ─
+    /// Conversation ID of the originating EDIFACT process.
+    ///
+    /// Forwarded from the `makoconvid` CloudEvents extension set by `makod`.
+    /// Enables subscribers to correlate events back to the EDIFACT conversation
+    /// (UNB…UNZ exchange) without parsing the `data` payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub makoconvid: Option<String>,
     /// Prüfidentifikator of the originating EDIFACT process.
     ///
     /// Forwarded from the `makopid` CloudEvents extension set by `makod` and
@@ -168,6 +175,7 @@ impl MarktEvent {
             marktcontractid: None,
             marktrole: None,
             markterpref: None,
+            makoconvid: None,
             makopid: None,
             makoworkflow: None,
             makoerc: None,
@@ -183,6 +191,7 @@ impl MarktEvent {
         self.marktcontractid = ext.marktcontractid;
         self.marktrole = ext.marktrole;
         self.markterpref = ext.markterpref;
+        self.makoconvid = ext.makoconvid;
         self.makopid = ext.makopid;
         self.makoworkflow = ext.makoworkflow;
         self.makoerc = ext.makoerc;
@@ -198,6 +207,8 @@ pub struct EventExtensions {
     pub marktcontractid: Option<String>,
     pub marktrole: Option<String>,
     pub markterpref: Option<String>,
+    /// Forwarded `makoconvid` from originating `InboundMakoEvent`.
+    pub makoconvid: Option<String>,
     /// Forwarded `makopid` from originating `InboundMakoEvent`.
     pub makopid: Option<u32>,
     /// Forwarded `makoworkflow` from originating `InboundMakoEvent`.

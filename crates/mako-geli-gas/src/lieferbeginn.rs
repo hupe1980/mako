@@ -39,12 +39,17 @@ use mako_engine::{
     deadline::Deadline,
     envelope::EventEnvelope,
     error::WorkflowError,
+    fristen::{
+        APERAK_GAS_FOLGEPROZESS_LABEL, APERAK_GAS_INITIALPROZESS_LABEL, HolidayCalendar,
+        aperak_gas_folgeprozess_due_at, aperak_gas_initialprozess_due_at, deadline_at_werktage,
+    },
     ids::DeadlineId,
     outbox::PendingOutbox,
     projection::Projection,
     types::{MaLo, MarktpartnerCode, MessageRef},
-    workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
+    workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
+use time::OffsetDateTime;
 
 // ── Stable names ──────────────────────────────────────────────────────────────
 
@@ -450,6 +455,12 @@ pub enum GasSupplierChangeCommand {
         validation_passed: bool,
         /// Human-readable validation error strings (empty when `validation_passed = true`).
         validation_errors: Vec<String>,
+        /// UTC wall-clock time when the inbound UTILMD G was received.
+        ///
+        /// Used to compute the APERAK Gas *sending* deadline (APERAK AHB 1.0 §2.3.1)
+        /// and the 10-Werktage process deadline (BK7-24-01-009) that are
+        /// registered atomically with the `Initiated` event.
+        received_at: OffsetDateTime,
     },
     /// Send the outbound UTILMD G Antwort (responder role).
     ///
@@ -675,6 +686,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 message_ref,
                 validation_passed,
                 validation_errors,
+                received_at,
             } => {
                 if !matches!(state, GasSupplierChangeState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
@@ -690,6 +702,8 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 // Clone before move for APERAK emission in the validation-failed path.
                 let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
+                // 44001 = Lieferbeginn Anfrage (Initialprozess); all others are Folgeprozesse.
+                let is_initialprozess = pid.as_u32() == 44_001;
 
                 let mut events = vec![GasSupplierChangeEvent::Initiated {
                     variant,
@@ -703,7 +717,31 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 }];
                 if validation_passed {
                     events.push(GasSupplierChangeEvent::ValidationPassed { message_ref });
-                    Ok(WorkflowOutput::events(events))
+                    // Register two deadlines atomically with the events:
+                    //   1. APERAK Gas *sending* deadline (APERAK AHB 1.0 \u00a72.3.1):
+                    //      Initialprozess (44001): 3 Werktage; Folgeprozess: n\u00e4chster Werktag 12:00.
+                    //   2. GeLi Gas 10-Werktage *process response* deadline (BK7-24-01-009):
+                    //      The responder must issue the Antwort within 10 WT.
+                    let aperak_send_dl = if is_initialprozess {
+                        PendingDeadline::new(
+                            APERAK_GAS_INITIALPROZESS_LABEL,
+                            aperak_gas_initialprozess_due_at(received_at),
+                        )
+                    } else {
+                        PendingDeadline::new(
+                            APERAK_GAS_FOLGEPROZESS_LABEL,
+                            aperak_gas_folgeprozess_due_at(received_at),
+                        )
+                    };
+                    let process_dl = PendingDeadline::new(
+                        RESPONSE_WINDOW_LABEL,
+                        deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo),
+                    );
+                    Ok(WorkflowOutput::with_outbox_and_deadlines(
+                        events,
+                        vec![],
+                        vec![aperak_send_dl, process_dl],
+                    ))
                 } else {
                     let reason = if validation_errors.is_empty() {
                         "AHB validation failed".to_owned()
@@ -713,9 +751,21 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     events.push(GasSupplierChangeEvent::Rejected {
                         reason: reason.clone(),
                     });
-                    // F-035: APERAK BGM+313 (Verarbeitbarkeitsfehlermeldung) — mandatory
-                    // per APERAK AHB 1.0 §2.1.1 when AHB validation fails.
-                    // GeLi Gas deadline: 10 Werktage (BK7-24-01-009).
+                    // F-035: APERAK BGM+313 (Verarbeitbarkeitsfehlermeldung) \u2014 mandatory
+                    // per APERAK AHB 1.0 \u00a72.1.1 when AHB validation fails.
+                    // Validation failure \u2192 APERAK sent immediately: register the sending
+                    // deadline so the OutboxWorker delivery is monitored.
+                    let aperak_send_dl = if is_initialprozess {
+                        PendingDeadline::new(
+                            APERAK_GAS_INITIALPROZESS_LABEL,
+                            aperak_gas_initialprozess_due_at(received_at),
+                        )
+                    } else {
+                        PendingDeadline::new(
+                            APERAK_GAS_FOLGEPROZESS_LABEL,
+                            aperak_gas_folgeprozess_due_at(received_at),
+                        )
+                    };
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
@@ -730,7 +780,11 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         )
                         .caused_by(0),
                     ];
-                    Ok(WorkflowOutput::with_outbox(events, outbox))
+                    Ok(WorkflowOutput::with_outbox_and_deadlines(
+                        events,
+                        outbox,
+                        vec![aperak_send_dl],
+                    ))
                 }
             }
 
@@ -1141,6 +1195,7 @@ mod tests {
             } else {
                 vec!["AHB violation".to_owned()]
             },
+            received_at: time::OffsetDateTime::now_utc(),
         }
     }
 

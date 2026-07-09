@@ -19,12 +19,15 @@ Both daemons run with authentication **disabled** in the demo (`--auth-disabled`
 | `curl` | HTTP smoke tests |
 | `jq` | Parse JSON responses |
 
-Build images from the repo root (shared builder layer — both finish in roughly the same time as one build):
+Build images from the repo root:
 
 ```bash
 docker build --target runtime          -t makod:dev     .
 docker build --target marktd-runtime   -t marktd:dev    .
 docker build --target processd-runtime -t processd:dev  .
+docker build --target invoicd-runtime  -t invoicd:dev   .
+docker build --target edmd-runtime     -t edmd:dev      .
+docker build --target obsd-runtime     -t obsd:dev      .
 ```
 
 Or pull published images:
@@ -48,6 +51,14 @@ The demo runs the stack as **Netzbetreiber Strom (NB)** with GLN `9900357000004`
 | marktd | Tenant GLN | `9900357000004` |
 | marktd | HTTP port | `:8180` |
 | marktd | Auth | disabled (dev mode) |
+| processd | HTTP port | `:8580` |
+| processd | Auth | disabled (dev mode) |
+| invoicd | HTTP port | `:8280` |
+| invoicd | Auth | disabled (dev mode) |
+| edmd | HTTP port | `:8380` |
+| edmd | Auth | disabled (dev mode) |
+| obsd | HTTP port | `:8480` |
+| obsd | Auth | disabled (dev mode) |
 
 ---
 
@@ -190,7 +201,16 @@ curl http://localhost:8000/events | jq '.[].body | {type,subject}'
 | makod REST API | http://localhost:8080 | EDIFACT ingest, process commands |
 | makod Swagger UI | http://localhost:8080/api/v1/docs/ | Interactive API docs |
 | makod MCP server | http://localhost:8080/mcp | LLM tooling (Claude Desktop, VS Code) |
-| marktd REST API | http://localhost:8180 | Master data (MaLo/MeLo, price sheets) |
+| marktd REST API | http://localhost:8180 | Master data (MaLo/MeLo, price sheets, VersorgungsStatus) |
 | marktd Swagger UI | http://localhost:8180/api/v1/docs/ | Interactive API docs |
+| marktd DLQ admin | http://localhost:8180/admin/fanout/dlq | Inspect failed CloudEvent deliveries |
+| marktd metrics | http://localhost:8180/metrics | Prometheus metrics |
+| processd decisions | http://localhost:8580/api/v1/decisions | NB STP audit log |
+| processd queue | http://localhost:8580/api/v1/queue | LF approval queue |
+| invoicd receipts | http://localhost:8280/api/v1/receipts | INVOIC receipt ledger |
+| invoicd overdue | http://localhost:8280/api/v1/overdue-remadv | Approaching Zahlungsziel |
+| edmd meter reads | http://localhost:8380/api/v1/deliveries/{malo_id} | Time-series meter data |
+| obsd projections | http://localhost:8480/obs/processes | Live process projections |
+| obsd KPIs | http://localhost:8480/obs/kpis | BNetzA KPI report |
 | ERP webhook receiver | http://localhost:8000/events | View delivered CloudEvents |
 

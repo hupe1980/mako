@@ -47,6 +47,7 @@ graph TB
 │  GET  /api/v1/disputes              ← open disputes             │
 │  GET  /api/v1/overdue-remadv        ← receipts near pay_by      │
 │  POST /api/v1/selbstausstellen/{malo_id} ← LF selbstausgestellt │
+│  GET  /metrics                      ← Prometheus metrics        │
 │  GET  /health/live  /health/ready                               │
 │  POST|GET /mcp      ← MCP Streamable HTTP (LLM tooling)         │
 └─────────────────────────────────────────────────────────────────┘
@@ -106,6 +107,14 @@ WHERE received_at < now() - INTERVAL '3 years';
 
 `invoicd` reads its configuration from a **TOML file** (default: `invoicd.toml`),
 with secrets deferred to environment variables via `"env:VAR_NAME"` values.
+
+### CLI flags
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--config` / `-c` | `INVOICD_CONFIG` | `invoicd.toml` | Path to `invoicd.toml` |
+| `--log-level` | `RUST_LOG` | `info` | Log level |
+| `--check` | `INVOICD_CHECK` | `false` | Validate config + DB connectivity, then exit 0. Used by Dockerfile HEALTHCHECK. |
 
 ```bash
 invoicd --config /etc/invoicd/invoicd.toml
@@ -209,6 +218,14 @@ and enqueues the outbound INVOIC 31006 for AS4 delivery to the NB.
 
 Alert when receipts approach `pay_by` without a `dispatched_at` — the NB may
 not have received the REMADV and will begin a dispute window.
+
+### Prometheus metrics (`/metrics`)
+
+| Metric | Description |
+|--------|-------------|
+| `invoicd_receipts_total` | Total INVOIC receipts persisted (§22 MessZV) |
+| `invoicd_disputes_total` | Receipts with `Dispute` outcome |
+| `invoicd_overdue_remadv_total` | Receipts with `pay_by < now() + 3 days` and no `dispatched_at` |
 
 ---
 

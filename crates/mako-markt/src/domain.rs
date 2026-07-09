@@ -39,16 +39,14 @@ pub use rubo4e::identifiers::{MaloId, MarktpartnerId, MeloId};
 /// **Note:** NAD DE3055 and UNB DE0007 use different values for the same
 /// authority (`9` vs. `14` for GS1; `293` vs. `500` for BDEW).
 /// This function returns NAD DE3055 values only.
+/// Use [`MarktpartnerId::unb_agency_code`] for UNB DE0007.
+///
+/// This is a thin wrapper around [`MarktpartnerId::nad_agency_code`],
+/// kept for call-site compatibility.  Prefer calling the method directly.
 #[must_use]
+#[inline]
 pub fn nad_agency_code(id: &MarktpartnerId) -> &'static str {
-    let s: &str = id.as_ref();
-    if s.starts_with("99") {
-        "293"
-    } else if s.starts_with("98") {
-        "332"
-    } else {
-        "9"
-    }
+    id.nad_agency_code()
 }
 
 // ── Sparte ───────────────────────────────────────────────────────────────────

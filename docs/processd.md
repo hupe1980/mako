@@ -108,7 +108,7 @@ de.mako.process.initiated (PID 55001/55016/44001)
 | 2 | `lf_gln_next` is `None` (no pending Lieferbeginn) | `Reject A06` |
 | 3 | `process_date ≥ today` (no retroactive starts) | `Reject A97` |
 | 4 | Bilanzierungsgebiet in UTILMD matches grid record | `Reject A02` |
-| 5 | LF GLN in partner directory | `Reject A05` |
+| 5 | LF MP-ID in partner directory | `Reject A05` |
 | 6 | Mindestvorlauffrist met (SLP: tomorrow+; RLM: 2 Werktage+) | `Reject A99` |
 
 ### STP rate targets
@@ -128,7 +128,7 @@ Monitor via `GET /api/v1/decisions` or the `get_stp_rate` MCP tool.
 Set `NB_AUTO_ACCEPT=false` (default) until you have verified:
 
 1. Grid record coverage for your MaLo portfolio (`GET /api/v1/malo/{id}/grid`)
-2. Partner directory populated for all expected LF GLNs
+2. Partner directory populated for all expected LF MP-IDs
 3. At least one manual review cycle confirmed correct ERC codes
 
 ---
@@ -139,12 +139,12 @@ Set `NB_AUTO_ACCEPT=false` (default) until you have verified:
 
 | VersorgungsStatus | Scenario | Decision |
 |-------------------|----------|----------|
-| `Beliefert` + `lf_gln == own_gln` | Standard | `einwilligung` |
-| `Beliefert` + `lf_gln == own_gln` | `Einzug` | `ablehnen A32` |
-| `Beliefert` + `lf_gln == own_gln` | `Ersatzversorgung` | `einwilligung` |
+| `Beliefert` + `lf_mp_id == own_mp_id` | Standard | `einwilligung` |
+| `Beliefert` + `lf_mp_id == own_mp_id` | `Einzug` | `ablehnen A32` |
+| `Beliefert` + `lf_mp_id == own_mp_id` | `Ersatzversorgung` | `einwilligung` |
 | `Grundversorgung` | any | `einwilligung` |
 | MaLo unknown | any | `approval_queue` |
-| `lf_gln != own_gln` | any | `approval_queue` |
+| `lf_mp_id != own_mp_id` | any | `approval_queue` |
 
 ### Approval queue
 
@@ -170,7 +170,7 @@ POST /api/v1/queue/{id}/reject        → dispatch ablehnen via makod AND mark R
 Every `anmeldung_decisions` row includes:
 
 ```sql
-initiator_is_affiliate BOOLEAN  -- TRUE when lf_gln == own_gln (integrated deployment)
+initiator_is_affiliate BOOLEAN  -- TRUE when lf_mp_id == own_mp_id (integrated deployment)
 ```
 
 This field is the BNetzA audit evidence for §20 EnWG parity compliance.
@@ -255,6 +255,7 @@ queue_ttl_secs = 2700   # 45 min — LFW24 deadline
 |------|---------|---------|-------------|
 | `--config` / `-c` | `PROCESSD_CONFIG` | `processd.toml` | Path to `processd.toml` |
 | `--log-level` | `RUST_LOG` | `info` | Log level (`info`, `debug`, `processd=trace`) |
+| `--check` | `PROCESSD_CHECK` | `false` | Validate config + DB connectivity, then exit 0 |
 
 ---
 

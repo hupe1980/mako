@@ -488,6 +488,7 @@ async fn ahb_44001_lieferbeginn_gas_validates_and_dispatches() {
         message_ref: cmd_ref,
         validation_passed: report.is_valid(), // ← authoritative AHB result, no bypass
         validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
+        received_at: time::OffsetDateTime::now_utc(),
     };
 
     // Step 6: Execute the command against an in-memory GNB process.
@@ -993,6 +994,7 @@ async fn ahb_44042_wim_gas_anmeldung_validates_and_dispatches() {
         message_ref: cmd_ref,
         validation_passed: report.is_valid(), // ← authoritative AHB result, no bypass
         validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
+        received_at: time::OffsetDateTime::now_utc(),
     };
 
     // NB (Netzbetreiber) owns the WiM Gas Anmeldung process; receives MSBA's 44042.

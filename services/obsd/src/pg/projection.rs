@@ -34,7 +34,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
             r"INSERT INTO process_projections
                   (process_id, pid, family, workflow_name, state, malo_id, partner_mp_id,
                    mdm_role, deadline_at, deadline_risk, started_at, last_event_at,
-                   erc_code, tenant_id, updated_at)
+                   erc_code, tenant, updated_at)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now())
               ON CONFLICT (process_id) DO UPDATE SET
                   state          = EXCLUDED.state,
@@ -62,7 +62,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         .bind(p.started_at)
         .bind(p.last_event_at)
         .bind(&p.erc_code)
-        .bind(p.tenant_id)
+        .bind(&p.tenant)
         .execute(&self.pool)
         .await
         .map_err(|e| ObsError::Database(e.to_string()))?;
@@ -73,14 +73,14 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         let rows = sqlx::query(
             r"SELECT process_id, pid, family, workflow_name, state, malo_id, partner_mp_id,
                      mdm_role, deadline_at, deadline_risk, started_at, last_event_at,
-                     erc_code, tenant_id
+                     erc_code, tenant
               FROM process_projections
               WHERE ($1::text IS NULL OR state = $1)
                 AND ($2::int  IS NULL OR pid   = $2)
                 AND ($3::text IS NULL OR partner_mp_id = $3)
                 AND ($4::text IS NULL OR mdm_role = $4)
                 AND ($5::timestamptz IS NULL OR started_at >= $5)
-                AND ($6::uuid IS NULL OR tenant_id = $6)
+                AND ($6::text IS NULL OR tenant = $6)
               ORDER BY last_event_at DESC
               LIMIT $7",
         )
@@ -89,7 +89,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         .bind(&q.partner_mp_id)
         .bind(&q.mdm_role)
         .bind(q.since)
-        .bind(q.tenant_id)
+        .bind(&q.tenant)
         .bind(q.limit as i64)
         .fetch_all(&self.pool)
         .await
@@ -104,7 +104,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         let row = sqlx::query(
             r"SELECT process_id, pid, family, workflow_name, state, malo_id, partner_mp_id,
                      mdm_role, deadline_at, deadline_risk, started_at, last_event_at,
-                     erc_code, tenant_id
+                     erc_code, tenant
               FROM process_projections
               WHERE process_id = $1",
         )
@@ -121,7 +121,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         pid: u32,
         from: Date,
         to: Date,
-        tenant_id: Option<Uuid>,
+        tenant: &str,
     ) -> Result<KpiReport, ObsError> {
         let row = sqlx::query(
             r"SELECT
@@ -134,12 +134,16 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
               WHERE pid = $1
                 AND started_at::date >= $2
                 AND started_at::date <= $3
-                AND ($4::uuid IS NULL OR tenant_id = $4)",
+                AND ($4::text IS NULL OR tenant = $4)",
         )
         .bind(pid as i32)
         .bind(from)
         .bind(to)
-        .bind(tenant_id)
+        .bind(if tenant.is_empty() {
+            None
+        } else {
+            Some(tenant)
+        })
         .fetch_one(&self.pool)
         .await
         .map_err(|e| ObsError::Database(e.to_string()))?;
@@ -178,21 +182,25 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
     async fn overdue_processes(
         &self,
         now: OffsetDateTime,
-        tenant_id: Option<Uuid>,
+        tenant: &str,
     ) -> Result<Vec<ProcessProjection>, ObsError> {
         let rows = sqlx::query(
             r"SELECT process_id, pid, family, workflow_name, state, malo_id, partner_mp_id,
                      mdm_role, deadline_at, deadline_risk, started_at, last_event_at,
-                     erc_code, tenant_id
+                     erc_code, tenant
               FROM process_projections
               WHERE state NOT IN ('completed','rejected','cancelled')
                 AND deadline_at IS NOT NULL
                 AND deadline_at < $1
-                AND ($2::uuid IS NULL OR tenant_id = $2)
+                AND ($2::text IS NULL OR tenant = $2)
               ORDER BY deadline_at ASC",
         )
         .bind(now)
-        .bind(tenant_id)
+        .bind(if tenant.is_empty() {
+            None
+        } else {
+            Some(tenant)
+        })
         .fetch_all(&self.pool)
         .await
         .map_err(|e| ObsError::Database(e.to_string()))?;
@@ -249,8 +257,8 @@ fn row_to_projection(row: &sqlx::postgres::PgRow) -> Result<ProcessProjection, O
         erc_code: row
             .try_get("erc_code")
             .map_err(|e| ObsError::Database(e.to_string()))?,
-        tenant_id: row
-            .try_get("tenant_id")
+        tenant: row
+            .try_get("tenant")
             .map_err(|e| ObsError::Database(e.to_string()))?,
     })
 }

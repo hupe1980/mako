@@ -190,6 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             message_ref: msg_ref.clone(),
             validation_passed,
             validation_errors: validation_errors.clone(),
+            received_at: time::OffsetDateTime::now_utc(),
         })
         .await?;
 
@@ -380,6 +381,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             message_ref: msg_ref.clone(),
             validation_passed: true,
             validation_errors: vec![],
+            received_at: time::OffsetDateTime::now_utc(),
         })
         .await
         .unwrap_err();

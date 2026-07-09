@@ -181,6 +181,145 @@ pub fn aperak_strom_due_at(received: OffsetDateTime) -> OffsetDateTime {
     }
 }
 
+// ── APERAK Gas sending windows ────────────────────────────────────────────────
+
+/// Deadline label for Gas APERAK sending obligations on Folgeprozesse.
+///
+/// Per APERAK AHB 1.0 §2.3.1 (Gas rules):
+/// *"Auf eingehende Übertragungsdateien, die Folgeprozesse … darstellen:
+/// nächster Werktag 12:00 Uhr."*
+///
+/// Folgeprozesse are messages that follow up on an existing process
+/// (confirmations, rejections, status messages).
+pub const APERAK_GAS_FOLGEPROZESS_LABEL: &str = "aperak-gas-folgeprozess-naechster-wt-1200";
+
+/// Deadline label for Gas APERAK sending obligations on Initialprozesse.
+///
+/// Per APERAK AHB 1.0 §2.3.1 (Gas rules):
+/// *"Auf eingehende Übertragungsdateien, die Initialprozesse … darstellen:
+/// 3 Werktage."*
+///
+/// Initialprozesse are messages that open a new business process
+/// (Lieferbeginn-Anfragen, MSB-Anmeldungen, etc.).
+pub const APERAK_GAS_INITIALPROZESS_LABEL: &str = "aperak-gas-initialprozess-3-werktage";
+
+/// Compute the Gas APERAK sending deadline for **Folgeprozesse**.
+///
+/// Per APERAK AHB 1.0 §2.3.1: the receiver must dispatch the APERAK by the
+/// **next Werktag at 12:00 Uhr Berliner Lokalzeit** after receiving the message.
+///
+/// | `received` Berlin local date | Deadline |
+/// |---|---|
+/// | Monday – Friday | next Werktag after the received date, 12:00 Berlin |
+/// | Saturday | Monday 12:00 Berlin (or next Werktag if Monday is a holiday) |
+/// | Sunday | Monday 12:00 Berlin (or next Werktag if Monday is a holiday) |
+///
+/// **Regulatory basis:** APERAK AHB 1.0 §2.3.1 — Gas Folgeprozesse.
+///
+/// # Panics
+///
+/// Panics if `12:00:00` cannot be constructed as a `time::Time` (statically
+/// valid — not a reachable panic), or if date arithmetic overflows the calendar
+/// (unreachable for any practical date), or if the timezone database cannot
+/// resolve 12:00 Europe/Berlin (12:00 is never inside a DST gap).
+///
+/// # Example
+///
+/// ```rust
+/// use mako_engine::fristen;
+/// use time::{Date, Month, OffsetDateTime, Time};
+///
+/// // Monday 2025-01-06 10:00 UTC (= 11:00 CET): next Werktag is Tuesday.
+/// // Deadline: Tuesday 2025-01-07 12:00 CET = 11:00 UTC.
+/// let received = OffsetDateTime::new_utc(
+///     Date::from_calendar_date(2025, Month::January, 6).unwrap(),
+///     Time::from_hms(10, 0, 0).unwrap(),
+/// );
+/// let due = fristen::aperak_gas_folgeprozess_due_at(received);
+/// // 12:00 CET (UTC+1) = 11:00 UTC on 2025-01-07.
+/// assert_eq!(due.to_offset(time::UtcOffset::UTC).hour(), 11);
+/// ```
+#[must_use]
+pub fn aperak_gas_folgeprozess_due_at(received: OffsetDateTime) -> OffsetDateTime {
+    let berlin = timezones::db::europe::BERLIN;
+    let received_date = received.to_timezone(berlin).date();
+    // "nächster Werktag" means the Werktag AFTER the received date.
+    // First find the next calendar day, then advance to the next Werktag.
+    let next_day = received_date
+        .next_day()
+        .expect("date overflow — unreachable for any practical date");
+    let due_date = next_werktag(next_day, HolidayCalendar::BdewMaKo);
+    noon_berlin(due_date)
+}
+
+/// Compute the Gas APERAK sending deadline for **Initialprozesse**.
+///
+/// Per APERAK AHB 1.0 §2.3.1: the receiver must dispatch the APERAK within
+/// **3 Werktage at 12:00 Uhr Berliner Lokalzeit** after receiving the message.
+///
+/// **Regulatory basis:** APERAK AHB 1.0 §2.3.1 — Gas Initialprozesse.
+///
+/// # Panics
+///
+/// Same conditions as [`aperak_gas_folgeprozess_due_at`].
+///
+/// # Example
+///
+/// ```rust
+/// use mako_engine::fristen::{self, HolidayCalendar};
+/// use time::{Date, Month, OffsetDateTime, Time};
+///
+/// // Monday 2025-01-06 10:00 UTC (= 11:00 CET):
+/// // 3 Werktage = Tue 07, Wed 08, Thu 09 → deadline Thu 2025-01-09 12:00 CET.
+/// let received = OffsetDateTime::new_utc(
+///     Date::from_calendar_date(2025, Month::January, 6).unwrap(),
+///     Time::from_hms(10, 0, 0).unwrap(),
+/// );
+/// let due = fristen::aperak_gas_initialprozess_due_at(received);
+/// assert_eq!(
+///     due.to_offset(time::UtcOffset::UTC).date(),
+///     Date::from_calendar_date(2025, Month::January, 9).unwrap()
+/// );
+/// ```
+#[must_use]
+pub fn aperak_gas_initialprozess_due_at(received: OffsetDateTime) -> OffsetDateTime {
+    let berlin = timezones::db::europe::BERLIN;
+    let start_date = received.to_timezone(berlin).date();
+    let due_date = add_werktage(start_date, 3, HolidayCalendar::BdewMaKo);
+    noon_berlin(due_date)
+}
+
+/// Construct an [`OffsetDateTime`] at 12:00 Europe/Berlin on `date`.
+///
+/// Used by Gas APERAK deadline helpers. 12:00 is never inside a DST gap or
+/// fold for Europe/Berlin (transitions happen at 02:00), so the conversion is
+/// unambiguous on all dates.
+///
+/// # Panics
+///
+/// Panics if `12:00:00` cannot be constructed (statically valid), or if the
+/// timezone database cannot resolve 12:00 Europe/Berlin (should never happen).
+#[must_use]
+fn noon_berlin(date: Date) -> OffsetDateTime {
+    let berlin = timezones::db::europe::BERLIN;
+    let noon = PrimitiveDateTime::new(date, Time::from_hms(12, 0, 0).expect("12:00:00 is valid"));
+    match noon.assume_timezone(berlin) {
+        OffsetResult::Some(dt) => dt.to_offset(time::UtcOffset::UTC),
+        OffsetResult::Ambiguous(earlier, _) => earlier.to_offset(time::UtcOffset::UTC),
+        OffsetResult::None => {
+            // 12:00 is never inside a DST gap for Europe/Berlin. If we land here
+            // the timezone database is corrupt. Panic rather than silently computing
+            // a wrong regulatory deadline.
+            panic!(
+                "CRITICAL: timezone database failure — could not resolve \
+                 12:00 Europe/Berlin for date {date}. \
+                 Cannot compute a correct Gas APERAK Frist. \
+                 Ensure tzdata is installed and up to date."
+            );
+        }
+    }
+}
+
 /// Selects which set of public holidays to observe when counting Werktage.
 ///
 /// BDEW MaKo processes use a single Germany-wide holiday calendar defined by
@@ -945,5 +1084,157 @@ mod tests {
             "late Saturday → Sunday deadline"
         );
         assert_eq!(due.to_offset(time::UtcOffset::UTC).hour(), 11);
+    }
+
+    // ── aperak_gas_folgeprozess_due_at ────────────────────────────────────────
+
+    #[test]
+    fn aperak_gas_folgeprozess_weekday_is_next_day_noon_cet() {
+        // Monday 2025-01-13 10:00 UTC (= 11:00 CET): next Werktag = Tuesday 14.
+        // Deadline: Tuesday 2025-01-14 12:00 CET = 11:00 UTC.
+        let received =
+            OffsetDateTime::new_utc(date(2025, 1, 13), Time::from_hms(10, 0, 0).unwrap());
+        let due = aperak_gas_folgeprozess_due_at(received);
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).date(),
+            date(2025, 1, 14)
+        );
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).hour(),
+            11,
+            "12:00 CET = 11:00 UTC"
+        );
+        assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
+    }
+
+    #[test]
+    fn aperak_gas_folgeprozess_friday_skips_weekend_to_monday_noon() {
+        // Friday 2025-01-17 10:00 UTC: next Werktag after Friday = Saturday 18 (Samstag).
+        // Saturday is a Werktag in BDEW regulation.
+        let received =
+            OffsetDateTime::new_utc(date(2025, 1, 17), Time::from_hms(10, 0, 0).unwrap());
+        let due = aperak_gas_folgeprozess_due_at(received);
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).date(),
+            date(2025, 1, 18),
+            "next Werktag after Friday = Saturday"
+        );
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).hour(),
+            11,
+            "12:00 CET = 11:00 UTC"
+        );
+    }
+
+    #[test]
+    fn aperak_gas_folgeprozess_saturday_skips_sunday_to_monday() {
+        // Saturday 2025-01-11: next Werktag after Saturday = next day = Sunday (skip) → Monday 13.
+        let received =
+            OffsetDateTime::new_utc(date(2025, 1, 11), Time::from_hms(10, 0, 0).unwrap());
+        let due = aperak_gas_folgeprozess_due_at(received);
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).date(),
+            date(2025, 1, 13),
+            "Saturday → Monday 12:00"
+        );
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).hour(),
+            11,
+            "12:00 CET = 11:00 UTC"
+        );
+    }
+
+    #[test]
+    fn aperak_gas_folgeprozess_summer_cest_noon() {
+        // Tuesday 2025-07-08 10:00 UTC (= 12:00 CEST): next Werktag = Wednesday 09.
+        // Deadline: Wednesday 2025-07-09 12:00 CEST = 10:00 UTC.
+        let received = OffsetDateTime::new_utc(date(2025, 7, 8), Time::from_hms(10, 0, 0).unwrap());
+        let due = aperak_gas_folgeprozess_due_at(received);
+        assert_eq!(due.to_offset(time::UtcOffset::UTC).date(), date(2025, 7, 9));
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).hour(),
+            10,
+            "12:00 CEST = 10:00 UTC"
+        );
+        assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
+    }
+
+    // Spring-forward: message arrives on Friday 2025-03-28, next Werktag is
+    // Saturday 2025-03-29 — but 2025-03-30 is spring-forward Sunday (skip).
+    // The clocks go forward at 02:00 CET on Sunday 30.
+    // Saturday 2025-03-29 12:00 CET = 11:00 UTC (CET still in effect Saturday).
+    #[test]
+    fn aperak_gas_folgeprozess_day_before_spring_forward() {
+        let received =
+            OffsetDateTime::new_utc(date(2025, 3, 28), Time::from_hms(10, 0, 0).unwrap());
+        let due = aperak_gas_folgeprozess_due_at(received);
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).date(),
+            date(2025, 3, 29),
+            "next Werktag = Saturday before spring-forward"
+        );
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).hour(),
+            11,
+            "CET: 12:00 local = 11:00 UTC"
+        );
+    }
+
+    // ── aperak_gas_initialprozess_due_at ──────────────────────────────────────
+
+    #[test]
+    fn aperak_gas_initialprozess_3_werktage_winter_cet() {
+        // Monday 2025-01-13 10:00 UTC (= 11:00 CET).
+        // 3 Werktage: Tue 14 (+1), Wed 15 (+2), Thu 16 (+3).
+        // Deadline: Thursday 2025-01-16 12:00 CET = 11:00 UTC.
+        let received =
+            OffsetDateTime::new_utc(date(2025, 1, 13), Time::from_hms(10, 0, 0).unwrap());
+        let due = aperak_gas_initialprozess_due_at(received);
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).date(),
+            date(2025, 1, 16)
+        );
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).hour(),
+            11,
+            "12:00 CET = 11:00 UTC"
+        );
+        assert_eq!(due.to_offset(time::UtcOffset::UTC).minute(), 0);
+    }
+
+    #[test]
+    fn aperak_gas_initialprozess_3_werktage_skips_holiday() {
+        // Wednesday 2025-04-16 (day before Karfreitag).
+        // +3 Werktage: Thu 17 (+1), Fri 18 = Karfreitag (skip), Sat 19 (+2), Mon 21 = Ostermontag (skip),
+        //              Tue 22 (+3).
+        // Deadline: Tuesday 2025-04-22 12:00 CEST = 10:00 UTC.
+        let received =
+            OffsetDateTime::new_utc(date(2025, 4, 16), Time::from_hms(10, 0, 0).unwrap());
+        let due = aperak_gas_initialprozess_due_at(received);
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).date(),
+            date(2025, 4, 22)
+        );
+        assert_eq!(
+            due.to_offset(time::UtcOffset::UTC).hour(),
+            10,
+            "12:00 CEST = 10:00 UTC"
+        );
+    }
+
+    #[test]
+    fn aperak_gas_initialprozess_label_is_stable() {
+        assert_eq!(
+            APERAK_GAS_INITIALPROZESS_LABEL,
+            "aperak-gas-initialprozess-3-werktage"
+        );
+    }
+
+    #[test]
+    fn aperak_gas_folgeprozess_label_is_stable() {
+        assert_eq!(
+            APERAK_GAS_FOLGEPROZESS_LABEL,
+            "aperak-gas-folgeprozess-naechster-wt-1200"
+        );
     }
 }
