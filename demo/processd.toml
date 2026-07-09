@@ -1,0 +1,69 @@
+# processd.toml — demo configuration (PostgreSQL, auth disabled, NB_AUTO_ACCEPT=true)
+# DO NOT use in production.
+#
+# processd is the **process decision engine**:
+#   - NB module: evaluates each Anmeldung via netz-checker (6 checks → Accept/Reject/Escalate)
+#   - LF module: auto-responds to E_0624 queries within the 45-min LFW24 window
+#
+# It subscribes to marktd for de.mako.process.initiated events and self-registers
+# on startup — no manual curl call is required.
+
+[http]
+addr = "0.0.0.0:8580"
+
+[database]
+# Each service owns its own database (microservices DB autonomy).
+# The `processd` database is created by demo/init-db.sh on first boot.
+url       = "env:DATABASE_URL"
+pool_size = 10
+
+[identity]
+# Operator primary MP-ID — must match makod.toml [[party]] primary = true.
+# Used for §20 EnWG parity: when the initiating LF MP-ID equals own_mp_id,
+# the decision is flagged as affiliate-initiated in anmeldung_decisions.
+own_mp_id = "9900357000004"
+# tenant defaults to own_mp_id when empty.
+
+[makod]
+url     = "http://makod:8080"
+api_key = "env:MAKOD_API_KEY"    # must match makod --auth-key
+
+[marktd]
+url     = "http://marktd:8180"
+api_key = "env:MARKTD_API_KEY"   # any non-empty value accepted in demo (OIDC disabled)
+
+[webhook]
+# HMAC-SHA256 secret — must match the webhook_secret registered with marktd.
+# Set to the same value as [subscription].webhook_url in the marktd subscription.
+inbound_secret = "env:INBOUND_WEBHOOK_SECRET"
+
+[subscription]
+# processd self-registers this subscription with marktd on startup.
+# No manual curl required — topology is fully config-driven.
+webhook_url   = "http://processd:8580/webhook"
+subscriber_id = "processd-demo"
+event_types   = "de.mako.process.initiated"
+
+[nb]
+# NB Anmeldung STP: automatically dispatch bestaetigen when all 6 netz-checker
+# checks pass.  In production, verify grid record + partner coverage first
+# (STP target ≥ 95 %).  Safe to enable in the demo because all master data is
+# pre-seeded by smoke.sh.
+auto_accept = true
+
+[lf]
+# E_0624 auto-response: automatically dispatch einwilligung/ablehnen within the
+# 45-min LFW24 window without ERP involvement.
+auto_respond   = true
+queue_ttl_secs = 2700   # 45 min — LFW24 regulatory deadline
+
+# [oidc] — intentionally absent: authentication is disabled in demo mode.
+# All API requests are accepted with synthetic dev-admin claims.
+#
+# [oidc]
+# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "api://mako-processd"
+
+# [otel] — intentionally absent in demo.
+# [otel]
+# endpoint = "http://otel-collector:4317"

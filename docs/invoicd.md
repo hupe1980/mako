@@ -48,6 +48,7 @@ graph TB
 │  GET  /api/v1/overdue-remadv        ← receipts near pay_by      │
 │  POST /api/v1/selbstausstellen/{malo_id} ← LF selbstausgestellt │
 │  GET  /health/live  /health/ready                               │
+│  POST|GET /mcp      ← MCP Streamable HTTP (LLM tooling)         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -103,49 +104,78 @@ WHERE received_at < now() - INTERVAL '3 years';
 
 ## Configuration reference
 
-All settings can be provided as environment variables or CLI flags.
+`invoicd` reads its configuration from a **TOML file** (default: `invoicd.toml`),
+with secrets deferred to environment variables via `"env:VAR_NAME"` values.
 
-| Env var | CLI flag | Default | Description |
-|---------|----------|---------|-------------|
-| `INVOICD_LISTEN` | `--listen` | `0.0.0.0:8280` | HTTP listen address |
-| `INVOICD_MAKOD_URL` | `--makod-url` | `http://localhost:8080` | `makod` base URL |
-| `INVOICD_MAKOD_API_KEY` | `--makod-api-key` | — | `makod` API key |
-| `INVOICD_MARKTD_URL` | `--marktd-url` | `http://localhost:9180` | `marktd` base URL |
-| `INVOICD_MARKTD_API_KEY` | `--marktd-api-key` | — | `marktd` Bearer token |
-| `INVOICD_SUBSCRIBER_ID` | `--subscriber-id` | `invoicd` | EventBus subscriber ID |
-| `INVOICD_WEBHOOK_URL` | `--webhook-url` | — | Public URL `marktd` POSTs events to |
-| `INVOICD_WEBHOOK_SECRET` | `--webhook-secret` | — | HMAC secret for outbound signing |
-| `INVOICD_INBOUND_SECRET` | `--inbound-secret` | = webhook-secret | HMAC verification secret |
-| `DATABASE_URL` | `--database-url` | — | PostgreSQL connection string |
-| `INVOICD_ARITHMETIC_TOLERANCE` | `--arithmetic-tolerance` | `0.01` | Relative tolerance for arithmetic checks |
-| `INVOICD_TOTAL_TOLERANCE` | `--total-tolerance` | `0.01` | Relative tolerance for total-amount checks |
-| `INVOICD_TARIFF_TOLERANCE` | `--tariff-tolerance` | `0.03` | Relative tolerance for tariff unit-price checks |
-| `INVOICD_REQUIRE_TARIFF_FOUND` | `--require-tariff-found` | `false` | Escalate `Warn` to `Dispute` on missing tariff |
-| `INVOICD_AUTO_DISPUTE_THRESHOLD_EUR_CENTS` | `--auto-dispute-threshold-eur-cents` | `0` | Escalate `Warn` to `Dispute` above this amount |
-| `OIDC_ISSUER` | `--oidc-issuer` | — | OIDC issuer URL |
-| `OIDC_AUDIENCE` | `--oidc-audience` | — | OIDC audience |
-| `RUST_LOG` | — | `info` | Log level |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `--otel-endpoint` | — | OTLP endpoint |
+```bash
+invoicd --config /etc/invoicd/invoicd.toml
+# or: INVOICD_CONFIG=/etc/invoicd/invoicd.toml invoicd
+```
+
+### Full `invoicd.toml` reference
+
+```toml
+[http]
+addr = "0.0.0.0:8280"          # default
+
+[database]
+# Required for §22 MessZV 3-year receipt retention.
+url             = "env:DATABASE_URL"   # required; use env: for secrets
+max_connections = 5                    # default
+
+[identity]
+tenant = "9900357000004"               # required — MP-ID of the operator
+
+[makod]
+url     = "http://makod:8080"          # required
+api_key = "env:INVOICD_MAKOD_API_KEY" # required
+
+[marktd]
+url     = "http://marktd:8180"            # required
+api_key = "env:INVOICD_MARKTD_API_KEY"   # required
+
+[webhook]
+inbound_secret = "env:INVOICD_INBOUND_SECRET"  # optional; omit for dev
+
+[subscription]
+# Self-registers with marktd on startup — no manual curl required.
+webhook_url   = "http://invoicd:8280/webhook"  # public URL marktd POSTs to
+subscriber_id = "invoicd"                        # default
+event_types   = [
+  "de.mako.process.initiated",
+  "de.mako.process.completed",
+]
+
+[check]
+# Relative tolerances for invoic-checker plausibility pipeline.
+arithmetic_tolerance       = 0.01   # 1 % — qty × price = line net
+total_tolerance            = 0.01   # 1 % — Σ line nets = Gesamtnetto
+tariff_tolerance           = 0.03   # 3 % — PRICAT unit price vs INVOIC
+require_tariff             = false  # true → missing tariff escalates to Dispute
+auto_dispute_threshold_eur = 0.0    # 0.0 → Warn always auto-approved
+
+# [oidc]          # omit to disable auth (dev only — never omit in production)
+# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "api://mako-invoicd"
+# jwks_refresh_secs = 300
+
+# [otel]          # omit to disable tracing
+# endpoint = "http://otel-collector:4317"
+```
 
 ---
 
-## marktd subscription setup
+## marktd subscription
 
-Register `invoicd` as an EventBus subscriber in `marktd`:
+`invoicd` **auto-registers** its EventBus subscription with `marktd` on startup
+when `subscription.webhook_url` is set in the config — no manual `curl` required.
+
+To force re-registration or verify the subscription:
 
 ```bash
-curl -X PUT http://marktd:8180/api/v1/subscriptions/invoicd \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "webhook_url": "http://invoicd:8280/webhook",
-    "webhook_secret": "<shared-hmac-secret>",
-    "event_types": ["de.mako.process.initiated"],
-    "active": true
-  }'
+curl -s http://marktd:8180/api/v1/subscriptions/invoicd \
+  -H "Authorization: Bearer <token>" | jq .
 ```
-
-Set `INVOICD_INBOUND_SECRET` to the same `<shared-hmac-secret>`.
 
 ---
 

@@ -102,31 +102,19 @@ services:
         condition: service_started
     ports:
       - "8580:8580"
+    volumes:
+      - ./processd.toml:/etc/processd/processd.toml:ro
     environment:
-      # PostgreSQL — processd owns its own database (separate from marktd)
-      DATABASE_URL:             postgres://demo:demo-secret@postgres/processd
-      # makod command API
-      MAKOD_URL:                http://makod:8080
-      MAKOD_API_KEY:            demo-secret-change-me
-      # marktd data hub (no auth in demo mode — any non-empty key accepted)
-      MARKTD_URL:               http://marktd:8180
-      MARKTD_API_KEY:           demo-processd-key
-      # Identity (§20 EnWG parity reporting)
-      OWN_MP_ID:                "9900357000004"
-      TENANT:                   "9900357000004"
-      # Inbound webhook secret (marktd signs payloads with this secret)
-      INBOUND_WEBHOOK_SECRET:   processd-webhook-secret
-      # NB auto-accept: dispatch bestaetigen when all STP checks pass
-      NB_AUTO_ACCEPT:           "true"
-      # Self-registration: declare the subscription topology in config,
-      # not in imperative scripts. processd calls marktd on startup.
-      # Helm equivalent: processd.selfRegister.webhookUrl in values.yaml
-      PROCESSD_SELF_REGISTER_WEBHOOK_URL: "http://processd:8580/webhook"
-      PROCESSD_SUBSCRIBER_ID:             "processd-demo"
-      PROCESSD_SUBSCRIBER_EVENT_TYPES:    "de.mako.process.initiated"
-      RUST_LOG:                 info
-    # No extra CLI flags needed — all config comes from env vars above.
-    # Subscription with marktd is registered by smoke.sh on first run.
+      # Secrets are read via `env:` references in processd.toml.
+      DATABASE_URL:           postgres://demo:demo-secret@postgres/processd
+      MAKOD_API_KEY:          demo-secret-change-me
+      MARKTD_API_KEY:         demo-processd-key
+      INBOUND_WEBHOOK_SECRET: processd-webhook-secret
+    command:
+      - "--config=/etc/processd/processd.toml"
+    # distroless has no shell — use service_started dependency instead of healthcheck
+    healthcheck:
+      disable: true
     restart: unless-stopped
 
   # ── makod — EDIFACT Process Engine ─────────────────────────────────────────

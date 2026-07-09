@@ -1,95 +1,180 @@
-//! Configuration for `edmd`.
+//! `edmd` configuration — loaded from `edmd.toml` + `env:` substitution.
+//!
+//! # Minimal `edmd.toml`
+//!
+//! ```toml
+//! [http]
+//! addr = "0.0.0.0:8380"
+//!
+//! [database]
+//! url = "env:DATABASE_URL"
+//!
+//! [identity]
+//! tenant = "9900357000004"
+//!
+//! [marktd]
+//! url     = "http://marktd:8180"
+//! api_key = "env:EDMD_MARKTD_API_KEY"
+//!
+//! [webhook]
+//! inbound_secret = "env:EDMD_INBOUND_SECRET"
+//!
+//! [subscription]
+//! webhook_url   = "http://edmd:8380/webhook"
+//! subscriber_id = "edmd"
+//!
+//! # [oidc]
+//! # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+//! # audience = "api://mako-edmd"
+//! # [otel]
+//! # endpoint = "http://otel-collector:4317"
+//! ```
 
-use clap::Parser;
-use secrecy::SecretString;
+use serde::Deserialize;
+use std::path::Path;
 
-/// Energy Data Management daemon.
-#[derive(Debug, Parser)]
-#[command(name = "edmd", about, version)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
-    /// Bind address for the HTTP server.
-    #[arg(long = "listen", env = "EDMD_LISTEN", default_value = "0.0.0.0:8380")]
-    pub listen: String,
-
-    /// PostgreSQL/TimescaleDB connection URL.
-    #[arg(long = "database-url", env = "EDMD_DATABASE_URL")]
-    pub database_url: SecretString,
-
-    /// Base URL of the `marktd` subscription API.
-    #[arg(
-        long = "marktd-url",
-        env = "EDMD_MARKTD_URL",
-        default_value = "http://localhost:8180"
-    )]
-    pub marktd_url: String,
-
-    /// Bearer token for `marktd` machine-to-machine auth.
-    #[arg(long = "marktd-api-key", env = "EDMD_MARKTD_API_KEY")]
-    pub marktd_api_key: secrecy::SecretString,
-
-    /// CloudEvents subscriber ID registered with `marktd`.
-    #[arg(
-        long = "subscriber-id",
-        env = "EDMD_SUBSCRIBER_ID",
-        default_value = "edmd"
-    )]
-    pub subscriber_id: String,
-
-    /// Public webhook URL that `marktd` will POST events to.
-    #[arg(long = "webhook-url", env = "EDMD_WEBHOOK_URL")]
-    pub webhook_url: String,
-
-    /// HMAC-SHA256 secret that `marktd` uses when signing outbound payloads.
-    #[arg(long = "webhook-secret", env = "EDMD_WEBHOOK_SECRET")]
-    pub webhook_secret: Option<SecretString>,
-
-    /// HMAC secret for verifying inbound `X-Mako-Signature` headers.
-    ///
-    /// Defaults to `--webhook-secret` when not set explicitly.
-    #[arg(long = "inbound-secret", env = "EDMD_INBOUND_SECRET")]
-    pub inbound_secret: Option<SecretString>,
-
-    /// Maximum number of database connections in the pool.
-    #[arg(long = "db-pool-size", env = "EDMD_DB_POOL_SIZE", default_value_t = 10)]
-    pub db_pool_size: u32,
-
-    /// Log level (e.g. `"info"`, `"debug"`). Overridden by `RUST_LOG`.
-    #[arg(long = "log-level", env = "EDMD_LOG_LEVEL")]
-    pub log_level: Option<String>,
-
-    /// OpenTelemetry OTLP gRPC endpoint (e.g. `http://otel-collector:4317`).
-    #[arg(long = "otel-endpoint", env = "EDMD_OTEL_ENDPOINT")]
-    pub otel_endpoint: Option<String>,
-
-    // ── Tenant ────────────────────────────────────────────────────────────────
-    /// Tenant identifier for Cedar resource checks.
-    #[arg(long = "tenant", env = "EDMD_TENANT", default_value = "default")]
-    pub tenant: String,
-
-    // ── OIDC ──────────────────────────────────────────────────────────────────
-    /// OIDC issuer URL.  When absent, auth is disabled (dev mode only).
-    #[arg(long = "oidc-issuer", env = "EDMD_OIDC_ISSUER")]
-    pub oidc_issuer: Option<String>,
-
-    /// JWT `aud` claim expected value.  Required when `--oidc-issuer` is set.
-    #[arg(long = "oidc-audience", env = "EDMD_OIDC_AUDIENCE")]
-    pub oidc_audience: Option<String>,
-
-    /// Seconds between JWKS background refreshes.
-    #[arg(
-        long = "oidc-jwks-refresh-secs",
-        env = "EDMD_OIDC_JWKS_REFRESH_SECS",
-        default_value_t = 3600u64
-    )]
-    pub oidc_jwks_refresh_secs: u64,
+    pub http: HttpConfig,
+    pub database: DatabaseConfig,
+    pub identity: IdentityConfig,
+    pub marktd: MarktdConfig,
+    #[serde(default)]
+    pub webhook: WebhookConfig,
+    #[serde(default)]
+    pub subscription: SubscriptionConfig,
+    #[serde(default)]
+    pub oidc: Option<OidcConfig>,
+    #[serde(default)]
+    pub otel: OtelConfig,
 }
 
-impl Config {
-    /// Return the effective inbound secret (falls back to `--webhook-secret`).
-    #[must_use]
-    pub fn effective_inbound_secret(&self) -> Option<&SecretString> {
-        self.inbound_secret
-            .as_ref()
-            .or(self.webhook_secret.as_ref())
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpConfig {
+    #[serde(default = "default_http_addr")]
+    pub addr: String,
+}
+
+fn default_http_addr() -> String {
+    "0.0.0.0:8380".to_owned()
+}
+
+impl Default for HttpConfig {
+    fn default() -> Self {
+        Self {
+            addr: default_http_addr(),
+        }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabaseConfig {
+    /// PostgreSQL URL.  Use `"env:DATABASE_URL"` to defer to the environment.
+    pub url: String,
+    #[serde(default = "default_pool_size")]
+    pub pool_size: u32,
+}
+
+fn default_pool_size() -> u32 {
+    10
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityConfig {
+    /// Tenant identifier written to every DB row and used in Cedar resource checks.
+    pub tenant: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarktdConfig {
+    /// `marktd` base URL.  Example: `http://marktd:8180`
+    pub url: String,
+    /// Bearer token / API key.  Use `"env:EDMD_MARKTD_API_KEY"`.
+    pub api_key: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct WebhookConfig {
+    /// HMAC-SHA256 secret for verifying inbound webhooks from `marktd`.
+    /// Use `"env:EDMD_INBOUND_SECRET"`.
+    pub inbound_secret: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionConfig {
+    /// URL that `marktd` will POST events to.
+    pub webhook_url: String,
+    #[serde(default = "default_subscriber_id")]
+    pub subscriber_id: String,
+    /// Comma-separated CloudEvent types.
+    #[serde(default = "default_event_types")]
+    pub event_types: Vec<String>,
+}
+
+fn default_subscriber_id() -> String {
+    "edmd".to_owned()
+}
+fn default_event_types() -> Vec<String> {
+    vec![
+        "de.mako.process.initiated".to_owned(),
+        "de.mako.process.completed".to_owned(),
+        "de.mako.edifact.inbound".to_owned(),
+    ]
+}
+
+impl Default for SubscriptionConfig {
+    fn default() -> Self {
+        Self {
+            webhook_url: "http://edmd:8380/webhook".to_owned(),
+            subscriber_id: default_subscriber_id(),
+            event_types: default_event_types(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OidcConfig {
+    pub issuer: String,
+    pub audience: String,
+    #[serde(default = "default_jwks_refresh_secs")]
+    pub jwks_refresh_secs: u64,
+}
+
+fn default_jwks_refresh_secs() -> u64 {
+    300
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct OtelConfig {
+    pub endpoint: Option<String>,
+}
+
+pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("cannot read config file {}: {e}", path.display()))?;
+    toml::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("config parse error in {}: {e}", path.display()))
+}
+
+pub fn resolve_env(value: &str) -> anyhow::Result<String> {
+    if let Some(var) = value.strip_prefix("env:") {
+        std::env::var(var).map_err(|_| {
+            anyhow::anyhow!("environment variable {var:?} is not set (referenced in edmd.toml)")
+        })
+    } else {
+        Ok(value.to_owned())
+    }
+}
+
+pub fn resolve_env_secret(value: &str) -> anyhow::Result<secrecy::SecretString> {
+    resolve_env(value).map(secrecy::SecretString::from)
 }

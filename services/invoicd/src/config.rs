@@ -1,191 +1,267 @@
-//! Configuration for `invoicd`.
+//! `invoicd` configuration — loaded from `invoicd.toml` + `env:` substitution.
+//!
+//! # Minimal `invoicd.toml`
+//!
+//! ```toml
+//! [http]
+//! addr = "0.0.0.0:8280"
+//!
+//! [database]
+//! url = "env:DATABASE_URL"
+//!
+//! [identity]
+//! tenant = "9900357000004"
+//!
+//! [makod]
+//! url     = "http://makod:8080"
+//! api_key = "env:INVOICD_MAKOD_API_KEY"
+//!
+//! [marktd]
+//! url     = "http://marktd:8180"
+//! api_key = "env:INVOICD_MARKTD_API_KEY"
+//!
+//! [webhook]
+//! inbound_secret = "env:INVOICD_INBOUND_SECRET"
+//!
+//! [subscription]
+//! webhook_url   = "http://invoicd:8280/webhook"
+//! subscriber_id = "invoicd"
+//!
+//! [check]
+//! # All tolerances are relative (0.01 = 1 %)
+//! arithmetic_tolerance = 0.01
+//! total_tolerance      = 0.01
+//! tariff_tolerance     = 0.03
+//! require_tariff       = false
+//! # EUR above which a Warn outcome triggers a Dispute (0.0 = never)
+//! auto_dispute_threshold_eur = 0.0
+//!
+//! # [oidc]
+//! # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+//! # audience = "api://mako-invoicd"
+//! # [otel]
+//! # endpoint = "http://otel-collector:4317"
+//! ```
 
-use clap::Parser;
 use invoic_checker::CheckConfig;
-use secrecy::SecretString;
+use serde::Deserialize;
+use std::path::Path;
 
-/// INVOIC plausibility-check daemon.
-#[derive(Debug, Parser)]
-#[command(name = "invoicd", about, version)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
-    /// Bind address for the HTTP server.
-    #[arg(
-        long = "listen",
-        env = "INVOICD_LISTEN",
-        default_value = "0.0.0.0:8280"
-    )]
-    pub listen: String,
-
-    /// Base URL of the `makod` command API.
-    #[arg(
-        long = "makod-url",
-        env = "INVOICD_MAKOD_URL",
-        default_value = "http://localhost:8080"
-    )]
-    pub makod_url: String,
-
-    /// Named API key for `makod`'s command endpoint.
-    ///
-    /// Must match a key provisioned on `makod` with `--auth-key invoicd=<token>`.
-    /// When absent, requests are sent without authentication (development only).
-    #[arg(long = "makod-api-key", env = "INVOICD_MAKOD_API_KEY")]
-    pub makod_api_key: Option<SecretString>,
-
-    /// Base URL of the `marktd` subscription API.
-    #[arg(
-        long = "marktd-url",
-        env = "INVOICD_MARKTD_URL",
-        default_value = "http://localhost:9180"
-    )]
-    pub marktd_url: String,
-
-    /// Bearer token for authenticating with `marktd` APIs.
-    ///
-    /// Required when `invoicd` calls `GET /api/v1/preisblaetter/{nb_mp_id}`.
-    #[arg(long = "marktd-api-key", env = "INVOICD_MARKTD_API_KEY")]
-    pub marktd_api_key: secrecy::SecretString,
-
-    /// CloudEvents subscriber ID registered with `marktd`.
-    #[arg(
-        long = "subscriber-id",
-        env = "INVOICD_SUBSCRIBER_ID",
-        default_value = "invoicd"
-    )]
-    pub subscriber_id: String,
-
-    /// Public webhook URL that `marktd` will POST events to.
-    #[arg(long = "webhook-url", env = "INVOICD_WEBHOOK_URL")]
-    pub webhook_url: String,
-
-    /// HMAC-SHA256 secret that `marktd` will use when signing outbound payloads.
-    ///
-    /// When set, `invoicd` registers this secret with `marktd` and verifies
-    /// the `X-Mako-Signature` header on every inbound webhook request.
-    #[arg(long = "webhook-secret", env = "INVOICD_WEBHOOK_SECRET")]
-    pub webhook_secret: Option<SecretString>,
-
-    /// HMAC secret for verifying inbound `X-Mako-Signature` headers.
-    ///
-    /// Defaults to `--webhook-secret` when not set explicitly.
-    #[arg(long = "inbound-secret", env = "INVOICD_INBOUND_SECRET")]
-    pub inbound_secret: Option<SecretString>,
-
-    /// Relative tolerance for per-line arithmetic checks (0.01 = 1 %).
-    #[arg(
-        long = "arithmetic-tolerance",
-        env = "INVOICD_ARITHMETIC_TOLERANCE",
-        default_value_t = 0.01
-    )]
-    pub arithmetic_tolerance: f64,
-
-    /// Relative tolerance for total-amount checks (0.01 = 1 %).
-    #[arg(
-        long = "total-tolerance",
-        env = "INVOICD_TOTAL_TOLERANCE",
-        default_value_t = 0.01
-    )]
-    pub total_tolerance: f64,
-
-    /// Relative tolerance for tariff unit-price checks (0.03 = 3 %).
-    #[arg(
-        long = "tariff-tolerance",
-        env = "INVOICD_TARIFF_TOLERANCE",
-        default_value_t = 0.03
-    )]
-    pub tariff_tolerance: f64,
-
-    /// Require a tariff entry; a missing tariff escalates to `Dispute`.
-    ///
-    /// Default `false`: missing tariffs generate a `Warn` finding, not a dispute.
-    #[arg(
-        long = "require-tariff",
-        env = "INVOICD_REQUIRE_TARIFF",
-        default_value_t = false
-    )]
-    pub require_tariff: bool,
-
-    /// INVOIC net-amount (EUR) above which a `Warn` outcome triggers a dispute
-    /// instead of automatic approval.
-    ///
-    /// `0.0` (default) means `Warn` outcomes are always approved automatically.
-    #[arg(
-        long = "auto-dispute-threshold",
-        env = "INVOICD_AUTO_DISPUTE_THRESHOLD",
-        default_value_t = 0.0_f64
-    )]
-    pub auto_dispute_threshold_eur: f64,
-
-    /// PostgreSQL connection URL for persisting INVOIC receipts.
-    ///
-    /// **Required for §22 MessZV / §41 EnWG compliance** (3-year retention).
-    /// When not set `invoicd` runs in development mode — receipts are NOT
-    /// persisted and a warning is emitted on every handled event.
-    ///
-    /// Example: `postgres://invoicd:secret@postgres:5432/invoicd`
-    #[arg(long = "database-url", env = "DATABASE_URL")]
-    pub database_url: Option<String>,
-
-    /// Maximum number of PostgreSQL connections in the pool.
-    #[arg(
-        long = "db-max-connections",
-        env = "INVOICD_DB_MAX_CONNECTIONS",
-        default_value_t = 5u32
-    )]
-    pub db_max_connections: u32,
-
-    /// Operator-configured tenant identifier written to every receipt row.
-    ///
-    /// Allows a shared `invoicd` instance to partition receipts by tenant.
-    /// Defaults to `"default"` for single-tenant deployments.
-    #[arg(long = "tenant", env = "INVOICD_TENANT", default_value = "default")]
-    pub tenant: String,
-
-    /// Log level (e.g. `"info"`, `"debug"`). Overridden by `RUST_LOG`.
-    #[arg(long = "log-level", env = "INVOICD_LOG_LEVEL")]
-    pub log_level: Option<String>,
-
-    /// OpenTelemetry OTLP gRPC endpoint (e.g. `http://otel-collector:4317`).
-    /// When absent, tracing is local-only (no spans exported).
-    #[arg(long = "otel-endpoint", env = "INVOICD_OTEL_ENDPOINT")]
-    pub otel_endpoint: Option<String>,
-
-    // ── OIDC ──────────────────────────────────────────────────────────────────
-    /// OIDC issuer URL.  When absent, auth is disabled (dev mode only).
-    ///
-    /// Example: `https://login.microsoftonline.com/{tenant-id}/v2.0`
-    #[arg(long = "oidc-issuer", env = "INVOICD_OIDC_ISSUER")]
-    pub oidc_issuer: Option<String>,
-
-    /// JWT `aud` claim expected value.  Required when `--oidc-issuer` is set.
-    #[arg(long = "oidc-audience", env = "INVOICD_OIDC_AUDIENCE")]
-    pub oidc_audience: Option<String>,
-
-    /// Seconds between JWKS background refreshes.
-    #[arg(
-        long = "oidc-jwks-refresh-secs",
-        env = "INVOICD_OIDC_JWKS_REFRESH_SECS",
-        default_value_t = 3600u64
-    )]
-    pub oidc_jwks_refresh_secs: u64,
+    pub http: HttpConfig,
+    /// Required for §22 MessZV / §41 EnWG compliance (3-year receipt retention).
+    pub database: DatabaseConfig,
+    pub identity: IdentityConfig,
+    pub makod: MakodConfig,
+    pub marktd: MarktdConfig,
+    #[serde(default)]
+    pub webhook: WebhookConfig,
+    #[serde(default)]
+    pub subscription: SubscriptionConfig,
+    #[serde(default)]
+    pub check: CheckSectionConfig,
+    #[serde(default)]
+    pub oidc: Option<OidcConfig>,
+    #[serde(default)]
+    pub otel: OtelConfig,
 }
 
 impl Config {
-    /// Build a [`CheckConfig`] from the relevant tolerance fields.
     #[must_use]
     pub fn check_config(&self) -> CheckConfig {
         CheckConfig {
-            arithmetic_tolerance: self.arithmetic_tolerance,
-            total_tolerance: self.total_tolerance,
-            tariff_tolerance: self.tariff_tolerance,
-            require_tariff: self.require_tariff,
+            arithmetic_tolerance: self.check.arithmetic_tolerance,
+            total_tolerance: self.check.total_tolerance,
+            tariff_tolerance: self.check.tariff_tolerance,
+            require_tariff: self.check.require_tariff,
         }
     }
 
-    /// Return the effective inbound secret (falls back to `--webhook-secret`).
+    /// EUR-cents threshold (converted from the TOML EUR value).
     #[must_use]
-    pub fn effective_inbound_secret(&self) -> Option<&SecretString> {
-        self.inbound_secret
-            .as_ref()
-            .or(self.webhook_secret.as_ref())
+    pub fn auto_dispute_threshold_eur_cents(&self) -> i64 {
+        (self.check.auto_dispute_threshold_eur * 100.0_f64).round() as i64
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpConfig {
+    #[serde(default = "default_http_addr")]
+    pub addr: String,
+}
+
+fn default_http_addr() -> String {
+    "0.0.0.0:8280".to_owned()
+}
+
+impl Default for HttpConfig {
+    fn default() -> Self {
+        Self {
+            addr: default_http_addr(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabaseConfig {
+    /// PostgreSQL URL.  Use `"env:DATABASE_URL"` to defer to the environment.
+    pub url: String,
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+}
+
+fn default_max_connections() -> u32 {
+    5
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityConfig {
+    /// Tenant identifier written to every receipt row.
+    pub tenant: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MakodConfig {
+    /// `makod` base URL.  Example: `http://makod:8080`
+    pub url: String,
+    /// API key for the `makod` command endpoint.  Use `"env:INVOICD_MAKOD_API_KEY"`.
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarktdConfig {
+    /// `marktd` base URL.  Example: `http://marktd:8180`
+    pub url: String,
+    /// Bearer token.  Use `"env:INVOICD_MARKTD_API_KEY"`.
+    pub api_key: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct WebhookConfig {
+    /// HMAC-SHA256 secret for verifying inbound webhooks from `marktd`.
+    /// Use `"env:INVOICD_INBOUND_SECRET"`.
+    pub inbound_secret: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionConfig {
+    /// URL that `marktd` will POST events to.
+    pub webhook_url: String,
+    #[serde(default = "default_subscriber_id")]
+    pub subscriber_id: String,
+    #[serde(default = "default_event_types")]
+    pub event_types: Vec<String>,
+}
+
+fn default_subscriber_id() -> String {
+    "invoicd".to_owned()
+}
+fn default_event_types() -> Vec<String> {
+    vec![
+        "de.mako.process.initiated".to_owned(),
+        "de.mako.process.completed".to_owned(),
+    ]
+}
+
+impl Default for SubscriptionConfig {
+    fn default() -> Self {
+        Self {
+            webhook_url: "http://invoicd:8280/webhook".to_owned(),
+            subscriber_id: default_subscriber_id(),
+            event_types: default_event_types(),
+        }
+    }
+}
+
+/// `invoic-checker` plausibility tolerances and dispute policy.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckSectionConfig {
+    /// Relative tolerance for per-line arithmetic (qty × price = net).
+    #[serde(default = "default_arithmetic_tolerance")]
+    pub arithmetic_tolerance: f64,
+    /// Relative tolerance for document total (Σ line nets = Gesamtnetto).
+    #[serde(default = "default_total_tolerance")]
+    pub total_tolerance: f64,
+    /// Relative tolerance for tariff unit-price comparison against PRICAT.
+    #[serde(default = "default_tariff_tolerance")]
+    pub tariff_tolerance: f64,
+    /// When `true`, a missing PRICAT entry escalates from `Warn` to `Dispute`.
+    #[serde(default)]
+    pub require_tariff: bool,
+    /// INVOIC net-amount (EUR) above which a `Warn` outcome becomes a `Dispute`.
+    /// `0.0` (default) means `Warn` is always auto-approved.
+    #[serde(default)]
+    pub auto_dispute_threshold_eur: f64,
+}
+
+fn default_arithmetic_tolerance() -> f64 {
+    0.01
+}
+fn default_total_tolerance() -> f64 {
+    0.01
+}
+fn default_tariff_tolerance() -> f64 {
+    0.03
+}
+
+impl Default for CheckSectionConfig {
+    fn default() -> Self {
+        Self {
+            arithmetic_tolerance: default_arithmetic_tolerance(),
+            total_tolerance: default_total_tolerance(),
+            tariff_tolerance: default_tariff_tolerance(),
+            require_tariff: false,
+            auto_dispute_threshold_eur: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OidcConfig {
+    pub issuer: String,
+    pub audience: String,
+    #[serde(default = "default_jwks_refresh_secs")]
+    pub jwks_refresh_secs: u64,
+}
+
+fn default_jwks_refresh_secs() -> u64 {
+    300
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct OtelConfig {
+    pub endpoint: Option<String>,
+}
+
+pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("cannot read config file {}: {e}", path.display()))?;
+    toml::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("config parse error in {}: {e}", path.display()))
+}
+
+pub fn resolve_env(value: &str) -> anyhow::Result<String> {
+    if let Some(var) = value.strip_prefix("env:") {
+        std::env::var(var).map_err(|_| {
+            anyhow::anyhow!("environment variable {var:?} is not set (referenced in invoicd.toml)")
+        })
+    } else {
+        Ok(value.to_owned())
+    }
+}
+
+pub fn resolve_env_secret(value: &str) -> anyhow::Result<secrecy::SecretString> {
+    resolve_env(value).map(secrecy::SecretString::from)
 }

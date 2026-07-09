@@ -92,7 +92,7 @@ de.mako.process.initiated (PID 55001/55016/44001)
   → extract AnmeldungAnfrage from event payload
   → GET marktd /api/v1/versorgung/{malo_id}         → VersorgungsStatus
   → GET marktd /api/v1/malo/{malo_id}/grid           → MaloGridRecord
-  → GET marktd /api/v1/partners/{lf_gln}             → partner_known
+  → GET marktd /api/v1/partners/{lf_mp_id}             → partner_known
   → netz_checker::evaluate(anfrage, vs, grid, partner_known, now_utc())
       Accept   → anmeldung_decisions(Accept)
                  [if NB_AUTO_ACCEPT=true] → makod gpke.lieferbeginn.bestaetigen
@@ -193,52 +193,82 @@ GROUP BY initiator_is_affiliate;
 
 ## Configuration reference
 
-All settings can be provided as environment variables or CLI flags.
+`processd` reads its configuration from a **TOML file** (default: `processd.toml`),
+with secrets deferred to environment variables via `"env:VAR_NAME"` values.
 
-| Env var | CLI flag | Default | Description |
-|---------|----------|---------|-------------|
-| `PROCESSD_LISTEN` | `--listen` | `0.0.0.0:8580` | HTTP listen address |
-| `DATABASE_URL` | `--database-url` | — | PostgreSQL connection string |
-| `DB_POOL_SIZE` | `--db-pool-size` | `10` | Connection pool size |
-| `MAKOD_URL` | `--makod-url` | — | `makod` base URL |
-| `MAKOD_API_KEY` | `--makod-api-key` | — | `makod` API key |
-| `MARKTD_URL` | `--marktd-url` | — | `marktd` base URL |
-| `MARKTD_API_KEY` | `--marktd-api-key` | — | `marktd` API key |
-| `OWN_MP_ID` | `--own-mp-id` | — | Operator primary Marktpartner-ID |
-| `TENANT` | `--tenant` | = `OWN_MP_ID` | Tenant identifier |
-| `NB_AUTO_ACCEPT` | `--nb-auto-accept` | `false` | Auto-dispatch bestaetigen on Accept |
-| `LF_AUTO_RESPOND` | `--lf-auto-respond` | `true` | Auto-dispatch einwilligung/ablehnen |
-| `LF_QUEUE_TTL_SECS` | `--lf-queue-ttl-secs` | `2700` | Approval queue TTL (45 min) |
-| `PROCESSD_SELF_REGISTER_WEBHOOK_URL` | `--self-register-webhook-url` | — | Self-register URL for marktd subscription |
-| `PROCESSD_SUBSCRIBER_ID` | `--subscriber-id` | `processd` | Subscriber ID for marktd upsert |
-| `PROCESSD_SUBSCRIBER_EVENT_TYPES` | `--subscriber-event-types` | `de.mako.process.initiated` | Comma-separated event types |
-| `OIDC_ISSUER` | `--oidc-issuer` | — | OIDC issuer URL |
-| `OIDC_AUDIENCE` | `--oidc-audience` | — | OIDC audience |
-| `INBOUND_WEBHOOK_SECRET` | `--inbound-secret` | — | HMAC secret for inbound webhooks |
-| `RUST_LOG` | `--log-level` | `info` | Log level |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `--otel-endpoint` | — | OpenTelemetry OTLP endpoint |
+```bash
+processd --config /etc/processd/processd.toml
+# or: PROCESSD_CONFIG=/etc/processd/processd.toml processd
+```
+
+### Full `processd.toml` reference
+
+```toml
+[http]
+addr = "0.0.0.0:8580"          # default
+
+[database]
+url       = "env:DATABASE_URL"  # required; use env: for secrets
+pool_size = 10                  # default
+
+[identity]
+own_mp_id = "9900357000004"     # required — must match makod.toml [[party]] primary
+tenant    = ""                  # optional; defaults to own_mp_id
+
+[makod]
+url     = "http://makod:8080"   # required
+api_key = "env:MAKOD_API_KEY"   # required
+
+[marktd]
+url     = "http://marktd:8180"  # required
+api_key = "env:MARKTD_API_KEY"  # required
+
+[webhook]
+inbound_secret = "env:INBOUND_WEBHOOK_SECRET"   # optional; omit for dev
+
+[subscription]
+# Self-register this subscription with marktd on startup.
+# No manual curl required — topology is fully config-driven.
+webhook_url   = "http://processd:8580/webhook"  # optional; omit to skip registration
+subscriber_id = "processd"                       # default
+event_types   = "de.mako.process.initiated"     # default
+
+[nb]
+auto_accept = false   # true → dispatch bestaetigen automatically on Accept
+
+[lf]
+auto_respond   = true   # false → all E_0624 routed to approval_queue
+queue_ttl_secs = 2700   # 45 min — LFW24 deadline
+
+# [oidc]                # omit to disable auth (dev only — never omit in production)
+# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "api://mako-processd"
+# jwks_refresh_secs = 300
+
+# [otel]               # omit to disable tracing
+# endpoint = "http://otel-collector:4317"
+```
+
+### CLI flags
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--config` / `-c` | `PROCESSD_CONFIG` | `processd.toml` | Path to `processd.toml` |
+| `--log-level` | `RUST_LOG` | `info` | Log level (`info`, `debug`, `processd=trace`) |
 
 ---
 
 ## marktd subscription — self-registration
 
 `processd` **self-registers** its subscription with `marktd` on startup.
-Set `PROCESSD_SELF_REGISTER_WEBHOOK_URL` to the URL `marktd` should POST
+Set `[subscription] webhook_url` in `processd.toml` to the URL `marktd` should POST
 events to, and `processd` calls `PUT /api/v1/subscriptions/{subscriber_id}`
 automatically with exponential-backoff retry (up to 30 s).
 
-This makes subscription topology **configuration-driven** (env var / Helm
-`values.yaml`) rather than an imperative bootstrap step:
+This makes subscription topology **configuration-driven** (TOML / Helm
+`values.yaml`) rather than an imperative bootstrap step.
 
-```bash
-# Kubernetes / docker compose env block:
-PROCESSD_SELF_REGISTER_WEBHOOK_URL=http://processd:8580/webhook
-PROCESSD_SUBSCRIBER_ID=processd-prod
-PROCESSD_SUBSCRIBER_EVENT_TYPES=de.mako.process.initiated
-INBOUND_WEBHOOK_SECRET=<shared-hmac-secret>
-```
-
-For Helm charts, map these to `values.yaml` under `processd.selfRegister.*`.
+For Helm charts, map `[subscription]` to `values.yaml` under `processd.subscription.*`.
 
 ---
 

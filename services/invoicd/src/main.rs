@@ -3,30 +3,43 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use anyhow::Context;
 use clap::Parser;
 use tokio_util::sync::CancellationToken;
 
-use invoicd::config::Config;
+use invoicd::config::{self, Config};
+
+#[derive(Debug, Parser)]
+#[command(name = "invoicd", about = "INVOIC plausibility-check daemon (LF role)")]
+struct Cli {
+    #[arg(
+        short = 'c',
+        long,
+        default_value = "invoicd.toml",
+        env = "INVOICD_CONFIG"
+    )]
+    config: std::path::PathBuf,
+    #[arg(long, default_value = "info", env = "RUST_LOG")]
+    log_level: String,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config = Config::parse();
+    let cli = Cli::parse();
 
-    // ── Logging + OpenTelemetry ───────────────────────────────────────────────
-    let otel_cfg = config
-        .otel_endpoint
+    let cfg: Config = config::load_from_file(&cli.config)
+        .with_context(|| format!("loading config from {}", cli.config.display()))?;
+
+    let otel_cfg = cfg
+        .otel
+        .endpoint
         .as_deref()
         .map(|ep| mako_service::OtelConfig {
             endpoint: ep.to_owned(),
             service_name: "invoicd".to_owned(),
         });
-    let _otel_guard = mako_service::init_tracing(
-        "invoicd",
-        config.log_level.as_deref().unwrap_or("info"),
-        otel_cfg.as_ref(),
-    );
+    let _otel_guard = mako_service::init_tracing("invoicd", &cli.log_level, otel_cfg.as_ref());
 
-    // ── Graceful shutdown ────────────────────────────────────────────────────
     let shutdown = CancellationToken::new();
     {
         let shutdown = shutdown.clone();
@@ -37,17 +50,15 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // ── OIDC ─────────────────────────────────────────────────────────────────
     let http = mako_service::http::default_client();
-    let oidc = if let Some(ref issuer) = config.oidc_issuer {
-        let audience = config
-            .oidc_audience
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("--oidc-audience required when --oidc-issuer is set"))?;
-        let verifier = mako_service::oidc::OidcVerifier::new(issuer, audience, &http).await?;
+    let oidc = if let Some(ref oidc_cfg) = cfg.oidc {
+        let verifier =
+            mako_service::oidc::OidcVerifier::new(&oidc_cfg.issuer, &oidc_cfg.audience, &http)
+                .await
+                .context("OIDC discovery")?;
         verifier.clone().spawn_refresh_task(
             http.clone(),
-            config.oidc_jwks_refresh_secs,
+            oidc_cfg.jwks_refresh_secs,
             shutdown.clone(),
         );
         verifier
@@ -55,10 +66,9 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(
             "invoicd: OIDC disabled — all requests accepted without authentication (not for production)"
         );
-        mako_service::oidc::OidcVerifier::disabled(&config.tenant)
+        mako_service::oidc::OidcVerifier::disabled(&cfg.identity.tenant)
     };
 
-    // ── Cedar ABAC ───────────────────────────────────────────────────────────
     let cedar = Arc::new(
         mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
             "../policies/invoicd.cedar"
@@ -66,32 +76,57 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Cedar policy error: {e}"))?,
     );
 
-    // ── Server ───────────────────────────────────────────────────────────────
-    let listen: SocketAddr = config
-        .listen
+    let listen: SocketAddr = cfg
+        .http
+        .addr
         .parse()
-        .map_err(|e| anyhow::anyhow!("invalid --listen address '{}': {e}", config.listen))?;
+        .with_context(|| format!("invalid http.addr '{}'", cfg.http.addr))?;
 
-    let check_config = config.check_config();
-    let auto_dispute_threshold_eur_cents =
-        (config.auto_dispute_threshold_eur * 100.0_f64).round() as i64;
-    let inbound_secret = config.effective_inbound_secret().cloned();
+    let database_url = config::resolve_env(&cfg.database.url)
+        .context("database.url")
+        .ok();
+    let makod_api_key = cfg
+        .makod
+        .api_key
+        .as_deref()
+        .map(config::resolve_env_secret)
+        .transpose()
+        .context("makod.api_key")?;
+    let marktd_api_key =
+        config::resolve_env_secret(&cfg.marktd.api_key).context("marktd.api_key")?;
+    let inbound_secret = cfg
+        .webhook
+        .inbound_secret
+        .as_deref()
+        .map(config::resolve_env_secret)
+        .transpose()
+        .context("webhook.inbound_secret")?;
+    let webhook_secret = inbound_secret.clone();
+
+    let check_config = cfg.check_config();
+    let auto_dispute_threshold_eur_cents = cfg.auto_dispute_threshold_eur_cents();
+    let makod_url = cfg.makod.url.clone();
+    let marktd_url = cfg.marktd.url.clone();
+    let subscriber_id = cfg.subscription.subscriber_id.clone();
+    let webhook_url = cfg.subscription.webhook_url.clone();
+    let tenant = cfg.identity.tenant.clone();
+    let db_max_connections = cfg.database.max_connections;
 
     invoicd::server::run(invoicd::server::RunConfig {
         listen,
-        makod_url: config.makod_url,
-        makod_api_key: config.makod_api_key,
-        marktd_url: config.marktd_url,
-        marktd_api_key: config.marktd_api_key,
-        subscriber_id: config.subscriber_id,
-        webhook_url: config.webhook_url,
-        webhook_secret: config.webhook_secret,
+        makod_url,
+        makod_api_key,
+        marktd_url,
+        marktd_api_key,
+        subscriber_id,
+        webhook_url,
+        webhook_secret,
         inbound_secret,
         check_config,
         auto_dispute_threshold_eur_cents,
-        database_url: config.database_url,
-        db_max_connections: config.db_max_connections,
-        tenant: config.tenant,
+        database_url,
+        db_max_connections,
+        tenant,
         oidc,
         cedar,
         shutdown,

@@ -50,6 +50,7 @@ graph TB
 │  GET  /api/v1/billing-period/{malo_id}  ← MeterBillingPeriod    │
 │  GET  /api/v1/imbalance/{malo_id}/{y}/{m} ← Mehr-/Mindermengen  │
 │  GET  /health/live  /health/ready                               │
+│  POST|GET /mcp      ← MCP Streamable HTTP (LLM tooling)         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -86,37 +87,65 @@ and Gas quantity conversion (m³ × Brennwert × Zustandszahl = kWh).
 
 ## Configuration reference
 
-| Env var | CLI flag | Default | Description |
-|---------|----------|---------|-------------|
-| `EDMD_LISTEN` | `--listen` | `0.0.0.0:8380` | HTTP listen address |
-| `EDMD_DATABASE_URL` | `--database-url` | — | PostgreSQL connection string |
-| `EDMD_DB_POOL_SIZE` | `--db-pool-size` | `10` | Connection pool size |
-| `EDMD_MARKTD_URL` | `--marktd-url` | `http://localhost:8180` | `marktd` base URL |
-| `EDMD_MARKTD_API_KEY` | `--marktd-api-key` | — | `marktd` Bearer token |
-| `EDMD_SUBSCRIBER_ID` | `--subscriber-id` | `edmd` | EventBus subscriber ID |
-| `EDMD_WEBHOOK_URL` | `--webhook-url` | — | Public URL `marktd` POSTs events to |
-| `EDMD_WEBHOOK_SECRET` | `--webhook-secret` | — | HMAC signing secret |
-| `EDMD_INBOUND_SECRET` | `--inbound-secret` | = webhook-secret | HMAC verification secret |
-| `EDMD_TENANT` | `--tenant` | `default` | Tenant identifier |
-| `EDMD_OIDC_ISSUER` | `--oidc-issuer` | — | OIDC issuer (omit for dev mode) |
-| `EDMD_OIDC_AUDIENCE` | `--oidc-audience` | — | OIDC audience |
-| `RUST_LOG` | `--log-level` | `info` | Log level |
-| `EDMD_OTEL_ENDPOINT` | `--otel-endpoint` | — | OTLP endpoint |
+`edmd` reads its configuration from a **TOML file** (default: `edmd.toml`),
+with secrets deferred to environment variables via `"env:VAR_NAME"` values.
+
+```bash
+edmd --config /etc/edmd/edmd.toml
+# or: EDMD_CONFIG=/etc/edmd/edmd.toml edmd
+```
+
+### Full `edmd.toml` reference
+
+```toml
+[http]
+addr = "0.0.0.0:8380"          # default
+
+[database]
+url       = "env:DATABASE_URL"  # required; use env: for secrets
+pool_size = 10                  # default
+
+[identity]
+tenant = "9900357000004"        # required — MP-ID of the operator
+
+[marktd]
+url     = "http://marktd:8180"       # required
+api_key = "env:EDMD_MARKTD_API_KEY" # required
+
+[webhook]
+inbound_secret = "env:EDMD_INBOUND_SECRET"  # optional; omit for dev
+
+[subscription]
+# Self-registers with marktd on startup — no manual curl required.
+webhook_url   = "http://edmd:8380/webhook"  # public URL marktd POSTs to
+subscriber_id = "edmd"                       # default
+event_types   = [
+  "de.mako.process.initiated",
+  "de.mako.process.completed",
+  "de.mako.edifact.inbound",
+]
+
+# [oidc]          # omit to disable auth (dev only — never omit in production)
+# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "api://mako-edmd"
+# jwks_refresh_secs = 300
+
+# [otel]          # omit to disable tracing
+# endpoint = "http://otel-collector:4317"
+```
 
 ---
 
-## marktd subscription setup
+## marktd subscription
+
+`edmd` **auto-registers** its EventBus subscription with `marktd` on startup
+when `subscription.webhook_url` is set in the config — no manual `curl` required.
+
+To force re-registration or verify the subscription:
 
 ```bash
-curl -X PUT http://marktd:8180/api/v1/subscriptions/edmd \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "webhook_url": "http://edmd:8380/webhook",
-    "webhook_secret": "<shared-hmac-secret>",
-    "event_types": ["de.mako.edifact.inbound"],
-    "active": true
-  }'
+curl -s http://marktd:8180/api/v1/subscriptions/edmd \
+  -H "Authorization: Bearer <token>" | jq .
 ```
 
 ---

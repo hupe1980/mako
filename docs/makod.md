@@ -612,14 +612,14 @@ started with.
 
 #### `get_malo` / `get_partner` parameters
 
-`get_malo` takes `malo_id` (11-digit string). `get_partner` takes `gln` (13-digit GLN string).
+`get_malo` takes `malo_id` (11-digit string). `get_partner` takes `mp_id` (13-digit MP-ID string — BDEW `99…`, DVGW `98…`, or GS1).
 
 ### Resources
 
 | URI template | Description |
 |---|---|
 | `malo://{malo_id}` | Full `MaloIdentResultPositive` record from the MaLo cache |
-| `partner://{gln}` | Full partner record including AS4 URL, market roles, and channels |
+| `partner://{mp_id}` | Full partner record including AS4 URL, market roles, and channels |
 
 Clients that support MCP Resources can read these directly (e.g. drag-and-drop into
 a Claude conversation, or `@resource malo://10001234567` in VS Code Copilot Chat).

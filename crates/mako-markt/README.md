@@ -13,7 +13,7 @@ It is the foundation for [`marktd`](../../services/marktd), the production Marke
 | Principle | Detail |
 |---|---|
 | **Stateless library** | No axum, no sqlx, no async runtime in this crate. All I/O lives in `services/marktd`. |
-| **Validated domain identifiers** | [`MaloId`], [`MeloId`], and [`Gln`] validate format and checksum at construction time — invalid IDs are rejected at the system boundary. |
+| **Validated domain identifiers** | [`MaloId`], [`MeloId`], and [`MarktpartnerId`] validate format and checksum at construction time — invalid IDs are rejected at the system boundary. |
 | **Temporal role assignments** | `lokationszuordnung` entries carry `valid_from`/`valid_to` date ranges. Queries are always resolved against a reference date (German local time, CET/CEST). |
 | **Generic `AppState`** | Seven generic type parameters — one per repository trait — enable fully static dispatch with no `dyn Trait` overhead. |
 | **AFIT** | All repository traits use `async fn in trait` (stable since Rust 1.75, MSRV 1.89). |
@@ -24,7 +24,7 @@ It is the foundation for [`marktd`](../../services/marktd), the production Marke
 
 ```
 mako_markt
-├── domain          Validated IDs (MaloId, MeloId, Gln), Sparte, ProcessStatus
+├── domain          Validated IDs (MaloId, MeloId, MarktpartnerId), Sparte, ProcessStatus
 ├── repository      Repository traits + AppState + record types + PageResult
 │                   includes: VersorgungsStatusRepository, LieferStatus, VersorgungsStatusRecord
 │                             PriCatRepository, PriCatVersion, PriCatDispatchState
@@ -59,16 +59,21 @@ use mako_markt::domain::MeloId;
 let id = MeloId::new("DE0001234567890123456789012345678")?;
 ```
 
-### `Gln` — 13-digit BDEW/DVGW/GS1 Codenummer
+### `MarktpartnerId` — 13-digit BDEW/DVGW/GS1 Codenummer
 
-Derives the NAD DE3055 agency code from the prefix:
+Derives the NAD DE3055 agency code from the prefix (`99…` → `293`, `98…` → `332`, other → `9`):
 
 ```rust
-use mako_markt::domain::Gln;
+use mako_markt::domain::MarktpartnerId;
 
-let gln = Gln::new("9900357000004")?;
-assert_eq!(gln.nad_agency_code(), "293");  // BDEW Strom
+let mp_id = "9900357000004".parse::<MarktpartnerId>()?;
+assert_eq!(mp_id.nad_agency_code(), "293");  // BDEW Strom
+assert_eq!(mp_id.is_bdew(), true);
 ```
+
+> **Note:** Only GS1-issued 13-digit codes are true GLNs (NAD DE3055 `9`).
+> BDEW-Codenummern (`99…`, `293`) and DVGW-Codenummern (`98…`, `332`) are not GLNs.
+> Use `MarktpartnerId` for all market-participant identifiers — never `String`.
 
 ---
 

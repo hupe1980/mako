@@ -1,147 +1,314 @@
-//! `processd` configuration — CLI + environment.
+//! `processd` configuration — loaded from `processd.toml` + `env:` substitution.
 //!
-//! All secrets can be provided via `env:VAR_NAME` substitution or directly
-//! on the command line.
+//! All secrets can be deferred to environment variables by writing `"env:VAR_NAME"`
+//! as the value in the TOML file.  Call [`resolve_env`] / [`resolve_env_secret`]
+//! before use.
+//!
+//! # Minimal `processd.toml`
+//!
+//! ```toml
+//! [http]
+//! addr = "0.0.0.0:8580"
+//!
+//! [database]
+//! url = "env:DATABASE_URL"
+//!
+//! [identity]
+//! own_mp_id = "9900357000004"
+//!
+//! [makod]
+//! url     = "http://makod:8080"
+//! api_key = "env:MAKOD_API_KEY"
+//!
+//! [marktd]
+//! url     = "http://marktd:8180"
+//! api_key = "env:MARKTD_API_KEY"
+//!
+//! [webhook]
+//! inbound_secret = "env:INBOUND_WEBHOOK_SECRET"
+//!
+//! [subscription]
+//! webhook_url   = "http://processd:8580/webhook"
+//! subscriber_id = "processd"
+//!
+//! [nb]
+//! auto_accept = false   # true: dispatch bestaetigen automatically on Accept
+//!
+//! [lf]
+//! auto_respond   = true
+//! queue_ttl_secs = 2700  # 45 min — LFW24 E_0624 window
+//!
+//! # [oidc]                # omit to disable auth (dev mode only)
+//! # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+//! # audience = "api://mako-processd"
+//! #
+//! # [otel]                # omit to disable tracing
+//! # endpoint = "http://otel-collector:4317"
+//! ```
 
-use clap::Parser;
-use secrecy::SecretString;
+use serde::Deserialize;
+use std::path::Path;
 
-/// Process decision engine for German energy market automation.
-///
-/// Consumes `de.mako.process.initiated` CloudEvents from `marktd` and applies
-/// role-specific policy to make automated decisions within regulatory deadlines.
-#[derive(Debug, Parser)]
-#[command(
-    name = "processd",
-    about = "Process decision engine for German energy market"
-)]
+// ── Top-level ─────────────────────────────────────────────────────────────────
+
+/// Full `processd.toml` configuration.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
-    // ── HTTP ───────────────────────────────────────────────────────────────
-    /// Listen address for the HTTP API.
-    #[arg(long, default_value = "0.0.0.0:8580", env = "PROCESSD_LISTEN")]
-    pub listen: String,
+    pub http: HttpConfig,
+    pub database: DatabaseConfig,
+    pub identity: IdentityConfig,
+    pub makod: MakodConfig,
+    pub marktd: MarktdConfig,
+    #[serde(default)]
+    pub webhook: WebhookConfig,
+    #[serde(default)]
+    pub subscription: SubscriptionConfig,
+    #[serde(default)]
+    pub nb: NbConfig,
+    #[serde(default)]
+    pub lf: LfConfig,
+    /// OIDC configuration.  When omitted, authentication is **disabled** and
+    /// all API requests are accepted with synthetic dev-admin claims.
+    /// **Never omit this in production.**
+    #[serde(default)]
+    pub oidc: Option<OidcConfig>,
+    #[serde(default)]
+    pub otel: OtelConfig,
+}
 
-    // ── Database ───────────────────────────────────────────────────────────
-    /// PostgreSQL connection string.
-    #[arg(long, env = "DATABASE_URL")]
-    pub database_url: String,
+// ── HTTP ──────────────────────────────────────────────────────────────────────
 
-    /// PostgreSQL connection pool size.
-    #[arg(long, default_value = "10", env = "DB_POOL_SIZE")]
-    pub db_pool_size: u32,
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpConfig {
+    #[serde(default = "default_http_addr")]
+    pub addr: String,
+}
 
-    // ── Inbound webhook ────────────────────────────────────────────────────
-    /// HMAC-SHA256 secret used to verify inbound webhooks from `marktd`.
-    /// Must match `marktd`'s `webhook_secret` for the `processd` subscription.
+fn default_http_addr() -> String {
+    "0.0.0.0:8580".to_owned()
+}
+
+impl Default for HttpConfig {
+    fn default() -> Self {
+        Self {
+            addr: default_http_addr(),
+        }
+    }
+}
+
+// ── Database ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabaseConfig {
+    /// PostgreSQL URL.  Use `"env:DATABASE_URL"` to defer to the environment.
+    pub url: String,
+    #[serde(default = "default_pool_size")]
+    pub pool_size: u32,
+}
+
+fn default_pool_size() -> u32 {
+    10
+}
+
+// ── Identity ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityConfig {
+    /// Operator primary MP-ID (BDEW-Codenummer starting with `99`, or DVGW `98`).
     ///
-    /// Leave unset to disable signature verification (dev only).
-    #[arg(long, env = "INBOUND_WEBHOOK_SECRET")]
-    pub inbound_secret: Option<SecretString>,
-
-    // ── makod connection ───────────────────────────────────────────────────
-    /// `makod` base URL (cluster-internal, e.g. `http://makod:8080`).
-    #[arg(long, env = "MAKOD_URL")]
-    pub makod_url: String,
-
-    /// `makod` API key (Bearer token).
-    #[arg(long, env = "MAKOD_API_KEY")]
-    pub makod_api_key: SecretString,
-
-    // ── marktd connection ──────────────────────────────────────────────────
-    /// `marktd` base URL (cluster-internal, e.g. `http://marktd:8180`).
-    #[arg(long, env = "MARKTD_URL")]
-    pub marktd_url: String,
-
-    /// `marktd` API key (Bearer token for machine-to-machine auth).
-    #[arg(long, env = "MARKTD_API_KEY")]
-    pub marktd_api_key: SecretString,
-
-    // ── Identity ───────────────────────────────────────────────────────────
-    /// Operator primary GLN (must match `makod.toml` `[[party]] primary = true`).
-    ///
-    /// Used to derive `initiator_is_affiliate` for §20 EnWG parity reporting:
-    /// when the initiating LF GLN equals `own_mp_id`, the decision is flagged as
-    /// affiliate-initiated.
-    #[arg(long, env = "OWN_MP_ID")]
+    /// Must match `makod.toml` `[[party]] primary = true`.
+    /// Used for `initiator_is_affiliate` §20 EnWG parity reporting.
     pub own_mp_id: String,
-
-    /// Operator tenant identifier (written to every DB row).
-    #[arg(long, env = "TENANT", default_value = "")]
+    /// Tenant identifier written to every DB row.  Defaults to `own_mp_id`.
+    #[serde(default)]
     pub tenant: String,
+}
 
-    // ── OIDC ───────────────────────────────────────────────────────────────
-    /// OIDC issuer URL (e.g. `https://login.microsoftonline.com/{tenant}/v2.0`).
-    /// Omit to disable authentication (dev mode only).
-    #[arg(long, env = "OIDC_ISSUER")]
-    pub oidc_issuer: Option<String>,
+// ── makod connection ──────────────────────────────────────────────────────────
 
-    /// OIDC audience.
-    #[arg(long, env = "OIDC_AUDIENCE")]
-    pub oidc_audience: Option<String>,
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MakodConfig {
+    /// `makod` base URL.  Example: `http://makod:8080`
+    pub url: String,
+    /// Bearer token / API key.  Use `"env:MAKOD_API_KEY"`.
+    pub api_key: String,
+}
 
-    /// JWKS background refresh interval in seconds.
-    #[arg(long, default_value = "3600", env = "OIDC_JWKS_REFRESH_SECS")]
-    pub oidc_jwks_refresh_secs: u64,
+// ── marktd connection ─────────────────────────────────────────────────────────
 
-    // ── NB module ─────────────────────────────────────────────────────────
-    /// `NB` — Automatically accept validated Anmeldungen (dispatches `bestaetigen`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarktdConfig {
+    /// `marktd` base URL.  Example: `http://marktd:8180`
+    pub url: String,
+    /// Bearer token / API key.  Use `"env:MARKTD_API_KEY"`.
+    pub api_key: String,
+}
+
+// ── Inbound webhook ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct WebhookConfig {
+    /// HMAC-SHA256 secret for verifying inbound webhooks from `marktd`.
+    /// Must match `marktd`'s subscription `webhook_secret`.
+    /// Leave unset to disable signature verification (dev only).
+    /// Use `"env:INBOUND_WEBHOOK_SECRET"`.
+    pub inbound_secret: Option<String>,
+}
+
+// ── Self-registration with marktd ─────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionConfig {
+    /// URL that `marktd` will POST `de.mako.process.initiated` events to.
     ///
-    /// When `false` (default), `processd` runs all 6 netz-checker checks and
-    /// writes `anmeldung_decisions` but does NOT dispatch `bestaetigen`.
-    /// Activate only after verifying grid record and partner coverage.
-    #[arg(long, env = "NB_AUTO_ACCEPT", default_value = "false")]
-    pub nb_auto_accept: bool,
-
-    // ── LF module ─────────────────────────────────────────────────────────
-    /// `LF` — Automatically respond to E_0624 queries (dispatches `einwilligung`/`ablehnen`).
-    ///
-    /// When `false` (default), all E_0624 events are routed to `approval_queue`.
-    #[arg(long, env = "LF_AUTO_RESPOND", default_value = "true")]
-    pub lf_auto_respond: bool,
-
-    /// `LF` — Approval queue entry TTL in seconds (default: 2700 = 45 min).
-    ///
-    /// Entries older than this are auto-expired (status = `Expired`).
-    #[arg(long, default_value = "2700", env = "LF_QUEUE_TTL_SECS")]
-    pub lf_queue_ttl_secs: u64,
-
-    // ── Self-registration with marktd ──────────────────────────────────────
-    /// Webhook URL that `marktd` should POST `de.mako.process.initiated` events to.
-    ///
-    /// When set, `processd` calls `PUT {marktd_url}/api/v1/subscriptions/{subscriber_id}`
-    /// on startup and self-registers as a subscriber. This makes the subscription
-    /// topology part of the deployment config (env var / Helm values.yaml) rather
-    /// than an imperative bootstrap script.  Retries for up to 30 s to tolerate
-    /// marktd startup ordering.
+    /// When set, `processd` calls `PUT {marktd.url}/api/v1/subscriptions/{subscriber_id}`
+    /// on startup and self-registers as a subscriber.  Retries for up to 30 s to
+    /// tolerate `marktd` startup ordering.
     ///
     /// Typical value: `http://<processd-service-dns>:8580/webhook`
-    /// Helm values.yaml: `processd.selfRegister.webhookUrl`
-    #[arg(long, env = "PROCESSD_SELF_REGISTER_WEBHOOK_URL")]
-    pub self_register_webhook_url: Option<String>,
-
-    /// Subscriber ID used when self-registering with `marktd`.
-    ///
-    /// Must be unique per deployment (e.g. `processd-prod`, `processd-nb-only`).
-    /// Used as the `PUT /api/v1/subscriptions/:id` path segment — idempotent upsert.
-    #[arg(long, env = "PROCESSD_SUBSCRIBER_ID", default_value = "processd")]
+    pub webhook_url: Option<String>,
+    /// Unique subscription ID for this deployment.  Used as the path segment in
+    /// `PUT /api/v1/subscriptions/:id` — idempotent upsert.
+    #[serde(default = "default_subscriber_id")]
     pub subscriber_id: String,
-
     /// Comma-separated CloudEvent types to subscribe to.
+    #[serde(default = "default_event_types")]
+    pub event_types: String,
+}
+
+fn default_subscriber_id() -> String {
+    "processd".to_owned()
+}
+fn default_event_types() -> String {
+    "de.mako.process.initiated".to_owned()
+}
+
+impl Default for SubscriptionConfig {
+    fn default() -> Self {
+        Self {
+            webhook_url: None,
+            subscriber_id: default_subscriber_id(),
+            event_types: default_event_types(),
+        }
+    }
+}
+
+// ── NB module ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct NbConfig {
+    /// When `true`, `processd` dispatches `bestaetigen` automatically on `Accept`.
     ///
-    /// Default covers all process lifecycle events that processd needs.
-    #[arg(
-        long,
-        env = "PROCESSD_SUBSCRIBER_EVENT_TYPES",
-        default_value = "de.mako.process.initiated"
-    )]
-    pub subscriber_event_types: String,
+    /// When `false` (default), decisions are written to `anmeldung_decisions` but
+    /// `bestaetigen` is NOT dispatched — operator must approve via
+    /// `PUT /api/v1/queue/{id}/approve`.  Activate only after verifying grid
+    /// record and partner coverage (STP target ≥ 95 %).
+    #[serde(default)]
+    pub auto_accept: bool,
+}
 
-    // ── Observability ─────────────────────────────────────────────────────
-    /// Log level (RUST_LOG syntax, e.g. `info`, `debug`, `processd=trace`).
-    #[arg(long, default_value = "info", env = "RUST_LOG")]
-    pub log_level: String,
+// ── LF module ─────────────────────────────────────────────────────────────────
 
-    /// OpenTelemetry OTLP endpoint (optional).
-    #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
-    pub otel_endpoint: Option<String>,
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LfConfig {
+    /// When `true` (default), `processd` automatically dispatches
+    /// `einwilligung` / `ablehnen` for E_0624 queries without ERP involvement.
+    #[serde(default = "default_lf_auto_respond")]
+    pub auto_respond: bool,
+    /// Approval queue entry TTL in seconds.  Default: 2700 (= 45 min, LFW24 window).
+    ///
+    /// Entries older than this are auto-expired (status = `Expired`).
+    #[serde(default = "default_queue_ttl_secs")]
+    pub queue_ttl_secs: u64,
+}
+
+fn default_lf_auto_respond() -> bool {
+    true
+}
+fn default_queue_ttl_secs() -> u64 {
+    2700
+}
+
+impl Default for LfConfig {
+    fn default() -> Self {
+        Self {
+            auto_respond: default_lf_auto_respond(),
+            queue_ttl_secs: default_queue_ttl_secs(),
+        }
+    }
+}
+
+// ── OIDC ──────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OidcConfig {
+    /// OIDC issuer URL (without trailing slash).
+    /// Example: `https://login.microsoftonline.com/{tenant-id}/v2.0`
+    pub issuer: String,
+    /// JWT `aud` claim expected value.
+    /// Example: `api://mako-processd`
+    pub audience: String,
+    /// JWKS background refresh interval in seconds.
+    #[serde(default = "default_jwks_refresh_secs")]
+    pub jwks_refresh_secs: u64,
+}
+
+fn default_jwks_refresh_secs() -> u64 {
+    300
+}
+
+// ── OpenTelemetry ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct OtelConfig {
+    /// OTLP gRPC endpoint.  Example: `http://otel-collector:4317`.
+    /// Omit to disable distributed tracing.
+    pub endpoint: Option<String>,
+}
+
+// ── Loader + env resolution ───────────────────────────────────────────────────
+
+/// Load configuration from a TOML file.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or the TOML is malformed.
+pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("cannot read config file {}: {e}", path.display()))?;
+    let cfg: Config = toml::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("config parse error in {}: {e}", path.display()))?;
+    Ok(cfg)
+}
+
+/// Resolve an `"env:VAR_NAME"` reference or return the value as-is.
+///
+/// # Errors
+///
+/// Returns an error if the `env:` variable is not set.
+pub fn resolve_env(value: &str) -> anyhow::Result<String> {
+    if let Some(var) = value.strip_prefix("env:") {
+        std::env::var(var).map_err(|_| {
+            anyhow::anyhow!("environment variable {var:?} is not set (referenced in processd.toml)")
+        })
+    } else {
+        Ok(value.to_owned())
+    }
+}
+
+/// Like [`resolve_env`] but wraps the result in `secrecy::SecretString`.
+pub fn resolve_env_secret(value: &str) -> anyhow::Result<secrecy::SecretString> {
+    resolve_env(value).map(secrecy::SecretString::from)
 }

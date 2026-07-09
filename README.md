@@ -54,18 +54,18 @@ Five distinct layers live here:
 | `mako-redispatch` | Redispatch 2.0 workflows — XML document types (`ActivationDocument`, `Stammdaten`, `NetworkConstraintDocument`, …) + IFTSTA PIDs 21037/21038 |
 | `redispatch-xml` | Redispatch 2.0 XML/XSD format parsing |
 | `energy-api` | BDEW API-Webdienste Strom — REST/WebSocket client + Axum server for iMS processes |
-| `makod` | Production daemon — assembles all modules, AS4 inbound server, deadline scheduler |
 | `mako-markt` | Master data library — `MaloId`, `MeloId`, `MarktpartnerId`, repository traits, CloudEvents, test doubles |
 | `mako-edm` | Energy data library — `MeterDataReceipt`, `TimeSeriesRepository`, `ImbalanceReport`, MSCONS PID set |
 | `mako-obs` | Observability library — `ProcessProjection`, `KpiReport`, `DeadlineRisk`, `ProcessProjectionRepository` |
-| `makod` | Production daemon — assembles all modules, AS4 inbound server, deadline scheduler |
-| `marktd` | Market Data Hub daemon — MaLo/MeLo/contracts/VersorgungsStatus/preisblaetter/NeLo/malo_grid, PostgreSQL, OIDC/JWT, `:8180` |
+| `mako-service` | Shared service infrastructure — `ServiceBuilder`, `load_config`, health routes, HMAC-SHA256 webhook verification |
+| **`makod`** | Protocol daemon — all 45+ workflows, AS4 (`:4080`), REST (`:8080`), iMS (`:8090`), SlateDB, MCP server, OTLP, Cedar ABAC |
+| **`marktd`** | Market Data Hub — MaLo/MeLo/contracts/VersorgungsStatus/preisblaetter/NeLo/malo_grid; EventBus fan-out; PostgreSQL, OIDC/JWT; `:8180` |
 | `processd` | Process Decision Engine — NB Anmeldung STP (netz-checker, ≥ 95 %) + LF E_0624 auto-response; role-gated §7 EnWG features; `:8580` |
 | `invoic-checker` | INVOIC plausibility library — period validity, position arithmetic, document total, tariff match, tariff found |
 | `invoicd` | INVOIC plausibility-check daemon (LF role) — auto-settles or disputes GPKE billing; persists receipts to PostgreSQL for §22 MessZV compliance; `:8280` |
 | `edmd` | Energy Data Management daemon — MSCONS meter readings, time-series API, `MeterBillingPeriod`, imbalance; PostgreSQL; `:8380` |
 | `obsd` | Business-process observability daemon — process projections, BNetzA KPI reports, deadline alerts; PostgreSQL; `:8480` |
-| `mako-service` | Shared service infrastructure — `ServiceBuilder`, `load_config`, health routes, HMAC-SHA256 webhook verification |
+
 
 ---
 

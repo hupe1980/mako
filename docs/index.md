@@ -62,7 +62,7 @@ permalink: /
     <span class="mako-kpi__label">EDIFACT message types</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">45</span>
+    <span class="mako-kpi__value">45+</span>
     <span class="mako-kpi__label">event-sourced workflows</span>
   </div>
   <div class="mako-kpi">
@@ -70,8 +70,8 @@ permalink: /
     <span class="mako-kpi__label">Prüfidentifikatoren</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">5-layer</span>
-    <span class="mako-kpi__label">validation pipeline</span>
+    <span class="mako-kpi__value">6</span>
+    <span class="mako-kpi__label">production daemons</span>
   </div>
   <div class="mako-kpi">
     <span class="mako-kpi__value">1.89</span>
@@ -182,14 +182,15 @@ permalink: /
     <div class="mako-feature__icon">🏭</div>
     <h3>Production Daemons</h3>
     <p>
-      Six independently deployable, Docker-ready services:
-      <code>makod</code> — all 45+ workflows behind durable SlateDB.
-      <code>marktd</code> — PostgreSQL master data (MaLo/MeLo/contracts/price sheets/VersorgungsStatus/NeLo/MaLo grid topology), Cedar ABAC, OIDC/JWT, EventBus fan-out.
-      <code>processd</code> — automated NB Anmeldung STP decisions (≥ 95% via <code>netz-checker</code>) + LF E_0624 auto-response (45 min window). Role-gated for §7 EnWG separation.
-      <code>invoicd</code> — autonomous INVOIC settlement (GPKE billing), §22 MessZV receipts, selbstausstellen 31006, overdue-REMADV monitoring.
-      <code>edmd</code> — MSCONS meter-reading storage, time-series API, `MeterBillingPeriod` (RLM spitzenleistung + Gas brennwert), Mehr-/Mindermengen imbalance.
-      <code>obsd</code> — process projections, BNetzA KPI reports, deadline-risk alerts, §20 EnWG parity.
-      All share <code>mako-service</code> scaffolding and emit OTLP traces.
+      Six independently deployable, Docker-ready services, each with TOML
+      configuration, Cedar ABAC, OIDC/JWT auth, OpenTelemetry, and a built-in
+      MCP server at <code>/mcp</code>:
+      <code>makod</code> — all 45+ workflows behind durable SlateDB; AS4 (`:4080`), REST (`:8080`), iMS (`:8090`).
+      <code>marktd</code> — PostgreSQL master data (MaLo/MeLo/contracts/VersorgungsStatus/NeLo/MaLo grid), Cedar ABAC, OIDC/JWT, EventBus fan-out.
+      <code>processd</code> — automated NB Anmeldung STP (≥ 95 % via <code>netz-checker</code>) + LF E_0624 auto-response (45-min window); role-gated for §7 EnWG separation.
+      <code>invoicd</code> — autonomous INVOIC settlement (GPKE billing), §22 MessZV receipts, selbstausstellen PID 31006, overdue-REMADV monitoring.
+      <code>edmd</code> — MSCONS meter-reading storage, time-series API, <code>MeterBillingPeriod</code> (RLM Spitzenleistung + Gas Brennwert), Mehr-/Mindermengen imbalance.
+      <code>obsd</code> — process projections, BNetzA KPI reports, deadline-risk alerts, §20 EnWG parity monitoring.
     </p>
     <a href="{{ '/makod' | relative_url }}">makod guide →</a> ·
     <a href="{{ '/marktd' | relative_url }}">marktd guide →</a> ·
@@ -203,11 +204,11 @@ permalink: /
     <div class="mako-feature__icon">🤖</div>
     <h3>LLM / MCP Integration</h3>
     <p>
-      Built-in <a href="https://modelcontextprotocol.io">MCP server</a> at
-      <code>/mcp</code> exposes tools, resources, and guided prompts to Claude
-      Desktop, VS Code Copilot, and any MCP-capable LLM client. Dynamic
-      server instructions include the instance's Marktrollen, available
-      commands, and regulatory deadlines — no extra configuration.
+      Every daemon ships a built-in <a href="https://modelcontextprotocol.io">MCP server</a>
+      at <code>/mcp</code> (MCP Streamable HTTP, 2025-11-25). Tools, resources, and guided
+      prompts expose EDIFACT commands, regulatory deadlines, INVOIC plausibility
+      outcomes, KPI data, and process projections to Claude Desktop, VS Code
+      Copilot, and any MCP-capable LLM client. No extra configuration required.
     </p>
     <a href="{{ '/makod' | relative_url }}#mcp-server">MCP guide →</a>
   </div>

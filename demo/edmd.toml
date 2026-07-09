@@ -1,0 +1,43 @@
+# edmd.toml — demo configuration (PostgreSQL, auth disabled)
+# DO NOT use in production.
+#
+# edmd is the Energy Data Management daemon:
+#   - Ingests MSCONS meter readings from makod via marktd EventBus
+#   - Stores meter time-series and pre-aggregates MeterBillingPeriod (Strom + Gas)
+#   - Provides /api/v1/billing-period to invoicd for NNE validation
+
+[http]
+addr = "0.0.0.0:8380"
+
+[database]
+# edmd owns its own database (microservices DB autonomy).
+url       = "env:DATABASE_URL"
+pool_size = 10
+
+[identity]
+# Tenant identifier for Cedar resource checks.
+tenant = "9900357000004"
+
+[marktd]
+url     = "http://marktd:8180"
+api_key = "env:EDMD_MARKTD_API_KEY"
+
+[webhook]
+inbound_secret = "env:EDMD_INBOUND_SECRET"
+
+[subscription]
+# Self-registers with marktd on startup.
+webhook_url   = "http://edmd:8380/webhook"
+subscriber_id = "edmd"
+event_types   = [
+  "de.mako.process.initiated",
+  "de.mako.process.completed",
+  "de.mako.edifact.inbound",
+]
+
+# [oidc]  — omit to disable auth (dev mode only)
+# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "api://mako-edmd"
+
+# [otel]
+# endpoint = "http://otel-collector:4317"

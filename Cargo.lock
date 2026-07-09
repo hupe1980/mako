@@ -1524,6 +1524,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "toml",
  "tracing",
  "uuid",
 ]
@@ -2746,6 +2747,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "toml",
  "tracing",
  "uuid",
 ]
@@ -3990,6 +3992,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "toml",
  "tracing",
  "uuid",
 ]
@@ -4600,6 +4603,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "toml",
  "tracing",
  "uuid",
 ]

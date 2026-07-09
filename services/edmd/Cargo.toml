@@ -26,6 +26,7 @@ thiserror          = { workspace = true }
 axum               = { version = "0.8", features = [] }
 clap               = { version = "4", features = ["derive", "env"] }
 serde              = { workspace = true }
+toml               = { version = "0.8", default-features = false, features = ["parse"] }
 serde_json         = { workspace = true }
 time               = { workspace = true }
 uuid               = { workspace = true }

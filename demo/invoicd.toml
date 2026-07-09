@@ -1,0 +1,56 @@
+# invoicd.toml — demo configuration (PostgreSQL, auth disabled)
+# DO NOT use in production.
+#
+# invoicd is the INVOIC plausibility-check daemon (LF role):
+#   - Validates inbound INVOIC 31001/31002/31005/31006 against PRICAT tariffs
+#   - Persists every receipt to PostgreSQL for §22 MessZV (3-year retention)
+#   - Dispatches REMADV 33001 (accept) or REMADV 33002 / COMDIS 29001 (dispute)
+#   - Handles outbound selbstausgestellt INVOIC 31006 via POST /api/v1/selbstausstellen
+
+[http]
+addr = "0.0.0.0:8280"
+
+[database]
+# invoicd owns its own database (microservices DB autonomy).
+# Required for §22 MessZV / §41 EnWG compliance (3-year receipt retention).
+url             = "env:DATABASE_URL"
+max_connections = 5
+
+[identity]
+# Tenant identifier written to every invoic_receipts row.
+tenant = "9900357000004"
+
+[makod]
+url     = "http://makod:8080"
+api_key = "env:INVOICD_MAKOD_API_KEY"
+
+[marktd]
+url     = "http://marktd:8180"
+api_key = "env:INVOICD_MARKTD_API_KEY"
+
+[webhook]
+inbound_secret = "env:INVOICD_INBOUND_SECRET"
+
+[subscription]
+# Self-registers with marktd on startup.
+webhook_url   = "http://invoicd:8280/webhook"
+subscriber_id = "invoicd"
+event_types   = [
+  "de.mako.process.initiated",
+  "de.mako.process.completed",
+]
+
+[check]
+# Relative tolerances for invoic-checker plausibility pipeline.
+arithmetic_tolerance       = 0.01   # 1 % — qty × price = line net
+total_tolerance            = 0.01   # 1 % — Σ line nets = Gesamtnetto
+tariff_tolerance           = 0.03   # 3 % — PRICAT unit price vs INVOIC
+require_tariff             = false  # true → missing tariff escalates to Dispute
+auto_dispute_threshold_eur = 0.0    # 0.0 → Warn always auto-approved
+
+# [oidc]  — omit to disable auth (dev mode only)
+# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "api://mako-invoicd"
+
+# [otel]
+# endpoint = "http://otel-collector:4317"

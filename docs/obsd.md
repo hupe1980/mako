@@ -51,6 +51,7 @@ graph TB
 │  GET  /obs/kpis             ← BNetzA KPI report                │
 │  GET  /obs/overdue          ← processes near or past deadline   │
 │  GET  /health/live  /health/ready                               │
+│  POST|GET /mcp      ← MCP Streamable HTTP (LLM tooling)         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -123,41 +124,67 @@ curl -s "http://obsd:8480/obs/overdue" \
 
 ## Configuration reference
 
-| Env var | CLI flag | Default | Description |
-|---------|----------|---------|-------------|
-| `OBSD_LISTEN` | `--listen` | `0.0.0.0:8480` | HTTP listen address |
-| `OBSD_DATABASE_URL` | `--database-url` | — | PostgreSQL connection string |
-| `OBSD_DB_POOL_SIZE` | `--db-pool-size` | `10` | Connection pool size |
-| `OBSD_MARKTD_URL` | `--marktd-url` | `http://localhost:8180` | `marktd` base URL |
-| `OBSD_MARKTD_API_KEY` | `--marktd-api-key` | — | `marktd` Bearer token |
-| `OBSD_SUBSCRIBER_ID` | `--subscriber-id` | `obsd` | EventBus subscriber ID |
-| `OBSD_WEBHOOK_URL` | `--webhook-url` | — | Public URL `marktd` POSTs events to |
-| `OBSD_WEBHOOK_SECRET` | `--webhook-secret` | — | HMAC signing secret |
-| `OBSD_INBOUND_SECRET` | `--inbound-secret` | = webhook-secret | HMAC verification secret |
-| `OBSD_TENANT` | `--tenant` | `default` | Tenant identifier |
-| `OBSD_OIDC_ISSUER` | `--oidc-issuer` | — | OIDC issuer (omit for dev mode) |
-| `OBSD_OIDC_AUDIENCE` | `--oidc-audience` | — | OIDC audience |
-| `RUST_LOG` | `--log-level` | `info` | Log level |
-| `OBSD_OTEL_ENDPOINT` | `--otel-endpoint` | — | OTLP endpoint |
+`obsd` reads its configuration from a **TOML file** (default: `obsd.toml`),
+with secrets deferred to environment variables via `"env:VAR_NAME"` values.
+
+```bash
+obsd --config /etc/obsd/obsd.toml
+# or: OBSD_CONFIG=/etc/obsd/obsd.toml obsd
+```
+
+### Full `obsd.toml` reference
+
+```toml
+[http]
+addr = "0.0.0.0:8480"          # default
+
+[database]
+url       = "env:DATABASE_URL"  # required; use env: for secrets
+pool_size = 10                  # default
+
+[identity]
+tenant = "9900357000004"        # required — MP-ID of the operator
+
+[marktd]
+url     = "http://marktd:8180"      # required
+api_key = "env:OBSD_MARKTD_API_KEY" # required
+
+[webhook]
+inbound_secret = "env:OBSD_INBOUND_SECRET"  # optional; omit for dev
+
+[subscription]
+# Self-registers with marktd on startup — no manual curl required.
+webhook_url   = "http://obsd:8480/webhook"  # public URL marktd POSTs to
+subscriber_id = "obsd"                       # default
+event_types   = [
+  "de.mako.process.initiated",
+  "de.mako.process.completed",
+  "de.mako.process.timed_out",
+  "de.mako.process.failed",
+  "de.mako.aperak.rejected",
+]
+
+# [oidc]          # omit to disable auth (dev only — never omit in production)
+# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "api://mako-obsd"
+# jwks_refresh_secs = 300
+
+# [otel]          # omit to disable tracing
+# endpoint = "http://otel-collector:4317"
+```
 
 ---
 
-## marktd subscription setup
+## marktd subscription
+
+`obsd` **auto-registers** its EventBus subscription with `marktd` on startup
+when `subscription.webhook_url` is set in the config — no manual `curl` required.
+
+To force re-registration or verify the subscription:
 
 ```bash
-curl -X PUT http://marktd:8180/api/v1/subscriptions/obsd \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "webhook_url": "http://obsd:8480/webhook",
-    "webhook_secret": "<shared-hmac-secret>",
-    "event_types": [
-      "de.mako.process.initiated",
-      "de.mako.process.completed",
-      "de.mako.aperak.rejected"
-    ],
-    "active": true
-  }'
+curl -s http://marktd:8180/api/v1/subscriptions/obsd \
+  -H "Authorization: Bearer <token>" | jq .
 ```
 
 ---

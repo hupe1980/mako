@@ -3,29 +3,38 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use anyhow::Context;
 use clap::Parser;
 use tokio_util::sync::CancellationToken;
 
-use obsd::config::Config;
+use obsd::config::{self, Config};
+
+#[derive(Debug, Parser)]
+#[command(name = "obsd", about = "Business-process observability daemon")]
+struct Cli {
+    #[arg(short = 'c', long, default_value = "obsd.toml", env = "OBSD_CONFIG")]
+    config: std::path::PathBuf,
+    #[arg(long, default_value = "info", env = "RUST_LOG")]
+    log_level: String,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config = Config::parse();
+    let cli = Cli::parse();
 
-    let otel_cfg = config
-        .otel_endpoint
+    let cfg: Config = config::load_from_file(&cli.config)
+        .with_context(|| format!("loading config from {}", cli.config.display()))?;
+
+    let otel_cfg = cfg
+        .otel
+        .endpoint
         .as_deref()
         .map(|ep| mako_service::OtelConfig {
             endpoint: ep.to_owned(),
             service_name: "obsd".to_owned(),
         });
-    let _otel_guard = mako_service::init_tracing(
-        "obsd",
-        config.log_level.as_deref().unwrap_or("info"),
-        otel_cfg.as_ref(),
-    );
+    let _otel_guard = mako_service::init_tracing("obsd", &cli.log_level, otel_cfg.as_ref());
 
-    // ── Graceful shutdown ────────────────────────────────────────────────────
     let shutdown = CancellationToken::new();
     {
         let shutdown = shutdown.clone();
@@ -36,50 +45,57 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // ── OIDC ─────────────────────────────────────────────────────────────────
     let http = mako_service::http::default_client();
-    let oidc = if let Some(ref issuer) = config.oidc_issuer {
-        let audience = config
-            .oidc_audience
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("--oidc-audience required when --oidc-issuer is set"))?;
-        let verifier = mako_service::oidc::OidcVerifier::new(issuer, audience, &http).await?;
+    let oidc = if let Some(ref oidc_cfg) = cfg.oidc {
+        let verifier =
+            mako_service::oidc::OidcVerifier::new(&oidc_cfg.issuer, &oidc_cfg.audience, &http)
+                .await
+                .context("OIDC discovery")?;
         verifier.clone().spawn_refresh_task(
             http.clone(),
-            config.oidc_jwks_refresh_secs,
+            oidc_cfg.jwks_refresh_secs,
             shutdown.clone(),
         );
         verifier
     } else {
         tracing::warn!("obsd: OIDC disabled — all requests accepted without authentication");
-        mako_service::oidc::OidcVerifier::disabled(&config.tenant)
+        mako_service::oidc::OidcVerifier::disabled(&cfg.identity.tenant)
     };
 
-    // ── Cedar ABAC ───────────────────────────────────────────────────────────
     let cedar = Arc::new(
         mako_service::cedar::CedarEnforcer::from_policy_str(include_str!("../policies/obsd.cedar"))
             .map_err(|e| anyhow::anyhow!("Cedar policy error: {e}"))?,
     );
 
-    // ── Server ───────────────────────────────────────────────────────────────
-    let listen: SocketAddr = config
-        .listen
+    let listen: SocketAddr = cfg
+        .http
+        .addr
         .parse()
-        .map_err(|e| anyhow::anyhow!("invalid --listen '{}': {e}", config.listen))?;
+        .with_context(|| format!("invalid http.addr '{}'", cfg.http.addr))?;
 
-    let inbound_secret = config.effective_inbound_secret().cloned();
+    let database_url = config::resolve_env_secret(&cfg.database.url).context("database.url")?;
+    let marktd_api_key =
+        config::resolve_env_secret(&cfg.marktd.api_key).context("marktd.api_key")?;
+    let inbound_secret = cfg
+        .webhook
+        .inbound_secret
+        .as_deref()
+        .map(config::resolve_env_secret)
+        .transpose()
+        .context("webhook.inbound_secret")?;
+    let webhook_secret = inbound_secret.clone();
 
     obsd::server::run(obsd::server::RunConfig {
         listen,
-        database_url: config.database_url,
-        marktd_url: config.marktd_url,
-        marktd_api_key: config.marktd_api_key,
-        subscriber_id: config.subscriber_id,
-        webhook_url: config.webhook_url,
-        webhook_secret: config.webhook_secret,
+        database_url,
+        marktd_url: cfg.marktd.url,
+        marktd_api_key,
+        subscriber_id: cfg.subscription.subscriber_id,
+        webhook_url: cfg.subscription.webhook_url,
+        webhook_secret,
         inbound_secret,
-        db_pool_size: config.db_pool_size,
-        tenant: config.tenant,
+        db_pool_size: cfg.database.pool_size,
+        tenant: cfg.identity.tenant,
         oidc,
         cedar,
         shutdown,

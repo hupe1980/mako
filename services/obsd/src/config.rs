@@ -1,82 +1,181 @@
-//! Configuration for `obsd`.
+//! `obsd` configuration — loaded from `obsd.toml` + `env:` substitution.
+//!
+//! # Minimal `obsd.toml`
+//!
+//! ```toml
+//! [http]
+//! addr = "0.0.0.0:8480"
+//!
+//! [database]
+//! url = "env:DATABASE_URL"
+//!
+//! [identity]
+//! tenant = "9900357000004"
+//!
+//! [marktd]
+//! url     = "http://marktd:8180"
+//! api_key = "env:OBSD_MARKTD_API_KEY"
+//!
+//! [webhook]
+//! inbound_secret = "env:OBSD_INBOUND_SECRET"
+//!
+//! [subscription]
+//! webhook_url   = "http://obsd:8480/webhook"
+//! subscriber_id = "obsd"
+//!
+//! # [oidc]
+//! # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+//! # audience = "api://mako-obsd"
+//! # [otel]
+//! # endpoint = "http://otel-collector:4317"
+//! ```
 
-use clap::Parser;
-use secrecy::SecretString;
+use serde::Deserialize;
+use std::path::Path;
 
-/// Business-process observability daemon.
-#[derive(Debug, Parser)]
-#[command(name = "obsd", about, version)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
-    #[arg(long = "listen", env = "OBSD_LISTEN", default_value = "0.0.0.0:8480")]
-    pub listen: String,
-
-    #[arg(long = "database-url", env = "OBSD_DATABASE_URL")]
-    pub database_url: SecretString,
-
-    #[arg(
-        long = "marktd-url",
-        env = "OBSD_MARKTD_URL",
-        default_value = "http://localhost:8180"
-    )]
-    pub marktd_url: String,
-    /// Bearer token for `marktd` machine-to-machine auth.
-    #[arg(long = "marktd-api-key", env = "OBSD_MARKTD_API_KEY")]
-    pub marktd_api_key: secrecy::SecretString,
-    #[arg(
-        long = "subscriber-id",
-        env = "OBSD_SUBSCRIBER_ID",
-        default_value = "obsd"
-    )]
-    pub subscriber_id: String,
-
-    #[arg(long = "webhook-url", env = "OBSD_WEBHOOK_URL")]
-    pub webhook_url: String,
-
-    #[arg(long = "webhook-secret", env = "OBSD_WEBHOOK_SECRET")]
-    pub webhook_secret: Option<SecretString>,
-
-    #[arg(long = "inbound-secret", env = "OBSD_INBOUND_SECRET")]
-    pub inbound_secret: Option<SecretString>,
-
-    #[arg(long = "db-pool-size", env = "OBSD_DB_POOL_SIZE", default_value_t = 10)]
-    pub db_pool_size: u32,
-
-    /// Log level (e.g. `"info"`, `"debug"`). Overridden by `RUST_LOG`.
-    #[arg(long = "log-level", env = "OBSD_LOG_LEVEL")]
-    pub log_level: Option<String>,
-
-    /// OpenTelemetry OTLP gRPC endpoint (e.g. `http://otel-collector:4317`).
-    #[arg(long = "otel-endpoint", env = "OBSD_OTEL_ENDPOINT")]
-    pub otel_endpoint: Option<String>,
-
-    // ── Tenant ────────────────────────────────────────────────────────────────
-    /// Tenant identifier for Cedar resource checks.
-    #[arg(long = "tenant", env = "OBSD_TENANT", default_value = "default")]
-    pub tenant: String,
-
-    // ── OIDC ──────────────────────────────────────────────────────────────────
-    /// OIDC issuer URL.  When absent, auth is disabled (dev mode only).
-    #[arg(long = "oidc-issuer", env = "OBSD_OIDC_ISSUER")]
-    pub oidc_issuer: Option<String>,
-
-    /// JWT `aud` claim expected value.  Required when `--oidc-issuer` is set.
-    #[arg(long = "oidc-audience", env = "OBSD_OIDC_AUDIENCE")]
-    pub oidc_audience: Option<String>,
-
-    /// Seconds between JWKS background refreshes.
-    #[arg(
-        long = "oidc-jwks-refresh-secs",
-        env = "OBSD_OIDC_JWKS_REFRESH_SECS",
-        default_value_t = 3600u64
-    )]
-    pub oidc_jwks_refresh_secs: u64,
+    pub http: HttpConfig,
+    pub database: DatabaseConfig,
+    pub identity: IdentityConfig,
+    pub marktd: MarktdConfig,
+    #[serde(default)]
+    pub webhook: WebhookConfig,
+    #[serde(default)]
+    pub subscription: SubscriptionConfig,
+    #[serde(default)]
+    pub oidc: Option<OidcConfig>,
+    #[serde(default)]
+    pub otel: OtelConfig,
 }
 
-impl Config {
-    #[must_use]
-    pub fn effective_inbound_secret(&self) -> Option<&SecretString> {
-        self.inbound_secret
-            .as_ref()
-            .or(self.webhook_secret.as_ref())
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpConfig {
+    #[serde(default = "default_http_addr")]
+    pub addr: String,
+}
+
+fn default_http_addr() -> String {
+    "0.0.0.0:8480".to_owned()
+}
+
+impl Default for HttpConfig {
+    fn default() -> Self {
+        Self {
+            addr: default_http_addr(),
+        }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabaseConfig {
+    /// PostgreSQL URL.  Use `"env:DATABASE_URL"` to defer to the environment.
+    pub url: String,
+    #[serde(default = "default_pool_size")]
+    pub pool_size: u32,
+}
+
+fn default_pool_size() -> u32 {
+    10
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityConfig {
+    /// Tenant identifier used in Cedar resource checks.
+    pub tenant: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarktdConfig {
+    /// `marktd` base URL.  Example: `http://marktd:8180`
+    pub url: String,
+    /// Bearer token.  Use `"env:OBSD_MARKTD_API_KEY"`.
+    pub api_key: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct WebhookConfig {
+    /// HMAC-SHA256 secret for verifying inbound webhooks from `marktd`.
+    /// Use `"env:OBSD_INBOUND_SECRET"`.
+    pub inbound_secret: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionConfig {
+    /// URL that `marktd` will POST events to.
+    pub webhook_url: String,
+    #[serde(default = "default_subscriber_id")]
+    pub subscriber_id: String,
+    #[serde(default = "default_event_types")]
+    pub event_types: Vec<String>,
+}
+
+fn default_subscriber_id() -> String {
+    "obsd".to_owned()
+}
+fn default_event_types() -> Vec<String> {
+    vec![
+        "de.mako.process.initiated".to_owned(),
+        "de.mako.process.completed".to_owned(),
+        "de.mako.process.timed_out".to_owned(),
+        "de.mako.process.failed".to_owned(),
+        "de.mako.aperak.rejected".to_owned(),
+    ]
+}
+
+impl Default for SubscriptionConfig {
+    fn default() -> Self {
+        Self {
+            webhook_url: "http://obsd:8480/webhook".to_owned(),
+            subscriber_id: default_subscriber_id(),
+            event_types: default_event_types(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OidcConfig {
+    pub issuer: String,
+    pub audience: String,
+    #[serde(default = "default_jwks_refresh_secs")]
+    pub jwks_refresh_secs: u64,
+}
+
+fn default_jwks_refresh_secs() -> u64 {
+    300
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct OtelConfig {
+    pub endpoint: Option<String>,
+}
+
+pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("cannot read config file {}: {e}", path.display()))?;
+    toml::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("config parse error in {}: {e}", path.display()))
+}
+
+pub fn resolve_env(value: &str) -> anyhow::Result<String> {
+    if let Some(var) = value.strip_prefix("env:") {
+        std::env::var(var).map_err(|_| {
+            anyhow::anyhow!("environment variable {var:?} is not set (referenced in obsd.toml)")
+        })
+    } else {
+        Ok(value.to_owned())
+    }
+}
+
+pub fn resolve_env_secret(value: &str) -> anyhow::Result<secrecy::SecretString> {
+    resolve_env(value).map(secrecy::SecretString::from)
 }

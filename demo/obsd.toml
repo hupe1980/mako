@@ -1,0 +1,46 @@
+# obsd.toml — demo configuration (PostgreSQL, auth disabled)
+# DO NOT use in production.
+#
+# obsd is the Business-Process Observability daemon:
+#   - Projects ProcessProjection state (pending/completed/failed/timed-out) from events
+#   - Serves BNetzA KPI report (§12 Abs.3 EnWG Monitoringbericht obligations)
+#   - Bridges late/failed processes to Prometheus Alertmanager
+#   - API: GET /api/v1/processes, GET /api/v1/kpi, GET /api/v1/deadline-risks
+
+[http]
+addr = "0.0.0.0:8480"
+
+[database]
+# obsd owns its own database (microservices DB autonomy).
+url       = "env:DATABASE_URL"
+pool_size = 10
+
+[identity]
+# Tenant identifier for Cedar resource checks.
+tenant = "9900357000004"
+
+[marktd]
+url     = "http://marktd:8180"
+api_key = "env:OBSD_MARKTD_API_KEY"
+
+[webhook]
+inbound_secret = "env:OBSD_INBOUND_SECRET"
+
+[subscription]
+# Self-registers with marktd on startup.
+webhook_url   = "http://obsd:8480/webhook"
+subscriber_id = "obsd"
+event_types   = [
+  "de.mako.process.initiated",
+  "de.mako.process.completed",
+  "de.mako.process.timed_out",
+  "de.mako.process.failed",
+  "de.mako.aperak.rejected",
+]
+
+# [oidc]  — omit to disable auth (dev mode only)
+# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "api://mako-obsd"
+
+# [otel]
+# endpoint = "http://otel-collector:4317"

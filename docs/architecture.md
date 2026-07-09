@@ -175,14 +175,21 @@ Process::execute_and_enqueue_with_snapshot_and_retry
 
 ## Companion daemons
 
-| Daemon | Port | Role | Status |
-|--------|------|------|--------|
-| `makod` | `:8080` / `:4080` | Protocol gateway (EDIFACT ↔ BO4E, all PIDs, deadlines) | ✅ |
-| `marktd` | `:8180` | Market Data Hub (MaLo/MeLo, VersorgungsStatus, EventBus, pure data) | ✅ |
-| `processd` | `:8580` | Process decision engine (NB STP + LF E_0624 automation) | ✅ |
-| `invoicd` | `:8280` | INVOIC plausibility + REMADV + selbstausstellen + overdue-remadv | ✅ M16 |
-| `edmd` | `:8380` | Energy data management (MSCONS, time-series, `MeterBillingPeriod`) | ✅ M15 |
-| `obsd` | `:8480` | Process observability, KPI reports, §20 parity | ✅ |
+All six daemons share a common operational model:
+- **TOML configuration** — loaded from a file (`makod.toml`, `marktd.toml`, …) with `env:VAR_NAME` secret interpolation
+- **Cedar ABAC** — all HTTP endpoints gated by Cedar attribute-based access control
+- **OIDC/JWT** — asymmetric algorithm only; JWKS cached with background refresh; omit `[oidc]` for dev mode
+- **MCP server** — built-in `POST|GET /mcp` endpoint (MCP Streamable HTTP, 2025-11-25) for LLM tooling
+- **OpenTelemetry** — OTLP traces on all workflow commands, event appends, and webhook deliveries
+
+| Daemon | Port | Role | Config file |
+|--------|------|------|-------------|
+| `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 45+ workflows, AS4 ingest, deadlines | `makod.toml` |
+| `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/VersorgungsStatus/preisblaetter, EventBus fan-out | `marktd.toml` |
+| `processd` | `:8580` | Process decision engine — NB STP (netz-checker) + LF E_0624 auto-response | `processd.toml` |
+| `invoicd` | `:8280` | INVOIC plausibility — REMADV, selbstausstellen, overdue-REMADV, §22 MessZV audit | `invoicd.toml` |
+| `edmd` | `:8380` | Energy data management — MSCONS meter readings, time-series, `MeterBillingPeriod` | `edmd.toml` |
+| `obsd` | `:8480` | Process observability — KPI reports, deadline-risk alerts, §20 EnWG parity | `obsd.toml` |
 
 ### `marktd` — Market Data Hub (`:8180`)
 
