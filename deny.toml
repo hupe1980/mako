@@ -218,13 +218,6 @@ version = "0.1"
 reason  = "Windows crate ecosystem version skew."
 
 [[bans.skip]]
-name    = "windows-sys"
-version = "0.59"
-reason  = "Windows crate ecosystem version skew."
-
-
-
-[[bans.skip]]
 name    = "windows-core"
 version = "0.61"
 reason  = "Windows crate ecosystem version skew (slatedb 0.14.1 update added 0.62.2)."
@@ -282,6 +275,48 @@ reason  = "windows-targets 0.48 legacy path; 0.52+ pulled by newer deps."
 name    = "windows_x86_64_gnu"
 version = "0.48"
 reason  = "windows_x86_64_gnu 0.48 legacy path alongside newer version."
+
+# ── mako-service / krafka transitive version skew (--all-features only) ─────────
+# krafka (Kafka EventBus backend in mako-service) pins socket2 0.5 which brings in
+# windows-sys 0.52; tokio / modern ecosystem uses socket2 0.6 / windows-sys 0.61.
+# Only exposed under --all-features; production binaries use the kafka feature gate.
+[[bans.skip]]
+name    = "socket2"
+version = "0.5"
+reason  = "krafka (mako-service kafka feature) pins socket2 0.5; tokio pulls 0.6. Resolve when krafka bumps socket2."
+
+[[bans.skip]]
+name    = "windows-sys"
+version = "0.52"
+reason  = "socket2 0.5 (krafka) pulls windows-sys 0.52; modern stack uses 0.59/0.61. Resolve when krafka bumps socket2."
+
+# ── governor / prometheus transitive version skew (mako-service) ─────────────────
+# mako-service pulls governor 0.6 (rate-limit) → dashmap 5.5.3.
+# asx-rs (AS4 transport) pulls dashmap 6.2.1 directly. No shared state.
+[[bans.skip]]
+name    = "dashmap"
+version = "5"
+reason  = "governor 0.6 (mako-service rate-limit) pins dashmap 5; asx-rs uses 6. Resolve when governor bumps dashmap."
+
+# mako-service pulls prometheus 0.14 → procfs 0.17 → rustix 0.38 / linux-raw-sys 0.4.
+# asx-rs + fd-lock + modern stack pull rustix 1.x / linux-raw-sys 0.12.
+[[bans.skip]]
+name    = "rustix"
+version = "0.38"
+reason  = "prometheus 0.14 → procfs 0.17 → rustix 0.38; modern stack uses rustix 1.x. Resolve when prometheus bumps procfs."
+
+[[bans.skip]]
+name    = "linux-raw-sys"
+version = "0.4"
+reason  = "Companion to rustix 0.38 (prometheus/procfs chain); linux-raw-sys 0.12 pulled by rustix 1.x."
+
+# ── p256/ecdsa vs asx-rs const-oid split ─────────────────────────────────────────
+# p256/ecdsa (energy-api) use const-oid 0.9 (RustCrypto 2022 generation).
+# asx-rs / digest 0.11 / hmac 0.13 use const-oid 0.10 (RustCrypto 2024 generation).
+[[bans.skip]]
+name    = "const-oid"
+version = "0.9"
+reason  = "p256/ecdsa/der 0.7 (energy-api) pins const-oid 0.9; asx-rs/digest 0.11 uses const-oid 0.10. Resolve when p256 ecosystem updates."
 
 [[bans.skip]]
 name    = "windows_x86_64_msvc"
