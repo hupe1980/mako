@@ -192,7 +192,7 @@ ENTRYPOINT ["/usr/local/bin/makod"]
 #   docker build \
 #     --build-arg OCI_REVISION=$(git rev-parse HEAD) \
 #     --build-arg OCI_CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ) …
-ARG OCI_VERSION=0.7.0
+ARG OCI_VERSION=0.8.0
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="makod" \
@@ -231,7 +231,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
 
 ENTRYPOINT ["/usr/local/bin/marktd"]
 
-ARG OCI_VERSION=0.7.0
+ARG OCI_VERSION=0.8.0
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="marktd" \
@@ -267,7 +267,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
 
 ENTRYPOINT ["/usr/local/bin/processd"]
 
-ARG OCI_VERSION=0.7.0
+ARG OCI_VERSION=0.8.0
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="processd" \
@@ -303,7 +303,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
 
 ENTRYPOINT ["/usr/local/bin/invoicd"]
 
-ARG OCI_VERSION=0.7.0
+ARG OCI_VERSION=0.8.0
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="invoicd" \
@@ -339,7 +339,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
 
 ENTRYPOINT ["/usr/local/bin/edmd"]
 
-ARG OCI_VERSION=0.7.0
+ARG OCI_VERSION=0.8.0
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="edmd" \
@@ -375,7 +375,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
 
 ENTRYPOINT ["/usr/local/bin/obsd"]
 
-ARG OCI_VERSION=0.7.0
+ARG OCI_VERSION=0.8.0
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="obsd" \

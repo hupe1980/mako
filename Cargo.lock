@@ -1447,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "dvgw-edi"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "edifact-rs",
  "serde",
@@ -1486,7 +1486,7 @@ dependencies = [
 
 [[package]]
 name = "edi-energy"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "criterion",
  "edifact-rs",
@@ -1526,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "edmd"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1622,7 +1622,7 @@ dependencies = [
 
 [[package]]
 name = "energy-api"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "axum",
  "base64ct",
@@ -2761,7 +2761,7 @@ dependencies = [
 
 [[package]]
 name = "invoic-checker"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "rubo4e",
  "rust_decimal",
@@ -2773,7 +2773,7 @@ dependencies = [
 
 [[package]]
 name = "invoicd"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3313,14 +3313,14 @@ dependencies = [
 
 [[package]]
 name = "mako-as4"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "asx-rs",
 ]
 
 [[package]]
 name = "mako-edm"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "rust_decimal",
  "serde",
@@ -3333,7 +3333,7 @@ dependencies = [
 
 [[package]]
 name = "mako-engine"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "criterion",
  "rand 0.10.2",
@@ -3351,7 +3351,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gabi-gas"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "dvgw-edi",
  "mako-engine",
@@ -3362,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "mako-geli-gas"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -3376,7 +3376,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gpke"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -3392,7 +3392,7 @@ dependencies = [
 
 [[package]]
 name = "mako-mabis"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "edi-energy",
  "mako-engine",
@@ -3405,7 +3405,7 @@ dependencies = [
 
 [[package]]
 name = "mako-markt"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "hmac 0.12.1",
  "reqwest",
@@ -3425,11 +3425,11 @@ dependencies = [
 
 [[package]]
 name = "mako-nbw"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "mako-obs"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3441,7 +3441,7 @@ dependencies = [
 
 [[package]]
 name = "mako-redispatch"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "mako-engine",
  "redispatch-xml",
@@ -3454,7 +3454,7 @@ dependencies = [
 
 [[package]]
 name = "mako-service"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "axum",
  "cedar-policy",
@@ -3487,7 +3487,7 @@ dependencies = [
 
 [[package]]
 name = "mako-wim"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -3501,7 +3501,7 @@ dependencies = [
 
 [[package]]
 name = "mako-wim-gas"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -3516,7 +3516,7 @@ dependencies = [
 
 [[package]]
 name = "makod"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "asx-rs",
@@ -3565,7 +3565,7 @@ dependencies = [
 
 [[package]]
 name = "marktd"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3747,7 +3747,7 @@ dependencies = [
 
 [[package]]
 name = "netz-checker"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "mako-markt",
  "serde",
@@ -4018,7 +4018,7 @@ dependencies = [
 
 [[package]]
 name = "obsd"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4627,7 +4627,7 @@ dependencies = [
 
 [[package]]
 name = "processd"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -5043,7 +5043,7 @@ dependencies = [
 
 [[package]]
 name = "redispatch-xml"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "quick-xml 0.40.1",
  "serde",

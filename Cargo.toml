@@ -32,7 +32,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version     = "0.7.0"
+version     = "0.8.0"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
@@ -68,14 +68,14 @@ rmcp                      = { version = "2.0.0", features = ["transport-io", "tr
 schemars                  = { version = "1.2.1" }
 
 # ── Internal workspace crates (path + version so domain crates can be published) ─
-edi-energy       = { path = "crates/edi-energy",  version = "0.7" }
-mako-engine      = { path = "crates/mako-engine", version = "0.7" }
-mako-markt       = { path = "crates/mako-markt",   version = "0.7" }
-mako-edm         = { path = "crates/mako-edm",    version = "0.7" }
-mako-obs         = { path = "crates/mako-obs",    version = "0.7" }
-mako-service     = { path = "crates/mako-service", version = "0.7" }
-invoic-checker   = { path = "crates/invoic-checker", version = "0.7" }
-netz-checker     = { path = "crates/netz-checker", version = "0.7" }
+edi-energy       = { path = "crates/edi-energy",  version = "0.8" }
+mako-engine      = { path = "crates/mako-engine", version = "0.8" }
+mako-markt       = { path = "crates/mako-markt",   version = "0.8" }
+mako-edm         = { path = "crates/mako-edm",    version = "0.8" }
+mako-obs         = { path = "crates/mako-obs",    version = "0.8" }
+mako-service     = { path = "crates/mako-service", version = "0.8" }
+invoic-checker   = { path = "crates/invoic-checker", version = "0.8" }
+netz-checker     = { path = "crates/netz-checker", version = "0.8" }
 
 # Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.
 # Required by mako-service feature "kafka" (EventBus scale-out backend).
