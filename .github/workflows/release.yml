@@ -280,22 +280,35 @@ jobs:
 
   # ── Docker build + push ──────────────────────────────────────────────────────
   #
-  # Builds all six production daemon images and pushes to ghcr.io:
-  #   ghcr.io/<owner>/makod:<version>    — EDIFACT process engine   :8080/:4080/:8090
-  #   ghcr.io/<owner>/marktd:<version>   — Market Data Hub          :8180
-  #   ghcr.io/<owner>/processd:<version> — Process Decision Engine  :8580
-  #   ghcr.io/<owner>/invoicd:<version>  — INVOIC plausibility      :8280
-  #   ghcr.io/<owner>/edmd:<version>     — Energy Data Management   :8380
-  #   ghcr.io/<owner>/obsd:<version>     — Observability            :8480
+  # ── Docker build + push ──────────────────────────────────────────────────────
   #
-  # Each service uses its own Dockerfile target (see multi-stage Dockerfile).
-  # Builds run in parallel via matrix. Cache scopes are per-service so that
-  # layer reuse is maximised without cross-service cache pollution.
+  # Native-runner multi-arch pipeline (Docker "distribute-build" pattern).
+  # QEMU emulation for arm64 Rust compilation takes 2+ hours — avoided entirely.
   #
-  # Multi-platform: linux/amd64 + linux/arm64 (QEMU for arm64 cross-build).
-  docker:
-    name: Docker — ${{ matrix.service }}
-    runs-on: ubuntu-latest
+  # Three-stage pipeline:
+  #
+  # Stage 1 — docker-builder (2 native-runner jobs in parallel):
+  #   Builds the cargo-chef `builder` stage on native hardware per platform.
+  #   Caches per-platform under scope `mako-builder-linux-amd64` /
+  #   `mako-builder-linux-arm64`. Runs in ~16 min on amd64, ~20 min on arm64
+  #   (native vs. ~2 h+ via QEMU).
+  #
+  # Stage 2 — docker (12 parallel native-runner jobs, 6 services × 2 platforms):
+  #   Restores the per-platform builder cache (no Rust recompile).
+  #   Builds the lightweight distroless runtime stage (~1–2 min each).
+  #   Pushes each image by OCI digest (no tag yet).
+  #   Uploads the digest to a GitHub artifact for Stage 3.
+  #
+  # Stage 3 — docker-manifest (6 parallel jobs, one per service):
+  #   Downloads the two platform digests for the service.
+  #   Creates and pushes the final multi-arch manifest tag.
+  #
+  # Net wall-clock time: ~20 min (limited by arm64 native build of the builder)
+  # vs. 2+ h with QEMU. Runner cost: 2× the parallel amd64/arm64 builder jobs.
+
+  docker-builder:
+    name: Docker — builder (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
     needs: publish
     permissions:
       contents: read
@@ -304,31 +317,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - service: makod
-            target: runtime
-            description: "Mako process engine daemon — German energy market communication (MaKo/BDEW EDI@Energy)"
-          - service: marktd
-            target: marktd-runtime
-            description: "Market Data Hub daemon — MaLo/MeLo/VersorgungsStatus/preisblaetter/EventBus fan-out"
-          - service: processd
-            target: processd-runtime
-            description: "Process Decision Engine — NB STP (netz-checker) + LF E_0624 auto-response"
-          - service: invoicd
-            target: invoicd-runtime
-            description: "INVOIC plausibility-check daemon — LF role, §22 MessZV receipt retention"
-          - service: edmd
-            target: edmd-runtime
-            description: "Energy Data Management daemon — MSCONS meter readings, MeterBillingPeriod"
-          - service: obsd
-            target: obsd-runtime
-            description: "Business-process observability daemon — KPI reports, §20 EnWG parity"
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm64
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU (for linux/arm64 cross-compilation)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -340,7 +334,142 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Derive versioned tags from the git tag (e.g. v0.7.0 → 0.7.0, 0.7, latest).
+      # Build only the shared `builder` stage on native hardware.
+      # No QEMU — each platform compiles Rust on its own CPU architecture.
+      - name: Build and cache Rust builder stage (${{ matrix.platform }})
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: builder
+          platforms: ${{ matrix.platform }}
+          push: false
+          build-args: |
+            OCI_REVISION=${{ github.sha }}
+            OCI_CREATED=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha,scope=mako-builder-${{ matrix.platform }}
+          cache-to:   type=gha,scope=mako-builder-${{ matrix.platform }},mode=max
+
+  docker:
+    name: Docker — ${{ matrix.service }} (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    needs: docker-builder
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── amd64 ───────────────────────────────────────────────────────────
+          - { service: makod,    target: runtime,          platform: linux/amd64, runner: ubuntu-latest }
+          - { service: marktd,   target: marktd-runtime,   platform: linux/amd64, runner: ubuntu-latest }
+          - { service: processd, target: processd-runtime, platform: linux/amd64, runner: ubuntu-latest }
+          - { service: invoicd,  target: invoicd-runtime,  platform: linux/amd64, runner: ubuntu-latest }
+          - { service: edmd,     target: edmd-runtime,     platform: linux/amd64, runner: ubuntu-latest }
+          - { service: obsd,     target: obsd-runtime,     platform: linux/amd64, runner: ubuntu-latest }
+          # ── arm64 ───────────────────────────────────────────────────────────
+          - { service: makod,    target: runtime,          platform: linux/arm64, runner: ubuntu-24.04-arm64 }
+          - { service: marktd,   target: marktd-runtime,   platform: linux/arm64, runner: ubuntu-24.04-arm64 }
+          - { service: processd, target: processd-runtime, platform: linux/arm64, runner: ubuntu-24.04-arm64 }
+          - { service: invoicd,  target: invoicd-runtime,  platform: linux/arm64, runner: ubuntu-24.04-arm64 }
+          - { service: edmd,     target: edmd-runtime,     platform: linux/arm64, runner: ubuntu-24.04-arm64 }
+          - { service: obsd,     target: obsd-runtime,     platform: linux/arm64, runner: ubuntu-24.04-arm64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Restore the per-platform builder cache — no Rust recompilation.
+      # Build the lightweight distroless runtime stage and push by OCI digest.
+      - name: Build and push ${{ matrix.service }} (${{ matrix.platform }}) by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          platforms: ${{ matrix.platform }}
+          # Push by digest without a tag — Stage 3 creates the final manifest.
+          outputs: >-
+            type=image,
+            name=ghcr.io/${{ github.repository_owner }}/${{ matrix.service }},
+            push-by-digest=true,
+            name-canonical=true,
+            push=true
+          build-args: |
+            OCI_REVISION=${{ github.sha }}
+            OCI_CREATED=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha,scope=mako-builder-${{ matrix.platform }}
+          # Do not update the builder cache from runtime jobs.
+          cache-to: ""
+
+      # Save the digest to a GitHub artifact so the manifest job can retrieve it.
+      - name: Export digest
+        run: |
+          platform_safe="${{ matrix.platform }}"
+          platform_safe="${platform_safe//\//-}"
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+          echo "PLATFORM_SAFE=${platform_safe}" >> "$GITHUB_ENV"
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.service }}-${{ env.PLATFORM_SAFE }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  docker-manifest:
+    name: Docker — manifest ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: docker
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: makod
+            description: "Mako process engine daemon — German energy market communication (MaKo/BDEW EDI@Energy)"
+          - service: marktd
+            description: "Market Data Hub daemon — MaLo/MeLo/VersorgungsStatus/preisblaetter/EventBus fan-out"
+          - service: processd
+            description: "Process Decision Engine — NB STP (netz-checker) + LF E_0624 auto-response"
+          - service: invoicd
+            description: "INVOIC plausibility-check daemon — LF role, §22 MessZV receipt retention"
+          - service: edmd
+            description: "Energy Data Management daemon — MSCONS meter readings, MeterBillingPeriod"
+          - service: obsd
+            description: "Business-process observability daemon — KPI reports, §20 EnWG parity"
+    steps:
+      - name: Download all platform digests for ${{ matrix.service }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-${{ matrix.service }}-*
+          merge-multiple: true
+          path: /tmp/digests
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Derive versioned tags from the git tag (e.g. v0.8.0 → 0.8.0, 0.8, latest).
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -355,19 +484,14 @@ jobs:
             org.opencontainers.image.description=${{ matrix.description }}
             org.opencontainers.image.licenses=MIT OR Apache-2.0
 
-      - name: Build and push ${{ matrix.service }}
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: ${{ matrix.target }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            OCI_REVISION=${{ github.sha }}
-            OCI_CREATED=${{ github.event.head_commit.timestamp }}
-          # Separate cache scope per service — avoids cross-service layer eviction.
-          cache-from: type=gha,scope=${{ matrix.service }}-docker
-          cache-to:   type=gha,scope=${{ matrix.service }}-docker,mode=max
+      # Merge the amd64 and arm64 digests into a single multi-arch manifest.
+      - name: Create and push multi-arch manifest for ${{ matrix.service }}
+        working-directory: /tmp/digests
+        run: |
+          # Build the tag arguments from metadata-action output.
+          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}')
+          # Build the digest source references.
+          sources=$(printf 'ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}@sha256:%s ' *)
+          # shellcheck disable=SC2086
+          docker buildx imagetools create $tags $sources
 
