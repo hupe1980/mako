@@ -51,6 +51,7 @@ use mako_engine::{
     types::MarktpartnerCode,
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
+use rubo4e::identifiers::{NeloId, SrId};
 
 /// Stable workflow name used in `WorkflowId` and `ProcessRegistry`.
 pub const WORKFLOW_NAME: &str = "wim-steuerungsauftrag";
@@ -68,6 +69,47 @@ pub const WORKFLOW_NAME: &str = "wim-steuerungsauftrag";
 /// deadline_store.register(&deadline).await?;
 /// ```
 pub const STEUERUNGSAUFTRAG_DEADLINE_LABEL: &str = "wim-steuerungsauftrag-deadline";
+
+// ── Control target location ───────────────────────────────────────────────────
+
+/// Typed target of a WiM Steuerungsauftrag command.
+///
+/// A control command addresses either a NeLo (network element location) or
+/// a SteuerbareRessource (iMS controllable resource, BK6-24-174 §6).
+/// Both identifiers are validated at construction time via rubo4e.
+///
+/// | Prefix | Type | Example |
+/// |--------|------|---------|
+/// | `E…` / `10Y…` | [`NeloId`] — EIC or BDEW Codenummer | `10XDE-EON-NETZ--G` |
+/// | `C…` | [`SrId`] — Steuerbare-Ressource-ID | `C0001234567890` |
+///
+/// [`NeloId`]: rubo4e::identifiers::NeloId
+/// [`SrId`]: rubo4e::identifiers::SrId
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", content = "id", rename_all = "snake_case")]
+pub enum LocationId {
+    /// Netz-Element-Lokation (EIC code or BDEW Codenummer).
+    Nelo(NeloId),
+    /// Steuerbare Ressource — iMS controllable resource (BK6-24-174 §6).
+    Sr(SrId),
+}
+
+impl LocationId {
+    /// Returns the raw string representation of this location identifier.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Nelo(id) => id.as_ref(),
+            Self::Sr(id) => id.as_ref(),
+        }
+    }
+}
+
+impl std::fmt::Display for LocationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 // ── Type of control command ───────────────────────────────────────────────────
 
@@ -90,8 +132,8 @@ pub struct SteuerungsauftragData {
     pub tx_id: String,
     /// GLN of the NB or LF that sent the command.
     pub sender_mp_id: MarktpartnerCode,
-    /// Location identifier — either a NeLo-ID (`E…`) or SR-ID (`C…`).
-    pub location_id: String,
+    /// Typed target: either a NeLo-ID or SR-ID (iMS SteuerbareRessource).
+    pub location_id: LocationId,
     /// Whether this is a power-regulation or reset command.
     pub command_type: SteuerungsCommandType,
     /// ISO-8601 UTC timestamp from which the control effect begins.
@@ -114,8 +156,8 @@ pub enum SteuerungsauftragEvent {
         tx_id: String,
         /// GLN of the NB/LF sending the command.
         sender_mp_id: MarktpartnerCode,
-        /// NeLo-ID or SR-ID of the controlled location.
-        location_id: String,
+        /// Typed target: NeLo or SteuerbareRessource.
+        location_id: LocationId,
         /// ISO-8601 UTC timestamp from which the limit takes effect.
         execution_time_from: String,
         /// Maximum power in kW.
@@ -129,8 +171,8 @@ pub enum SteuerungsauftragEvent {
         tx_id: String,
         /// GLN of the NB/LF sending the command.
         sender_mp_id: MarktpartnerCode,
-        /// NeLo-ID or SR-ID of the controlled location.
-        location_id: String,
+        /// Typed target: NeLo or SteuerbareRessource.
+        location_id: LocationId,
         /// ISO-8601 UTC timestamp from which the reset takes effect.
         execution_time_from: String,
     },
@@ -218,8 +260,8 @@ pub enum SteuerungsauftragCommand {
         tx_id: String,
         /// GLN of the NB/LF sending the command.
         sender_mp_id: MarktpartnerCode,
-        /// NeLo-ID or SR-ID of the controlled location.
-        location_id: String,
+        /// Typed target: NeLo or SteuerbareRessource (iMS).
+        location_id: LocationId,
         /// ISO-8601 UTC timestamp from which the limit takes effect.
         execution_time_from: String,
         /// Maximum power in kW.
@@ -233,8 +275,8 @@ pub enum SteuerungsauftragCommand {
         tx_id: String,
         /// GLN of the NB/LF sending the command.
         sender_mp_id: MarktpartnerCode,
-        /// NeLo-ID or SR-ID of the controlled location.
-        location_id: String,
+        /// Typed target: NeLo or SteuerbareRessource (iMS).
+        location_id: LocationId,
         /// ISO-8601 UTC timestamp from which the reset takes effect.
         execution_time_from: String,
     },

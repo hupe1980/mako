@@ -84,10 +84,10 @@ pub type MeloPayload = serde_json::Value;
 pub type ContractPayload = serde_json::Value;
 
 /// Default BO4E schema version used by `#[serde(default = ...)]` on record
-/// structs. Returns `"v202501.0.0"` so that records written before M5
+/// structs. Returns `"v202607.0.0"` so that records written before M5
 /// (the `bo4e_version` migration) are read as the baseline version.
 fn default_bo4e_version() -> String {
-    "v202501.0.0".to_owned()
+    "v202607.0.0".to_owned()
 }
 
 // ── MaLo ─────────────────────────────────────────────────────────────────────
@@ -114,14 +114,43 @@ pub struct Lokationszuordnung {
 pub struct MaloRecord {
     pub malo_id: MaloId,
     pub sparte: Sparte,
+    /// Voltage/pressure level extracted from `Marktlokation.netzebene` (e.g. `"NS"`, `"MS"`).
+    /// `None` when the incoming BO4E payload did not carry the field.
+    pub netzebene: Option<String>,
+    /// Bilanzierungsgebiet EIC code (`LOC+237` in UTILMD) extracted from `Marktlokation`.
+    /// Used by `processd` NB check 4 as fallback when `malo_grid` is not populated.
+    pub bilanzierungsgebiet: Option<String>,
+    /// Gas quality (`HGas` | `LGas`) extracted from `Marktlokation`.
+    /// Used for Gas tariff routing and GeLi Gas process validation.
+    pub gasqualitaet: Option<String>,
+    /// Energy direction (`Aussp` = generation, `Einsp` = consumption).
+    pub energierichtung: Option<String>,
+    /// Billing mode extracted from `Marktlokation.bilanzierungsmethode`.
+    ///
+    /// Values: `RLM` | `SLP` | `TLP_GEMEINSAM` | `TLP_GETRENNT` | `PAUSCHAL` | `IMS`.
+    /// `RLM` → `netzbilanzd` must include Leistungspreis position (`spitzenleistung_kw` required).
+    /// `SLP` → Arbeitspreis only; no `spitzenleistung_kw`.
+    pub bilanzierungsmethode: Option<String>,
+    /// Regelzone EIC code extracted from `Marktlokation.regelzone`.
+    ///
+    /// Maps the MaLo to an ÜNB (Transmission System Operator) for:
+    /// - MABIS IFTSTA 21000 routing (Bilanzkreisabrechnung Strom, BKV↔ÜNB)
+    /// - Redispatch 2.0 `Stammdaten` forwarding (VNB → ÜNB)
+    pub regelzone: Option<String>,
+    /// Gas GaBi RLM Fallgruppe, extracted from `data["fallgruppenzuordnung"]`.
+    ///
+    /// Values: `"GABI_RLM_MIT_TAGESBAND"` | `"GABI_RLM_OHNE_TAGESBAND"` |
+    /// `"GABI_RLM_IM_NOMINIERUNGSERSATZVERFAHREN"`.
+    ///
+    /// Determines the GaBi billing category for Gas RLM MaLos.
+    /// Required for `netzbilanzd` Gas MMM settlement routing.
+    pub fallgruppe: Option<String>,
     pub version: i64,
     pub data: MaloPayload,
     /// Role assignments valid at the requested reference date.
     pub lokationszuordnung: Vec<Lokationszuordnung>,
     pub updated_at: time::OffsetDateTime,
-    /// BO4E schema version of the `data` payload (e.g. `"v202501.0.0"`).
-    /// Populated from `rubo4e::Bo4eObject::schema_version()` at write time.
-    /// Used by the read-path dispatcher for zero-downtime schema migration.
+    /// BO4E schema version of the `data` payload (e.g. `"v202607.0.0"`).
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
 }
@@ -131,6 +160,23 @@ pub struct MaloRecord {
 pub struct MeloRecord {
     pub melo_id: MeloId,
     pub malo_id: Option<MaloId>,
+    /// Voltage/pressure level at the metering point, extracted from `Messlokation.netzebene_messung`.
+    pub netzebene_messung: Option<String>,
+    /// Regelzone EIC code extracted from
+    /// `Messlokation.standorteigenschaften.eigenschaftenStrom[0].regelzone`.
+    ///
+    /// Maps this MeLo to the \u00dcNB (Transmission System Operator) for:
+    /// - Redispatch 2.0 `Stammdaten` forwarding (VNB \u2192 \u00dcNB)
+    /// - MABIS IFTSTA 21000 routing (Bilanzkreisabrechnung Strom, BKV\u2194\u00dcNB)
+    pub regelzone: Option<String>,
+    /// Full BO4E `Standorteigenschaften` payload as JSONB.
+    ///
+    /// Contains `StandorteigenschaftenStrom` (regelzone, bilanzierungsgebietEic)
+    /// and `StandorteigenschaftenGas` (druckstufe). Required for:
+    /// - Redispatch 2.0 `NetworkConstraintDocument` cross-references
+    /// - Gas billing zone assignment (`druckstufe`) for GeLi Gas MMM
+    /// - netz-checker check 5 (Bilanzierungszone at MeLo level)
+    pub standorteigenschaften: Option<serde_json::Value>,
     pub version: i64,
     pub data: MeloPayload,
     pub updated_at: time::OffsetDateTime,
@@ -194,19 +240,22 @@ pub struct Subscription {
 /// authority.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartnerRecord {
-    /// 13-digit Marktpartner-ID (field name kept as `gln` for DB compat).
+    /// 13-digit Marktpartner-ID.
     pub mp_id: MarktpartnerId,
     pub display_name: Option<String>,
     pub marktrolle: Option<String>,
     pub sparte: Option<Sparte>,
-    /// Raw JSON for channel details (AS4 endpoint, certificate, etc.)
+    /// Coding authority: `"BDEW"` | `"DVGW"` | `"GS1"`.
+    /// Derived from the MP-ID prefix; stored for fast AS4 routing lookups.
+    pub rollencodetyp: Option<String>,
+    /// AS4 endpoint URL list from `Marktteilnehmer.makoadresse`.
+    /// Used by `makod` for dynamic AS4 destination routing.
+    pub makoadresse: Vec<String>,
+    /// Raw JSON for additional channel details (certificate, etc.)
     pub channels: serde_json::Value,
-    /// Optimistic-concurrency version. Defaults to 0 when deserializing from
-    /// PUT request bodies (the repository sets the final value on upsert).
+    /// Optimistic-concurrency version.
     #[serde(default)]
     pub version: i64,
-    /// Last-updated timestamp. Defaults to UNIX epoch when deserializing from
-    /// PUT request bodies (the repository sets `now()` on upsert).
     #[serde(default = "unix_epoch", with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
@@ -267,6 +316,26 @@ pub struct CorrelationFilter {
 }
 
 // ── Traits ────────────────────────────────────────────────────────────────────
+
+/// Read/write access to `MARKTLOKATION` records.
+#[allow(async_fn_in_trait)]
+/// Lightweight read model returned by `MarktdClient::get_malo`.
+///
+/// Contains only the typed fields extracted from the `Marktlokation` JSONB — not
+/// the full payload. Used by `processd` NB check 4 (Bilanzierungsgebiet) as the
+/// primary source before falling back to the `malo_grid` side table.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct MaloTypedFields {
+    pub malo_id: String,
+    /// Voltage/pressure level (e.g. `"NS"`, `"MS"`, `"HS"`).
+    pub netzebene: Option<String>,
+    /// Bilanzierungsgebiet EIC code — primary input for `processd` NB check 4.
+    pub bilanzierungsgebiet: Option<String>,
+    /// Gas quality (`"HGas"` | `"LGas"`).
+    pub gasqualitaet: Option<String>,
+    /// Energy direction (`"Aussp"` = generation, `"Einsp"` = consumption).
+    pub energierichtung: Option<String>,
+}
 
 /// Read/write access to `MARKTLOKATION` records.
 #[allow(async_fn_in_trait)]
@@ -519,6 +588,181 @@ pub trait PreisblattRepository: Send + Sync {
     ) -> Result<Option<PreisblattRecord>, MdmError>;
 }
 
+// ── PreisblattMessung (MSB metering price sheets — B5) ───────────────────────
+
+/// A stored `PreisblattMessung` record from the MSB.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PreisblattMessungRecord {
+    /// MP-ID (BDEW-Codenummer) of the Messstellenbetreiber that published this sheet.
+    pub msb_mp_id: String,
+    /// The full BO4E `PreisblattMessung` payload (stored as JSONB).
+    pub data: serde_json::Value,
+    /// BO4E schema version of `data`.
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+    /// How this record entered the system: `api` (operator upload) or `mako` (engine ingest).
+    pub source: PreisblattSource,
+    pub created_at: time::OffsetDateTime,
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Read/write access to MSB (Messstellenbetreiber) metering price sheets.
+///
+/// Used by `invoicd` for PID 31009 (`MSB-Rechnung`) tariff plausibility checks:
+/// positions 4 (Grundpreis Messung) and 5 (Arbeitspreis Messung).
+///
+/// Source: WiM AHB BK6-24-174.
+#[allow(async_fn_in_trait)]
+pub trait PreisblattMessungRepository: Send + Sync {
+    /// Upsert a `PreisblattMessung` for the given MSB MP-ID.
+    ///
+    /// Conflicts on `(msb_mp_id, valid_from)` perform an in-place update.
+    /// An `Api`-sourced sheet is never overwritten by a `Mako` ingest.
+    async fn upsert_messung(
+        &self,
+        msb_mp_id: &str,
+        data: serde_json::Value,
+        bo4e_version: &str,
+        source: PreisblattSource,
+    ) -> Result<(), MdmError>;
+
+    /// Return the `PreisblattMessung` for `msb_mp_id` valid on `billing_date`
+    /// (ISO 8601 date string, e.g. `"2025-06-15"`).
+    ///
+    /// Returns `None` when no matching entry is found.
+    async fn find_messung_for_date(
+        &self,
+        msb_mp_id: &str,
+        billing_date: &str,
+    ) -> Result<Option<PreisblattMessungRecord>, MdmError>;
+}
+
+// ── PreisblattKonzessionsabgabe (B3) ─────────────────────────────────────────
+
+/// A stored `PreisblattKonzessionsabgabe` record.
+///
+/// §17 StromNZV requires the NB to include Konzessionsabgabe (KA) as a separate
+/// tariff position in every NNE invoice. `kundengruppe_ka` differentiates between
+/// Tarifkunden and Sondervertragskunden.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PreisblattKaRecord {
+    /// NB MP-ID (BDEW-Codenummer) that published this price sheet.
+    pub nb_mp_id: String,
+    /// Energy commodity (`STROM` or `GAS`).
+    pub sparte: String,
+    /// Customer group classification — `None` means applies to all groups.
+    pub kundengruppe_ka: Option<String>,
+    /// The full BO4E `PreisblattKonzessionsabgabe` payload.
+    pub data: serde_json::Value,
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+    /// How this record entered the system.
+    pub source: PreisblattSource,
+    pub created_at: time::OffsetDateTime,
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Read/write access to `PreisblattKonzessionsabgabe` records.
+///
+/// Used by `netzbilanzd` for INVOIC 31001/31002 KA tariff positions.
+#[allow(async_fn_in_trait)]
+pub trait PreisblattKaRepository: Send + Sync {
+    /// Upsert a `PreisblattKonzessionsabgabe` for the given NB MP-ID.
+    ///
+    /// Conflicts on `(nb_mp_id, sparte, kundengruppe_ka, valid_from)` are updated in-place.
+    /// `Api`-sourced sheets are never overwritten by `Mako` ingests.
+    async fn upsert_ka(
+        &self,
+        nb_mp_id: &str,
+        sparte: &str,
+        kundengruppe_ka: Option<&str>,
+        data: serde_json::Value,
+        bo4e_version: &str,
+        source: PreisblattSource,
+    ) -> Result<(), MdmError>;
+
+    /// Return the `PreisblattKonzessionsabgabe` valid on `billing_date` for the NB.
+    ///
+    /// Returns `None` when no matching entry is found.
+    async fn find_ka_for_date(
+        &self,
+        nb_mp_id: &str,
+        sparte: &str,
+        kundengruppe_ka: Option<&str>,
+        billing_date: &str,
+    ) -> Result<Option<PreisblattKaRecord>, MdmError>;
+}
+
+// ── PreisblattDienstleistung (MSB service price sheets) ──────────────────────
+
+/// A stored `PreisblattDienstleistung` record.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PreisblattDienstleistungRecord {
+    pub msb_mp_id: String,
+    pub data: serde_json::Value,
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+    pub source: PreisblattSource,
+    pub created_at: time::OffsetDateTime,
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Read/write access to MSB service price sheets.
+///
+/// Used by `invoic-checker` for INVOIC 31009 service position validation
+/// and by `mako-wim` REQOTE/QUOTES (PIDs 35001–35005).
+#[allow(async_fn_in_trait)]
+pub trait PreisblattDienstleistungRepository: Send + Sync {
+    async fn upsert_dienstleistung(
+        &self,
+        msb_mp_id: &str,
+        data: serde_json::Value,
+        bo4e_version: &str,
+        source: PreisblattSource,
+    ) -> Result<(), MdmError>;
+
+    async fn find_dienstleistung_for_date(
+        &self,
+        msb_mp_id: &str,
+        billing_date: &str,
+    ) -> Result<Option<PreisblattDienstleistungRecord>, MdmError>;
+}
+
+// ── PreisblattHardware (MSB hardware rental price sheets) ────────────────────
+
+/// A stored `PreisblattHardware` record.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PreisblattHardwareRecord {
+    pub msb_mp_id: String,
+    pub data: serde_json::Value,
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+    pub source: PreisblattSource,
+    pub created_at: time::OffsetDateTime,
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Read/write access to MSB hardware rental price sheets.
+///
+/// Required for NB → MSB settlement INVOIC 31009 hardware positions.
+/// `invoic-checker` check 5 cannot validate hardware positions without it.
+#[allow(async_fn_in_trait)]
+pub trait PreisblattHardwareRepository: Send + Sync {
+    async fn upsert_hardware(
+        &self,
+        msb_mp_id: &str,
+        data: serde_json::Value,
+        bo4e_version: &str,
+        source: PreisblattSource,
+    ) -> Result<(), MdmError>;
+
+    async fn find_hardware_for_date(
+        &self,
+        msb_mp_id: &str,
+        billing_date: &str,
+    ) -> Result<Option<PreisblattHardwareRecord>, MdmError>;
+}
+
 // ── PriCat (versioned PreisblattNetznutzung history + dispatch) ──────────────
 
 /// Dispatch state of a versioned PRICAT snapshot.
@@ -711,8 +955,9 @@ pub struct NbContractRecord {
     /// Energy commodity.
     pub sparte: crate::domain::Sparte,
     /// Voltage / pressure level: `NS` | `MS` | `MSP` | `HSP` | `HS` | `HöS` | `HöS/HS`
+    /// (Gas: `GND` / `GMT` / `GHD`).
     pub netzebene: String,
-    /// Metering / balancing method: `RLM` | `SLP`
+    /// Metering / balancing method: `RLM` | `SLP` | `IMS` | `TLP_GEMEINSAM` | …
     pub bilanzierungsmethode: String,
     /// How often the NB bills for network usage.
     pub billing_schedule: BillingSchedule,
@@ -722,6 +967,20 @@ pub struct NbContractRecord {
     /// End of contract validity (`None` = currently active).
     #[serde(with = "date_iso::opt")]
     pub valid_to: Option<time::Date>,
+    /// Full BO4E `Vertrag` payload (L1 — digital LRV exchange).
+    ///
+    /// `_typ` is auto-injected to `"VERTRAG"` on write.
+    /// Rows created before L1 have `'{}'` (empty); re-PUT to populate.
+    #[serde(default)]
+    pub data: serde_json::Value,
+    /// Contract type extracted from `data["vertragsart"]`.
+    /// Default: `NETZNUTZUNGSVERTRAG`.
+    #[serde(default)]
+    pub vertragsart: Option<String>,
+    /// Contract lifecycle status extracted from `data["vertragsstatus"]`.
+    /// Default: `AKTIV`.
+    #[serde(default)]
+    pub vertragsstatus: Option<String>,
     /// Tenant ID for multi-tenant deployments.
     pub tenant: String,
     /// Optimistic-concurrency version counter.
@@ -829,8 +1088,21 @@ pub struct VersorgungsStatusRecord {
     pub lieferstatus: LieferStatus,
     /// GLN of the active Lieferant (set when `lieferstatus == Beliefert`).
     pub lf_mp_id: Option<String>,
-    /// GLN of the announced future Lieferant (post UTILMD 55001, pre NB confirm 55003).
-    pub lf_gln_next: Option<String>,
+    /// MP-ID of the announced future Lieferant (post UTILMD 55001/44001, pre confirmation).
+    ///
+    /// At most ONE pending Lieferbeginn per MaLo at any time — the NB rejects a second
+    /// 55001 with GPKE rule A06 while `lf_mp_id_next IS NOT NULL`.
+    pub lf_mp_id_next: Option<String>,
+    /// Announced Lieferbeginn date of the future Lieferant — set together with `lf_mp_id_next`.
+    ///
+    /// Together these two fields form the complete "pending transition" record: WHO takes
+    /// over (`lf_mp_id_next`) and WHEN (`lf_next_lieferbeginn`).  Both are cleared atomically
+    /// when the transition is confirmed (55003/44003) or rejected (55004/44004).
+    ///
+    /// Used by the NB to schedule Ersatz/Grundversorgung gap-closure (§38 EnWG) and by
+    /// `netzbilanzd` for billing-period alignment.
+    #[serde(default, with = "date_iso::opt")]
+    pub lf_next_lieferbeginn: Option<Date>,
     /// Agreed Lieferbeginn date (set when supply is confirmed).
     #[serde(default, with = "date_iso::opt")]
     pub lieferbeginn: Option<Date>,
@@ -865,7 +1137,9 @@ pub struct VersorgungsStatusHistoryRecord {
     pub tenant: String,
     pub lieferstatus: LieferStatus,
     pub lf_mp_id: Option<String>,
-    pub lf_gln_next: Option<String>,
+    pub lf_mp_id_next: Option<String>,
+    #[serde(default, with = "date_iso::opt")]
+    pub lf_next_lieferbeginn: Option<Date>,
     #[serde(default, with = "date_iso::opt")]
     pub lieferbeginn: Option<Date>,
     #[serde(default, with = "date_iso::opt")]
@@ -955,6 +1229,63 @@ pub trait VersorgungsStatusRepository: Send + Sync {
         page: u32,
         size: u32,
     ) -> Result<PageResult<VersorgungsStatusRecord>, MdmError>;
+
+    /// Record an announced incoming Lieferant (partial update).
+    ///
+    /// Called when a UTILMD 55001/44001 (`de.mako.process.initiated`, NB side)
+    /// is received.  Sets `lf_mp_id_next` and `lf_next_lieferbeginn` without
+    /// touching `lieferstatus`, `lf_mp_id`, `lieferbeginn`, or `lieferende`.
+    ///
+    /// Inserts a new row as `Unbeliefert` if none exists yet for this MaLo.
+    /// Appends to `versorgungsstatus_history` on every successful write.
+    #[must_use]
+    async fn announce_lf_next(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        lf_mp_id_next: &str,
+        lf_next_lieferbeginn: Option<Date>,
+        nb_mp_id: &str,
+        process_id: Option<Uuid>,
+    ) -> Result<(), MdmError>;
+
+    /// Promote the announced future Lieferant to the active one.
+    ///
+    /// Called when UTILMD 55003/44003 (`de.mako.process.completed`, NB side)
+    /// is sent.  Atomically:
+    /// - `lf_mp_id = lf_mp_id_next`
+    /// - `lieferbeginn = lf_next_lieferbeginn`
+    /// - `lieferstatus = Beliefert`
+    /// - `lf_mp_id_next = NULL`, `lf_next_lieferbeginn = NULL`
+    ///
+    /// No-ops if `lf_mp_id_next` is already `NULL` (idempotent re-delivery).
+    /// Appends to `versorgungsstatus_history` on every successful write.
+    #[must_use]
+    async fn confirm_supply(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        process_id: Option<Uuid>,
+    ) -> Result<(), MdmError>;
+
+    /// Mark a MaLo as `Unbeliefert` while preserving any pending announcement.
+    ///
+    /// Called when UTILMD 55013/44013 (`de.mako.process.completed`) is processed.
+    /// The active LF has ended supply; clears `lf_mp_id` and `lieferbeginn` but
+    /// leaves `lf_mp_id_next` / `lf_next_lieferbeginn` intact so a pending future
+    /// Lieferant announcement is not lost.
+    ///
+    /// The NB is responsible for activating Ersatz/Grundversorgung (§38 EnWG)
+    /// when `lieferstatus` becomes `Unbeliefert` and no `lf_mp_id_next` is set.
+    /// Appends to `versorgungsstatus_history` on every successful write.
+    #[must_use]
+    async fn end_supply(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        nb_mp_id: &str,
+        process_id: Option<Uuid>,
+    ) -> Result<(), MdmError>;
 }
 
 // ── Netz-Element-Lokation (NeLo) ──────────────────────────────────────────────
@@ -978,6 +1309,17 @@ pub struct NeLoRecord {
     pub netzebene: Option<String>,
     /// Owning Netzbetreiber GLN.
     pub nb_mp_id: String,
+    /// Whether this NeLo can be remote-controlled (Redispatch 2.0 `steuerkanal`).
+    ///
+    /// Required by DELORD/DELRES topology queries.
+    pub steuerkanal: Option<bool>,
+    /// `eigenschaftMsbLokation` — which Marktrolle is responsible for MSB at this NeLo.
+    ///
+    /// E.g. `"NB"` (grundzuständiger MSB = NB) or `"MSB"` (wechselbar).
+    /// Used for WiM Gas gMSB routing.
+    pub eigenschaft_msb_lokation: Option<String>,
+    /// `grundzustaendigerMsbCodenr` — gMSB MP-ID (13-digit BDEW/DVGW Codenummer).
+    pub grundzustaendiger_msb_codenr: Option<String>,
     /// Additional Redispatch 2.0 attributes (open-ended JSONB).
     pub data: serde_json::Value,
     pub version: i64,
@@ -1140,4 +1482,322 @@ pub trait MaloGridRepository: Send + Sync {
     /// Delete a grid record (e.g. when MaStR signals decommissioning).
     #[must_use]
     async fn delete(&self, malo_id: &MaloId, tenant: &str) -> Result<(), MdmError>;
+}
+
+// ── SteuerbareRessource (B4b) ─────────────────────────────────────────────────
+
+/// A stored `SteuerbareRessource` record.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SteuerbareRessourceRecord {
+    /// SR-ID (format: `C[A-Z0-9]{9}[0-9]`).
+    pub sr_id: String,
+    /// Tenant GLN.
+    pub tenant: String,
+    /// Associated MaLo-ID, if known.
+    pub malo_id: Option<String>,
+    /// Associated MeLo-ID, if known.
+    pub melo_id: Option<String>,
+    /// Full BO4E `SteuerbareRessource` payload (stored as JSONB).
+    pub data: serde_json::Value,
+    /// Contracted iMS control products (`Vec<Konfigurationsprodukt>` as JSONB array).
+    ///
+    /// `None` = not yet populated from WiM Stammdaten.
+    /// `Some([])` = SR has no contracted control products.
+    /// Required for pre-dispatch eligibility checks in `wim.steuerungsauftrag.bestaetigen`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub konfigurationsprodukte: Option<serde_json::Value>,
+    /// BO4E schema version.
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+    /// Monotonic version counter (incremented on update).
+    pub version: i64,
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Persistent store for `SteuerbareRessource` registrations.
+///
+/// Populated by the WiM iMS Steuerungsauftrag process (PID 55168)
+/// and by operator REST uploads.
+#[allow(async_fn_in_trait)]
+pub trait SteuerbareRessourceRepository: Send + Sync {
+    /// Upsert a `SteuerbareRessource` for the given `sr_id` + tenant.
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_sr(
+        &self,
+        sr_id: &str,
+        tenant: &str,
+        malo_id: Option<&str>,
+        melo_id: Option<&str>,
+        data: serde_json::Value,
+        bo4e_version: &str,
+        konfigurationsprodukte: Option<serde_json::Value>,
+    ) -> Result<(), MdmError>;
+
+    /// Return the `SteuerbareRessource` for `sr_id`, or `None` if not found.
+    async fn find_sr(
+        &self,
+        sr_id: &str,
+        tenant: &str,
+    ) -> Result<Option<SteuerbareRessourceRecord>, MdmError>;
+
+    /// Return all `SteuerbareRessource` records for a MaLo.
+    async fn list_sr_by_malo(
+        &self,
+        malo_id: &str,
+        tenant: &str,
+    ) -> Result<Vec<SteuerbareRessourceRecord>, MdmError>;
+}
+
+// ── TechnischeRessource (B9) ─────────────────────────────────────────────────
+
+/// A stored `TechnischeRessource` record.
+///
+/// Covers E-mobility charging points (`EMobilitaetsart`), generation units
+/// (`Erzeugungsart`), and storage (`Speicherart`).  Linked to `MaLo`/`MeLo` via
+/// `Lokationszuordnung`.  Required for WiM iMS Steuerungsauftrag and Redispatch 2.0.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TechnischeRessourceRecord {
+    /// `TrId` — Technische-Ressource identifier.
+    pub tr_id: String,
+    pub tenant: String,
+    /// Linked `MaLo` (`zugeordnete_marktlokation_id`).
+    pub malo_id: Option<String>,
+    /// Linked `MeLo` (`vorgelagerte_messlokation_id`).
+    pub melo_id: Option<String>,
+    /// Classification: `"EMobilitaet"` | `"Erzeugung"` | `"Speicher"`.
+    pub tr_typ: Option<String>,
+    /// Whether the resource can be remote-controlled (Redispatch 2.0 `ist_fernschaltbar`).
+    pub ist_fernschaltbar: Option<bool>,
+    /// Full BO4E `TechnischeRessource` payload.
+    pub data: serde_json::Value,
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+    pub version: i64,
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Persistent store for `TechnischeRessource` registrations.
+///
+/// Populated by Redispatch 2.0 registration processes and by operator REST
+/// uploads.  Used by iMS E-mobility `Steuerungsauftrag` routing and flex-market
+/// clearing.
+#[allow(async_fn_in_trait)]
+pub trait TechnischeRessourceRepository: Send + Sync {
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_tr(
+        &self,
+        tr_id: &str,
+        tenant: &str,
+        malo_id: Option<&str>,
+        melo_id: Option<&str>,
+        tr_typ: Option<&str>,
+        ist_fernschaltbar: Option<bool>,
+        data: serde_json::Value,
+        bo4e_version: &str,
+    ) -> Result<(), MdmError>;
+
+    async fn find_tr(
+        &self,
+        tr_id: &str,
+        tenant: &str,
+    ) -> Result<Option<TechnischeRessourceRecord>, MdmError>;
+
+    /// Return all `TechnischeRessource` records for a `MaLo`.
+    async fn list_tr_by_malo(
+        &self,
+        malo_id: &str,
+        tenant: &str,
+    ) -> Result<Vec<TechnischeRessourceRecord>, MdmError>;
+
+    /// Return all `TechnischeRessource` records for a `MeLo`.
+    async fn list_tr_by_melo(
+        &self,
+        melo_id: &str,
+        tenant: &str,
+    ) -> Result<Vec<TechnischeRessourceRecord>, MdmError>;
+}
+
+// ── Lokationszuordnung graph (B5) ────────────────────────────────────────────
+
+/// One directed edge of the MaKo location graph.
+///
+/// The graph models: `MaLo ↔ MeLo ↔ NeLo ↔ SteuerbareRessource ↔ TechnischeRessource`
+///
+/// Temporal validity: `valid_from IS NULL` means "from the beginning of time";
+/// `valid_to IS NULL` means "open-ended (currently active)".
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LokationszuordnungEdge {
+    pub id: uuid::Uuid,
+    pub tenant: String,
+    /// Source node ID (e.g. MaLo-ID, MeLo-ID).
+    pub von_id: String,
+    /// Source node type: `"malo"` | `"melo"` | `"nelo"` | `"sr"` | `"tr"`.
+    pub von_typ: String,
+    /// Target node ID.
+    pub nach_id: String,
+    /// Target node type.
+    pub nach_typ: String,
+    pub valid_from: Option<time::Date>,
+    /// `None` = open-ended (currently active).
+    pub valid_to: Option<time::Date>,
+    /// Full BO4E `Lokationszuordnung` payload.
+    pub data: serde_json::Value,
+    /// BFS traversal depth from root (0 = direct edge from root).
+    #[serde(default)]
+    pub depth: i32,
+}
+
+/// Persistent store for the `Lokationszuordnung` location graph.
+///
+/// Enables single-query recursive traversal of the full MaLo → MeLo → NeLo →
+/// SR/TR graph for topology-dependent operations (Redispatch 2.0, iMS E-mobility
+/// Steuerungsauftrag routing, MSB Stammdaten hierarchy).
+#[allow(async_fn_in_trait)]
+pub trait LokationszuordnungRepository: Send + Sync {
+    /// Insert or replace a directed edge.
+    ///
+    /// For open-ended edges (`valid_from = None`), only one edge per
+    /// `(tenant, von_id, nach_id)` pair is kept.  Dated edges
+    /// (`valid_from = Some(date)`) allow temporal succession.
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_edge(
+        &self,
+        tenant: &str,
+        von_id: &str,
+        von_typ: &str,
+        nach_id: &str,
+        nach_typ: &str,
+        valid_from: Option<time::Date>,
+        valid_to: Option<time::Date>,
+        data: serde_json::Value,
+    ) -> Result<uuid::Uuid, MdmError>;
+
+    /// Recursively traverse the full location graph reachable from `root_id`.
+    ///
+    /// Returns all edges BFS-ordered by depth (depth 0 = direct edges from root).
+    /// Pass `at_date = None` to return all edges regardless of validity.
+    /// Pass `at_date = Some(d)` to filter to edges valid on date `d`.
+    ///
+    /// Traversal is capped at depth 8 to prevent runaway queries on malformed data.
+    async fn find_graph(
+        &self,
+        tenant: &str,
+        root_id: &str,
+        at_date: Option<time::Date>,
+    ) -> Result<Vec<LokationszuordnungEdge>, MdmError>;
+
+    /// Return direct (depth-0) edges FROM a given node, optionally filtered by date.
+    async fn list_edges_from(
+        &self,
+        tenant: &str,
+        von_id: &str,
+        at_date: Option<time::Date>,
+    ) -> Result<Vec<LokationszuordnungEdge>, MdmError>;
+
+    /// Hard-delete an edge by `(tenant, von_id, nach_id)`.
+    ///
+    /// Removes all temporal variants of the edge pair.
+    /// Returns `true` if at least one row was deleted.
+    async fn delete_edge(
+        &self,
+        tenant: &str,
+        von_id: &str,
+        nach_id: &str,
+    ) -> Result<bool, MdmError>;
+}
+
+// ── Device registry: Zaehler + Geraete (B3) ──────────────────────────────────
+
+/// A stored `Zaehler` record.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ZaehlerRecord {
+    /// Manufacturer serial number or UUID.
+    pub zaehler_id: String,
+    /// Tenant GLN.
+    pub tenant: String,
+    /// Owning MeLo-ID.
+    pub melo_id: String,
+    /// Zähler type string (e.g. `"DREHSTROMZAEHLER"`).
+    pub zaehler_typ: Option<String>,
+    /// Eichgültigkeitsdatum — calibration valid until.
+    pub eichung_bis: Option<time::Date>,
+    /// Full BO4E `Zaehler` payload.
+    pub data: serde_json::Value,
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+    pub version: i64,
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// A stored `Geraet` record.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GeraetRecord {
+    /// Manufacturer serial number or UUID.
+    pub geraet_id: String,
+    /// Tenant GLN.
+    pub tenant: String,
+    /// Owning `zaehler_id`.
+    pub zaehler_id: String,
+    /// Gerätetyp string (e.g. `"WANDLER"`).
+    pub geraet_typ: Option<String>,
+    /// Full BO4E `Geraet` payload.
+    pub data: serde_json::Value,
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+    pub version: i64,
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Persistent store for Zähler (meters) and Geräte (devices).
+///
+/// Populated by WiM MSB/NB device handover processes (ORDERS PIDs 17001–17011)
+/// and operator REST uploads.
+///
+/// Source: WiM AHB BK6-24-174; BO4E Zaehler/Geraet schemas.
+#[allow(async_fn_in_trait)]
+pub trait DeviceRepository: Send + Sync {
+    /// Upsert a `Zaehler` record.
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_zaehler(
+        &self,
+        zaehler_id: &str,
+        tenant: &str,
+        melo_id: &str,
+        zaehler_typ: Option<&str>,
+        eichung_bis: Option<time::Date>,
+        data: serde_json::Value,
+        bo4e_version: &str,
+    ) -> Result<(), MdmError>;
+
+    /// Return all `Zaehler` for a given MeLo-ID.
+    async fn list_zaehler_by_melo(
+        &self,
+        melo_id: &str,
+        tenant: &str,
+    ) -> Result<Vec<ZaehlerRecord>, MdmError>;
+
+    /// Return the `Zaehler` for a given `zaehler_id`, or `None` if not found.
+    async fn find_zaehler(
+        &self,
+        zaehler_id: &str,
+        tenant: &str,
+    ) -> Result<Option<ZaehlerRecord>, MdmError>;
+
+    /// Upsert a `Geraet` record.
+    async fn upsert_geraet(
+        &self,
+        geraet_id: &str,
+        tenant: &str,
+        zaehler_id: &str,
+        geraet_typ: Option<&str>,
+        data: serde_json::Value,
+        bo4e_version: &str,
+    ) -> Result<(), MdmError>;
+
+    /// Return all `Geraete` for a given `zaehler_id`.
+    async fn list_geraete_by_zaehler(
+        &self,
+        zaehler_id: &str,
+        tenant: &str,
+    ) -> Result<Vec<GeraetRecord>, MdmError>;
 }

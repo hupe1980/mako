@@ -24,6 +24,7 @@
 
 use mako_engine::{
     error::WorkflowError,
+    outbox::PendingOutbox,
     types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -59,6 +60,19 @@ pub struct GasMsconsDatenData {
     pub sender: MarktpartnerCode,
     /// EDIFACT message reference.
     pub message_ref: MessageRef,
+    /// Abrechnungsbrennwert in kWh/m³ (PID 13007 only).
+    ///
+    /// Extracted from `QTY+Z08` in the EDIFACT MSCONS interchange.
+    /// Stored as a string to avoid floating-point precision issues.
+    /// `None` for PIDs 13002, 13008, 13009 (meter readings, not gas quality).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brennwert_kwh_per_m3: Option<String>,
+    /// Zustandszahl — dimensionless compressibility factor (PID 13007 only).
+    ///
+    /// Extracted from `QTY+Z10` in the EDIFACT MSCONS interchange.
+    /// `None` for PIDs 13002, 13008, 13009.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zustandszahl: Option<String>,
 }
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -75,6 +89,12 @@ pub enum GasMsconsDatenEvent {
         sender: MarktpartnerCode,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// Abrechnungsbrennwert in kWh/m³ (PID 13007 only, from `QTY+Z08`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        brennwert_kwh_per_m3: Option<String>,
+        /// Zustandszahl (PID 13007 only, from `QTY+Z10`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        zustandszahl: Option<String>,
     },
     /// AHB validation passed; data available for downstream use.
     ValidationPassed {
@@ -160,6 +180,14 @@ pub enum GasMsconsDatenCommand {
         validation_passed: bool,
         /// Human-readable validation errors (if any).
         validation_errors: Vec<String>,
+        /// Abrechnungsbrennwert in kWh/m³ (PID 13007 only, from `QTY+Z08`).
+        ///
+        /// `None` for PIDs 13002, 13008, 13009.
+        brennwert_kwh_per_m3: Option<String>,
+        /// Zustandszahl (PID 13007 only, from `QTY+Z10`).
+        ///
+        /// `None` for PIDs 13002, 13008, 13009.
+        zustandszahl: Option<String>,
     },
 }
 
@@ -185,12 +213,16 @@ impl Workflow for GeliGasMsconsWorkflow {
                 pruefidentifikator,
                 sender,
                 message_ref,
+                brennwert_kwh_per_m3,
+                zustandszahl,
             } => {
                 if matches!(state, GasMsconsDatenState::New) {
                     GasMsconsDatenState::DatenErhalten(GasMsconsDatenData {
                         pruefidentifikator: *pruefidentifikator,
                         sender: sender.clone(),
                         message_ref: message_ref.clone(),
+                        brennwert_kwh_per_m3: brennwert_kwh_per_m3.clone(),
+                        zustandszahl: zustandszahl.clone(),
                     })
                 } else {
                     state
@@ -222,6 +254,8 @@ impl Workflow for GeliGasMsconsWorkflow {
                 message_ref,
                 validation_passed,
                 validation_errors,
+                brennwert_kwh_per_m3,
+                zustandszahl,
             } => {
                 if !MSCONS_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
@@ -231,19 +265,38 @@ impl Workflow for GeliGasMsconsWorkflow {
                 if !matches!(state, GasMsconsDatenState::New) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
-                let mut events = vec![GasMsconsDatenEvent::MsconsDatenErhalten {
+                let erhalten_event = GasMsconsDatenEvent::MsconsDatenErhalten {
                     pruefidentifikator: pid,
                     sender,
                     message_ref: message_ref.clone(),
-                }];
-                if validation_passed {
+                    brennwert_kwh_per_m3: brennwert_kwh_per_m3.clone(),
+                    zustandszahl: zustandszahl.clone(),
+                };
+                let mut events = vec![erhalten_event];
+                let outbox = if validation_passed {
                     events.push(GasMsconsDatenEvent::ValidationPassed { message_ref });
+                    // Notify `edmd` that validated Gas MSCONS data is ready.
+                    // For PID 13007 the payload carries Brennwert and Zustandszahl
+                    // so `edmd` can update `meter_billing_periods` directly.
+                    vec![
+                        PendingOutbox::new(
+                            "ProcessCompleted",
+                            "",
+                            serde_json::json!({
+                                "pid": pid.as_u32(),
+                                "brennwert_kwh_per_m3": brennwert_kwh_per_m3,
+                                "zustandszahl": zustandszahl,
+                            }),
+                        )
+                        .caused_by(1),
+                    ]
                 } else {
                     events.push(GasMsconsDatenEvent::ValidationFailed {
                         reason: validation_errors.join("; "),
                     });
-                }
-                Ok(events.into())
+                    vec![]
+                };
+                Ok(WorkflowOutput::with_outbox(events, outbox))
             }
         }
     }

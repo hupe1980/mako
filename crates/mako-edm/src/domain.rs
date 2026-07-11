@@ -7,8 +7,16 @@ use uuid::Uuid;
 ///
 /// Source: GPKE BK6-24-174 / WiM BK6-24-174; direction NB → LF.
 pub const MSCONS_PIDS: &[u32] = &[
-    13005, 13006, 13015, 13016, 13017, 13018, 13019, 13025, 13027,
+    13005, 13006, 13007, 13015, 13016, 13017, 13018, 13019, 13025, 13027,
 ];
+
+/// MSCONS PIDs that carry Gas quality data (Brennwert + Zustandszahl).
+///
+/// PID 13007 = Gasbeschaffenheitsdaten (NB → LF): contains Abrechnungsbrennwert
+/// (`QTY+Z08`, kWh/m³) and Zustandszahl (`QTY+Z10`, dimensionless).
+///
+/// Source: MSCONS AHB Gas 1.x; Allgemeine Festlegungen V6.1d §6.
+pub const GAS_QUALITY_PIDS: &[u32] = &[13007];
 
 /// Metering / balancing classification of a Marktlokation.
 ///
@@ -127,6 +135,10 @@ pub struct MeterRead {
     pub pid: u32,
     /// Energy commodity.
     pub sparte: Sparte,
+    /// OBIS-Kennzahl (e.g. `"1-1:1.29.0"` for active energy, `"7-20:3.0.0"` for Gas volume).
+    ///
+    /// `None` when the MSCONS source did not include a PIA segment.
+    pub obis_code: Option<String>,
     /// Tenant ID for multi-tenant deployments.
     pub tenant_id: Option<Uuid>,
 }

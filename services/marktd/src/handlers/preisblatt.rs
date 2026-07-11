@@ -1,4 +1,5 @@
-//! Handlers for `GET|PUT /api/v1/preisblaetter/{nb_mp_id}`.
+//! Handlers for `GET|PUT /api/v1/preisblaetter/{nb_mp_id}` and
+//! `GET|PUT /api/v1/preisblaetter-messung/{msb_mp_id}`.
 
 use std::sync::Arc;
 
@@ -10,14 +11,20 @@ use axum::{
 };
 use mako_markt::{
     cloudevents::MarktEvent,
-    repository::{PreisblattRepository, PreisblattSource, PriCatRepository as _},
+    repository::{
+        PreisblattDienstleistungRepository, PreisblattHardwareRepository, PreisblattKaRepository,
+        PreisblattMessungRepository, PreisblattRepository, PreisblattSource, PriCatRepository as _,
+    },
 };
 use mako_service::cedar::CedarEnforcer;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use utoipa::{IntoParams, ToSchema};
 
-use crate::pg::{PgPreisblattRepository, PgPriCatRepository};
+use crate::pg::{
+    PgPreisblattDienstleistungRepository, PgPreisblattHardwareRepository, PgPreisblattKaRepository,
+    PgPreisblattMessungRepository, PgPreisblattRepository, PgPriCatRepository,
+};
 
 use super::{Claims, TenantGln};
 
@@ -44,13 +51,13 @@ pub struct PreisblattQuery {
 pub struct PreisblattUpsertRequest {
     /// Full BO4E `PreisblattNetznutzung` payload.
     pub data: serde_json::Value,
-    /// BO4E schema version of `data` (e.g. `"v202501.0.0"`). Defaults to current.
+    /// BO4E schema version of `data` (e.g. `"v202607.0.0"`). Defaults to current.
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
 }
 
 fn default_bo4e_version() -> String {
-    "v202501.0.0".to_owned()
+    "v202607.0.0".to_owned()
 }
 
 /// Response body for `GET /api/v1/preisblaetter/{nb_mp_id}`.
@@ -272,4 +279,422 @@ fn today_iso() -> String {
     let now = time::OffsetDateTime::now_utc();
     let d = now.date();
     format!("{:04}-{:02}-{:02}", d.year(), d.month() as u8, d.day())
+}
+
+// ── PreisblattMessung (MSB) — B5 ─────────────────────────────────────────────
+
+/// Extension type for the MSB preisblatt repo.
+pub type PreisblattMessungRepoExt = Arc<PgPreisblattMessungRepository>;
+
+/// Response body for `GET /api/v1/preisblaetter-messung/{msb_mp_id}`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PreisblattMessungResponse {
+    /// The full BO4E `PreisblattMessung` payload.
+    pub data: serde_json::Value,
+    /// How this record entered the system (`"api"` or `"mako"`).
+    pub source: String,
+    /// BO4E schema version of `data`.
+    pub bo4e_version: String,
+    /// Wall-clock time (UTC) when this sheet was last written.
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// `GET /api/v1/preisblaetter-messung/{msb_mp_id}?date={billing_date}`
+///
+/// Returns the `PreisblattMessung` for the MSB MP-ID valid on `date`.
+/// When `date` is absent, today's UTC date is used.  Returns 404 when not found.
+///
+/// Used by `invoicd` for PID 31009 tariff plausibility checks (positions 4+5).
+#[utoipa::path(
+    get,
+    path = "/api/v1/preisblaetter-messung/{msb_mp_id}",
+    params(
+        ("msb_mp_id" = String, Path, description = "MSB MP-ID (13-digit BDEW code)"),
+        ("date" = Option<String>, Query, description = "Billing date YYYY-MM-DD; defaults to today"),
+    ),
+    responses(
+        (status = 200, description = "PreisblattMessung JSON", body = PreisblattMessungResponse),
+        (status = 404, description = "No price sheet found"),
+    ),
+)]
+pub async fn get_preisblatt_messung(
+    Extension(repo): Extension<PreisblattMessungRepoExt>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    claims: Claims,
+    Path(msb_mp_id): Path<String>,
+    Query(query): Query<PreisblattQuery>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+
+    let billing_date = query.date.unwrap_or_else(today_iso);
+
+    match repo.find_messung_for_date(&msb_mp_id, &billing_date).await {
+        Ok(Some(record)) => Json(PreisblattMessungResponse {
+            data: record.data,
+            source: record.source.to_string(),
+            bo4e_version: record.bo4e_version,
+            updated_at: record.updated_at,
+        })
+        .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            format!("No PreisblattMessung found for MSB MP-ID {msb_mp_id} on {billing_date}"),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Request body for `PUT /api/v1/preisblaetter-messung/{msb_mp_id}`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PreisblattMessungUpsertRequest {
+    /// Full BO4E `PreisblattMessung` payload.
+    pub data: serde_json::Value,
+    /// BO4E schema version of `data`. Defaults to current.
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+}
+
+/// `PUT /api/v1/preisblaetter-messung/{msb_mp_id}`
+///
+/// Upsert a `PreisblattMessung` for the given MSB MP-ID.
+/// Always sets `source = "api"`.  Returns `204 No Content` on success.
+#[utoipa::path(
+    put,
+    path = "/api/v1/preisblaetter-messung/{msb_mp_id}",
+    params(
+        ("msb_mp_id" = String, Path, description = "MSB MP-ID (13-digit BDEW code)"),
+    ),
+    request_body = PreisblattMessungUpsertRequest,
+    responses(
+        (status = 204, description = "Price sheet stored"),
+        (status = 400, description = "Bad request"),
+        (status = 403, description = "Forbidden"),
+    ),
+)]
+pub async fn put_preisblatt_messung(
+    Extension(repo): Extension<PreisblattMessungRepoExt>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    claims: Claims,
+    Path(msb_mp_id): Path<String>,
+    Json(req): Json<PreisblattMessungUpsertRequest>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "write-preisblatt", &tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+
+    match repo
+        .upsert_messung(
+            &msb_mp_id,
+            req.data,
+            &req.bo4e_version,
+            PreisblattSource::Api,
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── PreisblattKonzessionsabgabe (B3) ─────────────────────────────────────────
+
+/// Extension type for the KA preisblatt repo.
+pub type PreisblattKaRepoExt = Arc<PgPreisblattKaRepository>;
+
+/// Query parameters for `GET /api/v1/preisblaetter-ka/{nb_mp_id}`.
+#[derive(Debug, Deserialize)]
+pub struct PreisblattKaQuery {
+    pub date: Option<String>,
+    /// Filter by Kundengruppe: `"Tarifkunden"` | `"Sondervertragskunden"` | omit for both.
+    pub kundengruppe: Option<String>,
+    pub sparte: Option<String>,
+}
+
+/// Response body for `GET /api/v1/preisblaetter-ka/{nb_mp_id}`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PreisblattKaResponse {
+    pub data: serde_json::Value,
+    pub sparte: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kundengruppe_ka: Option<String>,
+    pub source: String,
+    pub bo4e_version: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// `GET /api/v1/preisblaetter-ka/{nb_mp_id}?date=YYYY-MM-DD&sparte=STROM&kundengruppe=Tarifkunden`
+///
+/// Returns the `PreisblattKonzessionsabgabe` for the NB valid on `date`.
+/// Used by `netzbilanzd` for KA positions in INVOIC 31001/31002 (§17 StromNZV).
+pub async fn get_preisblatt_ka(
+    Extension(repo): Extension<PreisblattKaRepoExt>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    claims: Claims,
+    Path(nb_mp_id): Path<String>,
+    Query(query): Query<PreisblattKaQuery>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+
+    let billing_date = query.date.unwrap_or_else(today_iso);
+    let sparte = query.sparte.as_deref().unwrap_or("STROM");
+
+    match repo
+        .find_ka_for_date(
+            &nb_mp_id,
+            sparte,
+            query.kundengruppe.as_deref(),
+            &billing_date,
+        )
+        .await
+    {
+        Ok(Some(r)) => Json(PreisblattKaResponse {
+            data: r.data,
+            sparte: r.sparte,
+            kundengruppe_ka: r.kundengruppe_ka,
+            source: r.source.to_string(),
+            bo4e_version: r.bo4e_version,
+            updated_at: r.updated_at,
+        })
+        .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            format!("No PreisblattKonzessionsabgabe for NB {nb_mp_id} on {billing_date}"),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Request body for `PUT /api/v1/preisblaetter-ka/{nb_mp_id}`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PreisblattKaUpsertRequest {
+    pub data: serde_json::Value,
+    /// `"STROM"` or `"GAS"`. Defaults to `"STROM"`.
+    #[serde(default = "default_sparte")]
+    pub sparte: String,
+    /// `"Tarifkunden"` | `"Sondervertragskunden"` | omit for both.
+    pub kundengruppe_ka: Option<String>,
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+}
+
+fn default_sparte() -> String {
+    "STROM".to_owned()
+}
+
+/// `PUT /api/v1/preisblaetter-ka/{nb_mp_id}`
+///
+/// Upsert a `PreisblattKonzessionsabgabe` for the given NB.
+/// Always sets `source = "api"`. Returns `204 No Content` on success.
+pub async fn put_preisblatt_ka(
+    Extension(repo): Extension<PreisblattKaRepoExt>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    claims: Claims,
+    Path(nb_mp_id): Path<String>,
+    Json(req): Json<PreisblattKaUpsertRequest>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "write-preisblatt", &tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+
+    match repo
+        .upsert_ka(
+            &nb_mp_id,
+            &req.sparte,
+            req.kundengruppe_ka.as_deref(),
+            req.data,
+            &req.bo4e_version,
+            PreisblattSource::Api,
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── PreisblattDienstleistung ──────────────────────────────────────────────────
+
+pub type PreisblattDlRepoExt = Arc<PgPreisblattDienstleistungRepository>;
+
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct PreisblattDlResponse {
+    pub data: serde_json::Value,
+    pub source: String,
+    pub bo4e_version: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: time::OffsetDateTime,
+}
+
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct PreisblattDlUpsertRequest {
+    pub data: serde_json::Value,
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+}
+
+pub async fn get_preisblatt_dienstleistung(
+    Extension(repo): Extension<PreisblattDlRepoExt>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    claims: Claims,
+    Path(msb_mp_id): Path<String>,
+    Query(query): Query<PreisblattQuery>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+    let billing_date = query.date.unwrap_or_else(today_iso);
+    match repo
+        .find_dienstleistung_for_date(&msb_mp_id, &billing_date)
+        .await
+    {
+        Ok(Some(r)) => Json(PreisblattDlResponse {
+            data: r.data,
+            source: r.source.to_string(),
+            bo4e_version: r.bo4e_version,
+            updated_at: r.updated_at,
+        })
+        .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            format!("No PreisblattDienstleistung for {msb_mp_id} on {billing_date}"),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+pub async fn put_preisblatt_dienstleistung(
+    Extension(repo): Extension<PreisblattDlRepoExt>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    claims: Claims,
+    Path(msb_mp_id): Path<String>,
+    Json(req): Json<PreisblattDlUpsertRequest>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "write-preisblatt", &tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+    match repo
+        .upsert_dienstleistung(
+            &msb_mp_id,
+            req.data,
+            &req.bo4e_version,
+            PreisblattSource::Api,
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── PreisblattHardware ────────────────────────────────────────────────────────
+
+pub type PreisblattHwRepoExt = Arc<PgPreisblattHardwareRepository>;
+
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct PreisblattHwResponse {
+    pub data: serde_json::Value,
+    pub source: String,
+    pub bo4e_version: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: time::OffsetDateTime,
+}
+
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct PreisblattHwUpsertRequest {
+    pub data: serde_json::Value,
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+}
+
+pub async fn get_preisblatt_hardware(
+    Extension(repo): Extension<PreisblattHwRepoExt>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    claims: Claims,
+    Path(msb_mp_id): Path<String>,
+    Query(query): Query<PreisblattQuery>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+    let billing_date = query.date.unwrap_or_else(today_iso);
+    match repo.find_hardware_for_date(&msb_mp_id, &billing_date).await {
+        Ok(Some(r)) => Json(PreisblattHwResponse {
+            data: r.data,
+            source: r.source.to_string(),
+            bo4e_version: r.bo4e_version,
+            updated_at: r.updated_at,
+        })
+        .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            format!("No PreisblattHardware for {msb_mp_id} on {billing_date}"),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+pub async fn put_preisblatt_hardware(
+    Extension(repo): Extension<PreisblattHwRepoExt>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    claims: Claims,
+    Path(msb_mp_id): Path<String>,
+    Json(req): Json<PreisblattHwUpsertRequest>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "write-preisblatt", &tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+    match repo
+        .upsert_hardware(
+            &msb_mp_id,
+            req.data,
+            &req.bo4e_version,
+            PreisblattSource::Api,
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }

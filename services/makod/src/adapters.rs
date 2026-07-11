@@ -38,7 +38,7 @@ use mako_engine::{
     },
     version::FormatVersion,
 };
-use rubo4e::v202501 as bo4e;
+use rubo4e::current as bo4e;
 use rust_decimal::Decimal;
 
 /// Convert an `edi_energy::Pruefidentifikator` to the domain `Pruefidentifikator`.
@@ -573,6 +573,8 @@ pub fn wim_rechnung_registry() -> AdapterRegistry<WimRechnungWorkflow> {
                     .to_owned(),
                 validation_passed,
                 validation_errors,
+                rechnung: serde_json::to_value(build_rechnung(inv.segments()))
+                    .unwrap_or(serde_json::Value::Null),
             })
         },
     ));
@@ -2399,7 +2401,164 @@ pub fn wim_gas_stornierung_registry() -> AdapterRegistry<WimGasStornierungWorkfl
 /// Handles inbound PIDs 44023/44024 (Bestätigung / Ablehnung Stornierung)
 /// from GNB → LF. Produces [`LfStornierungCommand::HandleAntwort`].
 ///
+/// Build an [`AdapterRegistry`] for `GeliGasDatanabrufWorkflow` — ORDERS 17103/17104 receive.
+///
+/// NB-side: receives inbound ORDERS from LF requesting Brennwert/Zustandszahl.
+#[must_use]
+pub fn geli_gas_datenabruf_receive_registry()
+-> AdapterRegistry<mako_geli_gas::GeliGasDatanabrufWorkflow> {
+    use mako_geli_gas::datenabruf::{GeliGasDatanabrufCommand, ORDERS_ANFRAGE_PIDS};
+
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas Datenabruf receive adapter".into(),
+                )
+            })?;
+            let AnyMessage::Orders(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas Datenabruf receive adapter: expected ORDERS message (PIDs 17103/17104)".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas Datenabruf receive adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            if !ORDERS_ANFRAGE_PIDS.contains(&pid.as_u32()) {
+                return Err(EngineError::Deserialization(format!(
+                    "GeLi Gas Datenabruf receive adapter: unexpected PID {pid}"
+                )));
+            }
+            Ok(GeliGasDatanabrufCommand::ReceiveAnfrage {
+                pid,
+                sender: MarktpartnerCode::new(
+                    o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: MarktpartnerCode::new(
+                    o.receiver().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                message_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
+/// Build an [`AdapterRegistry`] for `GeliGasDatanabrufWorkflow` — ORDRSP 19103/19104.
+///
+/// LF-side: receives ORDRSP rejection from NB after sending ORDERS 17103.
+#[must_use]
+pub fn geli_gas_datenabruf_ablehnung_registry()
+-> AdapterRegistry<mako_geli_gas::GeliGasDatanabrufWorkflow> {
+    use mako_geli_gas::datenabruf::{GeliGasDatanabrufCommand, ORDRSP_ABLEHNUNG_PIDS};
+
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas Datenabruf Ablehnung adapter".into(),
+                )
+            })?;
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas Datenabruf Ablehnung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            if !ORDRSP_ABLEHNUNG_PIDS.contains(&pid.as_u32()) {
+                return Err(EngineError::Deserialization(format!(
+                    "GeLi Gas Datenabruf Ablehnung adapter: unexpected PID {pid}"
+                )));
+            }
+            // ORDRSP sender is the NB/MSB rejecting our request.
+            let sender_gln = match msg {
+                AnyMessage::Orders(o) => o
+                    .sender()
+                    .and_then(|n| n.party_id.as_deref())
+                    .unwrap_or("")
+                    .to_owned(),
+                _ => String::new(),
+            };
+            Ok(GeliGasDatanabrufCommand::ReceiveAblehnung {
+                pid,
+                sender: MarktpartnerCode::new(sender_gln),
+                message_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
 /// Acceptance is determined by PID alone: 44023 = accepted, 44024 = rejected.
+/// The rejection reason is extracted from the first transaction's FTX segment.
+/// Regulatory basis: BK7-24-01-009, GeLi Gas (Lf-only deployment role).
+#[must_use]
+pub fn geli_gas_lf_anmeldung_registry() -> AdapterRegistry<mako_geli_gas::GeliGasLfAnmeldungWorkflow>
+{
+    use mako_geli_gas::{GeliGasLfAnmeldungCommand, LF_ANMELDUNG_ANTWORT_PIDS};
+
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas LF-Anmeldung adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas LF-Anmeldung adapter: expected UTILMD G message (PIDs 44003–44006)"
+                        .into(),
+                ));
+            };
+
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas LF-Anmeldung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            if !LF_ANMELDUNG_ANTWORT_PIDS.contains(&pid.as_u32()) {
+                return Err(EngineError::Deserialization(format!(
+                    "GeLi Gas LF-Anmeldung adapter: unexpected PID {pid} (expected 44003–44006)"
+                )));
+            }
+
+            // PID 44003/44005 = Bestätigung (accepted), 44004/44006 = Ablehnung (rejected).
+            let accepted = matches!(pid.as_u32(), 44003 | 44005);
+            let reason = u
+                .transactions()
+                .first()
+                .and_then(|tx| tx.ftx.first())
+                .and_then(|f| f.text.clone());
+
+            Ok(GeliGasLfAnmeldungCommand::HandleAntwort {
+                response_pid: pid,
+                accepted,
+                reason,
+                response_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
 /// The rejection reason is extracted from the first transaction's FTX segment.
 /// Regulatory basis: BK7-24-01-009, GeLi Gas (Lf-only deployment role).
 #[must_use]
@@ -3650,6 +3809,8 @@ pub fn geli_gas_mscons_registry() -> AdapterRegistry<GeliGasMsconsWorkflow> {
                 message_ref,
                 validation_passed,
                 validation_errors,
+                brennwert_kwh_per_m3: extract_qty_z08(m),
+                zustandszahl: extract_qty_z10(m),
             })
         },
     ));
@@ -3901,10 +4062,10 @@ pub fn gabi_gas_allocation_registry() -> AdapterRegistry<GaBiGasAllocationWorkfl
 ///
 /// # Date types
 ///
-/// In rubo4e v0.3, `Zeitraum.startdatum / enddatum` are `time::Date` (date-only)
-/// and `Rechnungsposition.lieferung_von / bis` are `time::OffsetDateTime`.
-/// EDIFACT DTM `YYYYMMDD` values are parsed to `time::Date` for period fields
-/// and to midnight-UTC `OffsetDateTime` for delivery-period fields.
+/// In rubo4e v0.5, `Zeitraum.startdatum / enddatum` are `time::Date` (date-only).
+/// EDIFACT DTM `YYYYMMDD` values are parsed to `time::Date` for all period
+/// fields. Delivery periods are wrapped in a `Zeitraum` and stored in
+/// `Rechnungsposition.lieferungszeitraum` (v202607 schema).
 #[must_use]
 fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
     // Split at the first LIN segment: header vs. detail sections.
@@ -3914,11 +4075,11 @@ fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
         .unwrap_or(segs.len());
     let header = &segs[..lin_start];
 
-    // Zeitraum.startdatum/enddatum are time::Date in rubo4e v0.3.
+    // Zeitraum.startdatum/enddatum are time::Date in rubo4e v0.5.
     let period_start = dtm(header, "163").and_then(edifact_date_to_date);
     let period_end = dtm(header, "164").and_then(edifact_date_to_date);
     // Rechnung.rechnungsdatum is still OffsetDateTime.
-    // rechnungsdatum is time::Date in rubo4e v0.4 (follows *datum convention).
+    // rechnungsdatum is time::Date in rubo4e v0.5 (follows *datum convention).
     let invoice_date = dtm(header, "137").and_then(edifact_date_to_date);
 
     let gesamtnetto = moa_betrag(header, "79");
@@ -3984,15 +4145,25 @@ fn build_position(group: &[&OwnedSegment]) -> bo4e::Rechnungsposition {
         .and_then(|s| s.component_str(0, 0))
         .and_then(|s| s.parse::<i64>().ok());
 
-    let lokations_id = group
+    // `lokations_id` was removed in BO4E v202607; store it as positionstext.
+    let positionstext = group
         .iter()
         .find(|s| s.tag == "LOC" && s.component_str(0, 0) == Some("172"))
         .and_then(|s| s.component_str(1, 0))
         .map(str::to_owned);
 
-    // lieferung_von/bis are time::Date in rubo4e v0.4 (B-03 fixed).
+    // Delivery period now lives in lieferungszeitraum (v202607).
     let lieferung_von = dtm_in_group(group, "163").and_then(edifact_date_to_date);
     let lieferung_bis = dtm_in_group(group, "164").and_then(edifact_date_to_date);
+    let lieferungszeitraum = if lieferung_von.is_some() || lieferung_bis.is_some() {
+        Some(bo4e::Zeitraum {
+            startdatum: lieferung_von,
+            enddatum: lieferung_bis,
+            ..Default::default()
+        })
+    } else {
+        None
+    };
 
     let positions_menge = group
         .iter()
@@ -4019,16 +4190,15 @@ fn build_position(group: &[&OwnedSegment]) -> bo4e::Rechnungsposition {
             })
         });
 
-    let teilsumme_netto = moa_betrag_in_group(group, "77");
+    let gesamtpreis = moa_betrag_in_group(group, "77");
 
     bo4e::Rechnungsposition {
         positionsnummer,
-        lokations_id,
-        lieferung_von,
-        lieferung_bis,
+        positionstext,
+        lieferungszeitraum,
         positions_menge,
         einzelpreis,
-        teilsumme_netto,
+        gesamtpreis,
         ..Default::default()
     }
 }
@@ -4090,7 +4260,7 @@ fn moa_betrag_in_group(group: &[&OwnedSegment], qualifier: &str) -> Option<bo4e:
 /// `Zeitraum.startdatum` / `enddatum`).
 /// Parse an EDIFACT date string (`YYYYMMDD`) to a `time::Date`.
 ///
-/// Used for BO4E fields typed as `Option<time::Date>` in rubo4e v0.3
+/// Used for BO4E fields typed as `Option<time::Date>` in rubo4e v0.5
 /// (e.g. `Zeitraum.startdatum`, `Zeitraum.enddatum`).
 ///
 /// Returns `None` if the string is not exactly 8 digits or cannot be parsed as a
@@ -4105,4 +4275,66 @@ fn edifact_date_to_date(yyyymmdd: &str) -> Option<time::Date> {
     let day: u8 = yyyymmdd[6..8].parse().ok()?;
     let month = Month::try_from(month).ok()?;
     Date::from_calendar_date(year, month, day).ok()
+}
+
+// ── Gas quality helpers (PID 13007 Gasbeschaffenheitsdaten) ──────────────────
+//
+// PID 13007 MSCONS carries Brennwert and Zustandszahl in QTY segments:
+//   QTY+Z08:{value} — Abrechnungsbrennwert (kWh/m³)
+//   QTY+Z10:{value} — Zustandszahl (dimensionless compressibility factor)
+//
+// Source: Allgemeine Festlegungen V6.1d §6 / MSCONS AHB Gas 1.x.
+
+/// Extract Abrechnungsbrennwert from `QTY+Z08` in a Gas MSCONS.
+///
+/// Scans all delivery-point → time-series → line-item → quantity leaves
+/// for the first quantity with qualifier `Z08` and returns its value.
+fn extract_qty_z08(m: &edi_energy::messages::mscons::MsconsMessage) -> Option<String> {
+    for dp in m.delivery_points() {
+        for ts in &dp.time_series {
+            for item in &ts.items {
+                for qty in &item.quantities {
+                    if qty.qty.qualifier == "Z08" {
+                        let normalized = qty
+                            .qty
+                            .value
+                            .as_deref()
+                            .map(|v| v.replace(',', "."))
+                            .unwrap_or_default();
+                        if !normalized.is_empty() {
+                            return Some(normalized);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract Zustandszahl from `QTY+Z10` in a Gas MSCONS.
+///
+/// Scans all delivery-point → time-series → line-item → quantity leaves
+/// for the first quantity with qualifier `Z10` and returns its value.
+fn extract_qty_z10(m: &edi_energy::messages::mscons::MsconsMessage) -> Option<String> {
+    for dp in m.delivery_points() {
+        for ts in &dp.time_series {
+            for item in &ts.items {
+                for qty in &item.quantities {
+                    if qty.qty.qualifier == "Z10" {
+                        let normalized = qty
+                            .qty
+                            .value
+                            .as_deref()
+                            .map(|v| v.replace(',', "."))
+                            .unwrap_or_default();
+                        if !normalized.is_empty() {
+                            return Some(normalized);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }

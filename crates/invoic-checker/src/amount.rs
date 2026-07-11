@@ -166,11 +166,41 @@ impl EuroAmount {
     /// Compute `self × quantity` where `self` is a per-kWh price and
     /// `quantity` is in kWh.  Returns the monetary total.
     ///
-    /// Note: this uses `f64` for the multiplication — the result is rounded to
-    /// the nearest `EuroAmount` unit (1/100 000 EUR ≈ 0.01 cent).
+    /// Uses pure `rust_decimal::Decimal` arithmetic — no `f64` intermediate —
+    /// satisfying the §40 EnWG itemised-billing accuracy requirement.
+    ///
+    /// # Precision
+    ///
+    /// Both operands are exact:  `EuroAmount` is scaled by 10⁻⁵, and
+    /// `Decimal` has 28-digit precision.  The product is rounded to 5 decimal
+    /// places (the `EuroAmount` unit) using half-up rounding.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use invoic_checker::amount::EuroAmount;
+    /// use rust_decimal::Decimal;
+    /// use std::str::FromStr;
+    ///
+    /// let price = EuroAmount::parse("0.03456").unwrap(); // 0.03456 EUR/kWh
+    /// let qty = Decimal::from_str("100.0").unwrap();     // 100 kWh
+    /// assert_eq!(price.multiply_by_kwh_decimal(qty), EuroAmount::parse("3.45600").unwrap());
+    /// ```
     #[must_use]
-    pub fn multiply_by_kwh(self, kwh: f64) -> Self {
-        Self((self.0 as f64 * kwh).round() as i64)
+    pub fn multiply_by_kwh_decimal(self, kwh: rust_decimal::Decimal) -> Self {
+        use rust_decimal::prelude::ToPrimitive as _;
+        // Represent self as an exact Decimal (5 decimal places).
+        let price_decimal = rust_decimal::Decimal::new(self.0, 5);
+        // Multiply and round to 5 decimal places (half-up).
+        let product = (price_decimal * kwh)
+            .round_dp_with_strategy(5, rust_decimal::RoundingStrategy::MidpointAwayFromZero);
+        // Convert back: multiply by 10^5 to get the integer EuroAmount unit.
+        Self(
+            (product * rust_decimal::Decimal::from(Self::SCALE))
+                .round()
+                .to_i64()
+                .unwrap_or(self.0),
+        )
     }
 
     /// Absolute difference from `other`.
@@ -290,10 +320,26 @@ mod tests {
     }
 
     #[test]
-    fn multiply_by_kwh() {
+    fn multiply_by_kwh_decimal() {
+        use rust_decimal::Decimal;
+        use std::str::FromStr;
         let price = EuroAmount(3_456); // 0.03456 EUR/kWh
-        let total = price.multiply_by_kwh(100.0); // 100 kWh → 3.456 EUR
+        let qty = Decimal::from_str("100.0").unwrap();
+        let total = price.multiply_by_kwh_decimal(qty); // 100 kWh → 3.456 EUR
         assert_eq!(total, EuroAmount(345_600));
+    }
+
+    #[test]
+    fn multiply_by_kwh_decimal_large_quantity() {
+        // 2 500 000 kWh × 0.03456 EUR/kWh = 86 400.00000 EUR
+        // f64 would introduce error here; Decimal is exact.
+        use rust_decimal::Decimal;
+        use std::str::FromStr;
+        let price = EuroAmount(3_456); // 0.03456 EUR/kWh
+        let qty = Decimal::from_str("2500000").unwrap();
+        let total = price.multiply_by_kwh_decimal(qty);
+        // Expected: 3456 * 2500000 / 100000 = 86400.00000 EUR = 8_640_000_000
+        assert_eq!(total, EuroAmount(8_640_000_000));
     }
 
     #[test]

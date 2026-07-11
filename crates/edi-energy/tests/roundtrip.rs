@@ -162,7 +162,7 @@ mod mscons_roundtrip {
         #[test]
         fn mscons_metering_point_data_in_bytes(
             malo_id in "DE[0-9]{11}",
-            obis in "[0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{1,2}",
+            obis in "[0-9]{1,2}-[0-9]{1,2}:[1-9][0-9]?\\.[0-9]{1,2}\\.[0-9]{1,2}",
             quantity in "[0-9]{1,8}",
         ) {
             let bytes = MsconsBuilder::new(Release::new("2.4c"))
@@ -170,7 +170,7 @@ mod mscons_roundtrip {
                 .sender("4012345000023")
                 .receiver("9900357000004")
                 .metering_point(malo_id.as_str())
-                .obis(obis.as_str())
+                .obis(rubo4e::identifiers::ObisCode::new(obis.as_str()).expect("proptest regex ensures valid OBIS"))
                 .quantity("220", quantity.as_str(), "KWH")
                 .done()
                 .serialize()

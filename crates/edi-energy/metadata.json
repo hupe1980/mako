@@ -69,7 +69,13 @@
       "profile_dir": "utilmd/fv20251001_gas",
       "profile_release": "G1.1",
       "release_match": true,
-      "note": "AHB Gas 1.1 / MIG G1.1 introduced 2026-04-01, within the FV2025-10-01 window. Currently active (2026-06-17). Latest consolidated: AHB Stand 27.03.2026. Profile release matches."
+      "note": "AHB Gas 1.1 / MIG G1.1 introduced 2026-04-01, within the FV2025-10-01 window. Currently active (2026-06-17). Latest consolidated: AHB Stand 27.03.2026. Profile release matches.",
+      "extraordinary_publication": {
+        "mig": "UTILMD_MIG_Gas_1.1_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf",
+        "stand": "2025-12-11",
+        "impact": "REGULATORY CHANGE — §38a EnWG Anpassung; effective 2026-04-01. New field/qualifier added. Verify UTILMD Gas MIG G1.1 profile is already regenerated for this change (profile was published 2026-04-01 after the extraordinary pub date). As of 2026-07-11 this change is live.",
+        "reviewed": "2026-07-11"
+      }
     },
     {
       "message_type": "UTILMD",
@@ -83,7 +89,13 @@
       "profile_dir": "utilmd/fv20261001_gas",
       "profile_release": "G1.2",
       "release_match": true,
-      "note": "Next annual window. AHB Gas 1.2 / MIG G1.2. Profile release matches."
+      "note": "Next annual window. AHB Gas 1.2 / MIG G1.2. Profile release matches.",
+      "extraordinary_publication": {
+        "mig": "UTILMD_MIG_Gas_1.1_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf",
+        "stand": "2025-12-11",
+        "impact": "REGULATORY CHANGE — §38a EnWG Anpassung; effective 2026-04-01. New field/qualifier added. Verify UTILMD Gas MIG G1.1 profile is already regenerated for this change (profile was published 2026-04-01 after the extraordinary pub date). As of 2026-07-11 this change is live.",
+        "reviewed": "2026-07-11"
+      }
     },
     {
       "message_type": "APERAK",
@@ -153,7 +165,14 @@
       "profile_dir": "contrl/fv20251001",
       "profile_release": "2.0b",
       "release_match": true,
-      "note": "CONTRL AHB 1.0. Open-ended validity. Profile release matches."
+      "note": "CONTRL AHB 1.0 + MIG 2.0b. Extraordinary publication Stand 11.12.2025 (CONTRL_AHB_1.0_ausserordentliche_Veroeffentlichung) is in docs/pdfs/bdew-mako/. The extraordinary MIG 2.0b Stand 11.12.2025 corrects typos/cross-references only; no new segments, qualifiers, or rule-code changes affecting profile validation. Confirmed: generated profile fv20251001 satisfies both the base AHB 1.0 and the extraordinary correction. Profile release 2.0b matches wire code. Open-ended validity.",
+      "extraordinary_publication": {
+        "ahb": "CONTRL_AHB_1.0_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf",
+        "mig": "CONTRL_MIG_2.0b_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf",
+        "stand": "2025-12-11",
+        "impact": "Typos and cross-reference corrections only — no validation rule changes",
+        "reviewed": "2026-07-11"
+      }
     },
     {
       "message_type": "CONTRL",
@@ -209,7 +228,14 @@
       "profile_dir": "insrpt/fv20211001",
       "profile_release": "1.1a",
       "release_match": true,
-      "note": "INSRPT AHB 1.1g / MIG 1.1a. Open-ended (still valid 2026-06-17). Profile release matches."
+      "note": "INSRPT AHB 1.1g / MIG 1.1a. Open-ended (still valid 2026-06-17). Profile release matches.",
+      "extraordinary_publication": {
+        "ahb": "INSRPT_AHB_1.1g_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf",
+        "mig": "INSRPT_MIG_1.1a_-_ausserordentliche_Veroeffentlichung_Stand_26.07.2024.pdf",
+        "stand": "2025-12-11",
+        "impact": "RULE CHANGE — Änd-ID 23012: new qualifier ZS1 (Reparatur ohne Gerätewechsel) added to Anwendungsfall 23012 (Infomeldung MSB an NB/LF/ÜNB). Generated INSRPT profiles must accept ZS1 in the applicable BGM/STS qualifier table. Re-run cargo xtask codegen and add INSRPT conformance test for ZS1.",
+        "reviewed": "2026-07-11"
+      }
     },
     {
       "message_type": "INSRPT",
@@ -223,7 +249,14 @@
       "profile_dir": "insrpt/fv20260101",
       "profile_release": "1.1a",
       "release_match": true,
-      "note": "Duplicate profile for INSRPT in FV2026-01-01 directory. Same release."
+      "note": "Duplicate profile for INSRPT in FV2026-01-01 directory. Same release.",
+      "extraordinary_publication": {
+        "ahb": "INSRPT_AHB_1.1g_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf",
+        "mig": "INSRPT_MIG_1.1a_-_ausserordentliche_Veroeffentlichung_Stand_26.07.2024.pdf",
+        "stand": "2025-12-11",
+        "impact": "RULE CHANGE — same as index 14 (Änd-ID 23012, ZS1). Duplicate profile — same profile_version; both must be regenerated.",
+        "reviewed": "2026-07-11"
+      }
     },
     {
       "message_type": "INVOIC",
@@ -265,7 +298,13 @@
       "profile_dir": "mscons/fv20240401",
       "profile_release": "2.4c",
       "release_match": true,
-      "note": "MSCONS AHB 3.1d / MIG 2.4c (valid until FV2025-10-01 cutover). Profile release matches."
+      "note": "MSCONS AHB 3.1d / MIG 2.4c (valid until FV2025-10-01 cutover). Profile release matches.",
+      "extraordinary_publication": {
+        "mig": "MSCONS_MIG_2.4c_-_ausserordentliche_Veroeffentlichung_Stand_26.07.2024.pdf",
+        "stand": "2024-07-26",
+        "impact": "New use case: NB→MSB Energiemenge der Marktlokation for Prognoseoptimierungsgebühr (POG) calculation; adds new qualifier codes for this direction. Layout/Konsultation alignment changes included. Profile re-generation recommended to verify no new mandatory segment rules were introduced.",
+        "reviewed": "2026-07-11"
+      }
     },
     {
       "message_type": "MSCONS",
@@ -279,7 +318,13 @@
       "profile_dir": "mscons/fv20251001",
       "profile_release": "2.4c",
       "release_match": true,
-      "note": "MSCONS AHB 3.1d / MIG 2.4c continues in FV2025-10-01 window. MSCONS AHB 3.2 / MIG 2.5 was in consultation Feb 2026 for the next window. Profile release matches."
+      "note": "MSCONS AHB 3.1d / MIG 2.4c continues in FV2025-10-01 window. MSCONS AHB 3.2 / MIG 2.5 was in consultation Feb 2026 for the next window. Profile release matches.",
+      "extraordinary_publication": {
+        "mig": "MSCONS_MIG_2.4c_-_ausserordentliche_Veroeffentlichung_Stand_26.07.2024.pdf",
+        "stand": "2024-07-26",
+        "impact": "Same as index 18 — same profile_version MIG 2.4c continues in FV2025-10-01 window.",
+        "reviewed": "2026-07-11"
+      }
     },
     {
       "message_type": "MSCONS",
@@ -293,7 +338,13 @@
       "profile_dir": "mscons/fv20261001",
       "profile_release": "2.5",
       "release_match": true,
-      "note": "Next annual window. MSCONS AHB 3.2 / MIG 2.5 (Konsultation Feb 2026). Profile release matches."
+      "note": "Next annual window. MSCONS AHB 3.2 / MIG 2.5 (Konsultation Feb 2026). Profile release matches.",
+      "extraordinary_publication": {
+        "mig": "MSCONS_MIG_2.4c_-_ausserordentliche_Veroeffentlichung_Stand_26.07.2024.pdf",
+        "stand": "2024-07-26",
+        "impact": "Affects FV2025-10-01 base; same new POG Energiemenge use case as index 18. Profile re-generation recommended.",
+        "reviewed": "2026-07-11"
+      }
     },
     {
       "message_type": "ORDCHG",
@@ -307,7 +358,13 @@
       "profile_dir": "ordchg/fv20241001",
       "profile_release": "1.1",
       "release_match": true,
-      "note": "ORDCHG AHB 1.0a / MIG 1.1. Valid until ORDCHG 1.2 introduced 2026-04-01. Profile release matches."
+      "note": "ORDCHG AHB 1.0a / MIG 1.1. Valid until ORDCHG 1.2 introduced 2026-04-01. Profile release matches.",
+      "extraordinary_publication": {
+        "mig": "ORDCHG_MIG_1.1_-_ausserordentliche_Veroeffentlichung_Stand_26.07.2024.pdf",
+        "stand": "2024-07-26",
+        "impact": "CODE EXTENSION — adds coding authority 332 (DVGW, Gas) alongside existing 293 (BDEW, Strom) in NAD segment. Required for Sperrprozesse Gas (BDEW/VKU/GEODE Kooperationsvereinbarung Gas XIII, effective 2023-10-01). ORDCHG profile must accept both 293 and 332 in NAD DE3055. Re-run cargo xtask codegen.",
+        "reviewed": "2026-07-11"
+      }
     },
     {
       "message_type": "ORDCHG",
@@ -321,7 +378,13 @@
       "profile_dir": "ordchg/fv20260401",
       "profile_release": "1.2",
       "release_match": true,
-      "note": "ORDCHG AHB 1.1 / MIG 1.2 from 2026-04-01. Currently active (2026-06-17). Profile release matches."
+      "note": "ORDCHG AHB 1.1 / MIG 1.2 from 2026-04-01. Currently active (2026-06-17). Profile release matches.",
+      "extraordinary_publication": {
+        "mig": "ORDCHG_MIG_1.1_-_ausserordentliche_Veroeffentlichung_Stand_26.07.2024.pdf",
+        "stand": "2024-07-26",
+        "impact": "ORDCHG AHB 1.1 / MIG 1.2 (from 2026-04-01): same DVGW 332 coding extension as index 21; also verify MIG 1.2 includes this.",
+        "reviewed": "2026-07-11"
+      }
     },
     {
       "message_type": "ORDERS",

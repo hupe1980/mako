@@ -1,0 +1,14 @@
+# sperrd.toml — demo configuration
+# Sperrung execution tracking daemon (NB role).
+# Tracks Sperrung/Entsperrung field execution and auto-dispatches
+# IFTSTA 21039 (Ausführungsbestätigung) to the LF via makod.
+# DO NOT use in production — auth disabled.
+
+database_url  = "env:DATABASE_URL"
+port          = 8780
+makod_url     = "http://makod:8080"
+makod_api_key = "env:SPERRD_MAKOD_API_KEY"
+
+# [oidc]  — omit to disable auth (dev mode only)
+# [otel]
+# endpoint = "http://otel-collector:4317"

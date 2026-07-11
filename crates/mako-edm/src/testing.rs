@@ -183,6 +183,16 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
             tenant_id: q.tenant_id,
         }))
     }
+
+    async fn update_gas_quality(
+        &self,
+        _malo_id: &str,
+        _brennwert_kwh_per_m3: Option<&str>,
+        _zustandszahl: Option<&str>,
+    ) -> Result<u64, EdmError> {
+        // In-memory stub — no-op for testing.
+        Ok(0)
+    }
 }
 
 #[cfg(test)]

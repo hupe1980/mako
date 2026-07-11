@@ -20,6 +20,7 @@ path = "src/lib.rs"
 [dependencies]
 mako-markt = { workspace = true, features = ["marktd-client"] }
 mako-edm  = { workspace = true }
+rubo4e     = { workspace = true }
 
 anyhow             = { workspace = true }
 thiserror          = { workspace = true }

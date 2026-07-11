@@ -51,12 +51,19 @@ fmt-check:
 deny:
     cargo deny check
 
+# Guard: no hardcoded rubo4e schema-version aliases in business logic.
+# Domain code must use rubo4e::current:: or rubo4e::identifiers:: — never
+# rubo4e::v202607:: or any other pinned version path.
+no-version-alias:
+    @! grep -rn 'rubo4e::v[0-9]' crates/ services/ --include='*.rs' \
+        || (echo "ERROR: hardcoded rubo4e version alias found — use rubo4e::current:: instead" && exit 1)
+
 # Build and check rustdoc (--all-features, warnings as errors)
 doc-check:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
 # Full CI suite (minimum gate + tests + quality + release-lifecycle checks)
-ci: check test clippy fmt-check deny doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
+ci: check test clippy fmt-check deny no-version-alias doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
@@ -128,6 +135,10 @@ validate-release-codes:
 # Verify a profile covers today's date
 check-release-coverage:
     cargo xtask check-release-coverage
+
+# Verify the rubo4e::current active-type count matches the README.md claim (delta ≤ 2).
+check-bo4e-coverage:
+    cargo xtask check-bo4e-coverage
 
 # ── AHB audit ─────────────────────────────────────────────────────────────────
 

@@ -16,7 +16,7 @@
 //! 1. Verifies the HMAC signature
 //! 2. Deduplicates via `processed_events`
 //! 3. Enriches the event with `marktrole` and emits to all subscribers
-//! 4. Derives `VersorgungsStatus` for PIDs 55003/44003 (Beliefert) and 55013/44013 (Unbeliefert)
+//! 4. Derives `VersorgungsStatus` for PIDs 55001/44001 (announce), 55003/44003 (confirm), 55013/44013 (end)
 //!
 //! Idempotency: duplicate event IDs return `202 Accepted` without re-processing.
 
@@ -32,9 +32,8 @@ use axum::{
 use mako_markt::{
     cloudevents::{EventExtensions, InboundMakoEvent, MarktEvent, verify_signature},
     repository::{
-        AppState, ContractRepository, CorrelationIndex, LieferStatus, MaloRepository,
-        MeloRepository, PartnerRepository, SubscriptionRepository, VersorgungsStatusRecord,
-        VersorgungsStatusRepository,
+        AppState, ContractRepository, CorrelationIndex, MaloRepository, MeloRepository,
+        PartnerRepository, SubscriptionRepository, VersorgungsStatusRepository,
     },
 };
 use sqlx::PgPool;
@@ -115,19 +114,36 @@ where
         return StatusCode::ACCEPTED.into_response();
     }
 
+    // 4a. Append to durable event replay log (B11).
+    //
+    // Fire-and-forget — a log write failure must never block event processing.
+    // The `ON CONFLICT DO NOTHING` guard makes this idempotent in case of
+    // delayed retries after a partial failure.
+    let log_result = sqlx::query(
+        r"INSERT INTO event_log (event_id, ce_type, ce_source, subject, data)
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (event_id) DO NOTHING",
+    )
+    .bind(&event.id)
+    .bind(&event.ce_type)
+    .bind(&state.tenant_gln)
+    .bind(event.subject.as_deref())
+    .bind(&event.data)
+    .execute(&pool)
+    .await;
+
+    if let Err(ref e) = log_result {
+        warn!(event_id = %event.id, error = %e, "event_ingest: event_log write failed (non-fatal)");
+    }
+
     // 4. Re-emit as MarktEvent enriched with the tenant GLN as source.
     //
     // Phase 1 — capture values needed for VersorgungsStatus derivation before
     // event fields are moved into MarktEvent.
-    let process_completed = event.ce_type == "de.mako.process.completed";
+    let ce_type_for_vs = event.ce_type.clone();
     let event_id_for_vs = event.id.clone();
     let pid_for_vs = event.makopid;
-    let subject_for_vs = event.subject.clone();
-    let data_for_vs = if process_completed {
-        Some(event.data.clone())
-    } else {
-        None
-    };
+    let data_for_vs = event.data.clone();
 
     let marktrole = marktrole_from_workflow(event.makoworkflow.as_deref());
     let markt_event = MarktEvent::new(
@@ -141,6 +157,10 @@ where
         makoconvid: event.makoconvid,
         makopid: event.makopid,
         makoworkflow: event.makoworkflow,
+        // B10: forward W3C Trace Context unchanged so subscribers can continue
+        // the distributed trace without re-sampling.
+        traceparent: event.traceparent,
+        tracestate: event.tracestate,
         ..Default::default()
     });
 
@@ -148,71 +168,110 @@ where
         let _ = state.event_tx.send(payload);
     }
 
-    // 5. Phase 1 — derive VersorgungsStatus from de.mako.process.completed.
+    // 5. Derive VersorgungsStatus from supply-state-changing CloudEvents.
     //
-    // PID-to-state mapping (GPKE BK6-22-024 + GeLi Gas BK7-24-01-009):
-    //   55003 → Beliefert   (NB confirms Lieferbeginn; LFN assigned)
-    //   44003 → Beliefert   (GeLi Gas: NB confirms Gas-Lieferbeginn)
-    //   55013 → Unbeliefert (Abmeldung-Bestätigung received; LF removed)
-    //   44013 → Unbeliefert (GeLi Gas: Abmeldung-Bestätigung)
+    // Event → action mapping (GPKE BK6-22-024 + GeLi Gas BK7-24-01-009):
     //
-    // Upsert uses if_version=None (blind) so concurrent updates to unrelated
-    // fields converge without version conflicts.  At-least-once delivery from
-    // EventBus guarantees eventual convergence even when the spawn races.
-    if process_completed && let Some(pid) = pid_for_vs {
-        let lieferstatus: Option<LieferStatus> = match pid {
-            55003 | 44003 => Some(LieferStatus::Beliefert),
-            55013 | 44013 => Some(LieferStatus::Unbeliefert),
-            _ => None,
-        };
+    //   process.initiated  + PID 55001/44001
+    //     → announce_lf_next: set lf_mp_id_next + lf_next_lieferbeginn
+    //       (NB side: new_supplier + process_date from ProcessInitiated payload)
+    //
+    //   process.completed  + PID 55003/44003
+    //     → confirm_supply: promote lf_mp_id_next → lf_mp_id (atomic SQL)
+    //
+    //   process.completed  + PID 55013/44013
+    //     → end_supply: lieferstatus = Unbeliefert, clear lf_mp_id
+    //       (preserves lf_mp_id_next / lf_next_lieferbeginn for pending transition)
+    //
+    // The CE subject is always the process UUID — malo_id is extracted from
+    // the data payload.  Both actions are idempotent under at-least-once delivery.
+    {
+        let is_initiated = ce_type_for_vs == "de.mako.process.initiated";
+        let is_completed = ce_type_for_vs == "de.mako.process.completed";
 
-        if let (Some(lieferstatus), Some(subject)) = (lieferstatus, subject_for_vs)
-            && !subject.is_empty()
-        {
-            let data = data_for_vs.unwrap_or(serde_json::Value::Null);
-            // Parse as MaloId — if the subject is not a valid 11-digit MaLo-ID
-            // (e.g. it's a process UUID on non-MaLo events), skip silently.
-            let malo_id = match subject.parse::<mako_markt::domain::MaloId>() {
-                Ok(id) => id,
-                Err(_) => return StatusCode::ACCEPTED.into_response(),
-            };
-            let lf_mp_id = if lieferstatus == LieferStatus::Beliefert {
-                data.get("lieferant_gln")
+        if let Some(pid) = pid_for_vs {
+            // Extract malo_id from data payload — the CE subject is a process UUID.
+            let malo_id_str = data_for_vs
+                .get("malo_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+
+            if let Some(malo_str) = malo_id_str {
+                let malo_id = malo_str.parse::<mako_markt::domain::MaloId>();
+                let nb_mp_id = data_for_vs
+                    .get("nb_mp_id")
+                    .or_else(|| data_for_vs.get("grid_operator"))
                     .and_then(|v| v.as_str())
                     .map(str::to_owned)
-            } else {
-                None
-            };
-            let nb_mp_id = data
-                .get("nb_mp_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned)
-                .unwrap_or_else(|| state.tenant_gln.clone());
-            let process_id = uuid::Uuid::parse_str(&event_id_for_vs).ok();
-            let rec = VersorgungsStatusRecord {
-                malo_id,
-                lieferstatus,
-                lf_mp_id,
-                lf_gln_next: None,
-                lieferbeginn: None,
-                lieferende: None,
-                msb_mp_id: None,
-                nb_mp_id,
-                last_process_id: process_id,
-                updated_at: time::OffsetDateTime::now_utc(),
-                tenant: state.tenant_gln.clone(),
-                version: 0,
-            };
-            let vs = Arc::clone(&vs_repo);
-            // Inline the upsert — avoids an unjoined spawn whose panic would be
-            // silently swallowed. The DB call is already non-blocking (sqlx async).
-            if let Err(e) = vs.upsert(rec, None).await {
-                tracing::warn!(
-                    malo_id = %subject,
-                    pid,
-                    error = %e,
-                    "event_ingest: failed to upsert VersorgungsStatus"
-                );
+                    .unwrap_or_else(|| state.tenant_gln.clone());
+                let process_id = uuid::Uuid::parse_str(&event_id_for_vs).ok();
+
+                if let Ok(malo_id) = malo_id {
+                    let vs = Arc::clone(&vs_repo);
+
+                    if is_initiated && matches!(pid, 55001 | 44001) {
+                        // NB received Lieferbeginn Anfrage — record the pending transition.
+                        let lf_mp_id_next = data_for_vs
+                            .get("new_supplier")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned);
+                        let lf_next_lieferbeginn = data_for_vs
+                            .get("process_date")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| {
+                                time::Date::parse(
+                                    s,
+                                    &time::format_description::well_known::Iso8601::DEFAULT,
+                                )
+                                .ok()
+                            });
+                        if let Some(lf_mp_id_next) = lf_mp_id_next
+                            && let Err(e) = vs
+                                .announce_lf_next(
+                                    &malo_id,
+                                    &state.tenant_gln,
+                                    &lf_mp_id_next,
+                                    lf_next_lieferbeginn,
+                                    &nb_mp_id,
+                                    process_id,
+                                )
+                                .await
+                        {
+                            tracing::warn!(
+                                malo_id = %malo_str,
+                                pid,
+                                error = %e,
+                                "event_ingest: failed to announce_lf_next"
+                            );
+                        }
+                    } else if is_completed && matches!(pid, 55003 | 44003) {
+                        // NB confirmed Lieferbeginn — promote announced LF to active.
+                        if let Err(e) = vs
+                            .confirm_supply(&malo_id, &state.tenant_gln, process_id)
+                            .await
+                        {
+                            tracing::warn!(
+                                malo_id = %malo_str,
+                                pid,
+                                error = %e,
+                                "event_ingest: failed to confirm_supply"
+                            );
+                        }
+                    } else if is_completed && matches!(pid, 55013 | 44013) {
+                        // Abmeldung-Bestätigung — active LF removed; preserve pending transition.
+                        if let Err(e) = vs
+                            .end_supply(&malo_id, &state.tenant_gln, &nb_mp_id, process_id)
+                            .await
+                        {
+                            tracing::warn!(
+                                malo_id = %malo_str,
+                                pid,
+                                error = %e,
+                                "event_ingest: failed to end_supply"
+                            );
+                        }
+                    }
+                }
             }
         }
     }

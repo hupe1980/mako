@@ -612,8 +612,8 @@ impl ServerHandler for MakodMcpHandler {
             };
         }
 
-        if let Some(gln_str) = uri.strip_prefix("partner://") {
-            let mp_id = mako_engine::types::MarktpartnerCode::new(gln_str);
+        if let Some(mp_id_str) = uri.strip_prefix("partner://") {
+            let mp_id = mako_engine::types::MarktpartnerCode::new(mp_id_str);
             return match self
                 .state
                 .partner_store
@@ -628,7 +628,7 @@ impl ServerHandler for MakodMcpHandler {
                     ]))
                 }
                 Ok(None) => Err(McpError::resource_not_found(
-                    format!("Partner '{gln_str}' not registered"),
+                    format!("Partner '{mp_id_str}' not registered"),
                     None,
                 )),
                 Err(e) => Err(McpError::internal_error(

@@ -1,15 +1,16 @@
 # edmd — Energy Data Management daemon
 
-`edmd` stores MSCONS meter readings received from `marktd` and serves time-series and imbalance queries — Mehr-/Mindermengen reconciliation for `invoicd`, meter-read history for operator dashboards and ERP exports.
+`edmd` stores MSCONS meter readings received from `marktd` and serves BO4E typed time-series and imbalance queries — `Energiemenge` deliveries for ERP billing import, `Lastgang`/`Zeitreihe` for API-Webdienste Strom, `MeterBillingPeriod` for `netzbilanzd`, and Mehr-/Mindermengen reconciliation for `invoicd`.
 
 | Feature | Detail |
 |---|---|
 | HTTP port | `:8380` |
-| Database | PostgreSQL 15+ (sqlx 0.8, `meter_data_receipts` + `meter_reads` tables) |
+| Database | PostgreSQL 15+ (sqlx 0.8, `meter_reads` + `meter_billing_periods` tables) |
 | Inbound | CloudEvents from `marktd` — `de.mako.process.completed` where `makopid` ∈ MSCONS PID set |
-| REST API | `GET /api/v1/deliveries/{malo_id}`, `GET /api/v1/imbalance/{malo_id}/{year}/{month}` |
-| Health | `GET /health/live`, `GET /health/ready` |
-| Auth | Webhook HMAC-SHA256 (`X-Mako-Signature`); HTTP endpoints currently unauthenticated |
+| REST API | `GET /api/v1/deliveries/{malo_id}` → `Vec<Energiemenge>` (BO4E typed) · `GET /api/v1/lastgang/{malo_id}` · `GET /api/v1/zeitreihe/{malo_id}` · `GET /api/v1/billing-period/{malo_id}` · `GET /api/v1/imbalance/{malo_id}/{year}/{month}` |
+| Auth | OIDC/JWT + Cedar ABAC (`read-timeseries` action); webhook HMAC-SHA256 (`X-Mako-Signature`) |
+| Health | `GET /health/live`, `GET /health/ready` (PostgreSQL ping) |
+| MCP | `POST|GET /mcp` — MCP Streamable HTTP (LLM tooling) |
 
 ---
 

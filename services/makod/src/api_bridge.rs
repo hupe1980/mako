@@ -21,17 +21,32 @@
 //! When a new `energy-api` type needs to enter the engine, add a conversion here
 //! and import it from the relevant `makod` module.
 
-use energy_api::models::electricity::LocationId;
+use energy_api::models::electricity::LocationId as ApiLocationId;
 use mako_engine::types::MarktpartnerCode;
+use mako_markt::domain::{NeloId, SrId};
+use mako_wim::steuerungsauftrag::LocationId as DomainLocationId;
 
-/// Convert an `energy-api` [`LocationId`] to the `String` representation
-/// expected by domain commands.
+/// Convert an `energy-api` [`ApiLocationId`] into the validated domain
+/// [`DomainLocationId`].
 ///
-/// Both `NeloId` and `SrId` implement `Display` — the string representation is
-/// their raw identifier value (e.g. `"DE000..." for a NELO ID or an SR ID).
-#[must_use]
-pub fn location_id_to_string(id: &LocationId) -> String {
-    id.to_string()
+/// - `NetworkLocation(NeloId)` → `DomainLocationId::Nelo(mako_markt::domain::NeloId)`
+/// - `ControllableResource(SrId)` → `DomainLocationId::Sr(mako_markt::domain::SrId)`
+///
+/// Returns `Err(String)` with the raw ID value when rubo4e validation fails,
+/// so callers can surface a `400 Bad Request` to the NB/LF.
+///
+/// # Errors
+///
+/// Returns `Err` if the raw string is not a valid `NeloId` or `SrId`.
+pub fn location_id_to_domain(id: &ApiLocationId) -> Result<DomainLocationId, String> {
+    match id {
+        ApiLocationId::NetworkLocation(nelo) => NeloId::try_from(nelo.0.as_str())
+            .map(DomainLocationId::Nelo)
+            .map_err(|_| format!("invalid NeloId: {}", nelo.0)),
+        ApiLocationId::ControllableResource(sr) => SrId::try_from(sr.0.as_str())
+            .map(DomainLocationId::Sr)
+            .map_err(|_| format!("invalid SrId: {}", sr.0)),
+    }
 }
 
 /// Convert a raw party-ID string (GLN, BDEW code, or EIC) from a request
@@ -50,15 +65,21 @@ mod tests {
     use energy_api::models::electricity::{LocationId, NeloId, SrId};
 
     #[test]
-    fn location_id_nelo_to_string() {
-        let id = LocationId::NetworkLocation(NeloId("DE000123456789".into()));
-        assert_eq!(location_id_to_string(&id), "DE000123456789");
+    fn location_id_nelo_to_domain() {
+        // NeloId v0.6: Codetyp 'E' + 9 [A-Z0-9] + ASCII-Verfahren check digit.
+        // "E0000000001" is NeloId::from_base("E000000000").
+        let id = LocationId::NetworkLocation(NeloId("E0000000001".into()));
+        let domain = location_id_to_domain(&id).expect("valid NeloId");
+        assert!(matches!(domain, DomainLocationId::Nelo(_)));
     }
 
     #[test]
-    fn location_id_sr_to_string() {
-        let id = LocationId::ControllableResource(SrId("SR-12345".into()));
-        assert_eq!(location_id_to_string(&id), "SR-12345");
+    fn location_id_sr_to_domain() {
+        // SrId v0.6: Codetyp 'C' + 9 [A-Z0-9] + ASCII-Verfahren check digit.
+        // "C0000000003" is SrId::from_base("C000000000").
+        let id = LocationId::ControllableResource(SrId("C0000000003".into()));
+        let domain = location_id_to_domain(&id).expect("valid SrId");
+        assert!(matches!(domain, DomainLocationId::Sr(_)));
     }
 
     #[test]

@@ -21,11 +21,15 @@
 //!
 //! | Method | Path | Description |
 //! |--------|------|-------------|
-//! | POST   | `/webhook` | Inbound `MarktEvent` from `marktd` |
-//! | GET    | `/api/v1/deliveries/{malo_id}` | Meter data receipts for a MaLo |
-//! | GET    | `/api/v1/imbalance/{malo_id}/{year}/{month}` | Mehr-/Mindermengen |
+//! | POST   | `/webhook` | Inbound `MarktEvent` from `marktd` (MSCONS only; other types → 204) |
+//! | GET    | `/api/v1/deliveries/{malo_id}` | BO4E `Energiemenge` array for a MaLo |
+//! | GET    | `/api/v1/billing-period/{malo_id}` | `MeterBillingPeriod` (spitzenleistung, brennwert, zustandszahl) |
+//! | GET    | `/api/v1/imbalance/{malo_id}/{year}/{month}` | Mehr-/Mindermengen imbalance report |
+//! | GET    | `/api/v1/lastgang/{malo_id}` | BO4E `Lastgang` time series (grouped by OBIS register) |
+//! | GET    | `/api/v1/zeitreihe/{malo_id}` | BO4E `Zeitreihe` time series (commodity metadata) |
 //! | GET    | `/health/live` | Liveness probe |
-//! | GET    | `/health/ready` | Readiness probe |
+//! | GET    | `/health/ready` | Readiness probe (PostgreSQL ping) |
+//! | GET    | `/metrics` | Prometheus metrics |
 //!
 //! ## Configuration
 //!

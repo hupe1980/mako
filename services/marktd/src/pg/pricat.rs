@@ -52,7 +52,7 @@ fn row_to_version(r: &PgRow) -> PriCatVersion {
         data: r.get("data"),
         bo4e_version: r
             .try_get("bo4e_version")
-            .unwrap_or_else(|_| "v202501.0.0".to_owned()),
+            .unwrap_or_else(|_| "v202607.0.0".to_owned()),
         source,
         dispatch_state,
         dispatch_error: r.try_get("dispatch_error").ok().flatten(),

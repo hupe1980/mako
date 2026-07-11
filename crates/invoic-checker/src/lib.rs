@@ -3,7 +3,7 @@
 //! A German LF receives INVOIC messages (PIDs 31001–31011) from NB/GNB/MSB/BIKO
 //! counterparties for grid fees (NNE), meter charges, and Mehr-/Mindermengen (MMM)
 //! settlement. This library runs automated business-rule checks over BO4E
-//! [`Rechnung`][rubo4e::v202501::Rechnung] objects — the industry-standard German
+//! [`Rechnung`][rubo4e::current::Rechnung] objects — the industry-standard German
 //! energy domain model — and produces a [`CheckReport`] that drives the REMADV /
 //! dispute workflow in `invoicd`.
 //!
@@ -43,7 +43,7 @@
 //!     tariff::InMemoryPreisblattStore,
 //!     amount::EuroAmount,
 //! };
-//! use rubo4e::v202501::{PreisblattNetznutzung, Rechnung};
+//! use rubo4e::current::{PreisblattNetznutzung, Rechnung};
 //!
 //! let preisblatt_store = InMemoryPreisblattStore::default();
 //!

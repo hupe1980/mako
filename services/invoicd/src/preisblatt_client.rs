@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 
 use invoic_checker::tariff::InMemoryPreisblattStore;
-use rubo4e::v202501::PreisblattNetznutzung;
+use rubo4e::current::PreisblattNetznutzung;
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
 use tracing::{info, warn};

@@ -92,7 +92,10 @@ fn build_mscons() -> Result<(), Box<dyn std::error::Error>> {
         .document_date("20240115")
         // Add a metering point with OBIS code and quantity
         .metering_point("DE0001234567890123456789012345")
-        .obis("1-1:1.29.0:SRW")
+        .obis(
+            rubo4e::identifiers::ObisCode::new("1-0:1.8.0")
+                .expect("valid OBIS — Wirkarbeit+ cumulative"),
+        )
         .quantity("220", "1234.567", "KWH")
         .done()
         .build()?

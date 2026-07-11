@@ -8,7 +8,7 @@
 //! | # | Rule | Reject code | Escalate? |
 //! |---|------|-------------|-----------|
 //! | 1 | Grid record present (`MaloGridRecord` is `Some`) | — | ✓ missing data |
-//! | 2 | No conflicting active supply (`lf_gln_next` is `None`) | A06 | |
+//! | 2 | No conflicting active supply (`lf_mp_id_next` is `None`) | A06 | |
 //! | 3 | `process_date ≥ today_berlin(now)` | A97 | |
 //! | 4 | Bilanzierungsgebiet matches grid record (when both are present) | A02 | |
 //! | 5 | LF GLN is in the partner directory (`partner_known = true`) | A05 | |
@@ -122,16 +122,16 @@ pub fn evaluate(
 
     // ── Check 2: No conflicting active supply ─────────────────────────────────
     //
-    // If `lf_gln_next` is already set, another Lieferbeginn is in flight for
+    // If `lf_mp_id_next` is already set, another Lieferbeginn is in flight for
     // this MaLo.  Per GPKE AHB: reject with A06.
     if let Some(vs) = versorgung {
-        if vs.lf_gln_next.is_some() {
+        if vs.lf_mp_id_next.is_some() {
             return NetzCheckResult::Reject(RejectReason {
                 erc_code: "A06".to_owned(),
                 detail: format!(
-                    "MaLo {} already has a pending Lieferbeginn (lf_gln_next = {:?}). \
+                    "MaLo {} already has a pending Lieferbeginn (lf_mp_id_next = {:?}). \
                      Reject duplicate Anmeldung.",
-                    anfrage.malo_id, vs.lf_gln_next
+                    anfrage.malo_id, vs.lf_mp_id_next
                 ),
                 check_number: 2,
             });
@@ -295,13 +295,14 @@ mod tests {
     fn make_versorgung(
         status: LieferStatus,
         lf_mp_id: Option<String>,
-        lf_gln_next: Option<String>,
+        lf_mp_id_next: Option<String>,
     ) -> VersorgungsStatusRecord {
         VersorgungsStatusRecord {
             malo_id: "51238696780".parse().unwrap(),
             lieferstatus: status,
             lf_mp_id,
-            lf_gln_next,
+            lf_mp_id_next,
+            lf_next_lieferbeginn: None,
             lieferbeginn: None,
             lieferende: None,
             msb_mp_id: None,

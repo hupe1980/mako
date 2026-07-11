@@ -50,6 +50,19 @@ pub struct InboundMakoEvent {
     /// introduced (forward-compatible: `marktrole` remains `None` in that case).
     #[serde(default)]
     pub makoworkflow: Option<String>,
+    /// W3C Trace Context `traceparent` header value (B10).
+    ///
+    /// Format: `"00-{trace-id}-{parent-id}-{flags}"` per W3C Trace Context 1.0.
+    /// Injected by `makod` outbox from the current OpenTelemetry span context.
+    /// Forwarded by `marktd` fan-out to all subscribers so that L3 services
+    /// (`processd`, `invoicd`, `edmd`) can continue the distributed trace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traceparent: Option<String>,
+    /// W3C Trace Context `tracestate` header value (B10).
+    ///
+    /// Vendor-specific trace state bag forwarded unchanged through the pipeline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracestate: Option<String>,
     pub data: serde_json::Value,
 }
 
@@ -91,13 +104,15 @@ impl InboundMakoEvent {
 /// | `makopid` | Forwarded BDEW Prüfidentifikator |
 /// | `makoworkflow` | Forwarded workflow family name |
 /// | `makoerc` | Forwarded BDEW ERC error code (on `aperak.rejected`) |
+/// | `traceparent` | W3C Trace Context `traceparent` (B10, forwarded from inbound event) |
+/// | `tracestate` | W3C Trace Context `tracestate` (B10, vendor trace-state bag) |
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarktEvent {
     /// CloudEvents `specversion` — always `"1.0"`.
     pub specversion: String,
     /// Unique idempotency key for this event (UUID v4).
     pub id: String,
-    /// CloudEvents source — `"urn:markt:tenant:{tenant_gln}"`.
+    /// CloudEvents source — `"urn:markt:tenant:{tenant}"`.
     pub source: String,
     /// CloudEvents type, e.g. `"de.markt.malo.updated"`.
     #[serde(rename = "type")]
@@ -149,6 +164,16 @@ pub struct MarktEvent {
     /// `ce_type == "de.mako.aperak.rejected"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub makoerc: Option<String>,
+    /// W3C Trace Context `traceparent` — forwarded unchanged from the inbound `makod` event.
+    ///
+    /// Subscribers MUST propagate this as the `traceparent` HTTP header when
+    /// making downstream calls so the distributed trace spans the full
+    /// `makod → marktd → processd/invoicd/edmd` pipeline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traceparent: Option<String>,
+    /// W3C Trace Context `tracestate` — vendor trace-state bag forwarded unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracestate: Option<String>,
     /// BO4E payload (`_typ` + camelCase fields).
     pub data: serde_json::Value,
 }
@@ -157,7 +182,7 @@ impl MarktEvent {
     /// Construct a new `MarktEvent` with sensible defaults.
     #[must_use]
     pub fn new(
-        tenant_gln: &str,
+        tenant: &str,
         ce_type: impl Into<String>,
         subject: impl Into<String>,
         data: serde_json::Value,
@@ -165,7 +190,7 @@ impl MarktEvent {
         Self {
             specversion: "1.0".into(),
             id: Uuid::new_v4().to_string(),
-            source: format!("urn:markt:tenant:{tenant_gln}"),
+            source: format!("urn:markt:tenant:{tenant}"),
             ce_type: ce_type.into(),
             time: OffsetDateTime::now_utc(),
             subject: subject.into(),
@@ -179,6 +204,8 @@ impl MarktEvent {
             makopid: None,
             makoworkflow: None,
             makoerc: None,
+            traceparent: None,
+            tracestate: None,
             data,
         }
     }
@@ -195,6 +222,8 @@ impl MarktEvent {
         self.makopid = ext.makopid;
         self.makoworkflow = ext.makoworkflow;
         self.makoerc = ext.makoerc;
+        self.traceparent = ext.traceparent;
+        self.tracestate = ext.tracestate;
         self
     }
 }
@@ -215,6 +244,13 @@ pub struct EventExtensions {
     pub makoworkflow: Option<String>,
     /// Forwarded `makoerc` from originating `InboundMakoEvent`.
     pub makoerc: Option<String>,
+    /// W3C Trace Context `traceparent` — forwarded from the originating `makod` event (B10).
+    ///
+    /// Set this from `InboundMakoEvent.traceparent` to enable distributed tracing
+    /// across the full `makod → marktd → processd/invoicd/edmd` chain.
+    pub traceparent: Option<String>,
+    /// W3C Trace Context `tracestate` — vendor trace-state bag (B10).
+    pub tracestate: Option<String>,
 }
 
 // ── HMAC signature ────────────────────────────────────────────────────────────

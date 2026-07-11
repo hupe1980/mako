@@ -15,7 +15,7 @@
 //!       → MdmdPreisblattClient (1h LRU cache, circuit breaker)
 //!   → InvoicCheckEngine::check(&rechnung, &preisblatt_store, &config)
 //!       → PreisblattStore::get(nb_mp_id, billing_date) → Some(PreisblattNetznutzung)
-//!       → compare INVOIC einzelpreis against preisblatt.preispositionen[*].preisstaffeln[*].einheitspreis ± tolerance
+//!       → compare INVOIC einzelpreis against preisblatt.preispositionen[*].preisstaffeln[*].preis ± tolerance
 //! ```
 //!
 //! # Temporal lookup
@@ -29,7 +29,7 @@
 
 use std::collections::HashMap;
 
-use rubo4e::v202501::PreisblattNetznutzung;
+use rubo4e::current::PreisblattNetznutzung;
 
 // ── Trait ─────────────────────────────────────────────────────────────────────
 
@@ -88,7 +88,7 @@ impl InMemoryPreisblattStore {
     /// Sort all entry lists by `gueltigkeit.startdatum` descending so that
     /// [`PreisblattStore::get`] returns the most-recently-valid sheet first.
     ///
-    /// Uses the `validity()` convenience method from rubo4e v0.3 — direct
+    /// Uses the `validity()` convenience method from rubo4e v0.5 — direct
     /// `time::Date` comparison with no intermediate string allocation.
     pub fn sort(&mut self) {
         for sheets in self.inner.values_mut() {
@@ -112,7 +112,7 @@ impl PreisblattStore for InMemoryPreisblattStore {
 
 /// Return `true` when `billing_date` falls within the sheet's validity window.
 ///
-/// Uses the `validity()` convenience method from rubo4e v0.3 for direct
+/// Uses the `validity()` convenience method from rubo4e v0.5 for direct
 /// `time::Date` comparison — no string allocation or formatting needed.
 ///
 /// Window: `startdatum <= billing_date` AND (`enddatum` absent OR `billing_date < enddatum`)
@@ -130,7 +130,7 @@ fn sheet_is_valid(sheet: &PreisblattNetznutzung, billing_date: time::Date) -> bo
 
 #[cfg(test)]
 mod tests {
-    use rubo4e::v202501::{PreisblattNetznutzung, Zeitraum};
+    use rubo4e::current::{PreisblattNetznutzung, Zeitraum};
     use time::macros::date;
 
     use super::*;

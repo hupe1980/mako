@@ -11,7 +11,7 @@ keywords     = ["invoic", "bo4e", "energy", "mako", "bdew"]
 categories   = ["data-structures"]
 
 [dependencies]
-rubo4e      = { workspace = true }
+rubo4e       = { workspace = true }
 rust_decimal = { workspace = true }
 serde       = { workspace = true }
 thiserror   = { workspace = true }

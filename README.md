@@ -10,7 +10,9 @@ Five distinct layers live here:
 - **`dvgw-edi`** — Stateless DVGW EDIFACT library for the gas transport and balancing market (GaBi Gas 2.0): ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES. No async, no I/O.
 - **`redispatch-xml`** — Stateless Redispatch 2.0 XML/XSD parsing library: all 9 document types (`ActivationDocument`, `AcknowledgementDocument`, `PlannedResourceSchedule`, `Stammdaten`, `Unavailability`, `NetworkConstraintDocument`, `Kaskade`, `StatusRequest`, `Kostenblatt`). No async, no I/O.
 - **`mako-engine` + domain crates + `makod`** — Event-sourced process runtime for long-running MaKo workflows with regulatory deadlines, dual-write atomicity, AS4 inbound/outbound transport, Cedar ABAC authorization, OIDC/JWT + API-key auth, CloudEvents 1.0 ERP webhooks, and an MCP server.
-- **`mako-markt` + `marktd`** — Market data layer: validated domain IDs (`MaloId`, `MeloId`, `MarktpartnerId`), repository traits, `VersorgungsStatus`, MaLo grid topology, and the companion `marktd` daemon (PostgreSQL, OIDC/JWT, ERP webhook subscriptions, EventBus fan-out). Independently deployable; communicates with `makod` exclusively via CloudEvents 1.0.
+- **`mako-markt` + `marktd`** — Market data layer: validated domain IDs (`MaloId`, `MeloId`, `MarktpartnerId`), repository traits, `VersorgungsStatus`, MaLo grid topology, W3C Trace Context forwarding, durable `event_log` replay, and the companion `marktd` daemon (PostgreSQL, OIDC/JWT, ERP webhook subscriptions, EventBus fan-out). NB contracts stored as typed SQL columns + full BO4E `Vertrag` JSONB (digital LRV exchange). `Marktlokation`, `Messlokation`, `Zaehler`, `Geraet` API responses are fully typed `rubo4e::current::Foo`. Independently deployable; communicates with `makod` exclusively via CloudEvents 1.0.
+- **`mako-nne` + `netzbilanzd`** — Pure NNE/KA/MMM/MSB invoice generation library (zero floating-point money, self-validates via `invoic-checker`) and billing daemon that generates and dispatches INVOIC 31001/31002/31005/31009 for the NB role. `invoice_drafts` lifecycle with operator-review step before dispatch.
+- **`sperrd`** — Sperrung execution tracking daemon that auto-dispatches IFTSTA 21039 when the field team confirms execution, preventing permanent GPKE protocol violations.
 - **`invoic-checker` + `invoicd`** — Autonomous INVOIC plausibility-check pipeline
   for the Lieferant role. `invoicd` subscribes to `de.mako.process.initiated` events
   from `marktd`, runs five plausibility checks, persists every receipt to PostgreSQL
@@ -19,8 +21,8 @@ Five distinct layers live here:
 - **`processd`** — Process Decision Engine: automated NB Anmeldung STP decisions
   (via pure `netz-checker` library, STP target ≥ 95 %) and LF E_0624 auto-response
   (45-minute window). Role-gated Cargo features for §7 EnWG binary separation.
-- **`edmd`** — Energy Data Management daemon: MSCONS meter readings, time-series API,
-  `MeterBillingPeriod` (RLM Spitzenleistung + Gas Brennwert/Zustandszahl),
+- **`edmd`** — Energy Data Management daemon: MSCONS meter readings, BO4E `Energiemenge` deliveries API,
+  `Lastgang` + `Zeitreihe` time-series export, `MeterBillingPeriod` (RLM Spitzenleistung + Gas Brennwert/Zustandszahl),
   Mehr-/Mindermengensaldo imbalance. PostgreSQL-backed.
 - **`obsd`** — Business-process observability daemon: `ProcessProjection`, BNetzA KPI
   reports, overdue-process detection, §20 EnWG parity (`initiator_is_affiliate`).
@@ -54,16 +56,20 @@ Five distinct layers live here:
 | `mako-redispatch` | Redispatch 2.0 workflows — XML document types (`ActivationDocument`, `Stammdaten`, `NetworkConstraintDocument`, …) + IFTSTA PIDs 21037/21038 |
 | `redispatch-xml` | Redispatch 2.0 XML/XSD format parsing |
 | `energy-api` | BDEW API-Webdienste Strom — REST/WebSocket client + Axum server for iMS processes |
-| `mako-markt` | Master data library — `MaloId`, `MeloId`, `MarktpartnerId`, repository traits, CloudEvents, test doubles |
+| `mako-markt` | Master data library — `MaloId`, `MeloId`, `MarktpartnerId`, repository traits (incl. `LokationszuordnungRepository`, `TechnischeRessourceRepository`), CloudEvents, test doubles |
+| `mako-nne` | Pure NNE/KA/MMM/MSB invoice generation library — `calculate_nne_invoice`, `calculate_mmm_invoice`, `calculate_msb_invoice`; `EuroAmount` precision (no float money); self-validates via `invoic-checker` |
 | `mako-edm` | Energy data library — `MeterDataReceipt`, `TimeSeriesRepository`, `ImbalanceReport`, MSCONS PID set |
 | `mako-obs` | Observability library — `ProcessProjection`, `KpiReport`, `DeadlineRisk`, `ProcessProjectionRepository` |
 | `mako-service` | Shared service infrastructure — `ServiceBuilder`, `load_config`, health routes, HMAC-SHA256 webhook verification |
 | **`makod`** | Protocol daemon — all 45+ workflows, AS4 (`:4080`), REST (`:8080`), iMS (`:8090`), SlateDB, MCP server, OTLP, Cedar ABAC |
-| **`marktd`** | Market Data Hub — MaLo/MeLo/contracts/VersorgungsStatus/preisblaetter/NeLo/malo_grid; EventBus fan-out; PostgreSQL, OIDC/JWT; `:8180` |
+| **`marktd`** | Market Data Hub — MaLo/MeLo/NeLo/TR/SR with **typed `rubo4e::current` API responses** (Marktlokation, Messlokation, Zaehler, Geraet), `fallgruppe`, `standorteigenschaften JSONB`, `konfigurationsprodukte`, `Vec<Zaehlwerk>` register access, Lokationszuordnung graph, preisblaetter, VersorgungsStatus, `event_log` replay; EventBus fan-out; PostgreSQL, OIDC/JWT; `:8180` |
 | `processd` | Process Decision Engine — NB Anmeldung STP (netz-checker, ≥ 95 %) + LF E_0624 auto-response; role-gated §7 EnWG features; `:8580` |
 | `invoic-checker` | INVOIC plausibility library — period validity, position arithmetic, document total, tariff match, tariff found |
-| `invoicd` | INVOIC plausibility-check daemon (LF role) — auto-settles or disputes GPKE billing; persists receipts to PostgreSQL for §22 MessZV compliance; `:8280` |
-| `edmd` | Energy Data Management daemon — MSCONS meter readings, time-series API, `MeterBillingPeriod`, imbalance; PostgreSQL; `:8380` |
+| `invoicd` | INVOIC plausibility-check daemon (LF role) — auto-settles or disputes inbound billing; `POST /api/v1/receipts/{id}/confirm-payment` + `GET /api/v1/zahlungsstatus/{malo_id}` for §22 MessZV payment lifecycle; persists receipts to PostgreSQL; `:8280` |
+| `netzbilanzd` | NNE/KA/MMM/MSB billing daemon (NB role) — generates INVOIC 31001/31002/31005/31009; `invoice_drafts` lifecycle (`draft → dispatched/rejected`); `:8680` |
+| `sperrd` | Sperrung execution tracking daemon (NB role) — `sperr_orders` lifecycle; IFTSTA 21039 auto-dispatch on field confirmation; `:8780` |
+| `nis-syncd` | NIS/GIS grid topology import adapter (NB role, stateless) — `POST /api/v1/grid/sync`; dry-run mode; drift detection; lifts `processd` NB STP to ≥95%; `:9680` |
+| `edmd` | Energy Data Management daemon — MSCONS meter readings, BO4E `Energiemenge` deliveries, `Lastgang` + `Zeitreihe` time-series, `MeterBillingPeriod` (RLM / Gas), imbalance; PostgreSQL; `:8380` |
 | `obsd` | Business-process observability daemon — process projections, BNetzA KPI reports, deadline alerts; PostgreSQL; `:8480` |
 
 
@@ -109,11 +115,23 @@ Five distinct layers live here:
 | Category | Detail |
 |---|---|
 | 🆔 **Validated domain IDs** | `MaloId` (11-digit BDEW check-digit), `MeloId` (DE+31-char), `MarktpartnerId` (13-digit; auto-derives NAD DE3055 agency code `293`/`332`/`9` from prefix) |
-| 🗂️ **Six repository traits** | `MaloRepository`, `MeloRepository`, `ContractRepository`, `SubscriptionRepository`, `CorrelationIndex`, `PartnerRepository` — AFIT, no `dyn Trait` overhead |
+| 🗂️ **Nine repository traits** | `MaloRepository`, `MeloRepository`, `ContractRepository`, `SubscriptionRepository`, `CorrelationIndex`, `PartnerRepository`, `LokationszuordnungRepository`, `TechnischeRessourceRepository`, `SteuerbareRessourceRepository` — AFIT, no `dyn Trait` overhead |
 | ⏳ **Temporal role assignments** | `Lokationszuordnung` with `valid_from`/`valid_to` — evaluated against CET/CEST German calendar date at query time |
 | 📨 **CloudEvents 1.0** | Outbound events (`MarktEvent`) with HMAC-SHA256 signing; `InboundMakoEvent` for receiving `makod` lifecycle events |
 | 🧪 **`testing` feature** | `InMemory*` test doubles for all six traits — no PostgreSQL required in unit tests |
 | 🚫 **Zero framework deps** | No axum, sqlx, or async runtime — pure domain library; all I/O lives in `services/marktd` |
+
+### BO4E typed API (`marktd`)
+
+**25 active `rubo4e::current` types — schema validated at every read/write boundary.**
+
+| Category | Detail |
+|---|---|
+| 📦 **Typed responses** | `GET /api/v1/malo` → `Marktlokation`; `GET /api/v1/melo` → `Messlokation`; `GET /api/v1/zaehler` → `Zaehler`; `GET /api/v1/geraete` → `Geraet` — all canonical BO4E camelCase |
+| 🔍 **Schema validation on write** | `PUT` endpoints reject wrong `_typ` with 422; validate enum fields (`bilanzierungsmethode`, `netzebene`, `vertragsart`, …) against `rubo4e::current` types |
+| 📋 **`Vertrag` for LRV exchange** | `nb_contracts` stores full BO4E `Vertrag` JSONB + typed SQL columns; `PUT /api/v1/nb-contracts` validates `vertragsart` / `vertragsstatus`; emits `de.markt.nb-contract.updated` CloudEvent |
+| 🔢 **`Zaehlwerk` register access** | `GET /api/v1/zaehler/{id}/zaehlwerke` → `Vec<Zaehlwerk>` — OBIS registers for TOU billing and iMSyS demand management |
+| ⚡ **`Energiemenge` deliveries** | `GET /api/v1/deliveries/{malo_id}` → `Vec<Energiemenge>` — typed ERP-consumable meter readings without EDIFACT parsing |
 
 ### Process engine layer (`mako-engine` + domain crates)
 
@@ -135,7 +153,7 @@ Five distinct layers live here:
 
 ```toml
 [dependencies]
-edi-energy = "0.7"
+edi-energy = "0.8"
 ```
 
 ```rust
@@ -153,8 +171,8 @@ println!("Valid: {}", report.is_valid());
 
 ```toml
 [dependencies]
-mako-engine = { version = "0.7", features = ["testing"] }
-mako-gpke   = "0.7"
+mako-engine = { version = "0.8", features = ["testing"] }
+mako-gpke   = "0.8"
 ```
 
 ```rust
@@ -184,7 +202,7 @@ let state = process.state().await?;
 
 ```toml
 [dependencies]
-dvgw-edi = "0.7"
+dvgw-edi = "0.8"
 ```
 
 ```rust
@@ -211,7 +229,7 @@ let pid = msg.detect_pid(Some("Z01"));
 
 ```toml
 [dependencies]
-redispatch-xml = "0.7"
+redispatch-xml = "0.8"
 ```
 
 ```rust
@@ -238,7 +256,7 @@ let out = serialize(&doc)?;
 
 ```toml
 [dependencies]
-mako-markt = { version = "0.7", features = ["testing"] }
+mako-markt = { version = "0.8", features = ["testing"] }
 ```
 
 ```rust
@@ -331,7 +349,10 @@ let repo = InMemoryMaloRepository::default();
 | [marktd Operator Guide](./docs/marktd.md) | Market Data Hub: MaLo/MeLo, subscriptions, VersorgungsStatus, OIDC, Docker |
 | [processd Operator Guide](./docs/processd.md) | NB STP auto-decisions (netz-checker) + LF E_0624 auto-response; §7 EnWG role features |
 | [invoicd Operator Guide](./docs/invoicd.md) | INVOIC plausibility-check daemon: PostgreSQL persistence, §22 MessZV, tariff seeding |
-| [edmd Operator Guide](./docs/edmd.md) | Energy Data Management: MSCONS storage, time-series API, `MeterBillingPeriod` |
+| [netzbilanzd Operator Guide](./docs/netzbilanzd.md) | NNE/KA/MMM billing daemon: invoice generation, draft lifecycle, dispatch to `makod` |
+| [sperrd Operator Guide](./docs/sperrd.md) | Sperrung execution tracker: order lifecycle, IFTSTA 21039 auto-dispatch, GPKE compliance |
+| [nis-syncd Operator Guide](./docs/nis-syncd.md) | NIS/GIS grid topology import: sync, dry-run, drift detection, STP impact |
+| [edmd Operator Guide](./docs/edmd.md) | Energy Data Management: MSCONS storage, BO4E `Energiemenge` deliveries, `Lastgang`/`Zeitreihe` time-series, `MeterBillingPeriod` |
 | [obsd Operator Guide](./docs/obsd.md) | Observability: process projections, KPI reports, §20 EnWG parity |
 | [Release Lifecycle](./docs/release-lifecycle.md) | Annual BDEW profile updates, codegen pipeline |
 | [Schema Versioning](./docs/schema-versioning.md) | Profile JSON schema evolution and archive lifecycle |
@@ -533,7 +554,7 @@ By default UTILMD, MSCONS, APERAK, and CONTRL are compiled in:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.7", features = ["invoic", "remadv", "orders"] }
+edi-energy = { version = "0.8", features = ["invoic", "remadv", "orders"] }
 ```
 
 | Flag | Default | Enables |
@@ -565,7 +586,7 @@ edi-energy = { version = "0.7", features = ["invoic", "remadv", "orders"] }
 All 8 format parsers are compiled in by default. Disable unused formats to reduce binary size:
 
 ```toml
-dvgw-edi = { version = "0.7", default-features = false, features = ["nomint", "nomres"] }
+dvgw-edi = { version = "0.8", default-features = false, features = ["nomint", "nomres"] }
 ```
 
 | Flag | Default | Enables |

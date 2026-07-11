@@ -14,7 +14,7 @@
 //! | # | Rule | Outcome on failure |
 //! |---|------|-------------------|
 //! | 1 | MaLo exists in NB grid | `Escalate` (data gap) |
-//! | 2 | No conflicting active supply (`lf_gln_next` already set) | `Reject(A06)` |
+//! | 2 | No conflicting active supply (`lf_mp_id_next` already set) | `Reject(A06)` |
 //! | 3 | `process_date ≥ today` (no retroactive start) | `Reject(A97)` |
 //! | 4 | Network area consistent (Bilanzierungsgebiet matches) | `Reject(A02)` |
 //! | 5 | LF registered in partner directory | `Reject(A05)` |

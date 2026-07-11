@@ -3,10 +3,11 @@ layout: default
 title: ERP Integration
 nav_order: 23
 parent: Architecture
+mermaid: true
 description: >
-  Integrate makod with your ERP using CloudEvents 1.0 JSON webhooks. Command API,
-  HMAC-SHA256 signature verification, idempotency keys, and BO4E payload
-  schema reference.
+  Integrate with your ERP using CloudEvents 1.0 JSON webhooks, the Command API,
+  and typed BO4E market data. Covers HMAC-SHA256 signature verification, idempotency
+  keys, payment lifecycle CloudEvents, and the full integration topology diagram.
 ---
 
 # ERP Integration
@@ -93,7 +94,7 @@ Body (CloudEvents 1.0 structured-mode JSON):
   "type": "de.mako.aperak.accepted",
   "time": "2026-10-01T10:15:00+02:00",
   "subject": "018f3a2b-...",
-  "dataschema": "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202501.0.0/src/bo4e_schemas/bo/Marktlokation.json",
+  "dataschema": "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas/bo/Marktlokation.json",
   "datacontenttype": "application/json",
   "makoconvid": "...",
   "makocausationid": "...",
@@ -154,42 +155,52 @@ message is dead-lettered.
 | ERP → makod | `PUT /admin/malo/{malo_id}` | Push MaLo master data to the local cache |
 | ERP → makod | `PUT /admin/partners/{mp_id}` | Register or update a trading-partner endpoint |
 | ERP → makod | `ErpCommandSource` trait | Fully event-driven inbound (Kafka, SFTP, CDC, …) |
-| marktd → invoicd | `POST /webhook` CloudEvents | GPKE billing notifications for automatic plausibility check |
+| marktd → invoicd | `POST /webhook` CloudEvents | GPKE/WiM billing notifications for automatic plausibility check |
 | invoicd → makod | `POST /api/v1/commands` | `gpke.abrechnung.annehmen` or `gpke.abrechnung.ablehnen` |
-| edmd API → ERP | `GET /api/v1/timeseries` | Retrieve aggregated meter-data for billing basis |
-| obsd API → ERP | `GET /api/v1/kpi` | BNetzA process KPIs (§12 Abs. 1 EnWG reporting) |
+| invoicd → ERP | `de.invoic.receipt.settled/disputed` CloudEvents | Durable at-least-once payment notifications |
+| invoicd → ERP | `de.invoic.payment.overdue` CloudEvents | Background worker every 6 h — unpaid invoices past `pay_by` |
+| ERP → invoicd | `POST /api/v1/receipts/{id}/confirm-payment` | Close §22 MessZV payment audit trail when bank transfer confirmed |
+| ERP → invoicd | `GET /api/v1/zahlungsstatus/{malo_id}` | AR reconciliation — settled / pending / overdue counts |
+| edmd API → ERP | `GET /api/v1/deliveries/{malo_id}` | BO4E `Vec<Energiemenge>` — typed meter readings for billing import |
+| edmd API → ERP | `GET /api/v1/lastgang/{malo_id}` | BO4E `Lastgang` — interval time series grouped by OBIS register |
+| edmd API → ERP | `GET /api/v1/billing-period/{malo_id}` | `MeterBillingPeriod` — arbeitsmenge, spitzenleistung, brennwert |
+| ERP → marktd | `PUT /api/v1/nb-contracts/{id}` | Upsert NB contract with full BO4E `Vertrag` payload |
+| obsd API → ERP | `GET /obs/kpis` | BNetzA KPI report — §20 EnWG parity, STP rates, decision times |
 
 ### Full service topology
 
-```
-                    ┌─────────────────────────────────────────────┐
-                    │              makod :8080 / :4080             │
-                    │  EDIFACT ↔ AS4 · SlateDB event store         │
-                    │  GPKE / WiM / GeLi Gas / MABIS workflows     │
-                    └──────┬──────────────────────────────────────┘
-                           │ CloudEvents (HMAC-signed outbox)
-                    ┌──────▼──────────────────────────────────────┐
-                    │              marktd :8180                       │
-                    │  MaLo/MeLo/contracts · price sheets          │
-                    │  subscriber fan-out · auto-responder         │
-                    └──────┬──────────────────────────────────────┘
-          ┌────────────────┼────────────────────────────────┐
-          ▼                ▼                                 ▼
-  ┌───────────────┐ ┌─────────────────┐           ┌──────────────────┐
-  │ invoicd :8280 │ │   edmd :8380    │           │    obsd :8480    │
-  │ INVOIC check  │ │  Meter data /   │           │  KPI reports /   │
-  │ §22 MessZV    │ │  Time-series /  │           │  BNetzA alerts   │
-  │ REMADV/COMDIS │ │  M+M imbalance  │           │  Prometheus      │
-  └───────┬───────┘ └────────┬────────┘           └──────────────────┘
-          │                  │
-          └──── commands ────┘
-                    │
-             makod :8080
+```mermaid
+graph TB
+    ERP["ERP System\n(SAP / Powercloud / custom)"]
+    makod["makod :8080 / :4080\nEDIFACT ↔ AS4 · SlateDB\nGPKE / WiM / GeLi Gas / MABIS"]
+    marktd["marktd :8180 · PostgreSQL\nMaLo/MeLo/contracts · Vertrag\ntyped rubo4e::current API\nEventBus fan-out"]
+    invoicd["invoicd :8280 · PostgreSQL\nINVOIC plausibility · REMADV\n§22 MessZV receipts"]
+    edmd["edmd :8380 · PostgreSQL\nVec&lt;Energiemenge&gt; deliveries\nLastgang · MeterBillingPeriod"]
+    obsd["obsd :8480 · PostgreSQL\nprocess projections\nBNetzA §20 KPI reports"]
+    processd["processd :8580\nNB STP netz-checker\nLF E_0624 auto-response"]
+
+    ERP -->|"PUT /api/v1/malo/{id}\nPUT /api/v1/nb-contracts/{id}\n(typed BO4E payload)"| marktd
+    ERP -->|"POST /api/v1/commands\n(initiate Lieferbeginn, …)"| makod
+    ERP -->|"POST /receipts/{id}/confirm-payment"| invoicd
+
+    makod -->|"de.mako.process.*\nHMAC-signed CloudEvents"| marktd
+    marktd -->|"fan-out\nde.mako.* + de.markt.*"| ERP
+    marktd -->|"de.mako.process.initiated"| invoicd
+    marktd -->|"de.mako.process.initiated"| processd
+    marktd -->|"de.mako.*"| edmd
+    marktd -->|"de.mako.*"| obsd
+
+    invoicd -->|"de.invoic.receipt.settled/disputed\nde.invoic.payment.overdue"| ERP
+    invoicd -->|"gpke.abrechnung.annehmen/.ablehnen"| makod
+    processd -->|"gpke.lieferbeginn.bestaetigen/.ablehnen\ngeli.lieferbeginn.anmelden"| makod
+
+    ERP -->|"GET /api/v1/deliveries/{malo_id}\n(Vec&lt;Energiemenge&gt;)\nGET /obs/kpis"| edmd
+    ERP -.->|"GET /obs/kpis\nGET /obs/overdue"| obsd
 ```
 
-Every cloud event produced by `makod` flows through `marktd`'s subscription
-fan-out. The three satellite daemons subscribe independently and process
-events at their own pace.
+Every `de.mako.*` event from `makod` flows through `marktd`'s EventBus fan-out.
+The satellite daemons subscribe independently; fan-out failures are durably
+queued in `fanout_dlq` so no regulatory notification is silently dropped.
 
 ### Delivery pipeline
 
@@ -223,12 +234,39 @@ section above.
 | GPKE 55001 | Lieferbeginn LF-AN | `de.mako.process.initiated` → `de.mako.aperak.accepted` → `de.mako.process.completed` |
 | GPKE 55002 | Lieferbeginn NB-AN | same |
 | GPKE 55017 | Lieferbeginn Kündigung | same |
-| GPKE 31001–31008 | Abrechnung INVOIC | `de.mako.process.initiated` → `de.mako.process.completed` or `de.mako.process.failed` |
+| GPKE 31001–31005 | Abrechnung INVOIC | `de.mako.process.initiated` → `de.mako.process.completed` + `de.invoic.receipt.settled`/`disputed` |
+| WiM 31009 | MSB-Rechnung (LF payer) | `de.mako.process.initiated` → REMADV → `de.invoic.receipt.settled`/`disputed` |
 | WiM 55039, 55042, 55051, 55168 | Gerätewechsel / MSB-Wechsel | `de.mako.process.initiated` → `de.mako.aperak.accepted` → `de.mako.process.completed` |
-| GeLi Gas 44001–44006 | Lieferbeginn Gas | `de.mako.process.initiated` → `de.mako.aperak.accepted` → `de.mako.process.completed` |
+| GeLi Gas 44001–44006 | Lieferbeginn Gas (LFN-initiated) | `de.mako.process.initiated` → `de.mako.aperak.accepted` → `de.mako.process.completed` |
 | GeLi Gas 44017–44018 | Lieferende / Kündigung Gas | same |
+| GeLi Gas 17103 | Gas Datenabruf (Brennwert/Zustandszahl) | `de.mako.process.initiated` → `de.mako.process.completed` |
 | GeLi Gas 17115, 17117 | Sperr-/Entsperrauftrag Gas (LF-initiated) | `de.mako.process.initiated` → `de.mako.process.completed` or `de.mako.process.failed` |
 | MABIS 13003 | Bilanzkreisabrechnung Strom | `de.mako.process.initiated` → `de.mako.process.completed` or `de.mako.process.failed` |
+
+### `invoicd` payment CloudEvents
+
+After each validated INVOIC, `invoicd` emits **payment CloudEvents** directly to
+your ERP webhook when `[erp] webhook_url` is configured in `invoicd.toml`.
+These events enable **accounts-payable automation** without polling the REST API.
+
+| Type | Trigger | Use case |
+|---|---|---|
+| `de.invoic.receipt.settled` | REMADV 33001 dispatched | Book received invoice |
+| `de.invoic.receipt.disputed` | REMADV 33002 dispatched | Flag for manual review |
+| `de.invoic.receipt.dispatched` | Outbound 31006 sent | Track self-issued invoice |
+
+Payment events use `source: "urn:invoicd:tenant:{tenant}"` and `subject: "{process_id}"`.
+
+**Delivery guarantee — durable at-least-once:**
+The initial attempt runs inline after REMADV dispatch.  On any failure (transport
+error, HTTP 5xx), the background outbox worker retries with exponential backoff
+(30 s → 5 min → 30 min → 2 h → dead-letter after 5 attempts / ~11 h window).
+HTTP 4xx responses are dead-lettered immediately (permanent misconfiguration).
+Track delivery via `invoic_receipts.erp_notified_at`; dead-lettered rows have
+`erp_attempts >= 5 AND erp_notified_at IS NULL`.
+
+**Request signing:** when `[erp] hmac_secret` is configured, every POST includes
+`X-Mako-Signature: sha256=<hex>` computed over the exact request body bytes.
 
 ### Request format
 
@@ -301,7 +339,7 @@ BO4E-typed JSON object. Deserialise using the ERP's own BO4E library.
   "type": "de.mako.aperak.accepted",
   "time": "2026-10-01T10:15:00+02:00",
   "subject": "018f3a2b-...",
-  "dataschema": "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202501.0.0/src/bo4e_schemas/bo/Marktlokation.json",
+  "dataschema": "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas/bo/Marktlokation.json",
   "datacontenttype": "application/json",
   "makoconvid": "...",
   "makocausationid": "...",
@@ -810,7 +848,7 @@ With BO4E:
   (`de.mako.aperak.accepted`, `de.mako.process.completed`) — not raw EDIFACT codes.
 - `ErpEventType::label()` provides short snake_case labels (`aperak_accepted`)
   for structured logging and metric dimensions.
-- BO4E versioning (`v202501.0.0`) is independent of BDEW format versions.
+- BO4E versioning (`v202607.0.0`) is independent of BDEW format versions.
 
 ---
 
@@ -825,7 +863,7 @@ With BO4E:
 | `POST /api/v1/commands` REST endpoint | ✅ Implemented (`makod/src/commands_api.rs`) |
 | `PUT /admin/malo/{malo_id}` cache | ✅ Implemented |
 | `PUT /admin/partners/{mp_id}` | ✅ Implemented |
-| BO4E typed Rust crate (`rubo4e`) | ✅ In use — `rubo4e = "0.4.0"` in workspace dependencies |
+| BO4E typed Rust crate (`rubo4e`) | ✅ In use — `rubo4e = "0.5.0"` in workspace dependencies (BO4E schema v202607) |
 
 ---
 
@@ -893,22 +931,49 @@ invoicd :8280
 
 | Check | What it verifies |
 |---|---|
-| Period validity | `rechnungsperiode.startdatum` ≤ `enddatum`; dates parseable |
-| Position arithmetic | Sum of `position.positions_menge × einzelpreis` ≈ `teilsumme_netto` (within `arithmetic_tolerance`) |
-| Document total | Sum of `rechnungspositionen[*].teilsumme_netto` ≈ `gesamtnetto` (within `total_tolerance`) |
+| Period validity | `rechnungsperiode.startdatum` ≤ `enddatum`; line-item periods via `lieferungszeitraum` |
+| Position arithmetic | `position.positions_menge × einzelpreis` ≈ `gesamtpreis` (within `arithmetic_tolerance`) |
+| Document total | Sum of `rechnungspositionen[*].gesamtpreis` ≈ `gesamtnetto` (within `total_tolerance`) |
 | Tariff match | Each position's unit price falls within the registered tariff band ± `tariff_tolerance` |
 | Tariff found | A tariff entry for the MaLo + period exists in the tariff store (only when `require_tariff = true`) |
+
+> **BO4E v202607 field names:** `Rechnungsposition` uses `gesamtpreis` (line total)
+> and `lieferungszeitraum` (delivery period) instead of the v202501 `teilsumme_netto`
+> and flat `lieferung_von` / `lieferung_bis` fields. Convenience methods
+> `.gesamtpreis_decimal()`, `.lieferung_von_date()`, and `.lieferung_bis_date()`
+> bridge the structural access.
 
 ### Payment deadline tracking (`pay_by`)
 
 `invoicd` extracts the `faelligkeitsdatum` from each `Rechnung` and stores it as
-`pay_by TIMESTAMPTZ` in `invoic_receipts`. A background query (every 6 h) alerts
-on accepted invoices with `pay_by < now() + 3 days` where the REMADV has not yet
-been dispatched — giving operators a rolling REMADV overdue alert that is also
-queryable from the ERP:
+`pay_by TIMESTAMPTZ` in `invoic_receipts`.
+
+**Approaching REMADV deadline** (`GET /api/v1/overdue-remadv`) — receipts where
+`pay_by < now() + 3 days` and the REMADV has not yet been dispatched. Poll this
+from your ERP for a rolling Zahlungsziel alert:
 
 ```http
-GET http://invoicd:8280/api/v1/receipts?outcome=Ok&dispatched=false
+GET http://invoicd:8280/api/v1/overdue-remadv
+Authorization: Bearer ${TOKEN}
+```
+
+**Overdue payment** (`de.invoic.payment.overdue` CloudEvent) — after REMADV is
+dispatched, the `payment_overdue` background worker (runs every 6 h) emits a
+CloudEvent to the ERP webhook when `pay_by` passes without ERP payment confirmation.
+Subscribe to trigger your accounts-payable dunning flow automatically:
+
+```json
+{
+  "type":    "de.invoic.payment.overdue",
+  "data":    { "receipt_id": "...", "malo_id": "...", "pay_by": "2026-10-15" }
+}
+```
+
+**Payment confirmation** — when the bank transfer clears, POST to close the
+§22 MessZV audit trail:
+
+```http
+POST http://invoicd:8280/api/v1/receipts/{id}/confirm-payment
 ```
 
 ### Tariff seeding
@@ -920,7 +985,7 @@ Upload a price sheet to make it available for the plausibility check:
 curl -X PUT http://marktd:8180/api/v1/preisblaetter/9904234560001 \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -d @preisblatt_netznutzung.json   # rubo4e::v202501::PreisblattNetznutzung
+  -d @preisblatt_netznutzung.json   # rubo4e::current::PreisblattNetznutzung (BO4E v202607)
 ```
 
 `invoicd` fetches the price sheet from `marktd` at check time (1-hour TTL cache,

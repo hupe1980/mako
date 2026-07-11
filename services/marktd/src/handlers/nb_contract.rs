@@ -1,14 +1,17 @@
-//! NB network contract REST handlers.
+//! NB network contract REST handlers (L1 — Vertrag BO4E typing).
 //!
 //! Routes:
 //!   PUT  /api/v1/nb-contracts/:id
 //!   GET  /api/v1/nb-contracts/:id
 //!   GET  /api/v1/nb-contracts?nb_mp_id=...
 //!
-//! NB contracts are typed records (netzebene, bilanzierungsmethode,
-//! billing_schedule) stored in the `nb_contracts` table.  Unlike LF supply
-//! contracts (opaque JSONB), NB contracts enable SQL queries by `netzebene`
-//! and `bilanzierungsmethode` in `invoicd`.
+//! NB contracts are stored as typed SQL columns (fast queries by `invoicd` and
+//! `processd`) PLUS a full BO4E `Vertrag` JSONB payload for digital LRV exchange
+//! with ERP systems.  The `vertragsart` and `vertragsstatus` columns are
+//! extracted from `data` on every write.
+//!
+//! A `de.markt.nb-contract.updated` CloudEvent is emitted on every successful
+//! upsert so subscribers can rebuild Vertrag caches without polling.
 
 use std::sync::Arc;
 
@@ -19,6 +22,7 @@ use axum::{
     response::IntoResponse,
 };
 use mako_markt::{
+    cloudevents::MarktEvent,
     domain::{MaloId, Sparte},
     error::MdmError,
     repository::{
@@ -28,6 +32,7 @@ use mako_markt::{
     },
 };
 use mako_service::cedar::CedarEnforcer;
+use rubo4e::current::Vertrag;
 use serde::{Deserialize, Serialize};
 use time::macros::format_description;
 use utoipa::ToSchema;
@@ -39,6 +44,39 @@ use super::{Claims, IntoMdmResponse as _, TenantGln};
 /// Extension alias — `PgNbContractRepository` is concrete so AFIT works.
 pub type NbContractRepoExt = Arc<PgNbContractRepository>;
 
+// ── Vertrag validation helper ─────────────────────────────────────────────────
+
+/// Validate and normalise a `Vertrag` BO4E payload (L1 hard cut).
+///
+/// 1. Auto-inject `_typ: "VERTRAG"` when absent.
+/// 2. Reject 422 if `_typ` is present but does not equal `"VERTRAG"`.
+/// 3. Deserialise as `rubo4e::current::Vertrag` — validates all enum fields.
+/// 4. Re-serialise to canonical camelCase form for durable storage.
+fn normalize_vertrag(
+    mut data: serde_json::Value,
+) -> Result<(Vertrag, serde_json::Value), (StatusCode, serde_json::Value)> {
+    if let Some(obj) = data.as_object_mut() {
+        obj.entry("_typ")
+            .or_insert_with(|| serde_json::json!("VERTRAG"));
+    }
+    if let Some(typ) = data.get("_typ").and_then(|v| v.as_str())
+        && typ.to_uppercase() != "VERTRAG"
+    {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({ "error": format!("expected _typ VERTRAG, got '{typ}'") }),
+        ));
+    }
+    let vertrag: Vertrag = serde_json::from_value(data).map_err(|e| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({ "error": format!("invalid Vertrag payload: {e}") }),
+        )
+    })?;
+    let canonical = serde_json::to_value(&vertrag).unwrap_or_default();
+    Ok((vertrag, canonical))
+}
+
 // ── DTOs ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -47,9 +85,10 @@ pub struct NbContractUpsertRequest {
     pub nb_mp_id: String,
     #[schema(value_type = String, example = "STROM")]
     pub sparte: Sparte,
-    /// Voltage / pressure level: NS | MS | MSP | HSP | HS | HöS | HöS/HS
+    /// Voltage / pressure level: NS | MS | MSP | HSP | HS | HöS | HöS/HS (Strom)
+    /// or GND | GMT | GHD (Gas)
     pub netzebene: String,
-    /// RLM | SLP
+    /// Billing mode: RLM | SLP | IMS | TLP_GEMEINSAM | TLP_GETRENNT | PAUSCHAL
     pub bilanzierungsmethode: String,
     /// MONTHLY | QUARTERLY | ANNUALLY
     pub billing_schedule: String,
@@ -57,6 +96,14 @@ pub struct NbContractUpsertRequest {
     pub valid_from: String,
     #[serde(default)]
     pub valid_to: Option<String>,
+    /// Full BO4E `Vertrag` payload (L1).
+    ///
+    /// `_typ` is auto-injected to `"VERTRAG"` if absent.
+    /// When omitted, a minimal `Vertrag` is auto-constructed from the other fields.
+    /// Returns 422 if `_typ` is present but not `"VERTRAG"`, or if any typed
+    /// field (e.g. `vertragsart`, `vertragsstatus`) contains an unknown enum value.
+    #[serde(default)]
+    pub data: Option<serde_json::Value>,
     /// Tenant ID.  Defaults to the operator primary GLN if absent.
     #[serde(default)]
     pub tenant: Option<String>,
@@ -73,6 +120,16 @@ pub struct NbContractResponse {
     pub billing_schedule: String,
     pub valid_from: String,
     pub valid_to: Option<String>,
+    /// Full BO4E `Vertrag` payload in canonical camelCase form.
+    /// `_typ: "VERTRAG"` is always present after a successful PUT.
+    #[schema(value_type = Object)]
+    pub data: serde_json::Value,
+    /// BO4E `Vertragsart` extracted from `data.vertragsart`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vertragsart: Option<String>,
+    /// BO4E `Vertragsstatus` lifecycle — extracted from `data.vertragsstatus`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vertragsstatus: Option<String>,
     pub version: i64,
     pub tenant: String,
 }
@@ -123,6 +180,28 @@ fn parse_req(
         )
     })?;
 
+    // Validate and normalise the BO4E Vertrag payload.
+    // When the caller omits `data`, auto-construct a minimal Vertrag so every
+    // stored record is self-describing BO4E from day 1.
+    let raw_data = req.data.unwrap_or_else(|| {
+        serde_json::json!({
+            "_typ": "VERTRAG",
+            "vertragsart": "NETZNUTZUNGSVERTRAG",
+            "vertragsstatus": "AKTIV"
+        })
+    });
+    let (_, canonical_data) = normalize_vertrag(raw_data)?;
+
+    // Extract typed columns from the canonical Vertrag JSON for fast SQL queries.
+    let vertragsart = canonical_data
+        .get("vertragsart")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let vertragsstatus = canonical_data
+        .get("vertragsstatus")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+
     Ok(NbContractRecord {
         contract_id: id,
         malo_id,
@@ -133,6 +212,9 @@ fn parse_req(
         billing_schedule,
         valid_from,
         valid_to,
+        data: canonical_data,
+        vertragsart,
+        vertragsstatus,
         tenant,
         version: 0,
     })
@@ -146,6 +228,7 @@ pub async fn put_nb_contract(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(tenant_gln): Extension<TenantGln>,
+    Extension(event_tx): Extension<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>,
     Path(id): Path<String>,
     Json(req): Json<NbContractUpsertRequest>,
 ) -> impl IntoResponse {
@@ -154,13 +237,36 @@ pub async fn put_nb_contract(
         return StatusCode::FORBIDDEN.into_response();
     }
 
-    let rec = match parse_req(id, req, &tenant_gln.0) {
+    let rec = match parse_req(id.clone(), req, &tenant_gln.0) {
         Ok(r) => r,
         Err((status, body)) => return (status, Json(body)).into_response(),
     };
 
+    let vertragsart = rec
+        .vertragsart
+        .clone()
+        .unwrap_or_else(|| "NETZNUTZUNGSVERTRAG".into());
+    let tenant = rec.tenant.clone();
+
     match repo.upsert(rec).await {
-        Ok(version) => Json(serde_json::json!({ "version": version })).into_response(),
+        Ok(version) => {
+            // Emit de.markt.nb-contract.updated so ERP subscribers can rebuild
+            // Vertrag caches without polling.
+            let evt = MarktEvent::new(
+                &tenant_gln.0,
+                "de.markt.nb-contract.updated",
+                id,
+                serde_json::json!({
+                    "version": version,
+                    "vertragsart": vertragsart,
+                    "tenant": tenant,
+                }),
+            );
+            if let Ok(payload) = serde_json::to_value(&evt) {
+                let _ = event_tx.send(payload);
+            }
+            Json(serde_json::json!({ "version": version })).into_response()
+        }
         Err(e) => e.into_response(),
     }
 }
@@ -247,6 +353,9 @@ fn rec_to_response(r: NbContractRecord) -> NbContractResponse {
         billing_schedule: r.billing_schedule.to_string(),
         valid_from: r.valid_from.format(date_fmt).unwrap_or_default(),
         valid_to: r.valid_to.map(|d| d.format(date_fmt).unwrap_or_default()),
+        data: r.data,
+        vertragsart: r.vertragsart,
+        vertragsstatus: r.vertragsstatus,
         version: r.version,
         tenant: r.tenant,
     }

@@ -20,7 +20,8 @@ impl PgNbContractRepository {
 }
 
 const SELECT_COLS: &str = "contract_id, malo_id, nb_mp_id, sparte, netzebene, \
-    bilanzierungsmethode, billing_schedule, valid_from, valid_to, version, tenant";
+    bilanzierungsmethode, billing_schedule, valid_from, valid_to, version, tenant, \
+    data, vertragsart, vertragsstatus";
 
 impl NbContractRepository for PgNbContractRepository {
     async fn upsert(&self, rec: NbContractRecord) -> Result<i64, MdmError> {
@@ -37,11 +38,12 @@ impl NbContractRepository for PgNbContractRepository {
             r#"INSERT INTO nb_contracts
                (contract_id, malo_id, nb_mp_id, sparte, netzebene,
                 bilanzierungsmethode, billing_schedule,
-                valid_from, valid_to, version, tenant, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+                valid_from, valid_to, version, tenant, updated_at,
+                data, vertragsart, vertragsstatus)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), $12, $13, $14)
                ON CONFLICT (contract_id) DO UPDATE
                SET malo_id               = EXCLUDED.malo_id,
-                   nb_mp_id                = EXCLUDED.nb_mp_id,
+                   nb_mp_id              = EXCLUDED.nb_mp_id,
                    sparte                = EXCLUDED.sparte,
                    netzebene             = EXCLUDED.netzebene,
                    bilanzierungsmethode  = EXCLUDED.bilanzierungsmethode,
@@ -49,7 +51,10 @@ impl NbContractRepository for PgNbContractRepository {
                    valid_from            = EXCLUDED.valid_from,
                    valid_to              = EXCLUDED.valid_to,
                    version               = EXCLUDED.version,
-                   updated_at            = now()"#,
+                   updated_at            = now(),
+                   data                  = EXCLUDED.data,
+                   vertragsart           = EXCLUDED.vertragsart,
+                   vertragsstatus        = EXCLUDED.vertragsstatus"#,
         )
         .bind(&rec.contract_id)
         .bind(&rec.malo_id)
@@ -62,6 +67,9 @@ impl NbContractRepository for PgNbContractRepository {
         .bind(rec.valid_to)
         .bind(new_version)
         .bind(&rec.tenant)
+        .bind(&rec.data)
+        .bind(&rec.vertragsart)
+        .bind(&rec.vertragsstatus)
         .execute(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
@@ -150,6 +158,11 @@ fn row_to_rec(r: PgRow) -> NbContractRecord {
         billing_schedule,
         valid_from: r.get("valid_from"),
         valid_to: r.get("valid_to"),
+        data: r
+            .get::<Option<serde_json::Value>, _>("data")
+            .unwrap_or_default(),
+        vertragsart: r.get("vertragsart"),
+        vertragsstatus: r.get("vertragsstatus"),
         tenant: r.get("tenant"),
         version: r.get("version"),
     }

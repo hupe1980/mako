@@ -119,6 +119,7 @@ mod edifact_renderer;
 mod erp_adapter;
 mod health;
 mod ingest_dispatcher;
+mod invoic_api;
 mod malo_admin_api;
 mod malo_cache;
 mod malo_ident_sender;
@@ -1538,10 +1539,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             malo_cache: malo_cache.clone(),
             partner_store: Arc::new(store.as_partner_store()),
         });
+        let invoic_api_state = Arc::new(invoic_api::InvoicApiState {
+            store: Arc::new(store.clone()),
+            tenant_id: mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+        });
         let app = edifact_api::router(api_state)
             .merge(malo_admin_api::router(admin_state))
             .merge(partner_api::router(partner_admin_state))
             .merge(commands_api::router(commands_state))
+            .merge(invoic_api::router(invoic_api_state))
             .merge(metrics_api::router(metrics_state))
             .merge(migration_api::router(migration_state))
             .merge(mcp_server::router(mcp_state, shutdown_token.clone()))

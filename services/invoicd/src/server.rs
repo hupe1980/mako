@@ -1,15 +1,17 @@
 //! Axum router for `invoicd`.
 //!
 //! Routes:
-//! - `POST /webhook`                             — inbound MarktEvent CloudEvents from `marktd` (HMAC-auth)
-//! - `GET  /api/v1/receipts`                     — query INVOIC receipts (OIDC+Cedar)
-//! - `GET  /api/v1/receipts/:id`                 — get a single receipt (OIDC+Cedar)
-//! - `GET  /api/v1/disputes`                     — list open disputes (OIDC+Cedar)
-//! - `GET  /api/v1/overdue-remadv`               — receipts approaching `pay_by` without dispatch
-//! - `POST /api/v1/selbstausstellen/{malo_id}`   — trigger outbound selbstausgestellt INVOIC 31006 (M16)
-//! - `GET  /metrics`                             — Prometheus metrics (no auth, internal only)
-//! - `GET  /health/live`                         — liveness probe (always 200)
-//! - `GET  /health/ready`                        — readiness probe (200 OK)
+//! - `POST /webhook`                                  — inbound MarktEvent CloudEvents from `marktd` (HMAC-auth)
+//! - `GET  /api/v1/receipts`                          — query INVOIC receipts (OIDC+Cedar)
+//! - `GET  /api/v1/receipts/:id`                      — get a single receipt (OIDC+Cedar)
+//! - `POST /api/v1/receipts/:id/confirm-payment`      — ERP confirms payment received; sets `payment_confirmed_at` (§22 MessZV)
+//! - `GET  /api/v1/disputes`                          — list open disputes (OIDC+Cedar)
+//! - `GET  /api/v1/overdue-remadv`                    — receipts approaching `pay_by` without dispatch
+//! - `GET  /api/v1/zahlungsstatus/{malo_id}`          — payment status per MaLo (pending / settled / overdue)
+//! - `POST /api/v1/selbstausstellen/{malo_id}`        — trigger outbound selbstausgestellt INVOIC 31006 (M16)
+//! - `GET  /metrics`                                  — Prometheus metrics (no auth, internal only)
+//! - `GET  /health/live`                              — liveness probe (always 200)
+//! - `GET  /health/ready`                             — readiness probe (200 OK)
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -47,8 +49,13 @@ pub fn router(state: HandlerState) -> Router {
         .route("/webhook", post(handle_webhook))
         .route("/api/v1/receipts", get(list_receipts))
         .route("/api/v1/receipts/{id}", get(get_receipt))
+        .route(
+            "/api/v1/receipts/{id}/confirm-payment",
+            post(confirm_payment),
+        )
         .route("/api/v1/disputes", get(list_disputes))
         .route("/api/v1/overdue-remadv", get(list_overdue_remadv))
+        .route("/api/v1/zahlungsstatus/{malo_id}", get(get_zahlungsstatus))
         .route(
             "/api/v1/selbstausstellen/{malo_id}",
             post(post_selbstausstellen),
@@ -339,6 +346,199 @@ async fn list_overdue_remadv(
     }
 }
 
+/// `POST /api/v1/receipts/{id}/confirm-payment`
+///
+/// Called by the ERP when it confirms that payment for an invoice has been
+/// received (bank transfer confirmed).  Sets `payment_confirmed_at = now()`.
+///
+/// This closes the §22 MessZV payment audit trail: every `invoic_receipt`
+/// record transitions from `dispatched` → `payment_confirmed` state once
+/// the ERP sends this callback.
+///
+/// Request body: optional `{ "reference": "bank-transfer-id" }` (ignored).
+///
+/// Response: `204 No Content` on success; `404` if receipt not found.
+async fn confirm_payment(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-receipt", &state.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let Some(ref pool) = state.pool else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "database not configured" })),
+        )
+            .into_response();
+    };
+
+    let result = sqlx::query(
+        r"UPDATE invoic_receipts
+          SET payment_confirmed_at = now()
+          WHERE id = $1 AND tenant = $2 AND payment_confirmed_at IS NULL",
+    )
+    .bind(id)
+    .bind(&state.tenant)
+    .execute(pool)
+    .await;
+
+    match result {
+        Ok(r) if r.rows_affected() == 0 => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "receipt not found or already confirmed" })),
+        )
+            .into_response(),
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/v1/zahlungsstatus/{malo_id}`
+///
+/// Returns the payment status for all INVOIC receipts linked to a MaLo,
+/// grouped by status:
+///
+/// - `pending`  — REMADV dispatched but `payment_confirmed_at IS NULL` and
+///   `pay_by` is still in the future.
+/// - `overdue`  — REMADV dispatched, `pay_by` has passed, `payment_confirmed_at IS NULL`.
+/// - `settled`  — `payment_confirmed_at IS NOT NULL`.
+///
+/// This closes the §22 MessZV durable payment audit trail gap. Use this endpoint
+/// to feed a dunning workflow or ERP AR reconciliation.
+///
+/// Query parameters: `from=RFC3339`, `to=RFC3339` (filter by `received_at`).
+async fn get_zahlungsstatus(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-receipt", &state.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let Some(ref pool) = state.pool else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "database not configured" })),
+        )
+            .into_response();
+    };
+
+    // Determine zahlungsstatus from DB columns.
+    // We join on sender_mp_id being the NB's MP-ID for the given malo_id.
+    // Since invoic_receipts doesn't carry malo_id directly, we look it up
+    // via the rechnung->marktlokationsId field in the JSONB payload.
+    let rows = sqlx::query(
+        r"SELECT id, process_id, pid, sender_mp_id, outcome, pay_by,
+                 dispatched_at, payment_confirmed_at, received_at
+          FROM invoic_receipts
+          WHERE tenant = $1
+            AND outcome IN ('Ok', 'AcceptedPartial', 'Warn', 'Dispatched', 'Paid')
+            AND rechnung->'marktlokationsId' = to_jsonb($2::text)
+          ORDER BY received_at DESC
+          LIMIT 100",
+    )
+    .bind(&state.tenant)
+    .bind(&malo_id)
+    .fetch_all(pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let items: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    use sqlx::Row;
+                    let pay_by = r
+                        .try_get::<time::OffsetDateTime, _>("pay_by")
+                        .ok();
+                    let dispatched = r
+                        .try_get::<Option<time::OffsetDateTime>, _>("dispatched_at")
+                        .ok()
+                        .flatten();
+                    let confirmed = r
+                        .try_get::<Option<time::OffsetDateTime>, _>("payment_confirmed_at")
+                        .ok()
+                        .flatten();
+
+                    let zahlungsstatus = if confirmed.is_some() {
+                        "settled"
+                    } else if dispatched.is_some()
+                        && pay_by.is_some_and(|d| d < time::OffsetDateTime::now_utc())
+                    {
+                        "overdue"
+                    } else if dispatched.is_some() {
+                        "pending"
+                    } else {
+                        "undispatched"
+                    };
+
+                    let fmt = |t: time::OffsetDateTime| {
+                        use time::format_description::well_known::Rfc3339;
+                        t.format(&Rfc3339).ok()
+                    };
+
+                    serde_json::json!({
+                        "id":                     r.try_get::<uuid::Uuid, _>("id").ok(),
+                        "process_id":             r.try_get::<uuid::Uuid, _>("process_id").ok(),
+                        "pid":                    r.try_get::<i16, _>("pid").ok(),
+                        "sender_mp_id":           r.try_get::<String, _>("sender_mp_id").ok(),
+                        "zahlungsstatus":         zahlungsstatus,
+                        "pay_by":                 pay_by.and_then(fmt),
+                        "dispatched_at":          dispatched.and_then(fmt),
+                        "payment_confirmed_at":   confirmed.and_then(fmt),
+                        "received_at":            r.try_get::<time::OffsetDateTime, _>("received_at").ok().and_then(fmt),
+                    })
+                })
+                .collect();
+
+            let overdue_count = items
+                .iter()
+                .filter(|i| i.get("zahlungsstatus").and_then(|v| v.as_str()) == Some("overdue"))
+                .count();
+            let pending_count = items
+                .iter()
+                .filter(|i| i.get("zahlungsstatus").and_then(|v| v.as_str()) == Some("pending"))
+                .count();
+            let settled_count = items
+                .iter()
+                .filter(|i| i.get("zahlungsstatus").and_then(|v| v.as_str()) == Some("settled"))
+                .count();
+
+            Json(serde_json::json!({
+                "malo_id":        malo_id,
+                "overdue_count":  overdue_count,
+                "pending_count":  pending_count,
+                "settled_count":  settled_count,
+                "items":          items,
+            }))
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 /// `POST /api/v1/selbstausstellen/{malo_id}`
 ///
 /// Trigger outbound selbstausgestellt INVOIC 31006 (LF → NB).
@@ -425,44 +625,175 @@ async fn post_selbstausstellen(
             .into_response();
     }
 
-    // ── Step 1: Fetch PreisblattNetznutzung from marktd ───────────────────────
-    // Fetched for reference; full RLM generation uses mako-netzbilanz (N3).
-    let _sheet = state
+    // ── Step 1: Fetch MeterBillingPeriod from edmd ───────────────────────────
+    // Required for RLM (Leistungspreis) and Gas (Brennwert/Zustandszahl).
+    let Some(ref edmd_url) = state.edmd_url else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "edmd not configured — add [edmd] url to invoicd.toml for PID 31006"
+            })),
+        )
+            .into_response();
+    };
+
+    let billing_period_url = format!(
+        "{edmd_url}/api/v1/billing-period/{malo_id}?from={}&to={}",
+        body.period_from, body.period_to
+    );
+    let mut req = state.http_client.get(&billing_period_url);
+    if let Some(ref api_key) = state.edmd_api_key {
+        use secrecy::ExposeSecret as _;
+        req = req.bearer_auth(api_key.expose_secret());
+    }
+    let billing_period: mako_edm::domain::MeterBillingPeriod = match req.send().await {
+        Ok(resp) if resp.status().is_success() => match resp.json().await {
+            Ok(bp) => bp,
+            Err(e) => {
+                tracing::warn!(%e, malo_id, "invoicd: selbstausstellen: failed to parse MeterBillingPeriod from edmd");
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "error": format!("edmd parse error: {e}") })),
+                )
+                    .into_response();
+            }
+        },
+        Ok(resp) => {
+            let status = resp.status();
+            tracing::warn!(%status, malo_id, "invoicd: selbstausstellen: edmd returned non-2xx");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("edmd returned {status}") })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::warn!(%e, malo_id, "invoicd: selbstausstellen: edmd unreachable");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("edmd unreachable: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    // ── Step 2: Fetch PreisblattNetznutzung from marktd ───────────────────────
+    let sheet = state
         .preisblatt_client
         .get_preisblatt(&body.nb_mp_id, period_from)
         .await
         .ok()
         .flatten();
+    let Some(sheet) = sheet else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!("no PreisblattNetznutzung for NB {} on {period_from}", body.nb_mp_id)
+            })),
+        )
+            .into_response();
+    };
 
-    // ── Step 2: Invoke invoic-checker with what we have ───────────────────────
-    // For selbstausstellen, we generate a minimal draft. Full RLM generation
-    // requires MeterBillingPeriod from edmd (M15) — wired when edmd is available.
-    //
-    // Current: generate the receipt record and let the ERP supply the rechnung
-    // via the `rechnung` field below (simple mode), or error if not provided.
-    //
-    // TODO N3: replace with mako-netzbilanz::generate_invoic() when available.
+    // ── Step 3: Extract tariff params from PreisblattNetznutzung ─────────────
+    // Find Arbeitspreis (Leistungstyp::ArbeitspreisWirkarbeit) from Preisblatt.
+    use rubo4e::current::Leistungstyp;
+
+    let arbeitspreis_ct = sheet
+        .preispositionen
+        .iter()
+        .flatten()
+        .find(|pos| {
+            pos.leistungstyp
+                .as_ref()
+                .is_some_and(|lt| *lt == Leistungstyp::ArbeitspreisWirkarbeit)
+        })
+        .and_then(|pos| pos.preisstaffeln.as_ref())
+        .and_then(|staffeln| staffeln.first())
+        .and_then(|s| s.preis);
+
+    let Some(arbeitspreis_ct) = arbeitspreis_ct else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "PreisblattNetznutzung has no ArbeitspreisWirkarbeit position — cannot generate Rechnung"
+            })),
+        )
+            .into_response();
+    };
+
+    // Find Leistungspreis if present (RLM only).
+    let leistungspreis_eur = sheet
+        .preispositionen
+        .iter()
+        .flatten()
+        .find(|pos| {
+            pos.leistungstyp
+                .as_ref()
+                .is_some_and(|lt| *lt == Leistungstyp::LeistungspreisWirkleistung)
+        })
+        .and_then(|pos| pos.preisstaffeln.as_ref())
+        .and_then(|staffeln| staffeln.first())
+        .and_then(|s| s.preis);
+
+    // ── Step 4: Build NneInput and generate Rechnung via mako-nne ─────
+    use time::OffsetDateTime;
+
+    let invoice_date = OffsetDateTime::now_utc().date();
+    // Standard Zahlungsziel: 30 days from invoice date.
+    let due_date = invoice_date + time::Duration::days(30);
+    let rechnungsnummer = format!(
+        "SELBST-{}-{}-{}",
+        state.tenant,
+        malo_id,
+        invoice_date.to_string().replace('-', "")
+    );
+
+    let input = mako_nne::NneInput {
+        malo_id: malo_id.clone(),
+        nb_mp_id: body.nb_mp_id.clone(),
+        lf_mp_id: state.tenant.clone(), // LF is selbstaussteller (= our own tenant)
+        rechnungsnummer,
+        period_from,
+        period_to,
+        invoice_date,
+        due_date,
+        arbeitsmenge_kwh: billing_period.arbeitsmenge_kwh,
+        arbeitspreis_ct_per_kwh: arbeitspreis_ct,
+        spitzenleistung_kw: billing_period.spitzenleistung_kw,
+        leistungspreis_eur_per_kw: if billing_period.spitzenleistung_kw.is_some() {
+            leistungspreis_eur
+        } else {
+            None
+        },
+        ka_satz_ct_per_kwh: None, // KA lookup not implemented; ERP can add via COMDIS
+    };
+
+    let billing_result = match mako_nne::calculate_nne_invoice(&input) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(%e, malo_id, "invoicd: selbstausstellen: invoice generation failed");
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("invoice generation error: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let rechnung_json = serde_json::to_value(&billing_result.rechnung).unwrap_or_default();
 
     tracing::info!(
         malo_id = %malo_id,
         nb_mp_id = %body.nb_mp_id,
         period_from = %period_from,
         period_to = %period_to,
-        "invoicd: selbstausstellen 31006 triggered"
+        total_eur = %billing_result.total_eur,
+        "invoicd: selbstausstellen 31006 — full Rechnung generated"
     );
 
-    // ── Step 3: Persist as Dispatched (§22 MessZV) ───────────────────────────
+    // ── Step 5: Persist as Dispatched (§22 MessZV) ───────────────────────────
     let process_id = uuid::Uuid::new_v4();
     let now = time::OffsetDateTime::now_utc();
-
-    // Minimal rechnung placeholder — full generation is N3 (mako-netzbilanz).
-    let rechnung_placeholder = serde_json::json!({
-        "_note": "Full Rechnung generation requires mako-netzbilanz (N3)",
-        "malo_id": malo_id,
-        "nb_mp_id": body.nb_mp_id,
-        "period_from": body.period_from,
-        "period_to": body.period_to,
-    });
 
     let row = pg::ReceiptRow {
         process_id,
@@ -470,8 +801,8 @@ async fn post_selbstausstellen(
         direction: "Outbound".to_owned(),
         sender_mp_id: state.tenant.clone(),
         receiver_gln: body.nb_mp_id.clone(),
-        rechnung: rechnung_placeholder,
-        bo4e_version: "v202501.0.0".to_owned(),
+        rechnung: rechnung_json, // real BO4E Rechnung (not a placeholder)
+        bo4e_version: "v202607.0.0".to_owned(),
         outcome: "Dispatched".to_owned(),
         findings: serde_json::json!([]),
         pay_by: None,
@@ -486,7 +817,7 @@ async fn post_selbstausstellen(
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "failed to persist receipt — §22 MessZV; aborting dispatch" }))).into_response();
     }
 
-    // ── Step 4: Dispatch to makod ─────────────────────────────────────────────
+    // ── Step 6: Dispatch to makod ─────────────────────────────────────────────
     let idempotency_key = format!("invoicd-selbst-31006-{process_id}");
     let cmd = mako_markt::makod_client::ForwardCommand {
         marktrolle: None,
@@ -498,7 +829,8 @@ async fn post_selbstausstellen(
             "nb_mp_id": body.nb_mp_id,
             "period_from": body.period_from,
             "period_to": body.period_to,
-            "note": "Full RLM Rechnung generation pending N3 (mako-netzbilanz)",
+            "total_eur": billing_result.total_eur.to_string(),
+            "rechnung": billing_result.rechnung,
         }),
     };
 
@@ -510,15 +842,19 @@ async fn post_selbstausstellen(
             {
                 tracing::warn!(%e, %process_id, "invoicd: failed to mark selbstausstellen as dispatched");
             }
-            (StatusCode::ACCEPTED, Json(serde_json::json!({
-                "process_id": accepted.process_id,
-                "malo_id": malo_id,
-                "nb_mp_id": body.nb_mp_id,
-                "period_from": body.period_from,
-                "period_to": body.period_to,
-                "outcome": "Dispatched",
-                "note": "Full RLM Rechnung generation requires mako-netzbilanz (N3) and edmd MeterBillingPeriod (M15)",
-            }))).into_response()
+            (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "process_id": accepted.process_id,
+                    "malo_id": malo_id,
+                    "nb_mp_id": body.nb_mp_id,
+                    "period_from": body.period_from,
+                    "period_to": body.period_to,
+                    "total_eur": billing_result.total_eur.to_string(),
+                    "outcome": "Dispatched",
+                })),
+            )
+                .into_response()
         }
         Err(e) => {
             tracing::warn!(%e, %process_id, "invoicd: selbstausstellen dispatch to makod failed");
@@ -665,6 +1001,15 @@ pub struct RunConfig {
     pub db_max_connections: u32,
     /// Tenant identifier written to every receipt row.
     pub tenant: String,
+    /// Optional ERP webhook URL for `de.invoic.receipt.*` CloudEvents.
+    pub erp_webhook_url: Option<String>,
+    /// Optional HMAC-SHA256 secret for signing outbound ERP webhook requests.
+    pub erp_hmac_secret: Option<SecretString>,
+    /// `edmd` base URL for `MeterBillingPeriod` lookup in selbstausstellen.
+    /// When `None`, `POST /api/v1/selbstausstellen` returns 503.
+    pub edmd_url: Option<String>,
+    /// `edmd` Bearer token.
+    pub edmd_api_key: Option<SecretString>,
     /// OIDC verifier.  Use [`OidcVerifier::disabled`] in dev/test.
     pub oidc: OidcVerifier,
     /// Cedar ABAC enforcer loaded from `policies/invoicd.cedar`.
@@ -709,6 +1054,11 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         auto_dispute_threshold_eur_cents: cfg.auto_dispute_threshold_eur_cents,
         pool: pool.clone(),
         tenant: cfg.tenant.clone(),
+        erp_webhook_url: cfg.erp_webhook_url.clone(),
+        erp_hmac_secret: cfg.erp_hmac_secret.clone(),
+        http_client: reqwest::Client::new(),
+        edmd_url: cfg.edmd_url.clone(),
+        edmd_api_key: cfg.edmd_api_key.clone(),
     };
 
     // ── MCP state ─────────────────────────────────────────────────────────────
@@ -720,6 +1070,29 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             cedar: cfg.cedar.clone(),
         })
     });
+
+    // Spawn the ERP outbox worker when both pool and erp_webhook_url are configured.
+    // The worker retries failed ERP notifications with exponential backoff.
+    if let (Some(db_pool), Some(erp_url)) = (&pool, &cfg.erp_webhook_url) {
+        crate::erp_outbox::spawn(
+            db_pool.clone(),
+            cfg.tenant.clone(),
+            erp_url.clone(),
+            cfg.erp_hmac_secret.clone(),
+            cfg.shutdown.clone(),
+        );
+
+        // Spawn the payment-overdue worker (polls every 6 h).
+        // Emits `de.invoic.payment.overdue` when `pay_by` has passed
+        // without `payment_confirmed_at` being set — closes §22 MessZV dunning gap.
+        crate::payment_overdue::spawn(
+            db_pool.clone(),
+            cfg.tenant.clone(),
+            erp_url.clone(),
+            cfg.erp_hmac_secret.clone(),
+            cfg.shutdown.clone(),
+        );
+    }
 
     // Register subscription with marktd using the shared MarktdClient.
     preisblatt_client

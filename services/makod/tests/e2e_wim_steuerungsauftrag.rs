@@ -53,16 +53,25 @@ use mako_engine::{
     types::MarktpartnerCode,
     version::WorkflowId,
 };
+use mako_markt::domain::NeloId;
 use mako_wim::{
     STEUERUNGSAUFTRAG_DEADLINE_LABEL, SteuerungsCommandType, SteuerungsauftragCommand,
-    SteuerungsauftragState, WimSteuerungsauftragWorkflow,
+    SteuerungsauftragState, WimSteuerungsauftragWorkflow, steuerungsauftrag::LocationId,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MSB_ID: &str = "9900357000004"; // Messstellenbetreiber (MSB) GLN
 const NB_ID: &str = "4012345000023"; // Netzbetreiber (command sender) GLN
-const LOCATION_ID: &str = "E0000000000000000001"; // NeLo / SR location ID
+// Netzlokations-ID: rubo4e v0.6 format — Codetyp 'E' + 9 [A-Z0-9] + ASCII-Verfahren check digit.
+// "E0000000001" = NeloId::from_base("E000000000").
+// Distinct from EIC codes (10XDE-…, 10YDE-…) which use EicCode, not NeloId.
+const LOCATION_ID_STR: &str = "E0000000001";
+
+fn test_location_id() -> LocationId {
+    LocationId::Nelo(NeloId::try_from(LOCATION_ID_STR).expect("valid NeloId in test constant"))
+}
+
 const FV: &str = "FV2025-10-01";
 
 // ── Mock MSB backend ──────────────────────────────────────────────────────────
@@ -94,7 +103,7 @@ impl MockMsb {
             .execute(SteuerungsauftragCommand::ReceiveKonfiguration {
                 tx_id: tx_id.to_owned(),
                 sender_mp_id: MarktpartnerCode::new(NB_ID),
-                location_id: LOCATION_ID.to_owned(),
+                location_id: test_location_id(),
                 execution_time_from: "2025-01-15T06:00:00Z".to_owned(),
                 max_power_kw: max_power_kw.to_owned(),
                 execution_time_until: execution_time_until.map(str::to_owned),
@@ -109,7 +118,7 @@ impl MockMsb {
             .execute(SteuerungsauftragCommand::ReceiveInitialZustand {
                 tx_id: tx_id.to_owned(),
                 sender_mp_id: MarktpartnerCode::new(NB_ID),
-                location_id: LOCATION_ID.to_owned(),
+                location_id: test_location_id(),
                 execution_time_from: "2025-01-15T06:00:00Z".to_owned(),
             })
             .await
@@ -159,7 +168,7 @@ async fn e2e_wim_steuerungsauftrag_konfiguration_positive() {
         SteuerungsauftragState::Received(d) => {
             assert_eq!(d.tx_id, "TX-STEU-001");
             assert_eq!(d.sender_mp_id.as_str(), NB_ID);
-            assert_eq!(d.location_id, LOCATION_ID);
+            assert_eq!(d.location_id.as_str(), LOCATION_ID_STR);
             assert_eq!(d.command_type, SteuerungsCommandType::Konfiguration);
             assert_eq!(d.max_power_kw.as_deref(), Some("7.5"));
             assert_eq!(
@@ -316,7 +325,7 @@ async fn e2e_wim_steuerungsauftrag_duplicate_receive_rejected() {
         .execute(SteuerungsauftragCommand::ReceiveKonfiguration {
             tx_id: "TX-DUP-002".to_owned(),
             sender_mp_id: MarktpartnerCode::new(NB_ID),
-            location_id: LOCATION_ID.to_owned(),
+            location_id: test_location_id(),
             execution_time_from: "2025-01-16T06:00:00Z".to_owned(),
             max_power_kw: "6.0".to_owned(),
             execution_time_until: None,

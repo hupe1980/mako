@@ -1,4 +1,17 @@
 //! MCP server for `processd`.
+//!
+//! Exposes STP (Standardisierter Technischer Prozess) decisions and LF approval
+//! queue reads via the MCP Streamable HTTP transport (spec 2025-11-25).
+//! Mounted at `/mcp` on the existing HTTP port.
+//!
+//! ## Tools
+//!
+//! | Tool | Description |
+//! |---|---|
+//! | `list_decisions`           | List recent NB Anmeldung STP decisions |
+//! | `get_stp_rate`             | Approval rate for NB STP decisions over N days |
+//! | `list_pending_approvals`   | List LF approval-queue entries needing operator action |
+//! | `get_queue_entry`          | Get a single LF approval-queue entry by its UUID |
 
 use std::sync::Arc;
 
@@ -110,8 +123,10 @@ impl ProcessdMcpHandler {
         }
     }
 
-    #[tool(description = "List LF approval queue entries needing operator action.")]
-    async fn list_queue(
+    #[tool(
+        description = "List LF approval-queue entries needing operator action (status: Pending/Approved/Rejected/Expired)."
+    )]
+    async fn list_pending_approvals(
         &self,
         Parameters(params): Parameters<ListQueueParams>,
     ) -> Result<CallToolResult, McpError> {
@@ -162,7 +177,7 @@ impl ServerHandler for ProcessdMcpHandler {
             .with_instructions(
                 "processd MCP — Anmeldung STP decisions (NB) and E_0624 approval queue (LF).\n\
                  NB: `list_decisions`, `get_stp_rate`.\n\
-                 LF: `list_queue`, `get_queue_entry`.",
+                 LF: `list_pending_approvals`, `get_queue_entry`.",
             )
     }
 }

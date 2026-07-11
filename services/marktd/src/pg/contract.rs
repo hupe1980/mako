@@ -141,7 +141,7 @@ fn map_row(r: PgRow) -> ContractRecord {
         valid_to: r.get("valid_to"),
         bo4e_version: r
             .try_get("bo4e_version")
-            .unwrap_or_else(|_| "v202501.0.0".to_owned()),
+            .unwrap_or_else(|_| "v202607.0.0".to_owned()),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     }

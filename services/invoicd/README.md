@@ -42,7 +42,7 @@ marktd ──(POST /webhook)──► invoicd
                ┌──────────────▼───────────────┐
                │  PostgreSQL — invoic_receipts │  ← atomic write:
                │  outcome · findings · pay_by  │    receipt + pay_by in one TX
-               │  direction · receiver_gln     │    before dispatching command
+               │  sender_mp_id · erp_attempts  │    before dispatching command
                └──────────────┬───────────────┘
                               │
            ┌──────────────────┴──────────────────┐
@@ -81,25 +81,35 @@ marktd ──(POST /webhook)──► invoicd
 CREATE TABLE invoic_receipts (
     id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     process_id    UUID        NOT NULL UNIQUE,
-    pid           SMALLINT    NOT NULL,           -- 31001 | 31002 | 31005 | 31006
+    pid           SMALLINT    NOT NULL,           -- 31001 | 31002 | 31005 | 31006 | 31009
     direction     TEXT        NOT NULL,           -- 'Inbound' | 'Outbound'
-    sender_gln    TEXT        NOT NULL,           -- NB/MSB GLN (Inbound) or our GLN (Outbound)
-    receiver_gln  TEXT,                           -- our GLN (Inbound) or NB GLN (Outbound)
-    rechnung      JSONB       NOT NULL,           -- rubo4e::v202501::Rechnung
-    bo4e_version  TEXT        NOT NULL DEFAULT 'v202501.0.0',
+    sender_mp_id  TEXT        NOT NULL,           -- NB/MSB MP-ID (Inbound) or tenant MP-ID (Outbound)
+    receiver_gln  TEXT,                           -- tenant MP-ID (Inbound) or NB MP-ID (Outbound)
+    rechnung      JSONB       NOT NULL,           -- rubo4e::v202607::Rechnung
+    bo4e_version  TEXT        NOT NULL DEFAULT 'v202607.0.0',
     outcome       TEXT        NOT NULL CHECK (outcome IN (
                                   'Ok',              -- accepted; REMADV 33001
                                   'AcceptedPartial', -- accepted with remarks; REMADV 33003/33004
-                                  'Warn',            -- tolerance warning
+                                  'Warn',            -- tolerance warning; auto-approved
                                   'Dispute',         -- disputed; COMDIS 29001
                                   'Dispatched',      -- outbound 31006 sent, awaiting REMADV
                                   'Paid'             -- outbound 31006 settled
                               )),
     findings      JSONB       NOT NULL DEFAULT '[]',
     pay_by        TIMESTAMPTZ,                    -- Zahlungsziel from Rechnung.faelligkeitsdatum
-    received_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    checked_at    TIMESTAMPTZ,
-    dispatched_at TIMESTAMPTZ,
+
+    received_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    checked_at           TIMESTAMPTZ,
+    dispatched_at        TIMESTAMPTZ,
+
+    -- ERP notification tracking — durable at-least-once delivery
+    -- erp_notified_at: set when ERP webhook returns 2xx; NULL = pending or failed
+    -- erp_attempts: total delivery attempts (inline + outbox worker retries)
+    -- erp_next_attempt_at: backoff schedule for background retries
+    erp_notified_at      TIMESTAMPTZ,
+    erp_attempts         SMALLINT    NOT NULL DEFAULT 0,
+    erp_next_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+
     tenant        TEXT        NOT NULL DEFAULT 'default'
 );
 ```
@@ -109,10 +119,18 @@ CREATE TABLE invoic_receipts (
 dispatched to `makod`. A crash between the two would violate §22 MessZV
 retention — so persistence always comes first.
 
-**REMADV deadline tracking.** The background alert query (run every 6 h):
+**ERP notification.** After REMADV dispatch, `invoicd` POSTs a `de.invoic.receipt.*`
+CloudEvent to the configured ERP webhook.  Delivery is **durable at-least-once**:
+the initial attempt runs inline; failures are retried by the background outbox worker
+with exponential backoff (30 s → 5 min → 30 min → 2 h → dead-letter at attempt 5).
+HTTP 4xx = permanent failure (dead-lettered immediately); 5xx/transport = retried.
+Signed with `X-Mako-Signature: sha256=<hex>` when `[erp] hmac_secret` is configured.
+Dead-lettered receipts: `SELECT * FROM invoic_receipts WHERE erp_notified_at IS NULL AND erp_attempts >= 5`.
+
+**REMADV deadline tracking.** Alert query (run every 6 h):
 
 ```sql
-SELECT process_id, pid, sender_gln, pay_by
+SELECT process_id, pid, sender_mp_id, pay_by
 FROM invoic_receipts
 WHERE outcome IN ('Ok', 'AcceptedPartial', 'Warn')
   AND pay_by < now() + interval '3 days'
@@ -147,6 +165,23 @@ Query receipts for the caller's tenant. Supports filtering:
 
 Returns the full receipt including `findings` JSONB and `pay_by`.
 
+### `POST /api/v1/receipts/{id}/confirm-payment` — ERP payment confirmation
+
+Called by the ERP when a bank transfer is confirmed. Sets `payment_confirmed_at`
+on the receipt row, closing the §22 MessZV payment audit trail.
+
+```bash
+curl -X POST http://invoicd:8280/api/v1/receipts/<uuid>/confirm-payment \
+  -H "Authorization: Bearer <token>"
+# → 204 No Content
+```
+
+### `GET /api/v1/zahlungsstatus/{malo_id}` — payment status per MaLo
+
+Returns `overdue_count`, `pending_count`, `settled_count` and a list of receipts
+with `zahlungsstatus` values: `settled` / `pending` / `overdue` / `undispatched`.
+Use this for accounts-payable dashboards and dunning workflows.
+
 ### `GET /api/v1/disputes` — list open disputes
 
 Returns all receipts with `outcome = 'Dispute'` for the caller's tenant.
@@ -168,6 +203,7 @@ OIDC+Cedar layer as REST endpoints).
 | `get_receipt` | Fetch a receipt by process ID |
 | `list_disputes` | List all receipts with outcome = 'Dispute' |
 | `get_check_result` | Return the full plausibility report for an INVOIC |
+| `get_zahlungsstatus` | Payment status per MaLo (settled / pending / overdue) |
 
 ---
 
@@ -198,7 +234,7 @@ To upload a price sheet to `marktd`:
 curl -X PUT http://marktd:8180/api/v1/preisblaetter/9904234560001 \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -d @preisblatt.json   # rubo4e::v202501::PreisblattNetznutzung
+  -d @preisblatt.json   # rubo4e::v202607::PreisblattNetznutzung
 ```
 
 ---

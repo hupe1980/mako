@@ -50,7 +50,8 @@ fn map_row(row: &PgRow) -> Result<VersorgungsStatusRecord, sqlx::Error> {
         malo_id,
         lieferstatus,
         lf_mp_id: row.try_get("lf_mp_id")?,
-        lf_gln_next: row.try_get("lf_gln_next")?,
+        lf_mp_id_next: row.try_get("lf_mp_id_next")?,
+        lf_next_lieferbeginn: row.try_get("lf_next_lieferbeginn")?,
         lieferbeginn: row.try_get("lieferbeginn")?,
         lieferende: row.try_get("lieferende")?,
         msb_mp_id: row.try_get("msb_mp_id")?,
@@ -82,7 +83,8 @@ fn map_history_row(row: &PgRow) -> Result<VersorgungsStatusHistoryRecord, sqlx::
         tenant: row.try_get("tenant")?,
         lieferstatus,
         lf_mp_id: row.try_get("lf_mp_id")?,
-        lf_gln_next: row.try_get("lf_gln_next")?,
+        lf_mp_id_next: row.try_get("lf_mp_id_next")?,
+        lf_next_lieferbeginn: row.try_get("lf_next_lieferbeginn")?,
         lieferbeginn: row.try_get("lieferbeginn")?,
         lieferende: row.try_get("lieferende")?,
         msb_mp_id: row.try_get("msb_mp_id")?,
@@ -102,7 +104,8 @@ fn history_to_current(h: VersorgungsStatusHistoryRecord) -> VersorgungsStatusRec
         tenant: h.tenant,
         lieferstatus: h.lieferstatus,
         lf_mp_id: h.lf_mp_id,
-        lf_gln_next: h.lf_gln_next,
+        lf_mp_id_next: h.lf_mp_id_next,
+        lf_next_lieferbeginn: h.lf_next_lieferbeginn,
         lieferbeginn: h.lieferbeginn,
         lieferende: h.lieferende,
         msb_mp_id: h.msb_mp_id,
@@ -142,14 +145,15 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
                 UPDATE versorgungsstatus
                 SET lieferstatus     = $4,
                     lf_mp_id           = $5,
-                    lf_gln_next      = $6,
-                    lieferbeginn     = $7,
-                    lieferende       = $8,
-                    msb_mp_id          = $9,
-                    nb_mp_id           = $10,
-                    last_process_id  = $11,
+                    lf_mp_id_next      = $6,
+                    lf_next_lieferbeginn = $7,
+                    lieferbeginn     = $8,
+                    lieferende       = $9,
+                    msb_mp_id          = $10,
+                    nb_mp_id           = $11,
+                    last_process_id  = $12,
                     updated_at       = now(),
-                    version          = $12
+                    version          = $13
                 WHERE malo_id = $1 AND tenant = $2 AND EXISTS (SELECT 1 FROM cte)"#,
             )
             .bind(&rec.malo_id)
@@ -157,7 +161,8 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
             .bind(expected)
             .bind(rec.lieferstatus.to_string())
             .bind(&rec.lf_mp_id)
-            .bind(&rec.lf_gln_next)
+            .bind(&rec.lf_mp_id_next)
+            .bind(rec.lf_next_lieferbeginn)
             .bind(rec.lieferbeginn)
             .bind(rec.lieferende)
             .bind(&rec.msb_mp_id)
@@ -171,14 +176,15 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         } else {
             sqlx::query(
                 r#"INSERT INTO versorgungsstatus
-                   (malo_id, tenant, lieferstatus, lf_mp_id, lf_gln_next,
-                    lieferbeginn, lieferende, msb_mp_id, nb_mp_id,
-                    last_process_id, updated_at, version)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), 1)
+                   (malo_id, tenant, lieferstatus, lf_mp_id, lf_mp_id_next,
+                    lf_next_lieferbeginn, lieferbeginn, lieferende,
+                    msb_mp_id, nb_mp_id, last_process_id, updated_at, version)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), 1)
                    ON CONFLICT (malo_id, tenant) DO UPDATE
                    SET lieferstatus    = EXCLUDED.lieferstatus,
                        lf_mp_id         = EXCLUDED.lf_mp_id,
-                       lf_gln_next    = EXCLUDED.lf_gln_next,
+                       lf_mp_id_next    = EXCLUDED.lf_mp_id_next,
+                       lf_next_lieferbeginn = EXCLUDED.lf_next_lieferbeginn,
                        lieferbeginn   = EXCLUDED.lieferbeginn,
                        lieferende     = EXCLUDED.lieferende,
                        msb_mp_id        = EXCLUDED.msb_mp_id,
@@ -191,7 +197,8 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
             .bind(&rec.tenant)
             .bind(rec.lieferstatus.to_string())
             .bind(&rec.lf_mp_id)
-            .bind(&rec.lf_gln_next)
+            .bind(&rec.lf_mp_id_next)
+            .bind(rec.lf_next_lieferbeginn)
             .bind(rec.lieferbeginn)
             .bind(rec.lieferende)
             .bind(&rec.msb_mp_id)
@@ -216,16 +223,17 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         // Append history snapshot atomically.
         sqlx::query(
             r#"INSERT INTO versorgungsstatus_history
-               (malo_id, tenant, lieferstatus, lf_mp_id, lf_gln_next,
-                lieferbeginn, lieferende, msb_mp_id, nb_mp_id,
-                last_process_id, version, valid_from)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())"#,
+               (malo_id, tenant, lieferstatus, lf_mp_id, lf_mp_id_next,
+                lf_next_lieferbeginn, lieferbeginn, lieferende,
+                msb_mp_id, nb_mp_id, last_process_id, version, valid_from)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())"#,
         )
         .bind(&rec.malo_id)
         .bind(&rec.tenant)
         .bind(rec.lieferstatus.to_string())
         .bind(&rec.lf_mp_id)
-        .bind(&rec.lf_gln_next)
+        .bind(&rec.lf_mp_id_next)
+        .bind(rec.lf_next_lieferbeginn)
         .bind(rec.lieferbeginn)
         .bind(rec.lieferende)
         .bind(&rec.msb_mp_id)
@@ -375,5 +383,193 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
             page,
             size,
         })
+    }
+
+    async fn announce_lf_next(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        lf_mp_id_next: &str,
+        lf_next_lieferbeginn: Option<Date>,
+        nb_mp_id: &str,
+        process_id: Option<uuid::Uuid>,
+    ) -> Result<(), MdmError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        // Partial upsert: insert as Unbeliefert if new, otherwise only update
+        // the announcement fields — never overwrite lieferstatus / lf_mp_id.
+        sqlx::query(
+            r#"INSERT INTO versorgungsstatus
+               (malo_id, tenant, lieferstatus, nb_mp_id,
+                lf_mp_id_next, lf_next_lieferbeginn, last_process_id, updated_at, version)
+               VALUES ($1, $2, 'Unbeliefert', $3, $4, $5, $6, now(), 1)
+               ON CONFLICT (malo_id, tenant) DO UPDATE
+               SET lf_mp_id_next          = EXCLUDED.lf_mp_id_next,
+                   lf_next_lieferbeginn = EXCLUDED.lf_next_lieferbeginn,
+                   last_process_id      = EXCLUDED.last_process_id,
+                   updated_at           = now(),
+                   version              = versorgungsstatus.version + 1"#,
+        )
+        .bind(malo_id)
+        .bind(tenant)
+        .bind(nb_mp_id)
+        .bind(lf_mp_id_next)
+        .bind(lf_next_lieferbeginn)
+        .bind(process_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        // History snapshot — read back the new version for the history row.
+        let new_version: i64 = sqlx::query_scalar(
+            "SELECT version FROM versorgungsstatus WHERE malo_id = $1 AND tenant = $2",
+        )
+        .bind(malo_id)
+        .bind(tenant)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        sqlx::query(
+            r#"INSERT INTO versorgungsstatus_history
+               (malo_id, tenant, lieferstatus, lf_mp_id, lf_mp_id_next,
+                lf_next_lieferbeginn, lieferbeginn, lieferende,
+                msb_mp_id, nb_mp_id, last_process_id, version, valid_from)
+               SELECT malo_id, tenant, lieferstatus, lf_mp_id, lf_mp_id_next,
+                      lf_next_lieferbeginn, lieferbeginn, lieferende,
+                      msb_mp_id, nb_mp_id, last_process_id, version, now()
+               FROM versorgungsstatus
+               WHERE malo_id = $1 AND tenant = $2"#,
+        )
+        .bind(malo_id)
+        .bind(tenant)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        let _ = new_version; // used implicitly via SELECT above
+        tx.commit()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn confirm_supply(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        process_id: Option<uuid::Uuid>,
+    ) -> Result<(), MdmError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        // Atomic SQL promotion: lf_mp_id_next → lf_mp_id, lf_next_lieferbeginn → lieferbeginn.
+        // No-ops if lf_mp_id_next IS NULL (idempotent re-delivery).
+        sqlx::query(
+            r#"UPDATE versorgungsstatus
+               SET lieferstatus         = 'Beliefert',
+                   lf_mp_id             = lf_mp_id_next,
+                   lieferbeginn         = lf_next_lieferbeginn,
+                   lf_mp_id_next          = NULL,
+                   lf_next_lieferbeginn = NULL,
+                   last_process_id      = $3,
+                   updated_at           = now(),
+                   version              = version + 1
+               WHERE malo_id = $1 AND tenant = $2 AND lf_mp_id_next IS NOT NULL"#,
+        )
+        .bind(malo_id)
+        .bind(tenant)
+        .bind(process_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        sqlx::query(
+            r#"INSERT INTO versorgungsstatus_history
+               (malo_id, tenant, lieferstatus, lf_mp_id, lf_mp_id_next,
+                lf_next_lieferbeginn, lieferbeginn, lieferende,
+                msb_mp_id, nb_mp_id, last_process_id, version, valid_from)
+               SELECT malo_id, tenant, lieferstatus, lf_mp_id, lf_mp_id_next,
+                      lf_next_lieferbeginn, lieferbeginn, lieferende,
+                      msb_mp_id, nb_mp_id, last_process_id, version, now()
+               FROM versorgungsstatus
+               WHERE malo_id = $1 AND tenant = $2"#,
+        )
+        .bind(malo_id)
+        .bind(tenant)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn end_supply(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        nb_mp_id: &str,
+        process_id: Option<uuid::Uuid>,
+    ) -> Result<(), MdmError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        // Clear active LF fields; preserve lf_mp_id_next / lf_next_lieferbeginn
+        // so a pending future Lieferant announcement is not lost.
+        sqlx::query(
+            r#"INSERT INTO versorgungsstatus
+               (malo_id, tenant, lieferstatus, nb_mp_id, last_process_id, updated_at, version)
+               VALUES ($1, $2, 'Unbeliefert', $3, $4, now(), 1)
+               ON CONFLICT (malo_id, tenant) DO UPDATE
+               SET lieferstatus    = 'Unbeliefert',
+                   lf_mp_id        = NULL,
+                   lieferbeginn    = NULL,
+                   nb_mp_id        = $3,
+                   last_process_id = $4,
+                   updated_at      = now(),
+                   version         = versorgungsstatus.version + 1"#,
+        )
+        .bind(malo_id)
+        .bind(tenant)
+        .bind(nb_mp_id)
+        .bind(process_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        sqlx::query(
+            r#"INSERT INTO versorgungsstatus_history
+               (malo_id, tenant, lieferstatus, lf_mp_id, lf_mp_id_next,
+                lf_next_lieferbeginn, lieferbeginn, lieferende,
+                msb_mp_id, nb_mp_id, last_process_id, version, valid_from)
+               SELECT malo_id, tenant, lieferstatus, lf_mp_id, lf_mp_id_next,
+                      lf_next_lieferbeginn, lieferbeginn, lieferende,
+                      msb_mp_id, nb_mp_id, last_process_id, version, now()
+               FROM versorgungsstatus
+               WHERE malo_id = $1 AND tenant = $2"#,
+        )
+        .bind(malo_id)
+        .bind(tenant)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Ok(())
     }
 }

@@ -17,7 +17,7 @@ crates/edi-energy/        EDIFACT parse/validate/schema — stateless library
 crates/mako-engine/       Event-sourced runtime (EventStore, Workflow, Process, …)
 crates/mako-gpke/         GPKE — UTILMD Strom (55001–55018, 55022–55024, 55555, 55607–55609) + INVOIC (31001, 31002, 31005, 31006) + ORDERS Sperrung (17115–17117) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) + PARTIN Strom (37000–37006)
 crates/mako-wim/          WiM Strom — Messstellenbetrieb (55039, 55042, 55051, 55168) + ORDERS Geräteübernahme (17001–17011, 19001/19002 nMSB role) + Stammdaten + Preisanfrage/REQOTE (35001–35005) + Preisliste/PRICAT (27001–27003) + INVOIC 31009 + INSRPT (23001, 23003, 23004, 23008) + Stornierung + Technik-Änderung + iMS Steuerungsauftrag
-crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44021) + UTILMD G Stornierung role-conditional (44022 Nb-only, 44023/44024 Lf-only) + ORDERS Sperrung Gas (17115–17117, LF-role `geli-gas-sperrung-lf` + GNB-role `geli-gas-sperrung-nb`) + PARTIN Gas (37008–37014) + INVOIC 31011 (AWH Sperrprozesse Gas)
+crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44021) + LFN-side Lieferbeginn workflow (`geli-gas-lf-anmeldung`, PIDs 44001 outbound + 44003/44004 inbound) + UTILMD G Stornierung role-conditional (44022 Nb-only, 44023/44024 Lf-only) + ORDERS Sperrung Gas (17115–17117, LF-role `geli-gas-sperrung-lf` + GNB-role `geli-gas-sperrung-nb`) + ORDERS Datenabruf (17103/17104 + ORDRSP 19103/19104, `geli-gas-datenabruf`) + PARTIN Gas (37008–37014) + INVOIC 31011 (AWH Sperrprozesse Gas)
 crates/mako-mabis/        MABIS — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB)
 crates/mako-wim-gas/      WiM Gas — UTILMD G (44022–44024 + 44039–44053, 44168–44170) + INVOIC (31003, 31004) + INSRPT Gas-only (23005, 23009)
 crates/mako-gabi-gas/     GaBi Gas — INVOIC 31010 (Kapazitätsrechnung) + INVOIC 31007/31008 (Aggreg. MMM-Rechnung Gas, NB → MGV) + MSCONS 13013 (Allokationsliste Gas, MMMA)
@@ -27,24 +27,31 @@ crates/energy-api/        BDEW API-Webdienste Strom REST/WebSocket client+server
 crates/mako-as4/          AS4 transport [placeholder]
 crates/mako-redispatch/   Redispatch 2.0 [placeholder]
 crates/redispatch-xml/    Redispatch 2.0 XML/XSD format parsing
-crates/mako-markt/        Market data library — MaloId, MeloId, MarktpartnerId, repository traits, AppState, CloudEvents, VersorgungsStatus, PriCatRepository, MaloGridRecord/MaloGridRepository, testing feature
-crates/mako-edm/          Energy data library — MeterDataReceipt, TimeSeriesRepository, ImbalanceReport, MSCONS PID set
+crates/mako-markt/        Market data library — MaloId, MeloId, MarktpartnerId, repository traits, AppState, CloudEvents, VersorgungsStatus, PriCatRepository, MaloGridRecord/MaloGridRepository, PreisblattMessungRepository, SteuerbareRessourceRepository, DeviceRepository (Zaehler/Geraet), testing feature
+crates/mako-edm/          Energy data library — MeterDataReceipt, TimeSeriesRepository (with obis_code), ImbalanceReport, MSCONS PID set
 crates/mako-obs/          Observability library — ProcessProjection, KpiReport, DeadlineRisk, ProcessProjectionRepository
 crates/invoic-checker/    INVOIC plausibility library — period validity, position arithmetic, document total, tariff match, tariff found
 crates/netz-checker/      NB Anmeldung validation library — pure, deterministic 6-check pipeline; ERC codes A02/A05/A06/A97/A99; no I/O; used by processd NB module
 crates/mako-service/      Shared service infrastructure — ServiceBuilder, load_config, health_routes, verify_hmac (used by all mako daemons)
+crates/mako-nne/          Role-neutral NNE/KA/MMM invoice calculation library — calculate_nne_invoice (PID 31001/31005/31006), calculate_mmm_invoice (PID 31002); EuroAmount precision (i64 × 10⁻⁵ EUR); self-validates via invoic-checker; zero I/O; used by netzbilanzd (NB) and invoicd (LF selbstausstellen)
 services/makod/           Production daemon — assembles all modules
   services/makod/src/mcp_server.rs  MCP server (tools, resources, prompts) at /mcp
-services/marktd/          Market Data Manager daemon — MaLo/MeLo/contracts/subscriptions/VersorgungsStatus/PRICAT/malo_grid, PostgreSQL, OIDC/JWT, port :8180; **pure data hub — no domain policy**
-  services/marktd/migrations/  Three SQLx migrations (0001_initial_schema, 0002_phase3_history, 0003_malo_grid)  services/marktd/src/pg/      PostgreSQL implementations (upsert_versorgungsstatus, PgPriCatRepository, PgMaloGridRepository)
-services/processd/        Process Decision Engine — NB Anmeldung STP (netz-checker) + LF E_0624 auto-response; role-gated features (lf-only/nb-only/integrated); §20 EnWG parity; port :8580
+services/marktd/         Market Data Hub — MaLo/MeLo/NeLo/TR/SR (typed `rubo4e::current` API responses for Marktlokation/Messlokation/Zaehler/Geraet; schema-validated on PUT); NB contracts with full BO4E `Vertrag` JSONB (`vertragsart`/`vertragsstatus` as indexed columns; `de.markt.nb-contract.updated` CloudEvent); Lokationszuordnung graph (lokationszuordnungen table, recursive-CTE BFS), preisblaetter, VersorgungsStatus, event_log replay, W3C traceparent forwarding; PostgreSQL, OIDC/JWT, port :8180; **pure data hub — no domain policy**
+  services/marktd/migrations/  Single SQLx migration (0001_initial_schema.sql — complete schema)
+  services/marktd/src/pg/      PostgreSQL implementations (PgLokationszuordnungRepository, PgTechnischeRessourceRepository, PgSteuerbareRessourceRepository, PgDeviceRepository, upsert_versorgungsstatus, PgPriCatRepository, PgMaloGridRepository, PgPreisblattKaRepository)
+services/processd/        Process Decision Engine — NB Anmeldung STP (netz-checker) + LF E_0624 auto-response (gpke.nb-lieferende.bestaetigen/ablehnen) + LFN bootstrap Strom (POST /api/v1/start-supply, LFW24 Vorlauffrist 15:00 validated) + Gas (POST /api/v1/start-supply-gas, geli.lieferbeginn.anmelden) + Gas stornierung (geli.gas.stornierung.initiieren); role-gated features (lf-only/nb-only/integrated); §20 EnWG parity; port :8580
   services/processd/migrations/ Single SQLx migration (0001_initial.sql — approval_queue + anmeldung_decisions)
   services/processd/src/nb_module.rs  NB STP evaluation (wraps netz-checker)
   services/processd/src/lf_module.rs  LF E_0624 auto-response
-services/invoicd/         INVOIC plausibility-check daemon (LF role) — auto-settles/disputes GPKE billing; persists receipts to PostgreSQL (§22 MessZV); `POST /api/v1/selbstausstellen/{malo_id}` (31006); `GET /api/v1/overdue-remadv`; DLQ path for 31009; port :8280
+services/invoicd/         INVOIC plausibility-check daemon (LF role) — PIDs 31001/31002/31005/31006/31009 (Wim31009Ingestor with embedded Rechnung); auto-settles/disputes; persists receipts to PostgreSQL (§22 MessZV); `POST /api/v1/selbstausstellen/{malo_id}` (31006); `GET /api/v1/overdue-remadv`; payment CloudEvents (de.invoic.receipt.settled/disputed) via `[erp] webhook_url`; port :8280
   services/invoicd/migrations/  Single SQLx migration (0001_initial.sql — complete schema including invoic_dlq)
   services/invoicd/src/pg/      PostgreSQL receipt persistence (upsert_receipt, mark_dispatched)
-services/edmd/            Energy Data Management daemon — stores MSCONS meter readings, time-series API, `MeterBillingPeriod` (RLM spitzenleistung + Gas brennwert/zustandszahl), Mehr-/Mindermengen imbalance; PostgreSQL; port :8380
+services/netzbilanzd/     NNE/KA/MMM billing daemon (NB role) — uses mako-nne to generate INVOIC 31001/31002/31005; invoice_drafts table (draft → dispatched/rejected); POST /api/v1/billing/run, PUT /dispatch, PUT /reject; pre-dispatch invoic-checker validation blocks Dispute outcomes; port :8680
+  services/netzbilanzd/migrations/ Single SQLx migration (0001_initial.sql — invoice_drafts)
+services/sperrd/          Sperrung execution tracking daemon (NB role) — sperr_orders table (pending → executed/failed/cancelled); POST/GET sperr-orders, PUT /execute → auto-dispatches IFTSTA 21039 ref, PUT /fail → operator escalation; GPKE BK6-22-024 compliance; port :8780
+  services/sperrd/migrations/ Single SQLx migration (0001_initial.sql — sperr_orders)
+services/nis-syncd/       NIS/GIS grid topology import adapter (NB role) — stateless; POST /api/v1/grid/sync pushes malo_grid records to marktd; dry-run mode; per-entry drift detection; processd NB STP ~80%→≥95%; port :9680
+services/edmd/            Energy Data Management daemon — stores MSCONS meter readings (with `obis_code`), `GET /api/v1/deliveries/{malo_id}` returns `Vec<Energiemenge>` (BO4E typed), BO4E `Lastgang` + `Zeitreihe` export, `MeterBillingPeriod` (RLM spitzenleistung + Gas brennwert/zustandszahl), Mehr-/Mindermengen imbalance; PostgreSQL; port :8380
 services/obsd/            Business-process observability daemon — process projections, BNetzA KPI reports, Alertmanager bridge; PostgreSQL; port :8480
 xtask/                    Build/codegen/validation tasks
 docs/                     Architecture docs
@@ -77,6 +84,7 @@ cargo xtask validate-profiles         # validate all profiles against EDIFACT sp
 cargo xtask validate-pruefids         # validate Prüfidentifikatoren (AHB check)
 cargo xtask audit-ahb                 # audit Application Handbooks
 cargo xtask check-release-coverage    # verify format-version coverage
+cargo xtask check-bo4e-coverage       # verify rubo4e::current type count matches README (delta ≤ 2)
 cargo xtask generate-fixtures         # regenerate EDIFACT test fixtures
 cargo xtask extract-pdf               # extract tables from BDEW PDFs (docs/pdfs/)
 cargo xtask import-codelists          # import BDEW code lists
@@ -135,6 +143,20 @@ Both coexist in the same engine instance simultaneously. A process started under
   in `Marktteilnehmer`). Only GS1-issued 13-digit codes are true GLNs (NAD DE3055 = `9`);
   BDEW-Codenummern (`99…`, NAD `293`) and DVGW-Codenummern (`98…`, NAD `332`) are not GLNs.
   Use `mako_markt::domain::nad_agency_code()` to derive the coding authority.
+- BO4E Business Objects are imported directly from `rubo4e::current` (versioned) or
+  `rubo4e::identifiers` (version-stable). **Never** write `rubo4e::v202607::Foo` — always use
+  `rubo4e::current::Foo`. The `no-version-alias` CI gate enforces this.
+
+  ```rust
+  // Correct — version-stable identifiers
+  use rubo4e::identifiers::{ObisCode, SrId, NeloId, MaloId};
+
+  // Correct — versioned BOs via current alias
+  use rubo4e::current::{Rechnung, PreisblattNetznutzung, Lastgang};
+
+  // WRONG — hardcoded schema version
+  // use rubo4e::v202607::Rechnung;
+  ```
 
 ### Workflow determinism
 - `Workflow::handle` and `Workflow::apply` must be **pure functions**: no I/O,
@@ -347,6 +369,9 @@ ISC, Unicode-3.0, Zlib, CDLA-Permissive-2.0, MIT-0.
 | `marktd` operator guide | [docs/marktd.md](../docs/marktd.md) |
 | `processd` operator guide | [docs/processd.md](../docs/processd.md) |
 | `invoicd` operator guide | [docs/invoicd.md](../docs/invoicd.md) |
+| `netzbilanzd` operator guide | [docs/netzbilanzd.md](../docs/netzbilanzd.md) |
+| `sperrd` operator guide | [docs/sperrd.md](../docs/sperrd.md) |
+| `nis-syncd` operator guide | [docs/nis-syncd.md](../docs/nis-syncd.md) |
 | `edmd` operator guide | [docs/edmd.md](../docs/edmd.md) |
 | `obsd` operator guide | [docs/obsd.md](../docs/obsd.md) |
 | MCP server (LLM tooling) | [services/makod/src/mcp_server.rs](../services/makod/src/mcp_server.rs) · [docs/makod.md#mcp-server](../docs/makod.md) |

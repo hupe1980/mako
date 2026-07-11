@@ -38,6 +38,7 @@
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
+    outbox::PendingOutbox,
     types::{MaLo, MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -269,14 +270,24 @@ impl Workflow for GpkeMesswerteLieferungWorkflow {
                     document_date,
                     message_ref: message_ref.clone(),
                 }];
-                if validation_passed {
+                let outbox = if validation_passed {
                     events.push(MesswerteLieferungEvent::ValidationPassed { message_ref });
+                    // Notify `edmd` that validated Strom MSCONS data is ready.
+                    vec![
+                        PendingOutbox::new(
+                            "ProcessCompleted",
+                            "",
+                            serde_json::json!({ "pid": pid.as_u32() }),
+                        )
+                        .caused_by(1),
+                    ]
                 } else {
                     events.push(MesswerteLieferungEvent::ValidationFailed {
                         reason: validation_errors.join("; "),
                     });
-                }
-                Ok(events.into())
+                    vec![]
+                };
+                Ok(WorkflowOutput::with_outbox(events, outbox))
             }
         }
     }

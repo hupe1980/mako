@@ -7,11 +7,15 @@
 # on separate PostgreSQL instances or at different times.
 #
 # Databases created:
-#   marktd    — Market Data Hub (MaLo, MeLo, contracts, subscriptions, …)
-#   processd  — Process Decision Engine (anmeldung_decisions, approval_queue)
-#   invoicd   — INVOIC plausibility (invoic_receipts, invoic_dlq — §22 MessZV)
-#   edmd      — Energy Data Management (meter_reads, billing_periods)
-#   obsd      — Business-Process Observability (process_projections)
+#   marktd       — Market Data Hub (MaLo, MeLo, contracts, subscriptions, …)
+#   processd     — Process Decision Engine (anmeldung_decisions, approval_queue)
+#   invoicd      — INVOIC plausibility (invoic_receipts, invoic_dlq — §22 MessZV)
+#   edmd         — Energy Data Management (meter_reads, billing_periods)
+#   obsd         — Business-Process Observability (process_projections)
+#   netzbilanzd  — NNE/MMM billing daemon (invoice_drafts)
+#   sperrd       — Sperrung execution tracking (sperr_orders)
+#
+# nis-syncd is stateless — no database needed.
 #
 # SQLx note: each service runs `sqlx::migrate!()` against its own database,
 # so there is no `_sqlx_migrations` checksum conflict between services.
@@ -28,4 +32,8 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
     GRANT ALL PRIVILEGES ON DATABASE edmd TO "$POSTGRES_USER";
     CREATE DATABASE obsd;
     GRANT ALL PRIVILEGES ON DATABASE obsd TO "$POSTGRES_USER";
+    CREATE DATABASE netzbilanzd;
+    GRANT ALL PRIVILEGES ON DATABASE netzbilanzd TO "$POSTGRES_USER";
+    CREATE DATABASE sperrd;
+    GRANT ALL PRIVILEGES ON DATABASE sperrd TO "$POSTGRES_USER";
 EOSQL

@@ -299,7 +299,7 @@ impl As4Sender for MaloIdentSender {
                             "tenant_id":                cb.tenant_id,
                         }),
                         payload_schema: Some(
-                            "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202501.0.0/\
+                            "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/\
                              src/bo4e_schemas/bo/Marktlokation.json"
                                 .into(),
                         ),

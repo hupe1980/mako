@@ -141,6 +141,22 @@ impl GeliGasDatanabrufState {
 /// Commands for the GeLi Gas Datenabruf workflow.
 #[derive(Clone)]
 pub enum GeliGasDatanabrufCommand {
+    /// ERP instructs the LF to initiate a Gas data request (ORDERS 17103/17104 outbound).
+    ///
+    /// Spawns a new `GeliGasDatanabrufWorkflow`, enqueues the outbound ORDERS
+    /// message, and registers a 10-Werktage response deadline.
+    ///
+    /// Use PID 17103 to request Abrechnungsbrennwert + Zustandszahl.
+    InitiateAnfrage {
+        /// ORDERS PID (17103 = Brennwert/Zustandszahl, 17104 = MSB Gas → NB Strom).
+        pid: Pruefidentifikator,
+        /// Our own GLN (the Lieferant).
+        sender: MarktpartnerCode,
+        /// GNB / NB GLN (resolved from MaLo cache).
+        receiver: MarktpartnerCode,
+        /// EDIFACT message reference (generated at dispatch time).
+        message_ref: MessageRef,
+    },
     /// Inbound ORDERS data request received.
     ReceiveAnfrage {
         /// BDEW Prüfidentifikator (17103 or 17104).
@@ -216,6 +232,42 @@ impl Workflow for GeliGasDatanabrufWorkflow {
         cmd: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
         match cmd {
+            GeliGasDatanabrufCommand::InitiateAnfrage {
+                pid,
+                sender,
+                receiver,
+                message_ref,
+            } => {
+                if !ORDERS_ANFRAGE_PIDS.contains(&pid.as_u32()) {
+                    return Err(WorkflowError::rejected(format!(
+                        "expected a Gas Datenabruf ORDERS PID ({ORDERS_ANFRAGE_PIDS:?}), got {pid}",
+                    )));
+                }
+                if !matches!(state, GeliGasDatanabrufState::New) {
+                    return Err(WorkflowError::invalid_state("New", state.label()));
+                }
+                let event = GeliGasDatanabrufEvent::AnfrageErhalten {
+                    pid,
+                    sender: sender.clone(),
+                    receiver: receiver.clone(),
+                    message_ref: message_ref.clone(),
+                };
+                let outbox = mako_engine::outbox::PendingOutbox::new(
+                    "ORDERS",
+                    receiver.as_str(),
+                    serde_json::json!({
+                        "direction":  "outbound",
+                        "pid":        pid.as_u32(),
+                        "sender":     sender.as_str(),
+                        "receiver":   receiver.as_str(),
+                        "message_ref": message_ref.as_str(),
+                    }),
+                );
+                Ok(mako_engine::workflow::WorkflowOutput::with_outbox(
+                    vec![event],
+                    vec![outbox],
+                ))
+            }
             GeliGasDatanabrufCommand::ReceiveAnfrage {
                 pid,
                 sender,

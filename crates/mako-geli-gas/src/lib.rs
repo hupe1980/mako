@@ -97,6 +97,7 @@
 
 pub mod datenabruf;
 pub mod invoic;
+pub mod lf_anmeldung;
 pub mod lf_stornierung;
 pub mod lieferbeginn;
 pub mod mscons;
@@ -118,6 +119,12 @@ pub use invoic::{
     GeliGasSperrprozesseInvoicWorkflow,
     SETTLEMENT_WINDOW_LABEL as SPERRPROZESSE_INVOIC_SETTLEMENT_LABEL, SPERRPROZESSE_INVOIC_PID,
     WORKFLOW_NAME as GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME,
+};
+pub use lf_anmeldung::{
+    ANFRAGE_PIDS_LF as LF_ANMELDUNG_ANFRAGE_PIDS, ANTWORT_PIDS_LF as LF_ANMELDUNG_ANTWORT_PIDS,
+    GNB_RESPONSE_WINDOW_LABEL as LF_ANMELDUNG_RESPONSE_WINDOW_LABEL, GeliGasLfAnmeldungCommand,
+    GeliGasLfAnmeldungData, GeliGasLfAnmeldungEvent, GeliGasLfAnmeldungState,
+    GeliGasLfAnmeldungWorkflow, WORKFLOW_NAME as LF_ANMELDUNG_WORKFLOW_NAME,
 };
 pub use lf_stornierung::{
     ANFRAGE_PID_LF as STORNIERUNG_ANFRAGE_PID_LF, ANTWORT_PIDS_LF as STORNIERUNG_ANTWORT_PIDS_LF,
@@ -352,6 +359,11 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
             && roles.contains(Marktrolle::Nb)
             && !roles.contains(Marktrolle::Msb)
             && !roles.contains(Marktrolle::Nmsb);
+        // LF role (lf-only OR integrated): register LFN-side response PIDs.
+        // On integrated deployments, the LF *receives* 44003/44004 from GNB;
+        // the NB only ever *sends* them, so routing to lf-anmeldung is correct.
+        let has_lf_role = roles.contains(Marktrolle::Lf) || roles.is_all();
+        // LF stornierung: lf-only only (not all()), to avoid conflict with WimGas.
         let has_lf = !roles.is_all()
             && roles.contains(Marktrolle::Lf)
             && !roles.contains(Marktrolle::Msb)
@@ -365,6 +377,16 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
                 stornierung::WORKFLOW_NAME,
                 "geli-gas",
             );
+        }
+        if has_lf_role {
+            // LF (or integrated): 44003/44004 are inbound GNB confirmations/rejections
+            // to an outbound 44001/44002 the LF previously sent. Route to the LFN-side
+            // workflow, overriding the unconditional geli-gas-supplier-change registration.
+            for &pid in lf_anmeldung::ANTWORT_PIDS_LF {
+                // Use register() (silently replaces) — the GNB-side workflow never
+                // receives these PIDs inbound, so this override is safe.
+                router.register(pid, lf_anmeldung::WORKFLOW_NAME);
+            }
         }
         if has_lf {
             for &pid in lf_stornierung::ANTWORT_PIDS_LF {

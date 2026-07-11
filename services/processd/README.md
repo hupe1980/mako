@@ -66,7 +66,7 @@ de.mako.process.initiated (PID 55001/55016/44001)
 | # | Rule | Outcome on failure |
 |---|------|-------------------|
 | 1 | Grid record present in `marktd` | `Escalate` |
-| 2 | No conflicting active supply (`lf_gln_next` is `None`) | `Reject A06` |
+| 2 | No conflicting active supply (`lf_mp_id_next` is `None`) | `Reject A06` |
 | 3 | `process_date ≥ today_berlin(now)` (no retroactive starts) | `Reject A97` |
 | 4 | Bilanzierungsgebiet consistent (UTILMD matches grid record) | `Reject A02` |
 | 5 | LF GLN in partner directory | `Reject A05` |
@@ -88,9 +88,9 @@ de.mako.process.initiated (PID 55008)
   → parse E_0624 payload (malo_id, scenario, deadline_at = event_time + 45 min)
   → GET marktd /api/v1/versorgung/{malo_id}      → VersorgungsStatus
   → evaluate_e0624(payload, vs, own_gln)
-      Beliefert + standard     → MakodClient gpke.lfa.einwilligung
-      Beliefert + Einzug       → MakodClient gpke.lfa.ablehnen (A32)
-      Ersatzversorgung         → MakodClient gpke.lfa.einwilligung
+      Beliefert + standard     → MakodClient gpke.nb-lieferende.bestaetigen  (PID 55008)
+      Beliefert + Einzug       → MakodClient gpke.nb-lieferende.ablehnen (A32) (PID 55009)
+      Ersatzversorgung         → MakodClient gpke.nb-lieferende.bestaetigen  (PID 55008)
       MaLo unknown / mismatch  → approval_queue (expires_at = deadline_at - 5 min)
 ```
 

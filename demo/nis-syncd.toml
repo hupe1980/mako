@@ -1,0 +1,15 @@
+# nis-syncd.toml — demo configuration
+# NIS/GIS grid topology import adapter (NB role, stateless).
+# Pushes malo_grid records to marktd; lifts processd NB STP to ≥95%.
+# DO NOT use in production — auth disabled.
+
+port              = 9680
+marktd_url        = "http://marktd:8180"
+marktd_api_key    = "env:NIS_SYNCD_MARKTD_API_KEY"
+nb_mp_id          = "9900357000004"
+
+# Optional: emit de.markt.grid.drift.detected CloudEvent when NIS diverges.
+# drift_webhook_url = "http://webhook:8000/grid-drift"
+
+# [otel]
+# endpoint = "http://otel-collector:4317"

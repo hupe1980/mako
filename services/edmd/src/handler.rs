@@ -16,7 +16,7 @@ use axum::{
     response::IntoResponse,
 };
 use mako_edm::{
-    domain::{MSCONS_PIDS, MeterDataReceipt},
+    domain::{GAS_QUALITY_PIDS, MSCONS_PIDS, MeterDataReceipt},
     repository::TimeSeriesRepository,
 };
 use mako_markt::cloudevents::verify_signature;
@@ -131,6 +131,29 @@ pub async fn handle_webhook(
             }
             Err(err) => {
                 warn!(%err, process_id = %process_id, "edmd: failed to store receipt");
+            }
+        }
+
+        // ── PID 13007: update meter_billing_periods with gas quality data ──────
+        // The ProcessCompleted payload carries `brennwert_kwh_per_m3` and
+        // `zustandszahl` extracted by the makod adapter from `QTY+Z08`/`QTY+Z10`.
+        if GAS_QUALITY_PIDS.contains(&pid) {
+            let brennwert = data["brennwert_kwh_per_m3"].as_str().map(str::to_owned);
+            let zustandszahl = data["zustandszahl"].as_str().map(str::to_owned);
+            if brennwert.is_some() || zustandszahl.is_some() {
+                match state
+                    .repo
+                    .update_gas_quality(&malo_id, brennwert.as_deref(), zustandszahl.as_deref())
+                    .await
+                {
+                    Ok(n) => info!(
+                        process_id = %process_id, pid, malo_id = %malo_id,
+                        rows_updated = n,
+                        "edmd: updated gas quality (Brennwert/Zustandszahl) in meter_billing_periods"
+                    ),
+                    Err(err) => warn!(%err, process_id = %process_id, pid,
+                        "edmd: failed to update gas quality"),
+                }
             }
         }
     } else {

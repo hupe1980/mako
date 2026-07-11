@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS meter_reads (
     quality      TEXT        NOT NULL DEFAULT 'UNKNOWN',
     pid          INTEGER     NOT NULL,
     sparte       TEXT        NOT NULL DEFAULT 'STROM',
+    obis_code    TEXT,                   -- OBIS-Kennzahl (e.g. "1-1:1.29.0"); NULL when not provided by MSCONS
     tenant_id    UUID,
     PRIMARY KEY (malo_id, dtm_from, dtm_to)
 );

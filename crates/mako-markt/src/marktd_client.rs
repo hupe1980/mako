@@ -5,9 +5,11 @@
 //! | Method | Path | Returns |
 //! |--------|------|---------|
 //! | `GET` | `/api/v1/versorgung/{malo_id}` | `Option<VersorgungsStatusRecord>` |
+//! | `GET` | `/api/v1/malo/{malo_id}` | `Option<MaloTypedFields>` |
 //! | `GET` | `/api/v1/malo/{malo_id}/grid` | `Option<MaloGridRecord>` |
 //! | `GET` | `/api/v1/partners/{mp_id}` | `bool` (partner known) |
 //! | `GET` | `/api/v1/preisblaetter/{nb_mp_id}?date=…` | `Option<PreisblattNetznutzung>` |
+//! | `GET` | `/api/v1/preisblaetter-messung/{msb_mp_id}?date=…` | `Option<PreisblattMessung>` |
 //! | `PUT` | `/api/v1/subscriptions/{id}` | `()` (idempotent registration) |
 //!
 //! # Resilience
@@ -24,14 +26,17 @@
 
 use std::collections::HashMap;
 
-use rubo4e::v202501::PreisblattNetznutzung;
+use rubo4e::current::{PreisblattMessung, PreisblattNetznutzung};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use time::OffsetDateTime;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use crate::repository::{MaloGridRecord, VersorgungsStatusRecord};
+use crate::repository::{
+    MaloGridRecord, MaloTypedFields, PreisblattDienstleistungRecord, PreisblattHardwareRecord,
+    PreisblattKaRecord, VersorgungsStatusRecord,
+};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -218,8 +223,42 @@ impl MarktdClient {
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 
-    /// `GET /api/v1/malo/{malo_id}/grid` — NB grid topology record.
+    /// `GET /api/v1/malo/{malo_id}` — typed Marktlokation fields.
     ///
+    /// Returns the key typed fields extracted from `Marktlokation` JSONB
+    /// (`netzebene`, `bilanzierungsgebiet`, `gasqualitaet`).
+    ///
+    /// `processd` NB check 4 uses `bilanzierungsgebiet` as primary source;
+    /// falls back to `get_malo_grid` only when this returns `None`.
+    ///
+    /// Returns `None` on 404 (`MaLo` not registered in `marktd`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on network or non-404 HTTP errors.
+    pub async fn get_malo(
+        &self,
+        malo_id: &str,
+    ) -> Result<Option<MaloTypedFields>, MarktdClientError> {
+        let url = format!("{}/api/v1/malo/{}", self.base_url, malo_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json::<MaloTypedFields>()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `GET /api/v1/malo/{malo_id}/grid` — NB grid topology record.    ///
     /// Returns `None` on 404 (no grid record for this `MaLo`).
     ///
     /// # Errors
@@ -245,6 +284,48 @@ impl MarktdClient {
             .await
             .map(Some)
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `PUT /api/v1/malo/{malo_id}/grid` — upsert the NB grid topology record for a `MaLo`.
+    ///
+    /// Called by `nis-syncd` to push NIS/GIS data into `marktd`.  Idempotent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on network or non-2xx HTTP errors.
+    pub async fn put_malo_grid(
+        &self,
+        malo_id: &str,
+        nb_mp_id: &str,
+        bilanzierungsgebiet: Option<&str>,
+        netzgebiet: Option<&str>,
+        sparte: &str,
+        source: &str,
+    ) -> Result<(), MarktdClientError> {
+        let url = format!("{}/api/v1/malo/{}/grid", self.base_url, malo_id);
+        let body = serde_json::json!({
+            "nb_mp_id": nb_mp_id,
+            "bilanzierungsgebiet": bilanzierungsgebiet,
+            "netzgebiet": netzgebiet,
+            "sparte": sparte,
+            "source": source,
+        });
+        let resp = self
+            .client
+            .put(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            warn!(malo_id, status = %resp.status(), "put_malo_grid: HTTP error");
+            return Err(MarktdClientError::Http(format!(
+                "HTTP {}",
+                resp.status().as_u16()
+            )));
+        }
+        Ok(())
     }
 
     /// `GET /api/v1/partners/{mp_id}` — returns `true` if the partner is registered.
@@ -351,7 +432,282 @@ impl MarktdClient {
         }
     }
 
-    /// `PUT /api/v1/subscriptions/{subscriber_id}` — register or update a subscription.
+    /// `GET /api/v1/preisblaetter-messung/{msb_mp_id}?date={billing_date}` — MSB Preisblatt.
+    ///
+    /// Returns the `PreisblattMessung` for the MSB valid on `billing_date`, or `None` on 404.
+    /// Used by `invoicd` for PID 31009 tariff checks (positions 4+5).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on non-404 HTTP errors.
+    pub async fn get_preisblatt_messung(
+        &self,
+        msb_mp_id: &str,
+        billing_date: time::Date,
+    ) -> Result<Option<PreisblattMessung>, MarktdClientError> {
+        let date_str = billing_date.to_string();
+        let url = format!(
+            "{}/api/v1/preisblaetter-messung/{}",
+            self.base_url, msb_mp_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("date", &date_str)])
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            warn!(
+                msb_mp_id,
+                status, "MarktdClient: preisblatt-messung returned non-2xx"
+            );
+            return Err(MarktdClientError::Http(format!("HTTP {status}")));
+        }
+        let sheet = resp
+            .json::<PreisblattMessung>()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+        Ok(Some(sheet))
+    }
+
+    /// `GET /api/v1/preisblaetter-ka/{nb_mp_id}?date=…&sparte=STROM&kundengruppe=Tarifkunden`
+    ///
+    /// Returns the `PreisblattKonzessionsabgabe` valid on `billing_date`.
+    /// Used by `netzbilanzd` for KA tariff positions in INVOIC 31001/31002 (§17 `StromNZV`).
+    ///
+    /// Returns `None` on 404.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on non-404 HTTP errors.
+    pub async fn get_preisblatt_ka(
+        &self,
+        nb_mp_id: &str,
+        billing_date: time::Date,
+        sparte: &str,
+        kundengruppe_ka: Option<&str>,
+    ) -> Result<Option<PreisblattKaRecord>, MarktdClientError> {
+        let date_str = billing_date.to_string();
+        let mut query = vec![("date", date_str.as_str()), ("sparte", sparte)];
+        let kg;
+        if let Some(kg_str) = kundengruppe_ka {
+            kg = kg_str.to_owned();
+            query.push(("kundengruppe", kg.as_str()));
+        }
+        let url = format!("{}/api/v1/preisblaetter-ka/{}", self.base_url, nb_mp_id);
+        let resp = self
+            .client
+            .get(&url)
+            .query(&query)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            let s = resp.status().as_u16();
+            warn!(
+                nb_mp_id,
+                status = s,
+                "MarktdClient: preisblatt-ka returned non-2xx"
+            );
+            return Err(MarktdClientError::Http(format!("HTTP {s}")));
+        }
+        resp.json::<PreisblattKaRecord>()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `GET /api/v1/preisblaetter-dienstleistung/{msb_mp_id}?date=…` — MSB service price sheet.
+    pub async fn get_preisblatt_dienstleistung(
+        &self,
+        msb_mp_id: &str,
+        billing_date: time::Date,
+    ) -> Result<Option<PreisblattDienstleistungRecord>, MarktdClientError> {
+        let date_str = billing_date.to_string();
+        let url = format!(
+            "{}/api/v1/preisblaetter-dienstleistung/{}",
+            self.base_url, msb_mp_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("date", &date_str)])
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            let s = resp.status().as_u16();
+            warn!(
+                msb_mp_id,
+                status = s,
+                "MarktdClient: preisblatt-dienstleistung non-2xx"
+            );
+            return Err(MarktdClientError::Http(format!("HTTP {s}")));
+        }
+        resp.json::<PreisblattDienstleistungRecord>()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `GET /api/v1/preisblaetter-hardware/{msb_mp_id}?date=…` — MSB hardware rental price sheet.
+    pub async fn get_preisblatt_hardware(
+        &self,
+        msb_mp_id: &str,
+        billing_date: time::Date,
+    ) -> Result<Option<PreisblattHardwareRecord>, MarktdClientError> {
+        let date_str = billing_date.to_string();
+        let url = format!(
+            "{}/api/v1/preisblaetter-hardware/{}",
+            self.base_url, msb_mp_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("date", &date_str)])
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            let s = resp.status().as_u16();
+            warn!(
+                msb_mp_id,
+                status = s,
+                "MarktdClient: preisblatt-hardware non-2xx"
+            );
+            return Err(MarktdClientError::Http(format!("HTTP {s}")));
+        }
+        resp.json::<PreisblattHardwareRecord>()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `GET /api/v1/partners/{mp_id}/as4-address` — AS4 endpoint list (B2 `Marktteilnehmer.makoadresse`).
+    pub async fn get_as4_address(
+        &self,
+        mp_id: &str,
+    ) -> Result<Option<Vec<String>>, MarktdClientError> {
+        let url = format!("{}/api/v1/partners/{}/as4-address", self.base_url, mp_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            return Err(MarktdClientError::Http(format!(
+                "HTTP {}",
+                resp.status().as_u16()
+            )));
+        }
+        let body = resp
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+        let addrs = body["makoadresse"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(Some(addrs))
+    }
+
+    /// Fetch the full `Lokationszuordnung` graph reachable from `root_id`.
+    ///
+    /// Pass `at_date` as `"YYYY-MM-DD"` for point-in-time queries; `None`
+    /// returns all edges regardless of validity.
+    pub async fn get_lokationen(
+        &self,
+        root_id: &str,
+        root_typ: &str,
+        at_date: Option<&str>,
+    ) -> Result<Vec<crate::repository::LokationszuordnungEdge>, MarktdClientError> {
+        let path = match root_typ {
+            "melo" => format!("{}/api/v1/melos/{}/lokationen", self.base_url, root_id),
+            _ => format!("{}/api/v1/malo/{}/lokationen", self.base_url, root_id),
+        };
+        let mut req = self
+            .client
+            .get(&path)
+            .bearer_auth(self.api_key.expose_secret());
+        if let Some(d) = at_date {
+            req = req.query(&[("at", d)]);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            warn!(root_id, root_typ, status = %resp.status(), "get_lokationen: HTTP error");
+            return Err(MarktdClientError::Http(format!(
+                "HTTP {}",
+                resp.status().as_u16()
+            )));
+        }
+        resp.json::<Vec<crate::repository::LokationszuordnungEdge>>()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// Fetch a `TechnischeRessource` record by `TrId` from `marktd`.
+    ///
+    /// Returns `None` if the resource is not registered yet.
+    pub async fn get_technische_ressource(
+        &self,
+        tr_id: &str,
+    ) -> Result<Option<crate::repository::TechnischeRessourceRecord>, MarktdClientError> {
+        let url = format!("{}/api/v1/technische-ressourcen/{}", self.base_url, tr_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            warn!(tr_id, status = %resp.status(), "get_technische_ressource: HTTP error");
+            return Err(MarktdClientError::Http(format!(
+                "HTTP {}",
+                resp.status().as_u16()
+            )));
+        }
+        let record = resp
+            .json::<crate::repository::TechnischeRessourceRecord>()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+        Ok(Some(record))
+    }
+
     ///
     /// This is an idempotent upsert — safe to call on every service restart.
     /// Non-2xx responses are logged as warnings but do **not** return an error

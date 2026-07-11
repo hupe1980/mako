@@ -34,7 +34,7 @@ pub struct ReceiptRow {
     pub receiver_gln: String,
     /// Full BO4E Rechnung object as received.
     pub rechnung: serde_json::Value,
-    /// BO4E schema version string, e.g. `"v202501.0.0"`.
+    /// BO4E schema version string, e.g. `"v202607.0.0"`.
     pub bo4e_version: String,
     /// Plausibility outcome: `"Ok"`, `"AcceptedPartial"`, `"Warn"`, `"Dispute"`,
     /// `"Dispatched"` (outbound 31006 sent), or `"Paid"` (outbound 31006 settled).
@@ -115,4 +115,149 @@ pub async fn mark_dispatched(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Mark a receipt as successfully delivered to the ERP webhook.
+///
+/// Sets `erp_notified_at` to the delivery timestamp, clearing the record from
+/// the pending-delivery index.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` on database failure.
+pub async fn mark_erp_notified(
+    pool: &PgPool,
+    process_id: Uuid,
+    delivered_at: OffsetDateTime,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE invoic_receipts SET erp_notified_at = $1, erp_attempts = erp_attempts + 1 WHERE process_id = $2",
+    )
+    .bind(delivered_at)
+    .bind(process_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Increment the ERP delivery attempt counter and schedule the next retry.
+///
+/// Called when delivery fails.  Uses exponential backoff:
+/// - attempt 0→1: +30 s
+/// - attempt 1→2: +5 min
+/// - attempt 2→3: +30 min
+/// - attempt 3→4: +2 h
+/// - attempt 4→5: dead-lettered (background worker stops retrying)
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` on database failure.
+pub async fn record_erp_failure(
+    pool: &PgPool,
+    process_id: Uuid,
+    attempts: i16,
+) -> Result<(), sqlx::Error> {
+    // Backoff intervals in seconds: 30, 300, 1800, 7200, ∞ (dead-letter)
+    let delay_secs: i64 = match attempts {
+        0 => 30,
+        1 => 300,
+        2 => 1_800,
+        3 => 7_200,
+        _ => i64::MAX / 2, // effectively dead-lettered; never re-queried (erp_attempts >= 5)
+    };
+    sqlx::query(
+        r#"UPDATE invoic_receipts
+           SET erp_attempts = erp_attempts + 1,
+               erp_next_attempt_at = now() + ($1 * INTERVAL '1 second')
+           WHERE process_id = $2"#,
+    )
+    .bind(delay_secs)
+    .bind(process_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// A row returned by the background ERP outbox worker query.
+#[derive(Debug)]
+pub struct ErpPendingRow {
+    pub process_id: Uuid,
+    pub pid: i16,
+    pub direction: String,
+    pub sender_mp_id: String,
+    pub outcome: String,
+    pub pay_by: Option<OffsetDateTime>,
+    pub findings_count: i64,
+    pub erp_attempts: i16,
+}
+
+/// Fetch the next batch of receipts awaiting ERP notification.
+///
+/// Uses `FOR UPDATE SKIP LOCKED` for safe concurrent worker execution.
+/// Returns at most `limit` rows whose `erp_next_attempt_at <= now()` and
+/// whose `erp_attempts < 5` (below dead-letter threshold).
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` on database failure.
+pub async fn fetch_erp_pending(
+    pool: &PgPool,
+    tenant: &str,
+    limit: i64,
+) -> Result<Vec<ErpPendingRow>, sqlx::Error> {
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            i16,
+            String,
+            String,
+            String,
+            Option<OffsetDateTime>,
+            i64,
+            i16,
+        ),
+    >(
+        r#"SELECT process_id, pid, direction, sender_mp_id, outcome,
+                  pay_by, jsonb_array_length(findings), erp_attempts
+           FROM invoic_receipts
+           WHERE tenant = $1
+             AND erp_notified_at IS NULL
+             AND erp_attempts < 5
+             AND erp_next_attempt_at <= now()
+           ORDER BY erp_next_attempt_at
+           LIMIT $2
+           FOR UPDATE SKIP LOCKED"#,
+    )
+    .bind(tenant)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(
+                process_id,
+                pid,
+                direction,
+                sender_mp_id,
+                outcome,
+                pay_by,
+                findings_count,
+                erp_attempts,
+            )| {
+                ErpPendingRow {
+                    process_id,
+                    pid,
+                    direction,
+                    sender_mp_id,
+                    outcome,
+                    pay_by,
+                    findings_count,
+                    erp_attempts,
+                }
+            },
+        )
+        .collect())
 }

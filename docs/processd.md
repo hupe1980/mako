@@ -5,9 +5,9 @@ nav_order: 26
 parent: Architecture
 description: >
   processd operator guide: Process decision engine for automated NB Anmeldung STP
-  decisions (netz-checker) and LF E_0624 auto-response. Role-gated features for
-  §7 EnWG separation. Cedar ABAC, MCP tools, PostgreSQL-backed audit log,
-  §20 EnWG parity reporting.
+  decisions (netz-checker), LF E_0624 auto-response, LFN bootstrap (Strom + Gas),
+  Gas Datenabruf, LFW24 Vorlauffrist validation. Role-gated features for
+  §7 EnWG separation. Cedar ABAC, MCP tools, PostgreSQL audit log.
 ---
 
 # `processd` Operator Guide
@@ -36,8 +36,8 @@ graph TB
 
     processd --> NB
     processd --> LF
-    NB -->|"bestaetigen / ablehnen\nPOST /api/v1/commands"| makod
-    LF -->|"einwilligung / ablehnen\nPOST /api/v1/commands"| makod
+    NB -->|"gpke.lieferbeginn.bestaetigen/ablehnen\nPOST /api/v1/commands"| makod
+    LF -->|"gpke.nb-lieferende.bestaetigen/ablehnen\ngeli.lieferbeginn.anmelden\nPOST /api/v1/commands"| makod
     NB & LF -->|"GET /api/v1/versorgung\nGET /api/v1/malo/{id}/grid"| marktd
 ```
 
@@ -46,16 +46,18 @@ graph TB
 ## Port layout
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  processd  :8580                                                 │
-│                                                                 │
-│  POST /webhook         ← marktd CloudEvents (HMAC-verified)    │
-│  GET  /api/v1/decisions ← NB STP audit log (OIDC+Cedar)        │
-│  GET  /api/v1/queue    ← LF approval queue (OIDC+Cedar)        │
-│  POST /api/v1/queue/{id}/approve|reject  ← operator action     │
-│  GET  /health/live  /health/ready                               │
-│  POST|GET /mcp         ← MCP Streamable HTTP (2025-11-25)      │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│  processd  :8580                                                  │
+│                                                                  │
+│  POST /webhook              ← marktd CloudEvents (HMAC)          │
+│  GET  /api/v1/decisions     ← NB STP audit log (OIDC+Cedar)     │
+│  GET  /api/v1/queue         ← LF approval queue                 │
+│  POST /api/v1/queue/{id}/approve|reject  ← operator action       │
+│  POST /api/v1/start-supply              ← LFN Strom bootstrap    │
+│  POST /api/v1/start-supply-gas          ← LFN Gas 44001 bootstrap│
+│  GET  /health/live  /health/ready                                │
+│  POST|GET /mcp       ← MCP Streamable HTTP (2025-11-25)          │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -67,8 +69,8 @@ This ensures §7 EnWG separation: an `nb-only` binary provably contains no LF PI
 
 ```toml
 [features]
-role-lf-strom  = []  # LFA E_0624 (PID 55008), LFN Strom bootstrap
-role-lf-gas    = []  # LFA GeLi Gas (PID 44022/44023)
+role-lf-strom  = []  # LFA E_0624 (PID 55008), LFN Strom bootstrap, INSRPT
+role-lf-gas    = []  # LFA GeLi Gas stornierung + LFN Gas bootstrap (PID 44001)
 role-nb-strom  = []  # GPKE Anmeldung STP (PIDs 55001, 55016)
 role-nb-gas    = []  # GeLi Gas Anmeldung STP (PID 44001)
 
@@ -105,7 +107,7 @@ de.mako.process.initiated (PID 55001/55016/44001)
 | # | Rule | On failure |
 |---|------|------------|
 | 1 | `MaloGridRecord` exists for the MaLo | `Escalate` |
-| 2 | `lf_gln_next` is `None` (no pending Lieferbeginn) | `Reject A06` |
+| 2 | `lf_mp_id_next` is `None` (no pending Lieferbeginn) | `Reject A06` |
 | 3 | `process_date ≥ today` (no retroactive starts) | `Reject A97` |
 | 4 | Bilanzierungsgebiet in UTILMD matches grid record | `Reject A02` |
 | 5 | LF MP-ID in partner directory | `Reject A05` |
@@ -154,14 +156,90 @@ A background task runs every 60 s and sets `status = Expired` for stale entries.
 **Operator workflow:**
 ```
 GET /api/v1/queue                     → list Pending entries (review before expires_at)
-POST /api/v1/queue/{id}/approve       → dispatch einwilligung via makod AND mark Approved
-POST /api/v1/queue/{id}/reject        → dispatch ablehnen via makod AND mark Rejected
+POST /api/v1/queue/{id}/approve       → dispatch consent command via makod AND mark Approved
+POST /api/v1/queue/{id}/reject        → dispatch reject command via makod AND mark Rejected
 ```
 
 > **Regulatory deadline:** `expires_at = event_time + 45 min - 5 min`.
 > The approve/reject handlers dispatch to `makod` **before** updating the DB — if
 > `makod` is unavailable, the entry stays `Pending` so the operator can retry.
 > Expired entries log a `WARN` and must be reconciled manually.
+
+---
+
+## LF module — LFN bootstrap
+
+### Strom: `POST /api/v1/start-supply`
+
+Initiates a GPKE Lieferbeginn (UTILMD 55001) with **LFW24 Vorlauffrist validation**
+(BK6-22-024, effective 2025-06-06).
+
+```bash
+curl -X POST http://processd:8580/api/v1/start-supply \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"malo_id": "10001234567", "lieferbeginn_datum": "2026-10-01"}'
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `malo_id` | ✓ | 11-digit Strom Marktlokations-ID |
+| `lieferbeginn_datum` | ✓ | ISO-8601 date (YYYY-MM-DD) |
+
+**Vorlauffrist rules (15:00 CET/CEST cutoff):**
+
+| Submission time | Earliest allowed Lieferbeginn |
+|---|---|
+| Before 15:00 Berlin | Next Arbeitstag (+1 Werktag) |
+| At or after 15:00 Berlin | übernächster Arbeitstag (+2 Werktage) |
+| Retroactive date (`< today_berlin`) | Rejected with `RETROACTIVE_DATE` |
+
+Response includes `earliest_lieferbeginn` and `berlin_time_at_submission` for
+operator transparency.
+
+### Gas: `POST /api/v1/start-supply-gas`
+
+Initiates a GeLi Gas Lieferbeginn (UTILMD 44001). Both `malo_id` and `zaehlpunkt`
+**are mandatory** per BK7-24-01-009 AHB rules.
+
+```bash
+curl -X POST http://processd:8580/api/v1/start-supply-gas \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "malo_id":    "10001234567",
+    "zaehlpunkt": "DE00123456789012345678901234567890",
+    "process_date": "20261001"
+  }'
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `malo_id` | ✓ | 11-digit Gas-MaLo-ID (IDE+Z19) |
+| `zaehlpunkt` | ✓ | Zählpunktbezeichnung (RFF+Z13) |
+| `process_date` | ✓ | Lieferbeginn date (YYYYMMDD, CET/CEST) |
+
+The GNB responds with PID 44003 (confirmation) or 44004 (rejection). The LF
+process (`geli-gas-lf-anmeldung`) tracks the 10-Werktage response deadline
+automatically.
+
+> **No API-Webdienste equivalent for Gas.** The ERP must supply the Gas-MaLo-ID
+> (`malo_id`) upfront from the customer contract, MaStR, or DVGW Codevergabe.
+
+### Gas Datenabruf: `geli.gas.datenabruf.anfragen`
+
+Request Abrechnungsbrennwert and Zustandszahl on-demand (ORDERS 17103):
+
+```bash
+curl -X POST http://makod:8080/api/v1/commands \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"command": "geli.gas.datenabruf.anfragen", "payload": {"malo_id": "10001234567"}}'
+```
+
+The GNB responds with MSCONS 13007 (data delivery) or ORDRSP 19103 (rejection).
+Successful delivery automatically updates `edmd` `meter_billing_periods` via the
+existing `update_gas_quality` path.
 
 ---
 
@@ -279,20 +357,31 @@ For Helm charts, map `[subscription]` to `values.yaml` under `processd.subscript
 |------|------|-------------|
 | `list_decisions` | NB | Last N Anmeldung decisions with ERC codes and affiliate flag |
 | `get_stp_rate` | NB | STP rate over last N days vs. 95 % target |
-| `list_queue` | LF | Pending approval queue entries (most urgent first) |
+| `list_pending_approvals` | LF | Pending approval queue entries (most urgent first) |
 | `get_queue_entry` | LF | Single queue entry by UUID |
 
 ---
 
 ## Monitoring
 
+`GET /metrics` returns Prometheus-compatible metrics sourced from PostgreSQL:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `processd_decisions_total{decision,pid}` | counter | NB STP decisions by outcome (`Accept`/`Reject`/`Escalate`) and PID (`55001`/`44001`) |
+| `processd_approval_queue_depth` | gauge | Pending LF E_0624 entries in `approval_queue` (unresolved) |
+| `processd_db_pool_size` | gauge | PostgreSQL connection pool size |
+| `processd_db_pool_idle` | gauge | Idle PostgreSQL connections |
+
+### Alert rules
+
 | Metric / Query | Target |
 |----------------|--------|
-| `get_stp_rate` (MCP) ≥ 95 % | Accept / (Accept+Reject) |
-| `approval_queue` where `status = 'Pending' AND expires_at < now() + interval '10 min'` | 0 |
-| `anmeldung_decisions` where `decision = 'Escalate'` > 5 % | Investigate grid coverage |
+| `processd_decisions_total{decision="Accept"} / processd_decisions_total` | ≥ 95 % (STP rate) |
+| `processd_approval_queue_depth` approaching TTL | 0 near-expiry entries |
+| `processd_decisions_total{decision="Escalate"}` / total | < 5 % (grid coverage indicator) |
 
 Alert when:
-- STP rate drops below 90 % (grid record coverage degraded)
-- `approval_queue` entries approaching expiry (LF deadline risk)
+- STP rate drops below 90 % (grid record coverage degraded — run `nis-syncd`)
+- `processd_approval_queue_depth` > 0 entries near TTL (LF deadline risk)
 - Decision latency > 10 s (marktd connectivity issue)

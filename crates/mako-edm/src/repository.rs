@@ -71,4 +71,19 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
         &self,
         q: &BillingPeriodQuery,
     ) -> Result<Option<MeterBillingPeriod>, EdmError>;
+
+    /// Update Gas quality fields (`brennwert_kwh_per_m3`, `zustandszahl`) in
+    /// `meter_billing_periods` for a MaLo.
+    ///
+    /// Called by `edmd` when a `de.mako.process.completed` event arrives for
+    /// PID 13007 (Gasbeschaffenheitsdaten). Updates ALL billing-period rows for
+    /// the MaLo that currently have `NULL` gas quality fields.
+    ///
+    /// Returns the number of updated rows.
+    async fn update_gas_quality(
+        &self,
+        malo_id: &str,
+        brennwert_kwh_per_m3: Option<&str>,
+        zustandszahl: Option<&str>,
+    ) -> Result<u64, EdmError>;
 }

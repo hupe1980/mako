@@ -39,7 +39,7 @@ use mako_engine::{
     types::{MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
-use rubo4e::v202501::Rechnung;
+use rubo4e::current::Rechnung;
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 

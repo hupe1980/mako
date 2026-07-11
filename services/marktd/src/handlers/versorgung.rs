@@ -36,7 +36,8 @@ pub struct VersorgungsStatusResponse {
     #[schema(value_type = String, example = "Beliefert")]
     pub lieferstatus: String,
     pub lf_mp_id: Option<String>,
-    pub lf_gln_next: Option<String>,
+    pub lf_mp_id_next: Option<String>,
+    pub lf_next_lieferbeginn: Option<String>,
     pub lieferbeginn: Option<String>,
     pub lieferende: Option<String>,
     pub msb_mp_id: Option<String>,
@@ -52,7 +53,8 @@ impl From<VersorgungsStatusRecord> for VersorgungsStatusResponse {
             malo_id: r.malo_id.as_ref().to_owned(),
             lieferstatus: r.lieferstatus.to_string(),
             lf_mp_id: r.lf_mp_id,
-            lf_gln_next: r.lf_gln_next,
+            lf_mp_id_next: r.lf_mp_id_next,
+            lf_next_lieferbeginn: r.lf_next_lieferbeginn.map(|d| d.to_string()),
             lieferbeginn: r.lieferbeginn.map(|d| d.to_string()),
             lieferende: r.lieferende.map(|d| d.to_string()),
             msb_mp_id: r.msb_mp_id,
@@ -72,7 +74,8 @@ pub struct VersorgungsStatusHistoryResponse {
     #[schema(value_type = String, example = "Beliefert")]
     pub lieferstatus: String,
     pub lf_mp_id: Option<String>,
-    pub lf_gln_next: Option<String>,
+    pub lf_mp_id_next: Option<String>,
+    pub lf_next_lieferbeginn: Option<String>,
     pub lieferbeginn: Option<String>,
     pub lieferende: Option<String>,
     pub msb_mp_id: Option<String>,
@@ -90,7 +93,8 @@ impl From<VersorgungsStatusHistoryRecord> for VersorgungsStatusHistoryResponse {
             malo_id: r.malo_id.as_ref().to_owned(),
             lieferstatus: r.lieferstatus.to_string(),
             lf_mp_id: r.lf_mp_id,
-            lf_gln_next: r.lf_gln_next,
+            lf_mp_id_next: r.lf_mp_id_next,
+            lf_next_lieferbeginn: r.lf_next_lieferbeginn.map(|d| d.to_string()),
             lieferbeginn: r.lieferbeginn.map(|d| d.to_string()),
             lieferende: r.lieferende.map(|d| d.to_string()),
             msb_mp_id: r.msb_mp_id,
@@ -107,7 +111,8 @@ pub struct VersorgungsStatusUpsertRequest {
     #[schema(value_type = String, example = "Beliefert")]
     pub lieferstatus: String,
     pub lf_mp_id: Option<String>,
-    pub lf_gln_next: Option<String>,
+    pub lf_mp_id_next: Option<String>,
+    pub lf_next_lieferbeginn: Option<String>,
     pub lieferbeginn: Option<String>,
     pub lieferende: Option<String>,
     pub msb_mp_id: Option<String>,
@@ -372,7 +377,13 @@ where
         malo_id,
         lieferstatus,
         lf_mp_id: body.lf_mp_id,
-        lf_gln_next: body.lf_gln_next,
+        lf_mp_id_next: body.lf_mp_id_next,
+        lf_next_lieferbeginn: body
+            .lf_next_lieferbeginn
+            .as_deref()
+            .map(|s| time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT))
+            .transpose()
+            .unwrap_or(None),
         lieferbeginn,
         lieferende,
         msb_mp_id: body.msb_mp_id,

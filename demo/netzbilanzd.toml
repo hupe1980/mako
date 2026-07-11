@@ -1,0 +1,16 @@
+# netzbilanzd.toml — demo configuration
+# NNE/KA/MMM billing daemon (NB role).
+# Generates INVOIC 31001/31002/31005, self-validates via invoic-checker,
+# and dispatches to makod for EDIFACT delivery to the LF.
+# DO NOT use in production — auth disabled.
+
+database_url    = "env:DATABASE_URL"
+port            = 8680
+marktd_url      = "http://marktd:8180"
+marktd_api_key  = "env:NETZBILANZD_MARKTD_API_KEY"
+makod_url       = "http://makod:8080"
+makod_api_key   = "env:NETZBILANZD_MAKOD_API_KEY"
+
+# [oidc]  — omit to disable auth (dev mode only)
+# [otel]
+# endpoint = "http://otel-collector:4317"

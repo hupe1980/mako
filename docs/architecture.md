@@ -5,8 +5,8 @@ nav_order: 4
 has_children: true
 description: >-
   mako system architecture: event-sourced process runtime, AS4/REST transport,
-  ERP integration via CloudEvents 1.0, API-Webdienste Strom, and the six
-  companion daemons (makod, marktd, processd, invoicd, edmd, obsd).
+  ERP integration via CloudEvents 1.0, API-Webdienste Strom, and all nine
+  companion daemons (makod, marktd, processd, invoicd, netzbilanzd, sperrd, edmd, obsd, nis-syncd).
 ---
 
 # Architecture
@@ -14,7 +14,7 @@ description: >-
 This document covers the design of `mako-engine` and the full service mesh:
 event-sourced process runtime, inbound/outbound transport channels, ERP
 integration via BO4E + CloudEvents 1.0, and the SlateDB persistence layer.
-It also describes all six companion daemons and the `mako-service` shared
+It also describes all nine companion daemons and the `mako-service` shared
 infrastructure library they build on.
 
 ---
@@ -50,7 +50,7 @@ graph TB
 
     subgraph marktd ["marktd :8180 — Market Data Hub (pure data hub)"]
         MDM_DB["PostgreSQL\nMaLo · MeLo · contracts\nVersorgungsStatus + history · NeLo\nNbContracts · partners · preisblaetter\nmalo_grid (NB STP)"]
-        FANOUT["EventBus fan-out\n→ ERP + processd + invoicd + obsd\n(WebhookBus default · KafkaBus via krafka feature)"]
+        FANOUT["EventBus fan-out\n→ ERP + processd + invoicd + edmd + obsd\n(WebhookBus default · KafkaBus via krafka feature)"]
     end
 
     subgraph processd ["processd :8580 — Process Decision Engine"]
@@ -60,14 +60,26 @@ graph TB
         NB_MOD & LF_MOD --> PROC_DB
     end
 
-    subgraph invoicd ["invoicd :8280 — Billing settlement"]
-        CHK["invoic-checker<br/>5 plausibility checks"]
-        INV_DB["PostgreSQL<br/>invoic_receipts (§22 MessZV)"]
+    subgraph invoicd ["invoicd :8280 — INVOIC settlement (LF)"]
+        CHK["invoic-checker\n5 plausibility checks\n+ selbstausstellen 31006"]
+        INV_DB["PostgreSQL\ninvoic_receipts (§22 MessZV)"]
         CHK --> INV_DB
     end
 
+    subgraph netzbilanzd ["netzbilanzd :8680 — NNE billing (NB)"]
+        NNE["mako-nne\nNNE/KA/MMM calculation\ninvoic-checker self-validate"]
+        DRAFT_DB["PostgreSQL\ninvoice_drafts"]
+        NNE --> DRAFT_DB
+    end
+
+    subgraph sperrd ["sperrd :8780 — Sperrung tracker (NB)"]
+        SPR["Sperrung lifecycle\nIFTSTA 21039 auto-dispatch"]
+        SPR_DB["PostgreSQL\nsperr_orders"]
+        SPR --> SPR_DB
+    end
+
     subgraph edmd ["edmd :8380 — Energy data"]
-        EDM_DB["PostgreSQL<br/>meter_reads · receipts"]
+        EDM_DB["PostgreSQL\nmeter_reads · billing_periods"]
     end
 
     subgraph obsd ["obsd :8480 — Observability"]
@@ -76,6 +88,7 @@ graph TB
 
     ERP["ERP system<br/>(SAP · CATENA-X · custom)"]
     OPS["Alertmanager · Grafana<br/>BNetzA KPI reports"]
+    NIS["nis-syncd :9680<br/>grid topology import (stateless)"]
 
     NB <-->|AS4/SOAP+MTOM| AS4
     NB <-->|HTTP REST| REST
@@ -94,7 +107,13 @@ graph TB
     NB_MOD & LF_MOD -->|POST /api/v1/commands| makod
 
     CHK -->|GET /api/v1/preisblaetter| marktd
+    CHK -->|GET /api/v1/billing-period| edmd
     CHK -->|POST /api/v1/commands| makod
+
+    NNE -->|POST /api/v1/commands| makod
+    SPR -->|POST /api/v1/commands<br/>IFTSTA 21039| makod
+    NIS -->|PUT /api/v1/malo/{id}/grid| marktd
+
     PROJ --> OPS
 ```
 
@@ -175,7 +194,7 @@ Process::execute_and_enqueue_with_snapshot_and_retry
 
 ## Companion daemons
 
-All six daemons share a common operational model:
+All nine daemons share a common operational model:
 - **TOML configuration** — loaded from a file (`makod.toml`, `marktd.toml`, …) with `env:VAR_NAME` secret interpolation
 - **Cedar ABAC** — all HTTP endpoints gated by Cedar attribute-based access control
 - **OIDC/JWT** — asymmetric algorithm only; JWKS cached with background refresh; omit `[oidc]` for dev mode
@@ -185,26 +204,46 @@ All six daemons share a common operational model:
 | Daemon | Port | Role | Config file |
 |--------|------|------|-------------|
 | `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 45+ workflows, AS4 ingest, deadlines | `makod.toml` |
-| `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/VersorgungsStatus/preisblaetter, EventBus fan-out | `marktd.toml` |
-| `processd` | `:8580` | Process decision engine — NB STP (netz-checker) + LF E_0624 auto-response | `processd.toml` |
+| `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, preisblaetter, VersorgungsStatus, `event_log` replay, EventBus fan-out | `marktd.toml` |
+| `processd` | `:8580` | Process decision engine — NB STP (`netz-checker`) + LF E_0624 auto-response | `processd.toml` |
 | `invoicd` | `:8280` | INVOIC plausibility — REMADV, selbstausstellen, overdue-REMADV, §22 MessZV audit | `invoicd.toml` |
-| `edmd` | `:8380` | Energy data management — MSCONS meter readings, time-series, `MeterBillingPeriod` | `edmd.toml` |
+| `netzbilanzd` | `:8680` | NNE/KA/MMM billing daemon (NB role) — generates INVOIC 31001/31002/31005, invoice draft lifecycle | `netzbilanzd.toml` |
+| `sperrd` | `:8780` | Sperrung execution tracker (NB role) — `sperr_orders` lifecycle, IFTSTA 21039 auto-dispatch | `sperrd.toml` |
+| `nis-syncd` | `:9680` | NIS/GIS grid topology import (NB role, stateless) — pushes `malo_grid` to `marktd`; STP ~80%→≥95% | `nis-syncd.toml` |
+| `edmd` | `:8380` | Energy data management — MSCONS meter readings, BO4E `Energiemenge` deliveries, `Lastgang` + `Zeitreihe` time-series, `MeterBillingPeriod` | `edmd.toml` |
 | `obsd` | `:8480` | Process observability — KPI reports, deadline-risk alerts, §20 EnWG parity | `obsd.toml` |
 
 ### `marktd` — Market Data Hub (`:8180`)
 
 `marktd` is the single source of truth for all market entity state.
-It stores Marktlokationen (MaLo), Messlokationen (MeLo), contracts, trading
-partners, network contracts (NbContractRecord), price sheets,
-**VersorgungsStatus per MaLo** (with full history and `?at=YYYY-MM-DD`
-point-in-time queries), **MaLo grid topology** (`malo_grid` table, sourced from
-the NB’s NIS/GIS system and provisioned via `PUT /api/v1/malo/{id}/grid`; **not**
-from MaStR), and **Netz-Element-Lokationen (NeLo)** for Redispatch 2.0.
+It stores Marktlokationen (MaLo) with typed columns (`netzebene`, `bilanzierungsgebiet`,
+`gasqualitaet`, `energierichtung`, `bilanzierungsmethode`, `regelzone`, `fallgruppe`)
+and **typed `rubo4e::current::Marktlokation`** API responses (schema validated on every `PUT` — wrong `_typ` or invalid enum → 422),
+Messlokationen (MeLo) with typed `netzebene_messung`, `regelzone`, `standorteigenschaften JSONB`,
+and **typed `rubo4e::current::Messlokation`** responses,
+contracts, trading partners, network contracts (`NbContractRecord`),
+price sheets (NNE, Messung, KA, Dienstleistung, Hardware),
+**VersorgungsStatus per MaLo** (with full history and `?at=YYYY-MM-DD` point-in-time queries),
+**MaLo grid topology** (`malo_grid`, sourced from the NB's NIS/GIS),
+**Netz-Element-Lokationen (NeLo)** with typed Redispatch 2.0 columns
+(`steuerkanal`, `eigenschaft_msb_lokation`, `grundzustaendiger_msb_codenr`),
+**TechnischeRessource** (E-mobility, generation, storage for iMS and Redispatch 2.0),
+**SteuerbareRessource** with `konfigurationsprodukte JSONB` (contracted iMS control products),
+**Zaehler** (meter registry) returning typed `rubo4e::current::Zaehler` (M6), with
+`GET /api/v1/zaehler/{id}/zaehlwerke` for `Vec<Zaehlwerk>` OBIS register access,
+**Geraete** returning typed `rubo4e::current::Geraet` (M6),
+and the full **`Lokationszuordnung` location graph** (temporal `valid_from`/`valid_to` edges,
+recursive-CTE BFS traversal via `GET /api/v1/malo/{id}/lokationen`).
 
-`makod` pushes `de.mako.process.*` CloudEvents to `marktd`'s ingest endpoint;
-`marktd` fans them out to all registered subscribers. The `VersorgungsStatus`
-is derived automatically on `de.mako.process.completed` (PIDs 55003/44003 →
-Beliefert, 55013/44013 → Unbeliefert). Every supply-state change is written
+`makod` pushes `de.mako.process.*` CloudEvents to `marktd`'s ingest endpoint.
+Every inbound event is appended to the **durable `event_log` table** before fan-out,
+enabling full replay via `GET /admin/events?from=&to=&type=&limit=`.
+W3C Trace Context (`traceparent`, `tracestate`) from the originating `makod` event is
+forwarded unchanged in every outbound webhook, enabling end-to-end distributed traces.
+
+`marktd` fans events out to all registered subscribers via HMAC-SHA256-signed HTTP webhooks.
+The `VersorgungsStatus` is derived automatically on `de.mako.process.completed`
+(PIDs 55003/44003 → Beliefert, 55013/44013 → Unbeliefert). Every supply-state change is written
 to `versorgungsstatus_history`, enabling both full audit logs and bitemporal
 "as-of" queries by date.
 
@@ -217,7 +256,7 @@ plausibility check from running. Operators inspect and retry via
 
 `marktd` is a **pure data hub** — it stores market entity state and fans out
 CloudEvents to subscribers but contains no domain policy. Automated Anmeldung
-decisions live in `processd`’s NB module.
+decisions live in `processd`'s NB module.
 
 See [`marktd` Operator Guide](./marktd.md).
 
@@ -253,12 +292,15 @@ invoices, plausibility outcomes, and check findings — satisfying the 3-year
 retention requirement under §22 MessZV and §41 EnWG.
 
 **Supported PIDs:** 31001, 31002, 31005, 31006 (GPKE MMM-Rechnung); 31009
-(WiM MSB-Rechnung — DLQ path pending full N3 integration).
+(WiM MSB-Rechnung).
 
-**M16 additions:**
+**Payment lifecycle:**
+- `POST /api/v1/receipts/{id}/confirm-payment` — ERP calls when bank transfer confirmed; sets `payment_confirmed_at`
+- `GET /api/v1/zahlungsstatus/{malo_id}` — pending / settled / overdue counts per MaLo for AR reconciliation
 - `POST /api/v1/selbstausstellen/{malo_id}` — outbound INVOIC 31006 (LF selbstausgestellt)
 - `GET /api/v1/overdue-remadv` — receipts approaching Zahlungsziel without REMADV
-- MCP tool `list_overdue_remadv` — deadline monitoring for LLM tooling
+- `de.invoic.payment.overdue` CloudEvent emitted every 6 h by `payment_overdue` worker for overdue receipts
+- MCP tools: `get_receipt`, `list_disputes`, `list_overdue_remadv`, `get_zahlungsstatus`
 
 ### `edmd` — Energy Data Management (`:8380`)
 
@@ -271,13 +313,16 @@ Key facts:
 - Subscribes to `de.mako.process.completed` events from `marktd` where `makopid`
   is in the MSCONS PID set (`mako_edm::domain::MSCONS_PIDS`).
 - Stores typed kWh interval reads with `(malo_id, dtm_from, dtm_to)` primary key.
-- Exposes `GET /api/v1/deliveries/{malo_id}`,
-  `GET /api/v1/imbalance/{malo_id}/{year}/{month}`, and (M15)
+- `GET /api/v1/deliveries/{malo_id}` returns **BO4E `Energiemenge` objects** —
+  each read mapped to `{ obisKennzahl, menge: { wert, einheit: KWH }, zeitraum }`,
+  ready for direct ERP billing-import without EDIFACT parsing.
+- `GET /api/v1/lastgang/{malo_id}` (BO4E `Lastgang`, grouped by OBIS register),
+  `GET /api/v1/zeitreihe/{malo_id}` (BO4E `Zeitreihe`, commodity metadata), and
   `GET /api/v1/billing-period/{malo_id}?from=&to=`.
 - `MeterBillingPeriod` provides `arbeitsmenge_kwh`, `spitzenleistung_kw` (RLM Strom),
   `brennwert_kwh_per_m3` + `zustandszahl` (Gas) for billing plausibility (M16)
   and NNE invoice generation (N4).
-- Pre-aggregated `meter_billing_periods` table (migration 0002) for fast billing queries.
+- Pre-aggregated `meter_billing_periods` table  for fast billing queries.
 
 ### `obsd` — Business-Process Observability (`:8480`)
 
@@ -292,6 +337,68 @@ Key facts:
 - `GET /obs/processes`, `GET /obs/kpis`, `GET /obs/overdue` REST endpoints.
 - BNetzA KPI report via `GET /obs/kpis?pid=55001&period=2025-10`.
 - Integrates with Alertmanager: `GET /obs/overdue` as a Prometheus alert target.
+
+See [`obsd` Operator Guide](./obsd.md).
+
+### `netzbilanzd` — NNE/KA/MMM Billing Daemon (`:8680`)
+
+`netzbilanzd` automates the outbound billing cycle for the NB role: generating
+Netznutzungsentgelt (NNE), Konzessionsabgabe (KA), Mehr-/Mindermengen (MMM), and
+MSB-Rechnung invoices, running `invoic-checker` self-validation, and dispatching
+via `makod` as INVOIC 31001/31002/31005/31009.
+
+Key facts:
+- **`mako-nne` pure library** — all monetary arithmetic uses `EuroAmount` (`i64 × 10⁻⁵ EUR`),
+  zero floating-point money. The same library is used by `invoicd` for LF selbstausstellen (PID 31006).
+- **Operator-supplied inputs** — `POST /api/v1/billing/run` accepts meter readings and tariff data
+  directly in the request body. `netzbilanzd` does not query `marktd` or `edmd` autonomously,
+  making each billing run idempotent by design.
+- **Self-validation before draft** — checks 1–3 (period, arithmetic, total) run immediately
+  after generation. A `CheckReport { outcome: Dispute }` never reaches `invoice_drafts`.
+- **Operator review step** — generated invoices land in `invoice_drafts` with status `draft`.
+  An explicit `PUT /api/v1/billing/drafts/{id}/dispatch` is required to send via `makod`.
+  Pre-dispatch re-validation blocks erroneous invoices from reaching counterparties.
+- **`invoice_drafts` lifecycle**: `draft → dispatched` (on operator approval) or `rejected`
+  (on operator rejection or pre-dispatch `Dispute`).
+
+See [`netzbilanzd` Operator Guide](./netzbilanzd.md).
+
+### `sperrd` — Sperrung Execution Tracker (`:8780`)
+
+`sperrd` tracks the field execution of Sperrung (power/gas disconnection) and
+Entsperrung (reconnection) orders under GPKE BK6-22-024. Without it, the NB
+risks a permanent protocol violation if a field team executes a disconnection
+but the IFTSTA 21039 confirmation is never sent to `makod`.
+
+Key facts:
+- **`sperr_orders` lifecycle**: `pending → executed` (field confirmation received) or
+  `failed` (field team cannot execute) or `cancelled` (order withdrawn before execution).
+- **IFTSTA 21039 auto-dispatch** — when the field team calls `PUT /api/v1/sperr-orders/{id}/execute`,
+  `sperrd` atomically updates the order status and issues the IFTSTA 21039 command to `makod`.
+- **Operator escalation** — `PUT /api/v1/sperr-orders/{id}/fail` records the failure and
+  triggers an operator alert, preventing silent non-execution.
+- No event subscription from `marktd`; order IDs are created by the NB operator or ERP
+  when a Sperrung workflow reaches the execution milestone in `makod`.
+
+See [`sperrd` Operator Guide](./sperrd.md).
+
+### `nis-syncd` — Grid Topology Import (`:9680`, stateless)
+
+`nis-syncd` bridges the NB's NIS/GIS system to `marktd`'s `malo_grid` table,
+which is the prerequisite for `processd` achieving its ≥ 95 % STP target.
+
+Key facts:
+- **Stateless** — no PostgreSQL; every request is a read-from-NIS + push-to-`marktd`
+  cycle. Safe to restart at any time.
+- **`POST /api/v1/grid/sync`** — accepts a list of `MaloGridRecord` objects from the NIS/GIS
+  adapter and upserts them into `marktd` via `PUT /api/v1/malo/{id}/grid`.
+- **Dry-run mode** — `?dry_run=true` returns a diff of what would change without writing.
+- **Per-entry drift detection** — each record is compared to the current `marktd` value
+  and emits a `de.nis.grid.drift` CloudEvent on change.
+- **STP impact** — without grid records, `processd` `netz-checker` check 1 always
+  escalates (unknown MaLo). With full grid records, acceptance rate rises from ~80 % to ≥ 95 %.
+
+See [`nis-syncd` Operator Guide](./nis-syncd.md).
 
 ### `mako-service` — Shared service infrastructure (library)
 
@@ -427,7 +534,11 @@ the entire scheduler implementation.
 | Engine internals | [engine.md](engine.md) |
 | `makod` operator guide | [makod.md](makod.md) |
 | `marktd` operator guide | [marktd.md](marktd.md) |
+| `processd` operator guide | [processd.md](processd.md) |
 | `invoicd` operator guide | [invoicd.md](invoicd.md) |
+| `netzbilanzd` operator guide | [netzbilanzd.md](netzbilanzd.md) |
+| `sperrd` operator guide | [sperrd.md](sperrd.md) |
+| `nis-syncd` operator guide | [nis-syncd.md](nis-syncd.md) |
 | `edmd` operator guide | [edmd.md](edmd.md) |
 | `obsd` operator guide | [obsd.md](obsd.md) |
 | ERP integration | [erp-integration.md](erp-integration.md) |

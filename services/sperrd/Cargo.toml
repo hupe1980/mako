@@ -1,0 +1,29 @@
+[package]
+name        = "sperrd"
+description = "Sperrung execution tracking daemon — IFTSTA 21039 auto-dispatch on field-service confirmation"
+version.workspace     = true
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+
+[[bin]]
+name = "sperrd"
+path = "src/main.rs"
+
+[dependencies]
+mako-markt   = { workspace = true, features = ["makod-client"] }
+mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
+axum         = { version = "0.8" }
+sqlx         = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "migrate"] }
+tokio        = { version = "1", features = ["full"] }
+serde        = { workspace = true, features = ["derive"] }
+serde_json   = { workspace = true }
+time         = { workspace = true }
+uuid         = { workspace = true, features = ["v4", "serde"] }
+tracing      = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tower-http   = { version = "0.6" }
+anyhow       = "1"
+secrecy      = { version = "0.10" }

@@ -25,7 +25,7 @@ The result drives automatic `bestaetigen` or `ablehnen` dispatch in `processd`.
 | # | Rule | Reject code | Escalate? |
 |---|------|-------------|-----------|
 | 1 | Grid record present (`MaloGridRecord` is `Some`) | — | ✓ missing data |
-| 2 | No conflicting active supply (`lf_gln_next` is `None`) | A06 | |
+| 2 | No conflicting active supply (`lf_mp_id_next` is `None`) | A06 | |
 | 3 | `process_date ≥ today_berlin(now)` | A97 | |
 | 4 | Bilanzierungsgebiet matches grid record (when both present) | A02 | |
 | 5 | LF GLN in partner directory (`partner_known = true`) | A05 | |

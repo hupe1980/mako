@@ -23,16 +23,69 @@ use mako_markt::{
     },
 };
 use mako_service::cedar::CedarEnforcer;
+use rubo4e::current::Marktlokation;
 use serde::{Deserialize, Serialize};
 use time::Date;
 use utoipa::{IntoParams, ToSchema};
 
 use super::{Claims, IntoMdmResponse as _, etag, parse_if_match};
 
+// ── BO4E validation helpers ──────────────────────────────────────────────────────────
+
+/// Validate and normalise a `Marktlokation` payload (L4 hard cut).
+///
+/// 1. Auto-inject `_typ: "MARKTLOKATION"` when absent.
+/// 2. Reject 422 if `_typ` is present but does not equal `MARKTLOKATION`.
+/// 3. Deserialise as `rubo4e::current::Marktlokation` to validate all enum
+///    fields (`bilanzierungsmethode`, `netzebene`, `gasqualitaet`, …).
+/// 4. Re-serialise to canonical BO4E form (camelCase, correct `_typ`).
+///
+/// Non-standard keys (e.g. `fallgruppenzuordnung`) are preserved through the
+/// `_additional` extension map (serde `flatten`) — round-trip is lossless.
+fn normalize_marktlokation(
+    mut data: serde_json::Value,
+) -> Result<(Marktlokation, serde_json::Value), (StatusCode, serde_json::Value)> {
+    if let Some(obj) = data.as_object_mut() {
+        obj.entry("_typ")
+            .or_insert_with(|| serde_json::json!("MARKTLOKATION"));
+    }
+    if let Some(typ) = data.get("_typ").and_then(|v| v.as_str())
+        && typ.to_uppercase() != "MARKTLOKATION"
+    {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({ "error": format!("expected _typ MARKTLOKATION, got '{typ}'") }),
+        ));
+    }
+    let malo: Marktlokation = serde_json::from_value(data).map_err(|e| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({ "error": format!("invalid Marktlokation payload: {e}") }),
+        )
+    })?;
+    let canonical = serde_json::to_value(&malo).unwrap_or_default();
+    Ok((malo, canonical))
+}
+
+/// Deserialise stored JSONB as `Marktlokation`. Returns `None` and logs an
+/// error on schema drift (operator must re-PUT the record to fix).
+fn deserialize_stored_malo(data: serde_json::Value, malo_id: &str) -> Option<Marktlokation> {
+    serde_json::from_value::<Marktlokation>(data)
+        .map_err(|e| {
+            tracing::error!(
+                malo_id,
+                error = %e,
+                "schema drift: stored MaLo data is not a valid Marktlokation — \
+                 re-PUT with a valid BO4E payload"
+            );
+        })
+        .ok()
+}
+
 // ── DTOs ──────────────────────────────────────────────────────────────────────
 
 fn default_bo4e_version() -> String {
-    "v202501.0.0".to_owned()
+    "v202607.0.0".to_owned()
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -45,7 +98,7 @@ pub struct MaloUpsertRequest {
     #[serde(default)]
     #[schema(value_type = Vec<Object>)]
     pub lokationszuordnung: Vec<Lokationszuordnung>,
-    /// BO4E schema version of `data` (e.g. `"v202501.0.0"`). Defaults to current.
+    /// BO4E schema version of `data` (e.g. `"v202607.0.0"`). Defaults to current.
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
 }
@@ -56,7 +109,41 @@ pub struct MaloResponse {
     #[schema(value_type = String, example = "STROM")]
     pub sparte: Sparte,
     pub version: i64,
-    pub data: serde_json::Value,
+    /// Validated BO4E `Marktlokation` payload in canonical camelCase form.
+    /// Schema is enforced on every `PUT` — enum fields like `bilanzierungsmethode`
+    /// and `netzebene` are rejected with 422 if they contain unknown values.
+    #[schema(value_type = Object)]
+    pub data: Marktlokation,
+    /// Voltage/pressure level extracted from `data.netzebene` (e.g. `"NS"`, `"MS"`, `"HöS"`).
+    /// Available immediately on write; no `nis-syncd` needed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub netzebene: Option<String>,
+    /// Bilanzierungsgebiet EIC code extracted from `data.bilanzierungsgebiet`.
+    /// Used by `processd` NB check 4 as primary source; falls back to `malo_grid` when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bilanzierungsgebiet: Option<String>,
+    /// Gas quality extracted from `data.gasqualitaet` (`"HGas"` | `"LGas"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gasqualitaet: Option<String>,
+    /// Energy direction (`"Aussp"` = generation, `"Einsp"` = consumption).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energierichtung: Option<String>,
+    /// Billing mode extracted from `Marktlokation.bilanzierungsmethode`.
+    ///
+    /// Values: `"RLM"` | `"SLP"` | `"TLP_GEMEINSAM"` | `"TLP_GETRENNT"` | `"PAUSCHAL"` | `"IMS"`.
+    /// `"RLM"` → `netzbilanzd` includes Leistungspreis position (`spitzenleistung_kw` required).
+    /// `"SLP"` → Arbeitspreis only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bilanzierungsmethode: Option<String>,
+    /// Regelzone EIC code (`Marktlokation.regelzone`) — maps to the ÜNB for MABIS IFTSTA 21000
+    /// routing and Redispatch 2.0 Stammdaten forwarding (VNB → ÜNB).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regelzone: Option<String>,
+    /// Gas GaBi RLM Fallgruppe (`data["fallgruppenzuordnung"]`) — determines GaBi billing
+    /// category. Values: `GABI_RLM_MIT_TAGESBAND` | `GABI_RLM_OHNE_TAGESBAND` |
+    /// `GABI_RLM_IM_NOMINIERUNGSERSATZVERFAHREN`. Required for Gas MMM settlement routing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallgruppe: Option<String>,
     #[schema(value_type = Vec<Object>)]
     pub lokationszuordnung: Vec<Lokationszuordnung>,
 }
@@ -146,7 +233,15 @@ where
         .flatten()
         .is_some();
 
-    // Extract fields for the makod MaLo cache push BEFORE req is moved into upsert.
+    // L4 hard cut: validate and normalise the incoming BO4E payload.
+    // Returns 422 on wrong _typ or invalid enum values (bilanzierungsmethode, netzebene, …).
+    // Re-serialises to canonical camelCase form before storage.
+    let (_, canonical_data) = match normalize_marktlokation(req.data) {
+        Ok(v) => v,
+        Err((status, body)) => return (status, Json(body)).into_response(),
+    };
+
+    // Extract fields for the makod MaLo cache push from the canonical payload.
     let nb_mp_id = req
         .lokationszuordnung
         .iter()
@@ -158,15 +253,13 @@ where
         .iter()
         .find(|z| z.zuordnungstyp == "MSB" || z.zuordnungstyp == "GMSB")
         .map(|z| z.rollencodenummer.clone());
-    let bilanzierungsgebiet = req
-        .data
+    let bilanzierungsgebiet = canonical_data
         .get("bilanzierungsgebiet")
         .and_then(|v| v.as_str())
         .map(str::to_owned);
-    let netzgebiet = req
-        .data
+    let netzgebiet = canonical_data
         .get("netzgebietsnummer")
-        .or_else(|| req.data.get("netzgebiet"))
+        .or_else(|| canonical_data.get("netzgebiet"))
         .and_then(|v| v.as_str())
         .map(str::to_owned);
     let sparte_str = req.sparte.to_string();
@@ -177,7 +270,7 @@ where
         .upsert(
             &malo_id,
             req.sparte,
-            req.data,
+            canonical_data,
             req.lokationszuordnung,
             if_match,
             &req.bo4e_version,
@@ -288,11 +381,22 @@ where
 
     match state.malo_repo.find(&malo_id, today_berlin()).await {
         Ok(Some(r)) => {
+            let data = match deserialize_stored_malo(r.data, r.malo_id.as_ref()) {
+                Some(v) => v,
+                None => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            };
             let resp = MaloResponse {
                 malo_id: r.malo_id.to_string(),
                 sparte: r.sparte,
                 version: r.version,
-                data: r.data,
+                data,
+                netzebene: r.netzebene,
+                bilanzierungsgebiet: r.bilanzierungsgebiet,
+                gasqualitaet: r.gasqualitaet,
+                energierichtung: r.energierichtung,
+                bilanzierungsmethode: r.bilanzierungsmethode,
+                regelzone: r.regelzone,
+                fallgruppe: r.fallgruppe,
                 lokationszuordnung: r.lokationszuordnung,
             };
             (
@@ -359,12 +463,23 @@ where
             let items: Vec<MaloResponse> = page
                 .items
                 .into_iter()
-                .map(|r| MaloResponse {
-                    malo_id: r.malo_id.to_string(),
-                    sparte: r.sparte,
-                    version: r.version,
-                    data: r.data,
-                    lokationszuordnung: r.lokationszuordnung,
+                .filter_map(|r| {
+                    let malo_id_str = r.malo_id.to_string();
+                    let data = deserialize_stored_malo(r.data, r.malo_id.as_ref())?;
+                    Some(MaloResponse {
+                        malo_id: malo_id_str,
+                        sparte: r.sparte,
+                        version: r.version,
+                        data,
+                        netzebene: r.netzebene,
+                        bilanzierungsgebiet: r.bilanzierungsgebiet,
+                        gasqualitaet: r.gasqualitaet,
+                        energierichtung: r.energierichtung,
+                        bilanzierungsmethode: r.bilanzierungsmethode,
+                        regelzone: r.regelzone,
+                        fallgruppe: r.fallgruppe,
+                        lokationszuordnung: r.lokationszuordnung,
+                    })
                 })
                 .collect();
             Json(PageResult {

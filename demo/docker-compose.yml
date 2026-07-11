@@ -1,12 +1,14 @@
 # makod demo — full stack docker compose
 #
 # Runs the complete mako 8-service stack:
-#   • postgres  — PostgreSQL (one database per service: marktd, processd, invoicd, edmd, obsd)
+#   • postgres     — PostgreSQL (one database per service: marktd, processd, invoicd, edmd, obsd, netzbilanzd, sperrd)
 #   • webhook   :8000 — ERP CloudEvent receiver (Python, in-memory)
-#   • marktd    :8180 — Market Data Hub (MaLo/MeLo/contracts/VersorgungsStatus/PRICAT/NeLo/malo_grid)
+#   • marktd    :8180 — Market Data Hub (MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, event_log replay)
 #   • processd  :8580 — NB STP auto-responder + LF E_0624 auto-response (netz-checker, §20 parity)
 #   • makod     :8080 — EDIFACT process engine (in-memory; use slatedb feature for persistent storage)
 #   • invoicd   :8280 — INVOIC plausibility-check daemon (LF role, §22 MessZV receipt retention)
+#   • netzbilanzd :8680 — NNE/KA/MMM billing daemon (NB role, INVOIC 31001/31002/31005 generation)
+#   • sperrd    :8780 — Sperrung execution tracker (NB role, IFTSTA 21039 auto-dispatch)
 #   • edmd      :8380 — Energy Data Management (MSCONS meter readings, MeterBillingPeriod)
 #   • obsd      :8480 — Business-process observability (ProcessProjection, BNetzA KPI, §20 parity)
 #
@@ -49,7 +51,8 @@ services:
     volumes:
       - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U demo"]
+      # Use CMD (no shell) — compatible with both standard and distroless images.
+      test: ["CMD", "pg_isready", "-U", "demo"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -223,6 +226,80 @@ services:
       OBSD_INBOUND_SECRET: obsd-webhook-secret
     command:
       - "--config=/etc/obsd/obsd.toml"
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  # ── netzbilanzd — NNE/MMM Billing Daemon (NB role) ─────────────────────────
+  # Generates INVOIC 31001/31002/31005 from operator-supplied meter readings.
+  # Self-validates via invoic-checker before dispatching to makod.
+  # POST /api/v1/billing/run → draft; PUT /dispatch → EDIFACT INVOIC to LF.
+  netzbilanzd:
+    image: netzbilanzd:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      makod:
+        condition: service_started
+      marktd:
+        condition: service_started
+    ports:
+      - "8680:8680"
+    volumes:
+      - ./netzbilanzd.toml:/etc/netzbilanzd/netzbilanzd.toml:ro
+    environment:
+      DATABASE_URL:                  postgres://demo:demo-secret@postgres/netzbilanzd
+      NETZBILANZD_MARKTD_API_KEY:    demo-netzbilanzd-key
+      NETZBILANZD_MAKOD_API_KEY:     demo-secret-change-me
+    command:
+      - "--config=/etc/netzbilanzd/netzbilanzd.toml"
+    # distroless has no shell — use service_started dependency instead of healthcheck
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  # ── sperrd — Sperrung Execution Tracking Daemon (NB role) ──────────────────
+  # Tracks physical Sperrung/Entsperrung execution (ORDERS 17115/17117).
+  # Auto-dispatches IFTSTA 21039 on PUT /execute — mandatory per GPKE BK6-22-024 §5.
+  sperrd:
+    image: sperrd:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      makod:
+        condition: service_started
+    ports:
+      - "8780:8780"
+    volumes:
+      - ./sperrd.toml:/etc/sperrd/sperrd.toml:ro
+    environment:
+      DATABASE_URL:            postgres://demo:demo-secret@postgres/sperrd
+      SPERRD_MAKOD_API_KEY:    demo-secret-change-me
+    command:
+      - "--config=/etc/sperrd/sperrd.toml"
+    # distroless has no shell — use service_started dependency instead of healthcheck
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  # ── nis-syncd — NIS/GIS Grid Topology Import Adapter (NB role, stateless) ──
+  # Accepts NIS export batches and pushes malo_grid records to marktd.
+  # Lifts processd NB STP from ~80% to ≥95% once grid topology is populated.
+  # POST /api/v1/grid/sync — idempotent; ?dry_run=true for diff-only mode.
+  nis-syncd:
+    image: nis-syncd:dev
+    depends_on:
+      marktd:
+        condition: service_started
+    ports:
+      - "9680:9680"
+    volumes:
+      - ./nis-syncd.toml:/etc/nis-syncd/nis-syncd.toml:ro
+    environment:
+      NIS_SYNCD_MARKTD_API_KEY: demo-nis-syncd-key
+    command:
+      - "--config=/etc/nis-syncd/nis-syncd.toml"
+    # Stateless — no database, no healthcheck needed
     healthcheck:
       disable: true
     restart: unless-stopped

@@ -14,9 +14,11 @@ name = "invoicd"
 path = "src/main.rs"
 
 [dependencies]
-invoic-checker = { workspace = true }
-mako-markt    = { workspace = true, features = ["makod-client", "marktd-client"] }
-rubo4e         = { workspace = true }
+invoic-checker  = { workspace = true }
+mako-markt      = { workspace = true, features = ["makod-client", "marktd-client"] }
+mako-nne        = { workspace = true }
+mako-edm        = { path = "../../crates/mako-edm" }
+rubo4e          = { workspace = true }
 
 anyhow             = { workspace = true }
 thiserror          = { workspace = true }

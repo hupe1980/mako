@@ -24,6 +24,7 @@ makod-client = ["dep:reqwest"]
 marktd-client = ["dep:reqwest"]
 
 [dependencies]
+
 rubo4e      = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }

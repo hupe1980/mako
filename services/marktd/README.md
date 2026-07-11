@@ -15,11 +15,18 @@ STP decisions (PIDs 55001/55016/44001) are handled by [`processd`](../processd) 
 EventBus subscription. `marktd` emits events; `processd` reacts. This keeps `marktd`
 independently testable and deployable without any decision logic.
 
-`marktd` runs a **VersorgungsStatus derivation pipeline**: inbound `de.mako.process.completed`
-events for PIDs 55003/44003 (Lieferbeginn) and 55013/44013 (Abmeldung) are automatically
-converted into `LieferStatus` updates, persisted in `versorgungsstatus`, and appended to
-`versorgungsstatus_history` — so ERP and `processd` always have fresh supply-state data
-without manual intervention, and any historical state can be retrieved by date.
+`marktd` runs a **VersorgungsStatus derivation pipeline** that tracks the full
+supplier-transition lifecycle in three atomic DB operations:
+
+| Event | PID | Operation | Effect |
+|---|---|---|---|
+| `de.mako.process.initiated` | 55001 / 44001 | `announce_lf_next` | Sets `lf_mp_id_next` + `lf_next_lieferbeginn` (WHO + WHEN of the pending transition). Does NOT change `lieferstatus`. |
+| `de.mako.process.completed` | 55003 / 44003 | `confirm_supply` | Atomic SQL: `lf_mp_id ← lf_mp_id_next`, `lieferbeginn ← lf_next_lieferbeginn`, `lieferstatus = Beliefert`, clears `lf_mp_id_next`. |
+| `de.mako.process.completed` | 55013 / 44013 | `end_supply` | `lieferstatus = Unbeliefert`, clears `lf_mp_id` — but preserves `lf_mp_id_next` if a future LF is already announced. |
+
+Every write appends a row to `versorgungsstatus_history` in the same transaction.
+ERP and `processd` always have fresh supply-state data without manual intervention,
+and any historical state can be retrieved by date via `?at=YYYY-MM-DD`.
 
 ---
 
@@ -33,6 +40,8 @@ without manual intervention, and any historical state can be retrieved by date.
 | **Authorization** | Cedar ABAC (`policies/marktd.cedar`) — per-tenant, role-gated |
 | **API spec** | OpenAPI 3.1 at `/swagger-ui/` and `/api-docs/openapi.json` |
 | **Events** | Outbound CloudEvents 1.0 (`application/cloudevents+json`) + HMAC-SHA256 |
+| **Emitted events** | `de.markt.malo.updated`, `de.markt.nb-contract.updated`, `de.markt.pricat.published`, `de.markt.versorgung.beliefert` |
+| **Typed BO4E API** | All `GET` responses return canonical `rubo4e::current` types — `Marktlokation`, `Messlokation`, `Zaehler`, `Geraet`. Every `PUT` validates `_typ` and enum fields (422 on violation). `nb_contracts` stores full BO4E `Vertrag` JSONB (`vertragsart`, `vertragsstatus` as indexed columns). |
 | **Event source** | `urn:markt:tenant:{tenant_gln}` |
 | **CE extensions** | `marktrole`, `marktmaloid`, `marktmeloid`, `marktcontractid`, `markterpref` |
 | **Idempotency** | Inbound `POST /api/v1/events` uses `INSERT … ON CONFLICT DO NOTHING` |
@@ -98,7 +107,7 @@ services:
     ports: ["5432:5432"]
 
   marktd:
-    image: ghcr.io/hupe1980/marktd:0.7.0
+    image: ghcr.io/hupe1980/marktd:0.8.0
     depends_on: [postgres]
     environment:
       DATABASE_URL: postgres://marktd:secret@postgres/marktd

@@ -62,6 +62,12 @@ pub struct Config {
     pub subscription: SubscriptionConfig,
     #[serde(default)]
     pub check: CheckSectionConfig,
+    /// Optional `edmd` connection — required for PID 31006 selbstausstellen.
+    #[serde(default)]
+    pub edmd: EdmdConfig,
+    /// Optional ERP webhook for outbound payment CloudEvents (A8).
+    #[serde(default)]
+    pub erp: ErpConfig,
     #[serde(default)]
     pub oidc: Option<OidcConfig>,
     #[serde(default)]
@@ -141,6 +147,20 @@ pub struct MarktdConfig {
     pub url: String,
     /// Bearer token.  Use `"env:INVOICD_MARKTD_API_KEY"`.
     pub api_key: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+/// Optional `edmd` connection — required for `POST /api/v1/selbstausstellen` (PID 31006).
+///
+/// When omitted, selbstausstellen returns 503 (edmd not configured).
+pub struct EdmdConfig {
+    /// `edmd` base URL.  Example: `http://edmd:8380`
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Bearer token.  Use `"env:INVOICD_EDMD_API_KEY"`.
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -243,6 +263,27 @@ fn default_jwks_refresh_secs() -> u64 {
 #[serde(deny_unknown_fields)]
 pub struct OtelConfig {
     pub endpoint: Option<String>,
+}
+
+/// ERP integration config — outbound payment CloudEvents.
+///
+/// When `webhook_url` is set, `invoicd` POSTs a `de.invoic.receipt.settled`
+/// or `de.invoic.receipt.disputed` CloudEvent after each validated INVOIC.
+///
+/// Example TOML:
+/// ```toml
+/// [erp]
+/// webhook_url = "https://erp.example.com/webhooks/invoicd"
+/// hmac_secret = "env:INVOICD_ERP_HMAC_SECRET"
+/// ```
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ErpConfig {
+    /// ERP webhook URL for `de.invoic.receipt.*` CloudEvents.
+    pub webhook_url: Option<String>,
+    /// Optional HMAC-SHA256 secret for `X-Mako-Signature` on outbound requests.
+    /// Use `"env:INVOICD_ERP_HMAC_SECRET"` to load from environment.
+    pub hmac_secret: Option<String>,
 }
 
 pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {

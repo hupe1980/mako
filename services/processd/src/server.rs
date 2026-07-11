@@ -328,6 +328,8 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             post(rest::approve_queue_entry),
         )
         .route("/api/v1/queue/{id}/reject", post(rest::reject_queue_entry))
+        .route("/api/v1/start-supply", post(rest::start_supply))
+        .route("/api/v1/start-supply-gas", post(rest::start_supply_gas))
         .route("/metrics", get(rest::metrics))
         .with_state(state)
         .layer(axum::Extension(cfg.oidc.clone()))
@@ -392,7 +394,7 @@ mod rest {
 
     /// Approve a LFA E_0624 approval queue entry.
     ///
-    /// This dispatches `gpke.lfa.einwilligung` (or Gas equivalent) to `makod`
+    /// This dispatches `gpke.nb-lieferende.bestaetigen` (PID 55008 Strom) to `makod`
     /// AND marks the entry as `Approved` in the database.
     ///
     /// **Regulatory note:** The 45-min deadline applies from the original
@@ -415,10 +417,14 @@ mod rest {
         };
 
         // Determine the command name from PID.
+        // Strom: gpke.nb-lieferende.bestaetigen → PID 55008 (LF Zustimmung Lieferende)
+        // Gas stornierung 44022: LF initiates UTILMD G 44022 to GNB via geli.gas.stornierung.initiieren
+        // Gas stornierung 44023: GNB confirmed 44023 — this is an inbound response, not an ERP approval;
+        //   approval queue entries for 44023 indicate operator review of an automated accept.
         let command = match entry.pid as u32 {
-            55008 => "gpke.lfa.einwilligung",
-            44022 | 44023 => "geli.lfa.einwilligung",
-            _ => "gpke.lfa.einwilligung",
+            55008 => "gpke.nb-lieferende.bestaetigen",
+            44022 | 44023 => "geli.gas.stornierung.initiieren",
+            _ => "gpke.nb-lieferende.bestaetigen",
         };
 
         // Dispatch einwilligung to makod — BEFORE marking as Approved.
@@ -461,7 +467,7 @@ mod rest {
 
     /// Reject a LFA E_0624 approval queue entry.
     ///
-    /// This dispatches `gpke.lfa.ablehnen` (or Gas equivalent) to `makod`
+    /// This dispatches `gpke.nb-lieferende.ablehnen` (PID 55009 Strom) to `makod`
     /// AND marks the entry as `Rejected` in the database.
     pub async fn reject_queue_entry(
         State(state): State<ProcessdState>,
@@ -481,10 +487,24 @@ mod rest {
         };
 
         // Determine the command name from PID.
+        // Strom: gpke.nb-lieferende.ablehnen → PID 55009 (LF Ablehnung Lieferende)
+        // Gas stornierung 44022/44023: reject means the operator declines to initiate stornierung.
+        //   Mark as Rejected in the queue without dispatching to makod.
         let command = match entry.pid as u32 {
-            55008 => "gpke.lfa.ablehnen",
-            44022 | 44023 => "geli.lfa.ablehnen",
-            _ => "gpke.lfa.ablehnen",
+            55008 => "gpke.nb-lieferende.ablehnen",
+            44022 | 44023 => {
+                // For Gas stornierung rejections, there is no inbound command to dispatch
+                // (the GNB was not queried). Mark as Rejected immediately.
+                return match queue.reject(id, &state.tenant).await {
+                    Ok(true) => {
+                        tracing::info!(%id, "processd: Gas stornierung approval rejected by operator");
+                        StatusCode::NO_CONTENT.into_response()
+                    }
+                    Ok(false) => StatusCode::NOT_FOUND.into_response(),
+                    Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                };
+            }
+            _ => "gpke.nb-lieferende.ablehnen",
         };
 
         // Dispatch ablehnen to makod — BEFORE marking as Rejected.
@@ -525,8 +545,327 @@ mod rest {
         }
     }
 
-    pub async fn metrics() -> impl IntoResponse {
-        // Minimal metrics endpoint — TODO: integrate with Prometheus metrics registry
-        (StatusCode::OK, "# processd metrics placeholder\n")
+    pub async fn metrics(
+        axum::Extension(pool): axum::Extension<sqlx::PgPool>,
+    ) -> impl IntoResponse {
+        let mut out = String::with_capacity(1024);
+
+        // ── NB STP decision counters ──────────────────────────────────────────
+        // processd_decisions_total{decision, pid} — sourced from anmeldung_decisions table.
+        let decisions: Vec<(String, i32, i64)> = sqlx::query_as(
+            r"SELECT decision::text, pid, COUNT(*)::bigint
+              FROM anmeldung_decisions
+              GROUP BY decision, pid
+              ORDER BY pid, decision",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default();
+
+        out.push_str("# HELP processd_decisions_total NB STP Anmeldung decisions (Accept/Reject/Escalate) by PID.\n");
+        out.push_str("# TYPE processd_decisions_total counter\n");
+        for (decision, pid, count) in &decisions {
+            out.push_str(&format!(
+                "processd_decisions_total{{decision=\"{decision}\",pid=\"{pid}\"}} {count}\n"
+            ));
+        }
+
+        // ── LF approval queue depth ───────────────────────────────────────────
+        let queue_depth: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM approval_queue WHERE resolved_at IS NULL")
+                .fetch_one(&pool)
+                .await
+                .unwrap_or(0);
+
+        out.push_str(
+            "# HELP processd_approval_queue_depth Pending LF E_0624 approval-queue entries.\n",
+        );
+        out.push_str("# TYPE processd_approval_queue_depth gauge\n");
+        out.push_str(&format!("processd_approval_queue_depth {queue_depth}\n"));
+
+        // ── DB pool health ────────────────────────────────────────────────────
+        let pool_size = pool.size();
+        let pool_idle = pool.num_idle();
+
+        out.push_str("# HELP processd_db_pool_size Current PostgreSQL connection pool size.\n");
+        out.push_str("# TYPE processd_db_pool_size gauge\n");
+        out.push_str(&format!("processd_db_pool_size {pool_size}\n"));
+        out.push_str("# HELP processd_db_pool_idle Idle PostgreSQL connections.\n");
+        out.push_str("# TYPE processd_db_pool_idle gauge\n");
+        out.push_str(&format!("processd_db_pool_idle {pool_idle}\n"));
+
+        (
+            axum::http::StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; version=0.0.4",
+            )],
+            out,
+        )
+    }
+
+    /// `POST /api/v1/start-supply` — ERP initiates a GPKE Lieferbeginn (Strom SLP).
+    ///
+    /// Validates the LFW24 Mindestvorlauffrist (15:00 CET/CEST cutoff) and
+    /// dispatches `gpke.lieferbeginn.anmelden` to `makod`.
+    ///
+    /// ## Request body (JSON)
+    ///
+    /// | Field               | Type   | Required | Notes |
+    /// |---------------------|--------|----------|-------|
+    /// | `malo_id`           | string | ✓        | 11-digit Strom Marktlokations-ID |
+    /// | `lieferbeginn_datum` | string | ✓        | ISO-8601 date (YYYY-MM-DD) |
+    ///
+    /// ## LFW24 Vorlauffrist (BK6-22-024)
+    ///
+    /// - Submission **before 15:00 CET/CEST** → Lieferbeginn can be the next Arbeitstag.
+    /// - Submission **at or after 15:00 CET/CEST** → Lieferbeginn must be the übernächster Arbeitstag.
+    /// - Retroactive dates (`lieferbeginn_datum` < today Berlin) are always rejected.
+    pub async fn start_supply(
+        State(state): State<ProcessdState>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> impl IntoResponse {
+        use mako_engine::fristen::{self, HolidayCalendar};
+        use time_tz::{OffsetDateTimeExt as _, timezones};
+
+        let malo_id = match body
+            .get("malo_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            Some(id) => id.to_owned(),
+            None => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    axum::Json(serde_json::json!({
+                        "error": "MISSING_MALO_ID",
+                        "message": "\"malo_id\" is required (11-digit Strom Marktlokations-ID)"
+                    })),
+                )
+                    .into_response();
+            }
+        };
+
+        let lieferbeginn_str = match body
+            .get("lieferbeginn_datum")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            Some(d) => d.to_owned(),
+            None => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    axum::Json(serde_json::json!({
+                        "error": "MISSING_LIEFERBEGINN",
+                        "message": "\"lieferbeginn_datum\" is required (ISO-8601 date, e.g. \"2026-10-01\")"
+                    })),
+                )
+                    .into_response();
+            }
+        };
+
+        // Parse the requested Lieferbeginn date.
+        let lieferbeginn = match time::Date::parse(
+            &lieferbeginn_str,
+            time::macros::format_description!("[year]-[month]-[day]"),
+        ) {
+            Ok(d) => d,
+            Err(_) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    axum::Json(serde_json::json!({
+                        "error": "INVALID_DATE",
+                        "message": format!("\"lieferbeginn_datum\" is not a valid ISO-8601 date: {lieferbeginn_str:?}")
+                    })),
+                )
+                    .into_response();
+            }
+        };
+
+        // ── LFW24 Vorlauffrist validation (BK6-22-024) ────────────────────────
+        //
+        // German local time (CET = UTC+1, CEST = UTC+2) determines the cutoff.
+        // The 15:00 cutoff is set by BK6-22-024 §3.2 (LFW24, effective 2025-06-06).
+        let berlin = timezones::db::europe::BERLIN;
+        let now_utc = time::OffsetDateTime::now_utc();
+        let now_berlin = now_utc.to_timezone(berlin);
+        let today_berlin = now_berlin.date();
+        let now_berlin_hour = now_berlin.hour();
+
+        if lieferbeginn < today_berlin {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                axum::Json(serde_json::json!({
+                    "error": "RETROACTIVE_DATE",
+                    "message": format!(
+                        "Retroactive Lieferbeginn is forbidden. Requested: {lieferbeginn}, today (Berlin): {today_berlin}"
+                    )
+                })),
+            )
+                .into_response();
+        }
+
+        // Earliest allowed Lieferbeginn based on current Berlin time:
+        //   before 15:00 → next Arbeitstag
+        //   at/after 15:00 → übernächster Arbeitstag
+        let base = if now_berlin_hour < 15 {
+            fristen::add_werktage(today_berlin, 1, HolidayCalendar::BdewMaKo)
+        } else {
+            fristen::add_werktage(today_berlin, 2, HolidayCalendar::BdewMaKo)
+        };
+
+        if lieferbeginn < base {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                axum::Json(serde_json::json!({
+                    "error": "VORLAUFFRIST_VIOLATION",
+                    "message": format!(
+                        "LFW24 Mindestvorlauffrist not met. \
+                         Earliest allowed Lieferbeginn: {base}. \
+                         Requested: {lieferbeginn}. \
+                         (Submission {}15:00 CET/CEST → +1/+2 Arbeitstag)",
+                        if now_berlin_hour < 15 { "before " } else { "at/after " }
+                    ),
+                    "earliest_lieferbeginn": base.to_string(),
+                    "berlin_time": format!("{:02}:{:02}", now_berlin_hour, now_berlin.minute()),
+                    "cutoff_rule": "before 15:00 → +1 Arbeitstag; at/after 15:00 → +2 Arbeitstag"
+                })),
+            )
+                .into_response();
+        }
+
+        // ── Dispatch to makod ─────────────────────────────────────────────────
+        let idempotency_key = format!("processd-start-supply-{malo_id}-{lieferbeginn}");
+        let cmd = mako_markt::makod_client::ForwardCommand {
+            marktrolle: Some("LF".to_owned()),
+            command: "gpke.lieferbeginn.anmelden".to_owned(),
+            malo_id: Some(malo_id.clone()),
+            melo_id: None,
+            payload: serde_json::json!({
+                "malo_id": malo_id,
+                "lieferbeginn_datum": lieferbeginn.to_string(),
+            }),
+        };
+        match state.makod.post_command(&idempotency_key, &cmd).await {
+            Ok(accepted) => (
+                StatusCode::ACCEPTED,
+                axum::Json(serde_json::json!({
+                    "process_id": accepted.process_id,
+                    "command": "gpke.lieferbeginn.anmelden",
+                    "malo_id": malo_id,
+                    "lieferbeginn_datum": lieferbeginn.to_string(),
+                    "status": "initiated",
+                    "vorlauffrist": {
+                        "earliest_allowed": base.to_string(),
+                        "berlin_time_at_submission": format!("{:02}:{:02}", now_berlin_hour, now_berlin.minute()),
+                    }
+                })),
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::BAD_GATEWAY,
+                axum::Json(serde_json::json!({
+                    "error": "MAKOD_DISPATCH_FAILED",
+                    "message": e.to_string()
+                })),
+            )
+                .into_response(),
+        }
+    }
+
+    /// `POST /api/v1/start-supply-gas` — ERP initiates a GeLi Gas Lieferbeginn (Gas 44001).
+    ///
+    /// Dispatches `geli.lieferbeginn.anmelden` to `makod`.
+    ///
+    /// ## Request body (JSON)
+    ///
+    /// | Field          | Type   | Required | Notes |
+    /// |----------------|--------|----------|-------|
+    /// | `malo_id`      | string | ✓        | 11-digit Gas-MaLo-ID (IDE+Z19, EIC) |
+    /// | `zaehlpunkt`   | string | ✓        | Zählpunktbezeichnung (RFF+Z13) — **mandatory** per AHB |
+    /// | `process_date` | string | ✓        | Lieferbeginn date (YYYYMMDD in CET/CEST) |
+    ///
+    /// **Both `malo_id` and `zaehlpunkt` are mandatory** (BK7-24-01-009 AHB rules
+    /// `AHB-44001-IDE-M` and `AHB-44001-RFF-M`). There is no Gas equivalent of
+    /// API-Webdienste Strom — the ERP must supply the Gas-MaLo-ID upfront.
+    pub async fn start_supply_gas(
+        State(state): State<ProcessdState>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> impl IntoResponse {
+        // Validate mandatory Gas fields before forwarding.
+        let malo_id = match body.get("malo_id").and_then(|v| v.as_str()) {
+            Some(id) if !id.is_empty() => id.to_owned(),
+            _ => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    axum::Json(serde_json::json!({
+                        "error": "MISSING_MALO_ID",
+                        "message": "\"malo_id\" is required (11-digit Gas-MaLo-ID, IDE+Z19)"
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        if body
+            .get("zaehlpunkt")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .is_none()
+        {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                axum::Json(serde_json::json!({
+                    "error": "MISSING_ZAEHLPUNKT",
+                    "message": "\"zaehlpunkt\" is required (Zählpunktbezeichnung, RFF+Z13) — mandatory per BK7-24-01-009 AHB"
+                })),
+            )
+                .into_response();
+        }
+        if body
+            .get("process_date")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .is_none()
+        {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                axum::Json(serde_json::json!({
+                    "error": "MISSING_PROCESS_DATE",
+                    "message": "\"process_date\" is required (Lieferbeginn date, YYYYMMDD in CET/CEST)"
+                })),
+            )
+                .into_response();
+        }
+
+        // Forward to makod `geli.lieferbeginn.anmelden`.
+        let idempotency_key = format!("processd-start-supply-gas-{malo_id}");
+        let cmd = mako_markt::makod_client::ForwardCommand {
+            marktrolle: Some("LF".to_owned()),
+            command: "geli.lieferbeginn.anmelden".to_owned(),
+            malo_id: Some(malo_id.clone()),
+            melo_id: None,
+            payload: body,
+        };
+        match state.makod.post_command(&idempotency_key, &cmd).await {
+            Ok(accepted) => (
+                StatusCode::ACCEPTED,
+                axum::Json(serde_json::json!({
+                    "process_id": accepted.process_id,
+                    "command": "geli.lieferbeginn.anmelden",
+                    "malo_id": malo_id,
+                    "status": "initiated",
+                    "message": "GeLi Gas Lieferbeginn (PID 44001) initiated — awaiting GNB confirmation (10 Werktage)"
+                })),
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::BAD_GATEWAY,
+                axum::Json(serde_json::json!({
+                    "error": "MAKOD_DISPATCH_FAILED",
+                    "message": e.to_string()
+                })),
+            )
+                .into_response(),
+        }
     }
 }

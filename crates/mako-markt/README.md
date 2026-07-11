@@ -3,8 +3,20 @@
 **Market data library for German energy market communication (MaKo).**
 
 `mako-markt` is the domain library for `Marktlokation` (MaLo), `Messlokation` (MeLo),
-`VersorgungsStatus`, contracts, trading-partner, and process-correlation management.
-It is the foundation for [`marktd`](../../services/marktd), the production Market Data Hub.
+`VersorgungsStatus`, NB network contracts, trading-partner, and process-correlation
+management.  It is the foundation for [`marktd`](../../services/marktd), the production
+Market Data Hub.
+
+Key design choices:
+- **Typed `rubo4e::current` records** — `MaloRecord.data` stores and returns
+  `rubo4e::current::Marktlokation`, `MeloRecord.data` stores `Messlokation`, and so on.
+  Schema is validated at every write boundary; invalid `_typ` or enum values → 422.
+- **`NbContractRecord` carries full BO4E `Vertrag` JSONB** — `data: serde_json::Value`
+  stores the canonical BO4E `Vertrag` payload alongside typed SQL columns
+  (`netzebene`, `bilanzierungsmethode`, `billing_schedule`).  `vertragsart` and
+  `vertragsstatus` are extracted as indexed columns for fast SQL filtering.
+- **25 active `rubo4e::current` types** — `Marktlokation`, `Messlokation`, `Zaehler`,
+  `Geraet`, `Vertrag`, `Energiemenge`, `Lastgang`, `Rechnung`, and more.
 
 ---
 
@@ -26,10 +38,16 @@ It is the foundation for [`marktd`](../../services/marktd), the production Marke
 mako_markt
 ├── domain          Validated IDs (MaloId, MeloId, MarktpartnerId), Sparte, ProcessStatus
 ├── repository      Repository traits + AppState + record types + PageResult
-│                   includes: VersorgungsStatusRepository, LieferStatus, VersorgungsStatusRecord
-│                             PriCatRepository, PriCatVersion, PriCatDispatchState
+│                   MaloRecord (data: Marktlokation JSONB, typed columns)
+│                   MeloRecord (data: Messlokation JSONB, standorteigenschaften JSONB)
+│                   NbContractRecord (data: Vertrag JSONB, vertragsart/vertragsstatus columns)
+│                   ZaehlerRecord (data: Zaehler JSONB), GeraetRecord (data: Geraet JSONB)
+│                   VersorgungsStatusRepository, LieferStatus, VersorgungsStatusRecord
+│                   PriCatRepository, PriCatVersion, PriCatDispatchState
 ├── error           MdmError — RFC 7807-ready with status_u16, error_code, error_title
 ├── cloudevents     InboundMakoEvent, MarktEvent, HMAC-SHA256 signing/verification
+│                   Emitted: de.markt.malo.updated, de.markt.nb-contract.updated,
+│                            de.markt.pricat.published, de.markt.versorgung.beliefert
 ├── makod_client    HTTP client for the makod admin API
 └── testing         InMemory* test doubles (feature = "testing")
                     includes: InMemoryPriCatRepository

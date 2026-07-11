@@ -87,6 +87,24 @@ pub struct ListPartnersParams {
     pub cursor: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetNbContractParams {
+    /// 11-digit Marktlokations-ID.
+    #[schemars(example = "\"51238696781\"")]
+    pub malo_id: String,
+    /// Reference date (ISO 8601, YYYY-MM-DD).  Defaults to today.
+    pub date: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetCorrelationParams {
+    /// UUID of the `makod` workflow process (from `de.mako.process.initiated` CloudEvents `process_id` extension).
+    pub process_id: Option<String>,
+    /// ERP-side order reference (from `erp_order_id` CloudEvents extension).
+    /// Matches the reference set by the ERP when submitting a command.
+    pub erp_order_id: Option<String>,
+}
+
 // ── MCP handler ───────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -294,7 +312,7 @@ impl MdmdMcpHandler {
                 String,               // malo_id
                 String,               // lieferstatus
                 Option<String>,       // lf_mp_id
-                Option<String>,       // lf_gln_next
+                Option<String>,       // lf_mp_id_next
                 Option<time::Date>,   // lieferbeginn
                 Option<time::Date>,   // lieferende
                 Option<String>,       // msb_mp_id
@@ -303,7 +321,7 @@ impl MdmdMcpHandler {
                 time::OffsetDateTime, // updated_at
             ),
         >(
-            r#"SELECT malo_id, lieferstatus, lf_mp_id, lf_gln_next,
+            r#"SELECT malo_id, lieferstatus, lf_mp_id, lf_mp_id_next,
                       lieferbeginn, lieferende, msb_mp_id, nb_mp_id,
                       version, updated_at
                FROM versorgungsstatus
@@ -320,7 +338,7 @@ impl MdmdMcpHandler {
                 malo_id,
                 lieferstatus,
                 lf_mp_id,
-                lf_gln_next,
+                lf_mp_id_next,
                 lieferbeginn,
                 lieferende,
                 msb_mp_id,
@@ -331,7 +349,7 @@ impl MdmdMcpHandler {
                 "malo_id": malo_id,
                 "lieferstatus": lieferstatus,
                 "lf_mp_id": lf_mp_id,
-                "lf_gln_next": lf_gln_next,
+                "lf_mp_id_next": lf_mp_id_next,
                 "lieferbeginn": lieferbeginn.map(|d| d.to_string()),
                 "lieferende": lieferende.map(|d| d.to_string()),
                 "msb_mp_id": msb_mp_id,
@@ -345,6 +363,178 @@ impl MdmdMcpHandler {
                 "versorgungsstatus_not_found: No VersorgungsStatus for MaLo '{}' in tenant '{}'.",
                 p.malo_id, self.state.tenant
             ))])),
+        }
+    }
+
+    /// Read the active NB network contract for a Marktlokation.
+    ///
+    /// Returns netzebene, bilanzierungsmethode (RLM/SLP), billing_schedule
+    /// (MONTHLY/QUARTERLY/ANNUALLY), and validity period.  `invoicd` uses this
+    /// to validate billing-cycle plausibility (§22 MessZV).  Pass `date` to
+    /// retrieve the contract valid on a specific billing date; defaults to today.
+    #[tool(
+        description = "Read the active NB network contract for a MaLo (netzebene, billing_schedule, RLM/SLP)"
+    )]
+    async fn get_nb_contract(
+        &self,
+        Parameters(p): Parameters<GetNbContractParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let date = p
+            .date
+            .as_deref()
+            .and_then(|s| {
+                time::Date::parse(s, time::macros::format_description!("[year]-[month]-[day]")).ok()
+            })
+            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+
+        let row = sqlx::query_as::<
+            _,
+            (
+                String,             // contract_id
+                String,             // malo_id
+                String,             // nb_mp_id
+                String,             // sparte
+                String,             // netzebene
+                String,             // bilanzierungsmethode
+                String,             // billing_schedule
+                time::Date,         // valid_from
+                Option<time::Date>, // valid_to
+                i64,                // version
+            ),
+        >(
+            r#"
+            SELECT contract_id, malo_id, nb_mp_id, sparte,
+                   netzebene, bilanzierungsmethode, billing_schedule,
+                   valid_from, valid_to, version
+            FROM nb_contracts
+            WHERE tenant = $1
+              AND malo_id = $2
+              AND valid_from <= $3
+              AND (valid_to IS NULL OR valid_to >= $3)
+            ORDER BY valid_from DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(&self.state.tenant)
+        .bind(&p.malo_id)
+        .bind(date)
+        .fetch_optional(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        match row {
+            Some((
+                contract_id,
+                malo_id,
+                nb_mp_id,
+                sparte,
+                netzebene,
+                bilanzierungsmethode,
+                billing_schedule,
+                valid_from,
+                valid_to,
+                version,
+            )) => ContentBlock::json(serde_json::json!({
+                "contract_id": contract_id,
+                "malo_id": malo_id,
+                "nb_mp_id": nb_mp_id,
+                "sparte": sparte,
+                "netzebene": netzebene,
+                "bilanzierungsmethode": bilanzierungsmethode,
+                "billing_schedule": billing_schedule,
+                "valid_from": valid_from.to_string(),
+                "valid_to": valid_to.map(|d| d.to_string()),
+                "version": version,
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "nb_contract_not_found: No active NB contract for MaLo '{}' on '{date}'.",
+                p.malo_id
+            ))])),
+        }
+    }
+
+    /// Look up a process correlation record.
+    ///
+    /// Provide either `process_id` (the UUID from `de.mako.process.initiated`
+    /// CloudEvents `process_id` extension) or `erp_order_id` (the ERP-side work-
+    /// order reference).  Returns workflow name, BDEW PID, MaLo, current status
+    /// (`RUNNING` / `COMPLETED` / `FAILED`), and timing.
+    ///
+    /// Typical use: an ERP integration polls `get_correlation` after submitting
+    /// a command via `makod` to confirm the process has reached `COMPLETED`.
+    #[tool(
+        description = "Get a process correlation record by process_id UUID or erp_order_id string"
+    )]
+    async fn get_correlation(
+        &self,
+        Parameters(p): Parameters<GetCorrelationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        type CorrelationRow = (
+            uuid::Uuid,                   // process_id
+            Option<String>,               // workflow_name
+            Option<i32>,                  // pid
+            Option<String>,               // malo_id
+            Option<String>,               // erp_order_id
+            String,                       // status
+            time::OffsetDateTime,         // initiated_at
+            Option<time::OffsetDateTime>, // completed_at
+        );
+        const COLS: &str = r#"SELECT process_id, workflow_name, pid, malo_id,
+                   erp_order_id, status, initiated_at, completed_at
+            FROM process_correlation"#;
+
+        let row: Option<CorrelationRow> = if let Some(ref pid_str) = p.process_id {
+            let id = pid_str
+                .parse::<uuid::Uuid>()
+                .map_err(|_| McpError::invalid_params("process_id must be a valid UUID", None))?;
+            sqlx::query_as::<_, CorrelationRow>(&format!("{COLS} WHERE process_id = $1"))
+                .bind(id)
+                .fetch_optional(&self.state.pool)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        } else if let Some(ref erp_id) = p.erp_order_id {
+            sqlx::query_as::<_, CorrelationRow>(&format!(
+                "{COLS} WHERE erp_order_id = $1 ORDER BY initiated_at DESC LIMIT 1"
+            ))
+            .bind(erp_id)
+            .fetch_optional(&self.state.pool)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        } else {
+            return Err(McpError::invalid_params(
+                "provide either process_id or erp_order_id",
+                None,
+            ));
+        };
+
+        match row {
+            Some((
+                process_id,
+                workflow_name,
+                pid,
+                malo_id,
+                erp_order_id,
+                status,
+                initiated_at,
+                completed_at,
+            )) => ContentBlock::json(serde_json::json!({
+                "process_id": process_id,
+                "workflow_name": workflow_name,
+                "pid": pid,
+                "malo_id": malo_id,
+                "erp_order_id": erp_order_id,
+                "status": status,
+                "initiated_at": initiated_at,
+                "completed_at": completed_at,
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(
+                "correlation_not_found: No process correlation record found for the given identifier."
+                    .to_owned(),
+            )])),
         }
     }
 }
@@ -364,8 +554,10 @@ impl ServerHandler for MdmdMcpHandler {
              - `list_partners` — list registered trading partners (GLN, AS4 endpoint, roles)\n\
              - `get_preisblatt` — read the PreisblattNetznutzung for an NB (used by invoicd)\n\
              - `get_versorgungsstatus` — read the VersorgungsStatus (Beliefert/Unbeliefert/…) for a MaLo\n\
+             - `get_nb_contract` — read the active NB network contract (netzebene, billing_schedule, RLM/SLP)\n\
+             - `get_correlation` — look up a process correlation by process_id UUID or erp_order_id\n\
              \n\
-             All reads are scoped to your tenant.  Cross-tenant access is denied by Cedar ABAC.",
+             All reads are tenant-scoped.  Cross-tenant access is denied by Cedar ABAC.",
             )
     }
 }

@@ -56,18 +56,64 @@ impl MaloRepository for PgMaloRepository {
         };
 
         let sparte_str = sparte.to_string();
+        // Extract typed fields from the BO4E Marktlokation JSONB payload.
+        // These are stored as indexed columns for efficient SQL queries.
+        // All are optional — missing fields in the JSONB produce NULL.
+        let netzebene = data
+            .get("netzebene")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
+        let bilanzierungsgebiet = data
+            .get("bilanzierungsgebiet")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
+        let gasqualitaet = data
+            .get("gasqualitaet")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
+        let energierichtung = data
+            .get("energierichtung")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
+        let bilanzierungsmethode = data
+            .get("bilanzierungsmethode")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
+        let regelzone = data
+            .get("regelzone")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
+        let fallgruppe = data
+            .get("fallgruppenzuordnung")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
+
         sqlx::query(
-            r#"INSERT INTO malo (malo_id, sparte, version, data, bo4e_version, updated_at)
-               VALUES ($1, $2, $3, $4, $5, now())
+            r#"INSERT INTO malo (malo_id, sparte, netzebene, bilanzierungsgebiet, gasqualitaet, energierichtung, bilanzierungsmethode, regelzone, fallgruppe, version, data, bo4e_version, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
                ON CONFLICT (malo_id) DO UPDATE
-               SET sparte = EXCLUDED.sparte,
-                   version = EXCLUDED.version,
-                   data = EXCLUDED.data,
-                   bo4e_version = EXCLUDED.bo4e_version,
-                   updated_at = now()"#,
+               SET sparte               = EXCLUDED.sparte,
+                   netzebene            = EXCLUDED.netzebene,
+                   bilanzierungsgebiet  = EXCLUDED.bilanzierungsgebiet,
+                   gasqualitaet         = EXCLUDED.gasqualitaet,
+                   energierichtung      = EXCLUDED.energierichtung,
+                   bilanzierungsmethode = EXCLUDED.bilanzierungsmethode,
+                   regelzone            = EXCLUDED.regelzone,
+                   fallgruppe           = EXCLUDED.fallgruppe,
+                   version              = EXCLUDED.version,
+                   data                 = EXCLUDED.data,
+                   bo4e_version         = EXCLUDED.bo4e_version,
+                   updated_at           = now()"#,
         )
         .bind(malo_id)
         .bind(&sparte_str)
+        .bind(&netzebene)
+        .bind(&bilanzierungsgebiet)
+        .bind(&gasqualitaet)
+        .bind(&energierichtung)
+        .bind(&bilanzierungsmethode)
+        .bind(&regelzone)
+        .bind(&fallgruppe)
         .bind(new_version)
         .bind(&data)
         .bind(bo4e_version)
@@ -123,6 +169,13 @@ impl MaloRepository for PgMaloRepository {
         let row: Option<PgRow> = sqlx::query(
             r#"SELECT m.malo_id,
                       m.sparte,
+                      m.netzebene,
+                      m.bilanzierungsgebiet,
+                      m.gasqualitaet,
+                      m.energierichtung,
+                      m.bilanzierungsmethode,
+                      m.regelzone,
+                      m.fallgruppe,
                       m.version,
                       m.data,
                       m.bo4e_version,
@@ -144,7 +197,7 @@ impl MaloRepository for PgMaloRepository {
                      AND lz.valid_from <= $2
                      AND (lz.valid_to IS NULL OR lz.valid_to >= $2)
                WHERE m.malo_id = $1
-               GROUP BY m.malo_id, m.sparte, m.version, m.data, m.bo4e_version, m.updated_at"#,
+               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.version, m.data, m.bo4e_version, m.updated_at"#,
         )
         .bind(malo_id)
         .bind(at)
@@ -167,6 +220,13 @@ impl MaloRepository for PgMaloRepository {
         let rows: Vec<PgRow> = sqlx::query(
             r#"SELECT m.malo_id,
                       m.sparte,
+                      m.netzebene,
+                      m.bilanzierungsgebiet,
+                      m.gasqualitaet,
+                      m.energierichtung,
+                      m.bilanzierungsmethode,
+                      m.regelzone,
+                      m.fallgruppe,
                       m.version,
                       m.data,
                       m.bo4e_version,
@@ -191,7 +251,7 @@ impl MaloRepository for PgMaloRepository {
                WHERE ($2::text IS NULL OR m.sparte = $2)
                  AND ($3::text IS NULL OR lz.zuordnungstyp    = $3)
                  AND ($4::text IS NULL OR lz.rollencodenummer = $4)
-               GROUP BY m.malo_id, m.sparte, m.version, m.data, m.bo4e_version, m.updated_at
+               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.version, m.data, m.bo4e_version, m.updated_at
                ORDER BY m.malo_id
                LIMIT $5 OFFSET $6"#,
         )
@@ -230,12 +290,19 @@ fn row_to_malo(r: PgRow) -> MaloRecord {
         sparte: sparte_str
             .parse::<Sparte>()
             .expect("DB has CHECK constraint on sparte"),
+        netzebene: r.try_get("netzebene").unwrap_or(None),
+        bilanzierungsgebiet: r.try_get("bilanzierungsgebiet").unwrap_or(None),
+        gasqualitaet: r.try_get("gasqualitaet").unwrap_or(None),
+        energierichtung: r.try_get("energierichtung").unwrap_or(None),
+        bilanzierungsmethode: r.try_get("bilanzierungsmethode").unwrap_or(None),
+        regelzone: r.try_get("regelzone").unwrap_or(None),
+        fallgruppe: r.try_get("fallgruppe").unwrap_or(None),
         version: r.get("version"),
         data: r.get("data"),
         lokationszuordnung,
         updated_at: r.get("updated_at"),
         bo4e_version: r
             .try_get("bo4e_version")
-            .unwrap_or_else(|_| "v202501.0.0".to_owned()),
+            .unwrap_or_else(|_| "v202607.0.0".to_owned()),
     }
 }

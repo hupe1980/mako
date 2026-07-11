@@ -1,0 +1,19 @@
+[package]
+name        = "mako-nne"
+description = "Role-neutral NNE/KA/MMM invoice calculation (PIDs 31001/31002/31005/31006) — used by netzbilanzd (NB) and invoicd (LF selbstausstellen)"
+version.workspace     = true
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+
+[dependencies]
+invoic-checker = { workspace = true }
+rust_decimal   = { workspace = true }
+rubo4e         = { workspace = true }
+serde          = { workspace = true, features = ["derive"] }
+serde_json     = { workspace = true }
+thiserror      = { workspace = true }
+time           = { workspace = true }
+uuid           = { workspace = true, features = ["v4"] }

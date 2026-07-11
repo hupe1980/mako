@@ -54,6 +54,7 @@ path = "src/lib.rs"
 
 [dependencies]
 mako-markt    = { workspace = true, features = ["makod-client", "marktd-client"] }
+mako-engine   = { workspace = true }
 netz-checker  = { path = "../../crates/netz-checker" }
 
 anyhow             = { workspace = true }
@@ -64,6 +65,7 @@ serde              = { workspace = true }
 serde_json         = { workspace = true }
 toml               = { version = "0.8", default-features = false, features = ["parse"] }
 time               = { workspace = true }
+time-tz            = { workspace = true }
 uuid               = { workspace = true }
 tokio              = { version = "1", features = ["full"] }
 tokio-util         = { workspace = true }

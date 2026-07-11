@@ -553,23 +553,80 @@ pub struct Lin {
 ///
 /// Carries the OBIS code or metering location identifier.
 ///
+/// `PIA` — Additional product ID (MSCONS SG8).
+///
+/// In MSCONS, carries the OBIS measurement identifier for a line item.
+///
+/// `PIA` — Additional Product ID (MSCONS SG9, item identification).
+///
+/// Carries the OBIS measurement identifier for the current line item.
+///
 /// | Element | Component | DE   | Meaning                             |
 /// |---------|-----------|------|-------------------------------------|
-/// | 0       | 0         | 4347 | Product ID function qualifier       |
-/// | 1       | 0         | 7140 | Item number                         |
-/// | 1       | 1         | 7143 | Item number type, coded             |
+/// | 0       | —         | 4347 | Product ID function qualifier       |
+/// | 1       | 0         | 7140 | OBIS code (full, e.g. `1-0:1.8.0`) |
+/// | 1       | 1         | 7143 | Item type code (`Z12`, `SRW`, …)   |
+///
+/// ## EDIFACT release characters and OBIS codes
+///
+/// OBIS codes (IEC 62056-61) use `:` as part of their notation, which is also
+/// the EDIFACT composite component separator.  The BDEW MSCONS AHB (since
+/// FV2025-10-01) mandates the **EDIFACT release character `?`** to escape each
+/// `:` inside the OBIS value:
+///
+/// ```text
+/// PIA+5+1-1?:1.9.1:SRW'
+///          ^^         ^^ release-char escapes the OBIS colon
+///                     ^^ unescaped colon → component separator → DE 7143 = "SRW"
+/// ```
+///
+/// `edifact-rs` correctly processes release characters: after parsing,
+/// `item_number` contains the full clean OBIS string (`"1-1:1.9.1"`)
+/// and `item_type` contains the DE 7143 qualifier (`"SRW"` or `"Z12"`).
+///
+/// **Builder note:** always use `Writer::escape_value()` when constructing the
+/// PIA composite to ensure the OBIS colons are correctly escaped.
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
 #[edifact(segment = "PIA")]
 pub struct Pia {
     /// DE 4347 — product ID function qualifier (e.g. `"5"` = product ID).
     #[edifact(element = 0)]
     pub qualifier: String,
-    /// DE 7140 — item identification code (e.g. OBIS code `"1-1:1.29.0"`).
+    /// DE 7140 — full OBIS code (e.g. `"1-0:1.8.0"`).
+    ///
+    /// This field contains the complete OBIS identifier because the BDEW AHB
+    /// requires the `:` inside OBIS values to be escaped with `?:`.
+    /// `edifact-rs` strips the release character during parsing.
     #[edifact(element = 1)]
     pub item_number: Option<String>,
-    /// DE 7143 — item number type (e.g. `"Z12"` for OBIS, `"SRV"` for service).
+    /// DE 7143 — item type code (e.g. `"Z12"` for OBIS, `"SRW"` for
+    /// Strom-Richtung-Wirkleistung).
     #[edifact(element = 1, component = 1)]
     pub item_type: Option<String>,
+}
+
+impl Pia {
+    /// Return the OBIS code from DE 7140.
+    ///
+    /// Convenience accessor for `item_number`.  Returns the full OBIS string
+    /// (e.g. `"1-0:1.8.0"`) after release-character processing by `edifact-rs`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use edi_energy::messages::segments::Pia;
+    /// let pia = Pia {
+    ///     qualifier: "5".to_owned(),
+    ///     item_number: Some("1-0:1.8.0".to_owned()),
+    ///     item_type: Some("Z12".to_owned()),
+    /// };
+    /// assert_eq!(pia.obis_code().as_deref(), Some("1-0:1.8.0"));
+    /// assert_eq!(pia.item_type.as_deref(), Some("Z12"));
+    /// ```
+    #[must_use]
+    pub fn obis_code(&self) -> Option<&str> {
+        self.item_number.as_deref()
+    }
 }
 
 // ── CCI ───────────────────────────────────────────────────────────────────────

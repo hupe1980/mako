@@ -38,7 +38,7 @@
 
 use std::sync::Arc;
 
-use crate::api_bridge::{location_id_to_string, party_id_to_marktpartner};
+use crate::api_bridge::{location_id_to_domain, party_id_to_marktpartner};
 use axum::Router;
 use energy_api::models::electricity::{IdentificationParameter, WimAnmeldungRequest};
 use energy_api::server::{control_measures, malo_ident, wim_order};
@@ -193,7 +193,12 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
             let domain_cmd = SteuerungsauftragCommand::ReceiveKonfiguration {
                 tx_id: tx_id.clone(),
                 sender_mp_id: party_id_to_marktpartner(sender_party_id),
-                location_id: location_id_to_string(&location_id),
+                location_id: location_id_to_domain(&location_id).map_err(|e| {
+                    energy_api::Error::Http {
+                        status: 400,
+                        body: e,
+                    }
+                })?,
                 execution_time_from: command.execution_time_from.clone(),
                 max_power_kw: command.maximum_power_value.0.clone(),
                 execution_time_until: command.execution_time_until.clone(),
@@ -248,7 +253,12 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
             let domain_cmd = SteuerungsauftragCommand::ReceiveInitialZustand {
                 tx_id: tx_id.clone(),
                 sender_mp_id: party_id_to_marktpartner(sender_party_id),
-                location_id: location_id_to_string(&location_id),
+                location_id: location_id_to_domain(&location_id).map_err(|e| {
+                    energy_api::Error::Http {
+                        status: 400,
+                        body: e,
+                    }
+                })?,
                 execution_time_from: command.execution_time_from.clone(),
             };
 

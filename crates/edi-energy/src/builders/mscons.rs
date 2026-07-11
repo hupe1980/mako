@@ -3,6 +3,7 @@
 use std::marker::PhantomData;
 
 use edifact_rs::Writer;
+use rubo4e::identifiers::ObisCode;
 
 use crate::AgencyCode;
 use crate::{Error, Pruefidentifikator, Release};
@@ -28,7 +29,9 @@ struct QuantitySpec {
 #[derive(Debug, Clone)]
 struct LineItemSpec {
     line_number: usize,
-    obis_code: Option<String>,
+    /// OBIS measurement identifier (IEC 62056-61: `[A-B:]C.D[.E][*F]`).
+    /// Validated at construction — malformed OBIS codes are rejected.
+    obis_code: Option<ObisCode>,
     quantities: Vec<QuantitySpec>,
 }
 
@@ -253,7 +256,15 @@ impl<S, R> MsconsBuilder<S, R> {
                         let ln = item.line_number.to_string();
                         emit_seg!(w, "LIN", &ln);
                         if let Some(obis) = &item.obis_code {
-                            emit_seg!(w, "PIA", "5", obis, "Z12");
+                            // BDEW AHB example: PIA+5+1-1?:1.9.1:SRW
+                            // ObisCode::to_pia_string() (rubo4e v0.6+) drops the F
+                            // component and returns the pure OBIS without release chars.
+                            // We then append the component separator + DE 7143 type code.
+                            // escape_value() handles any non-default UNA configuration.
+                            let pia_value = obis.to_pia_string();
+                            let escaped = w.escape_value(&pia_value);
+                            let composite = format!("{escaped}:Z12");
+                            emit_seg!(w, "PIA", "5", &composite);
                         }
                         for qty in &item.quantities {
                             let qty_val = format!("{}:{}:{}", qty.qualifier, qty.value, qty.unit);
@@ -324,25 +335,28 @@ impl<S, R> MeteringPointBuilder<S, R> {
 
     /// Set the OBIS code (PIA+5) for the current line item.
     ///
+    /// The code must conform to IEC 62056-61: `[A-B:]C.D[.E][*F]`.
     /// A new line item is created automatically if none is in progress.
-    pub fn obis(mut self, code: impl Into<String>) -> Self {
+    pub fn obis(mut self, code: ObisCode) -> Self {
         self.current_item
             .get_or_insert_with(|| LineItemSpec {
                 line_number: self.spec.line_items.len() + 1,
                 obis_code: None,
                 quantities: Vec::new(),
             })
-            .obis_code = Some(code.into());
+            .obis_code = Some(code);
         self
     }
 
-    /// Start a new line item (LIN segment) with an optional OBIS code (PIA).
-    pub fn line_item(mut self, obis_code: impl Into<String>) -> Self {
+    /// Start a new line item (LIN segment) with an OBIS code (PIA).
+    ///
+    /// The code must conform to IEC 62056-61: `[A-B:]C.D[.E][*F]`.
+    pub fn line_item(mut self, obis_code: ObisCode) -> Self {
         self.flush_item();
         let idx = self.spec.line_items.len() + 1;
         self.current_item = Some(LineItemSpec {
             line_number: idx,
-            obis_code: Some(obis_code.into()),
+            obis_code: Some(obis_code),
             quantities: Vec::new(),
         });
         self

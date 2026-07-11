@@ -5,7 +5,7 @@
 //! | PID | Process | Deadline | Auto action |
 //! |-----|---------|----------|-------------|
 //! | 55008 | LFA E_0624 Abmeldung | 45 min | Evaluate from VersorgungsStatus |
-//! | 55022 | Zuordnungsanfrage | 45 min | Confirm `lf_gln_next` if known |
+//! | 55022 | Zuordnungsanfrage | 45 min | Confirm `lf_mp_id_next` if known |
 //! | 55013 | Abmeldung-Bestätigung | — | Update `lieferstatus = Unbeliefert` via marktd |
 //!
 //! # Decision logic for E_0624 (PID 55008)
@@ -260,7 +260,7 @@ pub async fn process_e0624(
             if config.auto_respond {
                 let cmd = ForwardCommand {
                     marktrolle: None,
-                    command: "gpke.lfa.einwilligung".to_owned(),
+                    command: "gpke.nb-lieferende.bestaetigen".to_owned(),
                     malo_id: Some(payload.malo_id.clone()),
                     melo_id: None,
                     payload: serde_json::json!({
@@ -282,7 +282,7 @@ pub async fn process_e0624(
             if config.auto_respond {
                 let cmd = ForwardCommand {
                     marktrolle: None,
-                    command: "gpke.lfa.ablehnen".to_owned(),
+                    command: "gpke.nb-lieferende.ablehnen".to_owned(),
                     malo_id: Some(payload.malo_id.clone()),
                     melo_id: None,
                     payload: serde_json::json!({
@@ -344,7 +344,8 @@ mod tests {
             malo_id: "51238696780".parse::<MaloId>().unwrap(),
             lieferstatus: status,
             lf_mp_id: lf_mp_id.map(ToOwned::to_owned),
-            lf_gln_next: None,
+            lf_mp_id_next: None,
+            lf_next_lieferbeginn: None,
             lieferbeginn: None,
             lieferende: None,
             msb_mp_id: None,

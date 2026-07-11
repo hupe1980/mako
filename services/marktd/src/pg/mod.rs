@@ -5,6 +5,8 @@
 
 pub mod contract;
 pub mod correlation;
+pub mod device;
+pub mod lokationszuordnung;
 pub mod malo;
 pub mod malo_grid;
 pub mod melo;
@@ -18,12 +20,20 @@ pub mod versorgung;
 
 pub use contract::PgContractRepository;
 pub use correlation::PgCorrelationIndex;
+pub use device::PgDeviceRepository;
+pub use device::PgSteuerbareRessourceRepository;
+pub use device::PgTechnischeRessourceRepository;
+pub use lokationszuordnung::PgLokationszuordnungRepository;
 pub use malo::PgMaloRepository;
 pub use malo_grid::PgMaloGridRepository;
 pub use melo::PgMeloRepository;
 pub use nb_contract::PgNbContractRepository;
 pub use nelo::PgNeLoRepository;
 pub use partner::PgPartnerRepository;
+pub use preisblatt::PgPreisblattDienstleistungRepository;
+pub use preisblatt::PgPreisblattHardwareRepository;
+pub use preisblatt::PgPreisblattKaRepository;
+pub use preisblatt::PgPreisblattMessungRepository;
 pub use preisblatt::PgPreisblattRepository;
 pub use pricat::PgPriCatRepository;
 pub use subscription::PgSubscriptionRepository;

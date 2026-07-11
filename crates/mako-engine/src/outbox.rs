@@ -111,7 +111,7 @@ pub struct PendingOutbox {
     /// `None` for raw EDIFACT or untyped payloads.
     ///
     /// Example:
-    /// `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202501.0.0/src/bo4e_schemas/bo/Marktlokation.json"`
+    /// `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas/bo/Marktlokation.json"`
     pub payload_schema: Option<Box<str>>,
     /// Zero-based index into the concurrent events batch that caused this
     /// outbound message.

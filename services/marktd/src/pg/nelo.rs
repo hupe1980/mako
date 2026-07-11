@@ -37,6 +37,9 @@ fn map_row(row: &PgRow) -> Result<NeLoRecord, sqlx::Error> {
         sparte,
         netzebene: row.try_get("netzebene")?,
         nb_mp_id: row.try_get("nb_mp_id")?,
+        steuerkanal: row.try_get("steuerkanal").unwrap_or(None),
+        eigenschaft_msb_lokation: row.try_get("eigenschaft_msb_lokation").unwrap_or(None),
+        grundzustaendiger_msb_codenr: row.try_get("grundzustaendiger_msb_codenr").unwrap_or(None),
         data: row.try_get("data")?,
         version: row.try_get("version")?,
         updated_at: row.try_get("updated_at")?,
@@ -45,18 +48,34 @@ fn map_row(row: &PgRow) -> Result<NeLoRecord, sqlx::Error> {
 
 impl NeLoRepository for PgNeLoRepository {
     async fn upsert(&self, rec: NeLoRecord, if_match: Option<i64>) -> Result<i64, MdmError> {
+        // Extract typed columns from the BO4E Netzlokation payload (B6).
+        let steuerkanal = rec.data.get("steuerkanal").and_then(|v| v.as_bool());
+        let eigenschaft_msb = rec
+            .data
+            .get("eigenschaftMsbLokation")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        let grundzustaendiger_msb = rec
+            .data
+            .get("grundzustaendigerMsbCodenr")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+
         let rows_affected: u64 = if let Some(expected) = if_match {
             // Conditional update — only succeeds when version matches.
             sqlx::query(
-                r#"UPDATE nelo
-                   SET name       = $3,
-                       sparte     = $4,
-                       netzebene  = $5,
-                       nb_mp_id     = $6,
-                       data       = $7,
-                       version    = version + 1,
-                       updated_at = now()
-                   WHERE nelo_id = $1 AND tenant = $2 AND version = $8"#,
+                r"UPDATE nelo
+                   SET name                       = $3,
+                       sparte                     = $4,
+                       netzebene                  = $5,
+                       nb_mp_id                   = $6,
+                       steuerkanal                = $7,
+                       eigenschaft_msb_lokation   = $8,
+                       grundzustaendiger_msb_codenr = $9,
+                       data                       = $10,
+                       version                    = version + 1,
+                       updated_at                 = now()
+                   WHERE nelo_id = $1 AND tenant = $2 AND version = $11",
             )
             .bind(&rec.nelo_id)
             .bind(&rec.tenant)
@@ -64,6 +83,9 @@ impl NeLoRepository for PgNeLoRepository {
             .bind(rec.sparte.to_string())
             .bind(&rec.netzebene)
             .bind(&rec.nb_mp_id)
+            .bind(steuerkanal)
+            .bind(&eigenschaft_msb)
+            .bind(&grundzustaendiger_msb)
             .bind(&rec.data)
             .bind(expected)
             .execute(&self.pool)
@@ -73,17 +95,22 @@ impl NeLoRepository for PgNeLoRepository {
         } else {
             // Blind upsert — insert or update unconditionally.
             sqlx::query(
-                r#"INSERT INTO nelo
-                   (nelo_id, tenant, name, sparte, netzebene, nb_mp_id, data, version, updated_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, 1, now())
+                r"INSERT INTO nelo
+                   (nelo_id, tenant, name, sparte, netzebene, nb_mp_id,
+                    steuerkanal, eigenschaft_msb_lokation, grundzustaendiger_msb_codenr,
+                    data, version, updated_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, now())
                    ON CONFLICT (nelo_id, tenant) DO UPDATE
-                   SET name       = EXCLUDED.name,
-                       sparte     = EXCLUDED.sparte,
-                       netzebene  = EXCLUDED.netzebene,
-                       nb_mp_id     = EXCLUDED.nb_mp_id,
-                       data       = EXCLUDED.data,
-                       version    = nelo.version + 1,
-                       updated_at = now()"#,
+                   SET name                         = EXCLUDED.name,
+                       sparte                       = EXCLUDED.sparte,
+                       netzebene                    = EXCLUDED.netzebene,
+                       nb_mp_id                     = EXCLUDED.nb_mp_id,
+                       steuerkanal                  = EXCLUDED.steuerkanal,
+                       eigenschaft_msb_lokation     = EXCLUDED.eigenschaft_msb_lokation,
+                       grundzustaendiger_msb_codenr = EXCLUDED.grundzustaendiger_msb_codenr,
+                       data                         = EXCLUDED.data,
+                       version                      = nelo.version + 1,
+                       updated_at                   = now()",
             )
             .bind(&rec.nelo_id)
             .bind(&rec.tenant)
@@ -91,6 +118,9 @@ impl NeLoRepository for PgNeLoRepository {
             .bind(rec.sparte.to_string())
             .bind(&rec.netzebene)
             .bind(&rec.nb_mp_id)
+            .bind(steuerkanal)
+            .bind(&eigenschaft_msb)
+            .bind(&grundzustaendiger_msb)
             .bind(&rec.data)
             .execute(&self.pool)
             .await

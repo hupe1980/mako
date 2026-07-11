@@ -143,6 +143,20 @@ async fn main() -> anyhow::Result<()> {
         database_url,
         db_max_connections,
         tenant,
+        erp_webhook_url: cfg.erp.webhook_url.clone(),
+        erp_hmac_secret: cfg
+            .erp
+            .hmac_secret
+            .as_deref()
+            .map(invoicd::config::resolve_env_secret)
+            .transpose()?,
+        edmd_url: cfg.edmd.url.clone(),
+        edmd_api_key: cfg
+            .edmd
+            .api_key
+            .as_deref()
+            .map(invoicd::config::resolve_env_secret)
+            .transpose()?,
         oidc,
         cedar,
         shutdown,

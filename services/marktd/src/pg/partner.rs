@@ -20,7 +20,7 @@ impl PgPartnerRepository {
     }
 }
 
-const SELECT_COLS: &str = "mp_id, display_name, marktrolle, sparte, channels, version, updated_at";
+const SELECT_COLS: &str = "mp_id, display_name, marktrolle, sparte, rollencodetyp, makoadresse, channels, version, updated_at";
 
 impl PartnerRepository for PgPartnerRepository {
     async fn upsert(&self, partner: PartnerRecord) -> Result<i64, MdmError> {
@@ -35,20 +35,24 @@ impl PartnerRepository for PgPartnerRepository {
         let sparte_str = partner.sparte.map(|s| s.to_string());
 
         sqlx::query(
-            r#"INSERT INTO partners (mp_id, display_name, marktrolle, sparte, channels, version, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, now())
+            r#"INSERT INTO partners (mp_id, display_name, marktrolle, sparte, rollencodetyp, makoadresse, channels, version, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
                ON CONFLICT (mp_id) DO UPDATE
-               SET display_name = EXCLUDED.display_name,
-                   marktrolle   = EXCLUDED.marktrolle,
-                   sparte       = EXCLUDED.sparte,
-                   channels     = EXCLUDED.channels,
-                   version      = EXCLUDED.version,
-                   updated_at   = now()"#,
+               SET display_name  = EXCLUDED.display_name,
+                   marktrolle    = EXCLUDED.marktrolle,
+                   sparte        = EXCLUDED.sparte,
+                   rollencodetyp = EXCLUDED.rollencodetyp,
+                   makoadresse   = EXCLUDED.makoadresse,
+                   channels      = EXCLUDED.channels,
+                   version       = EXCLUDED.version,
+                   updated_at    = now()"#,
         )
         .bind(&partner.mp_id)
         .bind(&partner.display_name)
         .bind(&partner.marktrolle)
         .bind(sparte_str)
+        .bind(&partner.rollencodetyp)
+        .bind(&partner.makoadresse)
         .bind(&partner.channels)
         .bind(new_version)
         .execute(&self.pool)
@@ -84,11 +88,14 @@ impl PartnerRepository for PgPartnerRepository {
 
 fn row_to_partner(r: PgRow) -> PartnerRecord {
     let sparte_str: Option<String> = r.get("sparte");
+    let makoadresse: Option<Vec<String>> = r.try_get("makoadresse").unwrap_or(None);
     PartnerRecord {
         mp_id: r.get("mp_id"),
         display_name: r.get("display_name"),
         marktrolle: r.get("marktrolle"),
         sparte: sparte_str.as_deref().map(parse_sparte),
+        rollencodetyp: r.try_get("rollencodetyp").unwrap_or(None),
+        makoadresse: makoadresse.unwrap_or_default(),
         channels: r.get("channels"),
         version: r.get("version"),
         updated_at: r.get("updated_at"),

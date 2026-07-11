@@ -10,6 +10,7 @@ use std::sync::Arc;
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
+    http::StatusCode,
     response::IntoResponse,
 };
 use mako_markt::{
@@ -233,6 +234,63 @@ where
                 .collect();
             Json(filtered).into_response()
         }
+        Err(e) => e.into_response(),
+    }
+}
+
+// ── B2: AS4 address lookup ────────────────────────────────────────────────────
+
+/// `GET /api/v1/partners/{mp_id}/as4-address`
+///
+/// Returns the list of AS4 endpoint URLs (`Marktteilnehmer.makoadresse`) for the
+/// given MP-ID. Used by `makod` for dynamic AS4 destination routing instead of
+/// static config.
+///
+/// Returns 404 when the partner is not registered or has no AS4 addresses.
+pub async fn get_as4_address<Ma, Me, Co, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    claims: Claims,
+    Path(mp_id_str): Path<String>,
+) -> impl IntoResponse
+where
+    Ma: MaloRepository + Clone,
+    Me: MeloRepository + Clone,
+    Co: ContractRepository + Clone,
+    Su: SubscriptionRepository + Clone,
+    Ci: CorrelationIndex + Clone,
+    Pa: PartnerRepository + Clone,
+{
+    if enforcer
+        .check(&claims.principal(), "read-partner", &state.tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+
+    let mp_id = match mp_id_str.parse::<MarktpartnerId>() {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    match state.partner_repo.find(&mp_id).await {
+        Ok(Some(p)) if !p.makoadresse.is_empty() => axum::Json(serde_json::json!({
+            "mp_id":          mp_id_str,
+            "rollencodetyp":  p.rollencodetyp,
+            "makoadresse":    p.makoadresse,
+        }))
+        .into_response(),
+        Ok(_) => (
+            StatusCode::NOT_FOUND,
+            format!("No AS4 address registered for {mp_id_str}"),
+        )
+            .into_response(),
         Err(e) => e.into_response(),
     }
 }

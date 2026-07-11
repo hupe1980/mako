@@ -65,6 +65,34 @@ impl MaloRepository for InMemoryMaloRepository {
             MaloRecord {
                 malo_id: malo_id.clone(),
                 sparte,
+                netzebene: data
+                    .get("netzebene")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned),
+                bilanzierungsgebiet: data
+                    .get("bilanzierungsgebiet")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned),
+                gasqualitaet: data
+                    .get("gasqualitaet")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned),
+                energierichtung: data
+                    .get("energierichtung")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned),
+                bilanzierungsmethode: data
+                    .get("bilanzierungsmethode")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned),
+                regelzone: data
+                    .get("regelzone")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned),
+                fallgruppe: data
+                    .get("fallgruppenzuordnung")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned),
                 version,
                 data,
                 lokationszuordnung: vec![],
@@ -138,6 +166,19 @@ impl MeloRepository for InMemoryMeloRepository {
             MeloRecord {
                 melo_id: melo_id.clone(),
                 malo_id: malo_id.cloned(),
+                netzebene_messung: data
+                    .get("netzebeneMessung")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned),
+                regelzone: data
+                    .get("standorteigenschaften")
+                    .and_then(|s| s.get("eigenschaftenStrom"))
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|first| first.get("regelzone"))
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned),
+                standorteigenschaften: data.get("standorteigenschaften").cloned(),
                 version,
                 data,
                 updated_at: time::OffsetDateTime::now_utc(),
@@ -445,7 +486,8 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
             tenant: rec.tenant.clone(),
             lieferstatus: rec.lieferstatus,
             lf_mp_id: rec.lf_mp_id.clone(),
-            lf_gln_next: rec.lf_gln_next.clone(),
+            lf_mp_id_next: rec.lf_mp_id_next.clone(),
+            lf_next_lieferbeginn: rec.lf_next_lieferbeginn,
             lieferbeginn: rec.lieferbeginn,
             lieferende: rec.lieferende,
             msb_mp_id: rec.msb_mp_id.clone(),
@@ -491,7 +533,8 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
                 tenant: h.tenant.clone(),
                 lieferstatus: h.lieferstatus,
                 lf_mp_id: h.lf_mp_id.clone(),
-                lf_gln_next: h.lf_gln_next.clone(),
+                lf_mp_id_next: h.lf_mp_id_next.clone(),
+                lf_next_lieferbeginn: h.lf_next_lieferbeginn,
                 lieferbeginn: h.lieferbeginn,
                 lieferende: h.lieferende,
                 msb_mp_id: h.msb_mp_id.clone(),
@@ -549,6 +592,156 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
             page,
             size,
         })
+    }
+
+    async fn announce_lf_next(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        lf_mp_id_next: &str,
+        lf_next_lieferbeginn: Option<time::Date>,
+        nb_mp_id: &str,
+        process_id: Option<uuid::Uuid>,
+    ) -> Result<(), MdmError> {
+        let key = (malo_id.as_ref().to_owned(), tenant.to_owned());
+        let mut store = self.store.write().await;
+        let now = time::OffsetDateTime::now_utc();
+        let entry = store.entry(key).or_insert_with(|| VersorgungsStatusRecord {
+            malo_id: malo_id.clone(),
+            tenant: tenant.to_owned(),
+            lieferstatus: LieferStatus::Unbeliefert,
+            lf_mp_id: None,
+            lf_mp_id_next: None,
+            lf_next_lieferbeginn: None,
+            lieferbeginn: None,
+            lieferende: None,
+            msb_mp_id: None,
+            nb_mp_id: nb_mp_id.to_owned(),
+            last_process_id: process_id,
+            updated_at: now,
+            version: 0,
+        });
+        entry.lf_mp_id_next = Some(lf_mp_id_next.to_owned());
+        entry.lf_next_lieferbeginn = lf_next_lieferbeginn;
+        entry.last_process_id = process_id;
+        entry.updated_at = now;
+        entry.version += 1;
+        let rec = entry.clone();
+        drop(store);
+        let hist = VersorgungsStatusHistoryRecord {
+            id: rec.version,
+            malo_id: rec.malo_id.clone(),
+            tenant: rec.tenant.clone(),
+            lieferstatus: rec.lieferstatus,
+            lf_mp_id: rec.lf_mp_id.clone(),
+            lf_mp_id_next: rec.lf_mp_id_next.clone(),
+            lf_next_lieferbeginn: rec.lf_next_lieferbeginn,
+            lieferbeginn: rec.lieferbeginn,
+            lieferende: rec.lieferende,
+            msb_mp_id: rec.msb_mp_id.clone(),
+            nb_mp_id: rec.nb_mp_id.clone(),
+            last_process_id: rec.last_process_id,
+            version: rec.version,
+            valid_from: now,
+        };
+        self.history.write().await.push(hist);
+        Ok(())
+    }
+
+    async fn confirm_supply(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        process_id: Option<uuid::Uuid>,
+    ) -> Result<(), MdmError> {
+        let key = (malo_id.as_ref().to_owned(), tenant.to_owned());
+        let mut store = self.store.write().await;
+        let now = time::OffsetDateTime::now_utc();
+        if let Some(entry) = store.get_mut(&key) {
+            if entry.lf_mp_id_next.is_some() {
+                entry.lf_mp_id = entry.lf_mp_id_next.take();
+                entry.lieferbeginn = entry.lf_next_lieferbeginn.take();
+                entry.lf_next_lieferbeginn = None;
+                entry.lieferstatus = LieferStatus::Beliefert;
+                entry.last_process_id = process_id;
+                entry.updated_at = now;
+                entry.version += 1;
+                let rec = entry.clone();
+                drop(store);
+                let hist = VersorgungsStatusHistoryRecord {
+                    id: rec.version,
+                    malo_id: rec.malo_id.clone(),
+                    tenant: rec.tenant.clone(),
+                    lieferstatus: rec.lieferstatus,
+                    lf_mp_id: rec.lf_mp_id.clone(),
+                    lf_mp_id_next: rec.lf_mp_id_next.clone(),
+                    lf_next_lieferbeginn: rec.lf_next_lieferbeginn,
+                    lieferbeginn: rec.lieferbeginn,
+                    lieferende: rec.lieferende,
+                    msb_mp_id: rec.msb_mp_id.clone(),
+                    nb_mp_id: rec.nb_mp_id.clone(),
+                    last_process_id: rec.last_process_id,
+                    version: rec.version,
+                    valid_from: now,
+                };
+                self.history.write().await.push(hist);
+            }
+        }
+        Ok(())
+    }
+
+    async fn end_supply(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        nb_mp_id: &str,
+        process_id: Option<uuid::Uuid>,
+    ) -> Result<(), MdmError> {
+        let key = (malo_id.as_ref().to_owned(), tenant.to_owned());
+        let mut store = self.store.write().await;
+        let now = time::OffsetDateTime::now_utc();
+        let entry = store.entry(key).or_insert_with(|| VersorgungsStatusRecord {
+            malo_id: malo_id.clone(),
+            tenant: tenant.to_owned(),
+            lieferstatus: LieferStatus::Unbeliefert,
+            lf_mp_id: None,
+            lf_mp_id_next: None,
+            lf_next_lieferbeginn: None,
+            lieferbeginn: None,
+            lieferende: None,
+            msb_mp_id: None,
+            nb_mp_id: nb_mp_id.to_owned(),
+            last_process_id: process_id,
+            updated_at: now,
+            version: 0,
+        });
+        entry.lieferstatus = LieferStatus::Unbeliefert;
+        entry.lf_mp_id = None;
+        entry.lieferbeginn = None;
+        entry.nb_mp_id.clone_from(&nb_mp_id.to_owned());
+        entry.last_process_id = process_id;
+        entry.updated_at = now;
+        entry.version += 1;
+        let rec = entry.clone();
+        drop(store);
+        let hist = VersorgungsStatusHistoryRecord {
+            id: rec.version,
+            malo_id: rec.malo_id.clone(),
+            tenant: rec.tenant.clone(),
+            lieferstatus: rec.lieferstatus,
+            lf_mp_id: rec.lf_mp_id.clone(),
+            lf_mp_id_next: rec.lf_mp_id_next.clone(),
+            lf_next_lieferbeginn: rec.lf_next_lieferbeginn,
+            lieferbeginn: rec.lieferbeginn,
+            lieferende: rec.lieferende,
+            msb_mp_id: rec.msb_mp_id.clone(),
+            nb_mp_id: rec.nb_mp_id.clone(),
+            last_process_id: rec.last_process_id,
+            version: rec.version,
+            valid_from: now,
+        };
+        self.history.write().await.push(hist);
+        Ok(())
     }
 }
 
@@ -839,5 +1032,585 @@ impl MaloGridRepository for InMemoryMaloGridRepository {
         let key = (malo_id.as_ref().to_owned(), tenant.to_owned());
         self.store.write().await.remove(&key);
         Ok(())
+    }
+}
+
+// ── InMemoryPreisblattMessungRepository (B5) ──────────────────────────────────
+
+use crate::repository::{
+    DeviceRepository, GeraetRecord, PreisblattMessungRecord, PreisblattMessungRepository,
+    SteuerbareRessourceRecord, SteuerbareRessourceRepository, TechnischeRessourceRecord,
+    TechnischeRessourceRepository, ZaehlerRecord,
+};
+
+/// In-memory test double for [`PreisblattMessungRepository`].
+#[derive(Default, Clone)]
+pub struct InMemoryPreisblattMessungRepository {
+    store: Arc<RwLock<HashMap<String, PreisblattMessungRecord>>>,
+}
+
+impl PreisblattMessungRepository for InMemoryPreisblattMessungRepository {
+    async fn upsert_messung(
+        &self,
+        msb_mp_id: &str,
+        data: serde_json::Value,
+        bo4e_version: &str,
+        source: PreisblattSource,
+    ) -> Result<(), crate::error::MdmError> {
+        let mut store = self.store.write().await;
+        store.insert(
+            msb_mp_id.to_owned(),
+            PreisblattMessungRecord {
+                msb_mp_id: msb_mp_id.to_owned(),
+                data,
+                bo4e_version: bo4e_version.to_owned(),
+                source,
+                created_at: time::OffsetDateTime::now_utc(),
+                updated_at: time::OffsetDateTime::now_utc(),
+            },
+        );
+        Ok(())
+    }
+
+    async fn find_messung_for_date(
+        &self,
+        msb_mp_id: &str,
+        _billing_date: &str,
+    ) -> Result<Option<PreisblattMessungRecord>, crate::error::MdmError> {
+        Ok(self.store.read().await.get(msb_mp_id).cloned())
+    }
+}
+
+// ── InMemorySteuerbareRessourceRepository (B4b) ───────────────────────────────
+
+/// In-memory test double for [`SteuerbareRessourceRepository`].
+#[derive(Default, Clone)]
+pub struct InMemorySteuerbareRessourceRepository {
+    store: Arc<RwLock<HashMap<(String, String), SteuerbareRessourceRecord>>>,
+}
+
+impl SteuerbareRessourceRepository for InMemorySteuerbareRessourceRepository {
+    #[allow(clippy::similar_names)]
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_sr(
+        &self,
+        sr_id: &str,
+        tenant: &str,
+        malo_id: Option<&str>,
+        melo_id: Option<&str>,
+        data: serde_json::Value,
+        bo4e_version: &str,
+        konfigurationsprodukte: Option<serde_json::Value>,
+    ) -> Result<(), crate::error::MdmError> {
+        let key = (sr_id.to_owned(), tenant.to_owned());
+        let version = {
+            let store = self.store.read().await;
+            store.get(&key).map_or(1, |r| r.version + 1)
+        };
+        self.store.write().await.insert(
+            key,
+            SteuerbareRessourceRecord {
+                sr_id: sr_id.to_owned(),
+                tenant: tenant.to_owned(),
+                malo_id: malo_id.map(std::borrow::ToOwned::to_owned),
+                melo_id: melo_id.map(std::borrow::ToOwned::to_owned),
+                data,
+                konfigurationsprodukte,
+                bo4e_version: bo4e_version.to_owned(),
+                version,
+                updated_at: time::OffsetDateTime::now_utc(),
+            },
+        );
+        Ok(())
+    }
+
+    async fn find_sr(
+        &self,
+        sr_id: &str,
+        tenant: &str,
+    ) -> Result<Option<SteuerbareRessourceRecord>, crate::error::MdmError> {
+        Ok(self
+            .store
+            .read()
+            .await
+            .get(&(sr_id.to_owned(), tenant.to_owned()))
+            .cloned())
+    }
+
+    async fn list_sr_by_malo(
+        &self,
+        malo_id: &str,
+        tenant: &str,
+    ) -> Result<Vec<SteuerbareRessourceRecord>, crate::error::MdmError> {
+        let store = self.store.read().await;
+        Ok(store
+            .values()
+            .filter(|r| r.tenant == tenant && r.malo_id.as_deref() == Some(malo_id))
+            .cloned()
+            .collect())
+    }
+}
+
+// ── InMemoryTechnischeRessourceRepository (B9) ───────────────────────────────
+
+/// In-memory test double for [`TechnischeRessourceRepository`].
+#[derive(Default, Clone)]
+pub struct InMemoryTechnischeRessourceRepository {
+    store: Arc<RwLock<HashMap<(String, String), TechnischeRessourceRecord>>>,
+}
+
+impl TechnischeRessourceRepository for InMemoryTechnischeRessourceRepository {
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::similar_names)]
+    async fn upsert_tr(
+        &self,
+        tr_id: &str,
+        tenant: &str,
+        malo_id: Option<&str>,
+        melo_id: Option<&str>,
+        tr_typ: Option<&str>,
+        ist_fernschaltbar: Option<bool>,
+        data: serde_json::Value,
+        bo4e_version: &str,
+    ) -> Result<(), crate::error::MdmError> {
+        let key = (tr_id.to_owned(), tenant.to_owned());
+        let version = {
+            let store = self.store.read().await;
+            store.get(&key).map_or(1, |r| r.version + 1)
+        };
+        self.store.write().await.insert(
+            key,
+            TechnischeRessourceRecord {
+                tr_id: tr_id.to_owned(),
+                tenant: tenant.to_owned(),
+                malo_id: malo_id.map(std::borrow::ToOwned::to_owned),
+                melo_id: melo_id.map(std::borrow::ToOwned::to_owned),
+                tr_typ: tr_typ.map(std::borrow::ToOwned::to_owned),
+                ist_fernschaltbar,
+                data,
+                bo4e_version: bo4e_version.to_owned(),
+                version,
+                updated_at: time::OffsetDateTime::now_utc(),
+            },
+        );
+        Ok(())
+    }
+
+    async fn find_tr(
+        &self,
+        tr_id: &str,
+        tenant: &str,
+    ) -> Result<Option<TechnischeRessourceRecord>, crate::error::MdmError> {
+        Ok(self
+            .store
+            .read()
+            .await
+            .get(&(tr_id.to_owned(), tenant.to_owned()))
+            .cloned())
+    }
+
+    async fn list_tr_by_malo(
+        &self,
+        malo_id: &str,
+        tenant: &str,
+    ) -> Result<Vec<TechnischeRessourceRecord>, crate::error::MdmError> {
+        let store = self.store.read().await;
+        Ok(store
+            .values()
+            .filter(|r| r.tenant == tenant && r.malo_id.as_deref() == Some(malo_id))
+            .cloned()
+            .collect())
+    }
+
+    async fn list_tr_by_melo(
+        &self,
+        melo_id: &str,
+        tenant: &str,
+    ) -> Result<Vec<TechnischeRessourceRecord>, crate::error::MdmError> {
+        let store = self.store.read().await;
+        Ok(store
+            .values()
+            .filter(|r| r.tenant == tenant && r.melo_id.as_deref() == Some(melo_id))
+            .cloned()
+            .collect())
+    }
+}
+
+// ── InMemoryLokationszuordnungRepository (B5) ────────────────────────────────
+
+/// In-memory test double for [`crate::repository::LokationszuordnungRepository`].
+#[derive(Default, Clone)]
+pub struct InMemoryLokationszuordnungRepository {
+    edges: Arc<RwLock<Vec<crate::repository::LokationszuordnungEdge>>>,
+}
+
+impl crate::repository::LokationszuordnungRepository for InMemoryLokationszuordnungRepository {
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_edge(
+        &self,
+        tenant: &str,
+        von_id: &str,
+        von_typ: &str,
+        nach_id: &str,
+        nach_typ: &str,
+        valid_from: Option<time::Date>,
+        valid_to: Option<time::Date>,
+        data: serde_json::Value,
+    ) -> Result<uuid::Uuid, crate::error::MdmError> {
+        let id = uuid::Uuid::new_v4();
+        let mut edges = self.edges.write().await;
+        // Replace existing edge with same (tenant, von_id, nach_id, valid_from)
+        edges.retain(|e| {
+            !(e.tenant == tenant
+                && e.von_id == von_id
+                && e.nach_id == nach_id
+                && e.valid_from == valid_from)
+        });
+        edges.push(crate::repository::LokationszuordnungEdge {
+            id,
+            tenant: tenant.to_owned(),
+            von_id: von_id.to_owned(),
+            von_typ: von_typ.to_owned(),
+            nach_id: nach_id.to_owned(),
+            nach_typ: nach_typ.to_owned(),
+            valid_from,
+            valid_to,
+            data,
+            depth: 0,
+        });
+        Ok(id)
+    }
+
+    async fn find_graph(
+        &self,
+        tenant: &str,
+        root_id: &str,
+        at_date: Option<time::Date>,
+    ) -> Result<Vec<crate::repository::LokationszuordnungEdge>, crate::error::MdmError> {
+        // Drop the lock before the BFS loop to avoid holding it across computation.
+        let filtered: Vec<_> = {
+            let edges = self.edges.read().await;
+            edges
+                .iter()
+                .filter(|e| e.tenant == tenant && is_valid_at(e, at_date))
+                .cloned()
+                .collect()
+        };
+        // BFS from root_id (max depth 8)
+        let mut result = Vec::new();
+        let mut frontier = vec![root_id.to_owned()];
+        let mut visited = std::collections::HashSet::new();
+        let mut depth = 0i32;
+        while !frontier.is_empty() && depth <= 8 {
+            let mut next = Vec::new();
+            for node in &frontier {
+                for edge in filtered.iter().filter(|e| &e.von_id == node) {
+                    if !visited.contains(&edge.nach_id) {
+                        let mut e = edge.clone();
+                        e.depth = depth;
+                        result.push(e);
+                        next.push(edge.nach_id.clone());
+                        visited.insert(edge.nach_id.clone());
+                    }
+                }
+            }
+            frontier = next;
+            depth += 1;
+        }
+        Ok(result)
+    }
+
+    async fn list_edges_from(
+        &self,
+        tenant: &str,
+        von_id: &str,
+        at_date: Option<time::Date>,
+    ) -> Result<Vec<crate::repository::LokationszuordnungEdge>, crate::error::MdmError> {
+        let edges = self.edges.read().await;
+        Ok(edges
+            .iter()
+            .filter(|e| e.tenant == tenant && e.von_id == von_id && is_valid_at(e, at_date))
+            .cloned()
+            .collect())
+    }
+
+    async fn delete_edge(
+        &self,
+        tenant: &str,
+        von_id: &str,
+        nach_id: &str,
+    ) -> Result<bool, crate::error::MdmError> {
+        let mut edges = self.edges.write().await;
+        let before = edges.len();
+        edges.retain(|e| !(e.tenant == tenant && e.von_id == von_id && e.nach_id == nach_id));
+        Ok(edges.len() < before)
+    }
+}
+
+fn is_valid_at(e: &crate::repository::LokationszuordnungEdge, at: Option<time::Date>) -> bool {
+    let Some(d) = at else { return true };
+    let from_ok = e.valid_from.is_none_or(|f| f <= d);
+    let to_ok = e.valid_to.is_none_or(|t| t >= d);
+    from_ok && to_ok
+}
+
+// ── InMemoryDeviceRepository (B3) ────────────────────────────────────────────
+
+/// In-memory test double for [`DeviceRepository`].
+#[derive(Default, Clone)]
+pub struct InMemoryDeviceRepository {
+    zaehler: Arc<RwLock<HashMap<(String, String), ZaehlerRecord>>>,
+    geraete: Arc<RwLock<HashMap<(String, String), GeraetRecord>>>,
+}
+
+impl DeviceRepository for InMemoryDeviceRepository {
+    async fn upsert_zaehler(
+        &self,
+        zaehler_id: &str,
+        tenant: &str,
+        melo_id: &str,
+        zaehler_typ: Option<&str>,
+        eichung_bis: Option<time::Date>,
+        data: serde_json::Value,
+        bo4e_version: &str,
+    ) -> Result<(), crate::error::MdmError> {
+        let key = (zaehler_id.to_owned(), tenant.to_owned());
+        let version = {
+            let z = self.zaehler.read().await;
+            z.get(&key).map_or(1, |r| r.version + 1)
+        };
+        self.zaehler.write().await.insert(
+            key,
+            ZaehlerRecord {
+                zaehler_id: zaehler_id.to_owned(),
+                tenant: tenant.to_owned(),
+                melo_id: melo_id.to_owned(),
+                zaehler_typ: zaehler_typ.map(std::borrow::ToOwned::to_owned),
+                eichung_bis,
+                data,
+                bo4e_version: bo4e_version.to_owned(),
+                version,
+                updated_at: time::OffsetDateTime::now_utc(),
+            },
+        );
+        Ok(())
+    }
+
+    async fn list_zaehler_by_melo(
+        &self,
+        melo_id: &str,
+        tenant: &str,
+    ) -> Result<Vec<ZaehlerRecord>, crate::error::MdmError> {
+        Ok(self
+            .zaehler
+            .read()
+            .await
+            .values()
+            .filter(|r| r.tenant == tenant && r.melo_id == melo_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn find_zaehler(
+        &self,
+        zaehler_id: &str,
+        tenant: &str,
+    ) -> Result<Option<ZaehlerRecord>, crate::error::MdmError> {
+        Ok(self
+            .zaehler
+            .read()
+            .await
+            .get(&(zaehler_id.to_owned(), tenant.to_owned()))
+            .cloned())
+    }
+
+    async fn upsert_geraet(
+        &self,
+        geraet_id: &str,
+        tenant: &str,
+        zaehler_id: &str,
+        geraet_typ: Option<&str>,
+        data: serde_json::Value,
+        bo4e_version: &str,
+    ) -> Result<(), crate::error::MdmError> {
+        let key = (geraet_id.to_owned(), tenant.to_owned());
+        let version = {
+            let g = self.geraete.read().await;
+            g.get(&key).map_or(1, |r| r.version + 1)
+        };
+        self.geraete.write().await.insert(
+            key,
+            GeraetRecord {
+                geraet_id: geraet_id.to_owned(),
+                tenant: tenant.to_owned(),
+                zaehler_id: zaehler_id.to_owned(),
+                geraet_typ: geraet_typ.map(std::borrow::ToOwned::to_owned),
+                data,
+                bo4e_version: bo4e_version.to_owned(),
+                version,
+                updated_at: time::OffsetDateTime::now_utc(),
+            },
+        );
+        Ok(())
+    }
+
+    async fn list_geraete_by_zaehler(
+        &self,
+        zaehler_id: &str,
+        tenant: &str,
+    ) -> Result<Vec<GeraetRecord>, crate::error::MdmError> {
+        Ok(self
+            .geraete
+            .read()
+            .await
+            .values()
+            .filter(|r| r.tenant == tenant && r.zaehler_id == zaehler_id)
+            .cloned()
+            .collect())
+    }
+}
+
+// ── InMemoryPreisblattKaRepository (B3) ──────────────────────────────────────
+
+use crate::repository::{PreisblattKaRecord, PreisblattKaRepository};
+
+type KaKey = (String, String, Option<String>);
+
+/// In-memory test double for [`PreisblattKaRepository`].
+#[derive(Default, Clone)]
+pub struct InMemoryPreisblattKaRepository {
+    store: Arc<RwLock<HashMap<KaKey, PreisblattKaRecord>>>,
+}
+
+impl PreisblattKaRepository for InMemoryPreisblattKaRepository {
+    async fn upsert_ka(
+        &self,
+        nb_mp_id: &str,
+        sparte: &str,
+        kundengruppe_ka: Option<&str>,
+        data: serde_json::Value,
+        bo4e_version: &str,
+        source: PreisblattSource,
+    ) -> Result<(), crate::error::MdmError> {
+        let key = (
+            nb_mp_id.to_owned(),
+            sparte.to_owned(),
+            kundengruppe_ka.map(ToOwned::to_owned),
+        );
+        self.store.write().await.insert(
+            key,
+            PreisblattKaRecord {
+                nb_mp_id: nb_mp_id.to_owned(),
+                sparte: sparte.to_owned(),
+                kundengruppe_ka: kundengruppe_ka.map(ToOwned::to_owned),
+                data,
+                bo4e_version: bo4e_version.to_owned(),
+                source,
+                created_at: time::OffsetDateTime::now_utc(),
+                updated_at: time::OffsetDateTime::now_utc(),
+            },
+        );
+        Ok(())
+    }
+
+    async fn find_ka_for_date(
+        &self,
+        nb_mp_id: &str,
+        sparte: &str,
+        kundengruppe_ka: Option<&str>,
+        _billing_date: &str,
+    ) -> Result<Option<PreisblattKaRecord>, crate::error::MdmError> {
+        let store = self.store.read().await;
+        // First try exact match, then fallback to generic (None kundengruppe)
+        let exact = store.get(&(
+            nb_mp_id.to_owned(),
+            sparte.to_owned(),
+            kundengruppe_ka.map(ToOwned::to_owned),
+        ));
+        if exact.is_some() {
+            return Ok(exact.cloned());
+        }
+        Ok(store
+            .get(&(nb_mp_id.to_owned(), sparte.to_owned(), None))
+            .cloned())
+    }
+}
+
+// ── InMemoryPreisblattDienstleistungRepository ───────────────────────────────
+
+use crate::repository::{
+    PreisblattDienstleistungRecord, PreisblattDienstleistungRepository, PreisblattHardwareRecord,
+    PreisblattHardwareRepository,
+};
+
+/// In-memory test double for [`PreisblattDienstleistungRepository`].
+#[derive(Default, Clone)]
+pub struct InMemoryPreisblattDienstleistungRepository {
+    store: Arc<RwLock<HashMap<String, PreisblattDienstleistungRecord>>>,
+}
+
+impl PreisblattDienstleistungRepository for InMemoryPreisblattDienstleistungRepository {
+    async fn upsert_dienstleistung(
+        &self,
+        msb_mp_id: &str,
+        data: serde_json::Value,
+        bo4e_version: &str,
+        source: PreisblattSource,
+    ) -> Result<(), crate::error::MdmError> {
+        self.store.write().await.insert(
+            msb_mp_id.to_owned(),
+            PreisblattDienstleistungRecord {
+                msb_mp_id: msb_mp_id.to_owned(),
+                data,
+                bo4e_version: bo4e_version.to_owned(),
+                source,
+                created_at: time::OffsetDateTime::now_utc(),
+                updated_at: time::OffsetDateTime::now_utc(),
+            },
+        );
+        Ok(())
+    }
+    async fn find_dienstleistung_for_date(
+        &self,
+        msb_mp_id: &str,
+        _billing_date: &str,
+    ) -> Result<Option<PreisblattDienstleistungRecord>, crate::error::MdmError> {
+        Ok(self.store.read().await.get(msb_mp_id).cloned())
+    }
+}
+
+/// In-memory test double for [`PreisblattHardwareRepository`].
+#[derive(Default, Clone)]
+pub struct InMemoryPreisblattHardwareRepository {
+    store: Arc<RwLock<HashMap<String, PreisblattHardwareRecord>>>,
+}
+
+impl PreisblattHardwareRepository for InMemoryPreisblattHardwareRepository {
+    async fn upsert_hardware(
+        &self,
+        msb_mp_id: &str,
+        data: serde_json::Value,
+        bo4e_version: &str,
+        source: PreisblattSource,
+    ) -> Result<(), crate::error::MdmError> {
+        self.store.write().await.insert(
+            msb_mp_id.to_owned(),
+            PreisblattHardwareRecord {
+                msb_mp_id: msb_mp_id.to_owned(),
+                data,
+                bo4e_version: bo4e_version.to_owned(),
+                source,
+                created_at: time::OffsetDateTime::now_utc(),
+                updated_at: time::OffsetDateTime::now_utc(),
+            },
+        );
+        Ok(())
+    }
+    async fn find_hardware_for_date(
+        &self,
+        msb_mp_id: &str,
+        _billing_date: &str,
+    ) -> Result<Option<PreisblattHardwareRecord>, crate::error::MdmError> {
+        Ok(self.store.read().await.get(msb_mp_id).cloned())
     }
 }

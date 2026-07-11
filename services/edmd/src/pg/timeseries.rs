@@ -58,11 +58,12 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         for read in reads {
             sqlx::query(
                 r"INSERT INTO meter_reads
-                      (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, tenant_id)
-                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                      (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, obis_code, tenant_id)
+                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                   ON CONFLICT (malo_id, dtm_from, dtm_to) DO UPDATE
                       SET quantity_kwh = EXCLUDED.quantity_kwh,
-                          quality     = EXCLUDED.quality",
+                          quality     = EXCLUDED.quality,
+                          obis_code   = COALESCE(EXCLUDED.obis_code, meter_reads.obis_code)",
             )
             .bind(&read.malo_id)
             .bind(&read.melo_id)
@@ -72,6 +73,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             .bind(quality_to_str(read.quality))
             .bind(read.pid as i32)
             .bind(sparte_to_str(read.sparte))
+            .bind(&read.obis_code)
             .bind(read.tenant_id)
             .execute(&self.pool)
             .await
@@ -82,7 +84,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
 
     async fn query(&self, q: &TimeSeriesQuery) -> Result<Vec<MeterRead>, EdmError> {
         let rows = sqlx::query(
-            r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, tenant_id
+            r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, obis_code, tenant_id
               FROM meter_reads
               WHERE malo_id = $1
                 AND dtm_from >= $2
@@ -187,7 +189,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         tenant_id: Option<Uuid>,
     ) -> Result<Option<MeterRead>, EdmError> {
         let row = sqlx::query(
-            r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, tenant_id
+            r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, obis_code, tenant_id
               FROM meter_reads
               WHERE malo_id = $1
                 AND ($2::uuid IS NULL OR tenant_id = $2)
@@ -274,7 +276,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
 
         // Fall back: on-the-fly aggregation from raw meter_reads.
         let rows = sqlx::query(
-            r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, tenant_id
+            r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, obis_code, tenant_id
               FROM meter_reads
               WHERE malo_id = $1
                 AND dtm_from >= $2
@@ -347,6 +349,30 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             tenant_id: q.tenant_id,
         }))
     }
+
+    async fn update_gas_quality(
+        &self,
+        malo_id: &str,
+        brennwert_kwh_per_m3: Option<&str>,
+        zustandszahl: Option<&str>,
+    ) -> Result<u64, EdmError> {
+        // Use COALESCE so that an already-set value is never overwritten by NULL.
+        // Update rows that still have any NULL gas quality field.
+        let result = sqlx::query(
+            r"UPDATE meter_billing_periods
+              SET brennwert_kwh_per_m3 = COALESCE($2, brennwert_kwh_per_m3),
+                  zustandszahl        = COALESCE($3, zustandszahl)
+              WHERE malo_id = $1
+                AND (brennwert_kwh_per_m3 IS NULL OR zustandszahl IS NULL)",
+        )
+        .bind(malo_id)
+        .bind(brennwert_kwh_per_m3)
+        .bind(zustandszahl)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EdmError::Database(e.to_string()))?;
+        Ok(result.rows_affected())
+    }
 }
 
 // ── Row mapping helpers ───────────────────────────────────────────────────────
@@ -380,6 +406,7 @@ fn row_to_read(row: &sqlx::postgres::PgRow) -> Result<MeterRead, EdmError> {
             row.try_get::<&str, _>("sparte")
                 .map_err(|e| EdmError::Database(e.to_string()))?,
         ),
+        obis_code: row.try_get("obis_code").unwrap_or(None),
         tenant_id: row
             .try_get("tenant_id")
             .map_err(|e| EdmError::Database(e.to_string()))?,

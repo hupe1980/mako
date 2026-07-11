@@ -267,8 +267,8 @@ pub struct ErpEvent {
     /// BO4E JSON Schema URL that validates [`payload`](ErpEvent::payload).
     ///
     /// Examples:
-    /// - `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202501.0.0/src/bo4e_schemas/bo/Marktlokation.json"`
-    /// - `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202501.0.0/src/bo4e_schemas/bo/Messlokation.json"`
+    /// - `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas/bo/Marktlokation.json"`
+    /// - `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas/bo/Messlokation.json"`
     ///
     /// `None` for events where no primary BO4E object is applicable
     /// (e.g. `ContrlReceived`).
@@ -348,7 +348,7 @@ pub struct InboundErpCommand {
     /// `payload`.
     ///
     /// Example:
-    /// `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202501.0.0/src/bo4e_schemas/bo/Vertrag.json"`
+    /// `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas/bo/Vertrag.json"`
     pub payload_schema: String,
 
     /// BO4E-typed JSON payload.  `mako-engine` maps this to an internal
@@ -582,14 +582,14 @@ impl ErpCommandSource for ErpCommandSourceTestHarness {
 
 // ── BO4E schema URL constants ─────────────────────────────────────────────────
 
-/// BO4E schema URL base for v202501.0.0.
+/// BO4E schema URL base for v202607.0.0.
 ///
 /// Use `bo4e_schema_url!(Marktlokation)` to construct typed schema URLs at
 /// compile time.
-pub const BO4E_V202501_BASE: &str =
-    "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202501.0.0/src/bo4e_schemas";
+pub const BO4E_V202607_BASE: &str =
+    "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas";
 
-/// Construct a BO4E v202501.0.0 JSON Schema URL for a Business Object.
+/// Construct a BO4E v202607.0.0 JSON Schema URL for a Business Object.
 ///
 /// ```rust
 /// use mako_engine::bo4e_schema_url;
@@ -599,7 +599,7 @@ pub const BO4E_V202501_BASE: &str =
 macro_rules! bo4e_schema_url {
     ($category:literal, $name:literal) => {
         concat!(
-            "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202501.0.0/src/bo4e_schemas/",
+            "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas/",
             $category,
             "/",
             $name,

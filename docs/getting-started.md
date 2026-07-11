@@ -20,11 +20,14 @@ complete end-to-end flow: UTILMD 55001 → automatic NB decision → UTILMD 5500
 |---|---|---|
 | `postgres` | `5432` | PostgreSQL — one database per service |
 | `webhook` | `8000` | Demo ERP event receiver (Python, in-memory) |
-| `marktd` | `8180` | Market Data Hub — MaLo/MeLo/contracts/VersorgungsStatus/preisblaetter/NeLo/malo_grid |
-| `processd` | `8580` | NB STP auto-responder — netz-checker decisions + LF E_0624, §20 EnWG parity |
-| `invoicd` | `8280` | INVOIC plausibility-check daemon (LF role) — §22 MessZV receipt retention |
+| `marktd` | `8180` | Market Data Hub — MaLo/MeLo/NeLo/TR, Lokationszuordnung graph, VersorgungsStatus, `event_log` replay |
+| `processd` | `8580` | NB STP auto-responder + LF E_0624 (45 min) + LFN bootstrap (Strom/Gas) |
+| `invoicd` | `8280` | INVOIC settlement (PIDs 31001/31002/31005/31006/31009) + payment CloudEvents |
+| `netzbilanzd` | `8680` | NNE/KA/MMM billing (NB role) — generates INVOIC 31001/31002/31005 |
+| `sperrd` | `8780` | Sperrung execution tracker (NB role) — IFTSTA 21039 auto-dispatch |
 | `edmd` | `8380` | Energy Data Management — MSCONS meter readings, `MeterBillingPeriod` |
 | `obsd` | `8480` | Business-process observability — ProcessProjection, BNetzA KPI reports |
+| `nis-syncd` | `9680` | NIS grid topology import (NB role, stateless) — lifts `processd` NB STP to ≥95% |
 | `makod` | `8080` | EDIFACT process engine — GPKE/WiM/GeLi Gas, AS4, SlateDB |
 
 ```mermaid

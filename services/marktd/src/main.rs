@@ -26,17 +26,32 @@ use marktd::{
         TenantGln,
         contract::{get_contract, put_contract},
         correlation::{get_correlation, list_correlations},
+        device::{
+            get_steuerbare_ressource, get_technische_ressource, get_zaehlwerke, list_geraete,
+            list_technische_ressourcen_by_malo, list_zaehler, put_geraet, put_steuerbare_ressource,
+            put_technische_ressource, put_zaehler,
+        },
         dlq::{delete_dlq_entry, list_dlq, retry_dlq_entry},
         event_ingest::{InboundWebhookSecret, ingest_event},
+        event_log::list_event_log,
         health::{health, health_ready},
+        lokationszuordnung::{
+            delete_lokationszuordnung, get_malo_lokationen, get_melo_lokationen,
+            put_lokationszuordnung,
+        },
         malo::{get_malo, list_malo, put_malo},
         malo_grid::{get_malo_grid, put_malo_grid},
         melo::{get_melo, put_melo},
         metrics::metrics_handler,
         nb_contract::{get_nb_contract, list_nb_contracts, put_nb_contract},
         nelo::{get_nelo, list_nelos, put_nelo},
-        partner::{get_partner, list_partners, put_partner},
-        preisblatt::{get_preisblatt, put_preisblatt},
+        partner::{get_as4_address, get_partner, list_partners, put_partner},
+        preisblatt::{
+            get_preisblatt, get_preisblatt_dienstleistung, get_preisblatt_hardware,
+            get_preisblatt_ka, get_preisblatt_messung, put_preisblatt,
+            put_preisblatt_dienstleistung, put_preisblatt_hardware, put_preisblatt_ka,
+            put_preisblatt_messung,
+        },
         pricat::{get_dispatch_log, get_pricat_history, post_pricat_dispatch},
         subscription::{get_subscription, list_subscriptions, put_subscription, test_subscription},
         versorgung::{get_versorgungsstatus, get_versorgungsstatus_history, put_versorgungsstatus},
@@ -44,10 +59,13 @@ use marktd::{
     oidc::OidcVerifier,
     openapi::swagger_ui,
     pg::{
-        PgContractRepository, PgCorrelationIndex, PgMaloGridRepository, PgMaloRepository,
-        PgMeloRepository, PgNbContractRepository, PgNeLoRepository, PgPartnerRepository,
-        PgPreisblattRepository, PgPriCatRepository, PgSubscriptionRepository,
-        PgVersorgungsStatusRepository,
+        PgContractRepository, PgCorrelationIndex, PgDeviceRepository,
+        PgLokationszuordnungRepository, PgMaloGridRepository, PgMaloRepository, PgMeloRepository,
+        PgNbContractRepository, PgNeLoRepository, PgPartnerRepository,
+        PgPreisblattDienstleistungRepository, PgPreisblattHardwareRepository,
+        PgPreisblattKaRepository, PgPreisblattMessungRepository, PgPreisblattRepository,
+        PgPriCatRepository, PgSteuerbareRessourceRepository, PgSubscriptionRepository,
+        PgTechnischeRessourceRepository, PgVersorgungsStatusRepository,
     },
 };
 
@@ -156,6 +174,16 @@ async fn main() -> anyhow::Result<()> {
     let ci = PgCorrelationIndex::new(pool.clone());
     let partner_repo = PgPartnerRepository::new(pool.clone());
     let preisblatt_repo = std::sync::Arc::new(PgPreisblattRepository::new(pool.clone()));
+    let preisblatt_messung_repo =
+        std::sync::Arc::new(PgPreisblattMessungRepository::new(pool.clone()));
+    let preisblatt_ka_repo = std::sync::Arc::new(PgPreisblattKaRepository::new(pool.clone()));
+    let preisblatt_dl_repo =
+        std::sync::Arc::new(PgPreisblattDienstleistungRepository::new(pool.clone()));
+    let preisblatt_hw_repo = std::sync::Arc::new(PgPreisblattHardwareRepository::new(pool.clone()));
+    let sr_repo = std::sync::Arc::new(PgSteuerbareRessourceRepository::new(pool.clone()));
+    let tr_repo = std::sync::Arc::new(PgTechnischeRessourceRepository::new(pool.clone()));
+    let lz_repo = std::sync::Arc::new(PgLokationszuordnungRepository::new(pool.clone()));
+    let device_repo = std::sync::Arc::new(PgDeviceRepository::new(pool.clone()));
     let nb_contract_repo = std::sync::Arc::new(PgNbContractRepository::new(pool.clone()));
     let vs_repo = std::sync::Arc::new(PgVersorgungsStatusRepository::new(pool.clone()));
     let pricat_repo = std::sync::Arc::new(PgPriCatRepository::new(pool.clone()));
@@ -356,6 +384,31 @@ async fn main() -> anyhow::Result<()> {
                 "/api/v1/preisblaetter/{nb_mp_id}",
                 get(get_preisblatt).put(put_preisblatt),
             )
+            // Price sheets (PreisblattMessung — MSB metering tariffs, B5)
+            .route(
+                "/api/v1/preisblaetter-messung/{msb_mp_id}",
+                get(get_preisblatt_messung).put(put_preisblatt_messung),
+            )
+            // Konzessionsabgabe price sheets (B3 — §17 StromNZV)
+            .route(
+                "/api/v1/preisblaetter-ka/{nb_mp_id}",
+                get(get_preisblatt_ka).put(put_preisblatt_ka),
+            )
+            // MSB service price sheets (PreisblattDienstleistung)
+            .route(
+                "/api/v1/preisblaetter-dienstleistung/{msb_mp_id}",
+                get(get_preisblatt_dienstleistung).put(put_preisblatt_dienstleistung),
+            )
+            // MSB hardware rental price sheets (PreisblattHardware)
+            .route(
+                "/api/v1/preisblaetter-hardware/{msb_mp_id}",
+                get(get_preisblatt_hardware).put(put_preisblatt_hardware),
+            )
+            // B2: AS4 address lookup (Marktteilnehmer.makoadresse)
+            .route(
+                "/api/v1/partners/{mp_id}/as4-address",
+                get(get_as4_address::<_, _, _, _, _, _>),
+            )
             // PRICAT version history + manual dispatch (Phase 2)
             .route("/api/v1/pricat/{nb_mp_id}/history", get(get_pricat_history))
             .route(
@@ -416,12 +469,54 @@ async fn main() -> anyhow::Result<()> {
                 "/api/v1/malo/{id}/grid",
                 get(get_malo_grid).put(put_malo_grid),
             )
+            // SteuerbareRessource registry (B4b — WiM iMS Steuerungsauftrag)
+            .route(
+                "/api/v1/steuerbare-ressourcen/{sr_id}",
+                get(get_steuerbare_ressource).put(put_steuerbare_ressource),
+            )
+            // TechnischeRessource registry (B9 — EMobility/Redispatch 2.0)
+            .route(
+                "/api/v1/technische-ressourcen/{tr_id}",
+                get(get_technische_ressource).put(put_technische_ressource),
+            )
+            .route(
+                "/api/v1/malos/{malo_id}/technische-ressourcen",
+                get(list_technische_ressourcen_by_malo),
+            )
+            // Lokationszuordnung graph API (B5 — MaLo↔MeLo↔NeLo↔SR↔TR topology)
+            .route(
+                "/api/v1/lokationszuordnungen",
+                axum::routing::put(put_lokationszuordnung),
+            )
+            .route(
+                "/api/v1/lokationszuordnungen/{von_id}/{nach_id}",
+                axum::routing::delete(delete_lokationszuordnung),
+            )
+            .route("/api/v1/malos/{id}/lokationen", get(get_malo_lokationen))
+            .route("/api/v1/melos/{id}/lokationen", get(get_melo_lokationen))
+            // Device registry: Zähler + Geräte (B3 — WiM MSB/NB device handover)
+            .route("/api/v1/melos/{melo_id}/zaehler", get(list_zaehler))
+            .route(
+                "/api/v1/zaehler/{zaehler_id}",
+                axum::routing::put(put_zaehler),
+            )
+            .route("/api/v1/zaehler/{zaehler_id}/geraete", get(list_geraete))
+            .route(
+                "/api/v1/zaehler/{zaehler_id}/zaehlwerke",
+                get(get_zaehlwerke),
+            )
+            .route(
+                "/api/v1/geraete/{geraet_id}",
+                axum::routing::put(put_geraet),
+            )
             // Inbound makod events
             .route(&inbound_path, post(ingest_event::<_, _, _, _, _, _>))
             // Dead-letter queue admin (F-003 — §22 MessZV compliance)
             .route("/admin/fanout/dlq", get(list_dlq))
             .route("/admin/fanout/dlq/{id}", delete(delete_dlq_entry))
             .route("/admin/fanout/dlq/{id}/retry", post(retry_dlq_entry))
+            // CloudEvent replay log admin (B11)
+            .route("/admin/events", get(list_event_log))
             // Prometheus-compatible metrics (F-006)
             .route("/metrics", get(metrics_handler))
             // Swagger UI
@@ -434,6 +529,13 @@ async fn main() -> anyhow::Result<()> {
             .layer(Extension(pool.clone()))
             // Preisblatt repository extension (M4)
             .layer(Extension(preisblatt_repo))
+            // PreisblattMessung repository extension (B5 — MSB metering tariffs)
+            .layer(Extension(preisblatt_messung_repo))
+            // KA price sheet repository extension (B3)
+            .layer(Extension(preisblatt_ka_repo))
+            // MSB Dienstleistung + Hardware price sheet repos
+            .layer(Extension(preisblatt_dl_repo))
+            .layer(Extension(preisblatt_hw_repo))
             // PRICAT version history + dispatch extension (Phase 2)
             .layer(Extension(pricat_repo))
             // NB contract repository extension
@@ -444,6 +546,14 @@ async fn main() -> anyhow::Result<()> {
             .layer(Extension(nelo_repo))
             // MaLo grid topology extension (N7)
             .layer(Extension(malo_grid_repo))
+            // SteuerbareRessource registry extension (B4b)
+            .layer(Extension(sr_repo))
+            // TechnischeRessource registry extension (B9)
+            .layer(Extension(tr_repo))
+            // Lokationszuordnung graph extension (B5)
+            .layer(Extension(lz_repo))
+            // Device registry extension (B3)
+            .layer(Extension(device_repo))
             // event_tx extension for handlers that emit CloudEvents without AppState
             .layer(Extension(state.event_tx.clone()))
             // Cedar ABAC enforcer (M6)

@@ -43,6 +43,7 @@
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
+    outbox::PendingOutbox,
     types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -100,6 +101,13 @@ pub enum WimRechnungEvent {
         ///
         /// PID 31003 (WiM-Rechnung) belongs to `mako-wim-gas`; it is not handled here.
         pruefidentifikator: Pruefidentifikator,
+        /// BO4E `Rechnung` object (rubo4e v0.5, schema v202607).
+        ///
+        /// Serialised at the transport boundary by the EDIFACT adapter and
+        /// embedded here so that `invoicd` can run plausibility checks
+        /// directly from the `ProcessInitiated` webhook payload without
+        /// re-fetching the original EDIFACT interchange.
+        rechnung: serde_json::Value,
     },
     /// INVOIC rejected immediately due to AHB validation failure.
     ///
@@ -186,6 +194,13 @@ pub enum WimRechnungCommand {
         validation_passed: bool,
         /// Validation error descriptions (empty when `validation_passed`).
         validation_errors: Vec<String>,
+        /// BO4E `Rechnung` object (rubo4e v0.5, schema v202607).
+        ///
+        /// Built by the EDIFACT adapter from the raw INVOIC segments.  Stored
+        /// in the `InvoicReceived` event and forwarded in the `ProcessInitiated`
+        /// webhook payload so that `invoicd` can validate without a separate
+        /// makod API round-trip.
+        rechnung: serde_json::Value,
     },
     /// Settle the invoice — a positive CONTRL will be dispatched.
     Settle,
@@ -241,6 +256,9 @@ pub enum WimRechnungState {
         invoice_ref: MessageRef,
         /// BDEW Prüfidentifikator (31003 or 31009).
         pruefidentifikator: Pruefidentifikator,
+        /// BO4E `Rechnung` object — retained in state so it survives replay
+        /// and is accessible to `GET /api/v1/invoic/{process_id}/rechnung`.
+        rechnung: serde_json::Value,
     },
     /// Invoice was accepted and settled.
     Settled,
@@ -280,10 +298,12 @@ impl Workflow for WimRechnungWorkflow {
             WimRechnungEvent::InvoicReceived {
                 invoice_ref,
                 pruefidentifikator,
+                rechnung,
                 ..
             } => WimRechnungState::PendingSettlement {
                 invoice_ref: invoice_ref.clone(),
                 pruefidentifikator: *pruefidentifikator,
+                rechnung: rechnung.clone(),
             },
             WimRechnungEvent::Rejected { reason } => WimRechnungState::Rejected {
                 reason: reason.clone(),
@@ -330,6 +350,7 @@ impl Workflow for WimRechnungWorkflow {
                 pruefidentifikator,
                 validation_passed,
                 validation_errors,
+                rechnung,
             } => {
                 if !matches!(state, WimRechnungState::New) {
                     return Err(WorkflowError::invalid_state("New", format!("{state:?}")));
@@ -339,20 +360,44 @@ impl Workflow for WimRechnungWorkflow {
                         "expected a WiM INVOIC PID (31003 or 31009), got {pruefidentifikator}"
                     )));
                 }
-                let events = if validation_passed {
-                    vec![WimRechnungEvent::InvoicReceived {
-                        invoice_ref,
-                        sender,
-                        recipient,
-                        document_date,
-                        pruefidentifikator,
-                    }]
+                if validation_passed {
+                    // Notify `invoicd` that a validated WiM INVOIC is ready for
+                    // plausibility checking.  The `Rechnung` BO4E object is
+                    // embedded so that `invoicd` can run checks directly from
+                    // the webhook payload (same pattern as GPKE abrechnung).
+                    let outbox = vec![
+                        PendingOutbox::new(
+                            "ProcessInitiated",
+                            recipient.as_str(),
+                            serde_json::json!({
+                                "pid":          pruefidentifikator.as_u32(),
+                                "invoice_ref":  invoice_ref.as_str(),
+                                "sender_mp_id": sender.as_str(),
+                                "rechnung":     rechnung,
+                            }),
+                        )
+                        .caused_by(0),
+                    ];
+                    Ok(WorkflowOutput::with_outbox(
+                        vec![WimRechnungEvent::InvoicReceived {
+                            invoice_ref,
+                            sender,
+                            recipient,
+                            document_date,
+                            pruefidentifikator,
+                            rechnung: outbox[0]
+                                .payload
+                                .get("rechnung")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null),
+                        }],
+                        outbox,
+                    ))
                 } else {
-                    vec![WimRechnungEvent::Rejected {
+                    Ok(WorkflowOutput::events(vec![WimRechnungEvent::Rejected {
                         reason: validation_errors.join("; "),
-                    }]
-                };
-                Ok(WorkflowOutput::events(events))
+                    }]))
+                }
             }
 
             WimRechnungCommand::Settle => {
@@ -362,7 +407,26 @@ impl Workflow for WimRechnungWorkflow {
                         format!("{state:?}"),
                     ));
                 }
-                Ok(WorkflowOutput::events(vec![WimRechnungEvent::Settled]))
+                let (pid, invoice_ref) = match &state {
+                    WimRechnungState::PendingSettlement {
+                        pruefidentifikator,
+                        invoice_ref,
+                        ..
+                    } => (pruefidentifikator.as_u32(), invoice_ref.to_string()),
+                    _ => (0, String::new()),
+                };
+                Ok(WorkflowOutput::with_outbox(
+                    vec![WimRechnungEvent::Settled],
+                    vec![PendingOutbox::new(
+                        "ProcessCompleted",
+                        "",
+                        serde_json::json!({
+                            "pid": pid,
+                            "invoice_ref": invoice_ref,
+                            "outcome": "settled",
+                        }),
+                    )],
+                ))
             }
 
             WimRechnungCommand::Dispute { reason } => {
@@ -372,9 +436,29 @@ impl Workflow for WimRechnungWorkflow {
                         format!("{state:?}"),
                     ));
                 }
-                Ok(WorkflowOutput::events(vec![WimRechnungEvent::Disputed {
-                    reason,
-                }]))
+                let (pid, invoice_ref) = match &state {
+                    WimRechnungState::PendingSettlement {
+                        pruefidentifikator,
+                        invoice_ref,
+                        ..
+                    } => (pruefidentifikator.as_u32(), invoice_ref.to_string()),
+                    _ => (0, String::new()),
+                };
+                Ok(WorkflowOutput::with_outbox(
+                    vec![WimRechnungEvent::Disputed {
+                        reason: reason.clone(),
+                    }],
+                    vec![PendingOutbox::new(
+                        "ProcessCompleted",
+                        "",
+                        serde_json::json!({
+                            "pid": pid,
+                            "invoice_ref": invoice_ref,
+                            "outcome": "disputed",
+                            "reason": reason,
+                        }),
+                    )],
+                ))
             }
 
             WimRechnungCommand::TimeoutExpired { deadline_id, label } => {

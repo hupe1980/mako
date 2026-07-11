@@ -20,15 +20,57 @@ use mako_markt::{
         PartnerRepository, SubscriptionRepository,
     },
 };
+use rubo4e::current::Messlokation;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::{Claims, IntoMdmResponse as _, etag, parse_if_match};
 
+// ── BO4E validation helpers ──────────────────────────────────────────────────────────
+
+/// Validate and normalise a `Messlokation` payload (L4 hard cut).
+fn normalize_messlokation(
+    mut data: serde_json::Value,
+) -> Result<serde_json::Value, (axum::http::StatusCode, serde_json::Value)> {
+    if let Some(obj) = data.as_object_mut() {
+        obj.entry("_typ")
+            .or_insert_with(|| serde_json::json!("MESSLOKATION"));
+    }
+    if let Some(typ) = data.get("_typ").and_then(|v| v.as_str())
+        && typ.to_uppercase() != "MESSLOKATION"
+    {
+        return Err((
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({ "error": format!("expected _typ MESSLOKATION, got '{typ}'") }),
+        ));
+    }
+    let melo: Messlokation = serde_json::from_value(data).map_err(|e| {
+        (
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({ "error": format!("invalid Messlokation payload: {e}") }),
+        )
+    })?;
+    Ok(serde_json::to_value(&melo).unwrap_or_default())
+}
+
+/// Deserialise stored JSONB as `Messlokation`. Returns `None` on schema drift.
+fn deserialize_stored_melo(data: serde_json::Value, melo_id: &str) -> Option<Messlokation> {
+    serde_json::from_value::<Messlokation>(data)
+        .map_err(|e| {
+            tracing::error!(
+                melo_id,
+                error = %e,
+                "schema drift: stored MeLo data is not a valid Messlokation — \
+                 re-PUT with a valid BO4E payload"
+            );
+        })
+        .ok()
+}
+
 // ── DTOs ──────────────────────────────────────────────────────────────────────
 
 fn default_bo4e_version() -> String {
-    "v202501.0.0".to_owned()
+    "v202607.0.0".to_owned()
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -37,7 +79,7 @@ pub struct MeloUpsertRequest {
     pub malo_id: Option<String>,
     /// Full BO4E MESSLOKATION payload.
     pub data: serde_json::Value,
-    /// BO4E schema version of `data` (e.g. `"v202501.0.0"`). Defaults to current.
+    /// BO4E schema version of `data` (e.g. `"v202607.0.0"`). Defaults to current.
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
 }
@@ -47,7 +89,22 @@ pub struct MeloResponse {
     pub melo_id: String,
     pub malo_id: Option<String>,
     pub version: i64,
-    pub data: serde_json::Value,
+    /// Validated BO4E `Messlokation` payload in canonical camelCase form.
+    /// `_typ` is auto-injected on write; enum fields validated on write.
+    #[schema(value_type = Object)]
+    pub data: Messlokation,
+    /// Voltage/pressure level at the metering point (`Messlokation.netzebeneMessung`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub netzebene_messung: Option<String>,
+    /// Regelzone EIC code extracted from `standorteigenschaften.eigenschaftenStrom[0].regelzone`.
+    /// Maps this MeLo to the \u00dcNB for Redispatch 2.0 Stammdaten routing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regelzone: Option<String>,
+    /// Full BO4E `Standorteigenschaften` JSONB — carries `StandorteigenschaftenStrom`
+    /// (regelzone, bilanzierungsgebietEic) and `StandorteigenschaftenGas` (druckstufe).
+    /// Required for Redispatch 2.0 `NetworkConstraintDocument` and Gas billing zones.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub standorteigenschaften: Option<serde_json::Value>,
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -115,12 +172,18 @@ where
         .flatten()
         .is_some();
 
+    // L4 hard cut: validate and normalise the incoming BO4E Messlokation payload.
+    let canonical_data = match normalize_messlokation(req.data) {
+        Ok(v) => v,
+        Err((status, body)) => return (status, Json(body)).into_response(),
+    };
+
     match state
         .melo_repo
         .upsert(
             &melo_id,
             malo_id.as_ref(),
-            req.data,
+            canonical_data,
             if_match,
             &req.bo4e_version,
         )
@@ -180,11 +243,18 @@ where
 
     match state.melo_repo.find(&melo_id).await {
         Ok(Some(r)) => {
+            let data = match deserialize_stored_melo(r.data, r.melo_id.as_ref()) {
+                Some(v) => v,
+                None => return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            };
             let resp = MeloResponse {
                 melo_id: r.melo_id.to_string(),
                 malo_id: r.malo_id.map(|id| id.to_string()),
                 version: r.version,
-                data: r.data,
+                data,
+                netzebene_messung: r.netzebene_messung,
+                regelzone: r.regelzone,
+                standorteigenschaften: r.standorteigenschaften,
             };
             (
                 StatusCode::OK,

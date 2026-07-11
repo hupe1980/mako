@@ -47,13 +47,13 @@ pub struct ContractUpsertRequest {
     /// `null` means the contract is currently active with no known end date.
     #[serde(default)]
     pub valid_to: Option<String>,
-    /// BO4E schema version of `data` (e.g. `"v202501.0.0"`). Defaults to current.
+    /// BO4E schema version of `data` (e.g. `"v202607.0.0"`). Defaults to current.
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
 }
 
 fn default_bo4e_version() -> String {
-    "v202501.0.0".to_owned()
+    "v202607.0.0".to_owned()
 }
 
 #[derive(Debug, Serialize, ToSchema)]

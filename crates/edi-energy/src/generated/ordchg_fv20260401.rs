@@ -79,6 +79,7 @@ static CODES_1153: &[&str] = &["ON", "TN", "Z13"];
 static CODES_1225: &[&str] = &["1"];
 static CODES_2005: &[&str] = &["137"];
 static CODES_3035: &[&str] = &["MR", "MS"];
+static CODES_3055: &[&str] = &["293", "332"];
 
 pub(crate) fn is_code_valid(de_id: &str, code: &str) -> bool {
     code_list(de_id).is_none_or(|codes| codes.binary_search(&code).is_ok())
@@ -106,6 +107,7 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
         "1225" => Some(CODES_1225),
         "2005" => Some(CODES_2005),
         "3035" => Some(CODES_3035),
+        "3055" => Some(CODES_3055),
         _ => None,
     }
 }

@@ -8,9 +8,12 @@
 
 pub mod contract;
 pub mod correlation;
+pub mod device;
 pub mod dlq;
 pub mod event_ingest;
+pub mod event_log;
 pub mod health;
+pub mod lokationszuordnung;
 pub mod malo;
 pub mod malo_grid;
 pub mod melo;

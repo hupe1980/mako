@@ -5,6 +5,12 @@ Quick-start guide for running and testing the full mako stack:
 - **`makod`** `:8080` — EDIFACT process engine (GPKE, WiM, GeLi Gas, MABIS, GaBi Gas)
 - **`marktd`** `:8180` — Market Data Hub (MaLo/MeLo, contracts, VersorgungsStatus, PRICAT, subscriptions)
 - **`processd`** `:8580` — NB STP auto-responder (validates Anmeldungen, dispatches bestaetigen/ablehnen)
+- **`invoicd`** `:8280` — INVOIC plausibility-check daemon (LF role; auto-settles/disputes inbound invoices)
+- **`edmd`** `:8380` — Energy Data Management (MSCONS meter readings, Lastgang/Zeitreihe export, billing period)
+- **`obsd`** `:8480` — Observability daemon (process projections, BNetzA KPIs)
+- **`netzbilanzd`** `:8680` — NNE/KA/MMM/MSB billing daemon (NB role; generates INVOIC 31001/31002/31005/31009)
+- **`sperrd`** `:8780` — Sperrung execution tracking (NB role; IFTSTA 21039 auto-dispatch)
+- **`nis-syncd`** `:9680` — NIS/GIS grid topology import adapter (pushes malo_grid, drift CloudEvents)
 - **`webhook`** `:8000` — In-memory ERP event receiver
 
 Both daemons run with authentication **disabled** in the demo (`--auth-disabled` / `--auth-key`) — suitable for local development only. See the [production guide](../docs/getting-started.md) for OIDC setup.
@@ -22,19 +28,22 @@ Both daemons run with authentication **disabled** in the demo (`--auth-disabled`
 Build images from the repo root:
 
 ```bash
-docker build --target runtime          -t makod:dev     .
-docker build --target marktd-runtime   -t marktd:dev    .
-docker build --target processd-runtime -t processd:dev  .
-docker build --target invoicd-runtime  -t invoicd:dev   .
-docker build --target edmd-runtime     -t edmd:dev      .
-docker build --target obsd-runtime     -t obsd:dev      .
+docker build --target runtime          -t makod:dev      .
+docker build --target marktd-runtime   -t marktd:dev     .
+docker build --target processd-runtime -t processd:dev   .
+docker build --target invoicd-runtime  -t invoicd:dev    .
+docker build --target edmd-runtime     -t edmd:dev       .
+docker build --target obsd-runtime     -t obsd:dev       .
+docker build --target netzbilanzd-runtime -t netzbilanzd:dev .
+docker build --target sperrd-runtime      -t sperrd:dev      .
+docker build --target nis-syncd-runtime   -t nis-syncd:dev   .
 ```
 
 Or pull published images:
 
 ```bash
-docker pull ghcr.io/hupe1980/makod:0.7.0 && docker tag ghcr.io/hupe1980/makod:0.7.0 makod:dev
-docker pull ghcr.io/hupe1980/marktd:0.7.0  && docker tag ghcr.io/hupe1980/marktd:0.7.0  marktd:dev
+docker pull ghcr.io/hupe1980/makod:0.8.0 && docker tag ghcr.io/hupe1980/makod:0.8.0 makod:dev
+docker pull ghcr.io/hupe1980/marktd:0.8.0  && docker tag ghcr.io/hupe1980/marktd:0.8.0  marktd:dev
 ```
 
 ---
@@ -59,6 +68,12 @@ The demo runs the stack as **Netzbetreiber Strom (NB)** with GLN `9900357000004`
 | edmd | Auth | disabled (dev mode) |
 | obsd | HTTP port | `:8480` |
 | obsd | Auth | disabled (dev mode) |
+| netzbilanzd | HTTP port | `:8680` |
+| netzbilanzd | Auth | disabled (dev mode) |
+| sperrd | HTTP port | `:8780` |
+| sperrd | Auth | disabled (dev mode) |
+| nis-syncd | HTTP port | `:9680` |
+| nis-syncd | Auth | disabled (dev mode) |
 
 ---
 
@@ -201,7 +216,7 @@ curl http://localhost:8000/events | jq '.[].body | {type,subject}'
 | makod REST API | http://localhost:8080 | EDIFACT ingest, process commands |
 | makod Swagger UI | http://localhost:8080/api/v1/docs/ | Interactive API docs |
 | makod MCP server | http://localhost:8080/mcp | LLM tooling (Claude Desktop, VS Code) |
-| marktd REST API | http://localhost:8180 | Master data (MaLo/MeLo, price sheets, VersorgungsStatus) |
+| marktd REST API | http://localhost:8180 | Master data (MaLo/MeLo, typed BO4E responses, NB contracts, price sheets) |
 | marktd Swagger UI | http://localhost:8180/api/v1/docs/ | Interactive API docs |
 | marktd DLQ admin | http://localhost:8180/admin/fanout/dlq | Inspect failed CloudEvent deliveries |
 | marktd metrics | http://localhost:8180/metrics | Prometheus metrics |
@@ -209,8 +224,14 @@ curl http://localhost:8000/events | jq '.[].body | {type,subject}'
 | processd queue | http://localhost:8580/api/v1/queue | LF approval queue |
 | invoicd receipts | http://localhost:8280/api/v1/receipts | INVOIC receipt ledger |
 | invoicd overdue | http://localhost:8280/api/v1/overdue-remadv | Approaching Zahlungsziel |
-| edmd meter reads | http://localhost:8380/api/v1/deliveries/{malo_id} | Time-series meter data |
+| edmd deliveries | http://localhost:8380/api/v1/deliveries/{malo_id} | BO4E `Energiemenge` array (typed ERP feed) |
+| edmd Lastgang | http://localhost:8380/api/v1/lastgang/{malo_id} | BO4E interval time-series (grouped by OBIS) |
+| edmd Zeitreihe | http://localhost:8380/api/v1/zeitreihe/{malo_id} | BO4E generic time-series (commodity metadata) |
 | obsd projections | http://localhost:8480/obs/processes | Live process projections |
 | obsd KPIs | http://localhost:8480/obs/kpis | BNetzA KPI report |
+| netzbilanzd billing | http://localhost:8680/api/v1/billing/run | NNE/MMM/MSB invoice generation |
+| netzbilanzd drafts | http://localhost:8680/api/v1/billing/drafts | Invoice draft review queue |
+| sperrd orders | http://localhost:8780/api/v1/sperr-orders | Sperrung execution tracker |
+| nis-syncd sync | http://localhost:9680/api/v1/grid/sync | NIS grid topology import |
 | ERP webhook receiver | http://localhost:8000/events | View delivered CloudEvents |
 

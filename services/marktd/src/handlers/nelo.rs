@@ -46,6 +46,15 @@ pub struct NeLoUpsertRequest {
     pub netzebene: Option<String>,
     /// Owning Netzbetreiber GLN.
     pub nb_mp_id: String,
+    /// `true` if this NeLo can be remote-controlled (Redispatch 2.0 B6).
+    #[serde(default)]
+    pub steuerkanal: Option<bool>,
+    /// gMSB Marktrolle (`"NB"`, `"MSB"`, …) — `eigenschaftMsbLokation` in BO4E.
+    #[serde(default)]
+    pub eigenschaft_msb_lokation: Option<String>,
+    /// gMSB MP-ID — `grundzustaendigerMsbCodenr` in BO4E.
+    #[serde(default)]
+    pub grundzustaendiger_msb_codenr: Option<String>,
     /// Additional Redispatch 2.0 attributes (arbitrary JSON object).
     #[serde(default = "empty_object")]
     pub data: serde_json::Value,
@@ -63,6 +72,12 @@ pub struct NeLoResponse {
     pub name: Option<String>,
     pub netzebene: Option<String>,
     pub nb_mp_id: String,
+    /// Redispatch 2.0 remote-control flag (B6).
+    pub steuerkanal: Option<bool>,
+    /// gMSB Marktrolle (B6).
+    pub eigenschaft_msb_lokation: Option<String>,
+    /// gMSB MP-ID (B6).
+    pub grundzustaendiger_msb_codenr: Option<String>,
     pub data: serde_json::Value,
     pub version: i64,
     pub updated_at: String,
@@ -76,6 +91,9 @@ impl From<NeLoRecord> for NeLoResponse {
             name: r.name,
             netzebene: r.netzebene,
             nb_mp_id: r.nb_mp_id,
+            steuerkanal: r.steuerkanal,
+            eigenschaft_msb_lokation: r.eigenschaft_msb_lokation,
+            grundzustaendiger_msb_codenr: r.grundzustaendiger_msb_codenr,
             data: r.data,
             version: r.version,
             updated_at: r.updated_at.to_string(),
@@ -152,6 +170,9 @@ pub async fn put_nelo(
         sparte: body.sparte,
         netzebene: body.netzebene,
         nb_mp_id: body.nb_mp_id,
+        steuerkanal: body.steuerkanal,
+        eigenschaft_msb_lokation: body.eigenschaft_msb_lokation,
+        grundzustaendiger_msb_codenr: body.grundzustaendiger_msb_codenr,
         data: body.data,
         version: 0,
         updated_at: time::OffsetDateTime::now_utc(),

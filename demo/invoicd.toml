@@ -52,5 +52,9 @@ auto_dispute_threshold_eur = 0.0    # 0.0 → Warn always auto-approved
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 # audience = "api://mako-invoicd"
 
+[edmd]
+url = "http://localhost:8380"
+# api_key = "env:EDMD_API_KEY"
+
 # [otel]
 # endpoint = "http://otel-collector:4317"

@@ -17,6 +17,9 @@ Commands:
   validate-pruefids   Check that every AHB Pruefidentifikator has a test fixture
   validate-release-codes  Verify that every profile's release code appears in a UNH 0057 fixture
   audit-ahb           Comprehensive AHB rule-coverage analysis for all profiles
+  check-bo4e-coverage  Count distinct rubo4e::current types used across crates/ and services/ and
+                        verify the count matches the claim in README.md. Exits 1 if the count
+                        deviates by more than 2.
   check-release-coverage  Fail when no profile covers the current (or --date) date
 
 Options for `validate-pruefids`:
@@ -128,6 +131,7 @@ fn main() {
         Some("add-release") => add_release(),
         Some("bump-version") => bump_version(),
         Some("audit-ahb") => audit_ahb(),
+        Some("check-bo4e-coverage") => check_bo4e_coverage(),
         Some("check-release-coverage") => check_release_coverage::check_release_coverage(),
         Some("codegen") => codegen(),
         Some("validate-profiles") => validate_profiles(),
@@ -176,6 +180,132 @@ fn audit_ahb() {
     let ok = audit_ahb::run(&workspace_root, &args);
     if !ok {
         std::process::exit(1);
+    }
+}
+
+fn check_bo4e_coverage() {
+    // Count distinct rubo4e::current types used across crates/ and services/.
+    //
+    // The grep for single-line imports misses multi-line brace imports such as
+    //   use rubo4e::current::{
+    //       Energiemenge, Lastgang, ...
+    //   };
+    // This implementation scans all Rust source files and accumulates type names
+    // from both single-line and multi-line import forms.
+    //
+    // Exit 1 if the count deviates by more than 2 from the claimed value in README.md.
+    use std::collections::BTreeSet;
+
+    let (root_str, _) = workspace_info();
+    let root = std::path::Path::new(&root_str);
+    let mut types: BTreeSet<String> = BTreeSet::new();
+
+    // Walk crates/ and services/ for *.rs files.
+    let search_dirs = [root.join("crates"), root.join("services")];
+    let mut rs_files: Vec<std::path::PathBuf> = Vec::new();
+    for dir in &search_dirs {
+        if let Ok(walker) = std::fs::read_dir(dir) {
+            collect_rs_files(walker, &mut rs_files);
+        }
+    }
+
+    // For each file, scan for `use rubo4e::current::<ident>` or `use rubo4e::current::{...}`
+    for path in &rs_files {
+        let Ok(src) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let mut in_import = false;
+        for line in src.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("use rubo4e::current::") {
+                in_import = true;
+            }
+            if in_import {
+                // Extract PascalCase identifiers, skipping `as Alias` rename targets.
+                // e.g. `Sparte as Bo4eSparte` → adds Sparte, skips Bo4eSparte.
+                let mut word = String::new();
+                let mut prev_word_was_as = false;
+                for ch in trimmed.chars() {
+                    if ch.is_alphanumeric() || ch == '_' {
+                        word.push(ch);
+                    } else if !word.is_empty() {
+                        if word == "as" {
+                            prev_word_was_as = true;
+                        } else {
+                            let is_type = word.chars().next().is_some_and(|c| c.is_uppercase());
+                            if is_type && !prev_word_was_as && word != "Bool" && word != "String" {
+                                types.insert(word.clone());
+                            }
+                            prev_word_was_as = false;
+                        }
+                        word.clear();
+                    }
+                }
+                if !word.is_empty() && word != "as" {
+                    let is_type = word.chars().next().is_some_and(|c| c.is_uppercase());
+                    if is_type && !prev_word_was_as {
+                        types.insert(word);
+                    }
+                }
+                // End of import: no trailing comma or open brace means single-line form done.
+                if !trimmed.ends_with('{') && !trimmed.ends_with(',') {
+                    in_import = false;
+                }
+            }
+        }
+    }
+
+    println!("rubo4e::current types found:");
+    for t in &types {
+        println!("  {t}");
+    }
+    let found = types.len();
+    println!("\nTotal: {found} distinct rubo4e::current types");
+
+    // Check against the claim in README.md.
+    // The claim looks like: **24 active `rubo4e::current` types**
+    let readme = std::fs::read_to_string(root.join("README.md")).unwrap_or_default();
+    let claimed: usize = readme
+        .lines()
+        .find(|l| l.contains("rubo4e::current") && l.contains("types"))
+        .and_then(|l| {
+            // Strip markdown formatting and find the first integer.
+            let stripped: String = l
+                .chars()
+                .filter(|c| c.is_ascii_digit() || c.is_whitespace())
+                .collect();
+            stripped
+                .split_whitespace()
+                .find_map(|w| w.parse::<usize>().ok())
+        })
+        .unwrap_or(0);
+
+    if claimed == 0 {
+        println!("⚠ Could not parse claimed count from README.md.");
+    } else {
+        let delta = (found as i64 - claimed as i64).unsigned_abs() as usize;
+        if delta > 2 {
+            eprintln!(
+                "ERROR: found {found} types but README.md claims {claimed} (delta={delta} > 2)."
+            );
+            eprintln!("Update the count in README.md and docs/index.md.");
+            std::process::exit(1);
+        } else {
+            println!("✓ Count {found} matches README.md claim {claimed} (delta={delta} ≤ 2).");
+        }
+    }
+}
+
+fn collect_rs_files(walker: std::fs::ReadDir, out: &mut Vec<std::path::PathBuf>) {
+    for entry in walker.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Ok(sub) = std::fs::read_dir(&path) {
+                collect_rs_files(sub, out);
+            }
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
     }
 }
 

@@ -26,7 +26,9 @@ use serde::{Deserialize, Serialize};
 
 // ── Identifier re-exports ─────────────────────────────────────────────────────
 
-pub use rubo4e::identifiers::{MaloId, MarktpartnerId, MeloId};
+pub use rubo4e::identifiers::{
+    EicCode, MaloId, MarktpartnerId, MeloId, NeloId, ObisCode, SrId, TrId,
+};
 
 /// Derive the NAD DE3055 agency code from a `MarktpartnerId`.
 ///

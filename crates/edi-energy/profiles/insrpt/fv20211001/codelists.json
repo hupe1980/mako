@@ -2,13 +2,48 @@
   "schema_version": 1,
   "release": "1.1a",
   "lists": {
-    "1001": ["4", "21", "22", "23", "293"],
-    "1153": ["Z13", "Z21", "AAV"],
-    "2005": ["137", "9", "163", "164", "292"],
-    "3035": ["MS", "MR", "CC", "DP"],
-    "3139": ["IC"],
-    "3155": ["EM", "FX", "TE", "AJ", "AL"],
-    "3227": ["172"],
-    "4451": ["AAO", "ACD"]
-  }
+    "1001": [
+      "4",
+      "21",
+      "22",
+      "23",
+      "293"
+    ],
+    "1153": [
+      "Z13",
+      "Z21",
+      "AAV"
+    ],
+    "2005": [
+      "137",
+      "9",
+      "163",
+      "164",
+      "292"
+    ],
+    "3035": [
+      "MS",
+      "MR",
+      "CC",
+      "DP"
+    ],
+    "3139": [
+      "IC"
+    ],
+    "3155": [
+      "EM",
+      "FX",
+      "TE",
+      "AJ",
+      "AL"
+    ],
+    "3227": [
+      "172"
+    ],
+    "4451": [
+      "AAO",
+      "ACD"
+    ]
+  },
+  "_note_sts_status_23012": "Änd-ID 23012 (INSRPT AHB 1.1g, Stand 11.12.2025): ZS1 (Reparatur ohne Gerätewechsel) added to Anwendungsfall 23012 STS qualifier set alongside ZB8 and ZC1. No allow-list codegen validation for STS qualifier codes — profile accepts any value. Conformance test for ZS1 to be added via cargo xtask generate-fixtures."
 }

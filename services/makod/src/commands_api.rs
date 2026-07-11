@@ -218,7 +218,11 @@ use mako_engine::{
     types::{BikoId, BillingPeriod, BkvId, MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator},
     version::WorkflowId,
 };
-use mako_geli_gas::{GasSupplierChangeCommand, GeliGasSupplierChangeWorkflow};
+use mako_geli_gas::{
+    GELI_GAS_DATENABRUF_WORKFLOW_NAME, GasSupplierChangeCommand, GeliGasDatanabrufCommand,
+    GeliGasDatanabrufWorkflow, GeliGasLfAnmeldungCommand, GeliGasLfAnmeldungWorkflow,
+    GeliGasSupplierChangeWorkflow, LF_ANMELDUNG_ANFRAGE_PIDS,
+};
 use mako_gpke::{
     AbrechnungCommand, AnkuendigungZuordnungLfCommand, GpkeAbrechnungWorkflow,
     GpkeAnkuendigungZuordnungLfWorkflow, GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow,
@@ -228,6 +232,7 @@ use mako_mabis::{
     BillingCommand, BillingVersion, DataStatus, IFTSTA_DATENSTATUS_PID,
     IFTSTA_PIDS as MABIS_IFTSTA_PIDS, MabisBillingWorkflow, PRUEFMITTEILUNG_DEADLINE_LABEL,
 };
+use mako_wim::rechnung::{WimRechnungCommand, WimRechnungWorkflow};
 use mako_wim::steuerungsauftrag::{SteuerungsauftragCommand, WimSteuerungsauftragWorkflow};
 use mako_wim::{DeviceChangeCommand, WimDeviceChangeWorkflow};
 use rubo4e::identifiers::{MaloId, MeloId};
@@ -1036,35 +1041,21 @@ fn cmd_gpke_abrechnung_ablehnen<'a>(
 }
 
 fn cmd_geli_lieferbeginn_anmelden<'a>(
-    _s: &'a CommandsApiState,
-    _p: &'a serde_json::Value,
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    // TODO(F-022): No LFG-side GeLi Gas Lieferbeginn workflow exists yet.
-    // GeLi Gas 3.0 (BK7-24-01-009) PID 44001 — LFG initiates Lieferbeginn.
-    // Implement: create GeliGasLfAnmeldungWorkflow, wire up analogously to
-    // GpkeLfAnmeldungWorkflow with the gas-specific AHB fields.
-    Box::pin(async {
-        Err(DispatchError::NotImplemented(
-            "geli.lieferbeginn.anmelden".to_owned(),
-        ))
-    })
+    Box::pin(dispatch_geli_lf_anmeldung(s, p, 44001))
 }
 
 fn cmd_geli_lieferende_anmelden<'a>(
-    _s: &'a CommandsApiState,
-    _p: &'a serde_json::Value,
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    // TODO(F-022): No LFG-side GeLi Gas Lieferende workflow exists yet.
-    // GeLi Gas 3.0 (BK7-24-01-009) PID 44002 — LFG initiates Lieferende.
-    Box::pin(async {
-        Err(DispatchError::NotImplemented(
-            "geli.lieferende.anmelden".to_owned(),
-        ))
-    })
+    Box::pin(dispatch_geli_lf_anmeldung(s, p, 44002))
 }
 
 fn cmd_geli_lieferbeginn_bestaetigen<'a>(
@@ -1182,6 +1173,41 @@ fn cmd_wim_steuerungsauftrag_ablehnen<'a>(
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
     Box::pin(dispatch_steuerungsauftrag_endantwort(s, p, false))
+}
+
+fn cmd_wim_rechnung_annehmen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let invoice_ref = extract_invoice_ref(p)?;
+        dispatch_to_process::<WimRechnungWorkflow, _>(s, &invoice_ref, "wim-rechnung", || {
+            WimRechnungCommand::Settle
+        })
+        .await
+    })
+}
+
+fn cmd_wim_rechnung_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let invoice_ref = extract_invoice_ref(p)?;
+        let reason = p
+            .get("ablehnungsgrund")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Automatisch ermittelte Abweichung — WiM 31009")
+            .to_owned();
+        dispatch_to_process::<WimRechnungWorkflow, _>(s, &invoice_ref, "wim-rechnung", || {
+            WimRechnungCommand::Dispute { reason }
+        })
+        .await
+    })
 }
 
 fn cmd_mabis_abrechnung_einleiten<'a>(
@@ -1738,6 +1764,363 @@ async fn dispatch_lf_activate(
         || LfAnmeldungCommand::Activate,
     )
     .await
+}
+
+fn cmd_geli_gas_stornierung_initiieren<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_gas_stornierung_initiieren(s, p))
+}
+
+fn cmd_geli_gas_datenabruf_anfragen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_gas_datenabruf_anfragen(s, p))
+}
+
+/// Dispatch `geli.gas.datenabruf.anfragen` — LF requests Gas quality data from NB.
+///
+/// Spawns a new [`GeliGasDatanabrufWorkflow`] and sends ORDERS 17103 outbound
+/// to the GNB requesting Abrechnungsbrennwert and Zustandszahl.
+/// 10-Werktage response deadline registered atomically (BK7-24-01-009).
+///
+/// ## Required payload fields
+///
+/// | Field     | Type   | Notes |
+/// |-----------|--------|-------|
+/// | `malo_id` | string | Gas Marktlokations-ID (11-digit EIC) |
+async fn dispatch_geli_gas_datenabruf_anfragen(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let malo_id = extract_malo_id(payload)?;
+
+    let malo_record = state
+        .malo_cache
+        .get(&state.tenant_id.to_string(), &malo_id)
+        .await
+        .map_err(|e| DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string())))?
+        .ok_or_else(|| DispatchError::MaloNotFound(malo_id.clone()))?;
+
+    let gnb_mp_id = malo_record
+        .data_market_location
+        .data_market_location_network_operators
+        .iter()
+        .max_by_key(|p| (p.execution_time_until.is_none(), &p.execution_time_from))
+        .map(|p| MarktpartnerCode::new(format!("{:013}", p.market_partner_id)))
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(format!(
+                "MaLo {malo_id} has no network_operator — GNB GLN cannot be resolved",
+            ))
+        })?;
+
+    let pid = Pruefidentifikator::new(17103).map_err(DispatchError::InvalidPayload)?;
+    let message_ref = MessageRef::new(format!("DATENABRUF-{}", uuid::Uuid::new_v4()));
+    let domain_cmd = GeliGasDatanabrufCommand::InitiateAnfrage {
+        pid,
+        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        receiver: gnb_mp_id,
+        message_ref,
+    };
+
+    let workflow_id = WorkflowId::new(GELI_GAS_DATENABRUF_WORKFLOW_NAME, latest_format_version());
+    let process = mako_engine::process::Process::<
+        GeliGasDatanabrufWorkflow,
+        Arc<mako_engine::store_slatedb::SlateDbStore>,
+    >::new(
+        Arc::clone(&state.store),
+        state.tenant_id,
+        workflow_id.clone(),
+    );
+    let process_id = process.process_id();
+
+    let due_at = mako_engine::fristen::deadline_at_werktage(
+        time::OffsetDateTime::now_utc(),
+        10,
+        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+    );
+    let deadline = Deadline::new(
+        process.stream_id().clone(),
+        process_id,
+        state.tenant_id,
+        workflow_id,
+        mako_geli_gas::datenabruf::ANTWORT_WINDOW_LABEL,
+        due_at,
+    );
+    process
+        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
+        .await?;
+
+    let identity = process.identity();
+    let _ = state
+        .store
+        .as_process_registry()
+        .register_correlated(state.tenant_id, &malo_id, process_id, identity)
+        .await;
+
+    Ok(DispatchOutcome::Spawned { process_id })
+}
+
+/// Dispatch `geli.gas.stornierung.initiieren` — LFN/LFA initiates a Gas
+/// supply-change cancellation (UTILMD G 44022 outbound to GNB).
+///
+/// ## Required payload fields
+///
+/// | Field         | Type   | Notes |
+/// |---------------|--------|-------|
+/// | `malo_id`     | string | Gas Marktlokations-ID (11-digit EIC) |
+/// | `bgm_qualifier` | string (opt.) | `E01`=Kündigung (default), `E02`=Rücktritt, `E35`=Sperrung |
+///
+/// Spawns a new [`GeliGasLfStornierungWorkflow`] keyed on `malo_id`.
+/// 10-Werktage response deadline (BK7-24-01-009) registered atomically.
+async fn dispatch_geli_gas_stornierung_initiieren(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    use mako_geli_gas::{
+        GeliGasLfStornierungWorkflow, LfStornierungCommand, STORNIERUNG_LF_WORKFLOW_NAME,
+    };
+
+    let malo_id = extract_malo_id(payload)?;
+    let bgm_qualifier = payload
+        .get("bgm_qualifier")
+        .and_then(|v| v.as_str())
+        .unwrap_or("E01")
+        .to_owned();
+
+    let malo_record = state
+        .malo_cache
+        .get(&state.tenant_id.to_string(), &malo_id)
+        .await
+        .map_err(|e| DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string())))?
+        .ok_or_else(|| DispatchError::MaloNotFound(malo_id.clone()))?;
+
+    let gnb_mp_id = malo_record
+        .data_market_location
+        .data_market_location_network_operators
+        .iter()
+        .max_by_key(|p| (p.execution_time_until.is_none(), &p.execution_time_from))
+        .map(|p| MarktpartnerCode::new(format!("{:013}", p.market_partner_id)))
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(format!(
+                "MaLo {malo_id} has no network_operator entry — GNB GLN cannot be resolved",
+            ))
+        })?;
+
+    let pid = Pruefidentifikator::new(44022).map_err(DispatchError::InvalidPayload)?;
+    let domain_cmd = LfStornierungCommand::InitiateStornierung {
+        pid,
+        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        receiver: gnb_mp_id,
+        vorgang_id: MaLo::new(malo_id.clone()),
+        bgm_qualifier,
+    };
+
+    // Idempotency: reject if an active stornierung already exists.
+    let existing = state
+        .store
+        .as_process_registry()
+        .lookup_correlated(state.tenant_id, &malo_id)
+        .await
+        .map_err(DispatchError::Engine)?;
+    if let Some(first) = existing
+        .into_iter()
+        .find(|id| id.workflow_id.name.as_ref() == STORNIERUNG_LF_WORKFLOW_NAME)
+    {
+        let dup_id = first.process_id;
+        tracing::warn!(
+            malo_id = %malo_id,
+            process_id = %dup_id,
+            "geli.gas.stornierung.initiieren refused: active stornierung already exists for this MaLo",
+        );
+        return Err(DispatchError::DuplicateProcess {
+            process_id: dup_id,
+            malo_id,
+        });
+    }
+
+    let workflow_id = WorkflowId::new(STORNIERUNG_LF_WORKFLOW_NAME, latest_format_version());
+    let process = mako_engine::process::Process::<
+        GeliGasLfStornierungWorkflow,
+        Arc<mako_engine::store_slatedb::SlateDbStore>,
+    >::new(
+        Arc::clone(&state.store),
+        state.tenant_id,
+        workflow_id.clone(),
+    );
+    let process_id = process.process_id();
+
+    let due_at = mako_engine::fristen::deadline_at_werktage(
+        time::OffsetDateTime::now_utc(),
+        10,
+        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+    );
+    let deadline = Deadline::new(
+        process.stream_id().clone(),
+        process_id,
+        state.tenant_id,
+        workflow_id,
+        mako_geli_gas::STORNIERUNG_LF_RESPONSE_WINDOW_LABEL,
+        due_at,
+    );
+    process
+        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
+        .await?;
+
+    let identity = process.identity();
+    let _ = state
+        .store
+        .as_process_registry()
+        .register_correlated(state.tenant_id, &malo_id, process_id, identity)
+        .await;
+
+    Ok(DispatchOutcome::Spawned { process_id })
+}
+
+/// Dispatch a GeLi Gas LFN-side Lieferbeginn (PID 44001) or Lieferende (PID 44002).
+///
+/// Spawns a new [`GeliGasLfAnmeldungWorkflow`] and atomically registers a
+/// 10-Werktage GNB-response deadline (BK7-24-01-009).
+///
+/// ## Required payload fields
+///
+/// | Field             | Type   | Notes |
+/// |-------------------|--------|-------|
+/// | `malo_id`         | string | Gas Marktlokations-ID (11-digit EIC, IDE+Z19) |
+/// | `zaehlpunkt`      | string | Zählpunktbezeichnung (RFF+Z13) — mandatory per AHB |
+/// | `process_date`    | string | Lieferbeginn/Lieferende date (YYYYMMDD, German local) |
+async fn dispatch_geli_lf_anmeldung(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    pid_code: u32,
+) -> Result<DispatchOutcome, DispatchError> {
+    use mako_geli_gas::lf_anmeldung::WORKFLOW_NAME as GELI_LF_ANMELDUNG_WF;
+
+    if !LF_ANMELDUNG_ANFRAGE_PIDS.contains(&pid_code) {
+        return Err(DispatchError::InvalidPayload(format!(
+            "geli.lieferbeginn.anmelden: unsupported PID {pid_code}"
+        )));
+    }
+
+    let malo_id = extract_malo_id(payload)?;
+
+    let zaehlpunkt = payload
+        .get("zaehlpunkt")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"zaehlpunkt\" (Zählpunktbezeichnung, RFF+Z13)".to_owned(),
+            )
+        })?
+        .to_owned();
+
+    let process_date = payload
+        .get("process_date")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"process_date\" (YYYYMMDD in German local time)".to_owned(),
+            )
+        })?
+        .to_owned();
+
+    // Resolve GNB GLN from MaLo cache.
+    let malo_record = state
+        .malo_cache
+        .get(&state.tenant_id.to_string(), &malo_id)
+        .await
+        .map_err(|e| DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string())))?
+        .ok_or_else(|| DispatchError::MaloNotFound(malo_id.clone()))?;
+
+    let gnb_mp_id = malo_record
+        .data_market_location
+        .data_market_location_network_operators
+        .iter()
+        .max_by_key(|p| (p.execution_time_until.is_none(), &p.execution_time_from))
+        .map(|p| MarktpartnerCode::new(format!("{:013}", p.market_partner_id)))
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(format!(
+                "MaLo {malo_id} has no network_operator — GNB GLN cannot be resolved",
+            ))
+        })?;
+
+    let pid = Pruefidentifikator::new(pid_code).map_err(DispatchError::InvalidPayload)?;
+    let domain_cmd = GeliGasLfAnmeldungCommand::InitiateAnmeldung {
+        pid,
+        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        receiver: gnb_mp_id,
+        malo_id: MaLo::new(malo_id.clone()),
+        zaehlpunkt,
+        process_date,
+        received_at: time::OffsetDateTime::now_utc(),
+    };
+
+    // Idempotency guard — reject duplicate active Lieferbeginn for same MaLo.
+    let existing = state
+        .store
+        .as_process_registry()
+        .lookup_correlated(state.tenant_id, &malo_id)
+        .await
+        .map_err(DispatchError::Engine)?;
+    if let Some(first) = existing
+        .into_iter()
+        .find(|id| id.workflow_id.name.as_ref() == GELI_LF_ANMELDUNG_WF)
+    {
+        let dup_id = first.process_id;
+        tracing::warn!(
+            malo_id = %malo_id,
+            process_id = %dup_id,
+            "geli.lieferbeginn.anmelden refused: active process already registered for this Gas-MaLo",
+        );
+        return Err(DispatchError::DuplicateProcess {
+            process_id: dup_id,
+            malo_id,
+        });
+    }
+
+    let workflow_id = WorkflowId::new(GELI_LF_ANMELDUNG_WF, latest_format_version());
+    let process = mako_engine::process::Process::<
+        GeliGasLfAnmeldungWorkflow,
+        Arc<mako_engine::store_slatedb::SlateDbStore>,
+    >::new(
+        Arc::clone(&state.store),
+        state.tenant_id,
+        workflow_id.clone(),
+    );
+    let process_id = process.process_id();
+
+    // 10-Werktage GNB response deadline (BK7-24-01-009).
+    let due_at = mako_engine::fristen::deadline_at_werktage(
+        time::OffsetDateTime::now_utc(),
+        10,
+        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+    );
+    let deadline = Deadline::new(
+        process.stream_id().clone(),
+        process_id,
+        state.tenant_id,
+        workflow_id,
+        mako_geli_gas::LF_ANMELDUNG_RESPONSE_WINDOW_LABEL,
+        due_at,
+    );
+    process
+        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
+        .await?;
+
+    let identity = process.identity();
+    let _ = state
+        .store
+        .as_process_registry()
+        .register_correlated(state.tenant_id, &malo_id, process_id, identity)
+        .await;
+
+    Ok(DispatchOutcome::Spawned { process_id })
 }
 
 /// Dispatch a GeLi Gas GNB→LFG Antwort to an existing
@@ -2537,6 +2920,24 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: 44006,
         dispatch: cmd_geli_lieferende_ablehnen,
     },
+    // ── GeLi Gas LF Stornierung (ERP-initiated, LF sends 44022 to GNB) ────────
+    // LFN/LFA initiates a supply-change cancellation; ERP supplies `malo_id`
+    // and optional `bgm_qualifier` (E01=Kündigung, E02=Rücktritt, E35=Sperrung).
+    CommandDescriptor {
+        name: "geli.gas.stornierung.initiieren",
+        permitted_roles: &["LF"],
+        primary_pid: 44022,
+        dispatch: cmd_geli_gas_stornierung_initiieren,
+    },
+    // ── GeLi Gas Datenabruf (ORDERS 17103 — LF requests Brennwert/Zustandszahl) ─
+    // LF sends ORDERS 17103 outbound to NB/MSB requesting Gas quality data.
+    // Spawns a GeliGasDatanabrufWorkflow that tracks the 10-Werktage response.
+    CommandDescriptor {
+        name: "geli.gas.datenabruf.anfragen",
+        permitted_roles: &["LF"],
+        primary_pid: 17103,
+        dispatch: cmd_geli_gas_datenabruf_anfragen,
+    },
     // ── WiM Messstellenbetrieb ────────────────────────────────────────────────
     // TODO(beauftragen): Implement ERP-initiated WimDeviceChangeWorkflow spawn.
     CommandDescriptor {
@@ -2569,6 +2970,21 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         permitted_roles: &["MSB"],
         primary_pid: 55039,
         dispatch: cmd_wim_steuerungsauftrag_ablehnen,
+    },
+    // ── WiM Rechnung (INVOIC 31009 MSB-Rechnung) ──────────────────────────────
+    // `invoicd` dispatches these after plausibility check.
+    // LF role: payer receives INVOIC from MSB → settle or dispute.
+    CommandDescriptor {
+        name: "wim.rechnung.annehmen",
+        permitted_roles: &["LF"],
+        primary_pid: 31009,
+        dispatch: cmd_wim_rechnung_annehmen,
+    },
+    CommandDescriptor {
+        name: "wim.rechnung.ablehnen",
+        permitted_roles: &["LF"],
+        primary_pid: 31009,
+        dispatch: cmd_wim_rechnung_ablehnen,
     },
     // ── MABIS Bilanzkreisabrechnung ────────────────────────────────────────────
     CommandDescriptor {

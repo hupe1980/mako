@@ -21,12 +21,16 @@ members = [
     "crates/mako-service",
     "crates/invoic-checker",
     "crates/netz-checker",
+    "crates/mako-nne",
     "services/invoicd",
     "services/makod",
     "services/marktd",
     "services/edmd",
     "services/obsd",
     "services/processd",
+    "services/netzbilanzd",
+    "services/sperrd",
+    "services/nis-syncd",
     "xtask",
 ]
 exclude = ["fuzz"]
@@ -44,7 +48,7 @@ anyhow      = "1"
 dashmap     = "6"
 edifact-rs   = "~0.11"
 miette       = { version = "7", features = ["fancy-no-syscall"] }
-rubo4e       = { version = "0.4.0", features = ["versioned", "decimal", "time", "validate", "schemars"] }
+rubo4e       = { version = "0.6.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "schemars"] }
 rust_decimal = "1"
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
@@ -69,13 +73,14 @@ schemars                  = { version = "1.2.1" }
 
 # ── Internal workspace crates (path + version so domain crates can be published) ─
 edi-energy       = { path = "crates/edi-energy",  version = "0.8" }
-mako-engine      = { path = "crates/mako-engine", version = "0.8" }
-mako-markt       = { path = "crates/mako-markt",   version = "0.8" }
-mako-edm         = { path = "crates/mako-edm",    version = "0.8" }
-mako-obs         = { path = "crates/mako-obs",    version = "0.8" }
-mako-service     = { path = "crates/mako-service", version = "0.8" }
-invoic-checker   = { path = "crates/invoic-checker", version = "0.8" }
-netz-checker     = { path = "crates/netz-checker", version = "0.8" }
+mako-engine      = { path = "crates/mako-engine",      version = "0.8" }
+mako-markt       = { path = "crates/mako-markt",       version = "0.8" }
+mako-edm         = { path = "crates/mako-edm",         version = "0.8" }
+mako-nne         = { path = "crates/mako-nne",         version = "0.8" }
+mako-obs         = { path = "crates/mako-obs",         version = "0.8" }
+mako-service     = { path = "crates/mako-service",     version = "0.8" }
+invoic-checker   = { path = "crates/invoic-checker",   version = "0.8" }
+netz-checker     = { path = "crates/netz-checker",     version = "0.8" }
 
 # Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.
 # Required by mako-service feature "kafka" (EventBus scale-out backend).

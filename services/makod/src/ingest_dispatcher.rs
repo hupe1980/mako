@@ -46,9 +46,10 @@ use mako_engine::{
 };
 use mako_gabi_gas::{GaBiGasAllocationWorkflow, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow};
 use mako_geli_gas::{
-    GeliGasLfStornierungWorkflow, GeliGasMsconsWorkflow, GeliGasPartinWorkflow,
-    GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow,
-    GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
+    GeliGasDatanabrufWorkflow, GeliGasLfAnmeldungWorkflow, GeliGasLfStornierungWorkflow,
+    GeliGasMsconsWorkflow, GeliGasPartinWorkflow, GeliGasSperrprozesseInvoicWorkflow,
+    GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow, GeliGasStornierungWorkflow,
+    GeliGasSupplierChangeWorkflow,
 };
 use mako_gpke::{
     GpkeAbrechnungWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
@@ -135,6 +136,7 @@ impl EdifactIngestDispatcher {
         "gabi-gas-schedl",
         "gabi-gas-tranot",
         "geli-gas-datenabruf",
+        "geli-gas-lf-anmeldung",
         "geli-gas-mscons",
         "geli-gas-partin",
         "geli-gas-sperrprozesse-invoic",
@@ -1558,6 +1560,27 @@ impl EdifactIngestDispatcher {
                 }),
             },
 
+            // ── GeLi Gas LFN-side Anmeldung (PIDs 44003–44006 inbound) ───────
+            // PIDs 44003/44005: GNB Bestätigung Lieferbeginn/Lieferende → resume.
+            // PIDs 44004/44006: GNB Ablehnung Lieferbeginn/Lieferende → resume.
+            // Spawned via ERP command geli.lieferbeginn.anmelden (PIDs 44001/44002 outbound).
+            "geli-gas-lf-anmeldung" => match pid {
+                44003..=44006 => {
+                    let cmd = adapters::geli_gas_lf_anmeldung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.resume_by_malo::<GeliGasLfAnmeldungWorkflow>(
+                        &malo_id,
+                        mako_geli_gas::LF_ANMELDUNG_WORKFLOW_NAME,
+                        cmd,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "geli-gas-lf-anmeldung",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
             // ── Workflows registered in PidRouter but Phase 2 dispatch not yet implemented ─
             //
             // These workflows handle inbound PIDs that are registered in their
@@ -1568,10 +1591,45 @@ impl EdifactIngestDispatcher {
             //
             // To implement one of these: add an AdapterRegistry<WorkflowType> function
             // to adapters.rs and add a proper spawn_or_resume arm above.
-            "geli-gas-datenabruf" => Ok(IngestOutcome::Skipped {
-                workflow_name: "geli-gas-datenabruf",
-                reason: "phase2_dispatch_not_yet_implemented",
-            }),
+            // ── GeLi Gas Datenabruf (PIDs 17103/17104 inbound, 19103/19104 ORDRSP) ─
+            // 17103/17104: NB/MSB receives ORDERS Anfrage from LF — spawn.
+            // 19103/19104: LF receives ORDRSP rejection from NB — resume.
+            // ERP-initiated outbound (LF sends 17103) uses geli.gas.datenabruf.anfragen command.
+            "geli-gas-datenabruf" => match pid {
+                17103 | 17104 => {
+                    let cmd =
+                        adapters::geli_gas_datenabruf_receive_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        10,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<GeliGasDatanabrufWorkflow>(
+                        &malo_id,
+                        mako_geli_gas::GELI_GAS_DATENABRUF_WORKFLOW_NAME,
+                        cmd,
+                        &fv,
+                        &[(mako_geli_gas::datenabruf::ANTWORT_WINDOW_LABEL, due_at)],
+                    )
+                    .await
+                }
+                19103 | 19104 => {
+                    let cmd =
+                        adapters::geli_gas_datenabruf_ablehnung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.resume_by_malo::<GeliGasDatanabrufWorkflow>(
+                        &malo_id,
+                        mako_geli_gas::GELI_GAS_DATENABRUF_WORKFLOW_NAME,
+                        cmd,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "geli-gas-datenabruf",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
             "gabi-gas-schedl" => Ok(IngestOutcome::Skipped {
                 workflow_name: "gabi-gas-schedl",
                 reason: "phase2_dispatch_not_yet_implemented",

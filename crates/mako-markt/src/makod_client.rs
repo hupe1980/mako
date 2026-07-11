@@ -327,4 +327,46 @@ impl MakodClient {
             )))
         }
     }
+
+    /// Fetch the BO4E `Rechnung` for a WiM billing process from makod.
+    ///
+    /// Calls `GET /api/v1/invoic/{process_id}/rechnung`.
+    ///
+    /// Returns `Ok(Some(value))` on success, `Ok(None)` on 404,
+    /// and `Err` on network/HTTP errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MdmError::MakodSync`] on HTTP error or network failure.
+    pub async fn get_invoic_rechnung(
+        &self,
+        process_id: uuid::Uuid,
+    ) -> Result<Option<serde_json::Value>, MdmError> {
+        let url = format!("{}/api/v1/invoic/{process_id}/rechnung", self.base_url);
+        debug!(%process_id, "fetching WiM rechnung from makod");
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MdmError::MakodSync(e.to_string()))?;
+
+        if resp.status().is_success() {
+            let value: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| MdmError::MakodSync(e.to_string()))?;
+            Ok(Some(value))
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(None)
+        } else {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            warn!(status, %process_id, %body, "makod GET invoic/rechnung failed");
+            Err(MdmError::MakodSync(format!(
+                "GET /api/v1/invoic/{process_id}/rechnung returned HTTP {status}: {body}"
+            )))
+        }
+    }
 }

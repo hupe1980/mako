@@ -137,7 +137,7 @@ LOC+172+12345678901'\
 DTM+163:20230101:102'\
 DTM+164:20230131:102'\
 LIN+1'\
-PIA+5+1-1:1.29.0+Z12'\
+PIA+5+1-1?:1.29.0:Z12'\
 QTY+220:1000.500:KWH'\
 DTM+163:20230101:102'\
 STS+7+Z03::293'\
@@ -203,13 +203,17 @@ fn mscons_line_items_within_time_series() {
 
     let item0 = &ts.items[0];
     assert_eq!(item0.lin.line_number.as_deref(), Some("1"));
-    // PIA+5+1-1:1.29.0+Z12' — element 1 is C212 composite.
-    // OBIS codes use ':' as part of their notation, which is also the EDIFACT
-    // component separator.  The parser splits on ':' so component 0 = "1-1"
-    // and component 1 = "1.29.0".  'Z12' falls in element 2 (not mapped here).
+    // PIA+5+1-1?:1.29.0:Z12' — BDEW AHB-compliant: '?:' escapes the colon inside
+    // the OBIS code so the parser treats "1-1:1.29.0" as component 0 (DE 7140)
+    // and "Z12" as component 1 (DE 7143).  Release chars are stripped by
+    // edifact-rs during parsing, so item_number is the clean OBIS string.
     let pia = item0.pia.as_ref().expect("PIA must be present on item 0");
-    assert_eq!(pia.item_number.as_deref(), Some("1-1"), "C212 component 0");
-    assert_eq!(pia.item_type.as_deref(), Some("1.29.0"), "C212 component 1");
+    assert_eq!(
+        pia.item_number.as_deref(),
+        Some("1-1:1.29.0"),
+        "DE 7140 full OBIS"
+    );
+    assert_eq!(pia.item_type.as_deref(), Some("Z12"), "DE 7143 qualifier");
 
     let item1 = &ts.items[1];
     assert_eq!(item1.lin.line_number.as_deref(), Some("2"));

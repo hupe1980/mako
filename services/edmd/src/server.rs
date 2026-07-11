@@ -1,5 +1,6 @@
 //! Axum router and startup logic for `edmd`.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -12,6 +13,12 @@ use axum::{
 };
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::{Claims, OidcVerifier};
+use rubo4e::current::{
+    Energiemenge, Lastgang, Medium, Menge, Mengeneinheit, Messart, Messwertstatus,
+    Sparte as Bo4eSparte, Zeitraum, Zeitreihe, Zeitreihenwert,
+};
+use rubo4e::identifiers::ObisCode;
+use rust_decimal::Decimal;
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -23,7 +30,10 @@ use crate::{
     handler::{HandlerState, handle_webhook},
     pg::PgTimeSeriesRepository,
 };
-use mako_edm::{domain::BillingPeriodQuery, repository::TimeSeriesRepository};
+use mako_edm::{
+    domain::{BillingPeriodQuery, QualityFlag, Sparte as EdmSparte, TimeSeriesQuery},
+    repository::TimeSeriesRepository,
+};
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
@@ -36,6 +46,8 @@ pub fn router(state: HandlerState) -> Router {
             get(get_imbalance),
         )
         .route("/api/v1/billing-period/{malo_id}", get(get_billing_period))
+        .route("/api/v1/lastgang/{malo_id}", get(get_lastgang))
+        .route("/api/v1/zeitreihe/{malo_id}", get(get_zeitreihe))
         .route("/metrics", get(metrics))
         .route("/health/live", get(|| async { StatusCode::OK }))
         .route("/health/ready", get(health_ready))
@@ -132,8 +144,19 @@ async fn get_deliveries(
         .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
         .unwrap_or_else(OffsetDateTime::now_utc);
 
-    match state.repo.receipts(&malo_id, from, to, None).await {
-        Ok(receipts) => Json(serde_json::to_value(receipts).unwrap_or_default()).into_response(),
+    let q = TimeSeriesQuery {
+        malo_id: malo_id.clone(),
+        from,
+        to,
+        sparte: None,
+        tenant_id: None,
+    };
+
+    match state.repo.query(&q).await {
+        Ok(reads) => {
+            let energiemengen: Vec<Energiemenge> = reads.iter().map(read_to_energiemenge).collect();
+            Json(energiemengen).into_response()
+        }
         Err(err) => {
             tracing::warn!(%err, malo_id, "edmd: get_deliveries failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -291,6 +314,344 @@ async fn get_billing_period(
             tracing::warn!(%err, %malo_id, "edmd: get_billing_period failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
+    }
+}
+
+// ── Lastgang ──────────────────────────────────────────────────────────────────
+
+/// `GET /api/v1/lastgang/{malo_id}?from=RFC3339&to=RFC3339`
+///
+/// Returns one `Lastgang` BO4E object per distinct OBIS-Kennzahl found in the
+/// requested time window.  Reads without an OBIS code are grouped together
+/// under a single `Lastgang` with `obis_kennzahl = null`.
+///
+/// The interval length (`zeit_intervall_laenge`) is inferred from the first
+/// read pair:
+/// - 15 min → `Mengeneinheit::ViertelStunde`
+/// - 60 min → `Mengeneinheit::Stunde`
+/// - other  → `Mengeneinheit::Minute` with the exact value
+///
+/// The `werte[].zeitraum` uses `startdatum`/`enddatum` (UTC date) plus
+/// `startuhrzeit`/`enduhrzeit` in `HH:MM:SS+00:00` format.
+///
+/// Source: BO4E-Standard; MSCONS AHB Gas/Strom.
+#[derive(Debug, Deserialize)]
+struct LastgangParams {
+    /// RFC 3339 start (inclusive). Defaults to Unix epoch.
+    from: Option<String>,
+    /// RFC 3339 end (inclusive). Defaults to now.
+    to: Option<String>,
+}
+
+async fn get_lastgang(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Query(params): Query<LastgangParams>,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Rfc3339;
+
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc);
+
+    let q = TimeSeriesQuery {
+        malo_id: malo_id.clone(),
+        from,
+        to,
+        sparte: None,
+        tenant_id: None,
+    };
+
+    let reads = match state.repo.query(&q).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, malo_id, "edmd: get_lastgang query failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if reads.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(
+                serde_json::json!({ "error": "no meter reads for this MaLo in requested window" }),
+            ),
+        )
+            .into_response();
+    }
+
+    // Group by OBIS code (None → empty-string sentinel key so BTreeMap works).
+    let mut groups: BTreeMap<String, Vec<_>> = BTreeMap::new();
+    for r in &reads {
+        let key = r.obis_code.clone().unwrap_or_default();
+        groups.entry(key).or_default().push(r);
+    }
+
+    let lastgaenge: Vec<Lastgang> = groups
+        .into_iter()
+        .map(|(obis_key, group)| {
+            let sparte = edm_sparte_to_bo4e(group[0].sparte);
+            let obis_kennzahl = if obis_key.is_empty() {
+                None
+            } else {
+                rubo4e::identifiers::ObisCode::new(&obis_key).ok()
+            };
+
+            // Infer interval from first consecutive pair (fallback: 15 min).
+            let interval_min = group
+                .windows(2)
+                .next()
+                .map(|w| {
+                    (w[1].dtm_from - w[0].dtm_from)
+                        .whole_minutes()
+                        .unsigned_abs() as u32
+                })
+                .filter(|&m| m > 0)
+                .unwrap_or(15);
+
+            let werte: Vec<Zeitreihenwert> =
+                group.iter().map(|r| read_to_zeitreihenwert(r)).collect();
+
+            Lastgang {
+                id: None,
+                marktlokation: None,
+                messgroesse: None,
+                messlokation: None,
+                obis_kennzahl,
+                sparte: Some(sparte),
+                typ: None,
+                version: None,
+                werte: Some(werte),
+                zeit_intervall_laenge: minutes_to_menge(interval_min),
+                zusatz_attribute: None,
+                _additional: Default::default(),
+            }
+        })
+        .collect();
+
+    Json(lastgaenge).into_response()
+}
+
+/// Convert an `edm::Sparte` to the BO4E `Sparte` enum.
+fn edm_sparte_to_bo4e(s: EdmSparte) -> Bo4eSparte {
+    match s {
+        EdmSparte::Strom => Bo4eSparte::Strom,
+        EdmSparte::Gas => Bo4eSparte::Gas,
+    }
+}
+
+/// Map `edm::Sparte` to the BO4E `Medium` enum for `Zeitreihe`.
+fn edm_sparte_to_medium(s: EdmSparte) -> Medium {
+    match s {
+        EdmSparte::Strom => Medium::Strom,
+        EdmSparte::Gas => Medium::Gas,
+    }
+}
+
+// ── Zeitreihe ─────────────────────────────────────────────────────────────────
+
+/// `GET /api/v1/zeitreihe/{malo_id}?from=RFC3339&to=RFC3339`
+///
+/// Returns one `Zeitreihe` BO4E object per distinct OBIS-Kennzahl found in
+/// the requested time window.  Unlike [`get_lastgang`], which carries interval
+/// metadata (`zeit_intervall_laenge`, OBIS code, Sparte), `Zeitreihe` exposes
+/// the generic time-series contract used by API-Webdienste Strom consumers.
+///
+/// - `messart` is set to `Mittelwert` (interval-average, typical for SLP/RLM).
+/// - `einheit` is set to `kWh`.
+/// - `medium` reflects the commodity (Strom / Gas).
+///
+/// Source: BO4E-Standard Zeitreihe; API-Webdienste Strom §5.3.
+async fn get_zeitreihe(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Query(params): Query<LastgangParams>,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Rfc3339;
+
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc);
+
+    let q = TimeSeriesQuery {
+        malo_id: malo_id.clone(),
+        from,
+        to,
+        sparte: None,
+        tenant_id: None,
+    };
+
+    let reads = match state.repo.query(&q).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, malo_id, "edmd: get_zeitreihe query failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if reads.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(
+                serde_json::json!({ "error": "no meter reads for this MaLo in requested window" }),
+            ),
+        )
+            .into_response();
+    }
+
+    // Group by OBIS code.
+    let mut groups: BTreeMap<String, Vec<_>> = BTreeMap::new();
+    for r in &reads {
+        let key = r.obis_code.clone().unwrap_or_default();
+        groups.entry(key).or_default().push(r);
+    }
+
+    let zeitreihen: Vec<Zeitreihe> = groups
+        .into_iter()
+        .map(|(obis_key, group)| {
+            let medium = edm_sparte_to_medium(group[0].sparte);
+            let bezeichnung = if obis_key.is_empty() {
+                format!("Zeitreihe MaLo {malo_id}")
+            } else {
+                format!("Zeitreihe MaLo {malo_id} OBIS {obis_key}")
+            };
+            let werte: Vec<Zeitreihenwert> =
+                group.iter().map(|r| read_to_zeitreihenwert(r)).collect();
+            Zeitreihe {
+                bezeichnung: Some(bezeichnung),
+                einheit: Some(Mengeneinheit::Kwh),
+                medium: Some(medium),
+                messart: Some(Messart::Mittelwert),
+                werte: Some(werte),
+                ..Default::default()
+            }
+        })
+        .collect();
+
+    Json(zeitreihen).into_response()
+}
+
+/// Map a `QualityFlag` to the nearest `Messwertstatus` variant.
+fn quality_to_messwertstatus(q: QualityFlag) -> Messwertstatus {
+    match q {
+        QualityFlag::Measured => Messwertstatus::Abgelesen,
+        QualityFlag::Estimated => Messwertstatus::Prognosewert,
+        QualityFlag::Substituted => Messwertstatus::Ersatzwert,
+        QualityFlag::Calculated => Messwertstatus::Vorlaeufigerwert,
+        QualityFlag::Unknown => Messwertstatus::Unknown,
+    }
+}
+
+/// Convert a `MeterRead` to a BO4E `Energiemenge`.
+///
+/// `Energiemenge` is the canonical BO4E Business Object for a metered energy
+/// quantity at a location.  It carries the OBIS-Kennzahl, the measured `Menge`
+/// in kWh, and the billing `Zeitraum` — exactly the triple that MSCONS
+/// communicates per register per interval.
+///
+/// All timestamps are UTC (`startuhrzeit`/`enduhrzeit` format `HH:MM:SS+00:00`).
+fn read_to_energiemenge(r: &mako_edm::domain::MeterRead) -> Energiemenge {
+    fn fmt_uhrzeit(dt: OffsetDateTime) -> String {
+        format!(
+            "{:02}:{:02}:{:02}+00:00",
+            dt.hour(),
+            dt.minute(),
+            dt.second()
+        )
+    }
+    Energiemenge {
+        obis_kennzahl: r.obis_code.as_deref().and_then(|s| ObisCode::new(s).ok()),
+        menge: Some(Menge {
+            wert: Some(r.quantity_kwh),
+            einheit: Some(Mengeneinheit::Kwh),
+            ..Default::default()
+        }),
+        zeitraum: Some(Zeitraum {
+            startdatum: Some(r.dtm_from.date()),
+            startuhrzeit: Some(fmt_uhrzeit(r.dtm_from)),
+            enddatum: Some(r.dtm_to.date()),
+            enduhrzeit: Some(fmt_uhrzeit(r.dtm_to)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// Convert a `MeterRead` to a BO4E `Zeitreihenwert`.
+///
+/// Timestamps are in UTC; `startuhrzeit`/`enduhrzeit` are formatted as
+/// `HH:MM:SS+00:00` per Allgemeine Festlegungen V6.1d §3.
+fn read_to_zeitreihenwert(r: &mako_edm::domain::MeterRead) -> Zeitreihenwert {
+    fn fmt_uhrzeit(dt: OffsetDateTime) -> String {
+        format!(
+            "{:02}:{:02}:{:02}+00:00",
+            dt.hour(),
+            dt.minute(),
+            dt.second()
+        )
+    }
+    Zeitreihenwert {
+        wert: Some(r.quantity_kwh),
+        status: Some(quality_to_messwertstatus(r.quality)),
+        zeitraum: Some(Zeitraum {
+            startdatum: Some(r.dtm_from.date()),
+            startuhrzeit: Some(fmt_uhrzeit(r.dtm_from)),
+            enddatum: Some(r.dtm_to.date()),
+            enduhrzeit: Some(fmt_uhrzeit(r.dtm_to)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// Build a `Menge` representing an interval length from whole minutes.
+fn minutes_to_menge(minutes: u32) -> Menge {
+    let (wert, einheit) = match minutes {
+        15 => (Decimal::from(15u32), Mengeneinheit::ViertelStunde),
+        60 => (Decimal::from(60u32), Mengeneinheit::Minute),
+        1440 => (Decimal::from(1u32), Mengeneinheit::Tag),
+        m => (Decimal::from(m), Mengeneinheit::Minute),
+    };
+    Menge {
+        wert: Some(wert),
+        einheit: Some(einheit),
+        ..Default::default()
     }
 }
 

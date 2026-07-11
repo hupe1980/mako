@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 71e83d5f5a6e2070fbe3ee1ace54b96544131e581babbc1abba640e39220a67f # shrinks to msg_ref = "A"
+cc 9a7473ea9a9a83ed36f83f8258868149954577e4cbe766e025bed32ab58dbc5b # shrinks to malo_id = "DE00000000000", obis = "0-0:0.0.0", quantity = "0"

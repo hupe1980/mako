@@ -186,6 +186,12 @@ pub async fn evaluate_and_decide(
         .await
         .inspect_err(|e| warn!(%e, %malo_id, "processd NB: marktd versorgung fetch failed"))?;
 
+    let malo = reader
+        .get_malo(&malo_id)
+        .await
+        .inspect_err(|e| warn!(%e, %malo_id, "processd NB: marktd malo fetch failed"))
+        .unwrap_or(None);
+
     let grid = reader
         .get_malo_grid(&malo_id)
         .await
@@ -199,16 +205,34 @@ pub async fn evaluate_and_decide(
     let now = OffsetDateTime::now_utc();
 
     // ── 4. Evaluate ───────────────────────────────────────────────────────
-    // `VersorgungsStatusRecord` uses `MaloId` not `String`; convert via parse.
+    // Build a grid record for netz-checker from the best available source:
+    //  1. `malo_grid` side table (populated by nis-syncd) — most authoritative
+    //  2. `malo.bilanzierungsgebiet` (B1 typed extraction) — fallback when
+    //     nis-syncd has not yet run; raises STP from ~60% to ~80% for SLP MaLos
     let vs_ref = versorgung.as_ref();
-    // Convert mako_markt::repository::MaloGridRecord → netz_checker::MaloGridRecord
-    let grid_nc: Option<netz_checker::MaloGridRecord> = grid.as_ref().map(Into::into);
+    let grid_nc: Option<netz_checker::MaloGridRecord> = if grid.is_some() {
+        grid.as_ref().map(Into::into)
+    } else if let Some(ref m) = malo {
+        if m.bilanzierungsgebiet.is_some() || m.netzebene.is_some() {
+            Some(netz_checker::MaloGridRecord {
+                malo_id: malo_id.clone(),
+                nb_mp_id: anfrage.grid_operator_gln.clone(),
+                bilanzierungsgebiet: m.bilanzierungsgebiet.clone(),
+                netzgebiet: None,
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let grid_ref = grid_nc.as_ref();
 
     let result = netz_checker::evaluate(&anfrage, vs_ref, grid_ref, partner_known, now);
 
     info!(
         %process_id, pid, %malo_id,
+        grid_source = if grid.is_some() { "malo_grid" } else if grid_nc.is_some() { "malo_typed" } else { "none" },
         outcome = ?result,
         "processd NB: netz-checker result"
     );

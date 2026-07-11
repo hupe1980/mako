@@ -1,7 +1,7 @@
 //! INVOIC plausibility check engine — operates on BO4E [`Rechnung`].
 //!
 //! [`InvoicCheckEngine::check`] runs a multi-stage pipeline of automated
-//! plausibility checks against a [`rubo4e::v202501::Rechnung`] and returns a
+//! plausibility checks against a [`rubo4e::current::Rechnung`] and returns a
 //! [`CheckReport`] that drives the REMADV / dispute workflow in `invoicd`.
 //!
 //! # Check stages
@@ -22,7 +22,7 @@
 //! # Architecture
 //!
 //! This module has **zero dependency on `edifact-rs`**.  It operates solely on
-//! [`rubo4e::v202501::Rechnung`] — the industry-standard BO4E domain model.
+//! [`rubo4e::current::Rechnung`] — the industry-standard BO4E domain model.
 //! EDIFACT → BO4E translation is the responsibility of the `makod` transport
 //! adapter (anti-corruption layer).
 //!
@@ -31,7 +31,7 @@
 //! ```rust
 //! use invoic_checker::check::{CheckConfig, CheckOutcome, InvoicCheckEngine};
 //! use invoic_checker::tariff::InMemoryPreisblattStore;
-//! use rubo4e::v202501::Rechnung;
+//! use rubo4e::current::Rechnung;
 //!
 //! // An empty preisblatt store yields a TariffNotFound *warning* (not a dispute)
 //! // even for an invoice with no line items, because the tariff check always
@@ -47,8 +47,7 @@
 //! ```
 
 use rubo4e::convenience::{BetragExt, MengeExt, PreisExt};
-use rubo4e::v202501::{Rechnung, Rechnungsposition};
-use rust_decimal::prelude::ToPrimitive as _;
+use rubo4e::current::{Rechnung, Rechnungsposition};
 
 use crate::{amount::EuroAmount, tariff::PreisblattStore};
 
@@ -117,7 +116,7 @@ pub enum CheckOutcome {
 pub enum FindingKind {
     /// A billing period is invalid (start ≥ end, or missing a boundary).
     PeriodInvalid,
-    /// Line item `quantity × unit_price` does not match `teilsumme_netto`.
+    /// Line item `quantity × unit_price` does not match `gesamtpreis` (BO4E v202607).
     ArithmeticError,
     /// Sum of line net amounts does not match the message-level `gesamtnetto`.
     TotalMismatch,
@@ -216,7 +215,7 @@ pub struct CheckReport {
     /// Total net amount as stated in `Rechnung.gesamtnetto`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_net_invoic: Option<EuroAmount>,
-    /// Total net amount as re-computed by summing `Rechnungsposition.teilsumme_netto`.
+    /// Total net amount as re-computed by summing `Rechnungsposition.gesamtpreis` (BO4E v202607).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_net_computed: Option<EuroAmount>,
     /// Number of `Rechnungsposition` entries checked.
@@ -242,7 +241,7 @@ impl CheckReport {
 /// Stateless INVOIC plausibility check engine.
 ///
 /// All logic is in [`InvoicCheckEngine::check`], which is a pure function over
-/// a [`rubo4e::v202501::Rechnung`].  No state is held between calls.
+/// a [`rubo4e::current::Rechnung`].  No state is held between calls.
 pub struct InvoicCheckEngine;
 
 impl InvoicCheckEngine {
@@ -269,10 +268,10 @@ impl InvoicCheckEngine {
         // ── Stage 1: Period validity ──────────────────────────────────────────
         Self::check_periods(rechnung, &mut findings);
 
-        // ── Stage 2: Arithmetic (qty × unit_price ≈ teilsumme_netto) ─────────
+        // ── Stage 2: Arithmetic (qty × unit_price ≈ gesamtpreis) ─────────
         Self::check_arithmetic(rechnung, config, &mut findings);
 
-        // ── Stage 3: Total consistency (Σ teilsumme_netto ≈ gesamtnetto) ─────
+        // ── Stage 3: Total consistency (Σ gesamtpreis ≈ gesamtnetto) ─────
         let computed_total = Self::check_total(rechnung, config, &mut findings);
 
         // ── Stage 4: Tariff check (PRICAT vs INVOIC unit price) ───────────────
@@ -316,7 +315,7 @@ impl InvoicCheckEngine {
 
     /// Stage 1: Verify that every billing period has start < end.
     ///
-    /// All period fields are native `time::Date` in rubo4e v0.4 — compared
+    /// All period fields are native `time::Date` in rubo4e v0.5 — compared
     /// directly. `billing_period()` returns `None` when either bound is absent,
     /// which correctly skips the check for partially-specified periods.
     fn check_periods(rechnung: &Rechnung, findings: &mut Vec<Finding>) {
@@ -332,10 +331,9 @@ impl InvoicCheckEngine {
                 None,
             ));
         }
-        // Line-level periods (Lieferung von/bis).
+        // Line-level periods (Lieferung von/bis via lieferungszeitraum).
         for pos in rechnung.rechnungspositionen.iter().flatten() {
-            if let (Some(start), Some(end)) =
-                (pos.lieferung_von.as_ref(), pos.lieferung_bis.as_ref())
+            if let (Some(start), Some(end)) = (pos.lieferung_von_date(), pos.lieferung_bis_date())
                 && start >= end
             {
                 let (line_no, malo) = pos_ident(pos);
@@ -353,21 +351,24 @@ impl InvoicCheckEngine {
     }
 
     /// Stage 2: For each position with quantity + unit_price, verify
-    /// `positions_menge × einzelpreis ≈ teilsumme_netto`.
+    /// `positions_menge × einzelpreis ≈ gesamtpreis` (BO4E v202607).
+    ///
+    /// Uses pure `Decimal` arithmetic via `multiply_by_kwh_decimal` — no `f64`
+    /// intermediate — satisfying the §40 EnWG itemised-billing accuracy requirement.
     fn check_arithmetic(rechnung: &Rechnung, config: &CheckConfig, findings: &mut Vec<Finding>) {
         for pos in rechnung.rechnungspositionen.iter().flatten() {
-            let qty = pos.positions_menge.wert_decimal().and_then(|d| d.to_f64());
+            let qty = pos.positions_menge.wert_decimal();
             let price = pos
                 .einzelpreis
                 .wert_decimal()
                 .and_then(EuroAmount::from_decimal);
             let stated_net = pos
-                .teilsumme_netto
+                .gesamtpreis
                 .wert_decimal()
                 .and_then(EuroAmount::from_decimal);
 
             if let (Some(qty), Some(price), Some(stated_net)) = (qty, price, stated_net) {
-                let computed = price.multiply_by_kwh(qty);
+                let computed = price.multiply_by_kwh_decimal(qty);
                 if !stated_net.within_tolerance(computed, config.arithmetic_tolerance) {
                     let (line_no, malo) = pos_ident(pos);
                     findings.push(Finding {
@@ -388,7 +389,7 @@ impl InvoicCheckEngine {
         }
     }
 
-    /// Stage 3: Verify Σ `teilsumme_netto` ≈ `gesamtnetto`.
+    /// Stage 3: Verify Σ `gesamtpreis` ≈ `gesamtnetto`.
     ///
     /// Returns the computed sum (used in the `CheckReport`).
     fn check_total(
@@ -401,7 +402,7 @@ impl InvoicCheckEngine {
             .iter()
             .flatten()
             .filter_map(|pos| {
-                pos.teilsumme_netto
+                pos.gesamtpreis
                     .wert_decimal()
                     .and_then(EuroAmount::from_decimal)
             })
@@ -425,7 +426,7 @@ impl InvoicCheckEngine {
             findings.push(Finding::warn(
                 FindingKind::TotalMismatch,
                 format!(
-                    "Total net mismatch: Σ teilsumme_netto = {computed} EUR, \
+                    "Total net mismatch: \u{03a3} gesamtpreis = {computed} EUR, \
                      gesamtnetto = {stated} EUR",
                 ),
                 None,
@@ -446,7 +447,7 @@ impl InvoicCheckEngine {
         findings: &mut Vec<Finding>,
     ) {
         // Use billing_period() start or fall back to the invoice document date.
-        // Both are native time::Date in rubo4e v0.4.
+        // Both are native time::Date in rubo4e v0.5.
         let billing_date: time::Date = rechnung
             .billing_period()
             .map(|(start, _)| start)
@@ -478,9 +479,8 @@ impl InvoicCheckEngine {
                 continue;
             };
             let (line_no, malo) = pos_ident(pos);
-            // lieferung_von is Option<time::Date> in rubo4e v0.4 — B-03 fixed,
-            // no .date() extraction needed.
-            let line_date = pos.lieferung_von.unwrap_or(billing_date);
+            // lieferung_von_date() reads lieferungszeitraum.startdatum (v202607).
+            let line_date = pos.lieferung_von_date().unwrap_or(billing_date);
 
             let Some(preisblatt) = preisblatt_store.get(sender_mp_id, line_date) else {
                 findings.push(Finding::warn(
@@ -505,7 +505,7 @@ impl InvoicCheckEngine {
                 .iter()
                 .flatten()
                 .flat_map(|pp| pp.preisstaffeln.iter().flatten())
-                .filter_map(|ps| ps.einheitspreis)
+                .filter_map(|ps| ps.preis)
                 .filter_map(EuroAmount::from_decimal)
                 .collect();
 
@@ -554,7 +554,8 @@ impl InvoicCheckEngine {
 /// Extract a stable (line_number, malo_id) pair for error messages.
 fn pos_ident(pos: &Rechnungsposition) -> (u32, &str) {
     let line_no = pos.positionsnummer.unwrap_or(0) as u32;
-    let malo = pos.lokations_id.as_deref().unwrap_or("-");
+    // `lokations_id` was removed in BO4E v202607; fall back to positionstext.
+    let malo = pos.positionstext.as_deref().unwrap_or("-");
     (line_no, malo)
 }
 
@@ -562,14 +563,14 @@ fn pos_ident(pos: &Rechnungsposition) -> (u32, &str) {
 
 #[cfg(test)]
 mod tests {
-    use rubo4e::v202501::{
+    use rubo4e::current::{
         Betrag, Menge, Mengeneinheit, Preis, Rechnung, Rechnungsposition, Zeitraum,
     };
     use rust_decimal::Decimal;
 
     use super::*;
     use crate::{amount::EuroAmount, tariff::InMemoryPreisblattStore};
-    use rubo4e::v202501::{PreisblattNetznutzung, Preisposition, Preisstaffel};
+    use rubo4e::current::{PreisblattNetznutzung, Preisposition, Preisstaffel};
 
     const SENDER: &str = "9900357000004";
 
@@ -580,7 +581,7 @@ mod tests {
         }
     }
 
-    /// Parse a `"YYYY-MM-DD"` string to `time::Date` (rubo4e v0.3 field type).
+    /// Parse a `"YYYY-MM-DD"` string to `time::Date` (rubo4e v0.5 field type).
     fn parse_date(s: &str) -> time::Date {
         time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT)
             .expect("valid ISO date")
@@ -598,17 +599,17 @@ mod tests {
     fn make_pos(
         n: i64,
         malo: &str,
-        qty: Option<f64>,
+        qty: Option<&str>,
         price: Option<EuroAmount>,
         net: Option<EuroAmount>,
     ) -> Rechnungsposition {
         Rechnungsposition {
             positionsnummer: Some(n),
-            lokations_id: Some(malo.to_owned()),
-            lieferung_von: Some(parse_date("2024-12-01")),
-            lieferung_bis: Some(parse_date("2024-12-31")),
+            // lokations_id removed in v202607; use positionstext for test ident.
+            positionstext: Some(malo.to_owned()),
+            lieferungszeitraum: Some(periode("2024-12-01", "2024-12-31")),
             positions_menge: qty.map(|q| Menge {
-                wert: Some(Decimal::try_from(q).expect("valid f64")),
+                wert: Some(Decimal::from_str_exact(q).expect("valid decimal literal")),
                 einheit: Some(Mengeneinheit::Kwh),
                 ..Default::default()
             }),
@@ -616,7 +617,7 @@ mod tests {
                 wert: Some(Decimal::from_str_exact(&pr.to_eur_string()).expect("valid decimal")),
                 ..Default::default()
             }),
-            teilsumme_netto: net.map(betrag),
+            gesamtpreis: net.map(betrag),
             ..Default::default()
         }
     }
@@ -651,7 +652,7 @@ mod tests {
             herausgeber: None,
             preispositionen: Some(vec![Preisposition {
                 preisstaffeln: Some(vec![Preisstaffel {
-                    einheitspreis: Some(einheitspreis),
+                    preis: Some(einheitspreis),
                     ..Default::default()
                 }]),
                 ..Default::default()
@@ -695,8 +696,8 @@ mod tests {
     #[test]
     fn line_period_invalid_is_dispute() {
         let mut pos = make_pos(1, "DE001", None, None, None);
-        pos.lieferung_von = Some(parse_date("2024-12-31"));
-        pos.lieferung_bis = Some(parse_date("2024-12-01"));
+        // Override the lieferungszeitraum to an invalid range (start > end).
+        pos.lieferungszeitraum = Some(periode("2024-12-31", "2024-12-01"));
         let r = make_rechnung(vec![pos], None);
         let report =
             InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
@@ -712,7 +713,7 @@ mod tests {
         let pos = make_pos(
             1,
             "DE001",
-            Some(1000.0),
+            Some("1000.0"),
             Some(EuroAmount(3_456)),
             Some(EuroAmount(3_456_000)),
         );
@@ -733,7 +734,7 @@ mod tests {
         let pos = make_pos(
             1,
             "DE001",
-            Some(1000.0),
+            Some("1000.0"),
             Some(EuroAmount(3_456)),
             Some(EuroAmount(4_000_000)),
         );
@@ -755,7 +756,7 @@ mod tests {
         let pos = make_pos(
             1,
             "DE001",
-            Some(1000.0),
+            Some("1000.0"),
             Some(EuroAmount(3_456)),
             Some(EuroAmount(3_490_000)),
         );
@@ -837,7 +838,7 @@ mod tests {
         let pos = make_pos(
             1,
             "DE001",
-            Some(1000.0),
+            Some("1000.0"),
             Some(price),
             Some(EuroAmount(3_456_000)),
         );
@@ -864,7 +865,7 @@ mod tests {
         let pos = make_pos(
             1,
             "DE001",
-            Some(1000.0),
+            Some("1000.0"),
             Some(invoic_price),
             Some(EuroAmount(4_000_000)),
         );
@@ -889,7 +890,7 @@ mod tests {
     fn clean_invoice_outcome_is_ok() {
         let price = EuroAmount(3_456);
         let net = EuroAmount(3_456_000);
-        let pos = make_pos(1, "DE001", Some(1000.0), Some(price), Some(net));
+        let pos = make_pos(1, "DE001", Some("1000.0"), Some(price), Some(net));
         let r = make_rechnung(vec![pos], Some(net));
         let report = InvoicCheckEngine::check(
             31001,
