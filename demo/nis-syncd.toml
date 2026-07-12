@@ -5,7 +5,8 @@
 
 port              = 9680
 marktd_url        = "http://marktd:8180"
-marktd_api_key    = "env:NIS_SYNCD_MARKTD_API_KEY"
+# marktd_api_key is injected via NIS_SYNCD_MARKTD_API_KEY env var
+marktd_api_key    = ""
 nb_mp_id          = "9900357000004"
 
 # Optional: emit de.markt.grid.drift.detected CloudEvent when NIS diverges.

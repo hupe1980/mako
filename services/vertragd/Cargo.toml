@@ -1,0 +1,34 @@
+[package]
+name        = "vertragd"
+description = "B2B + B2C contract & customer management daemon for mako (Vertragsmanagement)"
+version.workspace     = true
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+
+[[bin]]
+name = "vertragd"
+path = "src/main.rs"
+
+[dependencies]
+mako-service  = { path = "../../crates/mako-service", features = ["otel","oidc","cedar"] }
+mako-markt    = { path = "../../crates/mako-markt" }
+axum          = { version = "0.8" }
+tokio         = { version = "1", features = ["full"] }
+serde         = { workspace = true, features = ["derive"] }
+serde_json    = { workspace = true }
+sqlx          = { version = "0.8", features = ["postgres","uuid","time","runtime-tokio-rustls","json","rust_decimal"] }
+uuid          = { workspace = true, features = ["v4","serde"] }
+time          = { workspace = true }
+reqwest       = { workspace = true }
+rubo4e        = { workspace = true }
+rust_decimal  = { workspace = true }
+tracing       = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow        = { workspace = true }
+thiserror     = { workspace = true }
+secrecy       = { version = "0.10" }
+rmcp          = { workspace = true, features = ["transport-streamable-http-server","transport-io"] }
+tokio-util    = { workspace = true }

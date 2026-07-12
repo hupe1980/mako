@@ -1,57 +1,63 @@
 ---
 layout: home
-title: mako — EDI@Energy for Rust
+title: mako — German Energy Market Platform in Rust
 nav_order: 1
 description: >-
-  Rust library for German energy market communication
-  (BDEW MaKo / EDI@Energy). EDIFACT parsing, AHB/MIG validation,
-  event-sourced process runtime, AS4 transport, regulatory deadlines,
-  OpenTelemetry observability, and a REST Command API with CloudEvents 1.0 webhooks —
-  all in one workspace.
+  Full-stack German energy market communication (BDEW MaKo / EDI@Energy) in Rust.
+  EDIFACT parsing, AHB/MIG validation, event-sourced process runtime, AS4 transport,
+  automated APERAK deadline enforcement, 16 production microservices, BO4E ERP webhooks,
+  and LanceDB-powered AI orchestration.
 permalink: /
 ---
 
-<!-- ── Hero ──────────────────────────────────────────────────────────────── -->
+<!-- ── Hero ─────────────────────────────────────────────────────────────────── -->
 <div class="mako-hero">
   <div class="mako-hero__badge-row">
     <a href="https://github.com/hupe1980/mako/actions/workflows/ci.yml">
-      <img src="https://github.com/hupe1980/mako/actions/workflows/ci.yml/badge.svg" alt="CI">
+      <img src="https://github.com/hupe1980/mako/actions/workflows/ci.yml/badge.svg" alt="CI status">
     </a>
     <a href="https://crates.io/crates/edi-energy">
-      <img src="https://img.shields.io/crates/v/edi-energy?label=edi-energy&color=f59e0b&logo=rust" alt="edi-energy on crates.io">
+      <img src="https://img.shields.io/crates/v/edi-energy?label=edi-energy&color=f59e0b&logo=rust" alt="edi-energy crate version">
     </a>
     <a href="https://crates.io/crates/mako-engine">
-      <img src="https://img.shields.io/crates/v/mako-engine?label=mako-engine&color=f59e0b&logo=rust" alt="mako-engine on crates.io">
+      <img src="https://img.shields.io/crates/v/mako-engine?label=mako-engine&color=f59e0b&logo=rust" alt="mako-engine crate version">
     </a>
-    <img src="https://img.shields.io/badge/MSRV-1.89-orange?logo=rust" alt="MSRV 1.89">
+    <img src="https://img.shields.io/badge/MSRV-1.94-orange?logo=rust" alt="Minimum supported Rust version: 1.94">
     <a href="https://github.com/hupe1980/mako/blob/main/LICENSE-MIT">
-      <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" alt="MIT / Apache-2.0">
+      <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" alt="MIT or Apache-2.0 license">
     </a>
-    <img src="https://img.shields.io/badge/BDEW-FV2026--10--01-green" alt="BDEW FV2026-10-01">
+    <img src="https://img.shields.io/badge/BDEW-FV2026--10--01-green" alt="BDEW format version FV2026-10-01">
+    <img src="https://img.shields.io/badge/unsafe-0_blocks-red?logo=rust" alt="Zero unsafe blocks">
   </div>
 
   <h1 class="mako-hero__title">mako ⚡</h1>
+
   <p class="mako-hero__subtitle">
-    The only Rust library that covers the full German energy market stack —<br>
-    from raw EDIFACT bytes to durable, auditable MaKo process state.
+    German energy market communication —<br>from EDIFACT bytes to production microservices
+  </p>
+
+  <p class="mako-hero__tagline">
+    A Rust workspace covering the full BDEW MaKo stack: EDIFACT parsing, AHB/MIG validation,
+    event-sourced process runtime, AS4 transport, automated regulatory deadline enforcement,
+    energy billing, EEG settlement, and LLM-powered AI orchestration.
+    16 independently deployable services. Zero hardcoded EDIFACT parsers required.
   </p>
 
   <div class="mako-hero__cta">
-    <a href="{{ '/getting-started' | relative_url }}" class="btn btn-primary mako-cta-primary">
+    <a href="{{ '/getting-started' | relative_url }}" class="mako-btn-primary">
       Get started →
     </a>
-    <a href="{{ '/reference' | relative_url }}" class="btn mako-cta-secondary">
-      API Reference
+    <a href="{{ '/architecture' | relative_url }}" class="mako-btn-secondary">
+      Architecture
     </a>
-    <a href="https://github.com/hupe1980/mako" class="btn mako-cta-secondary">
-      GitHub
+    <a href="https://github.com/hupe1980/mako" class="mako-btn-secondary">
+      GitHub ↗
     </a>
   </div>
 
   <div class="mako-hero__warning">
     <strong>⚠ Pre-1.0 — Experimental.</strong>
-    APIs may change between patch releases. Not yet recommended for production
-    without thorough in-house validation.
+    APIs may change between releases. Validate thoroughly before production deployment.
   </div>
 </div>
 
@@ -62,223 +68,24 @@ permalink: /
     <span class="mako-kpi__label">EDIFACT message types</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">45+</span>
-    <span class="mako-kpi__label">event-sourced workflows</span>
-  </div>
-  <div class="mako-kpi">
     <span class="mako-kpi__value">247</span>
     <span class="mako-kpi__label">Prüfidentifikatoren</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">9</span>
-    <span class="mako-kpi__label">production daemons</span>
+    <span class="mako-kpi__value">45+</span>
+    <span class="mako-kpi__label">event-sourced workflows</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">25</span>
-    <span class="mako-kpi__label">active BO4E types</span>
-  </div>
-  <div class="mako-kpi">
-    <span class="mako-kpi__value">1.89</span>
-    <span class="mako-kpi__label">MSRV stable Rust</span>
+    <span class="mako-kpi__value">16</span>
+    <span class="mako-kpi__label">production services</span>
   </div>
   <div class="mako-kpi">
     <span class="mako-kpi__value">0</span>
     <span class="mako-kpi__label">unsafe blocks</span>
   </div>
-</div>
-
-<!-- ── Six-column feature grid ──────────────────────────────────────────── -->
-<div class="mako-features">
-  <div class="mako-feature">
-    <div class="mako-feature__icon">🔍</div>
-    <h3>Parse &amp; Validate</h3>
-    <p>
-      All 17 EDI@Energy EDIFACT types. Five-layer pipeline: schema → code
-      lists → MIG → AHB → semantic rules. Structured <code>EdiEnergyReport</code>
-      with per-rule violation details, not raw strings.
-    </p>
-    <a href="{{ '/parsing' | relative_url }}">Parsing guide →</a>
-  </div>
-
-  <div class="mako-feature">
-    <div class="mako-feature__icon">⛽</div>
-    <h3>DVGW Gas Transport</h3>
-    <p>
-      8 DVGW EDIFACT message types (ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT,
-      TRANOT, DELORD, DELRES) for GaBi Gas 2.0 / Kooperationsvereinbarung Gas.
-      <code>DvgwPlatform</code> with synthetic PIDs (90001–90062) for routing
-      through <code>mako-engine</code>. Independent of the BDEW EDIFACT stack.
-    </p>
-    <a href="{{ '/dvgw' | relative_url }}">DVGW EDI guide →</a>
-  </div>
-
-  <div class="mako-feature">
-    <div class="mako-feature__icon">⚡</div>
-    <h3>Redispatch 2.0 XML</h3>
-    <p>
-      All 9 CIM/IEC 62325 document types: parse, validate, and serialize.
-      <code>parse_and_validate()</code> enforces XSD constraints and semantic
-      cross-field rules. Hard real-time 5-minute activation deadline (UTC)
-      enforced by <code>mako-redispatch</code> per BK6-20-060.
-    </p>
-    <a href="{{ '/redispatch' | relative_url }}">Redispatch guide →</a>
-  </div>
-
-  <div class="mako-feature">
-    <div class="mako-feature__icon">⚙️</div>
-    <h3>Process Runtime</h3>
-    <p>
-      Event-sourced FSM engine with optimistic concurrency, atomic dual-write
-      (events + outbox in one <code>WriteBatch</code>), and APERAK deadline
-      enforcement — GPKE 24 h, WiM 5 Werktage, GeLi Gas 10 Werktage.
-    </p>
-    <a href="{{ '/engine' | relative_url }}">Engine guide →</a>
-  </div>
-
-  <div class="mako-feature">
-    <div class="mako-feature__icon">🔌</div>
-    <h3>Command API &amp; Webhooks</h3>
-    <p>
-      ERP integration via <code>POST /api/v1/commands</code> (BO4E JSON).
-      Outbound events pushed to your ERP over HMAC-SHA256-signed <a href="erp-integration">CloudEvents 1.0 webhooks</a>.
-      Idempotency keys prevent double-processing on retries.
-    </p>
-    <a href="{{ '/erp-integration' | relative_url }}">ERP integration →</a>
-  </div>
-
-  <div class="mako-feature">
-    <div class="mako-feature__icon">📡</div>
-    <h3>AS4 + REST Dual Channel</h3>
-    <p>
-      AS4/ebMS3 inbound on <code>:4080</code>, HTTP REST on <code>:8080</code>,
-      and BDEW API-Webdienste Strom (iMS REST/JSON) on <code>:8090</code>.
-      Startup coverage validation panics on missing message adapters.
-    </p>
-    <a href="{{ '/api-webdienste' | relative_url }}">API-Webdienste →</a>
-  </div>
-
-  <div class="mako-feature">
-    <div class="mako-feature__icon">📊</div>
-    <h3>OpenTelemetry Observability</h3>
-    <p>
-      Structured traces and metrics exported via OTLP. Every workflow command,
-      event append, outbox delivery, and deadline dispatch carries a trace
-      context. Plug into Grafana, Jaeger, or any OTLP-compatible backend.
-    </p>
-    <a href="{{ '/makod' | relative_url }}#observability">Observability →</a>
-  </div>
-
-  <div class="mako-feature">
-    <div class="mako-feature__icon">📋</div>
-    <h3>Typed BO4E Market Data</h3>
-    <p>
-      All <code>marktd</code> API responses deliver canonical
-      <a href="https://www.bo4e.de">BO4E v202607</a> objects — not raw JSONB.
-      <code>GET /api/v1/malo/{id}</code> returns a typed <code>Marktlokation</code>;
-      <code>GET /api/v1/melo/{id}</code> returns a typed <code>Messlokation</code>;
-      <code>GET /api/v1/melos/{id}/zaehler</code> returns <code>Vec&lt;Zaehler&gt;</code>;
-      <code>GET /api/v1/zaehler/{id}/zaehlwerke</code> returns <code>Vec&lt;Zaehlwerk&gt;</code>
-      (OBIS register access for TOU billing and iMSyS demand management).
-      <code>PUT /api/v1/nb-contracts/{id}</code> validates and stores a full BO4E
-      <code>Vertrag</code> payload for digital LRV exchange.
-      25 active <code>rubo4e::current</code> types — schema validated at every API boundary.
-    </p>
-    <a href="{{ '/marktd' | relative_url }}">marktd guide →</a>
-  </div>
-
-  <div class="mako-feature">
-    <div class="mako-feature__icon">🔐</div>
-    <h3>Security &amp; Auth</h3>
-    <p>
-      All HTTP endpoints gated by <a href="https://cedarpolicy.com">Cedar</a>
-      attribute-based access control (ABAC). Named API-key principals for
-      audit-trail identity. OIDC/JWT authentication from Azure AD, Keycloak,
-      Okta, and Kubernetes workload identity — asymmetric algorithms only,
-      JWKS cached with background refresh. HMAC tokens unconditionally
-      rejected.
-    </p>
-    <a href="{{ '/makod' | relative_url }}#authorization">Authorization →</a>
-  </div>
-
-  <div class="mako-feature">
-    <div class="mako-feature__icon">🏭</div>
-    <h3>Production Daemons</h3>
-    <p>
-      Nine independently deployable, Docker-ready services, each with TOML
-      configuration, Cedar ABAC, OIDC/JWT auth, OpenTelemetry, and a built-in
-      MCP server at <code>/mcp</code>:
-      <code>makod</code> — all 45+ workflows behind durable SlateDB; AS4 (`:4080`), REST (`:8080`), iMS (`:8090`).
-      <code>marktd</code> — PostgreSQL master data (MaLo/MeLo/NeLo/TR/SR, location graph, preisblaetter,
-      VersorgungsStatus, <code>event_log</code> replay), <strong>typed <code>rubo4e::current</code> API responses</strong>
-      (Marktlokation, Messlokation, Zaehler, Geraet — schema validated on every PUT),
-      NB contracts with full BO4E <code>Vertrag</code> payload (L1 digital LRV exchange),
-      Cedar ABAC, EventBus fan-out.
-      <code>processd</code> — automated NB Anmeldung STP (≥ 95 %) + LF E_0624 auto-response (45-min LFW24 window)
-      + LFN bootstrap (Strom/Gas); role-gated for §7 EnWG separation.
-      <code>invoicd</code> — INVOIC settlement (PIDs 31001/31002/31005/31006/31009), §22 MessZV receipts,
-      durable at-least-once ERP payment CloudEvents.
-      <code>netzbilanzd</code> — NNE/KA/MMM/MSB invoice generation (PIDs 31001/31002/31005/31009), draft workflow
-      with <code>invoic-checker</code> self-validation before dispatch (`:8680`).
-      <code>sperrd</code> — Sperrung execution tracking; IFTSTA 21039 auto-dispatch on field confirmation;
-      prevents permanent protocol violations under GPKE BK6-22-024 (`:8780`).
-      <code>edmd</code> — BO4E <code>Energiemenge</code> deliveries API (typed, ERP-consumable), MSCONS
-      meter-reading storage, <code>MeterBillingPeriod</code> (RLM Spitzenleistung +
-      Gas Brennwert/Zustandszahl via PID 13007), Mehr-/Mindermengen imbalance,
-      <code>Lastgang</code> + <code>Zeitreihe</code> time-series export (`:8380`).
-      <code>obsd</code> — process projections, BNetzA KPI reports, deadline-risk alerts, §20 EnWG parity monitoring.
-      <code>nis-syncd</code> — stateless NIS/GIS grid topology import; pushes <code>malo_grid</code> to <code>marktd</code>;
-      drift-event CloudEvents; lifts NB STP ~80 % → ≥ 95 % (`:9680`).
-    </p>
-    <a href="{{ '/makod' | relative_url }}">makod guide →</a> ·
-    <a href="{{ '/marktd' | relative_url }}">marktd guide →</a> ·
-    <a href="{{ '/processd' | relative_url }}">processd guide →</a> ·
-    <a href="{{ '/invoicd' | relative_url }}">invoicd guide →</a> ·
-    <a href="{{ '/netzbilanzd' | relative_url }}">netzbilanzd guide →</a> ·
-    <a href="{{ '/sperrd' | relative_url }}">sperrd guide →</a> ·
-    <a href="{{ '/edmd' | relative_url }}">edmd guide →</a> ·
-    <a href="{{ '/obsd' | relative_url }}">obsd guide →</a> ·
-    <a href="{{ '/nis-syncd' | relative_url }}">nis-syncd guide →</a>
-  </div>
-
-  <div class="mako-feature">
-    <div class="mako-feature__icon">🤖</div>
-    <h3>LLM / MCP Integration</h3>
-    <p>
-      Every daemon ships a built-in <a href="https://modelcontextprotocol.io">MCP server</a>
-      at <code>/mcp</code> (MCP Streamable HTTP, 2025-11-25). Tools, resources, and guided
-      prompts expose EDIFACT commands, regulatory deadlines, INVOIC plausibility
-      outcomes, KPI data, and process projections to Claude Desktop, VS Code
-      Copilot, and any MCP-capable LLM client. No extra configuration required.
-    </p>
-    <a href="{{ '/makod' | relative_url }}#mcp-server">MCP guide →</a>
-  </div>
-
-  <div class="mako-feature">
-    <div class="mako-feature__icon">🧾</div>
-    <h3>Automated Billing — LF &amp; NB</h3>
-    <p>
-      <strong>LF side (<code>invoicd</code>):</strong>
-      Runs the <code>invoic-checker</code> plausibility pipeline on every inbound
-      INVOIC (PIDs 31001/31002/31005/31006/31009) and issues the settlement command
-      automatically — no ERP round-trip. Five checks: period validity, position arithmetic,
-      document total, tariff match, tariff found.
-      <code>POST /api/v1/selbstausstellen/{malo_id}</code> triggers outbound PID 31006 (§20
-      MessZV): fetches <code>MeterBillingPeriod</code> from <code>edmd</code>, extracts tariffs
-      from <code>marktd</code>, and calls the shared <code>mako-nne</code> engine to produce
-      the complete BO4E <code>Rechnung</code>.
-      Every receipt is written to PostgreSQL (§22 MessZV 3-year retention). A background worker
-      emits <code>de.invoic.payment.overdue</code> CloudEvents every 6 h for unpaid invoices.
-    </p>
-    <p>
-      <strong>NB side (<code>netzbilanzd</code>):</strong>
-      Generates INVOIC 31001/31002/31005/31009 using <code>mako-nne</code>
-      (zero floating-point money), self-validates via <code>invoic-checker</code>, stores
-      drafts in PostgreSQL, and dispatches via <code>makod</code> after operator review.
-      Pre-dispatch re-validation blocks any invoice that would reach <code>Dispute</code>
-      outcome at the counterparty.
-    </p>
-    <a href="{{ '/invoicd' | relative_url }}">invoicd guide →</a> ·
-    <a href="{{ '/netzbilanzd' | relative_url }}">netzbilanzd guide →</a>
+  <div class="mako-kpi">
+    <span class="mako-kpi__value">1.94</span>
+    <span class="mako-kpi__label">MSRV stable Rust</span>
   </div>
 </div>
 
@@ -286,210 +93,437 @@ permalink: /
 
 ---
 
-## Quick Start
-{: .mt-8 }
+## What is mako?
 
-**EDIFACT parsing** — parse and validate a UTILMD message in three lines:
+mako is an **open-source Rust workspace** that implements the German energy market
+communication standard (**BDEW MaKo / EDI@Energy**) end-to-end.
+
+It solves two hard problems at once:
+
+- **Protocol correctness** — All 247 Prüfidentifikatoren across 17 EDIFACT message types are validated at AHB/MIG layer, not just schema layer. APERAK 45-minute deadline enforcement is built into the event-sourced runtime, not bolted on.
+- **Operational scale** — 16 independently deployable microservices cover the full lifecycle: supplier-switch processes, NNE billing, EEG settlement, B2C/B2B contract management with multi-user portal access, customer account ledger, and AI-powered automation.
+
+Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type safety needed to represent complex regulatory invariants at compile time — not runtime.
+
+---
+
+## Features
+
+</div>
+
+<!-- ── Feature grid ─────────────────────────────────────────────────────── -->
+<div class="mako-features">
+  <div class="mako-feature">
+    <div class="mako-feature__icon">🔍</div>
+    <h3>Parse &amp; Validate EDIFACT</h3>
+    <p>
+      All 17 EDI@Energy message types with a 5-layer validation pipeline:
+      schema → code lists → MIG structural → AHB Prüfidentifikator-specific → semantic cross-field rules.
+      Structured <code>EdiEnergyReport</code> with per-rule violation details, not raw parse errors.
+    </p>
+    <a href="{{ '/parsing' | relative_url }}">Parsing guide →</a>
+  </div>
+
+  <div class="mako-feature">
+    <div class="mako-feature__icon">⚙️</div>
+    <h3>Event-Sourced Process Runtime</h3>
+    <p>
+      Durable, replayable MaKo workflows built on <code>mako-engine</code>.
+      Atomic dual-write (events + APERAK outbox in one <code>WriteBatch</code>) guarantees
+      no lost messages on crash. Format-version coexistence: FV2025-10-01 and FV2026-10-01
+      run simultaneously.
+    </p>
+    <a href="{{ '/engine' | relative_url }}">Engine guide →</a>
+  </div>
+
+  <div class="mako-feature">
+    <div class="mako-feature__icon">⏱</div>
+    <h3>Automated Regulatory Compliance</h3>
+    <p>
+      APERAK 45-minute deadline enforced in <code>processd</code>.
+      Cedar ABAC generates per-decision audit records proving §20 EnWG non-discrimination.
+      BNetzA KPI reports are a SQL query, not a log search.
+    </p>
+    <a href="{{ '/bnetza' | relative_url }}">BNetzA reference →</a>
+  </div>
+
+  <div class="mako-feature">
+    <div class="mako-feature__icon">🧾</div>
+    <h3>Energy Billing Engine</h3>
+    <p>
+      12 product categories — STROM, GAS, WAERME, SOLAR, EEG/EINSPEISUNG, WAERMEPUMPE,
+      WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, BUNDLE.
+      All prices user-defined in <code>tarifbd</code>. §41a EPEX dynamic tariffs.
+      XRechnung 3.0 / ZUGFeRD 2.3 output.
+    </p>
+    <a href="{{ '/billingd' | relative_url }}">billingd guide →</a>
+  </div>
+
+  <div class="mako-feature">
+    <div class="mako-feature__icon">🔄</div>
+    <h3>Contract &amp; Customer Management</h3>
+    <p>
+      <code>vertragd</code> manages B2C and B2B customers with role-based multi-user portal access
+      (<code>kunden_identitaeten</code>: N OIDC logins per company with <code>standort_filter</code> site scoping),
+      B2B <code>Rahmenverträge</code> with portfolio pricing and Sammelrechnung,
+      and <code>Versorgungsverträge</code> per site/commodity. Serves as the sole OIDC→MaLo
+      authorization gateway for <code>portald</code>.
+    </p>
+    <a href="{{ '/vertragd' | relative_url }}">vertragd guide →</a>
+  </div>
+
+  <div class="mako-feature">
+    <div class="mako-feature__icon">📡</div>
+    <h3>iMSys Direct Push &amp; Quality Scoring</h3>
+    <p>
+      <code>edmd</code> accepts 15-min interval data directly from SMGW/iMSys gateways
+      without waiting for the MSCONS round-trip. A <strong>Hampel-filter quality scorer</strong>
+      (window k=3, MAD-based σ, grades A/B/C/F) runs on every batch. Grade F blocks the
+      billing run; grade C/F emits <code>de.edmd.reading.quality.warning</code> to the
+      <code>agentd</code> MSB-history specialist for LanceDB RAG indexing.
+    </p>
+    <a href="{{ '/edmd' | relative_url }}">edmd guide →</a>
+  </div>
+
+  <div class="mako-feature">
+    <div class="mako-feature__icon">🤖</div>
+    <h3>AI / LLM Integration</h3>
+    <p>
+      Every service ships an MCP server at <code>/mcp</code>.
+      <code>agentd</code> runs an Orchestrator + Specialist Mesh with LanceDB RAG
+      (ANN vector search, S3/GCS/local). OpenAI, Anthropic, AWS Bedrock SigV4 providers.
+      WASM plugins via <code>mako-plugin</code> (Extism sandbox). Specialists include
+      grid anomaly detection, billing anomaly AI, MSB device history RAG, and payment reconciliation.
+    </p>
+    <a href="{{ '/agentd' | relative_url }}">agentd guide →</a>
+  </div>
+</div>
+
+<div markdown="1">
+
+---
+
+## Architecture
+
+The system is organized in four layers — EDIFACT protocol, market data hub, automation, and retail billing — connected by CloudEvents 1.0 webhooks.
+
+</div>
+
+```mermaid
+graph TB
+    BDEW["BDEW counterparty\n(NB · MSB · LF)"]
+
+    subgraph core ["Protocol + Market Data"]
+        direction LR
+        makod["makod :8080/:4080\nedi-energy · mako-engine\n45+ workflows · SlateDB"]
+        marktd["marktd :8180\nMaLo · MeLo · contracts\nVersorgungsStatus · EventBus"]
+        makod -->|"CloudEvents"| marktd
+    end
+
+    subgraph auto ["Automation"]
+        direction LR
+        processd["processd :8580\nAnmeldung STP ≥95%\nLF E_0624 45-min auto-response"]
+        invoicd["invoicd :8280\ninvoic-checker 6 checks\n§22 MessZV receipts"]
+        netzbilanzd["netzbilanzd :8680\nNNE/KA/MMM billing\nINVOIC 31001/31002/31005"]
+    end
+
+    subgraph energy ["Energy Data"]
+        direction LR
+        edmd["edmd :8380\nMSCONS meter reads\nIceberg/S3 OLAP archive"]
+        einsd["einsd :9180\nEEG/KWKG settlement\n8 settlement models"]
+    end
+
+    subgraph retail ["Retail Billing (LF)"]
+        direction TB
+        tarifbd["tarifbd :9080\nUser-defined product catalog\nEPEX Spot prices"]
+        billingd["billingd :9280\n12 energy categories\n§41a EPEX · XRechnung 3.0"]
+        accountingd["accountingd :9380\nKundenkonto ledger\nSEPA pain.008 · Mahnwesen"]
+        tarifbd --> billingd --> accountingd
+    end
+
+    subgraph b2c ["B2C + AI"]
+        direction LR
+        vertragd["vertragd :9780\nContract & Customer Management\nKunden · Rahmenverträge · B2B/B2C\nkunden_identitaeten · portald auth"]
+        agentd["agentd :9580\nLLM Orchestrator + Specialist Mesh\nLanceDB RAG · MCP tools"]
+        portald["portald :9480\nCustomer Portal gateway\nREST + SSE · OIDC-gated"]
+    end
+
+    BDEW <-->|"AS4/ebMS3 · REST\niMS REST/WS"| makod
+    marktd -->|"EventBus fan-out"| processd & invoicd & edmd & auto
+    processd -->|"decisions"| makod
+    invoicd -->|"settle/dispute"| makod
+    edmd -->|"MeterBillingPeriod"| billingd
+    marktd -->|"NNE/KA tariffs"| billingd
+    einsd -->|"EEG credits"| accountingd
+    vertragd -->|"start-supply"| processd
+    agentd -.->|"MCP tools"| core & retail & auto
+    ERP["ERP / CRM"] --> vertragd
+    accountingd --> ERP
+```
+
+<div markdown="1">
+
+---
+
+## Quick Start
+
+Install the EDIFACT parsing and process engine libraries:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.8", features = ["utilmd", "mscons", "aperak"] }
+edi-energy  = { version = "0.8", features = ["utilmd", "mscons", "aperak"] }
+mako-engine = { version = "0.8", features = ["testing"] }
+mako-gpke   = "0.8"
 ```
+
+**Parse and validate a UTILMD Lieferbeginn:**
 
 ```rust
 use edi_energy::{parse, EdiEnergyMessage};
 
 let msg = parse(std::fs::read("lieferbeginn.edi")?.as_ref())?;
 msg.validate()?.into_error_result()?;  // returns Err if any AHB rule fires
-println!("PID {}", msg.detect_pruefidentifikator()?.as_u32()); // → 55001
+let pid = msg.detect_pruefidentifikator()?.as_u32();  // → 55001
+println!("PID {pid}: GPKE Lieferbeginn Strom");
 ```
 
-**DVGW gas transport** — parse a NOMINT nomination:
-
-```toml
-[dependencies]
-dvgw-edi = "0.8"
-```
+**Run a supplier-switch workflow:**
 
 ```rust
-use dvgw_edi::{DvgwPlatform, AnyDvgwMessage};
-
-let msg = DvgwPlatform::default().parse(edi_bytes)?;
-if let AnyDvgwMessage::Nomint(n) = &msg {
-    println!("nomination ref: {:?}", n.nomination_ref);
-    println!("routing PID:    {:?}", msg.detect_pid(Some("Z01"))); // → Some(90011)
-}
-```
-
-**Redispatch 2.0 XML** — parse and validate an `ActivationDocument`:
-
-```toml
-[dependencies]
-redispatch-xml = "0.8"
-```
-
-```rust
-use redispatch_xml::{parse_and_validate, Document};
-
-let doc = parse_and_validate(xml_bytes)?;
-println!("mRID:   {}", doc.mrid());
-println!("sender: {}", doc.sender_id()); // EIC code of TSO/RSO
-```
-
-**Full process runtime** — run a GPKE supplier-change workflow:
-
-```toml
-[dependencies]
-mako-engine = { version = "0.8", features = ["testing"] }
-mako-gpke   = "0.8"
-```
-
-```rust
-use mako_engine::{builder::EngineBuilder, event_store::InMemoryEventStore, ids::TenantId, version::WorkflowId};
-use mako_gpke::wechselprozesse::{GpkeSupplierChangeWorkflow, SupplierChangeCommand};
+use mako_engine::{builder::EngineBuilder, event_store::InMemoryEventStore};
+use mako_gpke::wechselprozesse::GpkeSupplierChangeWorkflow;
 
 let ctx = EngineBuilder::new()
     .with_event_store(InMemoryEventStore::new())
     .build();
-let process = ctx.spawn::<GpkeSupplierChangeWorkflow>(TenantId::new(), WorkflowId::new("gpke-supplier-change", "FV2025-10-01"));
-let envelopes = process.execute_and_enqueue(SupplierChangeCommand::ReceiveUtilmd { .. }).await?;
-// Events and APERAK outbox entry written atomically — no lost messages on crash.
+let process = ctx.spawn::<GpkeSupplierChangeWorkflow>(
+    tenant_id, workflow_id("gpke-switch", "FV2025-10-01")
+);
+// Events + APERAK outbox written atomically — no lost messages on crash
+let envelopes = process.execute_and_enqueue(cmd).await?;
 ```
 
-→ Full walkthrough in the [Getting Started guide]({{ '/getting-started' | relative_url }}).
+→ Full walkthrough: [Getting Started guide]({{ '/getting-started' | relative_url }})
 
 ---
 
-## System Overview
-{: .mt-8 }
+## Services
 
-```mermaid
-graph LR
-    NB["BDEW counterparty<br/>(NB · MSB · LF)"]
-    subgraph makod [makod :8080 / :4080]
-        ENG["edi-energy<br/>Parse · Validate"]
-        RT["mako-engine<br/>45+ workflows"]
-        DB[("SlateDB")]
-        ENG --> RT --> DB
-    end
-    subgraph marktd [marktd :8180 — Market Data Hub]
-        MDM_DB[("PostgreSQL<br/>MaLo · MeLo · NeLo · SR · TR<br/>Lokationszuordnung graph<br/>VersorgungsStatus · event_log")]
-    end
-    subgraph processd [processd :8580]
-        STP["netz-checker<br/>NB STP ≥95% · LF E_0624"]
-        PROC_DB[("PostgreSQL<br/>decisions · queue")]
-        STP --> PROC_DB
-    end
-    subgraph invoicd [invoicd :8280]
-        CHK["invoic-checker<br/>§22 MessZV receipt"]
-        CHK_DB[("PostgreSQL<br/>invoic_receipts")]
-        CHK --> CHK_DB
-    end
-    subgraph netzbilanzd [netzbilanzd :8680]
-        NNE["mako-nne<br/>NNE/KA/MMM billing<br/>invoic-checker self-validate"]
-        NNE_DB[("PostgreSQL<br/>invoice_drafts")]
-        NNE --> NNE_DB
-    end
-    subgraph sperrd [sperrd :8780]
-        SPR["Sperrung tracker<br/>IFTSTA 21039 auto-dispatch"]
-        SPR_DB[("PostgreSQL<br/>sperr_orders")]
-        SPR --> SPR_DB
-    end
-    subgraph edmd [edmd :8380]
-        EDM[("PostgreSQL<br/>meter reads · imbalance")]
-    end
-    subgraph obsd [obsd :8480]
-        OBS[("PostgreSQL<br/>projections · KPIs")]
-    end
-    ERP["ERP · Alertmanager<br/>Grafana · MCP client"]
+mako consists of 16 independently deployable services. Each ships a built-in MCP server at `/mcp` for LLM tool integration.
 
-    NB <-->|AS4 · REST · iMS| makod
-    DB -->|"de.mako.* CloudEvents"| marktd
-    marktd -->|"EventBus fan-out"| processd & invoicd & edmd & obsd & ERP
-    processd -->|"bestaetigen / ablehnen"| makod
-    processd -->|"GET versorgung / grid"| marktd
-    invoicd -->|"annehmen / ablehnen"| makod
-    invoicd -->|"GET preisblaetter"| marktd
-    invoicd -->|"GET billing-period"| edmd
-    netzbilanzd -->|"POST commands"| makod
-    sperrd -->|"IFTSTA 21039 command"| makod
-    NIS["nis-syncd :9680<br/>(stateless)"] -->|"PUT malo_grid"| marktd
-```
+</div>
+
+<div class="mako-group-label">Protocol &amp; Market Data</div>
+<div class="mako-service-grid">
+  <a href="{{ '/makod' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">makod</span>
+    <span class="mako-service-card__port">:8080 · :4080 · :8090</span>
+    <span class="mako-service-card__desc">45+ GPKE/WiM/GeLi Gas/MABIS/GaBi Gas workflows. AS4, REST, iMS. SlateDB event store.</span>
+  </a>
+  <a href="{{ '/marktd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">marktd</span>
+    <span class="mako-service-card__port">:8180</span>
+    <span class="mako-service-card__desc">Market Data Hub — MaLo/MeLo/contracts, typed BO4E responses, konfigurationsprodukte, MMMA monthly import, EventBus fan-out.</span>
+  </a>
+  <a href="{{ '/processd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">processd</span>
+    <span class="mako-service-card__port">:8580</span>
+    <span class="mako-service-card__desc">Anmeldung STP ≥95%. LF E_0624 45-min auto-response. MSB REQOTE auto-response. §14a Steuerungsauftrag produktcode check.</span>
+  </a>
+</div>
+
+<div class="mako-group-label">Invoice &amp; Billing (NB)</div>
+<div class="mako-service-grid">
+  <a href="{{ '/invoicd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">invoicd</span>
+    <span class="mako-service-card__port">:8280</span>
+    <span class="mako-service-card__desc">INVOIC 6-check plausibility pipeline. Auto-settle/dispute. §22 MessZV PostgreSQL receipts.</span>
+  </a>
+  <a href="{{ '/netzbilanzd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">netzbilanzd</span>
+    <span class="mako-service-card__port">:8680</span>
+    <span class="mako-service-card__desc">NNE/KA/MMM billing — generates INVOIC 31001/31002/31005. Self-validates before dispatch.</span>
+  </a>
+  <a href="{{ '/sperrd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">sperrd</span>
+    <span class="mako-service-card__port">:8780</span>
+    <span class="mako-service-card__desc">Sperrung execution tracking. Auto-dispatches IFTSTA 21039 on field confirmation.</span>
+  </a>
+</div>
+
+<div class="mako-group-label">Energy Data &amp; EEG</div>
+<div class="mako-service-grid">
+  <a href="{{ '/edmd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">edmd</span>
+    <span class="mako-service-card__port">:8380</span>
+    <span class="mako-service-card__desc">MSCONS meter readings. iMSys direct push (§41a). Hampel quality scoring (A/B/C/F). Ablesesteuerung. Apache Iceberg/S3 OLAP archive.</span>
+  </a>
+  <a href="{{ '/einsd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">einsd</span>
+    <span class="mako-service-card__port">:9180</span>
+    <span class="mako-service-card__desc">Einspeiser registry. 8 EEG/KWKG settlement models. Repowering §22 EEG. Built-in rate table 2000–2023.</span>
+  </a>
+  <a href="{{ '/obsd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">obsd</span>
+    <span class="mako-service-card__port">:8480</span>
+    <span class="mako-service-card__desc">Process projections, BNetzA KPI reports, §20 EnWG parity monitoring. Alertmanager bridge.</span>
+  </a>
+  <a href="{{ '/nis-syncd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">nis-syncd</span>
+    <span class="mako-service-card__port">:9680</span>
+    <span class="mako-service-card__desc">Stateless NIS/GIS grid topology import. Lifts NB Anmeldung STP ~80 % → ≥ 95 %.</span>
+  </a>
+</div>
+
+<div class="mako-group-label">Retail Billing &amp; Finance (LF)</div>
+<div class="mako-service-grid">
+  <a href="{{ '/tarifbd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">tarifbd</span>
+    <span class="mako-service-card__port">:9080</span>
+    <span class="mako-service-card__desc">User-defined product catalog. 12 energy categories. EPEX Spot prices for §41a. MaLo→product assignment.</span>
+  </a>
+  <a href="{{ '/billingd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">billingd</span>
+    <span class="mako-service-card__port">:9280</span>
+    <span class="mako-service-card__desc">Energy billing engine. §41a dynamic EPEX. Gas Brennwertkorrektur. §14a Modul 1/3. XRechnung 3.0.</span>
+  </a>
+  <a href="{{ '/accountingd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">accountingd</span>
+    <span class="mako-service-card__port">:9380</span>
+    <span class="mako-service-card__desc">Massenkontokorrent ledger. CAMT.054 bank import. SEPA pain.008 XML. Mahnwesen Mahnstufe 1–3.</span>
+  </a>
+</div>
+
+<div class="mako-group-label">B2C &amp; AI</div>
+<div class="mako-service-grid">
+  <a href="{{ '/vertragd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">vertragd</span>
+    <span class="mako-service-card__port">:9780</span>
+    <span class="mako-service-card__desc">Contract &amp; Customer Management. Kunden (B2C+B2B). Rahmenverträge. kunden_identitaeten (N portal users). Tarifwechsel. OIDC→MaLo auth gateway.</span>
+  </a>
+  <a href="{{ '/portald' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">portald</span>
+    <span class="mako-service-card__port">:9480</span>
+    <span class="mako-service-card__desc">Customer Portal gateway — Lastgang, invoices, balance, EEG, VersorgungsStatus. REST + SSE. OIDC-gated.</span>
+  </a>
+  <a href="{{ '/agentd' | relative_url }}" class="mako-service-card">
+    <span class="mako-service-card__name">agentd</span>
+    <span class="mako-service-card__port">:9580</span>
+    <span class="mako-service-card__desc">Multi-agent LLM orchestration. 8 specialist agents. LanceDB RAG. Grid anomaly detection. Billing anomaly AI. OpenAI/Anthropic/Bedrock.</span>
+  </a>
+</div>
+
+<div markdown="1">
 
 ---
 
-## Workspace at a Glance
-{: .mt-8 }
+## Design Principles
 
-| Crate / service | Purpose |
-|---|---|
-| [`edi-energy`](https://crates.io/crates/edi-energy) | Parse · validate · build all 17 EDI@Energy EDIFACT types |
-| [`mako-engine`](https://crates.io/crates/mako-engine) | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines, OpenTelemetry |
-| `mako-gpke` | GPKE — 16 workflows covering UTILMD Strom (55001–55018, 55555, 55600–55609), INVOIC (31001/31002/31005/31006), ORDERS Sperrung/Datenabruf/Allokationsliste, MSCONS Messwerte, UTILTS, Konfiguration, PARTIN Strom (37000–37006) |
-| `mako-wim` | WiM Strom — 10 workflows: MSB-Wechsel (55039/55042/55051/55168), Geräteübernahme ORDERS, Stammdaten, Preisanfrage/Preisliste, INVOIC 31009, INSRPT Strom, API-Webdienste Steuerungsauftrag |
-| `mako-wim-gas` | WiM Gas — MSB-Wechsel Gas (44039–44053, 44168–44170), Stornierung (44022–44024, Msb/Nmsb role), INVOIC 31003/31004, INSRPT Gas (23005/23009) |
-| `mako-geli-gas` | GeLi Gas 3.0 (BK7-24-01-009) — 9 workflows: UTILMD G supplier-switch (44001–44021), Stornierung LF/GNB (44022–44024 role-conditional), Sperrung LF+GNB, INVOIC 31011 (AWH), MSCONS Gas (13002/13007–13009), Datenabruf, PARTIN Gas (37008–37014) |
-| `mako-mabis` | MABIS — PID 13003 Bilanzkreisabrechnung Strom (BKV↔ÜNB) + PIDs 55065/55069/55070 Clearingliste |
-| `mako-redispatch` | Redispatch 2.0 — 8 XML-document-driven workflows (Activation, Stammdaten, NetworkConstraint, …); IFTSTA PIDs 21037/21038 |
-| `dvgw-edi` | DVGW EDIFACT gas transport — ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES (GaBi Gas 2.0 · BK7-14-020) |
-| `redispatch-xml` | Redispatch 2.0 XML/XSD — all 9 document types |
-| `mako-gabi-gas` | GaBi Gas — 8 workflows: INVOIC 31007/31008/31010, MSCONS 13013 Allokationsliste MMMA (ORDERS 17110/ORDRSP 19110), ALOCAT (90001–90003), NOMINT/NOMRES (90011–90022), SCHEDL, IMBNOT, TRANOT, DELORD/DELRES |
-| `mako-nbw` | Netzbetreiberwechsel — PARTIN bulk DSO handover *(placeholder)* |
-| `energy-api` | BDEW API-Webdienste Strom — REST/WebSocket client + Axum server |
-| `mako-markt` | Master data library — `MaloId`, `MeloId`, `MarktpartnerId`, repository traits (including `LokationszuordnungRepository`, `TechnischeRessourceRepository`), CloudEvents, testing doubles |
-| `mako-nne` | Pure NNE/KA/MMM invoice generation — `calculate_nne_invoice`, `calculate_mmm_invoice`; zero floating-point money (`EuroAmount`); self-validates via `invoic-checker` |
-| `mako-edm` | Energy data library — `MeterDataReceipt`, `TimeSeriesRepository`, `ImbalanceReport`, MSCONS PID set |
-| `mako-obs` | Observability library — `ProcessProjection`, `KpiReport`, `DeadlineRisk`, `ProcessProjectionRepository` |
-| `invoic-checker` | INVOIC plausibility library — period, arithmetic, total, tariff-match, and tariff-found checks |
-| `netz-checker` | NB Anmeldung validation library — 6 deterministic checks, ERC codes A02/A05/A06/A97/A99 |
-| `mako-service` | Shared service infrastructure — `ServiceBuilder`, `load_config`, health routes, HMAC-SHA256 webhook verification |
-| `makod` | Protocol daemon — all 45+ workflows, three ports (`:8080`/`:4080`/`:8090`), SlateDB, OTLP, Cedar ABAC, OIDC/JWT |
-| `marktd` | Market Data Hub — MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, preisblaetter, VersorgungsStatus (history + `?at=`), `event_log` replay, Cedar ABAC, `:8180` |
-| `invoicd` | INVOIC plausibility-check daemon (LF role) — auto-settles or disputes GPKE billing; §22 MessZV receipts, `:8280` |
-| `netzbilanzd` | NNE/KA/MMM billing daemon (NB role) — generates and dispatches INVOIC 31001/31002/31005; `invoice_drafts` lifecycle (`draft → dispatched/rejected`), `:8680` |
-| `sperrd` | Sperrung execution tracking daemon (NB role) — `sperr_orders` lifecycle (`pending → executed/failed`); auto-dispatches IFTSTA 21039 on field confirmation, `:8780` |
-| `edmd` | Energy Data Management daemon — MSCONS meter readings, time-series API, Mehr-/Mindermengen imbalance; PostgreSQL, `:8380` |
-| `obsd` | Business-process observability daemon — process projections, BNetzA KPI reports, overdue alerts; PostgreSQL, `:8480` |
+</div>
+
+<div class="mako-principles">
+  <div class="mako-principle">
+    <strong>No EDIFACT expertise required</strong>
+    AHB/MIG validation, Prüfidentifikatoren, and regulatory deadlines are built in.
+    You write domain logic in Rust; mako handles the protocol layer.
+  </div>
+  <div class="mako-principle">
+    <strong>Annual format versions in hours, not months</strong>
+    <code>cargo xtask codegen</code> regenerates all 247 AHB profiles from BDEW PDFs.
+    FV2025-10-01 and FV2026-10-01 coexist in the same running instance.
+  </div>
+  <div class="mako-principle">
+    <strong>Atomic dual-write — no lost APERAKs</strong>
+    Events and APERAK outbox entries are written in one <code>WriteBatch</code> via
+    <code>AtomicAppend::append_with_outbox</code>. A crash between two writes is impossible.
+  </div>
+  <div class="mako-principle">
+    <strong>Pure functions, deterministic state</strong>
+    <code>Workflow::handle</code> and <code>Workflow::apply</code> are pure.
+    No I/O, no clock access. Replayable, trivially testable, audit-compliant.
+  </div>
+  <div class="mako-principle">
+    <strong>BO4E at every API boundary</strong>
+    <code>marktd</code> returns typed <code>rubo4e::current::Marktlokation</code>, not raw JSON.
+    Schema validation on every PUT rejects malformed data before it causes silent billing errors.
+  </div>
+  <div class="mako-principle">
+    <strong>MCP server in every service</strong>
+    All 16 daemons expose tools and guided prompts at <code>/mcp</code> (Streamable HTTP 2025-11-05).
+    Plug any MCP-capable LLM client directly into your energy market operations.
+  </div>
+</div>
+
+<div markdown="1">
 
 ---
 
-## Regulatory Compliance
-{: .mt-8 }
+## Regulatory Coverage
 
-mako tracks every BNetzA ruling that governs German energy market communication
-and ships AHB/MIG profiles for every active format version:
+mako ships AHB/MIG profiles for every active BDEW format version:
 
-| Ruling | Scope | Effective |
+</div>
+
+<div class="mako-compliance-grid">
+  <div class="mako-compliance-card">
+    <div class="mako-compliance-card__id">BK6-24-174</div>
+    <div class="mako-compliance-card__desc">GPKE Teil 1–3, WiM Strom, MABIS</div>
+    <div class="mako-compliance-card__date">Effective 06.06.2025</div>
+  </div>
+  <div class="mako-compliance-card">
+    <div class="mako-compliance-card__id">BK6-22-024</div>
+    <div class="mako-compliance-card__desc">GPKE Teil 4 — Stammdatenprozesse</div>
+    <div class="mako-compliance-card__date">Effective 06.06.2025</div>
+  </div>
+  <div class="mako-compliance-card">
+    <div class="mako-compliance-card__id">BK7-24-01-009</div>
+    <div class="mako-compliance-card__desc">GeLi Gas 3.0 — UTILMD G supplier-switch</div>
+    <div class="mako-compliance-card__date">Effective 01.10.2025</div>
+  </div>
+  <div class="mako-compliance-card">
+    <div class="mako-compliance-card__id">BDEW FV2026-10-01</div>
+    <div class="mako-compliance-card__desc">All message types — annual release</div>
+    <div class="mako-compliance-card__date">Effective 01.10.2026</div>
+  </div>
+  <div class="mako-compliance-card">
+    <div class="mako-compliance-card__id">§14a EnWG</div>
+    <div class="mako-compliance-card__desc">Controllable loads — Modul 1/2/3 discounts</div>
+    <div class="mako-compliance-card__date">Since 01.01.2024</div>
+  </div>
+  <div class="mako-compliance-card">
+    <div class="mako-compliance-card__id">§41a EnWG</div>
+    <div class="mako-compliance-card__desc">Dynamic EPEX tariffs — mandatory from 2025</div>
+    <div class="mako-compliance-card__date">Since 01.01.2025</div>
+  </div>
+</div>
+
+<div markdown="1">
+
+→ [BNetzA regulatory reference]({{ '/bnetza' | relative_url }}) · [PID reference]({{ '/pid-reference' | relative_url }}) · [Annual release workflow]({{ '/annual-release-workflow' | relative_url }})
+
+---
+
+## Libraries
+
+Beyond the production services, mako exposes reusable Rust libraries:
+
+| Crate | Published | Purpose |
 |---|---|---|
-| BK6-24-174 | GPKE Teil 1–3 + WiM + MABIS | 06.06.2025 |
-| BK6-22-024 | GPKE Teil 4 — Stammdatenprozesse | 06.06.2025 |
-| BK7-24-01-009 | GeLi Gas 3.0 — UTILMD G supplier-switch | 01.10.2025 |
-| BDEW FV2026-10-01 | All message types — annual release | 01.10.2026 |
+| [`edi-energy`](https://crates.io/crates/edi-energy) | ✅ crates.io | Parse · validate · build all 17 EDI@Energy EDIFACT types |
+| [`mako-engine`](https://crates.io/crates/mako-engine) | ✅ crates.io | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
+| `mako-gpke` | workspace | GPKE workflows — UTILMD Strom + INVOIC + ORDERS Sperrung + PARTIN (37000–37006) |
+| `mako-wim` | workspace | WiM Strom workflows — MSB-Wechsel, INSRPT, Preisanfrage, INVOIC 31009 |
+| `mako-geli-gas` | workspace | GeLi Gas 3.0 — UTILMD G + ORDERS Sperrung Gas + INVOIC 31011 + PARTIN Gas |
+| `mako-wim-gas` | workspace | WiM Gas — UTILMD G MSB-Wechsel + INVOIC 31003/31004 + INSRPT Gas |
+| `mako-gabi-gas` | workspace | GaBi Gas — INVOIC 31007/31008/31010 + MSCONS 13013 MMMA + DVGW workflows |
+| `mako-mabis` | workspace | MABIS — PID 13003 Bilanzkreisabrechnung Strom (BKV↔ÜNB) |
+| `dvgw-edi` | workspace | DVGW EDIFACT gas transport — ALOCAT, NOMINT, NOMRES, SCHEDL, … |
+| `redispatch-xml` | workspace | Redispatch 2.0 XML/XSD — all 9 CIM/IEC 62325 document types |
+| `mako-nne` | workspace | Pure NNE/KA/MMM invoice generation — zero floating-point money |
+| `invoic-checker` | workspace | INVOIC plausibility — 6 checks, ToU-aware tariff match |
+| `netz-checker` | workspace | NB Anmeldung validation — 6 deterministic checks, ERC A02–A99 |
+| `mako-plugin` | workspace | WASM plugin system — Extism/Wasmtime sandbox for custom extensions |
 
-Both `FV2025-10-01` and `FV2026-10-01` coexist in the same engine instance
-simultaneously. A process started under the old format version continues to
-completion under the same rules even after the annual cutover.
-
-→ [BNetzA regulatory reference]({{ '/bnetza' | relative_url }}) · [PID reference]({{ '/pid-reference' | relative_url }}) · [Release lifecycle]({{ '/release-lifecycle' | relative_url }})
-
----
-
-## Why mako?
-{: .mt-8 }
-
-| | mako | Hand-rolled EDIFACT | Generic workflow engine |
-|---|:---:|:---:|:---:|
-| AHB/MIG validation built in | ✅ | ❌ | ❌ |
-| APERAK deadline enforcement | ✅ | ❌ | ⚠ manual |
-| Annual format-version migration | ✅ codegen | ❌ | ❌ |
-| Atomic dual-write (events + outbox) | ✅ | ❌ | ⚠ 2-phase |
-| AS4/ebMS3 transport | ✅ | ❌ | ❌ |
-| API-Webdienste Strom (iMS) | ✅ | ❌ | ❌ |
-| Cedar ABAC authorization | ✅ | ❌ | ⚠ bolt-on |
-| OIDC/JWT + API-key auth | ✅ | ❌ | ⚠ varies |
-| CloudEvents 1.0 ERP webhooks | ✅ | ❌ | ❌ |
-| OpenTelemetry traces + metrics | ✅ | ❌ | ⚠ varies |
-| LLM / MCP integration (tools + prompts) | ✅ | ❌ | ❌ |
-| 100% safe Rust, no OpenSSL for TLS | ✅ | ❌ | ❌ |
+→ [Getting Started]({{ '/getting-started' | relative_url }}) · [Architecture]({{ '/architecture' | relative_url }}) · [Parsing guide]({{ '/parsing' | relative_url }}) · [Engine guide]({{ '/engine' | relative_url }})
 
 </div>

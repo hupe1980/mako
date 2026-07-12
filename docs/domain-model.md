@@ -1,8 +1,8 @@
 ---
 layout: default
 title: Domain Model
-nav_order: 39
-parent: Regulatory
+nav_order: 13
+parent: Architecture
 description: >
   BDEW market role model, market objects (MaLo, MeLo, NeLo, NeBe), territory
   definitions, identifier formats with check-digit rules, and EDIFACT encoding

@@ -142,6 +142,17 @@ pub struct SteuerungsauftragData {
     pub max_power_kw: Option<String>,
     /// ISO-8601 UTC timestamp at which the control effect ends (if bounded).
     pub execution_time_until: Option<String>,
+    /// Contracted Konfigurationsprodukt code (e.g. `"TX-MODUL2-HT"`).
+    ///
+    /// Extracted from the inbound ORDERS `LIN+1` segment at ingestion time.
+    /// Used by `makod` to verify that the requested product is in the SR's
+    /// `konfigurationsprodukte` list before dispatching the ORDRSP
+    /// `bestaetigen` response (M1 guard).
+    ///
+    /// `None` for legacy processes created before this field was introduced
+    /// or for `InitialZustand` (reset) commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub produkt_code: Option<String>,
 }
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -164,6 +175,9 @@ pub enum SteuerungsauftragEvent {
         max_power_kw: String,
         /// ISO-8601 UTC timestamp at which the limit ends (if bounded).
         execution_time_until: Option<String>,
+        /// Contracted Konfigurationsprodukt code from ORDERS `LIN+1` segment.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        produkt_code: Option<String>,
     },
     /// MSB received an `initialZustand` (reset) command from NB/LF.
     InitialZustandReceived {
@@ -212,8 +226,10 @@ impl EventPayload for SteuerungsauftragEvent {
 /// Current state of a WiM Steuerungsauftrag process stream.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum SteuerungsauftragState {
     /// No events yet.
+    #[default]
     New,
     /// Control command received; waiting for MSB back-end confirmation.
     Received(SteuerungsauftragData),
@@ -226,12 +242,6 @@ pub enum SteuerungsauftragState {
         /// Human-readable rejection reason.
         reason: String,
     },
-}
-
-impl Default for SteuerungsauftragState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl SteuerungsauftragState {
@@ -268,6 +278,13 @@ pub enum SteuerungsauftragCommand {
         max_power_kw: String,
         /// ISO-8601 UTC timestamp at which the limit ends (if bounded).
         execution_time_until: Option<String>,
+        /// Contracted Konfigurationsprodukt code from the inbound ORDERS `LIN+1` segment.
+        ///
+        /// Stored in process state so that `makod` can verify the product is
+        /// in the SR's `konfigurationsprodukte` list before dispatching ORDRSP
+        /// `bestaetigen`.  `None` when the ORDERS message does not specify a
+        /// product (legacy / non-§14a flows).
+        produkt_code: Option<String>,
     },
     /// Inbound `initialZustand` (reset) command from NB/LF via REST.
     ReceiveInitialZustand {
@@ -347,6 +364,7 @@ impl Workflow for WimSteuerungsauftragWorkflow {
                 execution_time_from,
                 max_power_kw,
                 execution_time_until,
+                produkt_code,
             } => SteuerungsauftragState::Received(SteuerungsauftragData {
                 tx_id: tx_id.clone(),
                 sender_mp_id: sender_mp_id.clone(),
@@ -355,6 +373,7 @@ impl Workflow for WimSteuerungsauftragWorkflow {
                 execution_time_from: execution_time_from.clone(),
                 max_power_kw: Some(max_power_kw.clone()),
                 execution_time_until: execution_time_until.clone(),
+                produkt_code: produkt_code.clone(),
             }),
             SteuerungsauftragEvent::InitialZustandReceived {
                 tx_id,
@@ -369,6 +388,7 @@ impl Workflow for WimSteuerungsauftragWorkflow {
                 execution_time_from: execution_time_from.clone(),
                 max_power_kw: None,
                 execution_time_until: None,
+                produkt_code: None,
             }),
             SteuerungsauftragEvent::EndantwortPositiv { .. } => {
                 if let SteuerungsauftragState::Received(data) = state {
@@ -420,6 +440,7 @@ impl Workflow for WimSteuerungsauftragWorkflow {
                 execution_time_from,
                 max_power_kw,
                 execution_time_until,
+                produkt_code,
             } => {
                 if !matches!(state, SteuerungsauftragState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
@@ -431,6 +452,7 @@ impl Workflow for WimSteuerungsauftragWorkflow {
                     execution_time_from,
                     max_power_kw,
                     execution_time_until,
+                    produkt_code,
                 }]
                 .into())
             }

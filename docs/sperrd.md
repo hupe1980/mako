@@ -1,7 +1,8 @@
 ---
 layout: default
 title: sperrd
-nav_order: 15
+nav_order: 26
+parent: Services
 description: >-
   Operator guide for sperrd — the Sperrung execution tracking daemon that
   auto-dispatches IFTSTA 21039 (field confirmation) when the field-service

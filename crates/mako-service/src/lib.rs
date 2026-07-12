@@ -33,6 +33,8 @@ pub mod metrics;
 #[cfg(feature = "rate-limit")]
 pub mod rate_limit;
 
+pub use mako_plugin::{PluginContext, PluginError, PluginManifest, PluginRegistry};
+
 pub use builder::ServiceBuilder;
 pub use config::{ConfigError, load_config};
 pub use telemetry::{OtelConfig, OtelGuard, init_tracing};

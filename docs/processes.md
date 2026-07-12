@@ -1,8 +1,8 @@
 ---
 layout: default
 title: Process Catalog
-nav_order: 38
-parent: Regulatory
+nav_order: 15
+parent: Reference
 mermaid: true
 description: >
   Business-level catalog of all German energy market communication processes —

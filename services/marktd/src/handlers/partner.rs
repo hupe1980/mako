@@ -4,6 +4,10 @@
 //!   PUT  /api/v1/partners/:gln
 //!   GET  /api/v1/partners/:gln
 //!   GET  /api/v1/partners
+//!
+//! All PUT requests are validated as `rubo4e::current::Geschaeftspartner` (L6).
+//! The `_typ` discriminator is auto-injected when absent and the canonical
+//! camelCase form is stored in the `partners.channels` JSONB column.
 
 use std::sync::Arc;
 
@@ -23,6 +27,7 @@ use mako_markt::{
     },
 };
 use mako_service::cedar::CedarEnforcer;
+use rubo4e::current::Geschaeftspartner;
 use serde::Deserialize;
 
 use super::preisblatt::PriCatRepoExt;
@@ -32,6 +37,45 @@ use super::{Claims, IntoMdmResponse as _};
 pub struct PartnerQuery {
     pub marktrolle: Option<String>,
     pub sparte: Option<String>,
+}
+
+/// Validate and normalise a partner `data` payload as `rubo4e::current::Geschaeftspartner`.
+///
+/// 1. Auto-injects `"_typ": "GESCHAEFTSPARTNER"` when absent.
+/// 2. Rejects 422 when `_typ` is present but wrong.
+/// 3. Validates all enum fields (`marktrolle`, `rollencodetyp`, `marktteilnehmerstatus`).
+/// 4. Re-serialises to canonical camelCase BO4E form.
+///
+/// The `data` field in `PartnerRecord.channels` is the partner's BO4E payload.
+/// Returns the normalised JSON on success, or a 422 error body on failure.
+fn normalize_geschaeftspartner(
+    mut data: serde_json::Value,
+) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
+    if let Some(obj) = data.as_object_mut() {
+        obj.entry("_typ")
+            .or_insert_with(|| serde_json::json!("GESCHAEFTSPARTNER"));
+    }
+    if data
+        .get("_typ")
+        .and_then(|v| v.as_str())
+        .map(|t| t.to_uppercase() != "GESCHAEFTSPARTNER")
+        .unwrap_or(false)
+    {
+        let typ = data.get("_typ").and_then(|v| v.as_str()).unwrap_or("");
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({
+                "error": format!("expected _typ GESCHAEFTSPARTNER, got '{typ}'")
+            }),
+        ));
+    }
+    let partner: Geschaeftspartner = serde_json::from_value(data).map_err(|e| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({ "error": format!("invalid Geschaeftspartner payload: {e}") }),
+        )
+    })?;
+    Ok(serde_json::to_value(&partner).unwrap_or_default())
 }
 
 /// `PUT /api/v1/partners/:gln`
@@ -72,6 +116,17 @@ where
             .into_response();
         }
     };
+
+    // L6: Validate and normalise the partner's BO4E payload as Geschaeftspartner.
+    // Injects _typ, validates enum fields, canonicalises camelCase.
+    // Only applied when the `channels` field contains a non-null object.
+    if record.channels.is_object() && !record.channels.is_null() {
+        match normalize_geschaeftspartner(record.channels.clone()) {
+            Ok(normalised) => record.channels = normalised,
+            Err((status, body)) => return (status, Json(body)).into_response(),
+        }
+    }
+
     let is_lf = record
         .marktrolle
         .as_deref()
@@ -180,7 +235,31 @@ where
     };
 
     match state.partner_repo.find(&mp_id).await {
-        Ok(Some(p)) => Json(p).into_response(),
+        Ok(Some(p)) => {
+            // L5: deserialise `channels` JSONB as `rubo4e::current::Geschaeftspartner`
+            // for a fully typed GET response. Falls back to raw JSON on parse failure
+            // (e.g. legacy records written before L6 PUT validation was enforced).
+            let geschaeftspartner: Option<serde_json::Value> =
+                if p.channels.is_object() && !p.channels.is_null() {
+                    match serde_json::from_value::<Geschaeftspartner>(p.channels.clone()) {
+                        Ok(gp) => serde_json::to_value(&gp).ok(),
+                        Err(_) => Some(p.channels.clone()),
+                    }
+                } else {
+                    None
+                };
+            let resp = serde_json::json!({
+                "mp_id":              p.mp_id.to_string(),
+                "display_name":       p.display_name,
+                "marktrolle":         p.marktrolle,
+                "rollencodetyp":      p.rollencodetyp,
+                "makoadresse":        p.makoadresse,
+                "geschaeftspartner":  geschaeftspartner,
+                "version":            p.version,
+                "updated_at":         p.updated_at.to_string(),
+            });
+            Json(resp).into_response()
+        }
         Ok(None) => mako_markt::error::MdmError::NotFound {
             resource_type: "resource",
             id: gln_str,

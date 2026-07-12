@@ -1,0 +1,36 @@
+[package]
+name        = "billingd"
+description = "Multi-product billing engine (LF role). Pure calculation service: pulls ProductDefinition from tarifbd, consumption from edmd, grid pass-through from marktd; produces BO4E Rechnung for energy/service/telco/bundle; para.41a EPEX dynamic billing, para.14a Steuerbarkeits-Rabatt, EEG Gutschrift. Port :9280."
+version.workspace     = true
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+
+[[bin]]
+name = "billingd"
+path = "src/main.rs"
+
+[dependencies]
+mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
+billing      = { workspace = true }
+rmcp         = { workspace = true }
+schemars     = { workspace = true }
+mako-markt   = { workspace = true, features = ["marktd-client"] }
+rubo4e       = { workspace = true }
+axum         = { version = "0.8" }
+sqlx         = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal"] }
+tokio        = { version = "1", features = ["full"] }
+serde        = { workspace = true, features = ["derive"] }
+serde_json   = { workspace = true }
+time         = { workspace = true }
+uuid         = { workspace = true, features = ["v4", "serde"] }
+rust_decimal = { workspace = true }
+rust_decimal_macros = "1"
+reqwest      = { workspace = true }
+tracing      = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tower-http   = { version = "0.6" }
+anyhow       = "1"
+secrecy      = { version = "0.10" }

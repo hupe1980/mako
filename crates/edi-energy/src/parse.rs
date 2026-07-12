@@ -596,7 +596,7 @@ impl Parser {
 /// the UNZ control reference or message count is mismatched; after that it
 /// returns `None` permanently.
 pub struct InterchangeIter {
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     inner: MessageWindowsIter<
         std::iter::Map<
             std::vec::IntoIter<OwnedSegment>,
@@ -702,7 +702,7 @@ fn parse_interchange_header_from_segments(
         unb.component_str(3, 1).unwrap_or(""),
     );
     let control_ref = unb.element_str(4).unwrap_or("").to_owned();
-    let test_indicator = unb.element_str(10).map_or(false, |v| v.trim() == "1");
+    let test_indicator = unb.element_str(10).is_some_and(|v| v.trim() == "1");
 
     Ok(InterchangeHeader {
         sender_id: sender_id.into_boxed_str(),
@@ -742,7 +742,7 @@ pub(crate) fn parse_interchange_full_with_arc_registry(
     parse_interchange_full_from_segments_with_registry(segments, &config, registry)
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 fn parse_interchange_full_from_segments_with_registry(
     segments: Vec<OwnedSegment>,
     config: &ParseConfig,
@@ -792,7 +792,7 @@ fn parse_interchange_full_from_segments_with_registry(
 
     // DE 0035: test indicator.  "1" = test message; absent or any other value = production.
     // Per Allgemeine Festlegungen V6.1d §3: test messages must not be processed as production.
-    let test_indicator = unb.element_str(10).map_or(false, |v| v.trim() == "1");
+    let test_indicator = unb.element_str(10).is_some_and(|v| v.trim() == "1");
 
     let header = InterchangeHeader {
         sender_id: sender_id.into_boxed_str(),

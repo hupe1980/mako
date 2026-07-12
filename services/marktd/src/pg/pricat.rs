@@ -1,7 +1,7 @@
 //! PostgreSQL implementation of [`PriCatRepository`].
 //!
 //! Backed by the `pricat_versions` and `pricat_dispatch_log` tables
-//! (see `migrations/0001_initial_schema.sql`).
+//! (see `migrations/0001_initial.sql`).
 
 use mako_markt::{
     error::MdmError,

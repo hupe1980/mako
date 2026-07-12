@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Schema Versioning
-nav_order: 31
+nav_order: 10
 parent: Release & Compliance
 description: >
   Profile JSON schema versioning policy: additive changes, breaking changes,

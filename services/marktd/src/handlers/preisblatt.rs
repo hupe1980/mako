@@ -17,6 +17,7 @@ use mako_markt::{
     },
 };
 use mako_service::cedar::CedarEnforcer;
+use rubo4e::current::{PreisblattMessung, PreisblattNetznutzung, ZeitvariablePreisposition};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use utoipa::{IntoParams, ToSchema};
@@ -76,6 +77,19 @@ pub struct PreisblattResponse {
     /// Wall-clock time (UTC) when this sheet was last written.
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
+    /// §14a Modul 2 time-variable NNE price positions (BNetzA BK6-22-300).
+    ///
+    /// Extracted from `data.zeitvariablePreispositionen` for explicit typed access.
+    /// Contains ToU (time-of-use) discount bands for controllable loads
+    /// (heat pumps, EV charging, §14a-eligible assets).
+    ///
+    /// Mandatory for all NB deployments since 01.01.2024.  Consumers
+    /// (`invoicd` check 4, `netzbilanzd` Modul-2 billing) MUST check this
+    /// list before falling back to static `Leistungstyp` positions.
+    ///
+    /// `null` / empty = no ToU bands configured (pure static NNE tariff).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub zeitvariable_preispositionen: Vec<serde_json::Value>,
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -115,13 +129,26 @@ pub async fn get_preisblatt(
     let billing_date = query.date.unwrap_or_else(today_iso);
 
     match repo.find_for_date(&nb_mp_id, &billing_date).await {
-        Ok(Some(record)) => Json(PreisblattResponse {
-            data: record.data,
-            source: record.source.to_string(),
-            bo4e_version: record.bo4e_version,
-            updated_at: record.updated_at,
-        })
-        .into_response(),
+        Ok(Some(record)) => {
+            // Extract §14a Modul 2 time-variable positions from the stored JSONB.
+            // The NB PUTs them under `zeitvariablePreispositionen` (BO4E camelCase).
+            // Expose at top-level for explicit typed consumption by invoicd / netzbilanzd.
+            let zeitvariable = record
+                .data
+                .get("zeitvariablePreispositionen")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            Json(PreisblattResponse {
+                data: record.data,
+                source: record.source.to_string(),
+                bo4e_version: record.bo4e_version,
+                updated_at: record.updated_at,
+                zeitvariable_preispositionen: zeitvariable,
+            })
+            .into_response()
+        }
         Ok(None) => (
             StatusCode::NOT_FOUND,
             format!("No Preisblatt found for NB GLN {nb_mp_id} on {billing_date}"),
@@ -170,6 +197,18 @@ pub async fn put_preisblatt(
     }
 
     // REST API calls always count as source='api' — operator override protection.
+    // Validate the payload against rubo4e::current::PreisblattNetznutzung (B15).
+    // This catches wrong `_typ`, invalid enum values in `preispositionen`, and
+    // malformed `zeitvariablePreispositionen.zaehlzeitregister` before DB insert.
+    if let Err(e) = serde_json::from_value::<PreisblattNetznutzung>(req.data.clone()) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!("invalid PreisblattNetznutzung: {e}")
+            })),
+        )
+            .into_response();
+    }
     let data = req.data;
     let bo4e_version = req.bo4e_version;
     match repo
@@ -287,6 +326,16 @@ fn today_iso() -> String {
 pub type PreisblattMessungRepoExt = Arc<PgPreisblattMessungRepository>;
 
 /// Response body for `GET /api/v1/preisblaetter-messung/{msb_mp_id}`.
+///
+/// ## M5 — typed `zeitvariablePreispositionen`
+///
+/// `zeitvariable_preispositionen` is exposed as a typed `Vec<ZeitvariablePreisposition>`
+/// (deserialized from stored JSONB). This enables consumers (`invoicd` check 4,
+/// `invoic-checker` MSB position validation) to directly access the `zaehlzeitregister`
+/// band code without JSON path traversal.
+///
+/// `schema_drift` counts elements that could not be deserialized (indicates stale data
+/// written before M5 validation — re-PUT to normalize).
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PreisblattMessungResponse {
     /// The full BO4E `PreisblattMessung` payload.
@@ -298,6 +347,36 @@ pub struct PreisblattMessungResponse {
     /// Wall-clock time (UTC) when this sheet was last written.
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
+    /// Price supplements and discounts (BO4E `AufAbschlag`).
+    ///
+    /// Extracted from `data.aufAbschlaege` for explicit typed access.
+    /// Contains conditional supplements and discounts on the MSB base price:
+    /// - remote-read surcharge (`AufAbschlagstyp::AUFSCHLAG`)
+    /// - §14a Modul 2/3 ToU discount bands (`AufAbschlagstyp::ABSCHLAG`)
+    /// - hardware rental add-ons
+    ///
+    /// An empty list means no supplements/discounts are configured.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub auf_abschlaege: Vec<serde_json::Value>,
+    /// §14a Modul 2 time-variable MSB price positions.
+    ///
+    /// Typed `Vec<ZeitvariablePreisposition>` deserialized from stored JSONB.
+    /// Each element carries `zaehlzeitregister` (e.g. `"HT"`, `"NT"`, `"ST"`) which
+    /// identifies the TOU band.  Used by `invoicd` check 4 for INVOIC 31009 MSB
+    /// tariff validation and by `billingd` §14a Modul 2/3 billing.
+    ///
+    /// Empty = no TOU bands configured (pure flat MSB tariff).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schema(value_type = Vec<Object>)]
+    pub zeitvariable_preispositionen: Vec<ZeitvariablePreisposition>,
+    /// Number of `zeitvariablePreispositionen` elements that failed schema validation.
+    /// Non-zero indicates stale pre-M5 data — re-PUT the sheet to normalize.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub schema_drift_count: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// `GET /api/v1/preisblaetter-messung/{msb_mp_id}?date={billing_date}`
@@ -336,13 +415,51 @@ pub async fn get_preisblatt_messung(
     let billing_date = query.date.unwrap_or_else(today_iso);
 
     match repo.find_messung_for_date(&msb_mp_id, &billing_date).await {
-        Ok(Some(record)) => Json(PreisblattMessungResponse {
-            data: record.data,
-            source: record.source.to_string(),
-            bo4e_version: record.bo4e_version,
-            updated_at: record.updated_at,
-        })
-        .into_response(),
+        Ok(Some(record)) => {
+            let auf_abschlaege = record
+                .data
+                .get("aufAbschlaege")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            // M5: Deserialize `zeitvariablePreispositionen` as typed
+            // `Vec<ZeitvariablePreisposition>` for downstream typed consumption.
+            let raw_zvp = record
+                .data
+                .get("zeitvariablePreispositionen")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let mut schema_drift_count = 0u32;
+            let zeitvariable_preispositionen: Vec<ZeitvariablePreisposition> = raw_zvp
+                .into_iter()
+                .filter_map(|item| {
+                    serde_json::from_value::<ZeitvariablePreisposition>(item)
+                        .map_err(|e| {
+                            schema_drift_count += 1;
+                            tracing::warn!(
+                                msb_mp_id = %msb_mp_id,
+                                error = %e,
+                                "schema drift: stored ZeitvariablePreisposition cannot be \
+                                 deserialised — re-PUT the PreisblattMessung to normalize (M5)"
+                            );
+                        })
+                        .ok()
+                })
+                .collect();
+
+            Json(PreisblattMessungResponse {
+                data: record.data,
+                source: record.source.to_string(),
+                bo4e_version: record.bo4e_version,
+                updated_at: record.updated_at,
+                auf_abschlaege,
+                zeitvariable_preispositionen,
+                schema_drift_count,
+            })
+            .into_response()
+        }
         Ok(None) => (
             StatusCode::NOT_FOUND,
             format!("No PreisblattMessung found for MSB MP-ID {msb_mp_id} on {billing_date}"),
@@ -394,13 +511,112 @@ pub async fn put_preisblatt_messung(
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    match repo
-        .upsert_messung(
-            &msb_mp_id,
-            req.data,
-            &req.bo4e_version,
-            PreisblattSource::Api,
+    // ── Basic BO4E schema validation ─────────────────────────────────────────
+    // Catches wrong `_typ`, missing required fields, and invalid enum values.
+    // `ZeitvariablePreisposition` elements are stored in `_additional` extension
+    // data of `PreisblattMessung` — they are validated separately below (M5).
+    if let Err(e) = serde_json::from_value::<PreisblattMessung>(req.data.clone()) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!("invalid PreisblattMessung: {e}")
+            })),
         )
+            .into_response();
+    }
+
+    // ── M5: Full ZeitvariablePreisposition validation ────────────────────────
+    //
+    // The basic `PreisblattMessung` schema check above validates the outer envelope.
+    // Now extract `zeitvariablePreispositionen` from the raw JSON and apply
+    // BDEW business rules that are NOT enforced by the BO4E schema:
+    //
+    // 1. Each element must deserialize as `ZeitvariablePreisposition`.
+    // 2. `zaehlzeitregister` MUST be non-empty (§14a Modul 2, BK6-22-300):
+    //    An MSB with ToU pricing MUST identify each band code (e.g. "HT", "NT", "ST").
+    //    Without it, `invoic-checker` cannot match INVOIC 31009 positions against bands.
+    // 3. Reject `bandNummer` (does NOT exist in BO4E v202607 — pre-standardization field).
+    //    Operators who accidentally set `bandNummer` instead of `zaehlzeitregister` would
+    //    get silent failures in invoic-checker check 4.
+
+    let mut data = req.data;
+    if let Some(zvp_arr) = data
+        .get("zeitvariablePreispositionen")
+        .and_then(|v| v.as_array())
+        .cloned()
+    {
+        let mut validated: Vec<serde_json::Value> = Vec::with_capacity(zvp_arr.len());
+        for (i, item) in zvp_arr.iter().enumerate() {
+            // Reject `bandNummer` — it does not exist in BO4E v202607.
+            // Fail loudly so operators fix their PRICAT import tooling.
+            if item.get("bandNummer").is_some() {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": format!(
+                            "zeitvariablePreispositionen[{}]: 'bandNummer' is not a valid \
+                             BO4E v202607 field — use 'zaehlzeitregister' instead \
+                             (e.g. \"HT\", \"NT\", \"ST\")",
+                            i
+                        )
+                    })),
+                )
+                    .into_response();
+            }
+
+            // Parse as ZeitvariablePreisposition to validate schema.
+            let zvp = match serde_json::from_value::<ZeitvariablePreisposition>(item.clone()) {
+                Ok(z) => z,
+                Err(e) => {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(serde_json::json!({
+                            "error": format!(
+                                "zeitvariablePreispositionen[{}] is not a valid \
+                                 ZeitvariablePreisposition: {}",
+                                i, e
+                            )
+                        })),
+                    )
+                        .into_response();
+                }
+            };
+
+            // Business rule (§14a Modul 2, BK6-22-300): `zaehlzeitregister` is mandatory.
+            // Without it, `invoicd` / `invoic-checker` cannot route INVOIC positions to bands.
+            match zvp.zaehlzeitregister.as_deref() {
+                None | Some("") => {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(serde_json::json!({
+                            "error": format!(
+                                "zeitvariablePreispositionen[{}]: 'zaehlzeitregister' is \
+                                 mandatory per §14a Modul 2 (BK6-22-300) — set it to the \
+                                 TOU band code (e.g. \"HT\", \"NT\", \"ST\")",
+                                i
+                            )
+                        })),
+                    )
+                        .into_response();
+                }
+                _ => {}
+            }
+
+            // Re-serialize to canonical BO4E camelCase.
+            validated.push(serde_json::to_value(&zvp).unwrap_or(item.clone()));
+        }
+
+        // Replace the raw array with the validated canonical form.
+        if let Some(obj) = data.as_object_mut() {
+            obj.insert(
+                "zeitvariablePreispositionen".to_owned(),
+                serde_json::Value::Array(validated),
+            );
+        }
+    }
+
+    match repo
+        .upsert_messung(&msb_mp_id, data, &req.bo4e_version, PreisblattSource::Api)
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),

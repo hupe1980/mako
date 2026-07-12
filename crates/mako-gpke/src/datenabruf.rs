@@ -129,8 +129,10 @@ pub struct AnfrageData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum DatanabrufState {
     /// No request sent yet.
+    #[default]
     New,
     /// LF sent the ORDERS; awaiting ORDRSP or MSCONS delivery.
     AnfrageGesendet(AnfrageData),
@@ -153,12 +155,6 @@ pub enum DatanabrufState {
         /// Original request.
         anfrage: AnfrageData,
     },
-}
-
-impl Default for DatanabrufState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl DatanabrufState {

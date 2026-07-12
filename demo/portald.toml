@@ -1,0 +1,28 @@
+# portald.toml — demo configuration
+# Customer portal read-model gateway (LF role).
+# Aggregates Lastgang, invoices, account balance, VersorgungsStatus, and EEG
+# status into a single customer-facing REST + SSE API.
+# DO NOT use in production — auth disabled.
+
+port   = 9480
+tenant = "9910000000002"   # operator LF BDEW-Codenummer
+
+# Upstream service URLs (use local demo docker network hostnames)
+edmd_url        = "http://edmd:8380"
+billingd_url    = "http://billingd:9280"
+accountingd_url = "http://accountingd:9380"
+einsd_url       = "http://einsd:9180"
+marktd_url      = "http://marktd:8180"
+
+# OIDC authentication
+# When oidc_issuer is absent, authentication is SKIPPED (demo only).
+# In production: configure your OIDC issuer (e.g. Keycloak, Auth0).
+# oidc_issuer   = "https://auth.example.com/realms/mako"
+# oidc_audience = "portald"
+
+# API keys for upstream service auth (set via environment in production)
+# edmd_api_key        = "env:EDMD_API_KEY"
+# billingd_api_key    = "env:BILLINGD_API_KEY"
+# accountingd_api_key = "env:ACCOUNTINGD_API_KEY"
+# einsd_api_key       = "env:EINSD_API_KEY"
+# marktd_api_key      = "env:MARKTD_API_KEY"

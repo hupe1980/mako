@@ -54,6 +54,7 @@
 //! | [`error`] | `EdmError` |
 //! | [`testing`] | In-memory impls (behind `testing` feature) |
 
+pub mod archive;
 pub mod domain;
 pub mod error;
 pub mod repository;

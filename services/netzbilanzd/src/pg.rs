@@ -230,3 +230,137 @@ pub async fn reject_draft_pg(pool: &PgPool, id: Uuid, reason: &str) -> anyhow::R
     .rows_affected();
     Ok(rows > 0)
 }
+
+// ── Kostenblatt (Redispatch 2.0, N4) ─────────────────────────────────────────
+
+/// Stored Kostenblatt record row (migration 0002).
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct KostenblattRow {
+    pub id: Uuid,
+    pub tenant: String,
+    pub activation_id: String,
+    pub tr_id: String,
+    pub malo_id: Option<String>,
+    pub period_year: i16,
+    pub period_month: i16,
+    pub uenb_mp_id: String,
+    pub vnb_mp_id: String,
+    pub dispatch_kwh: Decimal,
+    pub arbeitspreis_eur_per_kwh: Decimal,
+    pub einsatzkosten_eur: Option<Decimal>,
+    pub kosten_json: Option<serde_json::Value>,
+    pub status: String,
+    pub submitted_at: Option<time::OffsetDateTime>,
+    pub dispatch_ref: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: time::OffsetDateTime,
+}
+
+/// Request body for `PUT /api/v1/redispatch/kostenblatt/{activation_id}`.
+#[derive(Debug, serde::Deserialize)]
+pub struct UpsertKostenblattRequest {
+    pub tr_id: String,
+    pub malo_id: Option<String>,
+    pub period_year: i16,
+    pub period_month: i16,
+    pub uenb_mp_id: String,
+    pub vnb_mp_id: String,
+    /// Energy dispatched in kWh (mandatory unless auto-fetched from edmd).
+    pub dispatch_kwh: Decimal,
+    /// Contract rate EUR/kWh (from Redispatch contract or TechnischeRessource).
+    pub arbeitspreis_eur_per_kwh: Decimal,
+    /// Full `rubo4e::current::Kosten` JSON for CIM export (optional).
+    pub kosten_json: Option<serde_json::Value>,
+}
+
+pub async fn upsert_kostenblatt(
+    pool: &PgPool,
+    tenant: &str,
+    activation_id: &str,
+    req: &UpsertKostenblattRequest,
+) -> anyhow::Result<Uuid> {
+    let row = sqlx::query(
+        r"INSERT INTO kostenblatt_records
+              (tenant, activation_id, tr_id, malo_id,
+               period_year, period_month, uenb_mp_id, vnb_mp_id,
+               dispatch_kwh, arbeitspreis_eur_per_kwh, kosten_json)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          ON CONFLICT (tenant, activation_id, tr_id) DO UPDATE
+          SET dispatch_kwh             = EXCLUDED.dispatch_kwh,
+              arbeitspreis_eur_per_kwh = EXCLUDED.arbeitspreis_eur_per_kwh,
+              kosten_json              = COALESCE(EXCLUDED.kosten_json, kostenblatt_records.kosten_json),
+              updated_at               = now()
+          RETURNING id",
+    )
+    .bind(tenant)
+    .bind(activation_id)
+    .bind(&req.tr_id)
+    .bind(&req.malo_id)
+    .bind(req.period_year)
+    .bind(req.period_month)
+    .bind(&req.uenb_mp_id)
+    .bind(&req.vnb_mp_id)
+    .bind(req.dispatch_kwh)
+    .bind(req.arbeitspreis_eur_per_kwh)
+    .bind(&req.kosten_json)
+    .fetch_one(pool)
+    .await
+    .context("upsert_kostenblatt")?;
+
+    Ok(row.try_get("id")?)
+}
+
+pub async fn fetch_kostenblatt(
+    pool: &PgPool,
+    activation_id: &str,
+    tenant: &str,
+) -> anyhow::Result<Option<KostenblattRow>> {
+    sqlx::query_as::<_, KostenblattRow>(
+        "SELECT * FROM kostenblatt_records WHERE activation_id = $1 AND tenant = $2 LIMIT 1",
+    )
+    .bind(activation_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await
+    .context("fetch_kostenblatt")
+}
+
+pub async fn list_kostenblatt(
+    pool: &PgPool,
+    tenant: &str,
+    period_year: i16,
+    period_month: i16,
+    status_filter: Option<&str>,
+) -> anyhow::Result<Vec<KostenblattRow>> {
+    sqlx::query_as::<_, KostenblattRow>(
+        r"SELECT * FROM kostenblatt_records
+          WHERE tenant = $1 AND period_year = $2 AND period_month = $3
+            AND ($4::text IS NULL OR status = $4)
+          ORDER BY created_at DESC",
+    )
+    .bind(tenant)
+    .bind(period_year)
+    .bind(period_month)
+    .bind(status_filter)
+    .fetch_all(pool)
+    .await
+    .context("list_kostenblatt")
+}
+
+pub async fn mark_kostenblatt_submitted(
+    pool: &PgPool,
+    id: Uuid,
+    dispatch_ref: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE kostenblatt_records
+         SET status = 'submitted', submitted_at = now(), dispatch_ref = $2, updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(dispatch_ref)
+    .execute(pool)
+    .await
+    .context("mark_kostenblatt_submitted")?;
+    Ok(())
+}

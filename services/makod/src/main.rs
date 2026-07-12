@@ -1169,7 +1169,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     //
     // Clippy's vec_init_then_push fires here because the pushes are
     // #[cfg]-gated and cannot be merged into a vec![] literal.
-    #[allow(clippy::vec_init_then_push)]
+    #[expect(clippy::vec_init_then_push)]
     let modules: Vec<Box<dyn mako_engine::builder::EngineModule>> = {
         let mut m: Vec<Box<dyn mako_engine::builder::EngineModule>> = Vec::new();
         // GpkeModule: GPKE PIDs 55001-55018, 55022-55024, 55555, 55607-55609 +
@@ -1517,6 +1517,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             snapshot_store: store.as_snapshot_store(),
             malo_cache: malo_cache.clone(),
             maloid_result_cache: malo_cache::MaloIdentResultCache::new(store.clone()),
+            // M1: Konfigurationsprodukt guard — wired up from config when
+            // [m1] marktd_url and marktd_api_key are provided.
+            // Falls back to `None` (guard disabled) when not configured.
+            marktd_client: None,
         });
         let metrics_state = Arc::new(
             metrics_api::MetricsState::new(

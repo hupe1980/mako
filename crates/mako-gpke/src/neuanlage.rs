@@ -208,8 +208,10 @@ pub struct NeuanlageData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum NeuanlageState {
     /// No events yet.
+    #[default]
     New,
     /// Anfrage received; AHB validation pending.
     Eingegangen(NeuanlageData),
@@ -229,12 +231,6 @@ pub enum NeuanlageState {
         /// Human-readable reason.
         reason: String,
     },
-}
-
-impl Default for NeuanlageState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl NeuanlageState {
@@ -553,7 +549,7 @@ impl Workflow for GpkeNeuanlageWorkflow {
                     }
                 }
                 let aperak_pid = Pruefidentifikator::new(29_001)
-                    .map_err(|e| WorkflowError::rejected(e.to_string()))?;
+                    .map_err(|e| WorkflowError::rejected(e.clone()))?;
                 Ok(vec![NeuanlageEvent::AperakFehlerDispatched {
                     aperak_pid,
                     reason,

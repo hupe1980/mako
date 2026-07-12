@@ -45,6 +45,7 @@
 
 pub mod config;
 pub mod handler;
+pub mod iceberg;
 pub mod mcp_server;
 pub mod pg;
 pub mod server;

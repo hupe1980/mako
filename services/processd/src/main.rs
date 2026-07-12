@@ -127,15 +127,11 @@ async fn main() -> anyhow::Result<()> {
     // ── --check mode: validate config + DB, then exit ─────────────────────────
     if cli.check {
         // Connect and ping PostgreSQL to verify credentials and reachability.
-        let pool = sqlx::postgres::PgPoolOptions::new()
+        let _pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(2)
             .connect(&database_url)
             .await
             .context("processd --check: connecting to PostgreSQL")?;
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .context("processd --check: running migrations")?;
         tracing::info!(
             "processd: check mode — config, secrets, and database connectivity verified"
         );
@@ -162,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
         nb_auto_accept: cfg.nb.auto_accept,
         lf_auto_respond: cfg.lf.auto_respond,
         lf_queue_ttl_secs: cfg.lf.queue_ttl_secs,
+        msb_auto_preisanfrage: cfg.msb.auto_preisanfrage,
         self_register_webhook_url: cfg.subscription.webhook_url,
         subscriber_id: cfg.subscription.subscriber_id,
         subscriber_event_types: cfg.subscription.event_types,

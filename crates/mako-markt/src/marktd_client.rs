@@ -708,6 +708,40 @@ impl MarktdClient {
         Ok(Some(record))
     }
 
+    /// `GET /api/v1/steuerbare-ressourcen/{sr_id}`
+    ///
+    /// Returns the full JSONB payload for a `SteuerbareRessource`.
+    /// Used by `processd` N5 (§14a `Steuerungsauftrag` auto-ORDRSP) to check
+    /// `istFernschaltbar` before auto-confirming a control command.
+    pub async fn get_steuerbare_ressource(
+        &self,
+        sr_id: &str,
+    ) -> Result<Option<serde_json::Value>, MarktdClientError> {
+        let url = format!("{}/api/v1/steuerbare-ressourcen/{}", self.base_url, sr_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            warn!(sr_id, status = %resp.status(), "get_steuerbare_ressource: HTTP error");
+            return Err(MarktdClientError::Http(format!(
+                "HTTP {}",
+                resp.status().as_u16()
+            )));
+        }
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+        Ok(Some(body))
+    }
+
     ///
     /// This is an idempotent upsert — safe to call on every service restart.
     /// Non-2xx responses are logged as warnings but do **not** return an error
@@ -745,5 +779,203 @@ impl MarktdClient {
                 warn!(%e, subscriber_id, "MarktdClient: subscription registration failed");
             }
         }
+    }
+    /// Fetch Gas MMM Abrechnungspreise for a billing month from `marktd`.
+    ///
+    /// Returns `None` if no prices have been imported yet for that month.
+    /// `netzbilanzd` calls this before each Gas MMM billing run (INVOIC 31007/31008)
+    /// to avoid requiring manual ERP input per run.
+    pub async fn get_mmma_gas(
+        &self,
+        year: i32,
+        month: u8,
+        marktgebiet: &str,
+    ) -> Result<Option<crate::repository::MmmaPreisGasRecord>, MarktdClientError> {
+        let url = format!("{}/api/v1/mmma-preise/gas/{year}/{month}", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("marktgebiet", marktgebiet)])
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            let s = resp.status().as_u16();
+            warn!(
+                year,
+                month,
+                status = s,
+                "MarktdClient: mmma-gas returned non-2xx"
+            );
+            return Err(MarktdClientError::Http(format!("HTTP {s}")));
+        }
+        resp.json::<crate::repository::MmmaPreisGasRecord>()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// Fetch Strom MMM Ausgleichsenergie prices for a billing month + ÜNB.
+    ///
+    /// Returns `None` if no prices have been imported for that month/ÜNB.
+    pub async fn get_mmm_strom(
+        &self,
+        year: i32,
+        month: u8,
+        unb_mp_id: &str,
+    ) -> Result<Option<crate::repository::MmmPreisStromRecord>, MarktdClientError> {
+        let url = format!("{}/api/v1/mmm-preise/strom/{year}/{month}", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("unb_mp_id", unb_mp_id)])
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            let s = resp.status().as_u16();
+            warn!(
+                year,
+                month,
+                unb_mp_id,
+                status = s,
+                "MarktdClient: mmm-strom returned non-2xx"
+            );
+            return Err(MarktdClientError::Http(format!("HTTP {s}")));
+        }
+        resp.json::<crate::repository::MmmPreisStromRecord>()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `GET /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte`
+    ///
+    /// Returns the contracted `Konfigurationsprodukte` for a `SteuerbareRessource`.
+    /// Used by `makod` M1 guard to verify that the requested `produkt_code` is
+    /// in the list before dispatching a positive ORDRSP `bestaetigen`.
+    ///
+    /// Returns `None` on 404 (SR not found in `marktd`).
+    /// Returns an empty `Vec` when the SR has no contracted products.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on network or non-404 HTTP errors.
+    pub async fn get_konfigurationsprodukte(
+        &self,
+        sr_id: &str,
+    ) -> Result<Option<Vec<serde_json::Value>>, MarktdClientError> {
+        let url = format!(
+            "{}/api/v1/steuerbare-ressourcen/{}/konfigurationsprodukte",
+            self.base_url, sr_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        // Response: { "sr_id": "...", "konfigurationsprodukte": [...] }
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+        let products = body
+            .get("konfigurationsprodukte")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        Ok(Some(products))
+    }
+
+    /// `PATCH /api/v1/melos/{melo_id}/standorteigenschaften`
+    ///
+    /// Auto-populates `Standorteigenschaften` on a `Messlokation` from `WiM` Stammdaten
+    /// (PIDs 17102–17133).  Called by `makod` when a `StammdatenUebermittelt` event
+    /// is received.
+    ///
+    /// Fields accepted: `regelzone` (EIC code → ÜNB for Redispatch 2.0 routing),
+    /// `bilanzierungsgebiet`, `netzgebiet`, `gasqualitaet`, `druckstufe` (Gas),
+    /// plus the full `eigenschaftenStrom` / `eigenschaftenGas` BO4E arrays.
+    ///
+    /// Idempotent — safe to call on every Stammdaten receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on non-2xx HTTP errors.
+    pub async fn patch_melo_standorteigenschaften(
+        &self,
+        melo_id: &str,
+        standorteigenschaften: &serde_json::Value,
+    ) -> Result<(), MarktdClientError> {
+        let url = format!(
+            "{}/api/v1/melos/{}/standorteigenschaften",
+            self.base_url, melo_id
+        );
+        let resp = self
+            .client
+            .patch(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .json(standorteigenschaften)
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            let s = resp.status().as_u16();
+            warn!(
+                melo_id,
+                status = s,
+                "MarktdClient: patch standorteigenschaften non-2xx"
+            );
+            return Err(MarktdClientError::Http(format!("HTTP {s}")));
+        }
+        info!(
+            melo_id,
+            "MarktdClient: standorteigenschaften updated from WiM Stammdaten"
+        );
+        Ok(())
+    }
+
+    /// `GET /api/v1/melos/{melo_id}/standorteigenschaften`
+    ///
+    /// Returns the typed `Standorteigenschaften` for a `Messlokation`, or `None` on 404.
+    pub async fn get_melo_standorteigenschaften(
+        &self,
+        melo_id: &str,
+    ) -> Result<Option<serde_json::Value>, MarktdClientError> {
+        let url = format!(
+            "{}/api/v1/melos/{}/standorteigenschaften",
+            self.base_url, melo_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        let body = resp
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+        Ok(Some(body))
     }
 }

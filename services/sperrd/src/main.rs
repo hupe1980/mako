@@ -49,10 +49,7 @@ async fn main() -> anyhow::Result<()> {
         SecretString::from(cfg.makod_api_key.clone()),
     ));
 
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .context("run migrations")?;
+    // Schema must be applied manually — see migrations/0001_initial.sql for DDL.
 
     let app = Router::new()
         .merge(health_routes(|| async { true }))

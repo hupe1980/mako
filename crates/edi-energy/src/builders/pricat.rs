@@ -385,7 +385,7 @@ impl<S, R> PricatBuilder<S, R> {
         for (group_idx, group) in self.inner.price_groups.iter().enumerate() {
             emit_seg!(w, "PGI", &group.group_type);
             for (item_idx, item) in group.items.iter().enumerate() {
-                #[allow(clippy::cast_possible_truncation)]
+                #[expect(clippy::cast_possible_truncation)]
                 let pos = item
                     .position
                     .unwrap_or((group_idx * 1000 + item_idx + 1) as u32);

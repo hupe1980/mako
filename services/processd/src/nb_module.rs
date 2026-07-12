@@ -271,7 +271,18 @@ pub async fn evaluate_and_decide(
     // ── 6. Dispatch command to makod ──────────────────────────────────────
     match &result {
         NetzCheckResult::Accept => {
-            if config.auto_accept {
+            // §20 EnWG Diskriminierungsfreiheitspflicht:
+            // When the initiating LF shares the same MP-ID as our operator
+            // (vertically integrated utility — §6b EnWG deployment), automatic
+            // acceptance is forbidden.  The operator must review manually.
+            // Bypassing this check exposes the NB to BNetzA sanctions.
+            if initiator_is_affiliate {
+                warn!(
+                    %process_id, pid, %malo_id, lf_mp_id = %lf_mp_id,
+                    "processd NB: §20 EnWG — affiliate Anmeldung detected; \
+                     auto_accept overridden to false — operator must review"
+                );
+            } else if config.auto_accept {
                 let cmd_body = ForwardCommand {
                     marktrolle: None,
                     command: lieferbeginn_accept_command(pid, &malo_id),
@@ -287,7 +298,7 @@ pub async fn evaluate_and_decide(
                     )?;
                 info!(%process_id, pid, %malo_id, "processd NB: dispatched bestaetigen");
             } else {
-                info!(%process_id, pid, %malo_id, "processd NB: Accept (auto_accept=false — operator must confirm)");
+                info!(%process_id, pid, %malo_id, "processd NB: Accept (auto_accept=false or §20 EnWG affiliate — operator must confirm)");
             }
         }
         NetzCheckResult::Reject(reason) => {

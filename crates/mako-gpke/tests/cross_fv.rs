@@ -200,6 +200,9 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
             .iter()
             .map(|e| e.message.clone())
             .collect(),
+        bilanzierungsgebiet: None,
+        bilanzierungsmethode: None,
+        fallgruppe: None,
     })
     .await
     .expect("NB ReceiveUtilmd must succeed");
@@ -418,6 +421,9 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
             .iter()
             .map(|e| e.message.clone())
             .collect(),
+        bilanzierungsgebiet: None,
+        bilanzierungsmethode: None,
+        fallgruppe: None,
     })
     .await
     .expect("NB ReceiveUtilmd (S2.1) must succeed");

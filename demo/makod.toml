@@ -24,5 +24,7 @@ addr = "0.0.0.0:8080"
 #
 # Both values are supplied by docker-compose environment variables; they are NOT
 # hardcoded here so the TOML can be used outside Docker without modification.
-webhook_url    = "env:MAKOD_ERP_WEBHOOK_URL"
-webhook_secret = "env:MAKOD_ERP_WEBHOOK_SECRET"
+# webhook_url is injected via MAKOD_ERP__WEBHOOK_URL env var
+webhook_url    = "http://webhook:8000"
+# webhook_secret is injected via MAKOD_ERP__WEBHOOK_SECRET env var
+webhook_secret = ""

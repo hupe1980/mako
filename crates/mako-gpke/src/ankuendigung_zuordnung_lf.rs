@@ -179,8 +179,10 @@ pub struct AnkuendigungZuordnungLfData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum AnkuendigungZuordnungLfState {
     /// No events yet.
+    #[default]
     New,
     /// Ankündigung received; AHB validation pending.
     Eingegangen(AnkuendigungZuordnungLfData),
@@ -200,12 +202,6 @@ pub enum AnkuendigungZuordnungLfState {
         /// Human-readable reason.
         reason: String,
     },
-}
-
-impl Default for AnkuendigungZuordnungLfState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl AnkuendigungZuordnungLfState {
@@ -490,7 +486,7 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                 }
                 let response_code: u32 = if accepted { 55608 } else { 55609 };
                 let response_pid = Pruefidentifikator::new(response_code)
-                    .map_err(|e| WorkflowError::rejected(e.to_string()))?;
+                    .map_err(|e| WorkflowError::rejected(e.clone()))?;
                 Ok(vec![AnkuendigungZuordnungLfEvent::AntwortGesendet {
                     response_pid,
                     accepted,
@@ -524,7 +520,7 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                     }
                 }
                 let aperak_pid = Pruefidentifikator::new(29_001)
-                    .map_err(|e| WorkflowError::rejected(e.to_string()))?;
+                    .map_err(|e| WorkflowError::rejected(e.clone()))?;
                 Ok(vec![AnkuendigungZuordnungLfEvent::AperakFehlerDispatched {
                     aperak_pid,
                     reason,

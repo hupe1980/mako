@@ -171,6 +171,20 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                     .and_then(|d| d.value_str())
                     .unwrap_or("")
                     .to_owned(),
+                // Bilanzierungsgebiet EIC from UTILMD NAD+Z09 / LOC+237.
+                // processd NB check 4 uses this field directly; when None,
+                // it falls back to marktd malo.bilanzierungsgebiet instead.
+                // TODO(L1/N2): call t.bilanzierungsgebiet_eic() once edi-energy
+                // exposes the LOC+237 segment accessor on UtilmdTransaction.
+                bilanzierungsgebiet: None,
+                // Bilanzierungsmethode from UTILMD TM+EM segment (L1/N1).
+                // TM qualifier Z01 = SLP, Z02 = RLM, Z04 = IMS.
+                // Extracted from the message-level raw segments: TM segment
+                // immediately after the first IDE in the SG4 transaction group.
+                bilanzierungsmethode: extract_bilanzierungsmethode(u.segments()),
+                // Gas GaBi RLM Fallgruppe from UTILMD TM+Z10 segment (L1/N1).
+                // Only populated for Gas PIDs; Strom UTILMD has no TM+Z10.
+                fallgruppe: extract_fallgruppe(u.segments()),
                 message_ref: MessageRef::new(msg.message_ref()),
                 received_at: time::OffsetDateTime::now_utc(),
                 validation_passed,
@@ -1111,6 +1125,9 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                 validation_passed,
                 validation_errors,
                 received_at: time::OffsetDateTime::now_utc(),
+                // L1/N1: extract Bilanzierungsmethode (TM+EM) and Fallgruppe (TM+Z10)
+                bilanzierungsmethode: extract_bilanzierungsmethode(u.segments()),
+                fallgruppe: extract_fallgruppe(u.segments()),
             })
         },
     ));
@@ -4337,4 +4354,45 @@ fn extract_qty_z10(m: &edi_energy::messages::mscons::MsconsMessage) -> Option<St
         }
     }
     None
+}
+
+// ── UTILMD Typenmerkmale (TM) segment extractors ─────────────────────────────
+//
+// The BDEW UTILMD S2.x TM segment encodes energy classification metadata:
+//   TM+EM+<qualifier>  — Energiemenge / Bilanzierungsmethode
+//   TM+Z10+<code>      — Gas GaBi Fallgruppe (RLM only)
+//
+// These extractors scan the raw UTILMD segment list. They are best-effort:
+// if the segment is absent or malformed, they return `None`.
+
+/// Extract `bilanzierungsmethode` from a UTILMD segment list.
+///
+/// Maps `TM+EM` qualifier to BO4E `Bilanzierungsmethode`:
+/// - Z01 → `"SLP"` (Standardlastprofil)
+/// - Z02 → `"RLM"` (Registrierende Leistungsmessung)
+/// - Z04 → `"IMS"` (Intelligentes Messsystem / iMSys)
+pub fn extract_bilanzierungsmethode(segs: &[OwnedSegment]) -> Option<String> {
+    segs.iter()
+        .find(|s| s.tag == "TM" && s.element_str(0).is_some_and(|q| q == "EM"))
+        .and_then(|s| s.element_str(1))
+        .and_then(|qualifier| match qualifier {
+            "Z01" => Some("SLP".to_owned()),
+            "Z02" => Some("RLM".to_owned()),
+            "Z04" => Some("IMS".to_owned()),
+            _ => None,
+        })
+}
+
+/// Extract Gas GaBi `Fallgruppe` from a UTILMD segment list.
+///
+/// The `TM+Z10` segment in Gas UTILMD encodes the GaBi RLM Fallgruppe,
+/// which determines whether the Gas MMM uses the `differenzierter` or
+/// `pauschalierter` Abwicklungsweg (§ 4 GaBi-Strom / §5 KoV IX).
+///
+/// Returns the raw DE 7065 value (e.g. `"Z01"`, `"Z02"`) when present.
+pub fn extract_fallgruppe(segs: &[OwnedSegment]) -> Option<String> {
+    segs.iter()
+        .find(|s| s.tag == "TM" && s.element_str(0).is_some_and(|q| q == "Z10"))
+        .and_then(|s| s.element_str(1))
+        .map(str::to_owned)
 }

@@ -27,9 +27,12 @@ use mako_service::{
 };
 use rmcp::{
     ErrorData as McpError, ServerHandler,
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    handler::server::{
+        router::{prompt::PromptRouter, tool::ToolRouter},
+        wrapper::Parameters,
+    },
     model::*,
-    schemars, tool, tool_handler, tool_router,
+    prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     },
@@ -70,6 +73,8 @@ pub struct InvoicdMcpHandler {
     state: Arc<InvoicdMcpState>,
     #[allow(dead_code)]
     tool_router: ToolRouter<InvoicdMcpHandler>,
+    #[allow(dead_code)]
+    prompt_router: PromptRouter<InvoicdMcpHandler>,
 }
 
 #[tool_router]
@@ -78,6 +83,7 @@ impl InvoicdMcpHandler {
         Self {
             state,
             tool_router: Self::tool_router(),
+            prompt_router: Self::prompt_router(),
         }
     }
 
@@ -86,7 +92,10 @@ impl InvoicdMcpHandler {
     /// Returns the receipt metadata including PID, sender GLN, outcome
     /// (`Ok`/`Warn`/`Dispute`), and timestamps.  The full `rechnung` BO4E
     /// payload is not returned — use `get_check_result` to inspect findings.
-    #[tool(description = "Read a single INVOIC receipt by UUID")]
+    #[tool(
+        description = "Read a single INVOIC receipt by UUID",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn get_receipt(
         &self,
         Parameters(p): Parameters<GetReceiptParams>,
@@ -157,7 +166,10 @@ impl InvoicdMcpHandler {
     /// are not auto-settled by `invoicd`.
     ///
     /// Returns up to 200 results.  For full pagination use the REST API.
-    #[tool(description = "List all open INVOIC disputes (outcome=Dispute) for this tenant")]
+    #[tool(
+        description = "List all open INVOIC disputes (outcome=Dispute) for this tenant",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn list_disputes(&self) -> Result<CallToolResult, McpError> {
         let rows = sqlx::query_as::<
             _,
@@ -214,7 +226,10 @@ impl InvoicdMcpHandler {
     /// (`Ok`/`Warn`/`Error`), and a human-readable `message`.
     ///
     /// Useful for understanding why a receipt was disputed or flagged.
-    #[tool(description = "Get invoic-checker plausibility findings for a receipt")]
+    #[tool(
+        description = "Get invoic-checker plausibility findings for a receipt",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn get_check_result(
         &self,
         Parameters(p): Parameters<GetCheckResultParams>,
@@ -260,7 +275,8 @@ impl InvoicdMcpHandler {
     ///
     /// Source: GPKE BK6-22-024; Allgemeine Festlegungen §7 Zahlungsziel.
     #[tool(
-        description = "List receipts approaching Zahlungsziel without dispatched REMADV (regulatory deadline risk). Returns up to 50 overdue entries."
+        description = "List receipts approaching Zahlungsziel without dispatched REMADV (regulatory deadline risk). Returns up to 50 overdue entries.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_overdue_remadv(&self) -> Result<CallToolResult, McpError> {
         let rows = sqlx::query(
@@ -307,10 +323,48 @@ impl InvoicdMcpHandler {
     }
 }
 
+#[prompt_router]
+impl InvoicdMcpHandler {
+    #[prompt(
+        name = "resolve-dispute",
+        description = "Step-by-step: investigate and resolve an INVOIC dispute (REMADV 33002)"
+    )]
+    async fn resolve_dispute_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "An INVOIC was disputed with REMADV 33002. How do I investigate?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "1. Use `list_disputes` to find all outstanding disputes.\n                 2. Use `get_receipt` with the receipt UUID for full details.\n                 3. Use `get_check_result` to see which invoic-checker rule(s) failed:\n                    - Check 1: billing period validity (Liefer- vs. Abrechnungszeitraum)\n                    - Check 2: position arithmetic (qty × price = line net within 1%)\n                    - Check 3: document total (Σ lines = Gesamtnetto within 1%)\n                    - Check 4: tariff match (PRICAT unit price vs INVOIC within 3%)\n                    - Check 5: tariff found (PRICAT entry exists for billing period)\n                    - Check 6: MMM settlement price (marktd MMMA store vs INVOIC)\n                 4. Resolve upstream: update PRICAT in tarifbd, correct Messreihe in edmd.\n                 5. Request corrected INVOIC from the NB or re-issue selbstausgestellt (PID 31006).",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "check-overdue-remadv",
+        description = "Step-by-step: monitor and action overdue REMADV dispatches"
+    )]
+    async fn check_overdue_remadv_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "How do I find and action overdue REMADV dispatches?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "1. Use `list_overdue_remadv` — returns receipts past Zahlungsziel without dispatched REMADV.\n                 2. For each overdue receipt:\n                    a. Use `get_receipt` to confirm Zahlungsziel and current status.\n                    b. POST /api/v1/receipts/{id}/dispatch-remadv to manually trigger dispatch.\n                 3. The REMADV (33001 accept / 33002 dispute) is sent via makod EDIFACT pipeline.\n                 4. §22 MessZV: REMADV must be dispatched within the payment term.\n                    Missed dispatches are a compliance violation — escalate to operations.",
+            ),
+        ]
+    }
+}
+
 #[tool_handler]
+#[prompt_handler]
 impl ServerHandler for InvoicdMcpHandler {
     fn get_info(&self) -> ServerInfo {
-        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
             .with_server_info(Implementation::new("invoicd", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "# invoicd — INVOIC Billing Validation\n\

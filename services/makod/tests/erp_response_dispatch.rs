@@ -54,6 +54,7 @@ async fn make_state(marktrollen: &[&str]) -> makod::commands_api::CommandsApiSta
         malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
         maloid_result_cache: MaloIdentResultCache::new(store.clone()),
         store: Arc::new(store),
+        marktd_client: None, // M1 guard disabled in unit tests
     }
 }
 
@@ -85,6 +86,9 @@ async fn spawn_supplier_change(
             process_date: "20261001".into(),
             message_ref: mako_engine::types::MessageRef::new("MSG-001"),
             received_at: time::OffsetDateTime::now_utc(),
+            bilanzierungsgebiet: None,
+            bilanzierungsmethode: None,
+            fallgruppe: None,
             validation_passed: true,
             validation_errors: vec![],
         })

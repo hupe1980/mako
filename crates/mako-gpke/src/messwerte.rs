@@ -139,8 +139,10 @@ impl EventPayload for MesswerteLieferungEvent {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum MesswerteLieferungState {
     /// No events yet.
+    #[default]
     New,
     /// MSCONS received; awaiting validation result.
     DatenErhalten(MesswerteLieferungData),
@@ -151,12 +153,6 @@ pub enum MesswerteLieferungState {
         /// Validation error reason.
         reason: String,
     },
-}
-
-impl Default for MesswerteLieferungState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl MesswerteLieferungState {

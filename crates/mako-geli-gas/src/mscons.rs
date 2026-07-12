@@ -130,8 +130,10 @@ impl EventPayload for GasMsconsDatenEvent {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum GasMsconsDatenState {
     /// No events yet.
+    #[default]
     New,
     /// MSCONS received; awaiting validation result.
     DatenErhalten(GasMsconsDatenData),
@@ -142,12 +144,6 @@ pub enum GasMsconsDatenState {
         /// Validation error reason.
         reason: String,
     },
-}
-
-impl Default for GasMsconsDatenState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl GasMsconsDatenState {

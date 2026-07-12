@@ -190,8 +190,10 @@ pub struct GasSperrungNbData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum GasSperrungNbState {
     /// No events yet.
+    #[default]
     New,
     /// ORDERS Sperrauftrag/Entsperrauftrag received; awaiting validation result.
     AnweisungErhalten(GasSperrungNbData),
@@ -206,12 +208,6 @@ pub enum GasSperrungNbState {
         /// Human-readable rejection reason.
         reason: String,
     },
-}
-
-impl Default for GasSperrungNbState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl GasSperrungNbState {

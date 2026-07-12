@@ -14,7 +14,7 @@
 //! # Design
 //!
 //! - **Pure library** — zero I/O, zero async.  All calculations are deterministic.
-//! - **No floating-point money** — uses [`invoic_checker::amount::EuroAmount`]
+//! - **No floating-point money** — uses [`billing::EuroAmount`]
 //!   (`i64 × 10⁻⁵ EUR`) for all monetary arithmetic to avoid rounding errors.
 //! - **Self-validating** — all generated invoices satisfy `invoic-checker` checks 1–3
 //!   (period validity, position arithmetic, document total) by construction.
@@ -40,6 +40,10 @@
 //!     due_date: date!(2025-03-15),
 //!     arbeitsmenge_kwh: d("1500"),
 //!     arbeitspreis_ct_per_kwh: d("3.5"),
+//!     arbeitsmenge_ht_kwh: None,
+//!     arbeitspreis_ht_ct_per_kwh: None,
+//!     arbeitsmenge_nt_kwh: None,
+//!     arbeitspreis_nt_ct_per_kwh: None,
 //!     spitzenleistung_kw: None,
 //!     leistungspreis_eur_per_kw: None,
 //!     ka_satz_ct_per_kwh: Some(d("0.11")),

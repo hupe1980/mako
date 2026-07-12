@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Release Lifecycle
-nav_order: 32
+nav_order: 11
 parent: Release & Compliance
 description: >-
   BDEW format version lifecycle: active, upcoming, grace-period, and archived

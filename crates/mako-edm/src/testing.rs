@@ -180,6 +180,8 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
             zaehlerstand_anfang: None,
             zaehlerstand_ende: None,
             quality: worst_quality,
+            lastprofil: None,
+            profil_typ: None,
             tenant_id: q.tenant_id,
         }))
     }

@@ -12,19 +12,26 @@ addr = "0.0.0.0:8480"
 
 [database]
 # obsd owns its own database (microservices DB autonomy).
-url       = "env:DATABASE_URL"
+# url is injected via OBSD_DATABASE__URL env var
+url       = "postgres://demo:demo-secret@postgres/obsd"
 pool_size = 10
 
 [identity]
 # Tenant identifier for Cedar resource checks.
 tenant = "9900357000004"
+# §20 EnWG: all operator MP-IDs for affiliate detection.
+# List both Strom (BDEW 99…) and Gas (DVGW 98…) codes for integrated NB+GNB deployments.
+# Falls back to [tenant] alone when omitted (pure single-role deployments).
+own_mp_ids = ["9900357000004"]   # add "9800357000004" here for Gas GNB
 
 [marktd]
 url     = "http://marktd:8180"
-api_key = "env:OBSD_MARKTD_API_KEY"
+# api_key is injected via OBSD_MARKTD__API_KEY env var
+api_key = ""
 
 [webhook]
-inbound_secret = "env:OBSD_INBOUND_SECRET"
+# inbound_secret is injected via OBSD_WEBHOOK__INBOUND_SECRET env var
+inbound_secret = ""
 
 [subscription]
 # Self-registers with marktd on startup.

@@ -188,8 +188,10 @@ pub struct BillingData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum BillingState {
     /// No events yet.
+    #[default]
     New,
     /// Abrechnungssummenzeitreihe received from BIKO; Prüfmitteilung not yet sent.
     SummenzeitreiheReceived(BillingData),
@@ -206,12 +208,6 @@ pub enum BillingState {
     },
     /// Prüfmitteilung deadline expired before the BKV responded.
     DeadlineExpired(BillingData),
-}
-
-impl Default for BillingState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl BillingState {

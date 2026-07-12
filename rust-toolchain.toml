@@ -3,10 +3,12 @@
 # the same toolchain. Bumping the MSRV requires updating this value and the
 # `msrv` CI job in .github/workflows/ci.yml simultaneously.
 #
-# 1.89 is the minimum because:
+# 1.94 is the minimum because:
 #   - `let_chains` stabilised in 1.88 (used in xtask/src/codegen.rs)
 #   - `usize::is_multiple_of` stabilised in 1.88 (used in xtask/src/codegen.rs)
 #   - time ≥ 0.3.47 declares rust-version = "1.88"
 #   - crc-fast ≥ 1.10.0 (via object_store/slatedb) requires rustc 1.89
-channel    = "1.89"
+#   - object_store ≥ 0.12 requires rustc 1.92
+#   - iceberg = "0.9.1" (Apache Iceberg Rust) declares rust-version = "1.94"
+channel    = "1.94"
 components = ["rustfmt", "clippy"]

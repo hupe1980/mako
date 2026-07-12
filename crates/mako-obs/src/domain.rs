@@ -102,6 +102,15 @@ pub struct ProcessProjection {
     pub last_event_at: OffsetDateTime,
     /// BDEW ERC error code when `state == Rejected` (e.g. `"E01"`, `"Z29"`).
     pub erc_code: Option<String>,
+    /// §20 EnWG parity flag: `true` when the initiating LF MP-ID equals the
+    /// operator's own MP-ID (vertically integrated utility deployment).
+    ///
+    /// Set by `obsd` on `de.mako.process.initiated` for Lieferbeginn PIDs
+    /// (55001, 55016, 44001) by comparing `data.new_supplier` to the
+    /// `[identity].own_mp_id` config value.
+    ///
+    /// Used for BNetzA §20 EnWG Diskriminierungsfreiheitspflicht audit reports.
+    pub initiator_is_affiliate: bool,
     /// Operator tenant — MP-ID (GLN) of the deploying market participant.
     /// Used for multi-tenant deployments and DB-level row isolation.
     pub tenant: String,

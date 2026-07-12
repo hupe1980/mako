@@ -78,7 +78,7 @@ use crate::{
 /// The `label` field identifies the deadline type (e.g.
 /// `"aperak-response-window"`) and is used by the scheduler to dispatch the
 /// correct timeout command.
-#[allow(clippy::struct_field_names)]
+#[expect(clippy::struct_field_names)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Deadline {
     /// Unique identifier for this deadline entry.

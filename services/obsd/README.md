@@ -5,9 +5,10 @@
 | Feature | Detail |
 |---|---|
 | HTTP port | `:8480` |
-| Database | PostgreSQL 15+ (`process_projections` table) |
+| Database | PostgreSQL 15+ (`process_projections` + `0002_affiliate_parity` migration) |
 | Inbound | All `de.mako.*` CloudEvents from `marktd` (wildcard subscriber) |
 | REST API | `GET /obs/processes`, `GET /obs/processes/{id}`, `GET /obs/kpis`, `GET /obs/overdue` |
+| §20 EnWG | `initiator_is_affiliate` flag on `ProcessProjection` — affiliate vs. non-affiliate STP parity for BNetzA audit |
 | Health | `GET /health/live`, `GET /health/ready` |
 | Auth | Webhook HMAC-SHA256 (`X-Mako-Signature`); HTTP endpoints currently unauthenticated |
 
@@ -117,7 +118,7 @@ All processes where `deadline_at < now()` and `state = 'initiated'`.
 
 ## Database Schema
 
-`obsd` uses a single migration file `migrations/0001_initial_schema.sql`.
+`obsd` uses a single schema file `migrations/0001_initial.sql`.
 
 | Table | Purpose |
 |---|---|

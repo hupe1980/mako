@@ -276,6 +276,9 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
         received_at: time::OffsetDateTime::now_utc(),
         validation_passed: true,
         validation_errors: vec![],
+        bilanzierungsgebiet: None,
+        bilanzierungsmethode: None,
+        fallgruppe: None,
     })
     .await
     .expect("NB ReceiveUtilmd must succeed");
@@ -496,6 +499,9 @@ async fn bilateral_lieferbeginn_rejection_path() {
         received_at: time::OffsetDateTime::now_utc(),
         validation_passed: true,
         validation_errors: vec![],
+        bilanzierungsgebiet: None,
+        bilanzierungsmethode: None,
+        fallgruppe: None,
     })
     .await
     .expect("NB ReceiveUtilmd");
@@ -586,6 +592,9 @@ async fn bilateral_24h_aperak_deadline_fires_on_timeout() {
         received_at: time::OffsetDateTime::now_utc(),
         validation_passed: true,
         validation_errors: vec![],
+        bilanzierungsgebiet: None,
+        bilanzierungsmethode: None,
+        fallgruppe: None,
     })
     .await
     .unwrap();

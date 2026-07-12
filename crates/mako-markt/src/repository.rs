@@ -31,7 +31,7 @@ mod date_iso {
     use time::Date;
     use time::macros::format_description;
 
-    #[allow(clippy::trivially_copy_pass_by_ref)]
+    #[expect(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S: Serializer>(date: &Date, s: S) -> Result<S::Ok, S::Error> {
         let fmt = format_description!("[year]-[month]-[day]");
         s.serialize_str(&date.format(fmt).map_err(serde::ser::Error::custom)?)
@@ -48,7 +48,7 @@ mod date_iso {
         use time::Date;
         use time::macros::format_description;
 
-        #[allow(clippy::trivially_copy_pass_by_ref, clippy::ref_option)]
+        #[expect(clippy::trivially_copy_pass_by_ref, clippy::ref_option)]
         pub fn serialize<S: Serializer>(date: &Option<Date>, s: S) -> Result<S::Ok, S::Error> {
             match date {
                 Some(d) => {
@@ -303,6 +303,14 @@ pub struct MaloFilter {
     pub zuordnungstyp: Option<String>,
     /// Filter by `rollencodenummer` (GLN) in active `lokationszuordnung`.
     pub rollencodenummer: Option<String>,
+    /// Filter by Gas GaBi RLM Fallgruppe (e.g. `"GABI_RLM_MIT_TAGESBAND"`).
+    /// Applies to Gas MaLos only; Strom MaLos have no Fallgruppe.
+    pub fallgruppe: Option<String>,
+    /// Filter by `bilanzierungsmethode` (e.g. `"RLM"`, `"SLP"`, `"IMS"`).
+    pub bilanzierungsmethode: Option<String>,
+    /// Filter by `regelzone` EIC code (e.g. `"10YDE-EON------1"`).
+    /// Maps to the controlling ÜNB for MABIS IFTSTA and Redispatch 2.0.
+    pub regelzone: Option<String>,
     pub page: u32,
     pub size: u32,
 }
@@ -335,6 +343,16 @@ pub struct MaloTypedFields {
     pub gasqualitaet: Option<String>,
     /// Energy direction (`"Aussp"` = generation, `"Einsp"` = consumption).
     pub energierichtung: Option<String>,
+    /// Billing mode — `"SLP"` | `"RLM"` | `"IMS"`.
+    ///
+    /// Derived from UTILMD `TM+EM` at supply-start and updated by `marktd`
+    /// `patch_typenmerkmal()`.  Drives `netzbilanzd` MMM SLP variant selection
+    /// (H0/G0/L0) and `processd` NB billing-mode check.
+    pub bilanzierungsmethode: Option<String>,
+    /// Gas GaBi RLM Fallgruppe.
+    pub fallgruppe: Option<String>,
+    /// Regelzone EIC code — maps MeLo to ÜNB for Redispatch 2.0 Stammdaten routing.
+    pub regelzone: Option<String>,
 }
 
 /// Read/write access to `MARKTLOKATION` records.
@@ -355,6 +373,23 @@ pub trait MaloRepository: Send + Sync {
         if_match: Option<i64>,
         bo4e_version: &str,
     ) -> Result<i64, MdmError>;
+
+    /// Patch the `bilanzierungsmethode` and/or `fallgruppe` typed columns on an
+    /// existing MaLo row **without** touching the JSONB payload or version.
+    ///
+    /// Called by `marktd` event_ingest when it receives
+    /// `de.mako.process.initiated` (PID 55001/44001) carrying
+    /// `bilanzierungsmethode` and/or `fallgruppe` extracted from the UTILMD
+    /// `TM+EM` / `TM+Z10` segments by the `makod` adapter (L1/N1).
+    ///
+    /// No-ops silently when the MaLo row does not yet exist — the values will
+    /// be set on the first `PUT /api/v1/malo` call instead.
+    async fn patch_typenmerkmal(
+        &self,
+        malo_id: &MaloId,
+        bilanzierungsmethode: Option<&str>,
+        fallgruppe: Option<&str>,
+    ) -> Result<(), MdmError>;
 
     /// Return the `MARKTLOKATION` with `lokationszuordnung` valid at `at`.
     ///
@@ -602,6 +637,17 @@ pub struct PreisblattMessungRecord {
     pub bo4e_version: String,
     /// How this record entered the system: `api` (operator upload) or `mako` (engine ingest).
     pub source: PreisblattSource,
+    /// Optional `AufAbschlag` list from the MSB PRICAT 27001–27003.
+    ///
+    /// `AufAbschlag` entries describe conditional price supplements and discounts
+    /// (§14a ToU discounts, time-variable surcharges, etc.).  Each entry is a
+    /// `rubo4e::current::AufAbschlag` JSONB object.
+    ///
+    /// `None` when the PRICAT does not carry any `AufAbschlag` entries (most
+    /// conventional meters).  `invoic-checker` uses this field to validate
+    /// whether a discount position in INVOIC 31009 is contractually authorised.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auf_abschlaege: Vec<serde_json::Value>,
     pub created_at: time::OffsetDateTime,
     pub updated_at: time::OffsetDateTime,
 }
@@ -1546,6 +1592,17 @@ pub trait SteuerbareRessourceRepository: Send + Sync {
         malo_id: &str,
         tenant: &str,
     ) -> Result<Vec<SteuerbareRessourceRecord>, MdmError>;
+
+    /// Replace the `konfigurationsprodukte` array for an existing SR (M1).
+    ///
+    /// Returns `Ok(true)` when the SR was found and updated,
+    /// `Ok(false)` when the SR does not exist (caller should return 404).
+    async fn replace_sr_konfigurationsprodukte(
+        &self,
+        sr_id: &str,
+        tenant: &str,
+        konfigurationsprodukte: serde_json::Value,
+    ) -> Result<bool, MdmError>;
 }
 
 // ── TechnischeRessource (B9) ─────────────────────────────────────────────────
@@ -1800,4 +1857,197 @@ pub trait DeviceRepository: Send + Sync {
         zaehler_id: &str,
         tenant: &str,
     ) -> Result<Vec<GeraetRecord>, MdmError>;
+}
+
+// ── iMSys TOU registers: ZaehlzeitRegister + ZaehlzeitSaison ─────────────────
+
+/// A `ZaehlzeitRegister` defines one metering register of an iMSys
+/// (Intelligentes Messsystem) smart meter.
+///
+/// German smart meters record separate totals for each tariff zone:
+/// - `HT` (Hochtarif) — peak-time consumption, higher grid tariff
+/// - `NT` (Niedertarif) — off-peak consumption, lower tariff
+/// - `EINZEL` — single-tariff (no zone discrimination)
+///
+/// The applicable zone at any given time is determined by the `ZaehlzeitSaison`
+/// entries linked to this register.
+///
+/// Source: MsbG §19; BO4E Zaehlwerk; BDEW AHB WiM Teil 3.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ZaehlzeitRegisterRecord {
+    /// Primary key (UUID).
+    pub id: uuid::Uuid,
+    /// Owning Zähler serial number.
+    pub zaehler_id: String,
+    /// Tenant GLN.
+    pub tenant: String,
+    /// Register human-readable label (e.g. `"HT"`, `"NT"`, `"Gesamt"`).
+    pub bezeichnung: String,
+    /// BO4E `Zaehlerauspraegung`: `"HT"` | `"NT"` | `"EINZEL"`.
+    pub zaehlerauspraegung: String,
+    /// OBIS kennzahl identifying this register in MSCONS (e.g. `"1-1:1.29.0"`).
+    pub obis_kennzahl: Option<String>,
+    /// Measurement unit (default `"KWH"`).
+    #[serde(default = "default_kwh")]
+    pub einheit: String,
+    /// Start of validity.
+    pub valid_from: time::Date,
+    /// End of validity — `None` = currently valid.
+    pub valid_to: Option<time::Date>,
+    pub updated_at: time::OffsetDateTime,
+}
+
+fn default_kwh() -> String {
+    "KWH".to_owned()
+}
+
+/// Seasonal / weekly time-of-use window within a `ZaehlzeitRegister`.
+///
+/// Defines the time windows during which the linked register's tariff zone is
+/// active (e.g. "HT applies Monday–Friday from 07:00 to 22:00 in winter").
+///
+/// Multiple `ZaehlzeitSaison` entries cover the full 168-hour week.
+///
+/// Source: BO4E Zaehlzeitdefinition; MsbG Anlage 1; BDEW Rolloutprofil.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ZaehlzeitSaisonRecord {
+    /// Primary key (UUID).
+    pub id: uuid::Uuid,
+    /// Owning `ZaehlzeitRegister` ID.
+    pub register_id: uuid::Uuid,
+    /// Season key: `"SOMMER"` | `"WINTER"` | `"GESAMT"` (year-round).
+    pub saison: String,
+    /// Days of week this window applies: bitmask or JSON array of ISO weekday
+    /// numbers 1 (Mon) through 7 (Sun).  Stored as a JSON array for clarity.
+    /// Example: `[1,2,3,4,5]` = Monday–Friday.
+    pub wochentage: serde_json::Value,
+    /// Window start time (local German time, HH:MM).  Example: `"07:00"`.
+    pub zeit_von: String,
+    /// Window end time (local German time, HH:MM, exclusive).  Example: `"22:00"`.
+    pub zeit_bis: String,
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Persistence store for iMSys TOU registers.
+///
+/// Allows `edmd` to correctly classify MSCONS reads by tariff zone
+/// (HT vs NT) for iMSys smart meters without relying on the OBIS code alone.
+#[allow(async_fn_in_trait)]
+pub trait ZaehlzeitRepository: Send + Sync {
+    /// Upsert a `ZaehlzeitRegister`.
+    async fn upsert_register(&self, rec: &ZaehlzeitRegisterRecord) -> Result<(), MdmError>;
+
+    /// Return all registers for a given `zaehler_id`.
+    async fn list_registers_by_zaehler(
+        &self,
+        zaehler_id: &str,
+        tenant: &str,
+    ) -> Result<Vec<ZaehlzeitRegisterRecord>, MdmError>;
+
+    /// Upsert a `ZaehlzeitSaison` for a given register.
+    async fn upsert_saison(&self, rec: &ZaehlzeitSaisonRecord) -> Result<(), MdmError>;
+
+    /// Return all `ZaehlzeitSaison` entries for a register.
+    async fn list_saisons_by_register(
+        &self,
+        register_id: uuid::Uuid,
+        tenant: &str,
+    ) -> Result<Vec<ZaehlzeitSaisonRecord>, MdmError>;
+
+    /// Resolve the applicable tariff zone (`HT`|`NT`|`EINZEL`) for a Zähler at
+    /// a given local datetime.  Returns `None` if no matching window is found
+    /// (treat as `EINZEL` in that case).
+    async fn resolve_tariff_zone(
+        &self,
+        zaehler_id: &str,
+        tenant: &str,
+        local_datetime: time::PrimitiveDateTime,
+    ) -> Result<Option<String>, MdmError>;
+}
+
+// ── MMMA Gas settlement prices (Trading Hub Europe / MGV) ────────────────────
+
+/// A stored Gas MMM Abrechnungspreis record.
+///
+/// Published monthly by Trading Hub Europe (THE). Used by `netzbilanzd` when
+/// generating INVOIC 31007/31008 and by `invoicd` for MMM position check 6.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MmmaPreisGasRecord {
+    /// First day of the billing month (German local time).
+    pub price_month: time::Date,
+    /// Marktgebiet — always `"THE"` in Germany since 2021.
+    pub marktgebiet: String,
+    /// Ausgleichsenergiepreis Überschuss (Mehrmengen) in ct/kWh.
+    pub mehr_ct_kwh: rust_decimal::Decimal,
+    /// Ausgleichsenergiepreis Defizit (Mindermengen) in ct/kWh.
+    pub minder_ct_kwh: rust_decimal::Decimal,
+    /// How this record entered the system: `"manual"` | `"the-api"` | `"csv-import"`.
+    pub source: String,
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Read/write access to Gas MMM Abrechnungspreise.
+///
+/// `netzbilanzd` fetches these instead of requiring manual ERP input per billing run.
+/// `invoicd` uses them for MMM position plausibility check.
+#[allow(async_fn_in_trait)]
+pub trait MmmaPreisGasRepository: Send + Sync {
+    /// Upsert the Gas MMM price pair for a billing month + Marktgebiet.
+    async fn upsert_gas(
+        &self,
+        price_month: time::Date,
+        marktgebiet: &str,
+        mehr_ct_kwh: rust_decimal::Decimal,
+        minder_ct_kwh: rust_decimal::Decimal,
+        source: &str,
+    ) -> Result<(), MdmError>;
+
+    /// Return the Gas MMM prices for a billing month. Returns `None` if not yet imported.
+    async fn find_gas(
+        &self,
+        price_month: time::Date,
+        marktgebiet: &str,
+    ) -> Result<Option<MmmaPreisGasRecord>, MdmError>;
+
+    /// List all Gas MMM price records, newest first.
+    async fn list_gas(&self, limit: i64) -> Result<Vec<MmmaPreisGasRecord>, MdmError>;
+}
+
+// ── MMM Strom settlement prices (ÜNB per §22 StromNZV) ───────────────────────
+
+/// A stored Strom MMM Ausgleichsenergie price record.
+///
+/// Published monthly by each ÜNB (50Hertz, TenneT, Amprion, TransnetBW).
+/// Used by `netzbilanzd` (INVOIC 31002/31005) and `invoicd` (MMM check 6).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MmmPreisStromRecord {
+    /// First day of the billing month.
+    pub price_month: time::Date,
+    /// ÜNB MP-ID (BDEW-Codenummer, `99…`).
+    pub unb_mp_id: String,
+    /// Surplus energy price (Mehrmengen) in ct/kWh.
+    pub mehr_ct_kwh: rust_decimal::Decimal,
+    /// Deficit energy price (Mindermengen) in ct/kWh.
+    pub minder_ct_kwh: rust_decimal::Decimal,
+    pub source: String,
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Read/write access to Strom MMM Ausgleichsenergie prices.
+#[allow(async_fn_in_trait)]
+pub trait MmmPreisStromRepository: Send + Sync {
+    async fn upsert_strom(
+        &self,
+        price_month: time::Date,
+        unb_mp_id: &str,
+        mehr_ct_kwh: rust_decimal::Decimal,
+        minder_ct_kwh: rust_decimal::Decimal,
+        source: &str,
+    ) -> Result<(), MdmError>;
+
+    async fn find_strom(
+        &self,
+        price_month: time::Date,
+        unb_mp_id: &str,
+    ) -> Result<Option<MmmPreisStromRecord>, MdmError>;
 }

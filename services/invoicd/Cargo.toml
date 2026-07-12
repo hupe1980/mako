@@ -38,4 +38,4 @@ schemars           = { workspace = true }
 secrecy            = "0.10"
 subtle             = "2"
 reqwest            = { workspace = true }
-sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "migrate"] }
+sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json"] }

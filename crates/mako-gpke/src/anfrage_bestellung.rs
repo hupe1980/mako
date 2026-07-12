@@ -159,8 +159,10 @@ pub struct AnfrageData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum AnfrageBestellungState {
     /// No events yet. Stream exists but process has not started.
+    #[default]
     New,
     /// PID 55555 received; AHB validation result not yet recorded.
     Initiated(AnfrageData),
@@ -173,12 +175,6 @@ pub enum AnfrageBestellungState {
         /// Human-readable reason for diagnostics and audit.
         reason: String,
     },
-}
-
-impl Default for AnfrageBestellungState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl AnfrageBestellungState {

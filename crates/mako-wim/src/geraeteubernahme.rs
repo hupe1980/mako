@@ -234,8 +234,10 @@ pub struct GeraeteubernahmeData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum GeraeteubernahmeState {
     /// No events yet.
+    #[default]
     New,
     /// Anfrage ORDERS received; awaiting validation result.
     AnfrageReceived(GeraeteubernahmeData),
@@ -257,12 +259,6 @@ pub enum GeraeteubernahmeState {
         /// Human-readable rejection reason.
         reason: String,
     },
-}
-
-impl Default for GeraeteubernahmeState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl GeraeteubernahmeState {

@@ -347,7 +347,7 @@ fn parse_awf_blocks(xml: &str) -> Vec<(String, String, Vec<AhbSegmentRule>)> {
                         awf_depth: Option<u32>,
                         depth: u32,
                         e: &quick_xml::events::BytesStart<'_>| {
-        let is_direct_child = awf_depth.map_or(false, |d| depth == d + 1);
+        let is_direct_child = awf_depth.is_some_and(|d| depth == d + 1);
         if is_direct_child {
             if let Some((_, _, rules)) = current_awf {
                 let seg_id = attr_value(e, "id").unwrap_or_default();

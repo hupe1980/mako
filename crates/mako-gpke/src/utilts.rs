@@ -113,8 +113,10 @@ impl EventPayload for UtiltsKonfigEvent {
 /// Current state of a UTILTS Konfigurationsdaten process stream.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum UtiltsKonfigState {
     /// No events yet.
+    #[default]
     New,
     /// UTILTS received; awaiting validation.
     UtiltsErhalten(UtiltsKonfigData),
@@ -125,12 +127,6 @@ pub enum UtiltsKonfigState {
         /// Validation error reason.
         reason: String,
     },
-}
-
-impl Default for UtiltsKonfigState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl UtiltsKonfigState {

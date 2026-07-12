@@ -759,6 +759,12 @@ async fn post_selbstausstellen(
         due_date,
         arbeitsmenge_kwh: billing_period.arbeitsmenge_kwh,
         arbeitspreis_ct_per_kwh: arbeitspreis_ct,
+        // §14a Modul 2 ToU: populate from MeterBillingPeriod when available.
+        // invoicd selbstausstellen uses flat rate; ToU billing is done by netzbilanzd.
+        arbeitsmenge_ht_kwh: billing_period.arbeitsmenge_ht_kwh,
+        arbeitspreis_ht_ct_per_kwh: None, // ToU prices come from PreisblattNetznutzung; not looked up here
+        arbeitsmenge_nt_kwh: billing_period.arbeitsmenge_nt_kwh,
+        arbeitspreis_nt_ct_per_kwh: None,
         spitzenleistung_kw: billing_period.spitzenleistung_kw,
         leistungspreis_eur_per_kw: if billing_period.spitzenleistung_kw.is_some() {
             leistungspreis_eur
@@ -1036,8 +1042,8 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             .max_connections(cfg.db_max_connections)
             .connect(url)
             .await?;
-        sqlx::migrate!("./migrations").run(&pool).await?;
-        tracing::info!("invoicd: database connected and migrations applied");
+        // Schema must be applied manually — see migrations/0001_initial.sql for DDL.
+        tracing::info!("invoicd: database connected");
         Some(pool)
     } else {
         tracing::warn!(

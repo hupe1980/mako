@@ -20,7 +20,7 @@ use mako_markt::{
         PartnerRepository, SubscriptionRepository,
     },
 };
-use rubo4e::current::Messlokation;
+use rubo4e::current::{Messlokation, Standorteigenschaften};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -265,6 +265,82 @@ where
         }
         Ok(None) => mako_markt::error::MdmError::NotFound {
             resource_type: "resource",
+            id,
+        }
+        .into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `GET /api/v1/melos/:id/standorteigenschaften`
+///
+/// Returns the typed BO4E `Standorteigenschaften` for the MeLo — carrying
+/// `StandorteigenschaftenStrom` (regelzone EIC, bilanzierungsgebietEic) and/or
+/// `StandorteigenschaftenGas` (druckstufe). Required for Redispatch 2.0
+/// `NetworkConstraintDocument` cross-references and Gas billing zone routing.
+///
+/// Returns 404 when the MeLo has no `standorteigenschaften` column populated yet.
+/// Use `PUT /api/v1/melo/{id}` with a `data.standorteigenschaften` field to populate it,
+/// or wait for `nis-syncd` / WiM Stammdaten auto-population (Roadmap N3).
+#[utoipa::path(
+    get,
+    path = "/api/v1/melos/{id}/standorteigenschaften",
+    tag = "melo",
+    params(("id" = String, Path, description = "MeLo-ID (DE + 31 chars)")),
+    responses(
+        (status = 200, description = "Standorteigenschaften", body = Object),
+        (status = 404, description = "MeLo not found or no Standorteigenschaften"),
+    )
+)]
+pub async fn get_melo_standorteigenschaften<Ma, Me, Co, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+    _claims: Claims,
+    Path(id): Path<String>,
+) -> impl IntoResponse
+where
+    Ma: MaloRepository + Clone,
+    Me: MeloRepository + Clone,
+    Co: ContractRepository + Clone,
+    Su: SubscriptionRepository + Clone,
+    Ci: CorrelationIndex + Clone,
+    Pa: PartnerRepository + Clone,
+{
+    let melo_id = match id.parse::<MeloId>() {
+        Ok(id) => id,
+        Err(e) => {
+            return MdmError::InvalidMeloId {
+                id,
+                reason: e.to_string(),
+            }
+            .into_response();
+        }
+    };
+
+    match state.melo_repo.find(&melo_id).await {
+        Ok(Some(r)) => {
+            match r.standorteigenschaften {
+                Some(raw) => {
+                    // Attempt to deserialize as typed `Standorteigenschaften`.
+                    // Falls back to returning raw JSONB when the stored JSON doesn't
+                    // match the typed schema (e.g. legacy or non-standard data).
+                    match serde_json::from_value::<Standorteigenschaften>(raw.clone()) {
+                        Ok(typed) => (
+                            StatusCode::OK,
+                            axum::Json(serde_json::to_value(&typed).unwrap_or(raw)),
+                        )
+                            .into_response(),
+                        Err(_) => (StatusCode::OK, axum::Json(raw)).into_response(),
+                    }
+                }
+                None => mako_markt::error::MdmError::NotFound {
+                    resource_type: "standorteigenschaften",
+                    id,
+                }
+                .into_response(),
+            }
+        }
+        Ok(None) => mako_markt::error::MdmError::NotFound {
+            resource_type: "melo",
             id,
         }
         .into_response(),

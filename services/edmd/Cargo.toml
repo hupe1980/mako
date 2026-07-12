@@ -1,7 +1,7 @@
 [package]
 name             = "edmd"
 version.workspace = true
-description      = "Energy Data Management daemon — MSCONS storage, time-series API, Mehr-/Mindermengen imbalance"
+description      = "Energy Data Management daemon — MSCONS storage, time-series API, Apache Iceberg/S3 OLAP archival"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -40,8 +40,40 @@ schemars           = { workspace = true }
 secrecy            = "0.10"
 subtle             = "2"
 reqwest            = { workspace = true }
-sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "migrate"] }
+sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json"] }
 rust_decimal       = { workspace = true }
+url                = "2"
+bytes              = "1"
+num_cpus           = "1"
+
+# ── Apache Iceberg OLAP archival tier ────────────────────────────────────────
+#
+# iceberg 0.9.1 — core: FileIO trait, table spec, writer, catalog trait.
+#   No features; storage backend is injected via OpenDalStorageFactory.
+#
+# iceberg-storage-opendal 0.9.1 — storage backends (opendal 0.55):
+#   opendal-s3:    AWS S3 + S3-compatible (MinIO, Ceph RGW, LocalStack)
+#   opendal-gcs:   Google Cloud Storage (ADC / service-account)
+#   opendal-azdls: Azure Data Lake Storage Gen 2 (MSI / client-secret)
+#   opendal-fs:    local filesystem (dev / integration tests)
+#
+# iceberg-datafusion 0.9.1 — IcebergTableProvider for DataFusion OLAP.
+#   10× faster MMM aggregation vs full PostgreSQL table scan.
+#
+# iceberg-catalog-sql 0.9.1 — SQL-backed catalog in existing PostgreSQL.
+#   No extra catalog service (Nessie / Polaris / AWS Glue) required.
+#   Spark / Trino / DuckDB can access via JDBC to the same database.
+#
+# arrow 57 + parquet 57 — exact versions shipped inside iceberg 0.9.1.
+# datafusion 52         — exact version shipped inside iceberg-datafusion 0.9.1.
+iceberg                 = { workspace = true }
+iceberg-storage-opendal = { workspace = true, features = ["opendal-s3", "opendal-gcs", "opendal-azdls", "opendal-fs"] }
+iceberg-datafusion      = { workspace = true }
+iceberg-catalog-sql     = { workspace = true }
+arrow                   = { workspace = true, features = ["ipc", "prettyprint"] }
+parquet                 = { workspace = true, features = ["arrow", "async", "zstd"] }
+datafusion              = { workspace = true, features = ["parquet", "sql"] }
+opendal                 = { workspace = true }
 
 [dev-dependencies]
 mako-edm  = { workspace = true, features = ["testing"] }

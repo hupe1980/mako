@@ -17,4 +17,8 @@ pub struct NetzbilanzConfig {
     pub makod_url: String,
     /// `makod` API key.
     pub makod_api_key: String,
+    /// `edmd` base URL — auto-fetches imbalance data for MMM auto-run (N6).
+    pub edmd_url: Option<String>,
+    /// `edmd` bearer token.
+    pub edmd_api_key: Option<String>,
 }

@@ -72,7 +72,7 @@ use crate::{
 ///
 /// If `S: Clone` (e.g. `InMemoryEventStore` (requires `testing` feature) or `Arc<…>`), `Process` is also
 /// `Clone` and all clones share the same underlying storage.
-#[allow(clippy::struct_field_names)] // `process_id` and `stream_id` are intentional: they
+#[expect(clippy::struct_field_names)] // `process_id` and `stream_id` are intentional: they
 // describe engine-layer concepts, not redundant prefixes.
 pub struct Process<W: Workflow, S: EventStore> {
     stream_id: StreamId,

@@ -9,7 +9,7 @@ repository.workspace  = true
 rust-version.workspace = true
 
 [dependencies]
-invoic-checker = { workspace = true }
+billing        = { workspace = true }
 rust_decimal   = { workspace = true }
 rubo4e         = { workspace = true }
 serde          = { workspace = true, features = ["derive"] }
@@ -17,3 +17,6 @@ serde_json     = { workspace = true }
 thiserror      = { workspace = true }
 time           = { workspace = true }
 uuid           = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+invoic-checker = { workspace = true }

@@ -4,12 +4,15 @@
 # and dispatches to makod for EDIFACT delivery to the LF.
 # DO NOT use in production — auth disabled.
 
-database_url    = "env:DATABASE_URL"
+# database_url is injected via NETZBILANZD_DATABASE_URL env var
+database_url    = "postgres://demo:demo-secret@postgres/netzbilanzd"
 port            = 8680
 marktd_url      = "http://marktd:8180"
-marktd_api_key  = "env:NETZBILANZD_MARKTD_API_KEY"
+# marktd_api_key is injected via NETZBILANZD_MARKTD_API_KEY env var
+marktd_api_key  = ""
 makod_url       = "http://makod:8080"
-makod_api_key   = "env:NETZBILANZD_MAKOD_API_KEY"
+# makod_api_key is injected via NETZBILANZD_MAKOD_API_KEY env var
+makod_api_key   = ""
 
 # [oidc]  — omit to disable auth (dev mode only)
 # [otel]

@@ -182,8 +182,10 @@ impl EventPayload for GasSperrungLfEvent {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum GasSperrungLfState {
     /// No events yet.
+    #[default]
     New,
     /// Gas-Sperrauftrag sent outbound; awaiting GNB's ORDRSP.
     AuftragGesendet(GasSperrungAuftragData),
@@ -205,12 +207,6 @@ pub enum GasSperrungLfState {
         /// Label of the expired deadline.
         label: String,
     },
-}
-
-impl Default for GasSperrungLfState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl GasSperrungLfState {

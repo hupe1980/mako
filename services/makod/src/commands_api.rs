@@ -359,6 +359,13 @@ pub struct CommandsApiState {
     /// so operators can tune replay latency vs. write amplification without
     /// recompiling.
     pub snapshot_interval: u64,
+    /// Optional `marktd` client for M1 Konfigurationsprodukt guard.
+    ///
+    /// When set, `wim.steuerungsauftrag.bestaetigen` checks that the contracted
+    /// `produkt_code` (from the original ORDERS) is in the SR's
+    /// `konfigurationsprodukte` list before dispatching the positive ORDRSP.
+    /// When `None`, the guard is disabled (dev mode / deployments without marktd).
+    pub marktd_client: Option<std::sync::Arc<mako_markt::marktd_client::MarktdClient>>,
 }
 
 // ── Command envelope ──────────────────────────────────────────────────────────
@@ -2220,6 +2227,94 @@ async fn dispatch_steuerungsauftrag_endantwort(
             .map(str::to_owned)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
+        // ── M1: Konfigurationsprodukt eligibility guard ───────────────────────
+        // Before dispatching the positive ORDRSP, verify that the SR has the
+        // requested `produkt_code` in its contracted `konfigurationsprodukte`
+        // list in `marktd`.  If the product is not contracted, auto-dispatch
+        // `ablehnen` with ERC A99 instead of the requested `bestaetigen`.
+        //
+        // Only runs when:
+        //   1. `state.marktd_client` is configured (optional — disabled in dev mode)
+        //   2. The process state is `Received` with a `produkt_code` set
+        //   3. The `location_id` is a SteuerbareRessource (SR ID starts with "C")
+        if let Some(ref marktd) = state.marktd_client {
+            use mako_wim::steuerungsauftrag::{LocationId, SteuerungsauftragState};
+            // Look up the process identity for this tx_id.
+            let registry = state.store.as_process_registry();
+            if let Ok(identities) = registry.lookup_correlated(state.tenant_id, &tx_id).await {
+                let maybe_identity = identities.into_iter().find(|id| {
+                    id.workflow_id.name.as_ref() == mako_wim::steuerungsauftrag::WORKFLOW_NAME
+                });
+
+                if let Some(identity) = maybe_identity {
+                    let proc =
+                        mako_engine::process::Process::<
+                            WimSteuerungsauftragWorkflow,
+                            Arc<mako_engine::store_slatedb::SlateDbStore>,
+                        >::from_identity(Arc::clone(&state.store), identity);
+
+                    #[allow(clippy::collapsible_match)]
+                    if let Ok(SteuerungsauftragState::Received(ref data)) =
+                        proc.state_with_snapshot(&state.snapshot_store).await
+                    {
+                        #[allow(clippy::collapsible_match)]
+                        if let (LocationId::Sr(sr_id), Some(produkt_code)) =
+                            (&data.location_id, &data.produkt_code)
+                        {
+                            match marktd.get_konfigurationsprodukte(sr_id.as_ref()).await {
+                                Ok(Some(products)) => {
+                                    let contracted = products.iter().any(|p| {
+                                        p.get("produktCode")
+                                            .or_else(|| p.get("produkt_code"))
+                                            .and_then(|v| v.as_str())
+                                            .map(|code| code == produkt_code.as_str())
+                                            .unwrap_or(false)
+                                    });
+                                    if !contracted {
+                                        let reject_reason = format!(
+                                            "ERC A99: Konfigurationsprodukt '{}' is not in the \
+                                             contracted konfigurationsprodukte list for SR {}",
+                                            produkt_code, sr_id
+                                        );
+                                        tracing::warn!(
+                                            tx_id = %tx_id,
+                                            sr_id = %sr_id,
+                                            produkt_code = %produkt_code,
+                                            "M1: Konfigurationsprodukt not contracted — auto-dispatching ablehnen (ERC A99)"
+                                        );
+                                        return dispatch_to_process::<WimSteuerungsauftragWorkflow, _>(
+                                            state,
+                                            &tx_id,
+                                            mako_wim::steuerungsauftrag::WORKFLOW_NAME,
+                                            move || mako_wim::steuerungsauftrag::SteuerungsauftragCommand::SendEndantwortNegativ {
+                                                reason: Some(reject_reason),
+                                            },
+                                        )
+                                        .await;
+                                    }
+                                }
+                                Ok(None) => {
+                                    tracing::warn!(
+                                        tx_id = %tx_id,
+                                        sr_id = %sr_id,
+                                        "M1: SR not found in marktd — skipping Konfigurationsprodukt guard"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        tx_id = %tx_id,
+                                        sr_id = %sr_id,
+                                        error = %e,
+                                        "M1: marktd request failed — skipping Konfigurationsprodukt guard (fail-open)"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         dispatch_to_process::<WimSteuerungsauftragWorkflow, _>(
             state,
             &tx_id,
@@ -3348,6 +3443,7 @@ mod tests {
             malo_cache: Arc::new(SlateDbMaloCache::new(store.clone())),
             maloid_result_cache: MaloIdentResultCache::new(store.clone()),
             store: Arc::new(store),
+            marktd_client: None,
         }
     }
 

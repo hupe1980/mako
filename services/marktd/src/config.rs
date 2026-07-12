@@ -58,6 +58,11 @@ pub struct Config {
     pub otel: OtelConfig,
     #[serde(default)]
     pub mcp: McpConfig,
+    /// B12: Automated monthly MMMA Gas / MMM Strom price import.
+    /// When omitted or `enabled = false`, prices must be imported via
+    /// `PUT /api/v1/mmma-preise/gas/{year}/{month}` by the ERP.
+    #[serde(default)]
+    pub mmma_import: MmmaImportConfig,
 }
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -220,8 +225,74 @@ pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
     Ok(cfg)
 }
 
-/// Resolve a string value that may contain an `"env:VAR_NAME"` reference.
+// ── MMMA/MMM price import (B12) ──────────────────────────────────────────────
+
+/// Configuration for the automated monthly MMMA Gas / MMM Strom price import.
 ///
+/// The import worker runs on the 1st of each month at `check_hour_utc`
+/// (default 06:00 UTC, after THE publishes the monthly prices) and fetches
+/// from the configured URLs.
+///
+/// Both Gas and Strom import URLs support:
+/// - `http(s)://...` — HTTP fetch; response body must be CSV or JSON
+/// - `file:///...`   — local file (for testing / CSV drop-in)
+/// - Empty string    — skip this commodity
+///
+/// ## CSV format (THE Gas MMMA monthly file)
+///
+/// ```csv
+/// year,month,marktgebiet,mehr_ct_kwh,minder_ct_kwh
+/// 2026,7,THE,1.23,0.87
+/// ```
+///
+/// ## JSON format
+///
+/// ```json
+/// { "mehr_ct_kwh": "1.23", "minder_ct_kwh": "0.87", "marktgebiet": "THE" }
+/// ```
+///
+/// A CloudEvent `de.markt.mmma.import.success` or `de.markt.mmma.import.failed`
+/// is emitted to the EventBus fan-out on each run.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MmmaImportConfig {
+    /// Whether the automated import worker is active.  Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// URL of the THE Gas MMMA CSV/JSON file.  Leave empty to skip Gas import.
+    /// Example: `https://www.the-group.de/gas/market/market-area-manager/mmma`
+    #[serde(default)]
+    pub gas_url: String,
+    /// URL of the ÜNB Strom MMM CSV/JSON file.  Leave empty to skip Strom import.
+    /// Example: `https://www.netztransparenz.de/de-de/strommarkt/mmm`
+    #[serde(default)]
+    pub strom_url: String,
+    /// UTC hour (0–23) at which the import runs on the 1st of each month.
+    /// Default: 6 (06:00 UTC — after THE typically publishes around 05:00 UTC).
+    #[serde(default = "default_mmma_check_hour")]
+    pub check_hour_utc: u8,
+    /// ERP webhook URL for import success/failure CloudEvents.
+    /// If empty, the EventBus fan-out is used instead.
+    #[serde(default)]
+    pub erp_webhook_url: String,
+}
+
+fn default_mmma_check_hour() -> u8 {
+    6
+}
+
+impl Default for MmmaImportConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            gas_url: String::new(),
+            strom_url: String::new(),
+            check_hour_utc: default_mmma_check_hour(),
+            erp_webhook_url: String::new(),
+        }
+    }
+}
+
 /// If the value starts with `"env:"`, the remainder is looked up in the
 /// environment.  Otherwise the value is returned as-is.
 ///

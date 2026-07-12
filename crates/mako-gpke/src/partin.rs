@@ -109,8 +109,10 @@ impl EventPayload for KommunikationsdatenEvent {
 /// Current state of a PARTIN Kommunikationsdaten process stream.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum KommunikationsdatenState {
     /// No events yet.
+    #[default]
     New,
     /// PARTIN received; awaiting validation.
     PartinErhalten(KommunikationsdatenData),
@@ -121,12 +123,6 @@ pub enum KommunikationsdatenState {
         /// Validation error reason.
         reason: String,
     },
-}
-
-impl Default for KommunikationsdatenState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl KommunikationsdatenState {

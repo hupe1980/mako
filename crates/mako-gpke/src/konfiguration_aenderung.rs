@@ -200,8 +200,10 @@ pub struct AnfrageData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum KonfigurationAenderungState {
     /// No ORDERS sent yet (initial state).
+    #[default]
     New,
     /// LF sent ORDERS; waiting for ORDRSP or status update.
     AnfrageGesendet(AnfrageData),
@@ -219,12 +221,6 @@ pub enum KonfigurationAenderungState {
         /// Original request data.
         anfrage: AnfrageData,
     },
-}
-
-impl Default for KonfigurationAenderungState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl KonfigurationAenderungState {

@@ -251,14 +251,20 @@ impl MaloRepository for PgMaloRepository {
                WHERE ($2::text IS NULL OR m.sparte = $2)
                  AND ($3::text IS NULL OR lz.zuordnungstyp    = $3)
                  AND ($4::text IS NULL OR lz.rollencodenummer = $4)
+                 AND ($5::text IS NULL OR m.fallgruppe        = $5)
+                 AND ($6::text IS NULL OR m.bilanzierungsmethode = $6)
+                 AND ($7::text IS NULL OR m.regelzone         = $7)
                GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.version, m.data, m.bo4e_version, m.updated_at
                ORDER BY m.malo_id
-               LIMIT $5 OFFSET $6"#,
+               LIMIT $8 OFFSET $9"#,
         )
         .bind(at)
         .bind(&sparte_str)
         .bind(&filter.zuordnungstyp)
         .bind(&filter.rollencodenummer)
+        .bind(&filter.fallgruppe)
+        .bind(&filter.bilanzierungsmethode)
+        .bind(&filter.regelzone)
         .bind(limit)
         .bind(offset)
         .fetch_all(&self.pool)
@@ -277,6 +283,34 @@ impl MaloRepository for PgMaloRepository {
             page: filter.page,
             size,
         })
+    }
+
+    async fn patch_typenmerkmal(
+        &self,
+        malo_id: &mako_markt::domain::MaloId,
+        bilanzierungsmethode: Option<&str>,
+        fallgruppe: Option<&str>,
+    ) -> Result<(), mako_markt::error::MdmError> {
+        // Only update if at least one value is supplied.
+        if bilanzierungsmethode.is_none() && fallgruppe.is_none() {
+            return Ok(());
+        }
+        // Patch only the typed columns — do NOT touch data JSONB or version.
+        // Uses COALESCE so a NULL argument leaves the existing column unchanged.
+        sqlx::query(
+            r#"UPDATE malo
+               SET bilanzierungsmethode = COALESCE($2, bilanzierungsmethode),
+                   fallgruppe           = COALESCE($3, fallgruppe),
+                   updated_at           = now()
+               WHERE malo_id = $1"#,
+        )
+        .bind(malo_id.to_string())
+        .bind(bilanzierungsmethode)
+        .bind(fallgruppe)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?;
+        Ok(())
     }
 }
 

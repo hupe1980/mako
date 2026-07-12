@@ -228,8 +228,10 @@ pub struct AbrechnungData {
 /// Current state of a GPKE billing process stream.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum AbrechnungState {
     /// No events yet.
+    #[default]
     New,
     /// INVOIC received.
     InvoicReceived(AbrechnungData),
@@ -262,12 +264,6 @@ pub enum AbrechnungState {
     },
     /// COMDIS 29001 received — invoicer rejected our REMADV (payer role).
     ComdisRejected(AbrechnungData),
-}
-
-impl Default for AbrechnungState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl AbrechnungState {

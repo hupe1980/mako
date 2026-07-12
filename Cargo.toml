@@ -19,6 +19,7 @@ members = [
     "crates/mako-edm",
     "crates/mako-obs",
     "crates/mako-service",
+    "crates/mako-plugin",
     "crates/invoic-checker",
     "crates/netz-checker",
     "crates/mako-nne",
@@ -31,6 +32,13 @@ members = [
     "services/netzbilanzd",
     "services/sperrd",
     "services/nis-syncd",
+    "services/einsd",
+    "services/tarifbd",
+    "services/agentd",
+    "services/billingd",
+    "services/accountingd",
+    "services/portald",
+    "services/vertragd",
     "xtask",
 ]
 exclude = ["fuzz"]
@@ -41,15 +49,16 @@ authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
 repository  = "https://github.com/hupe1980/mako"
-rust-version = "1.89"
+rust-version = "1.94"
 
 [workspace.dependencies]
 anyhow      = "1"
 dashmap     = "6"
 edifact-rs   = "~0.11"
 miette       = { version = "7", features = ["fancy-no-syscall"] }
-rubo4e       = { version = "0.6.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "schemars"] }
-rust_decimal = "1"
+rubo4e       = { version = "0.7.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "schemars", "json"] }
+rust_decimal = { version = "1", features = ["db-postgres"] }
+billing      = { path = "/Users/hupe/Workspaces/hupe1980/billing", version = "0.3.0", features = ["serde"] }
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
 thiserror    = "2"
@@ -68,7 +77,10 @@ tracing-opentelemetry     = "0.33"
 jsonwebtoken              = "9"
 reqwest                   = { version = "0.13", default-features = false, features = ["json", "rustls", "query"] }
 tokio-util                = { version = "0.7", features = ["rt"] }
-rmcp                      = { version = "2.0.0", features = ["transport-io", "transport-streamable-http-server"] }
+rmcp                      = { version = "2.2.0", features = ["transport-io", "transport-streamable-http-server"] }
+figment                    = { version = "0.10",  features = ["toml", "env"] }
+extism                     = { version = "1" }
+figment-file-provider-adapter = { version = "0.1", package = "figment_file_provider_adapter" }
 schemars                  = { version = "1.2.1" }
 
 # ── Internal workspace crates (path + version so domain crates can be published) ─
@@ -79,6 +91,7 @@ mako-edm         = { path = "crates/mako-edm",         version = "0.8" }
 mako-nne         = { path = "crates/mako-nne",         version = "0.8" }
 mako-obs         = { path = "crates/mako-obs",         version = "0.8" }
 mako-service     = { path = "crates/mako-service",     version = "0.8" }
+mako-plugin      = { path = "crates/mako-plugin",      version = "0.8" }
 invoic-checker   = { path = "crates/invoic-checker",   version = "0.8" }
 netz-checker     = { path = "crates/netz-checker",     version = "0.8" }
 
@@ -87,6 +100,25 @@ netz-checker     = { path = "crates/netz-checker",     version = "0.8" }
 # Activate at >500 MaLo or >20 webhook subscribers — see event_bus.rs.
 # Default features include: compression (gzip/snappy/lz4), ring (rustls crypto).
 krafka           = { version = "0.12" }
+
+# ── Apache Iceberg OLAP tier (edmd) ─────────────────────────────────────────
+# Exact versions shipped in the iceberg 0.9.1 release (verified from crate source):
+#   iceberg + iceberg-storage-opendal + iceberg-catalog-sql → arrow 57, parquet 57
+#   iceberg-datafusion 0.9.1                               → datafusion 52
+# MSRV 1.94 required by iceberg.
+iceberg                 = { version = "0.9.1" }
+iceberg-storage-opendal = { version = "0.9.1" }
+iceberg-datafusion      = { version = "0.9.1" }
+iceberg-catalog-sql     = { version = "0.9.1" }
+arrow                   = { version = "57", default-features = false }
+# lancedb requires arrow 58 — declared directly in agentd/Cargo.toml (not here)
+# because iceberg in edmd pins arrow 57; both can coexist since semver treats
+# arrow 57 and 58 as distinct crate versions.
+lancedb                 = { version = "0.31" }   # enabled: rubo4e 0.7.0 fixed BUG-1 (time pin)
+parquet                 = { version = "57", default-features = false }
+datafusion              = { version = "52", default-features = false }
+# opendal 0.55 is exactly what iceberg 0.9.1 requires — do not upgrade.
+opendal                 = { version = "0.55", default-features = false }
 
 # ── Testing utilities ───────────────────────────────────────────────────────
 # testcontainers: spin up Docker containers in Rust integration tests.

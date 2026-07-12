@@ -1,7 +1,8 @@
 ---
 layout: default
 title: nis-syncd
-nav_order: 16
+nav_order: 30
+parent: Services
 description: >-
   Operator guide for nis-syncd — the stateless NIS/GIS grid topology import
   adapter that pushes malo_grid records into marktd, lifting processd NB STP

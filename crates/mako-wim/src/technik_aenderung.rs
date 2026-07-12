@@ -146,8 +146,10 @@ pub struct AuftragData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum TechnikAenderungState {
     /// No ORDERS sent yet.
+    #[default]
     New,
     /// ORDERS sent; awaiting ORDRSP.
     AuftragGesendet(AuftragData),
@@ -172,12 +174,6 @@ pub enum TechnikAenderungState {
         /// Original request data.
         auftrag: AuftragData,
     },
-}
-
-impl Default for TechnikAenderungState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl TechnikAenderungState {

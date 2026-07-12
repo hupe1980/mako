@@ -75,7 +75,7 @@ marktd ──(POST /webhook)──► invoicd
 
 ## Persistence schema
 
-`invoicd` runs SQLx migrations at startup (`migrations/0001_initial.sql`). The schema:
+`invoicd` applies the schema at startup (`migrations/0001_initial.sql`). The schema:
 
 ```sql
 CREATE TABLE invoic_receipts (

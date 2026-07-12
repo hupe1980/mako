@@ -6,7 +6,7 @@ has_children: true
 description: >-
   mako system architecture: event-sourced process runtime, AS4/REST transport,
   ERP integration via CloudEvents 1.0, API-Webdienste Strom, and all nine
-  companion daemons (makod, marktd, processd, invoicd, netzbilanzd, sperrd, edmd, obsd, nis-syncd).
+  companion daemons (makod, marktd, processd, invoicd, netzbilanzd, sperrd, edmd, obsd, nis-syncd, einsd, tarifbd, billingd, accountingd, portald, vertragd, agentd).
 ---
 
 # Architecture
@@ -14,7 +14,7 @@ description: >-
 This document covers the design of `mako-engine` and the full service mesh:
 event-sourced process runtime, inbound/outbound transport channels, ERP
 integration via BO4E + CloudEvents 1.0, and the SlateDB persistence layer.
-It also describes all nine companion daemons and the `mako-service` shared
+It also describes all sixteen companion daemons and the `mako-service` shared
 infrastructure library they build on.
 
 ---
@@ -61,7 +61,7 @@ graph TB
     end
 
     subgraph invoicd ["invoicd :8280 — INVOIC settlement (LF)"]
-        CHK["invoic-checker\n5 plausibility checks\n+ selbstausstellen 31006"]
+        CHK["invoic-checker\n5+1 plausibility checks\n(check 6 = MMM settlement prices)\n+ selbstausstellen 31006"]
         INV_DB["PostgreSQL\ninvoic_receipts (§22 MessZV)"]
         CHK --> INV_DB
     end
@@ -89,6 +89,13 @@ graph TB
     ERP["ERP system<br/>(SAP · CATENA-X · custom)"]
     OPS["Alertmanager · Grafana<br/>BNetzA KPI reports"]
     NIS["nis-syncd :9680<br/>grid topology import (stateless)"]
+    EEG["einsd :9180<br/>EEG settlement (NB)"]
+    subgraph o2c ["Contract & Customer (LF)"]
+        AUF["vertragd :9780<br/>Kunden (B2C+B2B) · Rahmenverträge<br/>Versorgungsverträge · Tarifwechsel<br/>kunden_identitaeten · portald auth"]
+    end
+    subgraph ai ["AI layer"]
+        AGT["agentd :9580<br/>Orchestrator + Specialist Mesh<br/>LanceDB RAG · MCP tools · WASM plugins"]
+    end
 
     NB <-->|AS4/SOAP+MTOM| AS4
     NB <-->|HTTP REST| REST
@@ -113,8 +120,17 @@ graph TB
     NNE -->|POST /api/v1/commands| makod
     SPR -->|POST /api/v1/commands<br/>IFTSTA 21039| makod
     NIS -->|PUT /api/v1/malo/{id}/grid| marktd
+    EEG -->|"GET /api/v1/billing-period
+(Einspeisemenge)"| edmd
 
     PROJ --> OPS
+    AUF -->|"POST start-supply"| processd
+    AUF -->|"POST reading-orders<br/>(Ablesesteuerung)"| edmd
+    AUF -->|"PUT customer product"| tarifbd
+    AUF -->|"POST accounts"| accountingd
+    processd -->|"de.mako.*.bestaetigt"| AUF
+    AGT -->|"MCP tools (all services)"| makod
+    AGT -->|"MCP tools"| marktd
 ```
 
 ---
@@ -194,7 +210,7 @@ Process::execute_and_enqueue_with_snapshot_and_retry
 
 ## Companion daemons
 
-All nine daemons share a common operational model:
+All thirteen daemons share a common operational model:
 - **TOML configuration** — loaded from a file (`makod.toml`, `marktd.toml`, …) with `env:VAR_NAME` secret interpolation
 - **Cedar ABAC** — all HTTP endpoints gated by Cedar attribute-based access control
 - **OIDC/JWT** — asymmetric algorithm only; JWKS cached with background refresh; omit `[oidc]` for dev mode
@@ -212,6 +228,13 @@ All nine daemons share a common operational model:
 | `nis-syncd` | `:9680` | NIS/GIS grid topology import (NB role, stateless) — pushes `malo_grid` to `marktd`; STP ~80%→≥95% | `nis-syncd.toml` |
 | `edmd` | `:8380` | Energy data management — MSCONS meter readings, BO4E `Energiemenge` deliveries, `Lastgang` + `Zeitreihe` time-series, `MeterBillingPeriod` | `edmd.toml` |
 | `obsd` | `:8480` | Process observability — KPI reports, deadline-risk alerts, §20 EnWG parity | `obsd.toml` |
+| `einsd` | `:9180` | Einspeiser Registry + EEG/KWKG Settlement (NB/LF role) — 8 settlement models (Vergütung, Mieterstrom §38a, Direktvermarktung, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag §7 KWKG 2023, Flexibilitätsprämie §50 EEG); Repowering §22 EEG; KWKG Förderdauer; built-in rate table EEG 2000–2023 + KWKG 2023; CloudEvents `de.eeg.verguetung.berechnet` + `de.eeg.marktpraemie.berechnet` + `de.eeg.anlage.foerderung_auslaufend` | `einsd.toml` |
+| `tarifbd` | `:9080` | Product & Tariff Catalog (LF role) — user-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE); all prices in `Tarifpreisblatt` JSONB; version history; MaLo→product assignment; EPEX Spot for §41a | `tarifbd.toml` |
+| `billingd` | `:9280` | Energy Billing Engine (LF role) — all prices user-defined in `tarifbd`; 12 categories (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE); §41a dynamic; `/preview` dry-run; XRechnung 3.0 / ZUGFeRD 2.3; `de.billing.rechnung.erstellt` | `billingd.toml` |
+| `accountingd` | `:9380` | Customer Account Ledger (LF role) — running Kundenkonto ledger; idempotent CE ingest (billing/EEG credits); CAMT.054 import; SEPA pain.008 XML; Mahnwesen Mahnstufe 1–3 | `accountingd.toml` |
+| `portald` | `:9480` | Customer Portal read-model gateway (LF role, stateless) — aggregates Lastgang, invoices, account balance, VersorgungsStatus, EEG settlement; `/dashboard` parallel aggregation; `/events` SSE stream; OIDC-gated | `portald.toml` |
+| `vertragd` | `:9780` | Contract & Customer Management (LF role) — `Kunden` (B2C + B2B) with `kunden_identitaeten` (N OIDC logins per company, rolle=VOLLZUGRIFF/ADMIN/FINANZEN/TECHNIK/READONLY, optional `standort_filter` for site-scoped B2B access); `Rahmenverträge` (B2B portfolio: Sammelrechnung, indexation, volume discount); `Versorgungsverträge` per site/commodity (ANGELEGT→IN_BEARBEITUNG→TEILERFUELLUNG→AKTIV→GEKÜNDIGT→ABGELAUFEN); triggers GPKE/GeLi Gas Lieferbeginn/-ende via `processd`; Tarifwechsel (§41 EnWG); Kündigung with coordinated Schlussablesung; OIDC sub → MaLo authorization gateway (`GET /kunden/authenticate`) for `portald` | `vertragd.toml` |
+| `agentd` | `:9580` | Multi-agent LLM orchestration daemon — Orchestrator + Specialist Mesh; OpenAI / Anthropic / AWS Bedrock SigV4; ReAct loop with MCP tool calls across all 16 services; LanceDB RAG (persistent ANN, S3/GCS/local); WASM plugins via `mako-plugin` (Extism) | `agentd.toml` |
 
 ### `marktd` — Market Data Hub (`:8180`)
 
@@ -229,9 +252,16 @@ price sheets (NNE, Messung, KA, Dienstleistung, Hardware),
 (`steuerkanal`, `eigenschaft_msb_lokation`, `grundzustaendiger_msb_codenr`),
 **TechnischeRessource** (E-mobility, generation, storage for iMS and Redispatch 2.0),
 **SteuerbareRessource** with `konfigurationsprodukte JSONB` (contracted iMS control products),
-**Zaehler** (meter registry) returning typed `rubo4e::current::Zaehler` (M6), with
+**Zaehler** (meter registry) returning typed `rubo4e::current::Zaehler`, with
 `GET /api/v1/zaehler/{id}/zaehlwerke` for `Vec<Zaehlwerk>` OBIS register access,
-**Geraete** returning typed `rubo4e::current::Geraet` (M6),
+**ZaehlzeitRegister + ZaehlzeitSaison** for iMSys Time-of-Use (TOU) register definitions:
+`GET/PUT /api/v1/zaehler/{id}/register` stores HT/NT/EINZEL register records;
+`GET/PUT /api/v1/zaehler-register/{id}/saisons` stores seasonal time windows (SOMMER/WINTER/GESAMT)
+with ISO weekday bitmasks and local-time HH:MM bounds (PostgreSQL JSONB `@>` containment);
+`GET /api/v1/zaehler/{id}/tariff-zone?datetime=ISO` resolves the active zone with a single
+JOIN query — enabling `billingd` to automatically classify 15-min Lastgang intervals into
+HT/NT bands for §14a Modul 2 ToU billing without per-meter manual configuration,
+**Geraete** returning typed `rubo4e::current::Geraet`,
 and the full **`Lokationszuordnung` location graph** (temporal `valid_from`/`valid_to` edges,
 recursive-CTE BFS traversal via `GET /api/v1/malo/{id}/lokationen`).
 
@@ -320,8 +350,8 @@ Key facts:
   `GET /api/v1/zeitreihe/{malo_id}` (BO4E `Zeitreihe`, commodity metadata), and
   `GET /api/v1/billing-period/{malo_id}?from=&to=`.
 - `MeterBillingPeriod` provides `arbeitsmenge_kwh`, `spitzenleistung_kw` (RLM Strom),
-  `brennwert_kwh_per_m3` + `zustandszahl` (Gas) for billing plausibility (M16)
-  and NNE invoice generation (N4).
+  `brennwert_kwh_per_m3` + `zustandszahl` (Gas) for billing plausibility
+  and NNE invoice generation.
 - Pre-aggregated `meter_billing_periods` table  for fast billing queries.
 
 ### `obsd` — Business-Process Observability (`:8480`)

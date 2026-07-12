@@ -162,6 +162,7 @@ mod tests {
             started_at: OffsetDateTime::now_utc(),
             last_event_at: OffsetDateTime::now_utc(),
             erc_code: None,
+            initiator_is_affiliate: false,
             tenant: "9900357000004".into(),
         };
         repo.upsert(&proj).await.unwrap();
@@ -188,6 +189,7 @@ mod tests {
                 started_at: OffsetDateTime::now_utc(),
                 last_event_at: OffsetDateTime::now_utc(),
                 erc_code: None,
+                initiator_is_affiliate: false,
                 tenant: "9900357000004".into(),
             };
             repo.upsert(&proj).await.unwrap();

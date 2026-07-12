@@ -172,6 +172,7 @@ pub mod abrechnung;
 pub mod allokationsliste;
 pub mod anfrage_bestellung;
 pub mod ankuendigung_zuordnung_lf;
+pub mod comdis;
 pub mod datenabruf;
 pub mod konfiguration;
 pub mod konfiguration_aenderung;
@@ -209,6 +210,11 @@ pub use ankuendigung_zuordnung_lf::{
     AnkuendigungZuordnungLfCommand, AnkuendigungZuordnungLfData, AnkuendigungZuordnungLfEvent,
     AnkuendigungZuordnungLfState, GpkeAnkuendigungZuordnungLfWorkflow,
     WORKFLOW_NAME as ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW_NAME,
+};
+pub use comdis::{
+    COMDIS_APERAK_WINDOW_LABEL, COMDIS_PIDS, COMDIS_RECORDS_DDL, ComdisOutcome, GpkeComdisCommand,
+    GpkeComdisData, GpkeComdisEvent, GpkeComdisState, GpkeComdisWorkflow,
+    WORKFLOW_NAME as COMDIS_WORKFLOW_NAME,
 };
 pub use datenabruf::{
     DatanabrufCommand, DatanabrufEvent, DatanabrufState, GpkeDatanabrufWorkflow,

@@ -4,10 +4,12 @@
 # IFTSTA 21039 (Ausführungsbestätigung) to the LF via makod.
 # DO NOT use in production — auth disabled.
 
-database_url  = "env:DATABASE_URL"
+# database_url is injected via SPERRD_DATABASE_URL env var
+database_url  = "postgres://demo:demo-secret@postgres/sperrd"
 port          = 8780
 makod_url     = "http://makod:8080"
-makod_api_key = "env:SPERRD_MAKOD_API_KEY"
+# makod_api_key is injected via SPERRD_MAKOD_API_KEY env var
+makod_api_key = ""
 
 # [oidc]  — omit to disable auth (dev mode only)
 # [otel]

@@ -164,7 +164,7 @@ pub fn check_release_coverage() {
             // Report the nearest future profile as context.
             let future: Vec<&ProfileSpan> = spans
                 .iter()
-                .filter(|s| !s.archived && s.valid_from.map_or(false, |vf| vf > check_date))
+                .filter(|s| !s.archived && s.valid_from.is_some_and(|vf| vf > check_date))
                 .collect();
 
             let hint = if let Some(next) = future.iter().min_by_key(|s| s.valid_from) {
@@ -229,7 +229,7 @@ fn parse_date(s: &str) -> Option<time::Date> {
 /// - `valid_from` is absent (undated legacy profile), OR `valid_from <= date`
 /// - AND (`valid_until` is absent) OR `valid_until >= date`
 fn covers(span: &ProfileSpan, date: time::Date) -> bool {
-    let from_ok = span.valid_from.map_or(true, |vf| vf <= date);
-    let until_ok = span.valid_until.map_or(true, |vu| vu >= date);
+    let from_ok = span.valid_from.is_none_or(|vf| vf <= date);
+    let until_ok = span.valid_until.is_none_or(|vu| vu >= date);
     from_ok && until_ok
 }

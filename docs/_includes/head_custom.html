@@ -1,38 +1,103 @@
-<!-- ── mako custom <head> additions ─────────────────────────────────────────
+<!-- ── mako custom <head> — SEO, Open Graph, structured data ────────────────────
      Injected by Just the Docs via _includes/head_custom.html
-──────────────────────────────────────────────────────────────────────────── -->
+──────────────────────────────────────────────────────────────────────────────── -->
 
 <!-- Canonical URL -->
 {% if page.url %}
-<link rel="canonical" href="{{ page.url | absolute_url }}">
+<link rel="canonical" href="{{ page.url | absolute_url | replace: 'index.html', '' }}">
 {% endif %}
 
-<!-- Open Graph / Twitter card -->
-<meta property="og:type"        content="website">
-<meta property="og:title"       content="{{ page.title | default: site.title }}">
-<meta property="og:description" content="{{ page.description | default: site.description }}">
-<meta property="og:url"         content="{{ page.url | absolute_url }}">
-<meta property="og:image"       content="{{ '/assets/img/og-card.png' | absolute_url }}">
-<meta property="og:site_name"   content="{{ site.title }}">
-<meta name="twitter:card"       content="summary_large_image">
-<meta name="twitter:title"      content="{{ page.title | default: site.title }}">
-<meta name="twitter:description" content="{{ page.description | default: site.description }}">
-<meta name="twitter:image"      content="{{ '/assets/img/og-card.png' | absolute_url }}">
+<!-- Primary meta -->
+<meta name="author" content="mako contributors">
+<meta name="robots" content="index, follow">
+{% if page.description %}
+<meta name="description" content="{{ page.description | strip_html | strip_newlines | truncate: 160 }}">
+{% else %}
+<meta name="description" content="{{ site.description | strip_html | strip_newlines | truncate: 160 }}">
+{% endif %}
+<meta name="keywords" content="EDIFACT, EDI@Energy, MaKo, BDEW, Rust, GPKE, WiM, GeLi Gas, MABIS, UTILMD, MSCONS, APERAK, AS4, energy market, BO4E, Lieferant, Netzbetreiber, Messstellenbetreiber">
 
-<!-- Structured data: SoftwareSourceCode -->
+<!-- Open Graph -->
+<meta property="og:type"        content="website">
+<meta property="og:title"       content="{{ page.title | default: site.title }} — {{ site.tagline }}">
+<meta property="og:description" content="{% if page.description %}{{ page.description | strip_html | strip_newlines | truncate: 200 }}{% else %}{{ site.description | strip_html | strip_newlines | truncate: 200 }}{% endif %}">
+<meta property="og:url"         content="{{ page.url | absolute_url | replace: 'index.html', '' }}">
+<meta property="og:image"       content="{{ '/assets/img/og-card.png' | absolute_url }}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:site_name"   content="mako — EDI@Energy for Rust">
+<meta property="og:locale"      content="en_US">
+
+<!-- Twitter / X Card -->
+<meta name="twitter:card"        content="summary_large_image">
+<meta name="twitter:title"       content="{{ page.title | default: site.title }}">
+<meta name="twitter:description" content="{% if page.description %}{{ page.description | strip_html | strip_newlines | truncate: 200 }}{% else %}{{ site.description | strip_html | strip_newlines | truncate: 200 }}{% endif %}">
+<meta name="twitter:image"       content="{{ '/assets/img/og-card.png' | absolute_url }}">
+
+<!-- Structured data: SoftwareSourceCode (home page only) -->
+{% if page.url == "/" %}
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
   "@type": "SoftwareSourceCode",
   "name": "mako",
-  "description": "Rust library for German energy market communication (BDEW MaKo / EDI@Energy).",
+  "alternateName": "mako — German Energy Market Platform",
+  "description": "Full-stack German energy market communication (BDEW MaKo / EDI@Energy) in Rust. EDIFACT parsing, AHB/MIG validation, event-sourced process runtime, AS4 transport, 16 production microservices, energy billing, EEG settlement, and LLM AI orchestration.",
   "url": "{{ site.url }}{{ site.baseurl }}",
   "codeRepository": "https://github.com/hupe1980/mako",
-  "programmingLanguage": "Rust",
-  "license": ["https://opensource.org/licenses/MIT", "https://opensource.org/licenses/Apache-2.0"],
-  "keywords": ["EDIFACT", "EDI@Energy", "MaKo", "BDEW", "energy market", "Rust", "UTILMD", "MSCONS"]
+  "programmingLanguage": {
+    "@type": "ComputerLanguage",
+    "name": "Rust"
+  },
+  "license": [
+    "https://opensource.org/licenses/MIT",
+    "https://opensource.org/licenses/Apache-2.0"
+  ],
+  "keywords": [
+    "EDIFACT", "EDI@Energy", "MaKo", "BDEW", "GPKE", "WiM", "GeLi Gas", "MABIS",
+    "UTILMD", "MSCONS", "APERAK", "AS4", "German energy market", "BO4E",
+    "Lieferant", "Netzbetreiber", "Messstellenbetreiber", "Rust", "energy billing"
+  ],
+  "author": {
+    "@type": "Person",
+    "name": "Frank Hübner",
+    "url": "https://github.com/hupe1980"
+  }
 }
 </script>
+{% endif %}
 
-<!-- Mermaid diagram support is handled by the just-the-docs theme.
-     Configure via _config.yml (mermaid.version) and page front matter (mermaid: true). -->
+<!-- Structured data: BreadcrumbList (non-home pages) -->
+{% unless page.url == "/" %}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "mako",
+      "item": "{{ site.url }}{{ site.baseurl }}"
+    }{% if page.parent %},{
+      "@type": "ListItem",
+      "position": 2,
+      "name": "{{ page.parent }}",
+      "item": "{{ site.url }}{{ site.baseurl }}/{{ page.parent | downcase | replace: ' ', '-' | replace: '&', 'and' }}"
+    },{
+      "@type": "ListItem",
+      "position": 3,
+      "name": "{{ page.title }}"
+    }{% else %},{
+      "@type": "ListItem",
+      "position": 2,
+      "name": "{{ page.title }}"
+    }{% endif %}
+  ]
+}
+</script>
+{% endunless %}
+
+<!-- Performance hints -->
+<link rel="preconnect" href="https://github.com">
+<link rel="dns-prefetch" href="https://img.shields.io">

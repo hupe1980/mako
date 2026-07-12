@@ -130,8 +130,10 @@ impl EventPayload for GasKommunikationsdatenEvent {
 /// Current state of a Gas PARTIN Kommunikationsdaten process stream.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum GasKommunikationsdatenState {
     /// No events yet.
+    #[default]
     New,
     /// Gas PARTIN received; awaiting validation.
     PartinErhalten(GasKommunikationsdatenData),
@@ -142,12 +144,6 @@ pub enum GasKommunikationsdatenState {
         /// Validation error reason.
         reason: String,
     },
-}
-
-impl Default for GasKommunikationsdatenState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl GasKommunikationsdatenState {

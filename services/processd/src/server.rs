@@ -57,6 +57,10 @@ pub struct ProcessdState {
     pub tenant: String,
     /// Operator's own Marktpartner-ID (used for LFA command routing).
     pub own_mp_id: String,
+    /// `marktd` client — used by the §14a Steuerungsauftrag auto-ORDRSP module (N5).
+    pub marktd: Arc<mako_markt::marktd_client::MarktdClient>,
+    /// M3: When `true`, auto-dispatch QUOTES from PreisblattMessung on REQOTE arrival.
+    pub msb_auto_preisanfrage: bool,
 }
 
 // ── RunConfig ─────────────────────────────────────────────────────────────────
@@ -75,6 +79,8 @@ pub struct RunConfig {
     pub nb_auto_accept: bool,
     pub lf_auto_respond: bool,
     pub lf_queue_ttl_secs: u64,
+    /// M3: When `true`, auto-dispatch QUOTES from `PreisblattMessung` on REQOTE (PID 35001–35005) arrival.
+    pub msb_auto_preisanfrage: bool,
     /// Webhook URL to register with `marktd` on startup (self-registration).
     /// `None` → skip self-registration (useful in tests / standalone mode).
     pub self_register_webhook_url: Option<String>,
@@ -131,11 +137,8 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("processd: failed to connect to PostgreSQL: {e}"))?;
 
-    info!("processd: running migrations");
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .map_err(|e| anyhow::anyhow!("processd: migration error: {e}"))?;
+    info!("processd: running");
+    // Schema must be applied manually — see migrations/0001_initial.sql for DDL.
 
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -294,6 +297,11 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     }
 
     // ── Assemble shared handler state ──────────────────────────────────────
+    let marktd_for_state = Arc::new(mako_markt::marktd_client::MarktdClient::new(
+        &cfg.marktd_url,
+        cfg.marktd_api_key.clone(),
+        mako_service::http::default_client(),
+    ));
     let state = ProcessdState {
         inbound_secret: Arc::new(cfg.inbound_secret),
         #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
@@ -303,6 +311,8 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         makod: makod.clone(),
         tenant: cfg.tenant.clone(),
         own_mp_id: cfg.own_mp_id.clone(),
+        marktd: marktd_for_state,
+        msb_auto_preisanfrage: cfg.msb_auto_preisanfrage,
     };
 
     // ── MCP state ──────────────────────────────────────────────────────────
@@ -311,6 +321,8 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         tenant: cfg.tenant.clone(),
         oidc: cfg.oidc.clone(),
         cedar: cfg.cedar.clone(),
+        makod_url: cfg.makod_url.clone(),
+        makod_api_key: cfg.makod_api_key.clone(),
     });
 
     // ── Router ─────────────────────────────────────────────────────────────

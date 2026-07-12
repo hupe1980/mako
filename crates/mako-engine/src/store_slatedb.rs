@@ -347,7 +347,7 @@ pub(crate) fn slatedb_error_is_transient(e: &slatedb::Error) -> bool {
     matches!(e.kind(), ErrorKind::Unavailable | ErrorKind::Closed(_))
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 fn to_store_err(e: slatedb::Error) -> EngineError {
     tracing::error!(error = %e, "event store error");
     if slatedb_error_is_transient(&e) {
@@ -357,7 +357,7 @@ fn to_store_err(e: slatedb::Error) -> EngineError {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 fn to_outbox_err(e: slatedb::Error) -> EngineError {
     tracing::error!(error = %e, "outbox store error");
     if slatedb_error_is_transient(&e) {
@@ -367,7 +367,7 @@ fn to_outbox_err(e: slatedb::Error) -> EngineError {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 fn to_deadline_err(e: slatedb::Error) -> EngineError {
     tracing::error!(error = %e, "deadline store error");
     if slatedb_error_is_transient(&e) {
@@ -377,7 +377,7 @@ fn to_deadline_err(e: slatedb::Error) -> EngineError {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 fn to_registry_err(e: slatedb::Error) -> EngineError {
     tracing::error!(error = %e, "process registry error");
     if slatedb_error_is_transient(&e) {
@@ -387,7 +387,7 @@ fn to_registry_err(e: slatedb::Error) -> EngineError {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 fn to_inbox_err(e: slatedb::Error) -> EngineError {
     tracing::error!(error = %e, "inbox store error");
     if slatedb_error_is_transient(&e) {
@@ -795,6 +795,10 @@ impl KvNamespace {
     /// the check is evaluated at compile time and never incurs runtime cost.
     /// A missing trailing `/` causes cross-namespace key collisions:
     /// `kv_get(ns, "key")` produces `"my_cachex"` instead of `"my_cache/x"`.
+    ///
+    /// # Panics
+    ///
+    /// Panics at compile time if `prefix` is empty or does not end with `'/'`.
     #[must_use]
     pub const fn new(prefix: &'static str) -> Self {
         assert!(
@@ -2233,7 +2237,7 @@ impl SlateDbInboxStore {
             batch.delete(ib_k.as_bytes());
             purged += 1;
             // Flush every 1000 deletions to bound memory usage.
-            if purged % 1000 == 0 {
+            if purged.is_multiple_of(1000) {
                 self.db
                     .write(std::mem::replace(&mut batch, WriteBatch::new()))
                     .await

@@ -139,8 +139,10 @@ impl EventPayload for StorungsmeldungEvent {
 /// Current state of an INSRPT Störungsmeldung process stream.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum StorungsmeldungState {
     /// No events yet.
+    #[default]
     New,
     /// Störungsmeldung sent; awaiting MSB response.
     StorungsmeldungGesendet(StorungsmeldungData),
@@ -155,12 +157,6 @@ pub enum StorungsmeldungState {
         /// Label of the expired deadline.
         label: String,
     },
-}
-
-impl Default for StorungsmeldungState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl StorungsmeldungState {

@@ -3,8 +3,12 @@
 //! All monetary arithmetic uses [`EuroAmount`] (`i64 × 10⁻⁵`) internally for
 //! exact representation, then round-trips through [`rust_decimal::Decimal`] for
 //! the BO4E `Betrag` / `Preis` fields.
+//!
+//! `EuroAmount` is now `billing::Amount<5>` — a fixed-point integer type from the
+//! standalone `billing` crate. This removes the transitive `invoic-checker → rubo4e`
+//! path for a type that has no BO4E dependency.
 
-use invoic_checker::amount::EuroAmount;
+use billing::EuroAmount;
 use rubo4e::current::{Betrag, Menge, Mengeneinheit, Preis, Rechnung, Rechnungsposition, Zeitraum};
 use rust_decimal::Decimal;
 use time::Date;
@@ -72,7 +76,7 @@ fn position_net(qty: Decimal, unit_price_eur: Decimal) -> Decimal {
 }
 
 fn decimal_to_euro_amount(d: Decimal) -> Result<EuroAmount, BillingError> {
-    EuroAmount::from_decimal(d).ok_or(BillingError::MonetaryOverflow)
+    EuroAmount::checked_from_decimal(d).map_err(|_| BillingError::MonetaryOverflow)
 }
 
 // ── NNE invoice (PID 31001 / 31005) ──────────────────────────────────────────
@@ -122,22 +126,68 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<BillingResult, BillingE
     let mut positions: Vec<Rechnungsposition> = Vec::new();
     let mut total = Decimal::ZERO;
 
-    // ── Position 1: Netznutzung Arbeit ───────────────────────────────────────
-    let arbeitspreis_eur = ct_to_eur(input.arbeitspreis_ct_per_kwh);
-    let arbeitskosten = position_net(input.arbeitsmenge_kwh, arbeitspreis_eur);
-    total += arbeitskosten;
+    // ── Position 1(a/b): Netznutzung Arbeit — flat OR §14a Modul 2 ToU ───────
+    //
+    // §14a Modul 2 (BNetzA BK6-22-300): when the MaLo is equipped with a
+    // smart meter and ToU tariff bands, the NB MUST bill HT and NT separately.
+    // The `arbeitsmenge_ht_kwh` / `arbeitsmenge_nt_kwh` fields carry the
+    // edmd-reported split; `arbeitspreis_ht_ct_per_kwh` / `..._nt_ct_per_kwh`
+    // come from `PreisblattNetznutzung.zeitvariablePreispositionen`.
+    let has_tou = input.arbeitsmenge_ht_kwh.is_some()
+        && input.arbeitspreis_ht_ct_per_kwh.is_some()
+        && input.arbeitsmenge_nt_kwh.is_some()
+        && input.arbeitspreis_nt_ct_per_kwh.is_some();
 
-    positions.push(Rechnungsposition {
-        positionsnummer: Some(1),
-        positionstext: Some("Netznutzung Arbeit".to_owned()),
-        lieferungszeitraum: Some(lz.clone()),
-        positions_menge: Some(kwh_menge(input.arbeitsmenge_kwh)),
-        einzelpreis: Some(eur_per_kwh_preis(arbeitspreis_eur)),
-        gesamtpreis: Some(decimal_to_betrag(arbeitskosten)),
-        ..Default::default()
-    });
+    if has_tou {
+        // HT (Hochlasttarif) — high-price band
+        let ht_kwh = input.arbeitsmenge_ht_kwh.unwrap();
+        let ht_eur = ct_to_eur(input.arbeitspreis_ht_ct_per_kwh.unwrap());
+        let ht_kosten = position_net(ht_kwh, ht_eur);
+        total += ht_kosten;
+        positions.push(Rechnungsposition {
+            positionsnummer: Some(1),
+            positionstext: Some("Netznutzung Arbeit HT (§14a Modul 2)".to_owned()),
+            lieferungszeitraum: Some(lz.clone()),
+            positions_menge: Some(kwh_menge(ht_kwh)),
+            einzelpreis: Some(eur_per_kwh_preis(ht_eur)),
+            gesamtpreis: Some(decimal_to_betrag(ht_kosten)),
+            ..Default::default()
+        });
 
-    // ── Position 2: Netznutzung Leistung (RLM only) ──────────────────────────
+        // NT (Niedertarif) — off-peak reduced band
+        let nt_kwh = input.arbeitsmenge_nt_kwh.unwrap();
+        let nt_eur = ct_to_eur(input.arbeitspreis_nt_ct_per_kwh.unwrap());
+        let nt_kosten = position_net(nt_kwh, nt_eur);
+        total += nt_kosten;
+        positions.push(Rechnungsposition {
+            positionsnummer: Some(2),
+            positionstext: Some("Netznutzung Arbeit NT (§14a Modul 2)".to_owned()),
+            lieferungszeitraum: Some(lz.clone()),
+            positions_menge: Some(kwh_menge(nt_kwh)),
+            einzelpreis: Some(eur_per_kwh_preis(nt_eur)),
+            gesamtpreis: Some(decimal_to_betrag(nt_kosten)),
+            ..Default::default()
+        });
+    } else {
+        // Flat Arbeitspreis (static NNE, SLP/RLM without ToU)
+        let arbeitspreis_eur = ct_to_eur(input.arbeitspreis_ct_per_kwh);
+        let arbeitskosten = position_net(input.arbeitsmenge_kwh, arbeitspreis_eur);
+        total += arbeitskosten;
+        positions.push(Rechnungsposition {
+            positionsnummer: Some(1),
+            positionstext: Some("Netznutzung Arbeit".to_owned()),
+            lieferungszeitraum: Some(lz.clone()),
+            positions_menge: Some(kwh_menge(input.arbeitsmenge_kwh)),
+            einzelpreis: Some(eur_per_kwh_preis(arbeitspreis_eur)),
+            gesamtpreis: Some(decimal_to_betrag(arbeitskosten)),
+            ..Default::default()
+        });
+    }
+
+    // Next position number after Arbeit (1 flat or 1+2 ToU)
+    let next_pos = if has_tou { 3u32 } else { 2u32 };
+
+    // ── Leistung (RLM only) ───────────────────────────────────────────────────
     if let (Some(sl_kw), Some(lp_eur_per_kw)) =
         (input.spitzenleistung_kw, input.leistungspreis_eur_per_kw)
     {
@@ -145,7 +195,7 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<BillingResult, BillingE
         total += leistungskosten;
 
         positions.push(Rechnungsposition {
-            positionsnummer: Some(2),
+            positionsnummer: Some(next_pos as i64),
             positionstext: Some("Netznutzung Leistung".to_owned()),
             lieferungszeitraum: Some(lz.clone()),
             positions_menge: Some(kw_menge(sl_kw)),
@@ -155,17 +205,29 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<BillingResult, BillingE
         });
     }
 
-    // ── Position 3: Konzessionsabgabe ────────────────────────────────────────
+    // ── Konzessionsabgabe ─────────────────────────────────────────────────────
+    // KA base is always total arbeitsmenge_kwh (flat + HT + NT sum = total).
+    let ka_base_kwh = if has_tou {
+        input.arbeitsmenge_ht_kwh.unwrap_or(Decimal::ZERO)
+            + input.arbeitsmenge_nt_kwh.unwrap_or(Decimal::ZERO)
+    } else {
+        input.arbeitsmenge_kwh
+    };
+
     if let Some(ka_ct) = input.ka_satz_ct_per_kwh {
         let ka_eur = ct_to_eur(ka_ct);
-        let ka_kosten = position_net(input.arbeitsmenge_kwh, ka_eur);
+        let ka_kosten = position_net(ka_base_kwh, ka_eur);
         total += ka_kosten;
-
+        let ka_pos = if input.spitzenleistung_kw.is_some() {
+            next_pos + 1
+        } else {
+            next_pos
+        };
         positions.push(Rechnungsposition {
-            positionsnummer: Some(3),
+            positionsnummer: Some(ka_pos as i64),
             positionstext: Some("Konzessionsabgabe".to_owned()),
             lieferungszeitraum: Some(lz.clone()),
-            positions_menge: Some(kwh_menge(input.arbeitsmenge_kwh)),
+            positions_menge: Some(kwh_menge(ka_base_kwh)),
             einzelpreis: Some(eur_per_kwh_preis(ka_eur)),
             gesamtpreis: Some(decimal_to_betrag(ka_kosten)),
             ..Default::default()
@@ -429,6 +491,10 @@ mod tests {
             due_date: date!(2025 - 03 - 15),
             arbeitsmenge_kwh: d("1500"),
             arbeitspreis_ct_per_kwh: d("3.5"),
+            arbeitsmenge_ht_kwh: None,
+            arbeitspreis_ht_ct_per_kwh: None,
+            arbeitsmenge_nt_kwh: None,
+            arbeitspreis_nt_ct_per_kwh: None,
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: None,

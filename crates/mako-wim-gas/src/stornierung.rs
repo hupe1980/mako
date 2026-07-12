@@ -162,8 +162,10 @@ pub struct WimGasStornierungData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum WimGasStornierungState {
     /// No events yet.
+    #[default]
     New,
     /// 44022 received; awaiting validation result.
     Initiated(WimGasStornierungData),
@@ -178,12 +180,6 @@ pub enum WimGasStornierungState {
         /// Human-readable reason for the rejection.
         reason: String,
     },
-}
-
-impl Default for WimGasStornierungState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl WimGasStornierungState {

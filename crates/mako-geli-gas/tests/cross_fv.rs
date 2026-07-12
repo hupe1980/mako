@@ -98,6 +98,8 @@ async fn cross_fv_antwort_accepted_on_fv_start_process() {
         validation_passed: true,
         validation_errors: vec![],
         received_at: time::OffsetDateTime::now_utc(),
+        bilanzierungsmethode: None,
+        fallgruppe: None,
     })
     .await
     .expect("GNB ReceiveUtilmd must succeed");
@@ -182,6 +184,8 @@ async fn cross_fv_aperak_timeout_fires_on_validation_passed() {
         validation_passed: true,
         validation_errors: vec![],
         received_at: time::OffsetDateTime::now_utc(),
+        bilanzierungsmethode: None,
+        fallgruppe: None,
     })
     .await
     .expect("ReceiveUtilmd must succeed");

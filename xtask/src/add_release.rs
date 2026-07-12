@@ -320,7 +320,7 @@ fn collect_message_types(profiles_dir: &str, type_filter: Option<&str>) -> Vec<S
     };
     for entry in rd.filter_map(std::result::Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !entry.file_type().map_or(false, |ft| ft.is_dir()) {
+        if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
             continue;
         }
         // Skip meta-directories that are not message types.
@@ -348,7 +348,7 @@ fn find_latest_predecessor(type_dir: &str, exclude_dir: &str) -> Option<String> 
     let rd = std::fs::read_dir(type_dir).ok()?;
     let mut candidates: Vec<String> = rd
         .filter_map(std::result::Result::ok)
-        .filter(|e| e.file_type().map_or(false, |ft| ft.is_dir()))
+        .filter(|e| e.file_type().is_ok_and(|ft| ft.is_dir()))
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|name| name.starts_with("fv") && name != exclude_dir)
         .collect();
@@ -427,7 +427,7 @@ fn days_in_month(year: u32, month: u32) -> u32 {
 }
 
 fn is_leap(year: u32) -> bool {
-    year % 400 == 0 || (year % 4 == 0 && year % 100 != 0)
+    year.is_multiple_of(400) || (year.is_multiple_of(4) && !year.is_multiple_of(100))
 }
 
 /// Load and parse a JSON file, returning an error string on failure.

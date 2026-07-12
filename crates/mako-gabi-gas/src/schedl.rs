@@ -97,9 +97,10 @@ impl EventPayload for SchedlEvent {
 // ── State ─────────────────────────────────────────────────────────────────────
 
 /// Process state for the GaBi Gas SCHEDL workflow.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub enum SchedlState {
     /// Initial state — no SCHEDL received yet.
+    #[default]
     New,
     /// SCHEDL received and recorded (terminal).
     Received(SchedlData),
@@ -111,12 +112,6 @@ impl SchedlState {
             Self::New => "New",
             Self::Received(_) => "Received",
         }
-    }
-}
-
-impl Default for SchedlState {
-    fn default() -> Self {
-        Self::New
     }
 }
 

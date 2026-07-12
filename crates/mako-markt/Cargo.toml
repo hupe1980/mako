@@ -42,6 +42,7 @@ hmac        = { version = "0.12", features = ["std"] }
 sha2        = { version = "0.10" }
 subtle      = "2"
 secrecy     = "0.10"
+rust_decimal = { workspace = true }
 
 [dev-dependencies]
 tokio      = { version = "1", features = ["full"] }

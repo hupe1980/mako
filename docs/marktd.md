@@ -1,8 +1,8 @@
 ---
 layout: default
 title: marktd Operator Guide
-nav_order: 25
-parent: Architecture
+nav_order: 22
+parent: Services
 description: >
   marktd operator guide: Market Data Hub for Marktlokation, Messlokation,
   contracts, VersorgungsStatus (with history + point-in-time queries), NeLo
@@ -18,7 +18,7 @@ state in a MaKo deployment. It stores Marktlokationen (MaLo) with typed `rubo4e:
 API responses (schema validated on PUT), Messlokationen (MeLo) with typed `rubo4e::current::Messlokation`
 responses, Zaehler + Geraete (device registry) with typed `rubo4e::current::Zaehler`/`Geraet` responses,
 energy contracts, trading partners, network contracts (`nb_contracts`) with full BO4E **`Vertrag`** payload
-(`vertragsart`, `vertragsstatus` as indexed columns — L1 digital LRV exchange), price sheets
+(`vertragsart`, `vertragsstatus` as indexed columns for ERP digital LRV exchange), price sheets
 (PreisblattNetznutzung), **VersorgungsStatus per MaLo** (with full history and
 point-in-time queries), **MaLo grid topology** (`malo_grid` — sourced from the NB's
 NIS/GIS system and provisioned via `PUT /api/v1/malo/{id}/grid`; read by `processd`
@@ -315,9 +315,12 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/melo/{melo_id}` | `read-melo` | Get Messlokation as typed `rubo4e::current::Messlokation` |
 | `PUT` | `/api/v1/contracts/{id}` | `write-contract` | Upsert contract (with `valid_from` / `valid_to`) |
 | `GET` | `/api/v1/contracts/{id}` | `read-contract` | Get contract |
-| `PUT` | `/api/v1/partners/{mp_id}` | `write-partner` | Upsert trading partner |
-| `GET` | `/api/v1/partners/{mp_id}` | `read-partner` | Get trading partner |
+| `PUT` | `/api/v1/partners/{mp_id}` | `write-partner` | Upsert trading partner — validates payload as `rubo4e::current::Geschaeftspartner` (auto-injects `_typ`; validates `marktrolle`, `rollencodetyp`, `marktteilnehmerstatus`, `adresse`; canonicalises camelCase) |
+| `GET` | `/api/v1/partners/{mp_id}` | `read-partner` | Get trading partner — returns a `geschaeftspartner` field with the typed `rubo4e::current::Geschaeftspartner` payload (graceful fallback for legacy records) |
 | `GET` | `/api/v1/partners` | `read-partner` | List partners |
+| `GET/PUT` | `/api/v1/mmma-preise/gas/{year}/{month}` | `read/write-preisblatt` | Gas MMM Abrechnungspreise (Trading Hub Europe / MGV, monthly) — `{mehr_ct_kwh, minder_ct_kwh}`; queried by `netzbilanzd` for INVOIC 31007/31008 billing and `invoicd` check 6 validation |
+| `GET` | `/api/v1/mmma-preise/gas` | `read-preisblatt` | List all Gas MMM price records (newest first; `?limit=`) |
+| `GET/PUT` | `/api/v1/mmm-preise/strom/{year}/{month}` | `read/write-preisblatt` | Strom MMM Ausgleichsenergie prices per ÜNB (§22 StromNZV) — `{unb_mp_id, mehr_ct_kwh, minder_ct_kwh}`; queried by `netzbilanzd` for INVOIC 31002/31005 and `invoicd` check 6 |
 | `PUT` | `/api/v1/preisblaetter/{nb_mp_id}` | `write-preisblatt` | Upsert price sheet + store versioned snapshot + emit `de.markt.pricat.published` |
 | `GET` | `/api/v1/preisblaetter/{nb_mp_id}` | `read-preisblatt` | Get price sheet valid on date |
 | `GET` | `/api/v1/pricat/{nb_mp_id}/history` | `read-preisblatt` | List PRICAT version history (newest first) |
@@ -331,10 +334,11 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `PUT` | `/api/v1/nelo/{id}` | `write-nelo` (NB role) | Insert or update a NeLo |
 | `GET` | `/api/v1/malo/{malo_id}/grid` | `read-malo` | MaLo grid topology (Netzgebiet, Bilanzierungsgebiet) |
 | `PUT` | `/api/v1/malo/{malo_id}/grid` | `write-malo` (NB role) | Upsert grid record from NIS/GIS |
-| `GET` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `read-preisblatt` | `PreisblattMessung` valid on date (MSB metering tariffs) |
+| `GET` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `read-preisblatt` | `PreisblattMessung` valid on date (MSB metering tariffs); includes `auf_abschlaege` |
 | `PUT` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `write-preisblatt` | Upsert MSB metering price sheet |
 | `GET` | `/api/v1/steuerbare-ressourcen/{sr_id}` | `read-sr` | Get a `SteuerbareRessource` by SR-ID |
 | `PUT` | `/api/v1/steuerbare-ressourcen/{sr_id}` | `write-sr` | Upsert a `SteuerbareRessource` |
+| `GET` | `/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte` | `read-sr` | List `Konfigurationsprodukte` (§14a steuerbare Verbrauchseinrichtungen) |
 | `GET` | `/api/v1/technische-ressourcen/{tr_id}` | `read-device` | Get a `TechnischeRessource` by `TrId` |
 | `PUT` | `/api/v1/technische-ressourcen/{tr_id}` | `write-device` | Upsert a `TechnischeRessource` (E-mobility, generation, storage) |
 | `GET` | `/api/v1/malos/{malo_id}/technische-ressourcen` | `read-device` | List `TechnischeRessource` for a `MaLo` |
@@ -346,6 +350,9 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/zaehler/{zaehler_id}/zaehlwerke` | `read-device` | List `Zaehlwerk` registers for a Zaehler (typed `Vec<Zaehlwerk>` from JSONB) |
 | `PUT` | `/api/v1/zaehler/{zaehler_id}` | `write-device` | Upsert a `Zaehler`; validates `_typ = ZAEHLER` and schema (422 on violation) |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/geraete` | `read-device` | List `Geraete` for a `Zaehler` (typed `Vec<GeraetResponse>` with `data: rubo4e::current::Geraet`) |
+| `GET/PUT` | `/api/v1/zaehler/{zaehler_id}/register` | `read-device` / `write-device` | List/upsert iMSys TOU registers (`ZaehlzeitRegister`) |
+| `GET/PUT` | `/api/v1/zaehler-register/{register_id}/saisons` | `read-device` / `write-device` | List/upsert seasonal TOU windows (`ZaehlzeitSaison`) |
+| `GET` | `/api/v1/zaehler/{zaehler_id}/tariff-zone` | `read-device` | Resolve HT/NT/EINZEL tariff zone for a given local datetime |
 | `PUT` | `/api/v1/geraete/{geraet_id}` | `write-device` | Upsert a `Geraet`; validates `_typ = GERAET` and schema (422 on violation) |
 | `GET` | `/api/v1/nb-contracts/{id}` | `read-nb-contract` | Get NB network contract with typed BO4E `Vertrag` payload |
 | `PUT` | `/api/v1/nb-contracts/{id}` | `write-nb-contract` | Upsert NB network contract; validates `Vertrag` `_typ` and enums (422 on violation); emits `de.markt.nb-contract.updated` |
@@ -392,9 +399,23 @@ inside the JSON payload.
   "data":         { "bo_typ": "PREISBLATT_NETZNUTZUNG", ... },
   "source":       "api",
   "bo4e_version": "v202607.0.0",
-  "updated_at":   "2025-10-01T08:15:00Z"
+  "updated_at":   "2025-10-01T08:15:00Z",
+  "zeitvariable_preispositionen": [
+    {
+      "bezeichnung": "HT-Arbeitspreis",
+      "einheit": "CT_PRO_KWH",
+      "bezugsgroesse": "STUNDE",
+      "zeitfenster": { "startzeit": "07:00", "endzeit": "21:00" },
+      "preis": "8.35"
+    }
+  ]
 }
 ```
+
+`zeitvariable_preispositionen` contains the `ZeitvariablePreisposition` array
+from the BO4E payload. If the price sheet has no ToU tariffs the field is omitted
+(serialized with `#[serde(skip_serializing_if = "Vec::is_empty")]`). This array
+is consumed by `netzbilanzd` for §14a Modul 2 ToU billing (BNetzA BK6-22-300).
 
 Query parameter: `?date=YYYY-MM-DD` (defaults to today in CET/CEST).
 
@@ -473,9 +494,73 @@ force distribution to newly on-boarded partners.
 
 ---
 
+## Trading Partners — `Geschaeftspartner` BO4E
+
+`marktd` stores trading partners in the `partners` table, keyed by `mp_id`
+(BDEW-Codenummer or DVGW-Codenummer). Every `PUT` validates and normalises the
+partner payload as `rubo4e::current::Geschaeftspartner`.
+
+### Schema validation on PUT
+
+The `PUT /api/v1/partners/{mp_id}` handler:
+1. Auto-injects `"_typ": "GESCHAEFTSPARTNER"` when absent.
+2. Rejects 422 when `_typ` is wrong.
+3. Validates all enum fields (`marktrolle`, `rollencodetyp`, `marktteilnehmerstatus`, `adresse`) via `rubo4e::current::Geschaeftspartner`.
+4. Re-serialises to canonical BO4E camelCase before storage.
+
+```bash
+# Register a trading partner (LF, validated as Geschaeftspartner)
+curl -s -X PUT "http://marktd:8180/api/v1/partners/9904234560001" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "channels": {
+      "marktrolle": "LF",
+      "rollencodetyp": "BDEW",
+      "marktteilnehmerstatus": "AKTIV",
+      "adresse": {
+        "strasse": "Musterstraße",
+        "hausnummer": "1",
+        "postleitzahl": "10115",
+        "ort": "Berlin",
+        "landescode": "DE"
+      }
+    }
+  }'
+```
+
+### Typed GET response
+
+`GET /api/v1/partners/{mp_id}` returns a structured response with a `geschaeftspartner`
+field containing the typed `rubo4e::current::Geschaeftspartner` payload:
+
+```json
+{
+  "mp_id":   "9904234560001",
+  "display_name": "Muster Energieversorgung GmbH",
+  "marktrolle": "LF",
+  "rollencodetyp": "BDEW",
+  "makoadresse": ["https://as4.muster-ev.de/as4/in"],
+  "geschaeftspartner": {
+    "_typ": "GESCHAEFTSPARTNER",
+    "marktrolle": "LF",
+    "rollencodetyp": "BDEW",
+    "marktteilnehmerstatus": "AKTIV",
+    "adresse": { "strasse": "Musterstraße", "hausnummer": "1", ... }
+  },
+  "version": 3,
+  "updated_at": "2026-07-11T09:15:00Z"
+}
+```
+
+Legacy partner records written before schema validation was introduced are returned
+with the raw `channels` JSONB in the `geschaeftspartner` field (graceful fallback).
+
+---
+
 ## Database Schema
 
-`marktd` uses a single SQL migration file (`migrations/0001_initial_schema.sql`).
+`marktd` uses a single SQL schema file (`migrations/0001_initial.sql`).
 Migrations run automatically at startup via `sqlx migrate run`.
 
 ### Tables
@@ -484,7 +569,7 @@ Migrations run automatically at startup via `sqlx migrate run`.
 |---|---|
 | `malo` | Marktlokationen — JSONB payload, `bo4e_version`, GIN index |
 | `lokationszuordnung` | Temporal NB/LF/MSB role assignments per MaLo (legacy embedded JSON) |
-| `lokationszuordnungen` | Location graph edges — `(tenant, von_id, von_typ, nach_id, nach_typ, valid_from, valid_to)`; recursive-CTE BFS traversal (B5) |
+| `lokationszuordnungen` | Location graph edges — `(tenant, von_id, von_typ, nach_id, nach_typ, valid_from, valid_to)`; recursive-CTE BFS traversal |
 | `melo` | Messlokationen — JSONB payload, `bo4e_version` |
 | `contracts` | Energy contracts — JSONB payload, `bo4e_version`, **`valid_from DATE`**, **`valid_to DATE`** |
 | `partners` | Trading partners (GLN → channels) — JSONB |
@@ -495,7 +580,7 @@ Migrations run automatically at startup via `sqlx migrate run`.
 | `preisblaetter_messung` | MSB metering price sheets — same source-override protection |
 | `versorgungsstatus` | VersorgungsStatus per MaLo — `LieferStatus CHECK`, optimistic concurrency `version BIGINT` |
 | `versorgungsstatus_history` | Append-only audit log of every supply-state transition — powers `?at=` and `/history` |
-| `nb_contracts` | NB network contracts — typed SQL columns (`netzebene`, `bilanzierungsmethode`, `billing_schedule`) + full BO4E `Vertrag` JSONB (`data`) for ERP digital LRV exchange (L1) |
+| `nb_contracts` | NB network contracts — typed SQL columns (`netzebene`, `bilanzierungsmethode`, `billing_schedule`) + full BO4E `Vertrag` JSONB (`data`) for ERP digital LRV exchange |
 | `pricat_versions` | Versioned PRICAT snapshots — `(nb_mp_id, tenant, valid_from)` unique, dispatch state |
 | `pricat_dispatch_log` | Dispatch audit log — one row per NB × LF dispatch attempt |
 | `nelo` | Netz-Element-Lokationen (Redispatch 2.0) — EIC or BDEW Codenummer, owner NB GLN, JSONB data |
@@ -506,7 +591,7 @@ Migrations run automatically at startup via `sqlx migrate run`.
 | `geraete` | Device registry — linked to Zaehler, stores `geraet_typ`, BO4E payload |
 | `event_log` | Durable CloudEvent replay log — keyed by `event_id` (unique); indexed by `ce_type` + `received_at` |
 
-All columns listed below are part of the single **`migrations/0001_initial_schema.sql`** file.
+All columns listed below are part of the single **`migrations/0001_initial.sql`** file.
 There are no incremental migration files — the initial schema is the authoritative source.
 
 ### Key typed columns on `malo`
@@ -604,7 +689,7 @@ ERP logic that needs to understand which supply contracts are currently active.
 
 ---
 
-## NB Network Contracts — `Vertrag` BO4E (L1)
+## NB Network Contracts — `Vertrag` BO4E
 
 NB network contracts are stored in `nb_contracts` as **both** fast-query typed SQL
 columns (`netzebene`, `bilanzierungsmethode`, `billing_schedule`, `valid_from`, `valid_to`)
@@ -690,6 +775,29 @@ webhook_secret = "shared-hmac-secret"
 
 Inbound delivery is idempotent — duplicates are detected by `event_id` and silently
 acknowledged without re-processing.
+
+### Automatic `malo.bilanzierungsmethode` + `malo.fallgruppe` update
+
+When `marktd` receives `de.mako.process.initiated` for PIDs 55001 (GPKE) or 44001 (GeLi
+Gas), it calls `MaloRepository::patch_typenmerkmal()` to update the `malo` table:
+
+| Payload field | Column | Source |
+|---|---|---|
+| `bilanzierungsmethode` | `malo.bilanzierungsmethode` | UTILMD `TM+EM` segment (Z01→SLP, Z02→RLM, Z04→IMS) extracted by `makod` adapter |
+| `fallgruppe` | `malo.fallgruppe` | UTILMD `TM+Z10` segment (Gas GaBi RLM category) extracted by `makod` adapter |
+
+This keeps the MaLo's billing mode and GaBi Gas Fallgruppe in sync with the UTILMD
+without requiring a separate ERP `PUT /api/v1/malo` call. The update is best-effort:
+if the MaLo row does not yet exist, the patch silently no-ops (the values will be set
+on the first `PUT /api/v1/malo`).
+
+```bash
+# After a 55001 Anmeldung, verify the update:
+curl -s "http://marktd:8180/api/v1/malo/10001234567" \
+  -H "Authorization: Bearer <token>" | jq '.bilanzierungsmethode, .fallgruppe'
+# → "SLP", null     (for a Strom SLP point)
+# → "RLM", "Z01"   (for a Gas RLM point with GaBi category Z01)
+```
 
 ---
 
@@ -1136,21 +1244,156 @@ curl -s -X PUT "http://marktd:8180/api/v1/preisblaetter-messung/9900012345678" \
   -d '{
     "data": {
       "bo_typ": "PREISBLATT_MESSUNG",
-      "bezeichnung": "Messentgelte 2025",
-      "gueltigkeit": { "startdatum": "2025-10-01", "enddatum": "2026-09-30" },
-      "preispositionen": []
+      "bezeichnung": "Messentgelte 2026",
+      "gueltigkeit": { "startdatum": "2026-10-01", "enddatum": "2027-09-30" },
+      "preispositionen": [],
+      "zeitvariablePreispositionen": [
+        { "zaehlzeitregister": "HT", "preis": { "wert": "12.50", "einheit": "EUR_PRO_KWH" } },
+        { "zaehlzeitregister": "NT", "preis": { "wert": "8.75",  "einheit": "EUR_PRO_KWH" } }
+      ]
     },
     "bo4e_version": "v202607.0.0"
   }'
 
-# Retrieve for a billing date
+# Retrieve for a billing date — response includes typed zeitvariable_preispositionen
 curl -s "http://marktd:8180/api/v1/preisblaetter-messung/9900012345678?date=2026-01-15" \
-  -H "Authorization: Bearer <token>" | jq .source
+  -H "Authorization: Bearer <token>"
+# → {
+#     "data": { ... },
+#     "zeitvariable_preispositionen": [
+#       { "zaehlzeitregister": "HT", "preis": { "wert": "12.50", ... } },
+#       { "zaehlzeitregister": "NT", "preis": { "wert": "8.75",  ... } }
+#     ],
+#     "auf_abschlaege": [],
+#     "schema_drift_count": 0
+#   }
 ```
+
+### §14a Modul 2 — `zeitvariablePreispositionen`
+
+For MSBs that operate under §14a Modul 2 (time-of-use pricing for controllable loads), each `ZeitvariablePreisposition` element in the price sheet **must** carry a non-empty `zaehlzeitregister` band code (e.g. `"HT"`, `"NT"`, `"ST"`). The PUT endpoint validates this:
+
+| Validation | Error |
+|-----------|-------|
+| Missing `zaehlzeitregister` | 422 — mandatory per §14a Modul 2 (BK6-22-300) |
+| `bandNummer` field present | 422 — does not exist in BO4E v202607 |
+| Invalid BO4E schema | 422 — `serde_json` schema error |
+
+`invoic-checker` check 4 uses the `zaehlzeitregister` codes to route INVOIC 31009 positions against the correct ToU band price, rather than guessing from `positionstext` keywords.
 
 **Source-override protection.** Same as `preisblaetter`: an operator REST
 upload (`source = 'api'`) is never silently overwritten by an engine ingest
 (`source = 'mako'`).
+
+---
+
+## MMM Settlement Prices — Gas MMMA + Strom Ausgleichsenergie
+
+`marktd` stores monthly settlement reference prices for Mehr-/Mindermengenabrechnungen
+(MMM). These are **B2B settlement prices** — not B2C retail tariffs — and must therefore
+live in `marktd`, not in a retail tariff service. Both `netzbilanzd` (NB, generates MMM
+invoices) and `invoicd` (LF, validates inbound MMM invoices) need them, and they cannot
+share a database directly.
+
+### Gas MMM Abrechnungspreise — Trading Hub Europe (THE)
+
+Published monthly by Trading Hub Europe (THE, the German gas market area operator
+since 2021). `netzbilanzd` auto-fetches these when `mehr_preis_ct_per_kwh` /
+`minder_preis_ct_per_kwh` are not supplied in the `POST /api/v1/billing/run` request.
+`invoicd` uses them for **check 6** on inbound INVOIC 31007/31008.
+
+```bash
+# Import THE Gas MMMA prices for a billing month (operator monthly task)
+curl -s -X PUT "http://marktd:8180/api/v1/mmma-preise/gas/2026/7" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "marktgebiet": "THE",
+    "mehr_ct_kwh": "1.25",
+    "minder_ct_kwh": "0.87",
+    "source": "manual"
+  }'
+
+# Query (used by netzbilanzd and invoicd)
+curl -s "http://marktd:8180/api/v1/mmma-preise/gas/2026/7" \
+  -H "Authorization: Bearer <token>"
+# → { "price_month": "2026-07-01", "marktgebiet": "THE", "mehr_ct_kwh": "1.25", ... }
+
+# List all imported months
+curl -s "http://marktd:8180/api/v1/mmma-preise/gas?limit=12" \
+  -H "Authorization: Bearer <token>"
+```
+
+### Strom MMM Ausgleichsenergie — ÜNB (§22 StromNZV)
+
+Published monthly per ÜNB (50Hertz, TenneT, Amprion, TransnetBW). Used by
+`netzbilanzd` for INVOIC 31002/31005 and `invoicd` check 6 on inbound Strom MMM invoices.
+
+```bash
+# Import Strom MMM prices for TenneT (example)
+curl -s -X PUT "http://marktd:8180/api/v1/mmm-preise/strom/2026/7" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "unb_mp_id": "9900823780008",
+    "mehr_ct_kwh": "2.10",
+    "minder_ct_kwh": "1.45",
+    "source": "manual"
+  }'
+
+# Query
+curl -s "http://marktd:8180/api/v1/mmm-preise/strom/2026/7?unb_mp_id=9900823780008" \
+  -H "Authorization: Bearer <token>"
+```
+
+**Operator task:** import these prices monthly before running MMM billing.
+A missed monthly import causes `netzbilanzd` to require manual ERP input and
+`invoicd` to skip check 6 (logged at debug level, not a hard error).
+
+### Automated monthly import
+
+`marktd` includes a **background worker** that automatically fetches and imports
+Gas MMMA and Strom MMM prices on the 1st of each month. Configure it in `marktd.toml`:
+
+```toml
+[mmma_import]
+enabled       = true
+gas_url       = "https://www.the-group.de/gas/mmma/export.csv"  # THE CSV endpoint
+strom_url     = "https://www.netztransparenz.de/mmm/strom.json" # ÜNB JSON endpoint
+check_hour_utc = 6   # import at 06:00 UTC (after THE typically publishes ~05:00 UTC)
+```
+
+The worker wakes every hour; on the 1st of the month at or after `check_hour_utc`
+it fetches, parses (CSV or JSON), and upserts — idempotent if prices already exist
+for the current month.
+
+**Supported formats:**
+
+```csv
+# CSV (5-column)
+year,month,marktgebiet,mehr_ct_kwh,minder_ct_kwh
+2026,7,THE,1.25,0.87
+```
+
+```json
+// JSON (single object or array)
+{ "mehr_ct_kwh": "1.25", "minder_ct_kwh": "0.87", "marktgebiet": "THE" }
+```
+
+**Manual trigger** (catch-up after downtime or testing):
+
+```bash
+curl -s -X POST "http://marktd:8180/api/v1/mmma-preise/import-trigger?year=2026&month=7" \
+  -H "Authorization: Bearer <token>"
+# → { "year": 2026, "month": 7, "import_enabled": true, "results": [...] }
+```
+
+**CloudEvents emitted:**
+
+| Event type | Trigger |
+|------------|---------|
+| `de.markt.mmma.import.success` | Successful monthly import |
+| `de.markt.mmma.import.failed` | Fetch or parse failure (requires operator action) |
 
 ---
 
@@ -1269,6 +1512,88 @@ curl -s "http://marktd:8180/api/v1/zaehler/Z001234567/geraete" \
 
 ---
 
+## ZaehlzeitRegister — iMSys TOU register definitions
+
+`ZaehlzeitRegister` and `ZaehlzeitSaison` provide structured Time-of-Use (TOU) register
+definitions for iMSys (intelligent metering systems). They underpin §14a Modul 2 billing
+by enabling automatic classification of 15-min Lastgang intervals into HT/NT tariff bands
+without per-meter manual configuration.
+
+### Data model
+
+```
+Zaehler (1) ──► ZaehlzeitRegister (N)
+                   zaehlerauspraegung: HT | NT | EINZEL
+                   obis_kennzahl: "1-1:1.29.0" (HT), "1-1:1.49.0" (NT)
+                   valid_from / valid_to  (seasonal changeover supported)
+
+ZaehlzeitRegister (1) ──► ZaehlzeitSaison (N)
+                               saison: SOMMER | WINTER | GESAMT
+                               wochentage: [1,2,3,4,5] (Mon–Fri)
+                               zeit_von: "07:00"   (inclusive, local German time CET/CEST)
+                               zeit_bis: "22:00"   (exclusive)
+```
+
+A typical residential iMSys meter has two registers (HT + NT) each with two seasons
+(SOMMER, WINTER). Weekdays differ from weekends. `marktd` stores all combinations and
+resolves them efficiently via a single PostgreSQL JOIN with JSONB `@>` containment.
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/zaehler/{id}/register` | List all TOU registers for a Zaehler |
+| `PUT` | `/api/v1/zaehler/{id}/register` | Upsert a ZaehlzeitRegister |
+| `GET` | `/api/v1/zaehler-register/{id}/saisons` | List seasonal windows for a register |
+| `PUT` | `/api/v1/zaehler-register/{id}/saisons` | Upsert a ZaehlzeitSaison |
+| `GET` | `/api/v1/zaehler/{id}/tariff-zone` | Resolve HT/NT/EINZEL at a given datetime |
+
+### Setting up TOU registers
+
+```bash
+# 1. Create an HT register
+REGISTER_ID=$(uuidgen)
+curl -s -X PUT "http://marktd:8180/api/v1/zaehler/Z001234567/register" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"id\": \"${REGISTER_ID}\",
+    \"bezeichnung\": \"HT\",
+    \"zaehlerauspraegung\": \"HT\",
+    \"obis_kennzahl\": \"1-1:1.29.0\",
+    \"einheit\": \"KWH\",
+    \"valid_from\": \"2025-01-01\"
+  }"
+
+# 2. Add winter season: Mon–Fri 07:00–22:00
+curl -s -X PUT "http://marktd:8180/api/v1/zaehler-register/${REGISTER_ID}/saisons" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"id\": \"$(uuidgen)\",
+    \"saison\": \"WINTER\",
+    \"wochentage\": [1,2,3,4,5],
+    \"zeit_von\": \"07:00\",
+    \"zeit_bis\": \"22:00\"
+  }"
+
+# 3. Resolve tariff zone at a specific time
+curl -s "http://marktd:8180/api/v1/zaehler/Z001234567/tariff-zone?datetime=2026-01-15T14:30:00" \
+  -H "Authorization: Bearer <token>" | jq .
+# → { "zaehler_id": "Z001234567", "local_datetime": "2026-01-15T14:30:00", "tariff_zone": "HT" }
+```
+
+The `tariff-zone` endpoint performs a single JOIN between `zaehler_register` and
+`zaehler_saisons`, filtering by JSONB array containment (`wochentage @> $3::jsonb`)
+and time range. No application-level iteration is needed on the consumer side.
+
+**Integration with `billingd` (§14a Modul 2):**
+`billingd` calls `GET /api/v1/zaehler/{id}/tariff-zone?datetime=<slot-start>` for each
+15-min slot in the billing month and aggregates kWh by zone. This eliminates the need for
+operators to maintain manual HT/NT time-window configuration per meter in the billing engine.
+
+---
+
 ## SteuerbareRessource Registry
 
 `marktd` stores **steuerbare Ressourcen** (SR) — iMS controllable resources per
@@ -1279,40 +1604,46 @@ Populated by WiM iMS Steuerungsauftrag processes (PID 55168) and by operator
 uploads. Linked optionally to a MaLo and/or MeLo.
 
 The `konfigurationsprodukte` field stores the contracted iMS control products
-(`Vec<Konfigurationsprodukt>` in BO4E spec) — used for pre-dispatch eligibility
-checks in `wim.steuerungsauftrag.bestaetigen`. The value is preserved across
-PUT calls unless explicitly replaced.
+— used for pre-dispatch eligibility checks in `wim.steuerungsauftrag.bestaetigen`.
+The value is preserved across PUT calls unless explicitly replaced via the sub-resource endpoint.
+
+### Konfigurationsprodukte — typed API
+
+The `konfigurationsprodukte` sub-resource has its own endpoints with **full BO4E validation** per BK6-24-174 §4.3:
 
 ```bash
-# Retrieve a steuerbare Ressource
-curl -s "http://marktd:8180/api/v1/steuerbare-ressourcen/C0001234567890" \
-  -H "Authorization: Bearer <token>" | jq '{sr_id, malo_id, version, konfigurationsprodukte}'
+# Retrieve typed Konfigurationsprodukte (returns Vec<ZeitvariablePreisposition> deserialized)
+curl -s "http://marktd:8180/api/v1/steuerbare-ressourcen/C0001234567890/konfigurationsprodukte" \
+  -H "Authorization: Bearer <token>"
+# → {
+#     "sr_id": "C0001234567890",
+#     "konfigurationsprodukte": [{ "produktcode": "FLEX-001", ... }],
+#     "count": 1,
+#     "schema_drift": 0
+#   }
 
-# Register or update with contracted iMS control products
-curl -s -X PUT "http://marktd:8180/api/v1/steuerbare-ressourcen/C0001234567890" \
+# Replace all contracted products (validates each element + enforces non-empty produktcode)
+curl -s -X PUT "http://marktd:8180/api/v1/steuerbare-ressourcen/C0001234567890/konfigurationsprodukte" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d '{
-    "malo_id": "10001234567",
-    "data": { "_typ": "STEUERBARE_RESSOURCE" },
-    "konfigurationsprodukte": [
-      {
-        "produktcode": "FLEX-PRODUCT-001",
-        "leistungskurvendefinition": "linear-ramp"
-      }
-    ],
-    "bo4e_version": "v202607.0.0"
-  }'
+  -d '[
+    { "produktcode": "FLEX-PRODUCT-001", "zaehlzeitregister": "HT" }
+  ]'
+# → 204 No Content + emits de.markt.sr.konfigurationsprodukt.updated CloudEvent
+
+# Remove a single product by produktcode
+curl -s -X DELETE "http://marktd:8180/api/v1/steuerbare-ressourcen/C0001234567890/konfigurationsprodukte/FLEX-PRODUCT-001" \
+  -H "Authorization: Bearer <token>"
+# → 204 No Content
 ```
 
-**Field semantics:**
+**Validation rules (BK6-24-174 §4.3):**
 
-| Field | Type | Notes |
-|---|---|---|
-| `data` | `JSONB` | Full BO4E `SteuerbareRessource` payload; `_typ` auto-injected to `"STEUERBARE_RESSOURCE"` if absent |
-| `konfigurationsprodukte` | `JSONB` (nullable) | `null` = not yet populated; `[]` = no products; preserved on update when `null` is sent |
-| `malo_id` | `TEXT` (nullable) | Associated Marktlokation |
-| `melo_id` | `TEXT` (nullable) | Associated Messlokation |
+- Each element must deserialize as `rubo4e::current::Konfigurationsprodukt`
+- `produktcode` **must not be empty** — every contracted product requires a unique code
+- `bandNummer` is **rejected with 422** — it does not exist in BO4E v202607; use `zaehlzeitregister`
+
+`processd` checks this list before auto-confirming a Steuerungsauftrag. An uncontracted `produktcode` triggers `wim.steuerungsauftrag.ablehnen` automatically.
 
 ---
 
@@ -1383,7 +1714,7 @@ GET  /api/v1/nelo/{nelo_id}
 PUT  /api/v1/nelo/{nelo_id}
 ```
 
-**Request body for PUT** (now includes typed B6 columns):
+**Request body for PUT** (includes typed NeLo columns):
 
 ```json
 {

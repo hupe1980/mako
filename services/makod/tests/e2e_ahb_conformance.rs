@@ -259,6 +259,9 @@ async fn ahb_55001_lieferbeginn_validates_and_dispatches() {
         process_date: String::new(), // not present in minimal fixture
         message_ref: cmd_ref,
         received_at: time::OffsetDateTime::now_utc(),
+        bilanzierungsgebiet: None,
+        bilanzierungsmethode: None,
+        fallgruppe: None,
         validation_passed: report.is_valid(), // ← authoritative AHB result, no bypass
         validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
     };
@@ -329,6 +332,9 @@ async fn ahb_55002_lieferende_validates_and_dispatches() {
         process_date: String::new(),
         message_ref: cmd_ref,
         received_at: time::OffsetDateTime::now_utc(),
+        bilanzierungsgebiet: None,
+        bilanzierungsmethode: None,
+        fallgruppe: None,
         validation_passed: report.is_valid(), // ← authoritative AHB result, no bypass
         validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
     };
@@ -449,6 +455,8 @@ async fn ahb_44001_lieferbeginn_gas_validates_and_dispatches() {
         receiver: cmd_receiver,
         malo_id: cmd_malo,
         message_ref: cmd_ref,
+        bilanzierungsmethode: None,
+        fallgruppe: None,
         ..
     } = adapter_cmd
     else {
@@ -486,6 +494,8 @@ async fn ahb_44001_lieferbeginn_gas_validates_and_dispatches() {
         document_date: String::new(),
         process_date: String::new(),
         message_ref: cmd_ref,
+        bilanzierungsmethode: None,
+        fallgruppe: None,
         validation_passed: report.is_valid(), // ← authoritative AHB result, no bypass
         validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
         received_at: time::OffsetDateTime::now_utc(),

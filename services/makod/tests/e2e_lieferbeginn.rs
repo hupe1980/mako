@@ -249,6 +249,9 @@ impl MockNb {
                     process_date,
                     message_ref,
                     received_at: time::OffsetDateTime::now_utc(),
+                    bilanzierungsgebiet: None,
+                    bilanzierungsmethode: None,
+                    fallgruppe: None,
                     validation_passed: true, // bypass AHB profile check
                     validation_errors: vec![],
                 }

@@ -193,8 +193,10 @@ pub struct WimGasAnmeldungData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum WimGasAnmeldungState {
     /// No events yet.
+    #[default]
     New,
     /// UTILMD G received and `Initiated` event applied.
     Initiated(WimGasAnmeldungData),
@@ -209,12 +211,6 @@ pub enum WimGasAnmeldungState {
         /// Human-readable rejection reason.
         reason: String,
     },
-}
-
-impl Default for WimGasAnmeldungState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl WimGasAnmeldungState {

@@ -56,10 +56,13 @@ use axum::{
 use mako_engine::{ids::TenantId, partner::PartnerStore as _, store_slatedb::SlateDbPartnerStore};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    handler::server::{
+        router::{prompt::PromptRouter, tool::ToolRouter},
+        wrapper::Parameters,
+    },
     model::*,
-    schemars,
-    service::RequestContext,
+    prompt, prompt_handler, prompt_router, schemars,
+    service::{Peer, RequestContext},
     tool, tool_handler, tool_router,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -182,6 +185,8 @@ pub struct MakodMcpHandler {
     state: Arc<MakodMcpState>,
     #[allow(dead_code)] // used by the #[tool_router] macro-generated dispatch code
     tool_router: ToolRouter<MakodMcpHandler>,
+    #[allow(dead_code)] // used by the #[prompt_router] macro-generated dispatch code
+    prompt_router: PromptRouter<MakodMcpHandler>,
 }
 
 #[tool_router]
@@ -190,6 +195,7 @@ impl MakodMcpHandler {
         Self {
             state,
             tool_router: Self::tool_router(),
+            prompt_router: Self::prompt_router(),
         }
     }
 
@@ -203,7 +209,8 @@ impl MakodMcpHandler {
     /// IFTSTA sink commands (`*.empfangen`) are excluded — those are driven by
     /// inbound EDIFACT messages, not by ERP/LLM initiations.
     #[tool(
-        description = "List all MaKo commands available for this instance (filtered to configured Marktrollen). Call this before submit_command to discover what you can submit."
+        description = "List all MaKo commands available for this instance (filtered to configured Marktrollen). Call this before submit_command to discover what you can submit.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     #[instrument(skip(self))]
     async fn list_commands(&self) -> Result<CallToolResult, McpError> {
@@ -259,13 +266,33 @@ impl MakodMcpHandler {
     /// `duplicate_process`, `process_not_found`, `role_not_configured`,
     /// `engine_error`.
     #[tool(
-        description = "Submit a MaKo process command (GPKE, GeLi Gas, WiM, MABIS). Use list_commands first to see what's available and what payload fields are required."
+        description = "Submit a MaKo process command (GPKE, GeLi Gas, WiM, MABIS). Use list_commands first to see what's available and what payload fields are required.",
+        annotations(
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
     )]
-    #[instrument(skip(self), fields(command = %p.command))]
+    #[instrument(skip(self, client), fields(command = %p.command))]
     async fn submit_command(
         &self,
         Parameters(p): Parameters<SubmitCommandParams>,
+        meta: Meta,
+        client: Peer<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        let progress_token = meta.get_progress_token();
+
+        // ── Phase 1: validation (20 %) ────────────────────────────────────
+        if let Some(ref token) = progress_token {
+            let _ = client
+                .notify_progress(
+                    ProgressNotificationParam::new(token.clone(), 0.2)
+                        .with_total(1.0)
+                        .with_message(String::from("Validating command and Marktrolle...")),
+                )
+                .await;
+        }
+
         let cmd_lower = p.command.to_lowercase();
         let asserted = p.marktrolle.as_deref().map(str::to_uppercase);
 
@@ -286,6 +313,17 @@ impl MakodMcpHandler {
             idempotency_key = %idempotency_key,
             "MCP: submit_command",
         );
+
+        // ── Phase 2: engine dispatch (80 %) ──────────────────────────────
+        if let Some(ref token) = progress_token {
+            let _ = client
+                .notify_progress(
+                    ProgressNotificationParam::new(token.clone(), 0.8)
+                        .with_total(1.0)
+                        .with_message(format!("Dispatching {cmd_lower} to EDIFACT engine...")),
+                )
+                .await;
+        }
 
         match dispatch_command(&self.state.commands, &cmd_lower, &p.payload).await {
             Ok(outcome) => {
@@ -318,7 +356,10 @@ impl MakodMcpHandler {
     /// Returns the full `MaloIdentResultPositive` from the BDEW API-Webdienste
     /// Strom MaLo identification response. Returns an error if the MaLo is not
     /// in the cache — seed it first via `PUT /admin/malo/{malo_id}`.
-    #[tool(description = "Read a cached Marktlokation (MaLo) record by its 11-digit ID")]
+    #[tool(
+        description = "Read a cached Marktlokation (MaLo) record by its 11-digit ID",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     #[instrument(skip(self), fields(malo_id = %p.malo_id))]
     async fn get_malo(
         &self,
@@ -352,7 +393,10 @@ impl MakodMcpHandler {
     /// array is returned when no partners have been registered yet.
     ///
     /// Use `limit` and `cursor` to page through large directories.
-    #[tool(description = "List registered trading partners for this tenant (paginated, max 500)")]
+    #[tool(
+        description = "List registered trading partners for this tenant (paginated, max 500)",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     #[instrument(skip(self), fields(limit = ?p.limit, cursor = ?p.cursor))]
     async fn list_partners(
         &self,
@@ -397,7 +441,10 @@ impl MakodMcpHandler {
     /// Returns the full partner record including the AS4 inbox URL, market
     /// roles, and communication channel configuration. Returns an error if
     /// the partner is not registered.
-    #[tool(description = "Get a trading partner record by 13-digit GLN")]
+    #[tool(
+        description = "Get a trading partner record by 13-digit GLN",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     #[instrument(skip(self), fields(mp_id = %p.mp_id))]
     async fn get_partner(
         &self,
@@ -431,7 +478,10 @@ impl MakodMcpHandler {
     /// Returns the daemon version, instance ID, MaLo cache statistics, and
     /// configured Marktrollen. Useful for verifying connectivity and checking
     /// the current operational state before submitting commands.
-    #[tool(description = "Get makod health status, version, and MaLo cache statistics")]
+    #[tool(
+        description = "Get makod health status, version, and MaLo cache statistics",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     #[instrument(skip(self))]
     async fn get_health(&self) -> Result<CallToolResult, McpError> {
         let cache_stats = self
@@ -456,7 +506,147 @@ impl MakodMcpHandler {
     }
 }
 
+// ── Prompt argument types ─────────────────────────────────────────────────────
+
+/// Arguments for the `gpke-lieferbeginn` prompt.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GpkeLieferbeginnArgs {
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// Supply start date (YYYY-MM-DD).
+    pub lieferbeginn_datum: String,
+}
+
+/// Arguments for the `geli-lieferbeginn` prompt.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GeliLieferbeginnArgs {
+    /// 11-digit gas Marktlokations-ID.
+    pub malo_id: String,
+    /// Supply start date (YYYY-MM-DD).
+    pub lieferbeginn_datum: String,
+}
+
+/// Arguments for the `wim-geraetewechsel` prompt.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WimGeraetewechselArgs {
+    /// 11-digit Messlokations-ID.
+    pub melo_id: String,
+    /// Meter change date (YYYY-MM-DD).
+    pub wechseldatum: String,
+    /// Initiating Marktrolle: NB or MSB.
+    pub marktrolle: String,
+}
+
+// ── Prompt router ─────────────────────────────────────────────────────────────
+
+#[prompt_router]
+impl MakodMcpHandler {
+    #[prompt(
+        name = "gpke-lieferbeginn",
+        description = "Guided workflow: GPKE Lieferbeginn Strom (electricity supplier change)"
+    )]
+    async fn gpke_lieferbeginn_prompt(
+        &self,
+        Parameters(args): Parameters<GpkeLieferbeginnArgs>,
+    ) -> Vec<PromptMessage> {
+        let malo_id = &args.malo_id;
+        let date = &args.lieferbeginn_datum;
+        vec![PromptMessage::new_text(
+            Role::User,
+            format!(
+                "I need to initiate a GPKE Lieferbeginn (electricity supplier change) \
+                 for MaLo {malo_id} starting {date}.\n\
+                 \n\
+                 Please:\n\
+                 1. Call `get_malo` with malo_id=\"{malo_id}\" to verify the MaLo is \
+                    cached and show me the NB/MSB GLNs.\n\
+                 2. If found, call `submit_command` with:\n\
+                    - command: \"gpke.lieferbeginn.anmelden\"\n\
+                    - payload: {{\"malo_id\": \"{malo_id}\", \"lieferbeginn_datum\": \"{date}\"}}\n\
+                 3. Report the process_id and status.\n\
+                 4. Explain next steps: the NB has 24 wall-clock hours to respond \
+                    with a Bestätigung (PID 55003/55004) per BK6-22-024."
+            ),
+        )]
+    }
+
+    #[prompt(
+        name = "geli-lieferbeginn",
+        description = "Guided workflow: GeLi Gas Lieferbeginn (gas supplier change)"
+    )]
+    async fn geli_lieferbeginn_prompt(
+        &self,
+        Parameters(args): Parameters<GeliLieferbeginnArgs>,
+    ) -> Vec<PromptMessage> {
+        let malo_id = &args.malo_id;
+        let date = &args.lieferbeginn_datum;
+        vec![PromptMessage::new_text(
+            Role::User,
+            format!(
+                "I need to initiate a GeLi Gas Lieferbeginn (gas supplier change) \
+                 for gas MaLo {malo_id} starting {date}.\n\
+                 \n\
+                 Please:\n\
+                 1. Call `get_malo` with malo_id=\"{malo_id}\" to verify the MaLo is \
+                    cached and show me the GNB GLN.\n\
+                 2. If found, call `submit_command` with:\n\
+                    - command: \"geli.lieferbeginn.anmelden\"\n\
+                    - payload: {{\"malo_id\": \"{malo_id}\", \"lieferbeginn_datum\": \"{date}\"}}\n\
+                 3. Report the process_id and status.\n\
+                 4. Explain next steps: the GNB has 10 Werktage to respond per \
+                    BK7-24-01-009 (Saturday counts as Werktag; public holidays do not; German local time)."
+            ),
+        )]
+    }
+
+    #[prompt(
+        name = "wim-geraetewechsel",
+        description = "Guided workflow: WiM Gerätewechsel (meter device change)"
+    )]
+    async fn wim_geraetewechsel_prompt(
+        &self,
+        Parameters(args): Parameters<WimGeraetewechselArgs>,
+    ) -> Vec<PromptMessage> {
+        let melo_id = &args.melo_id;
+        let date = &args.wechseldatum;
+        let marktrolle = &args.marktrolle;
+        vec![PromptMessage::new_text(
+            Role::User,
+            format!(
+                "I need to initiate a WiM Gerätewechsel (meter device change) \
+                 for MeLo {melo_id} on {date}, acting as {marktrolle}.\n\
+                 \n\
+                 Please:\n\
+                 1. Call `submit_command` with:\n\
+                    - command: \"wim.geraetewechsel.beauftragen\"\n\
+                    - marktrolle: \"{marktrolle}\"\n\
+                    - payload: {{\"melo_id\": \"{melo_id}\", \"wechseldatum\": \"{date}\"}}\n\
+                 2. Report the process_id and status.\n\
+                 3. Explain next steps: the MSB has 5 Werktage to confirm or reject \
+                    per BK6-24-174."
+            ),
+        )]
+    }
+    #[prompt(
+        name = "msb-preisanfrage",
+        description = "Guided workflow: MSB Preisanfrage (REQOTE/QUOTES PIDs 35001/15001) and PRICAT 27003 dispatch"
+    )]
+    async fn msb_preisanfrage_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "How do I request a price quote from the existing MSB (aMSB) when switching meter operators?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "**MSB Preisanfrage (WiM Strom BK6-24-174)**\n\n                 The nMSB (new MSB) requests a price quote from the aMSB (existing MSB) before initiating a WiM-Wechsel.\n\n                 **Step 1 — Send REQOTE (PID 35001):**\n                 Use `submit_command` with:\n                 - command: \"wim.preisanfrage.anfordern\"\n                 - marktrolle: \"MSB\"\n                 - payload: {\"melo_id\": \"...\", \"wechseldatum\": \"YYYY-MM-DD\"}\n\n                 **Step 2 — aMSB responds QUOTES (PID 15001) within 5 Werktage:**\n                 The Preisliste is stored in `marktd` as a `PreisblattMessung` record.\n                 Check: marktd `get_preisblatt` with the aMSB MP-ID.\n\n                 **Step 3 — MSB dispatches own PRICAT 27001–27003:**\n                 Before a WiM-Wechsel, the nMSB must have a valid PRICAT on file with the NB.\n                 Check: marktd `list_pricat_versions` with your nb_mp_id.\n                 If dispatch_state != done: use marktd `dispatch_pricat` to (re-)send.\n\n                 **Step 4 — Initiate WiM-Wechsel:**\n                 `submit_command` with command: \"wim.geraetewechsel.beauftragen\"\n\n                 **§14a note:** For controllable loads (iMSys), the PRICAT must include\n                 `ZeitvariablePreisposition` for time-of-use MSB fees (Modul 2/3).\n                 This requires `marktd` PreisblattMessung with `auf_abschlaege` populated.",
+            ),
+        ]
+    }
+}
+
 #[tool_handler]
+#[prompt_handler]
 impl ServerHandler for MakodMcpHandler {
     fn get_info(&self) -> ServerInfo {
         let configured = &self.state.commands.configured_marktrollen;
@@ -534,6 +724,7 @@ impl ServerHandler for MakodMcpHandler {
                 .enable_tools()
                 .enable_resources()
                 .enable_prompts()
+                .enable_completions()
                 .build(),
         )
         .with_server_info(Implementation::new("makod", &self.state.version))
@@ -644,143 +835,38 @@ impl ServerHandler for MakodMcpHandler {
         ))
     }
 
-    // ── Prompts ─────────────────────────────────────────────────────────────────────────────
-
-    async fn list_prompts(
+    async fn complete(
         &self,
-        _request: Option<PaginatedRequestParams>,
+        request: CompleteRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListPromptsResult, McpError> {
-        Ok(ListPromptsResult {
-            prompts: vec![
-                Prompt::new(
-                    "gpke-lieferbeginn",
-                    Some("Guided workflow: GPKE Lieferbeginn Strom (electricity supplier change)"),
-                    Some(vec![
-                        PromptArgument::new("malo_id")
-                            .with_description("11-digit Marktlokations-ID")
-                            .with_required(true),
-                        PromptArgument::new("lieferbeginn_datum")
-                            .with_description("Supply start date (YYYY-MM-DD)")
-                            .with_required(true),
-                    ]),
-                ),
-                Prompt::new(
-                    "geli-lieferbeginn",
-                    Some("Guided workflow: GeLi Gas Lieferbeginn (gas supplier change)"),
-                    Some(vec![
-                        PromptArgument::new("malo_id")
-                            .with_description("11-digit gas Marktlokations-ID")
-                            .with_required(true),
-                        PromptArgument::new("lieferbeginn_datum")
-                            .with_description("Supply start date (YYYY-MM-DD)")
-                            .with_required(true),
-                    ]),
-                ),
-                Prompt::new(
-                    "wim-geraetewechsel",
-                    Some("Guided workflow: WiM Gerätewechsel (meter device change)"),
-                    Some(vec![
-                        PromptArgument::new("melo_id")
-                            .with_description("11-digit Messlokations-ID")
-                            .with_required(true),
-                        PromptArgument::new("wechseldatum")
-                            .with_description("Meter change date (YYYY-MM-DD)")
-                            .with_required(true),
-                        PromptArgument::new("marktrolle")
-                            .with_description("NB or MSB")
-                            .with_required(true),
-                    ]),
-                ),
-            ],
-            next_cursor: None,
-            meta: None,
-        })
-    }
+    ) -> Result<CompleteResult, McpError> {
+        let partial = request.argument.value.to_lowercase();
 
-    async fn get_prompt(
-        &self,
-        request: GetPromptRequestParams,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, McpError> {
-        let args = request.arguments.unwrap_or_default();
-        let arg = |key: &str| {
-            args.get(key)
-                .and_then(|v| v.as_str())
-                .unwrap_or("<not provided>")
-                .to_owned()
+        let values: Vec<String> = match &request.r#ref {
+            // Prompt argument completions
+            Reference::Prompt(p) => match (p.name.as_str(), request.argument.name.as_str()) {
+                ("wim-geraetewechsel", "marktrolle") => {
+                    vec!["NB".into(), "MSB".into()]
+                }
+                ("gpke-lieferbeginn" | "geli-lieferbeginn", "command") | (_, "command") => {
+                    // Suggest available command names from the static registry
+                    COMMAND_REGISTRY
+                        .iter()
+                        .map(|d| d.name.to_string())
+                        .filter(|name| name.to_lowercase().contains(&partial))
+                        .collect()
+                }
+                _ => vec![],
+            },
+            // Resource URI template variable completions
+            Reference::Resource(_) => vec![],
+            // Future Reference variants (non_exhaustive enum)
+            _ => vec![],
         };
 
-        match request.name.as_str() {
-            "gpke-lieferbeginn" => {
-                let malo_id = arg("malo_id");
-                let date = arg("lieferbeginn_datum");
-                Ok(GetPromptResult::new(vec![PromptMessage::new_text(
-                    Role::User,
-                    format!(
-                        "I need to initiate a GPKE Lieferbeginn (electricity supplier change) \
-                         for MaLo {malo_id} starting {date}.\n\
-                         \n\
-                         Please:\n\
-                         1. Call `get_malo` with malo_id=\"{malo_id}\" to verify the MaLo is \
-                            cached and show me the NB/MSB GLNs.\n\
-                         2. If found, call `submit_command` with:\n\
-                            - command: \"gpke.lieferbeginn.anmelden\"\n\
-                            - payload: {{\"malo_id\": \"{malo_id}\", \"lieferbeginn_datum\": \"{date}\"}}\n\
-                         3. Report the process_id and status.\n\
-                         4. Explain next steps: the NB has 24 wall-clock hours to respond \
-                            with a Bestätigung (PID 55003/55004) per BK6-22-024."
-                    ),
-                )]))
-            }
-            "geli-lieferbeginn" => {
-                let malo_id = arg("malo_id");
-                let date = arg("lieferbeginn_datum");
-                Ok(GetPromptResult::new(vec![PromptMessage::new_text(
-                    Role::User,
-                    format!(
-                        "I need to initiate a GeLi Gas Lieferbeginn (gas supplier change) \
-                         for gas MaLo {malo_id} starting {date}.\n\
-                         \n\
-                         Please:\n\
-                         1. Call `get_malo` with malo_id=\"{malo_id}\" to verify the MaLo \
-                            is cached and show me the GNB GLN.\n\
-                         2. If found, call `submit_command` with:\n\
-                            - command: \"geli.lieferbeginn.anmelden\"\n\
-                            - payload: {{\"malo_id\": \"{malo_id}\", \"lieferbeginn_datum\": \"{date}\"}}\n\
-                         3. Report the process_id and status.\n\
-                         4. Explain next steps: the GNB has 10 Werktage to respond per \
-                            BK7-24-01-009 (Saturday counts as Werktag; \
-                            public holidays do not; German local time)."
-                    ),
-                )]))
-            }
-            "wim-geraetewechsel" => {
-                let melo_id = arg("melo_id");
-                let date = arg("wechseldatum");
-                let marktrolle = arg("marktrolle");
-                Ok(GetPromptResult::new(vec![PromptMessage::new_text(
-                    Role::User,
-                    format!(
-                        "I need to initiate a WiM Gerätewechsel (meter device change) \
-                         for MeLo {melo_id} on {date}, acting as {marktrolle}.\n\
-                         \n\
-                         Please:\n\
-                         1. Call `submit_command` with:\n\
-                            - command: \"wim.geraetewechsel.beauftragen\"\n\
-                            - marktrolle: \"{marktrolle}\"\n\
-                            - payload: {{\"melo_id\": \"{melo_id}\", \"wechseldatum\": \"{date}\"}}\n\
-                         2. Report the process_id and status.\n\
-                         3. Explain next steps: the MSB has 5 Werktage to confirm or reject \
-                            per BK6-24-174."
-                    ),
-                )]))
-            }
-            name => Err(McpError::resource_not_found(
-                format!("Unknown prompt: {name}"),
-                None,
-            )),
-        }
+        let completion = CompletionInfo::with_pagination(values, None, false)
+            .map_err(|e| McpError::internal_error(e, None))?;
+        Ok(CompleteResult::new(completion))
     }
 }
 

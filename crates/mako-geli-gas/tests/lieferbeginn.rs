@@ -58,6 +58,8 @@ fn receive_utilmd_cmd(validation_passed: bool) -> GasSupplierChangeCommand {
             vec!["UTILMD G segment IDE missing mandatory Z18 Marktlokation reference".to_owned()]
         },
         received_at: time::OffsetDateTime::now_utc(),
+        bilanzierungsmethode: None,
+        fallgruppe: None,
     }
 }
 
@@ -168,6 +170,8 @@ async fn unsupported_pid_is_rejected() {
             validation_passed: true,
             validation_errors: vec![],
             received_at: time::OffsetDateTime::now_utc(),
+            bilanzierungsmethode: None,
+            fallgruppe: None,
         })
         .await;
 

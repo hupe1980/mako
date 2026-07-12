@@ -10,7 +10,11 @@
 //! url = "env:DATABASE_URL"
 //!
 //! [identity]
-//! tenant = "9900357000004"
+//! tenant     = "9900357000004"
+//! # All operator MP-IDs for §20 EnWG affiliate detection.
+//! # Include both Strom (BDEW 99…) and Gas (DVGW 98…) codes
+//! # when running an integrated NB+GNB deployment.
+//! own_mp_ids = ["9900357000004", "9800357000004"]
 //!
 //! [marktd]
 //! url     = "http://marktd:8180"
@@ -87,6 +91,20 @@ fn default_pool_size() -> u32 {
 pub struct IdentityConfig {
     /// Tenant identifier used in Cedar resource checks.
     pub tenant: String,
+    /// All operator MP-IDs used by this deployment.
+    ///
+    /// Include every MP-ID the operator acts under:
+    /// - NB Strom BDEW-Codenummer (`99…`)
+    /// - GNB Gas  DVGW-Codenummer (`98…`)
+    /// - MSB / nMSB codes if applicable
+    ///
+    /// Used to compute `initiator_is_affiliate` for §20 EnWG parity reporting:
+    /// when `data.new_supplier` matches **any** of these MP-IDs, the initiating
+    /// LF is a subsidiary of the operator (vertically integrated utility).
+    ///
+    /// Defaults to `[tenant]` when absent (single-MP-ID deployments).
+    #[serde(default)]
+    pub own_mp_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

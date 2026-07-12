@@ -193,9 +193,10 @@ impl EventPayload for DeliveryOrderEvent {
 // ── State ─────────────────────────────────────────────────────────────────────
 
 /// Process state for the GaBi Gas DELORD/DELRES workflow.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub enum DeliveryOrderState {
     /// Initial state — no DELORD sent yet.
+    #[default]
     New,
     /// DELORD dispatched; awaiting DELRES.
     OrderSent(DeliveryOrderData),
@@ -212,12 +213,6 @@ pub enum DeliveryOrderState {
     },
     /// DELRES deadline expired — no response from FNB/MGV (terminal).
     DeadlineExpired(DeliveryOrderData),
-}
-
-impl Default for DeliveryOrderState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl DeliveryOrderState {

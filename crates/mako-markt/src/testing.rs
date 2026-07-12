@@ -126,6 +126,24 @@ impl MaloRepository for InMemoryMaloRepository {
             size,
         })
     }
+
+    async fn patch_typenmerkmal(
+        &self,
+        malo_id: &MaloId,
+        bilanzierungsmethode: Option<&str>,
+        fallgruppe: Option<&str>,
+    ) -> Result<(), MdmError> {
+        let mut store = self.store.write().await;
+        if let Some(rec) = store.get_mut(malo_id.as_ref()) {
+            if let Some(b) = bilanzierungsmethode {
+                rec.bilanzierungsmethode = Some(b.to_owned());
+            }
+            if let Some(f) = fallgruppe {
+                rec.fallgruppe = Some(f.to_owned());
+            }
+        }
+        Ok(())
+    }
 }
 
 // ── InMemoryMeloRepository ────────────────────────────────────────────────────
@@ -137,7 +155,7 @@ pub struct InMemoryMeloRepository {
 }
 
 impl MeloRepository for InMemoryMeloRepository {
-    #[allow(clippy::similar_names)]
+    #[expect(clippy::similar_names)]
     async fn upsert(
         &self,
         melo_id: &MeloId,
@@ -842,7 +860,7 @@ impl NeLoRepository for InMemoryNeLoRepository {
 /// In-memory `PriCatRepository` for unit tests.
 ///
 /// Thread-safe (`Arc<RwLock>`); keyed on `(nb_mp_id, tenant, valid_from)`.
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 #[derive(Clone, Default)]
 pub struct InMemoryPriCatRepository {
     versions: Arc<RwLock<HashMap<(String, String, time::Date), PriCatVersion>>>,
@@ -1065,6 +1083,7 @@ impl PreisblattMessungRepository for InMemoryPreisblattMessungRepository {
                 data,
                 bo4e_version: bo4e_version.to_owned(),
                 source,
+                auf_abschlaege: vec![],
                 created_at: time::OffsetDateTime::now_utc(),
                 updated_at: time::OffsetDateTime::now_utc(),
             },
@@ -1090,7 +1109,7 @@ pub struct InMemorySteuerbareRessourceRepository {
 }
 
 impl SteuerbareRessourceRepository for InMemorySteuerbareRessourceRepository {
-    #[allow(clippy::similar_names)]
+    #[expect(clippy::similar_names)]
     #[allow(clippy::too_many_arguments)]
     async fn upsert_sr(
         &self,
@@ -1149,6 +1168,22 @@ impl SteuerbareRessourceRepository for InMemorySteuerbareRessourceRepository {
             .cloned()
             .collect())
     }
+
+    async fn replace_sr_konfigurationsprodukte(
+        &self,
+        sr_id: &str,
+        tenant: &str,
+        konfigurationsprodukte: serde_json::Value,
+    ) -> Result<bool, crate::error::MdmError> {
+        let mut store = self.store.write().await;
+        let key = (sr_id.to_owned(), tenant.to_owned());
+        if let Some(rec) = store.get_mut(&key) {
+            rec.konfigurationsprodukte = Some(konfigurationsprodukte);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
 }
 
 // ── InMemoryTechnischeRessourceRepository (B9) ───────────────────────────────
@@ -1161,7 +1196,7 @@ pub struct InMemoryTechnischeRessourceRepository {
 
 impl TechnischeRessourceRepository for InMemoryTechnischeRessourceRepository {
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::similar_names)]
+    #[expect(clippy::similar_names)]
     async fn upsert_tr(
         &self,
         tr_id: &str,
@@ -1612,5 +1647,104 @@ impl PreisblattHardwareRepository for InMemoryPreisblattHardwareRepository {
         _billing_date: &str,
     ) -> Result<Option<PreisblattHardwareRecord>, crate::error::MdmError> {
         Ok(self.store.read().await.get(msb_mp_id).cloned())
+    }
+}
+
+// ── InMemoryZaehlzeitRepository ───────────────────────────────────────────────
+
+use crate::repository::{ZaehlzeitRegisterRecord, ZaehlzeitRepository, ZaehlzeitSaisonRecord};
+
+/// In-memory test double for [`ZaehlzeitRepository`].
+#[derive(Default, Clone)]
+pub struct InMemoryZaehlzeitRepository {
+    registers: Arc<RwLock<HashMap<uuid::Uuid, ZaehlzeitRegisterRecord>>>,
+    saisons: Arc<RwLock<HashMap<uuid::Uuid, ZaehlzeitSaisonRecord>>>,
+}
+
+impl ZaehlzeitRepository for InMemoryZaehlzeitRepository {
+    async fn upsert_register(
+        &self,
+        rec: &ZaehlzeitRegisterRecord,
+    ) -> Result<(), crate::error::MdmError> {
+        self.registers.write().await.insert(rec.id, rec.clone());
+        Ok(())
+    }
+
+    async fn list_registers_by_zaehler(
+        &self,
+        zaehler_id: &str,
+        tenant: &str,
+    ) -> Result<Vec<ZaehlzeitRegisterRecord>, crate::error::MdmError> {
+        Ok(self
+            .registers
+            .read()
+            .await
+            .values()
+            .filter(|r| r.zaehler_id == zaehler_id && r.tenant == tenant)
+            .cloned()
+            .collect())
+    }
+
+    async fn upsert_saison(
+        &self,
+        rec: &ZaehlzeitSaisonRecord,
+    ) -> Result<(), crate::error::MdmError> {
+        self.saisons.write().await.insert(rec.id, rec.clone());
+        Ok(())
+    }
+
+    async fn list_saisons_by_register(
+        &self,
+        register_id: uuid::Uuid,
+        _tenant: &str,
+    ) -> Result<Vec<ZaehlzeitSaisonRecord>, crate::error::MdmError> {
+        Ok(self
+            .saisons
+            .read()
+            .await
+            .values()
+            .filter(|s| s.register_id == register_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn resolve_tariff_zone(
+        &self,
+        zaehler_id: &str,
+        tenant: &str,
+        local_datetime: time::PrimitiveDateTime,
+    ) -> Result<Option<String>, crate::error::MdmError> {
+        use time::Weekday;
+        let registers = self.list_registers_by_zaehler(zaehler_id, tenant).await?;
+        let time_str = format!(
+            "{:02}:{:02}",
+            local_datetime.hour(),
+            local_datetime.minute()
+        );
+        let weekday_iso = match local_datetime.weekday() {
+            Weekday::Monday => 1u8,
+            Weekday::Tuesday => 2,
+            Weekday::Wednesday => 3,
+            Weekday::Thursday => 4,
+            Weekday::Friday => 5,
+            Weekday::Saturday => 6,
+            Weekday::Sunday => 7,
+        };
+        for reg in &registers {
+            let saisons = self.list_saisons_by_register(reg.id, tenant).await?;
+            for s in &saisons {
+                // Check weekday mask.
+                let days: Vec<u8> =
+                    serde_json::from_value(s.wochentage.clone()).unwrap_or_default();
+                if !days.contains(&weekday_iso) {
+                    continue;
+                }
+                // Check time window (lexicographic comparison works for HH:MM).
+                if time_str >= s.zeit_von && time_str < s.zeit_bis {
+                    return Ok(Some(reg.zaehlerauspraegung.clone()));
+                }
+            }
+        }
+        Ok(None)
     }
 }

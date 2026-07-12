@@ -39,6 +39,7 @@
 
 mod config;
 mod handlers;
+mod mcp_server;
 mod sync;
 
 use anyhow::Context as _;
@@ -58,7 +59,18 @@ async fn main() -> anyhow::Result<()> {
         reqwest::Client::new(),
     ));
 
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let mcp_state = std::sync::Arc::new(mcp_server::NisSyncdMcpState {
+        marktd_api_key: cfg.marktd_api_key.clone(),
+        nb_mp_id: cfg.nb_mp_id.clone(),
+        service_base_url: format!("http://0.0.0.0:{}", cfg.port.unwrap_or(9680)),
+    });
+
     let app = Router::new()
+        .merge(mcp_server::router(
+            std::sync::Arc::clone(&mcp_state),
+            shutdown.clone(),
+        ))
         .merge(health_routes(|| async { true }))
         .route(
             "/api/v1/grid/sync",

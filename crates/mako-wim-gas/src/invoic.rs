@@ -101,8 +101,10 @@ pub struct WimGasInvoicData {
 /// Current state of a WiM Gas INVOIC billing process.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum WimGasInvoicState {
     /// No INVOIC received yet.
+    #[default]
     New,
     /// INVOIC received; AHB validation pending or in progress.
     InvoicReceived(WimGasInvoicData),
@@ -135,12 +137,6 @@ pub enum WimGasInvoicState {
     },
     /// COMDIS 29001 received — gMSB rejects NB's REMADV (NB payer role).
     ComdisRejected(WimGasInvoicData),
-}
-
-impl Default for WimGasInvoicState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl WimGasInvoicState {

@@ -68,6 +68,8 @@ pub struct Config {
     pub nb: NbConfig,
     #[serde(default)]
     pub lf: LfConfig,
+    #[serde(default)]
+    pub msb: MsbConfig,
     /// OIDC configuration.  When omitted, authentication is **disabled** and
     /// all API requests are accepted with synthetic dev-admin claims.
     /// **Never omit this in production.**
@@ -244,6 +246,37 @@ impl Default for LfConfig {
         Self {
             auto_respond: default_lf_auto_respond(),
             queue_ttl_secs: default_queue_ttl_secs(),
+        }
+    }
+}
+
+// ── MSB module ─────────────────────────────────────────────────────────────────
+
+/// MSB process automation configuration.
+///
+/// When `auto_preisanfrage = true` (default), `processd` automatically dispatches
+/// a QUOTES response when a REQOTE Preisanfrage (PIDs 35001–35005) arrives,
+/// sourcing prices from the current `PreisblattMessung` in `marktd`.
+///
+/// If no active `PreisblattMessung` exists for the aMSB MP-ID, the auto-response
+/// is skipped and the REQOTE is escalated to the operator.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsbConfig {
+    /// When `true` (default), dispatch QUOTES automatically from `PreisblattMessung`.
+    /// Set `false` to require manual QUOTES dispatch via ERP.
+    #[serde(default = "default_msb_auto_preisanfrage")]
+    pub auto_preisanfrage: bool,
+}
+
+fn default_msb_auto_preisanfrage() -> bool {
+    true
+}
+
+impl Default for MsbConfig {
+    fn default() -> Self {
+        Self {
+            auto_preisanfrage: default_msb_auto_preisanfrage(),
         }
     }
 }

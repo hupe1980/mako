@@ -16,7 +16,7 @@ communication (MaKo / BDEW EDI@Energy). Two distinct concerns:
 crates/edi-energy/        EDIFACT parse/validate/schema — stateless library
 crates/mako-engine/       Event-sourced runtime (EventStore, Workflow, Process, …)
 crates/mako-gpke/         GPKE — UTILMD Strom (55001–55018, 55022–55024, 55555, 55607–55609) + INVOIC (31001, 31002, 31005, 31006) + ORDERS Sperrung (17115–17117) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) + PARTIN Strom (37000–37006)
-crates/mako-wim/          WiM Strom — Messstellenbetrieb (55039, 55042, 55051, 55168) + ORDERS Geräteübernahme (17001–17011, 19001/19002 nMSB role) + Stammdaten + Preisanfrage/REQOTE (35001–35005) + Preisliste/PRICAT (27001–27003) + INVOIC 31009 + INSRPT (23001, 23003, 23004, 23008) + Stornierung + Technik-Änderung + iMS Steuerungsauftrag
+crates/mako-wim/          WiM Strom — Messstellenbetrieb (55039, 55042, 55051, 55168) + ORDERS Geräteübernahme (17001–17011, 19001/19002 nMSB role) + Stammdaten (StammdatenUebermittelt carries standorteigenschaften+zaehlwerke for marktd auto-update) + Preisanfrage/REQOTE (35001–35005) + Preisliste/PRICAT (27001–27003) + INVOIC 31009 + INSRPT (23001, 23003, 23004, 23008) + Stornierung + Technik-Änderung + iMS Steuerungsauftrag
 crates/mako-geli-gas/     GeLi Gas 3.0 — UTILMD G (44001–44021) + LFN-side Lieferbeginn workflow (`geli-gas-lf-anmeldung`, PIDs 44001 outbound + 44003/44004 inbound) + UTILMD G Stornierung role-conditional (44022 Nb-only, 44023/44024 Lf-only) + ORDERS Sperrung Gas (17115–17117, LF-role `geli-gas-sperrung-lf` + GNB-role `geli-gas-sperrung-nb`) + ORDERS Datenabruf (17103/17104 + ORDRSP 19103/19104, `geli-gas-datenabruf`) + PARTIN Gas (37008–37014) + INVOIC 31011 (AWH Sperrprozesse Gas)
 crates/mako-mabis/        MABIS — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB)
 crates/mako-wim-gas/      WiM Gas — UTILMD G (44022–44024 + 44039–44053, 44168–44170) + INVOIC (31003, 31004) + INSRPT Gas-only (23005, 23009)
@@ -30,28 +30,31 @@ crates/redispatch-xml/    Redispatch 2.0 XML/XSD format parsing
 crates/mako-markt/        Market data library — MaloId, MeloId, MarktpartnerId, repository traits, AppState, CloudEvents, VersorgungsStatus, PriCatRepository, MaloGridRecord/MaloGridRepository, PreisblattMessungRepository, SteuerbareRessourceRepository, DeviceRepository (Zaehler/Geraet), testing feature
 crates/mako-edm/          Energy data library — MeterDataReceipt, TimeSeriesRepository (with obis_code), ImbalanceReport, MSCONS PID set
 crates/mako-obs/          Observability library — ProcessProjection, KpiReport, DeadlineRisk, ProcessProjectionRepository
-crates/invoic-checker/    INVOIC plausibility library — period validity, position arithmetic, document total, tariff match, tariff found
+crates/invoic-checker/    INVOIC plausibility library — 6 checks: period validity, position arithmetic, document total, tariff match (ToU-aware: HT/NT position text classifies against zeitvariablePreispositionen band prices), tariff found; check 6 = MMM settlement price check (PIDs 31002/31005/31007/31008 vs. marktd MMMA store, `InvoicCheckEngine::check_mmm_settlement()`)
 crates/netz-checker/      NB Anmeldung validation library — pure, deterministic 6-check pipeline; ERC codes A02/A05/A06/A97/A99; no I/O; used by processd NB module
 crates/mako-service/      Shared service infrastructure — ServiceBuilder, load_config, health_routes, verify_hmac (used by all mako daemons)
 crates/mako-nne/          Role-neutral NNE/KA/MMM invoice calculation library — calculate_nne_invoice (PID 31001/31005/31006), calculate_mmm_invoice (PID 31002); EuroAmount precision (i64 × 10⁻⁵ EUR); self-validates via invoic-checker; zero I/O; used by netzbilanzd (NB) and invoicd (LF selbstausstellen)
 services/makod/           Production daemon — assembles all modules
   services/makod/src/mcp_server.rs  MCP server (tools, resources, prompts) at /mcp
-services/marktd/         Market Data Hub — MaLo/MeLo/NeLo/TR/SR (typed `rubo4e::current` API responses for Marktlokation/Messlokation/Zaehler/Geraet; schema-validated on PUT); NB contracts with full BO4E `Vertrag` JSONB (`vertragsart`/`vertragsstatus` as indexed columns; `de.markt.nb-contract.updated` CloudEvent); Lokationszuordnung graph (lokationszuordnungen table, recursive-CTE BFS), preisblaetter, VersorgungsStatus, event_log replay, W3C traceparent forwarding; PostgreSQL, OIDC/JWT, port :8180; **pure data hub — no domain policy**
-  services/marktd/migrations/  Single SQLx migration (0001_initial_schema.sql — complete schema)
-  services/marktd/src/pg/      PostgreSQL implementations (PgLokationszuordnungRepository, PgTechnischeRessourceRepository, PgSteuerbareRessourceRepository, PgDeviceRepository, upsert_versorgungsstatus, PgPriCatRepository, PgMaloGridRepository, PgPreisblattKaRepository)
-services/processd/        Process Decision Engine — NB Anmeldung STP (netz-checker) + LF E_0624 auto-response (gpke.nb-lieferende.bestaetigen/ablehnen) + LFN bootstrap Strom (POST /api/v1/start-supply, LFW24 Vorlauffrist 15:00 validated) + Gas (POST /api/v1/start-supply-gas, geli.lieferbeginn.anmelden) + Gas stornierung (geli.gas.stornierung.initiieren); role-gated features (lf-only/nb-only/integrated); §20 EnWG parity; port :8580
-  services/processd/migrations/ Single SQLx migration (0001_initial.sql — approval_queue + anmeldung_decisions)
+services/marktd/         Market Data Hub — MaLo/MeLo/NeLo/TR/SR (typed `rubo4e::current` API responses for Marktlokation/Messlokation/Zaehler/Geraet; schema-validated on PUT); NB contracts with full BO4E `Vertrag` JSONB (`vertragsart`/`vertragsstatus` as indexed columns; `de.markt.nb-contract.updated` CloudEvent); Lokationszuordnung graph (lokationszuordnungen table, recursive-CTE BFS), preisblaetter, VersorgungsStatus, event_log replay, W3C traceparent forwarding; **konfigurationsprodukte** typed sub-resource on SteuerbareRessource (mandatory `produktcode` per BK6-24-174 §4.3, `de.markt.sr.konfigurationsprodukt.updated`); **MMMA import worker** (monthly auto-import of Gas/Strom MMM settlement prices, configurable URL, `de.markt.mmma.*.imported` events); **ZeitvariablePreisposition** validation on PreisblattMessung PUT (mandatory `zaehlzeitregister`, rejects `bandNummer`); PostgreSQL, OIDC/JWT, port :8180; **pure data hub — no domain policy**
+  services/marktd/src/pg/      PostgreSQL implementations (PgLokationszuordnungRepository, PgTechnischeRessourceRepository, PgSteuerbareRessourceRepository, PgDeviceRepository, upsert_versorgungsstatus, PgPriCatRepository, PgMaloGridRepository, PgPreisblattKaRepository, PgZaehlzeitRepository); zaehler_register + zaehler_saisons tables defined in 0001_initial.sql
+services/processd/        Process Decision Engine — NB Anmeldung STP (netz-checker) + LF E_0624 auto-response (gpke.nb-lieferende.bestaetigen/ablehnen) + LFN bootstrap Strom (POST /api/v1/start-supply, LFW24 Vorlauffrist 15:00 validated) + Gas (POST /api/v1/start-supply-gas, geli.lieferbeginn.anmelden) + Gas stornierung (geli.gas.stornierung.initiieren) + **MSB-Wechsel STP** (evaluate_msb_anmeldung/kuendigung, PIDs 55039/55042, 5 checks, ERC A02/A05/A97, escalate-on-iMSys/SR/no-zaehler) + **REQOTE auto-response** (PIDs 35001–35005, auto-fetches PreisblattMessung, dispatches QUOTES; `[msb] auto_preisanfrage` flag) + **§14a Steuerungsauftrag** (produktcode contract check against konfigurationsprodukte, auto-bestaetigen/ablehnen per BK6-24-174 §4.3); role-gated features (lf-only/nb-only/integrated); §20 EnWG parity; port :8580
   services/processd/src/nb_module.rs  NB STP evaluation (wraps netz-checker)
   services/processd/src/lf_module.rs  LF E_0624 auto-response
-services/invoicd/         INVOIC plausibility-check daemon (LF role) — PIDs 31001/31002/31005/31006/31009 (Wim31009Ingestor with embedded Rechnung); auto-settles/disputes; persists receipts to PostgreSQL (§22 MessZV); `POST /api/v1/selbstausstellen/{malo_id}` (31006); `GET /api/v1/overdue-remadv`; payment CloudEvents (de.invoic.receipt.settled/disputed) via `[erp] webhook_url`; port :8280
-  services/invoicd/migrations/  Single SQLx migration (0001_initial.sql — complete schema including invoic_dlq)
+services/invoicd/         INVOIC plausibility-check daemon (LF role) — PIDs 31001/31002/31005/31006/31009 (Wim31009Ingestor with embedded Rechnung); auto-settles/disputes; persists receipts to PostgreSQL (§22 MessZV); `POST /api/v1/selbstausstellen/{malo_id}` (31006); `GET /api/v1/overdue-remadv`; payment CloudEvents (de.invoic.receipt.settled/disputed) via `[erp] webhook_url`; check 6 for MMM PIDs auto-fetches MMMA Gas or Strom Ausgleichsenergie prices from marktd; **PID 31009 uses `InvoicCheckEngine::check_msb_rechnung()` with `PreisblattMessung` (not NNE) for checks 4+5**; port :8280
   services/invoicd/src/pg/      PostgreSQL receipt persistence (upsert_receipt, mark_dispatched)
-services/netzbilanzd/     NNE/KA/MMM billing daemon (NB role) — uses mako-nne to generate INVOIC 31001/31002/31005; invoice_drafts table (draft → dispatched/rejected); POST /api/v1/billing/run, PUT /dispatch, PUT /reject; pre-dispatch invoic-checker validation blocks Dispute outcomes; port :8680
-  services/netzbilanzd/migrations/ Single SQLx migration (0001_initial.sql — invoice_drafts)
+services/netzbilanzd/     NNE/KA/MMM billing daemon (NB role) — uses mako-nne to generate INVOIC 31001/31002/31005; invoice_drafts table (draft → dispatched/rejected); POST /api/v1/billing/run, PUT /dispatch, PUT /reject; pre-dispatch invoic-checker validation blocks Dispute outcomes; MMM billing auto-fetches mehr_preis/minder_preis from marktd MMMA store when not supplied in request; port :8680
 services/sperrd/          Sperrung execution tracking daemon (NB role) — sperr_orders table (pending → executed/failed/cancelled); POST/GET sperr-orders, PUT /execute → auto-dispatches IFTSTA 21039 ref, PUT /fail → operator escalation; GPKE BK6-22-024 compliance; port :8780
-  services/sperrd/migrations/ Single SQLx migration (0001_initial.sql — sperr_orders)
+services/einsd/           Einspeiser Registry + EEG/KWKG Settlement daemon — eeg_anlagen register (19 erzeugungsart types: SOLAR variants, WIND_ONSHORE/OFFSHORE, BIOMASSE/BIOGAS/BIOMETHANE, KLAEGAS/GRUBENGAS/DEPONIEGAS, WASSERKRAFT, GEOTHERMIE, GEZEITEN, KWKG); 8 settlement models (VERGUETUNG, MIETERSTROM, DIREKTVERMARKTUNG, AUSSCHREIBUNG, POST_EEG_SPOT, EIGENVERBRAUCH, KWKG_ZUSCHLAG, FLEXIBILITAET); Repowering §22 EEG (foerderendedatum reset + POST /api/v1/anlagen/{tr_id}/repowering); Zusammenlegung §24 (parent_tr_id); KWKG Förderdauer tracking (h + years); Flexibilitätsprämie §50; foerderendedatum = inbetriebnahme + 20yr OR repowering_datum + 20yr; 180-day background alert; CloudEvents de.eeg.verguetung.berechnet + de.eeg.marktpraemie.berechnet + de.eeg.anlage.foerderung_auslaufend with HMAC signing; edmd auto-fetch; port :9180
+  services/einsd/migrations/ 0001_initial.sql (eeg_anlagen with all fields + indexes), 0002_verguetungssaetze.sql (Solar EEG 2000-2024, Wind onshore/offshore, Biomasse/Biogas, Klärgas/Grubengas/Deponiegas, Wasserkraft, KWKG 2023, Geothermie/Gezeiten)
+services/tarifbd/         Product & Tariff Catalog daemon (LF role) — user-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE), all prices in Tarifpreisblatt JSONB + version history, customer_products (MaLo→product assignment), epex_prices (hourly §41a day-ahead); port :9080
+services/billingd/         Energy Billing Engine (LF role) — pure calculation, all prices user-defined in tarifbd; 12 categories: STROM (§14a Modul 1/3, §41a EPEX), GAS (§10 GasGVV Brennwertkorrektur, Energiesteuer, BEHG), WAERME, SOLAR (§42b/§42a), EEG/EINSPEISUNG feed-in credit notes, WAERMEPUMPE/WALLBOX §14a, HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE; `/preview` dry-run; XRechnung 3.0/ZUGFeRD 2.3 CII XML (EN16931); emits de.billing.rechnung.erstellt; port :9280
+services/accountingd/      Massenkontokorrent / Customer Account Ledger (LF role) — accounts + ledger_entries (immutable, idempotent CE ingest) + sepa_mandates + dunning_cases; ingest de.billing.rechnung.erstellt (debit) + de.eeg.verguetung.berechnet (credit); `GET /accounts/{malo_id}/balance`, `/ledger`, `/kontoauszug`; SEPA pain.008 XML; Mahnwesen Mahnstufe 1-3; CAMT.054 payment import; emits de.accounting.mahnung.issued + de.accounting.sperrauftrag; port :9380
+services/vertragd/         Contract & Customer Management (LF role) — Kunden (B2C + B2B) with kunden_identitaeten (N OIDC logins per company, rolle=VOLLZUGRIFF/ADMIN/FINANZEN/TECHNIK/READONLY, standort_filter for site-scoped B2B access); Rahmenverträge (B2B portfolio: Sammelrechnung, indexation, volume discount, angebot_id); Versorgungsverträge per site/commodity (ANGELEGT→IN_BEARBEITUNG→TEILERFUELLUNG→AKTIV→GEKÜNDIGT→ABGELAUFEN); triggers GPKE/GeLi Gas Lieferbeginn/-ende via processd; Tarifwechsel endpoint (§41 EnWG); Kündigung with coordinated Schlussablesung; OIDC sub → MaLo authorization gateway (GET /kunden/authenticate) for portald; port :9780
+services/agentd/          Multi-agent LLM orchestration daemon — Orchestrator+Specialist Mesh pattern; 8 specialists (mako-agent, billing-agent, billing-anomaly-agent, eeg-agent, compliance-agent, payment-reconciliation-agent, msb-history-agent, grid-anomaly-agent); OpenAI/Anthropic/AWS Bedrock SigV4 providers; ReAct loop with MCP tools across all 16 services; LanceDB RAG (persistent ANN, S3/GCS/local, rubo4e 0.7.0 time fix enabled lancedb 0.31); WASM plugins via mako-plugin (Extism/Wasmtime sandbox); CloudEvent trigger + /api/v1/run; emits de.agent.decision.made; port :9580
+services/portald/          Customer Portal read-model gateway (LF role) — aggregates Lastgang (edmd), invoices (billingd), account balance (accountingd), VersorgungsStatus (marktd), EEG settlement (einsd) into single REST + SSE API; OIDC bearer-token authentication; `GET /api/v1/portal/{malo_id}/dashboard`, `/lastgang`, `/invoices`, `/balance`, `/kontoauszug`, `/eeg`, `/versorgung`, `/events` (SSE); port :9480
 services/nis-syncd/       NIS/GIS grid topology import adapter (NB role) — stateless; POST /api/v1/grid/sync pushes malo_grid records to marktd; dry-run mode; per-entry drift detection; processd NB STP ~80%→≥95%; port :9680
-services/edmd/            Energy Data Management daemon — stores MSCONS meter readings (with `obis_code`), `GET /api/v1/deliveries/{malo_id}` returns `Vec<Energiemenge>` (BO4E typed), BO4E `Lastgang` + `Zeitreihe` export, `MeterBillingPeriod` (RLM spitzenleistung + Gas brennwert/zustandszahl), Mehr-/Mindermengen imbalance; PostgreSQL; port :8380
+services/edmd/            Energy Data Management daemon — stores MSCONS meter readings (with `obis_code`), direct iMSys/SMGW push (`POST /api/v1/meter-reads/rlm/{malo_id}` + gas, idempotent on session_id), Hampel-filter quality scoring (k=3 t=3.0, grades A/B/C/F, retroactive rescore), Ablesesteuerung reading orders (INSRPT PID 23001 auto-creates `INSRPT_STOERUNG` orders), `GET /api/v1/deliveries/{malo_id}` returns `Vec<Energiemenge>` (BO4E typed), BO4E `Lastgang` + `Zeitreihe` export, `MeterBillingPeriod` (RLM spitzenleistung + Gas brennwert/zustandszahl), Mehr-/Mindermengen imbalance; PostgreSQL; Apache Iceberg V2 archive; emits `de.edmd.reading.direct.stored` + `de.edmd.reading.quality.warning`; port :8380
 services/obsd/            Business-process observability daemon — process projections, BNetzA KPI reports, Alertmanager bridge; PostgreSQL; port :8480
 xtask/                    Build/codegen/validation tasks
 docs/                     Architecture docs
@@ -95,14 +98,14 @@ cargo xtask release-diff              # diff between format versions
 **`just ci` is the minimum gate before any commit.** It runs check + test + clippy
 + fmt-check + deny + codegen-check + validate-profiles-strict + validate-pruefids-strict.
 
-**MSRV: 1.89** — do not use language features or stdlib APIs introduced after 1.89.
+**MSRV: 1.94** — do not use language features or stdlib APIs introduced after 1.94.
 
 ---
 
 ## Toolchain and Edition
 
 - Rust edition: **2024** (all crates)
-- Toolchain: **1.89** (pinned in `rust-toolchain.toml` — do not change to `stable`)
+- Toolchain: **1.92** (pinned in `rust-toolchain.toml` — do not change to `stable`)
 - Components: `rustfmt`, `clippy`
 
 ---
@@ -130,7 +133,7 @@ Both coexist in the same engine instance simultaneously. A process started under
 
 ### Async
 - All async code targets **Tokio** (version 1).
-- Use async-fn-in-trait (AFIT) — stabilised at Rust 1.75, available on MSRV 1.89.
+- Use async-fn-in-trait (AFIT) — stabilised at Rust 1.75, available on MSRV 1.94.
 - Do not use `tokio::runtime::Handle::try_current()` as a runtime-detection backdoor.
 
 ### Types
@@ -371,6 +374,10 @@ ISC, Unicode-3.0, Zlib, CDLA-Permissive-2.0, MIT-0.
 | `invoicd` operator guide | [docs/invoicd.md](../docs/invoicd.md) |
 | `netzbilanzd` operator guide | [docs/netzbilanzd.md](../docs/netzbilanzd.md) |
 | `sperrd` operator guide | [docs/sperrd.md](../docs/sperrd.md) |
+| `einsd` operator guide | [docs/einsd.md](../docs/einsd.md) |
+| `tarifbd` operator guide | [docs/tarifbd.md](../docs/tarifbd.md) |
+| `billingd` operator guide | [docs/billingd.md](../docs/billingd.md) |
+| `accountingd` operator guide | [docs/accountingd.md](../docs/accountingd.md) |
 | `nis-syncd` operator guide | [docs/nis-syncd.md](../docs/nis-syncd.md) |
 | `edmd` operator guide | [docs/edmd.md](../docs/edmd.md) |
 | `obsd` operator guide | [docs/obsd.md](../docs/obsd.md) |

@@ -150,6 +150,8 @@ impl MockMsb {
             .execute(StammdatenCommand::TransmitStammdaten {
                 response_pid: Pruefidentifikator::new(17102).expect("17102 is a valid PID"),
                 response_ref: MessageRef::new("WIM-SD-RESP-001"),
+                standorteigenschaften: None,
+                zaehlwerke: vec![],
             })
             .await
             .expect("MSB: execute TransmitStammdaten");

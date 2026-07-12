@@ -1,8 +1,8 @@
 ---
 layout: default
 title: invoicd Operator Guide
-nav_order: 27
-parent: Architecture
+nav_order: 24
+parent: Services
 mermaid: true
 description: >
   invoicd operator guide: INVOIC plausibility-check daemon (LF role). Handles all
@@ -16,7 +16,7 @@ description: >
 It subscribes to `marktd`'s EventBus, receives inbound INVOIC events, and:
 
 1. Fetches the `PreisblattNetznutzung` and `NbContractRecord` from `marktd`.
-2. Runs **5 deterministic checks** via `invoic-checker`.
+2. Runs **5+1 deterministic checks** via `invoic-checker` (check 6 applies to MMM PIDs only).
 3. Auto-settles (REMADV 33001) or disputes (REMADV 33002).
 4. Persists every receipt to PostgreSQL for the **3-year §22 MessZV** audit trail.
 5. Emits `de.invoic.receipt.*` CloudEvents to your ERP — **durable at-least-once delivery** with exponential-backoff retry.
@@ -70,23 +70,30 @@ graph TB
 | 31009 | MSB-Rechnung (MSB → LF, WiM) | Inbound | ✅ |
 
 **PID 31009 (WiM MSB-Rechnung):** Handled by `Wim31009Ingestor`. The `WimRechnungWorkflow`
-embeds the BO4E `Rechnung` directly in the `ProcessInitiated` outbox payload
-(since workspace 0.8.0). `invoicd` extracts it, runs the validation pipeline,
-persists the §22 MessZV receipt, and dispatches REMADV via `wim.rechnung.annehmen`
-or `wim.rechnung.ablehnen`. Fallback endpoint for operator inspection:
+embeds the BO4E `Rechnung` directly in the `ProcessInitiated` outbox payload.
+`invoicd` extracts it and runs `InvoicCheckEngine::check_msb_rechnung()` —
+a dedicated check method that uses **`PreisblattMessung`** (MSB metering service tariff,
+fetched via `GET /api/v1/preisblaetter-messung/{msb_mp_id}`) for checks 4 and 5,
+instead of the NNE `PreisblattNetznutzung`. This ensures Messstellenbetrieb Grundgebühr
+and hardware rental positions are validated against the correct MSB price sheet.
+Checks 1–3 (period, arithmetic, totals) run identically to other PIDs.
+On completion, `invoicd` persists the §22 MessZV receipt and dispatches REMADV via
+`wim.rechnung.annehmen` or `wim.rechnung.ablehnen`. Fallback endpoint for operator inspection:
 `GET /api/v1/invoic/{process_id}/rechnung` on `makod`.
 
 ---
 
-## invoic-checker — 5 plausibility checks
+## invoic-checker — 6+1 plausibility checks
 
-| # | Check | Outcome on failure |
-|---|-------|--------------------|
-| 1 | Billing period validity (boundaries consistent, in scope) | `Dispute` |
-| 2 | Position arithmetic (unit price × quantity = line net; tolerance 1%) | `Dispute` |
-| 3 | Document total (sum of positions = Gesamtnetto; tolerance 1%) | `Dispute` |
-| 4 | Tariff unit price within tolerance of `PreisblattNetznutzung` | `Warn` or `Dispute` |
-| 5 | Tariff entry found in `PreisblattNetznutzung` | `Warn` or `Dispute` |
+| # | Check | PIDs | Outcome on failure |
+|---|-------|------|--------------------|
+| 1 | Billing period validity (boundaries consistent, in scope) | all | `Dispute` |
+| 2 | Position arithmetic (unit price × quantity = line net; tolerance 1%) | all | `Dispute` |
+| 3 | Document total (sum of positions = Gesamtnetto; tolerance 1%) | all | `Dispute` |
+| 4 | Tariff unit price within tolerance — **ToU-aware**: each INVOIC position's text is matched against the `zaehlzeitregister` band code of `zeitvariablePreispositionen` entries (e.g. `"HT"`, `"NT"`, `"ST"`). Flat positions fall back to `Preisstaffel` prices. **PID 31009:** uses `PreisblattMessung` via `check_msb_rechnung()` instead of `PreisblattNetznutzung`. | all | `Warn` or `Dispute` |
+| 5 | Tariff entry found in price sheet — **PID 31009:** `PreisblattMessung`; all others: `PreisblattNetznutzung` | all | `Warn` or `Dispute` |
+| 6 | **MMM settlement price check** — for MMM PIDs (31002/31005/31007/31008) only: fetches Gas MMMA prices (Trading Hub Europe) or Strom Ausgleichsenergie prices (ÜNB per §22 StromNZV) from `marktd` and validates each Mehrmengen/Mindermengen position against the reference within tolerance. Skipped gracefully when prices are not yet imported for the billing month. | 31002/31005/31007/31008 | `Warn` or `Dispute` |
+| 6 | **AufAbschlag discount validation** — for PID 31009: every **negative** Rechnungsposition (discount) must match a contracted `AufAbschlag` name from `PreisblattMessung.auf_abschlaege` (WiM PRICAT 27001–27003). Undocumented discounts are disputed. Activated via `check_msb_rechnung_with_aufabschlaege()`. | 31009 | `Dispute` |
 
 `Warn` outcomes auto-approve unless the total net invoice exceeds
 `auto_dispute_threshold_eur`. Set this to `0` to always approve warnings (default).

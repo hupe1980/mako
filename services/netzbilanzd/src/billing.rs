@@ -2,9 +2,11 @@
 
 use anyhow::{Context as _, bail};
 use invoic_checker::{InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore};
+use mako_markt::marktd_client::MarktdClient;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use sqlx::PgPool;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use mako_nne::{
@@ -53,6 +55,14 @@ pub struct BillingPosition {
     pub arbeitsmenge_kwh: Option<Decimal>,
     /// Arbeitspreis in ct/kWh (NNE only, from `PreisblattNetznutzung`).
     pub arbeitspreis_ct_per_kwh: Option<Decimal>,
+    /// HT consumption in kWh (§14a Modul 2 ToU, from `edmd MeterBillingPeriod`).
+    pub arbeitsmenge_ht_kwh: Option<Decimal>,
+    /// HT Arbeitspreis in ct/kWh (from `PreisblattNetznutzung.zeitvariablePreispositionen`).
+    pub arbeitspreis_ht_ct_per_kwh: Option<Decimal>,
+    /// NT consumption in kWh (§14a Modul 2 ToU, from `edmd MeterBillingPeriod`).
+    pub arbeitsmenge_nt_kwh: Option<Decimal>,
+    /// NT Arbeitspreis in ct/kWh (from `PreisblattNetznutzung.zeitvariablePreispositionen`).
+    pub arbeitspreis_nt_ct_per_kwh: Option<Decimal>,
     /// Spitzenleistung in kW (NNE RLM only).
     pub spitzenleistung_kw: Option<Decimal>,
     /// Leistungspreis in EUR/kW (NNE RLM only).
@@ -66,6 +76,17 @@ pub struct BillingPosition {
     pub mehr_preis_ct_per_kwh: Option<Decimal>,
     /// Mindermengen price in ct/kWh (MMM only).
     pub minder_preis_ct_per_kwh: Option<Decimal>,
+    /// SLP Lastprofil designation for this MaLo (optional, MMM only).
+    ///
+    /// When absent, auto-fetched from `marktd GET /api/v1/malo/{malo_id}` via the
+    /// stored `bilanzierungsmethode` column that was populated from UTILMD `TM+EM`
+    /// at supply-start.
+    ///
+    /// Standard values: `"H0"` (household), `"G0"`–`"G6"` (commercial),
+    /// `"L0"`/`"L1"`/`"L2"` (agricultural), `"P0"` (pumping station).
+    /// Used to embed the SLP profile in the generated `Rechnung` `bemerkung` field
+    /// for `netzbilanzd` audit trail and downstream ERP import.
+    pub lastprofil: Option<String>,
     // ── MSB fields (31009) ───────────────────────────────────────────────────
     /// MSB (Messstellenbetreiber) MP-ID — invoice recipient for `"msb_31009"`.
     pub msb_mp_id: Option<String>,
@@ -85,13 +106,16 @@ fn parse_date(s: &str) -> anyhow::Result<time::Date> {
 /// Core billing orchestration called by the handler.
 ///
 /// For each position:
-/// 1. Calculate invoice via `mako-nne`
-/// 2. Self-validate via `invoic-checker`
-/// 3. Store as draft in PostgreSQL
+/// 1. For MMM: auto-fetch `mehr_preis` / `minder_preis` from `marktd` when not
+///    supplied in the request (eliminates the monthly manual ERP lookup — C18).
+/// 2. Calculate invoice via `mako-nne`
+/// 3. Self-validate via `invoic-checker`
+/// 4. Store as draft in PostgreSQL
 ///
 /// Returns the list of generated draft UUIDs.
 pub async fn run_billing_internal(
     pool: &PgPool,
+    marktd: &Arc<MarktdClient>,
     req: BillingRunRequest,
 ) -> anyhow::Result<Vec<Uuid>> {
     let invoice_date = parse_date(&req.invoice_date)?;
@@ -125,6 +149,12 @@ pub async fn run_billing_internal(
                     due_date,
                     arbeitsmenge_kwh: arbeit,
                     arbeitspreis_ct_per_kwh: ap,
+                    // §14a Modul 2 ToU fields — passed through when the operator
+                    // supplies them from edmd MeterBillingPeriod + marktd zeitvariablePreispositionen
+                    arbeitsmenge_ht_kwh: pos.arbeitsmenge_ht_kwh,
+                    arbeitspreis_ht_ct_per_kwh: pos.arbeitspreis_ht_ct_per_kwh,
+                    arbeitsmenge_nt_kwh: pos.arbeitsmenge_nt_kwh,
+                    arbeitspreis_nt_ct_per_kwh: pos.arbeitspreis_nt_ct_per_kwh,
                     spitzenleistung_kw: pos.spitzenleistung_kw,
                     leistungspreis_eur_per_kw: pos.leistungspreis_eur_per_kw,
                     ka_satz_ct_per_kwh: pos.ka_satz_ct_per_kwh,
@@ -142,12 +172,38 @@ pub async fn run_billing_internal(
                     .arbeitsmenge_kwh
                     .context("arbeitsmenge_kwh (actual) required for MMM")?;
                 let profil = pos.profil_kwh.context("profil_kwh required for MMM")?;
-                let mp = pos
-                    .mehr_preis_ct_per_kwh
-                    .context("mehr_preis_ct_per_kwh required for MMM")?;
-                let mnp = pos
-                    .minder_preis_ct_per_kwh
-                    .context("minder_preis_ct_per_kwh required for MMM")?;
+
+                // Auto-fetch MMMA prices from marktd (C18) when the caller does not
+                // supply them. This eliminates the monthly manual ERP lookup.
+                // For Gas MMM: prices come from Trading Hub Europe (THE), published monthly.
+                // For Strom MMM: prices come from the relevant ÜNB (§22 StromNZV).
+                let (mp, mnp) = if let (Some(m), Some(mn)) =
+                    (pos.mehr_preis_ct_per_kwh, pos.minder_preis_ct_per_kwh)
+                {
+                    (m, mn)
+                } else {
+                    // Derive billing year+month from period_from for the lookup.
+                    let d = parse_date(&pos.period_from)?;
+                    let (y, m) = (d.year(), d.month() as u8);
+
+                    // Try Gas MMMA first (THE); fall back to expecting manual Strom supply.
+                    let fetched = marktd
+                        .get_mmma_gas(y, m, "THE")
+                        .await
+                        .context("auto-fetch MMMA Gas prices from marktd")?;
+                    match fetched {
+                        Some(r) => (r.mehr_ct_kwh, r.minder_ct_kwh),
+                        None => {
+                            // Not Gas or not yet imported — try to use caller-supplied values.
+                            let mp = pos.mehr_preis_ct_per_kwh
+                                .context("mehr_preis_ct_per_kwh required for MMM (not found in marktd MMMA store either)")?;
+                            let mnp = pos.minder_preis_ct_per_kwh
+                                .context("minder_preis_ct_per_kwh required for MMM (not found in marktd MMMA store either)")?;
+                            (mp, mnp)
+                        }
+                    }
+                };
+
                 let input = MmmInput {
                     malo_id: pos.malo_id.clone(),
                     nb_mp_id: req.nb_mp_id.clone(),
@@ -162,8 +218,34 @@ pub async fn run_billing_internal(
                     mehr_preis_ct_per_kwh: mp,
                     minder_preis_ct_per_kwh: mnp,
                 };
-                calculate_mmm_invoice(&input)
-                    .map_err(|e| anyhow::anyhow!("billing calc failed for {}: {e}", pos.malo_id))?
+                let mut result = calculate_mmm_invoice(&input)
+                    .map_err(|e| anyhow::anyhow!("billing calc failed for {}: {e}", pos.malo_id))?;
+
+                // Auto-embed lastprofil in Rechnung.zusatz_attribute for audit trail.
+                // When the caller does not supply `lastprofil`, fetch bilanzierungsmethode
+                // from marktd (populated from UTILMD TM+EM at supply-start via
+                // patch_typenmerkmal).  SLP type feeds downstream ERP MMM profile selection.
+                let lastprofil = if let Some(lp) = pos.lastprofil.as_deref() {
+                    lp.to_owned()
+                } else {
+                    marktd
+                        .get_malo(&pos.malo_id)
+                        .await
+                        .context("fetch bilanzierungsmethode from marktd")?
+                        .and_then(|f| f.bilanzierungsmethode)
+                        .unwrap_or_else(|| "SLP".to_owned())
+                };
+                let attr = rubo4e::current::ZusatzAttribut {
+                    name: Some("lastprofil".to_owned()),
+                    wert: Some(serde_json::Value::String(lastprofil)),
+                    ..Default::default()
+                };
+                result.rechnung.zusatz_attribute = Some({
+                    let mut attrs = result.rechnung.zusatz_attribute.take().unwrap_or_default();
+                    attrs.push(attr);
+                    attrs
+                });
+                result
             }
             "msb_31009" => {
                 let msb_mp_id = pos

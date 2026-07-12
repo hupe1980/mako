@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Deadline Compensation
-nav_order: 24
+nav_order: 12
 parent: Architecture
 description: >
   Saga pattern for MaKo regulatory deadlines. How mako-engine compensates

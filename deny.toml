@@ -22,6 +22,12 @@ allow = [
     # 0BSD: public-domain-like permissive license, used by mailparse and quoted_printable
     # (transitive deps via asx-rs). Acceptable for commercial use — effectively no conditions.
     "0BSD",
+    # bzip2-1.0.6: bzip2 compression library license — BSD-like, no restrictions.
+    # Introduced as a transitive dep via parquet/iceberg compression codecs.
+    "bzip2-1.0.6",
+    # CC0-1.0: Creative Commons Zero — public domain dedication.
+    # Used by some data/test crates as transitive deps.
+    "CC0-1.0",
 ]
 confidence-threshold = 0.9
 
@@ -370,4 +376,136 @@ ignore = [
     # Docker images in tests, not to extract user-supplied archives.
     # Resolve when testcontainers releases with a patched bollard.
     { id = "RUSTSEC-2025-0134", reason = "tokio-tar PAX smuggling; dev-only dep via testcontainers/bollard — not in production binaries, no user-supplied archive input" },
+    # RUSTSEC-2026-0179: postgres-protocol SCRAM unbounded iteration count CPU-exhaustion DoS.
+    # postgres-protocol is a transitive dep of sqlx. Exploitable only if the PostgreSQL server
+    # is compromised and sends a malicious SCRAM challenge — internal cluster services only.
+    # Resolve when sqlx releases with a patched postgres-protocol.
+    { id = "RUSTSEC-2026-0179", reason = "postgres-protocol SCRAM DoS; internal DB connections only — no untrusted PostgreSQL server in deployment" },
+    # RUSTSEC-2026-0180: postgres-protocol hstore panic on malformed value.
+    # Same crate, same sqlx transitive dep chain. Triggered only by a malicious PostgreSQL
+    # server returning a malformed hstore value — not reachable from user input.
+    { id = "RUSTSEC-2026-0180", reason = "postgres-protocol hstore panic; internal DB connections only — no untrusted PostgreSQL server in deployment" },
+    # RUSTSEC-2023-0071: rsa Marvin Attack timing side-channel.
+    # rsa is pulled transitively by mako-as4 → asx-rs → WS-Security XML crypto.
+    # The rsa crate is used for PKCS#1 signature verification of AS4 messages from
+    # trusted BDEW counterparties — not for key decryption in adversarial settings.
+    # The Marvin Attack requires an attacker to observe RSA decryption timing to recover
+    # a private key; this usage only verifies signatures (public-key operation).
+    # Resolve when asx-rs updates to a mitigated rsa version.
+    { id = "RUSTSEC-2023-0071", reason = "rsa Marvin timing attack; only used for signature verification (public-key operation) via asx-rs WS-Security — not for key decryption" },
 ]
+
+# ── Bans: duplicate-version skip entries ──────────────────────────────────────
+# Each entry allows a specific older version to coexist with a newer version.
+# New portald (reqwest 0.13) + existing workspace (reqwest 0.12) require both.
+# iceberg 0.9.1 + existing ecosystem crates pull older versions of crypto/utility crates.
+
+[[bans.skip]]
+name    = "reqwest"
+version = "=0.12"
+reason  = "portald introduces reqwest 0.13 (no ring dep); workspace services still use 0.12. Resolve by bumping all services to 0.13."
+
+[[bans.skip]]
+name    = "reqwest"
+version = "=0.13"
+reason  = "portald introduces reqwest 0.13; coexists with workspace 0.12 services."
+
+[[bans.skip]]
+name    = "darling"
+version = "=0.20"
+reason  = "iceberg-datafusion 0.9.1 transitively requires darling 0.20; workspace uses darling 0.23."
+
+[[bans.skip]]
+name    = "darling_core"
+version = "=0.20"
+reason  = "paired with darling 0.20 skip above."
+
+[[bans.skip]]
+name    = "darling_macro"
+version = "=0.20"
+reason  = "paired with darling 0.20 skip above."
+
+[[bans.skip]]
+name    = "itertools"
+version = "=0.10"
+reason  = "slatedb transitively requires itertools 0.10; workspace code uses 0.13/0.14/0.15."
+
+[[bans.skip]]
+name    = "itertools"
+version = "=0.13"
+reason  = "iceberg ecosystem requires itertools 0.13 alongside workspace 0.14/0.15."
+
+[[bans.skip]]
+name    = "itertools"
+version = "=0.14"
+reason  = "transitional: iceberg/slatedb ecosystem requires 0.14 alongside 0.15."
+
+[[bans.skip]]
+name    = "object_store"
+version = "=0.12"
+reason  = "slatedb 0.13 requires object_store 0.12; iceberg 0.9.1 requires 0.14."
+
+[[bans.skip]]
+name    = "quick-xml"
+version = "=0.37"
+reason  = "roxmltree/testcontainers require older quick-xml alongside workspace 0.40/0.41."
+
+[[bans.skip]]
+name    = "quick-xml"
+version = "=0.38"
+reason  = "some ecosystem crates require quick-xml 0.38."
+
+[[bans.skip]]
+name    = "aes"
+version = "=0.8"
+reason  = "older crypto crates in the iceberg/tls ecosystem use aes 0.8; workspace now uses 0.9."
+
+[[bans.skip]]
+name    = "cipher"
+version = "=0.4"
+reason  = "paired with aes 0.8 skip — older cipher block cipher trait version."
+
+[[bans.skip]]
+name    = "block-padding"
+version = "=0.3"
+reason  = "paired with cipher 0.4 skip."
+
+[[bans.skip]]
+name    = "cbc"
+version = "=0.1"
+reason  = "paired with cipher 0.4 / aes 0.8 skip."
+
+[[bans.skip]]
+name    = "inout"
+version = "=0.1"
+reason  = "paired with cipher 0.4 skip."
+
+[[bans.skip]]
+name    = "ordered-float"
+version = "=2"
+reason  = "petgraph 0.7 (via iceberg) uses ordered-float 2; workspace uses ordered-float 4."
+
+[[bans.skip]]
+name    = "petgraph"
+version = "=0.7"
+reason  = "iceberg 0.9.1 uses petgraph 0.7; workspace uses petgraph 0.8."
+
+[[bans.skip]]
+name    = "phf"
+version = "=0.11"
+reason  = "some crates require phf 0.11; workspace uses phf 0.12."
+
+[[bans.skip]]
+name    = "phf_shared"
+version = "=0.11"
+reason  = "paired with phf 0.11 skip."
+
+[[bans.skip]]
+name    = "spin"
+version = "=0.9"
+reason  = "ring 0.17 (mako-as4) uses spin 0.9; newer deps use spin 0.10."
+
+[[bans.skip]]
+name    = "webpki-roots"
+version = "=0.26"
+reason  = "older rustls consumers use webpki-roots 0.26; newer use 1.0."

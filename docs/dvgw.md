@@ -1,8 +1,8 @@
 ---
 layout: default
 title: DVGW EDI
-nav_order: 40
-parent: Architecture
+nav_order: 14
+parent: Reference
 description: >
   dvgw-edi: parsing ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, and DELRES
   for GaBi Gas 2.0. Covers regulatory basis, message taxonomy, version management,

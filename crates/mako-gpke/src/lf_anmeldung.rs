@@ -174,9 +174,10 @@ pub struct LfAnmeldungData {
 }
 
 /// Process state for the GPKE LF-side Anmeldung workflow.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub enum LfAnmeldungState {
     /// Initial state before `InitiateAnmeldung` is received.
+    #[default]
     New,
     /// UTILMD Anfrage sent; awaiting NB/LFA response.
     Pending(LfAnmeldungData),
@@ -197,12 +198,6 @@ impl LfAnmeldungState {
             Self::Active(_) => "Active",
             Self::Rejected { .. } => "Rejected",
         }
-    }
-}
-
-impl Default for LfAnmeldungState {
-    fn default() -> Self {
-        Self::New
     }
 }
 

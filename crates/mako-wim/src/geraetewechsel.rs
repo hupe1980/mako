@@ -209,8 +209,10 @@ pub struct DeviceChangeData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum DeviceChangeState {
     /// No events yet; stream exists but process has not started.
+    #[default]
     New,
     /// UTILMD received and `Initiated` event applied.
     Initiated(DeviceChangeData),
@@ -225,12 +227,6 @@ pub enum DeviceChangeState {
         /// Human-readable rejection reason.
         reason: String,
     },
-}
-
-impl Default for DeviceChangeState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl DeviceChangeState {

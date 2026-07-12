@@ -169,8 +169,10 @@ pub struct LfAbmeldungData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum LfAbmeldungState {
     /// No events yet.
+    #[default]
     New,
     /// Ankündigung received.
     Eingegangen(LfAbmeldungData),
@@ -190,12 +192,6 @@ pub enum LfAbmeldungState {
         /// Human-readable reason.
         reason: String,
     },
-}
-
-impl Default for LfAbmeldungState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl LfAbmeldungState {
@@ -463,7 +459,7 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                 }
                 let response_code: u32 = if accepted { 55008 } else { 55009 };
                 let response_pid = Pruefidentifikator::new(response_code)
-                    .map_err(|e| WorkflowError::rejected(e.to_string()))?;
+                    .map_err(|e| WorkflowError::rejected(e.clone()))?;
                 Ok(vec![LfAbmeldungEvent::AntwortGesendet {
                     response_pid,
                     accepted,
@@ -496,7 +492,7 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                     }
                 }
                 let aperak_pid = Pruefidentifikator::new(29_001)
-                    .map_err(|e| WorkflowError::rejected(e.to_string()))?;
+                    .map_err(|e| WorkflowError::rejected(e.clone()))?;
                 Ok(vec![LfAbmeldungEvent::AperakFehlerDispatched {
                     aperak_pid,
                     reason,

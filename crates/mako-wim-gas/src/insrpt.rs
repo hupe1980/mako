@@ -151,8 +151,10 @@ impl EventPayload for GasStorungsmeldungEvent {
 /// State of a WiM Gas INSRPT Störungsmeldung process stream.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum GasStorungsmeldungState {
     /// No events yet.
+    #[default]
     New,
     /// Störungsmeldung sent to gMSB; awaiting response within 10 Werktage.
     AwaitingResponse(GasStorungsmeldungData),
@@ -162,12 +164,6 @@ pub enum GasStorungsmeldungState {
     Completed(GasStorungsmeldungData),
     /// Deadline expired without gMSB response (terminal).
     DeadlineExpired,
-}
-
-impl Default for GasStorungsmeldungState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl GasStorungsmeldungState {

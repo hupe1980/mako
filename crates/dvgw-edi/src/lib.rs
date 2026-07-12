@@ -3,7 +3,7 @@
 //!
 //! This crate implements parsing of **DVGW-governed EDIFACT formats** used in
 //! gas network balancing (`GaBi Gas 2.0`, `BNetzA` BK7-14-020). It is the DVGW
-//! counterpart to the [`edi-energy`] crate which covers BDEW EDI@Energy.
+//! counterpart to the `edi-energy` crate which covers BDEW EDI@Energy.
 //!
 //! # Supported formats
 //!

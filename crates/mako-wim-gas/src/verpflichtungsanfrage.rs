@@ -141,8 +141,10 @@ pub struct WimGasVerpflichtungsanfrageData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum WimGasVerpflichtungsanfrageState {
     /// Initial state before any event is applied.
+    #[default]
     New,
     /// ANFRAGE received; APERAK deadline timer should now be started.
     Initiated(WimGasVerpflichtungsanfrageData),
@@ -157,12 +159,6 @@ pub enum WimGasVerpflichtungsanfrageState {
         /// Human-readable rejection reason.
         reason: String,
     },
-}
-
-impl Default for WimGasVerpflichtungsanfrageState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl WimGasVerpflichtungsanfrageState {

@@ -199,8 +199,10 @@ impl EventPayload for SperrungLfEvent {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum SperrungLfState {
     /// No events yet.
+    #[default]
     New,
     /// Sperrauftrag sent outbound; awaiting NB's ORDRSP.
     AuftragGesendet(SperrungAuftragData),
@@ -224,12 +226,6 @@ pub enum SperrungLfState {
         /// Label of the expired deadline.
         label: String,
     },
-}
-
-impl Default for SperrungLfState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl SperrungLfState {

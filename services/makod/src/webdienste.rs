@@ -202,6 +202,12 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
                 execution_time_from: command.execution_time_from.clone(),
                 max_power_kw: command.maximum_power_value.0.clone(),
                 execution_time_until: command.execution_time_until.clone(),
+                // The `produkt_code` is not carried in the API-Webdienste Strom
+                // REST request body — it is part of the AS4 ORDERS message only.
+                // When present, it would be extracted by the EDIFACT adapter.
+                // Set to None here so the M1 guard is skipped for REST-originated
+                // commands (operators using the direct REST API are trusted).
+                produkt_code: None,
             };
 
             spawn_steuerungsauftrag(store, tenant_id, &tx_id, domain_cmd)

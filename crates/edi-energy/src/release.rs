@@ -431,7 +431,7 @@ impl Release {
 
 // Cross-track comparisons are intentionally non-total; `Ord::cmp` falls back to
 // raw-byte ordering while `PartialOrd::partial_cmp` returns `None`.
-#[allow(clippy::non_canonical_partial_ord_impl)]
+#[expect(clippy::non_canonical_partial_ord_impl)]
 impl PartialOrd for Release {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let a = self.kind();

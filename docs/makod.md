@@ -2,7 +2,7 @@
 layout: default
 title: makod Operator Guide
 nav_order: 21
-parent: Architecture
+parent: Services
 description: >
   makod operator guide: port layout, CLI flags, config file, persistent and
   volatile storage, AS4 inbound, HTTP REST API, health checks, and Kubernetes

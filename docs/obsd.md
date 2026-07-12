@@ -2,7 +2,7 @@
 layout: default
 title: obsd Operator Guide
 nav_order: 29
-parent: Architecture
+parent: Services
 mermaid: true
 description: >
   obsd operator guide: Business-process observability daemon. Process projections,
@@ -81,22 +81,54 @@ Each `ProcessProjection` record is a read-model built from the event stream:
 
 ## §20 EnWG parity
 
-The `initiator_is_affiliate` flag enables §20 EnWG non-discrimination monitoring.
-When `processd` decides an Anmeldung, it sets this flag based on whether the
-requesting LF GLN matches the operator's own GLN. `obsd` aggregates this in KPI
-reports:
+`processd` and `obsd` together implement the **§20 EnWG Diskriminierungsfreiheitspflicht**
+(non-discrimination obligation) for vertically integrated utilities operating both NB
+and LF roles (§6b EnWG deployment).
+
+### How it works
+
+When a Lieferbeginn Anmeldung (PID 55001, 55016, or 44001) arrives, `processd` computes:
+
+```rust
+initiator_is_affiliate = new_supplier_mp_id ∈ own_mp_ids
+```
+
+- `own_mp_ids` is a `Vec<String>` configured per service instance — covering
+  **all** operator MP-IDs (Strom NB `99…` and Gas GNB `98…` for integrated Stadtwerk deployments).
+- Falls back to `[tenant]` when `own_mp_ids` is not explicitly configured.
+
+`processd` **blocks automatic acceptance** (`auto_accept = false` is enforced) when
+`initiator_is_affiliate = true`, forcing operator review for all affiliate Anmeldungen.
+This ensures the NB cannot give its subsidiary LF an automatic processing advantage.
+
+`obsd` records `initiator_is_affiliate` on every `ProcessProjection`, enabling
+BNetzA audit evidence as a structured query:
 
 ```bash
-# Affiliate vs non-affiliate STP parity (BNetzA audit)
+# §20 EnWG parity audit: affiliate vs. non-affiliate STP rates
 curl -s "http://obsd:8480/obs/kpis?days=90" \
   -H "Authorization: Bearer <token>" | jq '{
-    affiliate_stp_rate: .affiliate.stp_rate,
+    affiliate_stp_rate:     .affiliate.stp_rate,
     non_affiliate_stp_rate: .non_affiliate.stp_rate,
-    parity_delta: (.affiliate.stp_rate - .non_affiliate.stp_rate | fabs)
+    parity_delta:           (.affiliate.stp_rate - .non_affiliate.stp_rate | fabs),
+    bnetza_limit_pp:        2.0
   }'
 ```
 
-BNetzA expects the parity delta to be < 2 percentage points.
+BNetzA expects the parity delta to be **< 2 percentage points**.
+
+### Multi-MP-ID configuration
+
+An integrated NB+GNB instance operates under multiple MP-IDs. Configure all of them:
+
+```toml
+[identity]
+tenant     = "9900357000004"   # primary (for Cedar resource checks)
+# §20 EnWG: list all operator MP-IDs — Strom NB (BDEW 99…) + Gas GNB (DVGW 98…)
+own_mp_ids = ["9900357000004", "9800357000004"]
+```
+
+When `own_mp_ids` is omitted, it defaults to `[tenant]` (pure single-role deployments).
 
 ---
 

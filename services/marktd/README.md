@@ -40,8 +40,11 @@ and any historical state can be retrieved by date via `?at=YYYY-MM-DD`.
 | **Authorization** | Cedar ABAC (`policies/marktd.cedar`) — per-tenant, role-gated |
 | **API spec** | OpenAPI 3.1 at `/swagger-ui/` and `/api-docs/openapi.json` |
 | **Events** | Outbound CloudEvents 1.0 (`application/cloudevents+json`) + HMAC-SHA256 |
-| **Emitted events** | `de.markt.malo.updated`, `de.markt.nb-contract.updated`, `de.markt.pricat.published`, `de.markt.versorgung.beliefert` |
-| **Typed BO4E API** | All `GET` responses return canonical `rubo4e::current` types — `Marktlokation`, `Messlokation`, `Zaehler`, `Geraet`. Every `PUT` validates `_typ` and enum fields (422 on violation). `nb_contracts` stores full BO4E `Vertrag` JSONB (`vertragsart`, `vertragsstatus` as indexed columns). |
+| **Emitted events** | `de.markt.malo.updated`, `de.markt.nb-contract.updated`, `de.markt.pricat.published`, `de.markt.versorgung.beliefert`, `de.markt.sr.konfigurationsprodukt.updated`, `de.markt.mmma.strom.imported`, `de.markt.mmma.gas.imported` |
+| **Typed BO4E API** | All `GET` responses return canonical `rubo4e::current` types — `Marktlokation`, `Messlokation`, `Zaehler`, `Geraet`. Every `PUT` validates `_typ` and enum fields (422 on violation). `nb_contracts` stores full BO4E `Vertrag` JSONB. |
+| **Konfigurationsprodukte** | Typed sub-resource on `SteuerbareRessource`: `GET/PUT/DELETE /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte`. `produktcode` is mandatory (BK6-24-174 §4.3). Emits `de.markt.sr.konfigurationsprodukt.updated`. |
+| **MMMA import worker** | Background worker auto-imports monthly Ausgleichsenergie prices (Gas + Strom) on the 1st of each month. Configurable `gas_url` / `strom_url` — supports `https://` and `file:///` sources. POST `/api/v1/mmma-preise/import-trigger` for on-demand. |
+| **ZeitvariablePreisposition** | `PUT /api/v1/preisblaetter-messung/{mp_id}` validates each `zeitvariablePreispositionen` element: `bandNummer` rejected with 422, `zaehlzeitregister` mandatory. Deserialized as typed `Vec<ZeitvariablePreisposition>` on `GET`. |
 | **Event source** | `urn:markt:tenant:{tenant_gln}` |
 | **CE extensions** | `marktrole`, `marktmaloid`, `marktmeloid`, `marktcontractid`, `markterpref` |
 | **Idempotency** | Inbound `POST /api/v1/events` uses `INSERT … ON CONFLICT DO NOTHING` |
@@ -89,6 +92,12 @@ and any historical state can be retrieved by date via `?at=YYYY-MM-DD`.
 | `GET` | `/api/v1/pricat/{nb_mp_id}/history` | PRICAT version history (newest first) |
 | `GET` | `/api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}` | Dispatch audit log for a PRICAT version |
 | `POST` | `/api/v1/pricat/{nb_mp_id}/dispatch` | Enqueue (re-)dispatch to all active LF partners |
+| `GET` | `/api/v1/preisblaetter-messung/{mp_id}` | Fetch PreisblattMessung with typed `ZeitvariablePreisposition` array |
+| `PUT` | `/api/v1/preisblaetter-messung/{mp_id}` | Upsert PreisblattMessung — validates `zaehlzeitregister`, rejects `bandNummer` |
+| `GET` | `/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte` | List contracted `Konfigurationsprodukt` items |
+| `PUT` | `/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte` | Replace `konfigurationsprodukte` (validates mandatory `produktcode`) |
+| `DELETE` | `/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}` | Remove one product from the contracted list |
+| `POST` | `/api/v1/mmma-preise/import-trigger` | Trigger on-demand MMMA price import (`?year=&month=`) |
 
 ---
 
@@ -165,8 +174,7 @@ jwks_refresh = 3600   # seconds
 
 Migrations run automatically at startup.  The schema is defined across two migration files:
 
-- `migrations/0001_initial_schema.sql` — core tables
-- `migrations/0002_phase3_history.sql` — supply-state history + NeLo (Redispatch 2.0)
+- `migrations/0001_initial.sql` — complete schema (all tables)
 
 Tables: `malo`, `melo`, `lokationszuordnung`, `contracts`, `nb_contracts`,
 `versorgungsstatus`, `versorgungsstatus_history`, `nelo`, `preisblaetter`,
@@ -303,6 +311,61 @@ GET /api/v1/correlations/51238696780
   }
 ]
 ```
+
+---
+
+## §14a Steuerungsauftrag — konfigurationsprodukte
+
+`konfigurationsprodukte` are the **contracted iMS control products** for a SteuerbareRessource
+(§14a EnWG / BK6-24-174 §4.3). `processd` reads this list before auto-confirming any
+`wim-steuerungsauftrag` ORDERS: the `produktcode` in the incoming message must appear in the
+contracted list, otherwise the ORDERS is automatically rejected with ERC A05.
+
+```bash
+# List contracted products
+curl -s http://marktd:8180/api/v1/steuerbare-ressourcen/C0001234567890/konfigurationsprodukte \
+  -H "Authorization: Bearer $TOKEN"
+
+# Upsert (produktcode is mandatory)
+curl -s -X PUT http://marktd:8180/api/v1/steuerbare-ressourcen/C0001234567890/konfigurationsprodukte \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '[{"produktcode":"FLEX-001","_typ":"Konfigurationsprodukt"}]'
+
+# Remove one product
+curl -s -X DELETE http://marktd:8180/api/v1/steuerbare-ressourcen/C0001234567890/konfigurationsprodukte/FLEX-001 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Each successful PUT or DELETE emits `de.markt.sr.konfigurationsprodukt.updated`.
+
+---
+
+## MMMA price import
+
+`marktd` includes a background **MMMA worker** that auto-imports monthly Ausgleichsenergie
+prices on the 1st of each month. These prices are used by `invoicd` check 6 and
+`netzbilanzd` MMM billing.
+
+Configure in `marktd.toml`:
+
+```toml
+[mmma_import]
+enabled = true
+gas_url  = "https://www.tradinghub.eu/mmma-preise.csv"   # or file:///path/to/prices.csv
+strom_url = "https://example.com/strom-ae.json"
+check_hour_utc = 6   # check at 06:00 UTC on the 1st of each month
+```
+
+On-demand trigger:
+
+```bash
+# Import for a specific month
+curl -s -X POST "http://marktd:8180/api/v1/mmma-preise/import-trigger?year=2026&month=7" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Each successful import emits `de.markt.mmma.strom.imported` or `de.markt.mmma.gas.imported`.
 
 ---
 

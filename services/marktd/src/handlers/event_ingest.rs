@@ -244,6 +244,38 @@ where
                                 "event_ingest: failed to announce_lf_next"
                             );
                         }
+
+                        // L1/N1: Patch malo.bilanzierungsmethode + malo.fallgruppe
+                        // from the ProcessInitiated payload.  These are populated
+                        // by the makod GPKE/GeLi Gas adapter from UTILMD TM+EM /
+                        // TM+Z10 segments and propagated into the outbox event.
+                        // Best-effort: failure is logged but does not affect the
+                        // VersorgungsStatus update above.
+                        let bilanzierungsmethode = data_for_vs
+                            .get("bilanzierungsmethode")
+                            .and_then(|v| v.as_str());
+                        let fallgruppe = data_for_vs.get("fallgruppe").and_then(|v| v.as_str());
+                        if bilanzierungsmethode.is_some() || fallgruppe.is_some() {
+                            if let Err(e) = state
+                                .malo_repo
+                                .patch_typenmerkmal(&malo_id, bilanzierungsmethode, fallgruppe)
+                                .await
+                            {
+                                tracing::warn!(
+                                    malo_id = %malo_str,
+                                    pid,
+                                    error = %e,
+                                    "event_ingest: patch_typenmerkmal failed (non-fatal)"
+                                );
+                            } else if bilanzierungsmethode.is_some() || fallgruppe.is_some() {
+                                tracing::debug!(
+                                    malo_id = %malo_str,
+                                    bilanzierungsmethode,
+                                    fallgruppe,
+                                    "event_ingest: patched malo Typenmerkmale from ProcessInitiated"
+                                );
+                            }
+                        }
                     } else if is_completed && matches!(pid, 55003 | 44003) {
                         // NB confirmed Lieferbeginn — promote announced LF to active.
                         if let Err(e) = vs

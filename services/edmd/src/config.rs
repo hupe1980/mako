@@ -23,6 +23,19 @@
 //! webhook_url   = "http://edmd:8380/webhook"
 //! subscriber_id = "edmd"
 //!
+//! # Iceberg/S3 archival — offloads meter_reads > retention_months to Parquet
+//! # [archive]
+//! # enabled           = true
+//! # storage_uri       = "s3://my-bucket/edmd/meter_reads"
+//! # access_key_id     = "env:AWS_ACCESS_KEY_ID"
+//! # secret_access_key = "env:AWS_SECRET_ACCESS_KEY"
+//! # region            = "eu-central-1"
+//! # retention_months  = 12
+//! # batch_size        = 100000
+//! # interval_secs     = 3600
+//! # # Optional: register with Nessie/Polaris/AWS Glue REST catalog
+//! # iceberg_catalog_url = "http://nessie:19120/iceberg/v1"
+//!
 //! # [oidc]
 //! # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 //! # audience = "api://mako-edmd"
@@ -30,6 +43,7 @@
 //! # endpoint = "http://otel-collector:4317"
 //! ```
 
+use mako_edm::archive::ArchiveConfig;
 use serde::Deserialize;
 use std::path::Path;
 
@@ -48,6 +62,9 @@ pub struct Config {
     pub oidc: Option<OidcConfig>,
     #[serde(default)]
     pub otel: OtelConfig,
+    /// Iceberg/S3 archival configuration.  Disabled by default.
+    #[serde(default)]
+    pub archive: ArchiveConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,6 +121,9 @@ pub struct WebhookConfig {
     /// HMAC-SHA256 secret for verifying inbound webhooks from `marktd`.
     /// Use `"env:EDMD_INBOUND_SECRET"`.
     pub inbound_secret: Option<String>,
+    /// ERP webhook URL for outbound CloudEvents (`de.edmd.reading.direct.stored`,
+    /// `de.edmd.reading.quality.warning`). Omit to disable outbound notifications.
+    pub erp_webhook_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

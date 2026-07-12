@@ -173,8 +173,10 @@ pub struct BeauftragungData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum KonfigurationState {
     /// No ORDERS sent yet.
+    #[default]
     New,
     /// ORDERS 17134 was sent; waiting for ORDRSP.
     Beauftragt(BeauftragungData),
@@ -192,12 +194,6 @@ pub enum KonfigurationState {
         /// Human-readable rejection reason from the MSB.
         reason: String,
     },
-}
-
-impl Default for KonfigurationState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl KonfigurationState {

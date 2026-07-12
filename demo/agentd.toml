@@ -1,0 +1,268 @@
+# agentd.toml — Multi-agent LLM orchestration daemon (demo).
+#
+# Architecture: Orchestrator + Specialist Mesh + RAG (LanceDB)
+#
+# ── Provider configuration ──────────────────────────────────────────────────
+
+[providers.anthropic]
+backend   = "anthropic"
+api_key   = ""  # set via AGENTD_PROVIDERS__ANTHROPIC__API_KEY
+
+[providers.openai]
+backend   = "openai"
+api_key   = ""  # set via AGENTD_PROVIDERS__OPENAI__API_KEY
+
+# AWS Bedrock (uncomment to use Claude/Titan via Bedrock):
+# [providers.bedrock]
+# backend               = "bedrock"
+# aws_region            = "us-east-1"
+# aws_access_key_id     = ""  # set via AGENTD_PROVIDERS__BEDROCK__AWS_ACCESS_KEY_ID
+# aws_secret_access_key = ""  # set via AGENTD_PROVIDERS__BEDROCK__AWS_SECRET_ACCESS_KEY
+
+# Ollama (local, no API key):
+# [providers.ollama]
+# backend  = "openai"
+# api_base = "http://ollama:11434/v1"
+# api_key  = "ollama"
+
+# ── Orchestrator ─────────────────────────────────────────────────────────────
+[orchestrator]
+provider  = "anthropic"
+model     = "claude-sonnet-4-5"
+max_turns = 5
+
+# ── Specialist agents ─────────────────────────────────────────────────────────
+[[agents]]
+name             = "mako-agent"
+specialty        = "EDIFACT MaKo processes, APERAK deadlines, GPKE/GeLi/WiM workflows"
+provider         = "anthropic"
+model            = "claude-sonnet-4-5"
+trigger_patterns = ["de.mako.process.*", "de.mako.aperak.*"]
+mcp_servers      = ["makod", "marktd", "processd", "obsd"]
+max_turns        = 20
+
+[[agents]]
+name             = "billing-agent"
+specialty        = "INVOIC disputes, bilanzielle Abgrenzung, REMADV/COMDIS handling"
+provider         = "openai"
+model            = "gpt-4o"
+trigger_patterns = ["de.invoic.receipt.disputed", "de.accounting.*"]
+mcp_servers      = ["invoicd", "billingd", "accountingd", "netzbilanzd"]
+max_turns        = 20
+
+[[agents]]
+name             = "billing-anomaly-agent"
+specialty        = "Billing anomaly detection: rolling 3-month average, deviation alerts, over/under-billing root-cause analysis"
+provider         = "openai"
+model            = "gpt-4o"
+# Triggered on every new invoice — checks for >20% deviation from rolling average.
+# powercloud advertises >98% AI payment accuracy; this specialist provides equivalent capability.
+trigger_patterns = ["de.billing.rechnung.erstellt"]
+mcp_servers      = ["billingd", "tarifbd", "edmd"]
+max_turns        = 10
+system_prompt    = """You are a billing anomaly detection specialist for a German energy retailer.
+
+When triggered by de.billing.rechnung.erstellt:
+1. Call check_billing_anomaly with the malo_id from the event
+2. If is_anomaly=true AND deviation_pct > 20%: 
+   - Call get_billing_record to inspect the invoice positions
+   - Call list_billing_records for the past 3 months to confirm the trend
+   - Identify the anomalous position (unusual kWh, wrong tariff, duplicate position)
+   - Return a structured finding: { malo_id, anomaly_type, deviation_pct, likely_cause, recommended_action }
+3. If is_anomaly=false: return { status: "ok", deviation_pct: ... }
+
+Never block the billing cycle — report findings only. The operator or agentd orchestrator decides on corrections."""
+
+[[agents]]
+name             = "eeg-agent"
+specialty        = "EEG/KWKG plant lifecycle, Förderungsende, Direktvermarktung §20 EEG"
+provider         = "anthropic"
+model            = "claude-sonnet-4-5"
+trigger_patterns = ["de.eeg.*"]
+mcp_servers      = ["einsd", "edmd", "marktd"]
+max_turns        = 15
+
+[[agents]]
+name             = "payment-reconciliation-agent"
+specialty        = "CAMT.054 payment matching, Offene Posten reconciliation, Bankruecklast handling"
+provider         = "openai"
+model            = "gpt-4o"
+# Triggered when a CAMT.054 import needs reconciliation or a payment-due event arrives.
+# powercloud claims >98% automated payment matching — this agent provides the same.
+trigger_patterns = ["de.accounting.payment.due", "de.accounting.bankruecklast"]
+mcp_servers      = ["accountingd"]
+max_turns        = 15
+system_prompt    = """You are a payment reconciliation specialist for a German energy retailer.
+
+When triggered:
+1. Call suggest_payment_match with the payment amount and Verwendungszweck from the event
+2. For HIGH confidence matches (score >= 80): confirm by calling import_payments
+3. For MEDIUM matches (50-79): present candidates to the operator for confirmation
+4. For LOW matches (<50) or no candidates: escalate — flag as unmatched payment in the dunning log
+5. For bankruecklast: call list_ledger to find the original debit, then escalate to Mahnstufe
+
+Always log your decision rationale. Never silently drop a payment or create phantom credits."""
+
+[[agents]]
+name             = "compliance-agent"
+specialty        = "§20 EnWG parity, §22 MessZV, BNetzA KPI, APERAK deadline violations"
+provider         = "anthropic"
+model            = "claude-sonnet-4-5"
+trigger_patterns = []
+mcp_servers      = ["obsd", "processd", "marktd"]
+max_turns        = 10
+
+[[agents]]
+name             = "msb-history-agent"
+specialty        = "MSB device history RAG: natural-language search over WiM device change events, INSRPT reports, reading orders, and meter quality history"
+provider         = "anthropic"
+model            = "claude-sonnet-4-5"
+# Triggered when new device events or quality warnings arrive.
+# Indexes event data into LanceDB so field operators can query by natural language.
+trigger_patterns = [
+  "de.mako.process.initiated",     # WiM Geraeteubernahme (55039/55042), INSRPT (23001)
+  "de.edmd.reading.quality.warning",
+  "de.edmd.reading.direct.stored",
+]
+mcp_servers      = ["edmd", "makod", "marktd"]
+max_turns        = 15
+system_prompt    = """You are the MSB service history RAG specialist for a German energy metering platform.
+
+INDEXING mode (triggered by events):
+1. Extract the malo_id from the CloudEvent data
+2. Call edmd.get_device_history { malo_id } to get the comprehensive device history text
+3. POST the returned document_text to agentd POST /api/v1/rag/ingest:
+   { "source": "msb-{malo_id}", "text": "<document_text>" }
+4. Confirm indexing with a brief summary
+
+QUERY mode (triggered by msb.query or manual run):
+1. Use the RAG context auto-injected into your system prompt as "Background Knowledge"
+2. Answer the operator's natural-language question about device history
+3. Example queries:
+   - "list all meters that required emergency readings in Q1 2026"
+   - "show quality issues for the Strom RLM meters in Berlin-Mitte"
+   - "when was the MSB last changed on MaLo 51238696781"
+   - "find all INSRPT Störungsmeldungen from last month"
+
+Always cite the specific MaLo IDs and dates from the indexed history."""
+
+[[agents]]
+name             = "grid-anomaly-agent"
+specialty        = "N3: Grid record drift detection, bilanzierungsgebiet mismatch, netz-checker false-reject root-cause"
+provider         = "anthropic"
+model            = "claude-sonnet-4-5"
+# N3: Triggered by nis-syncd drift events and NNE billing anomalies.
+# Detects misconfigured bilanzierungsgebiet that would cause netz-checker ERC A99 rejects.
+# Without this specialist, incorrect grid records block valid Anmeldungen for up to 24 hours.
+trigger_patterns = [
+  "de.markt.grid.drift.detected",     # nis-syncd: NIS/GIS ↔ marktd divergence
+  "de.markt.nb-contract.updated",     # NB contract change may invalidate bilanzierungsgebiet
+]
+mcp_servers      = ["marktd", "obsd"]
+max_turns        = 15
+system_prompt    = """You are the grid anomaly detection specialist for a German energy NB operator.
+
+## Purpose
+
+You detect and resolve `bilanzierungsgebiet` mismatches that cause netz-checker ERC A99 rejects,
+and alert when a grid record drift would block valid Anmeldungen.
+
+## Decision pipeline
+
+When triggered by `de.markt.grid.drift.detected`:
+1. Extract `malo_id`, `nb_mp_id`, `old_bilanzierungsgebiet`, `new_bilanzierungsgebiet` from event data.
+2. Call `marktd.get_malo { malo_id }` — compare stored `bilanzierungsgebiet` with the drifted value.
+3. Call `marktd.get_nb_contract { malo_id }` — check if contract's `bilanzierungsgebiet` matches.
+4. Call `obsd.get_kpis` — check for recent A99 rejects on this MaLo.
+5. Determine the authoritative value:
+   - NIS/GIS export = authoritative (NB's own grid data)
+   - marktd stored value = potentially stale (import lag)
+   - UTILMD EDIFACT value = LF's assertion (may be wrong)
+6. If drift is confirmed and NIS value should prevail:
+   - Recommend: `PUT marktd /api/v1/malo/{malo_id}/grid { bilanzierungsgebiet: <nis_value> }`
+   - Report: { malo_id, issue: "bilanzierungsgebiet_mismatch", nis_value, marktd_value, recommended_action }
+7. If LF UTILMD value is wrong (ERC A99 expected):
+   - Report escalation for the LF to re-submit with correct Bilanzierungsgebiet.
+
+## When triggered by `de.markt.nb-contract.updated`:
+1. Extract `malo_id`, `bilanzierungsgebiet` from the new contract.
+2. Call `marktd.get_malo { malo_id }` to verify the MaLo record is consistent.
+3. Alert if they differ — a contract change can silently invalidate pending Anmeldungen.
+
+## Output format
+
+Always return a JSON object:
+```json
+{
+  "malo_id": "...",
+  "issue": "bilanzierungsgebiet_mismatch | contract_inconsistency | no_drift",
+  "nis_value": "...",
+  "marktd_value": "...",
+  "a99_risk": true/false,
+  "recommended_action": "PUT /api/v1/malo/{id}/grid {...} | escalate_to_lf | no_action",
+  "severity": "critical | warning | info"
+}
+```
+
+**Critical** means: without correction, the NEXT Anmeldung on this MaLo WILL be rejected (ERC A99).
+**Warning** means: inconsistency detected but no active Anmeldung pending.
+**Info** means: drift resolved by nis-syncd, no operator action needed."""
+
+# ── MCP servers ───────────────────────────────────────────────────────────────
+[mcp_servers]
+makod       = "http://makod:8080"
+marktd      = "http://marktd:8180"
+invoicd     = "http://invoicd:8280"
+edmd        = "http://edmd:8380"
+obsd        = "http://obsd:8480"
+processd    = "http://processd:8580"
+billingd    = "http://billingd:9280"
+accountingd = "http://accountingd:9380"
+tarifbd     = "http://tarifbd:9080"
+einsd       = "http://einsd:9180"
+mcp_api_key = "demo-secret-change-me"
+
+# ── RAG knowledge base (LanceDB) ──────────────────────────────────────────────
+[rag]
+enabled            = false         # set to true and add sources to activate
+storage_uri        = "/var/lib/agentd/rag"  # or "s3://my-bucket/agentd/rag"
+embedding_provider = "openai"
+embedding_model    = "text-embedding-3-small"
+embedding_dim      = 1536
+top_k              = 5
+
+# Document sources to index at startup:
+# [[rag.sources]]
+# name = "aperak-ahb"
+# path = "/etc/agentd/docs/aperak-ahb-1.0.md"
+#
+# [[rag.sources]]
+# name = "operator-runbook"
+# path = "/etc/agentd/docs/runbook.md"
+
+# ── Other settings ────────────────────────────────────────────────────────────
+port   = 9580
+tenant = "9910000000002"
+
+audit_webhook_url  = "http://marktd:8180/api/v1/events"
+audit_hmac_secret  = "demo-makod-webhook-secret"
+
+trigger_event_types = [
+    "de.mako.process.escalated",
+    "de.invoic.receipt.disputed",
+    "de.accounting.mahnung.issued",
+    "de.eeg.anlage.foerderung_auslaufend",
+    # B6/L1: AI billing anomaly detection on every new invoice
+    "de.billing.rechnung.erstellt",
+    # B14/L7: AI payment reconciliation
+    "de.accounting.payment.due",
+    "de.accounting.bankruecklast",
+    # M9: MSB device history RAG indexing
+    "de.edmd.reading.quality.warning",
+    "de.edmd.reading.direct.stored",
+    # N3: Grid anomaly detection — bilanzierungsgebiet drift
+    "de.markt.grid.drift.detected",
+    "de.markt.nb-contract.updated",
+    # B12: MMMA/MMM price import result notifications
+    "de.markt.mmma.import.failed",
+]

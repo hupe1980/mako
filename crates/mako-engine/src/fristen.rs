@@ -613,7 +613,7 @@ fn is_bdew_mako_holiday(date: Date) -> bool {
 /// let e = easter_sunday(2025);
 /// assert_eq!((e.year(), e.month() as u8, e.day()), (2025, 4, 20));
 /// ```
-#[allow(clippy::many_single_char_names)]
+#[expect(clippy::many_single_char_names)]
 fn easter_sunday(year: i32) -> Date {
     let a = year % 19;
     let b = year / 100;

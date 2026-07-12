@@ -1,7 +1,7 @@
 ---
 layout: default
 title: ERP Integration
-nav_order: 23
+nav_order: 10
 parent: Architecture
 mermaid: true
 description: >
@@ -863,7 +863,7 @@ With BO4E:
 | `POST /api/v1/commands` REST endpoint | ✅ Implemented (`makod/src/commands_api.rs`) |
 | `PUT /admin/malo/{malo_id}` cache | ✅ Implemented |
 | `PUT /admin/partners/{mp_id}` | ✅ Implemented |
-| BO4E typed Rust crate (`rubo4e`) | ✅ In use — `rubo4e = "0.5.0"` in workspace dependencies (BO4E schema v202607) |
+| BO4E typed Rust crate (`rubo4e`) | ✅ In use — `rubo4e = "0.6.0"` in workspace dependencies (BO4E schema v202607); 31 active `rubo4e::current` types |
 
 ---
 

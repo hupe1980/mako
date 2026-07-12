@@ -34,16 +34,17 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
             r"INSERT INTO process_projections
                   (process_id, pid, family, workflow_name, state, malo_id, partner_mp_id,
                    mdm_role, deadline_at, deadline_risk, started_at, last_event_at,
-                   erc_code, tenant, updated_at)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now())
+                   erc_code, initiator_is_affiliate, tenant, updated_at)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())
               ON CONFLICT (process_id) DO UPDATE SET
-                  state          = EXCLUDED.state,
-                  deadline_risk  = EXCLUDED.deadline_risk,
-                  last_event_at  = EXCLUDED.last_event_at,
-                  erc_code       = COALESCE(EXCLUDED.erc_code, process_projections.erc_code),
-                  malo_id        = COALESCE(EXCLUDED.malo_id, process_projections.malo_id),
-                  partner_mp_id    = COALESCE(EXCLUDED.partner_mp_id, process_projections.partner_mp_id),
-                  mdm_role       = COALESCE(EXCLUDED.mdm_role, process_projections.mdm_role),
+                  state                  = EXCLUDED.state,
+                  deadline_risk          = EXCLUDED.deadline_risk,
+                  last_event_at          = EXCLUDED.last_event_at,
+                  erc_code               = COALESCE(EXCLUDED.erc_code, process_projections.erc_code),
+                  malo_id                = COALESCE(EXCLUDED.malo_id, process_projections.malo_id),
+                  partner_mp_id          = COALESCE(EXCLUDED.partner_mp_id, process_projections.partner_mp_id),
+                  mdm_role               = COALESCE(EXCLUDED.mdm_role, process_projections.mdm_role),
+                  initiator_is_affiliate = EXCLUDED.initiator_is_affiliate OR process_projections.initiator_is_affiliate,
                   workflow_name  = CASE WHEN EXCLUDED.workflow_name <> ''
                                         THEN EXCLUDED.workflow_name
                                         ELSE process_projections.workflow_name END,
@@ -62,6 +63,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         .bind(p.started_at)
         .bind(p.last_event_at)
         .bind(&p.erc_code)
+        .bind(p.initiator_is_affiliate)
         .bind(&p.tenant)
         .execute(&self.pool)
         .await
@@ -73,7 +75,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         let rows = sqlx::query(
             r"SELECT process_id, pid, family, workflow_name, state, malo_id, partner_mp_id,
                      mdm_role, deadline_at, deadline_risk, started_at, last_event_at,
-                     erc_code, tenant
+                     erc_code, initiator_is_affiliate, tenant
               FROM process_projections
               WHERE ($1::text IS NULL OR state = $1)
                 AND ($2::int  IS NULL OR pid   = $2)
@@ -104,7 +106,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         let row = sqlx::query(
             r"SELECT process_id, pid, family, workflow_name, state, malo_id, partner_mp_id,
                      mdm_role, deadline_at, deadline_risk, started_at, last_event_at,
-                     erc_code, tenant
+                     erc_code, initiator_is_affiliate, tenant
               FROM process_projections
               WHERE process_id = $1",
         )
@@ -187,7 +189,7 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         let rows = sqlx::query(
             r"SELECT process_id, pid, family, workflow_name, state, malo_id, partner_mp_id,
                      mdm_role, deadline_at, deadline_risk, started_at, last_event_at,
-                     erc_code, tenant
+                     erc_code, initiator_is_affiliate, tenant
               FROM process_projections
               WHERE state NOT IN ('completed','rejected','cancelled')
                 AND deadline_at IS NOT NULL
@@ -257,6 +259,7 @@ fn row_to_projection(row: &sqlx::postgres::PgRow) -> Result<ProcessProjection, O
         erc_code: row
             .try_get("erc_code")
             .map_err(|e| ObsError::Database(e.to_string()))?,
+        initiator_is_affiliate: row.try_get("initiator_is_affiliate").unwrap_or(false),
         tenant: row
             .try_get("tenant")
             .map_err(|e| ObsError::Database(e.to_string()))?,

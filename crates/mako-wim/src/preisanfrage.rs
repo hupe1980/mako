@@ -200,8 +200,10 @@ pub struct PreisanfrageData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum PreisanfrageState {
     /// No events yet.
+    #[default]
     New,
     /// REQOTE received; awaiting response.
     Eingegangen(PreisanfrageData),
@@ -221,12 +223,6 @@ pub enum PreisanfrageState {
         /// Reason.
         reason: String,
     },
-}
-
-impl Default for PreisanfrageState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl PreisanfrageState {
@@ -485,7 +481,7 @@ impl Workflow for WimPreisanfrageWorkflow {
                     }
                 }
                 let aperak_pid = Pruefidentifikator::new(29_001)
-                    .map_err(|e| WorkflowError::rejected(e.to_string()))?;
+                    .map_err(|e| WorkflowError::rejected(e.clone()))?;
                 Ok(vec![PreisanfrageEvent::AperakFehlerDispatched {
                     aperak_pid,
                     reason,

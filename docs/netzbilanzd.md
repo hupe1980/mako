@@ -1,7 +1,8 @@
 ---
 layout: default
 title: netzbilanzd
-nav_order: 14
+nav_order: 25
+parent: Services
 description: >-
   Operator guide for netzbilanzd — the NNE/KA/MMM/MSB billing daemon that generates
   INVOIC 31001, 31002, 31005, and 31009 invoices for the NB (Netzbetreiber) role,
@@ -61,8 +62,27 @@ sequenceDiagram
 1. **Input collection** — the operator (or ERP) provides meter readings
    (`arbeitsmenge_kwh`, `spitzenleistung_kw`) and tariff data from `marktd`
    (`arbeitspreis_ct_per_kwh`, `leistungspreis_eur_per_kw`, `ka_satz_ct_per_kwh`).
-   `netzbilanzd` does not query `marktd` or `edmd` autonomously; all inputs are
-   supplied in the billing-run request, making the run idempotent.
+   `netzbilanzd` does not query `marktd` or `edmd` autonomously for tariff data
+   — all inputs are supplied in the billing-run request, making the run idempotent.
+
+   **Exception — MMM Abrechnungspreise (auto-fetch):** for `billing_type = "mmm"`,
+   the fields `mehr_preis_ct_per_kwh` and `minder_preis_ct_per_kwh` are optional.
+   When omitted, `netzbilanzd` automatically fetches them from `marktd`:
+   - Gas MMM → `GET /api/v1/mmma-preise/gas/{year}/{month}` (Trading Hub Europe monthly)
+   - Strom MMM → `GET /api/v1/mmm-preise/strom/{year}/{month}?unb_mp_id=...` (ÜNB, §22 StromNZV)
+
+   Import these prices into `marktd` monthly via
+   `PUT /api/v1/mmma-preise/gas/{year}/{month}` before running Gas MMM billing.
+   Without them the billing run will fall back to requiring manual ERP input.
+
+   **SLP profile audit trail (auto-annotate):** for `billing_type = "mmm"`, the
+   optional `lastprofil` field (e.g. `"H0"`, `"G0"`, `"L0"`) identifies the
+   SLP profile used in the billing period. When omitted, `netzbilanzd` auto-fetches
+   `malo.bilanzierungsmethode` from `marktd` (populated from UTILMD `TM+EM` at supply-start)
+   and stores it as `Rechnung.zusatz_attribute[{name:"lastprofil"}]` for downstream
+   ERP import and BNetzA audit. This ensures the correct SLP variant (H0 household vs.
+   G0 commercial vs. L0 agricultural) is traceable per billing period without manual
+   ERP intervention.
 
 2. **Invoice generation** — the pure `mako-nne` library calculates billing
    positions with no floating-point money (all amounts in `EuroAmount` = `i64 × 10⁻⁵ EUR`).
@@ -90,16 +110,57 @@ sequenceDiagram
 |---|---|---|---|
 | `nne_strom` | 31001 | NNE Strom — monthly network usage (NB → LF) | `arbeitsmenge_kwh`, `arbeitspreis_ct_per_kwh` |
 | `nne_gas` | 31005 | NNE Gas — monthly gas network usage (GNB → LFG) | `arbeitsmenge_kwh`, `arbeitspreis_ct_per_kwh` |
-| `mmm` | 31002 | Mehr-/Mindermengen settlement | `arbeitsmenge_kwh` (actual), `profil_kwh`, `mehr_preis_ct_per_kwh`, `minder_preis_ct_per_kwh` |
+| `mmm` | 31002 | Mehr-/Mindermengen settlement | `arbeitsmenge_kwh` (actual), `profil_kwh`, `mehr_preis_ct_per_kwh`\*, `minder_preis_ct_per_kwh`\* |
+
+> \* MMM prices are auto-fetched from `marktd` when not supplied — see [MMM price auto-fetch](#mmm-abrechnungspreise-auto-fetch) below. Supply `lastprofil` (e.g. `"H0"`, `"G0"`) to annotate the SLP profile in the generated `Rechnung.zusatz_attribute`; omit to have `netzbilanzd` auto-fetch it from `malo.bilanzierungsmethode` in `marktd`.
 | `msb_31009` | 31009 | MSB-Rechnung — metering service settlement (NB → MSB) | `msb_mp_id`, `grundgebuehr_eur_per_month`, `billing_months` |
 
-### NNE billing positions
+### NNE billing positions (flat-rate)
+
+Standard static NNE — one Arbeit position plus optional Leistung (RLM) and KA:
 
 | # | Position | Formula | Condition |
 |---|---|---|---|
-| 1 | Netznutzung Arbeit | `arbeitsmenge_kwh × arbeitspreis_ct_per_kwh ÷ 100` | Always |
+| 1 | Netznutzung Arbeit | `arbeitsmenge_kwh × arbeitspreis_ct_per_kwh ÷ 100` | Always (flat) |
 | 2 | Netznutzung Leistung (RLM) | `spitzenleistung_kw × leistungspreis_eur_per_kw` | When `spitzenleistung_kw` set |
 | 3 | Konzessionsabgabe | `arbeitsmenge_kwh × ka_satz_ct_per_kwh ÷ 100` | When `ka_satz_ct_per_kwh` set |
+
+### §14a Modul 2 ToU billing positions (time-variable NNE)
+
+**Mandatory since 01.01.2024** (BNetzA BK6-22-300) for controllable loads (heat pumps,
+EV charging points, §14a-eligible assets). When `arbeitsmenge_ht_kwh` **and**
+`arbeitsmenge_nt_kwh` are both provided, `mako-nne` auto-generates separate HT + NT
+positions instead of a single blended Arbeit position:
+
+| # | Position | Formula | Source |
+|---|---|---|---|
+| 1 | Netznutzung Arbeit HT (§14a Modul 2) | `arbeitsmenge_ht_kwh × arbeitspreis_ht_ct_per_kwh ÷ 100` | Hochlast band |
+| 2 | Netznutzung Arbeit NT (§14a Modul 2) | `arbeitsmenge_nt_kwh × arbeitspreis_nt_ct_per_kwh ÷ 100` | Niedertarif band |
+| 3 | Netznutzung Leistung (RLM) | `spitzenleistung_kw × leistungspreis_eur_per_kw` | When `spitzenleistung_kw` set |
+| 4 | Konzessionsabgabe | `(ht_kwh + nt_kwh) × ka_satz_ct_per_kwh ÷ 100` | When `ka_satz_ct_per_kwh` set |
+
+**How to populate the ToU inputs:**
+
+1. **Consumption split** — read `arbeitsmenge_ht_kwh` and `arbeitsmenge_nt_kwh` from
+   `edmd GET /api/v1/billing-period/{malo_id}` (populated from MSCONS HT/NT OBIS codes).
+2. **Band prices** — read `zeitvariablePreispositionen` from
+   `marktd GET /api/v1/preisblaetter/{nb_mp_id}` (published via PRICAT 27003).
+   The response field `zeitvariable_preispositionen` contains a JSON array of
+   `ZeitvariablePreisposition` objects; extract `preisHt` and `preisNt` (ct/kWh).
+
+```bash
+# 1. Get HT/NT split from edmd
+PERIOD=$(curl -s "http://edmd:8380/api/v1/billing-period/10001234567?from=2025-01-01&to=2025-01-31" \
+  -H "Authorization: Bearer <token>")
+HT_KWH=$(echo "$PERIOD" | jq -r '.arbeitsmenge_ht_kwh // empty')
+NT_KWH=$(echo "$PERIOD" | jq -r '.arbeitsmenge_nt_kwh // empty')
+
+# 2. Get ToU prices from marktd
+PREISBLATT=$(curl -s "http://marktd:8180/api/v1/preisblaetter/9900357000004?date=2025-01-01" \
+  -H "Authorization: Bearer <token>")
+HT_PREIS=$(echo "$PREISBLATT" | jq -r '.zeitvariable_preispositionen[0].preisHt')
+NT_PREIS=$(echo "$PREISBLATT" | jq -r '.zeitvariable_preispositionen[0].preisNt')
+```
 
 ### MMM billing positions
 

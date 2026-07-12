@@ -121,9 +121,10 @@ impl EventPayload for TransportNotificationEvent {
 // ── State ─────────────────────────────────────────────────────────────────────
 
 /// Process state for the GaBi Gas TRANOT workflow.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub enum TransportNotificationState {
     /// Initial state — no TRANOT received yet.
+    #[default]
     New,
     /// TRANOT received and recorded (terminal).
     Received(TransportNotificationData),
@@ -135,12 +136,6 @@ impl TransportNotificationState {
             Self::New => "New",
             Self::Received(_) => "Received",
         }
-    }
-}
-
-impl Default for TransportNotificationState {
-    fn default() -> Self {
-        Self::New
     }
 }
 

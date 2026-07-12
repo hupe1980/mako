@@ -270,6 +270,8 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
                 zaehlerstand_anfang: parse_dec("zaehlerstand_anfang"),
                 zaehlerstand_ende: parse_dec("zaehlerstand_ende"),
                 quality: str_to_quality(&quality_str),
+                lastprofil: None,
+                profil_typ: None,
                 tenant_id: row.try_get("tenant_id").unwrap_or(None),
             }));
         }
@@ -346,6 +348,8 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             zaehlerstand_anfang: None,
             zaehlerstand_ende: None,
             quality: worst_quality,
+            lastprofil: None,
+            profil_typ: None,
             tenant_id: q.tenant_id,
         }))
     }

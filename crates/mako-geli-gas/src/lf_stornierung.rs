@@ -165,9 +165,10 @@ pub struct LfStornierungData {
 }
 
 /// Process state for the GeLi Gas LF-side Stornierung workflow.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub enum LfStornierungState {
     /// Initial state before `InitiateStornierung` is received.
+    #[default]
     New,
     /// UTILMD G 44022 sent; awaiting GNB response within 10 Werktage.
     Pending(LfStornierungData),
@@ -194,12 +195,6 @@ impl LfStornierungState {
     #[must_use]
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Accepted(_) | Self::Rejected { .. })
-    }
-}
-
-impl Default for LfStornierungState {
-    fn default() -> Self {
-        Self::New
     }
 }
 

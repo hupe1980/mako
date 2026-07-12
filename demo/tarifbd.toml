@@ -1,0 +1,18 @@
+# tarifbd.toml — demo configuration
+# Product & Tariff Catalog daemon (LF role).
+# Single source of truth for retail energy tariffs, Energiedienstleistungen,
+# Telco products, EPEX Spot day-ahead prices.
+# DO NOT use in production — auth disabled.
+
+# database_url is injected via TARIFBD_DATABASE_URL env var
+database_url = "postgres://demo:demo-secret@postgres/tarifbd"
+port         = 9080
+tenant       = "9910000000002"   # operator LF BDEW-Codenummer
+
+# Optional: ERP webhook for product change notifications
+# erp_webhook_url = "http://erp:8000/webhooks/tarifbd"
+# erp_hmac_secret = ""  # set via TARIFBD_ERP_HMAC_SECRET env var
+
+# [oidc]  — omit to disable auth (dev mode only)
+# [otel]
+# endpoint = "http://otel-collector:4317"

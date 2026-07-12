@@ -112,6 +112,8 @@ async fn main() -> anyhow::Result<()> {
         inbound_secret,
         db_pool_size: cfg.database.pool_size,
         tenant: cfg.identity.tenant,
+        // §20 EnWG: if own_mp_ids is empty the server falls back to [tenant].
+        own_mp_ids: cfg.identity.own_mp_ids,
         oidc,
         cedar,
         shutdown,

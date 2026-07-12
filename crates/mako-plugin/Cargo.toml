@@ -1,0 +1,30 @@
+[package]
+name             = "mako-plugin"
+version.workspace = true
+description      = "Plugin infrastructure for mako daemons — extension point traits, PluginRegistry, and optional WASM plugin loading via Extism."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish          = false
+
+[features]
+## Enables loading WASM plugins from .wasm files using Extism (Wasmtime-backed).
+## Plugins written in any WASM-targeting language (Rust, Go, TypeScript, Python, etc.)
+## are sandboxed: they can only call the host functions explicitly exposed to them.
+## Adds ~1 MB to the binary (Wasmtime JIT).
+wasm = ["dep:extism"]
+
+[dependencies]
+serde       = { workspace = true, features = ["derive"] }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+tracing     = "0.1"
+tokio       = { version = "1", features = ["rt", "sync"] }
+
+# Optional WASM runtime — enabled by feature `wasm`
+extism      = { version = "1", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

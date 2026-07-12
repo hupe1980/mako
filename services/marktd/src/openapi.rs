@@ -27,6 +27,7 @@ use utoipa_swagger_ui::SwaggerUi;
         crate::handlers::malo::list_malo,
         crate::handlers::melo::put_melo,
         crate::handlers::melo::get_melo,
+        crate::handlers::melo::get_melo_standorteigenschaften,
         crate::handlers::contract::put_contract,
         crate::handlers::contract::get_contract,
         crate::handlers::pricat::get_pricat_history,

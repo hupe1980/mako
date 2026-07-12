@@ -139,8 +139,10 @@ pub struct GaBiGasInvoicData {
 /// Current state of a GaBi Gas INVOIC billing process.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum GaBiGasInvoicState {
     /// No INVOIC received yet.
+    #[default]
     New,
     /// INVOIC received; AHB validation pending or in progress.
     InvoicReceived(GaBiGasInvoicData),
@@ -164,12 +166,6 @@ pub enum GaBiGasInvoicState {
     PaymentConfirmed(GaBiGasInvoicData),
     /// COMDIS 29001 received — invoicer rejected the BKV's REMADV (payer role).
     ComdisRejected(GaBiGasInvoicData),
-}
-
-impl Default for GaBiGasInvoicState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl GaBiGasInvoicState {

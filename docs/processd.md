@@ -1,8 +1,8 @@
 ---
 layout: default
 title: processd Operator Guide
-nav_order: 26
-parent: Architecture
+nav_order: 23
+parent: Services
 description: >
   processd operator guide: Process decision engine for automated NB Anmeldung STP
   decisions (netz-checker), LF E_0624 auto-response, LFN bootstrap (Strom + Gas),
@@ -118,7 +118,7 @@ de.mako.process.initiated (PID 55001/55016/44001)
 | Condition | STP |
 |-----------|-----|
 | Grid records not imported (cold NIS cache) | ~60 % |
-| NIS data imported via `nis-syncd` (N7) or manual provisioning | ≥ 95 % |
+| NIS data imported via `nis-syncd` or manual provisioning | ≥ 95 % |
 
 Grid records are sourced from the NB’s own NIS/GIS system — **not** from MaStR.
 See [marktd Grid topology](marktd#grid-topology--nisgis-integration) for import options.
@@ -132,6 +132,33 @@ Set `NB_AUTO_ACCEPT=false` (default) until you have verified:
 1. Grid record coverage for your MaLo portfolio (`GET /api/v1/malo/{id}/grid`)
 2. Partner directory populated for all expected LF MP-IDs
 3. At least one manual review cycle confirmed correct ERC codes
+
+### §20 EnWG — affiliate guard
+
+When `processd` is deployed in an **integrated NB+LF utility** (§6b EnWG),
+auto-acceptance is **always blocked** for Anmeldungen where the requesting LF
+is an **affiliate** of the NB operator. This implements the §20 EnWG
+Diskriminierungsfreiheitspflicht non-discrimination obligation.
+
+Detection logic:
+
+```text
+new_supplier_mp_id ∈ obsd.own_mp_ids  →  initiator_is_affiliate = true
+                                           auto_accept overridden to false
+                                           decision: Escalate (operator review)
+```
+
+Configure the operator's own MP-IDs in `obsd.toml` (they are shared with `processd`
+via the `obsd` CloudEvent payload):
+
+```toml
+[identity]
+own_mp_ids = ["9900357000004", "9800357000004"]
+```
+
+`obsd` records `initiator_is_affiliate = true` on the resulting `ProcessProjection`
+and the KPI report exposes the parity delta for **BNetzA audit evidence**.
+See [obsd §20 EnWG parity](obsd#20-enwg-parity) for query examples.
 
 ---
 
@@ -385,3 +412,101 @@ Alert when:
 - STP rate drops below 90 % (grid record coverage degraded — run `nis-syncd`)
 - `processd_approval_queue_depth` > 0 entries near TTL (LF deadline risk)
 - Decision latency > 10 s (marktd connectivity issue)
+
+---
+
+## MSB module — WiM MSB-Wechsel STP
+
+`processd` includes a **WiM MSB-Wechsel STP** engine (feature: `role-nb-strom`) that
+automatically evaluates inbound UTILMD 55039 (Kündigung MSB) and 55042 (Anmeldung MSB)
+requests from new Messstellenbetreiber. STP target: **≥ 80 %**.
+
+### Decision pipeline (`msb_module.rs`)
+
+```
+de.mako.process.initiated (PID 55039 / 55042)
+  → GET marktd /api/v1/versorgung/{malo_id}   ← MeLo exists?
+  → GET marktd /api/v1/partners/{nmsb_mp_id}  ← nMSB registered?
+  → GET marktd /api/v1/technische-ressourcen/{sr_id} ← SR linked?
+  → evaluate_msb_anmeldung / evaluate_msb_kuendigung (pure, no I/O)
+      Accept   → wim.msb-wechsel.anmeldung.bestaetigen
+      Reject   → wim.msb-wechsel.anmeldung.ablehnen (ERC code)
+      Escalate → operator alert (manual decision required)
+```
+
+### Evaluation checks (PID 55042 — Anmeldung)
+
+| # | Check | ERC on failure |
+|---|---|---|
+| 1 | MeLo exists in `marktd` grid registry | A02 |
+| 2 | nMSB registered in partner directory | A05 |
+| 3 | MeLo has an iMSys device (§14a mandatory MSB eligibility review) | Escalate |
+| 4 | `SteuerbareRessource` linked (§14a eligibility review) | Escalate |
+| 5 | Zaehler count > 0 (grid record exists for the MeLo) | Escalate |
+
+Checks 1–2 are hard rejects (A02/A05). Checks 3–5 trigger operator escalation — `processd`
+cannot make the §14a eligibility determination autonomously.
+
+**Kündigung (PID 55039)** only applies checks 1–2. The NB has no valid grounds to reject
+termination when the MeLo exists and the nMSB is registered.
+
+### Escalation reasons
+
+| Scenario | Escalate reason |
+|---|---|
+| iMSys device present | `MeLo {id} has an iMSys device — §14a eligibility check required` |
+| SR-linked §14a load | `MeLo {id} has linked SteuerbareRessource {id} — §14a Modul eligibility check required` |
+| No Zaehler registered | `MeLo {id} has no registered meters — NIS/GIS data import required` |
+
+All escalated decisions still generate an `anmeldung_decisions` row for §20 EnWG audit trail.
+
+---
+
+## MSB module — REQOTE auto-response
+
+When `processd` receives `de.mako.process.initiated` for PIDs 35001–35005 (REQOTE Preisanfrage from an nMSB), it **automatically dispatches a QUOTES response** sourced from the active `PreisblattMessung` in `marktd`. This eliminates the manual ERP trigger that previously risked APERAK ERC A97 deadline breach.
+
+### Decision pipeline
+
+```
+de.mako.process.initiated (PIDs 35001–35005, REQOTE)
+  → GET marktd /api/v1/preisblaetter-messung/{own_mp_id}  ← PreisblattMessung current?
+      Found   → wim.preisanfrage.angebot-senden
+                 (includes preisblatt_gueltigkeit in payload for makod QUOTES build)
+      Not found → operator alert (no auto-response — prevents blind QUOTES)
+```
+
+Enable in `processd.toml`:
+
+```toml
+[msb]
+auto_preisanfrage = true   # default: true
+```
+
+Set `auto_preisanfrage = false` to require manual QUOTES dispatch via ERP (e.g. during PreisblattMessung update windows).
+
+---
+
+## MSB module — §14a Steuerungsauftrag auto-ORDRSP
+
+When an MSB receives a WiM Steuerungsauftrag (iMS ORDERS, `makoworkflow = wim-steuerungsauftrag`), `processd` auto-confirms if:
+
+1. The `SteuerbareRessource.istFernschaltbar = true` (remote-switchable), **and**
+2. The dispatched `produktcode` is in the contracted `konfigurationsprodukte` list (BK6-24-174 §4.3).
+
+If the `produktcode` is not contracted, `processd` dispatches `wim.steuerungsauftrag.ablehnen` immediately — preventing unauthorized control of customer assets.
+
+### Decision pipeline
+
+```
+de.mako.process.initiated (wim-steuerungsauftrag)
+  → [parallel]
+      GET marktd /api/v1/steuerbare-ressourcen/{sr_id}                 ← istFernschaltbar?
+      GET marktd /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte  ← contracted?
+  → istFernschaltbar=true + produktcode contracted  → bestaetigen
+  → istFernschaltbar=true + produktcode NOT contracted  → ablehnen (BK6-24-174 §4.3)
+  → istFernschaltbar=false  → Escalate (manual ORDRSP required)
+  → SR not found  → Escalate
+```
+
+Register contracted products via `PUT /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte` in `marktd`. Each entry requires a non-empty `zaehlzeitregister`-linked `produktcode`.

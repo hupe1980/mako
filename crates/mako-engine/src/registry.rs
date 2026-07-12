@@ -528,10 +528,10 @@ impl ProcessRegistry for NoopProcessRegistry {
 #[cfg(any(test, feature = "testing"))]
 #[derive(Debug, Default, Clone)]
 pub struct InMemoryProcessRegistry {
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     inner: Arc<RwLock<HashMap<(TenantId, Box<str>), ProcessIdentity>>>,
     /// Correlated 1:many index: `(tenant_id, tag, process_id)` → `ProcessIdentity`.
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     correlated: Arc<RwLock<HashMap<(TenantId, Box<str>, crate::ids::ProcessId), ProcessIdentity>>>,
 }
 

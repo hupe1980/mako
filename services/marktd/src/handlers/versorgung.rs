@@ -150,7 +150,7 @@ fn default_history_size() -> u32 {
 ///
 /// Returns the current supply state.  Add `?at=YYYY-MM-DD` to query the state
 /// as of a specific calendar date (German local time, CET/CEST).
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 pub async fn get_versorgungsstatus<Ma, Me, Co, Su, Ci, Pa, Vs>(
     State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -244,7 +244,7 @@ where
 ///
 /// Returns the full supply-state change history for a MaLo, newest first.
 /// Backed by the `versorgungsstatus_history` table.
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 pub async fn get_versorgungsstatus_history<Ma, Me, Co, Su, Ci, Pa, Vs>(
     State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -301,7 +301,7 @@ where
 }
 
 /// PUT /api/v1/versorgung/:malo_id
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 pub async fn put_versorgungsstatus<Ma, Me, Co, Su, Ci, Pa, Vs>(
     State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Annual Release Workflow
-nav_order: 30
+nav_order: 12
 parent: Release & Compliance
 description: >
   Step-by-step engineering playbook for incorporating a new BDEW annual

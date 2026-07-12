@@ -18,6 +18,11 @@ use rust_decimal::Decimal;
 /// For **SLP** meters:
 /// - Leave both fields as `None` (Arbeitspreisanteil only).
 ///
+/// For **§14a Modul 2 time-variable NNE** (BNetzA BK6-22-300):
+/// - Set `arbeitsmenge_ht_kwh` + `arbeitspreis_ht_ct_per_kwh` for Hochlast periods.
+/// - Set `arbeitsmenge_nt_kwh` + `arbeitspreis_nt_ct_per_kwh` for Niedertarif periods.
+/// - Leave `arbeitsmenge_kwh` / `arbeitspreis_ct_per_kwh` as the base fallback.
+///
 /// For Gas:
 /// - The `arbeitsmenge_kwh` should already be converted from m³ using
 ///   `brennwert × zustandszahl` before being supplied here.
@@ -43,9 +48,31 @@ pub struct NneInput {
     /// Total energy consumption in kWh for the billing period.
     ///
     /// For Gas: already converted from m³ (brennwert × zustandszahl × volume).
+    /// Used when HT/NT split is not available (SLP, Gas, or pre-§14a deployments).
     pub arbeitsmenge_kwh: Decimal,
     /// Published NNE Arbeitspreis in **ct/kWh** (from `PreisblattNetznutzung`).
+    /// Used as the single Arbeit rate when HT/NT split is absent.
     pub arbeitspreis_ct_per_kwh: Decimal,
+
+    // ── §14a Modul 2 time-variable (ToU) NNE ─────────────────────────────────
+    // BNetzA BK6-22-300: mandatory for all controllable loads since 01.01.2024.
+    // When both fields below are non-None, the billing engine generates two
+    // separate Arbeit positions (HT + NT) instead of a single blended position.
+    // Source: `edmd` MeterBillingPeriod.arbeitsmenge_ht_kwh / .arbeitsmenge_nt_kwh.
+    /// Hochlast (HT) consumption in kWh — §14a Modul 2 periods (higher-price band).
+    /// `None` when ToU metering is not configured for this MaLo.
+    pub arbeitsmenge_ht_kwh: Option<Decimal>,
+    /// HT Arbeitspreis in ct/kWh (from `PreisblattNetznutzung.zeitvariablePreispositionen`).
+    /// Required when `arbeitsmenge_ht_kwh` is set.
+    pub arbeitspreis_ht_ct_per_kwh: Option<Decimal>,
+    /// Niedertarif (NT) consumption in kWh — §14a Modul 2 off-peak periods.
+    /// `None` when ToU metering is not configured for this MaLo.
+    pub arbeitsmenge_nt_kwh: Option<Decimal>,
+    /// NT Arbeitspreis in ct/kWh (from `PreisblattNetznutzung.zeitvariablePreispositionen`).
+    /// Required when `arbeitsmenge_nt_kwh` is set.
+    pub arbeitspreis_nt_ct_per_kwh: Option<Decimal>,
+
+    // ── RLM demand charge ─────────────────────────────────────────────────────
     /// Peak demand in **kW** (`spitzenleistung_kw` from `MeterBillingPeriod`).
     ///
     /// `None` for SLP meters and Gas MaLos.

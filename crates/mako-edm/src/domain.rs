@@ -64,6 +64,7 @@ impl std::str::FromStr for Messtyp {
 /// Quality flag for a meter reading (MSCONS DE7085 mapping).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Default)]
 pub enum QualityFlag {
     /// Reading directly from meter (DE7085: 67 / Z83).
     Measured,
@@ -74,13 +75,8 @@ pub enum QualityFlag {
     /// Calculated from SLP formula (DE7085: 220 / Z78).
     Calculated,
     /// Unknown / not mapped.
+    #[default]
     Unknown,
-}
-
-impl Default for QualityFlag {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 /// Energy commodity (Sparte).
@@ -240,6 +236,26 @@ pub struct MeterBillingPeriod {
     pub zaehlerstand_ende: Option<Decimal>,
     /// Worst quality flag across all reads contributing to this summary.
     pub quality: QualityFlag,
+    /// **SLP only** — standardised load profile designation.
+    ///
+    /// Set by the NB from the UTILMD `LIN+1` / `IMD` segment during supply-start
+    /// registration.  Standard values:
+    /// - `H0` — household (Haushalt)
+    /// - `G0` – `G6` — commercial (Gewerbe, 0 = generic)
+    /// - `L0` / `L1` / `L2` — agricultural (Landwirtschaft)
+    /// - `P0` — pumping station / agriculture
+    ///
+    /// `None` for RLM and iMSys MaLos (metered individually).
+    pub lastprofil: Option<String>,
+    /// BO4E `ProfilTyp` for this MaLo.
+    ///
+    /// Populated from the UTILMD `TS+Z09`/`TS+Z10` qualifier or from the
+    /// `bilanzierungsmethode` field in `marktd`.  Valid values per BO4E schema:
+    /// - `"STANDARDLASTPROFIL"` — synthetic SLP  
+    /// - `"ANALYTISCHES_VERFAHREN"` — analytically profiled (used for some Gas SLPs)
+    ///
+    /// `None` when unspecified (backwards-compatible — treat as SLP for existing records).
+    pub profil_typ: Option<String>,
     /// Tenant ID.
     pub tenant_id: Option<Uuid>,
 }

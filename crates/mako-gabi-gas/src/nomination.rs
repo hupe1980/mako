@@ -239,8 +239,10 @@ impl EventPayload for NominationEvent {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum NominationState {
     /// No NOMINT dispatched yet.
+    #[default]
     New,
     /// NOMINT dispatched; awaiting NOMRES from FNB/MGV.
     NominationSent(NominationData),
@@ -257,12 +259,6 @@ pub enum NominationState {
     },
     /// No NOMRES received before the D-1 15:00 deadline (terminal).
     DeadlineExpired(NominationData),
-}
-
-impl Default for NominationState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl NominationState {

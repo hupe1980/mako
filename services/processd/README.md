@@ -14,6 +14,9 @@ without ERP involvement for the common cases.
 |------|--------|------|----------|----------------|
 | **NB** | `nb_module` | 55001, 55016, 44001 | GPKE: 24h · GeLi Gas: 10 WT | `netz-checker` (6 checks) |
 | **LF** | `lf_module` | 55008 (E_0624) | 45 min | `VersorgungsStatus` from `marktd` |
+| **MSB** | `msb_module` | 55039, 55042 (MSB-Wechsel STP) | 5 WT | device/partner checks |
+| **MSB** | `msb_module` | 35001–35005 (REQOTE auto-response) | APERAK window | `PreisblattMessung` lookup |
+| **MSB/NB** | `handler` | `wim-steuerungsauftrag` | immediate | `konfigurationsprodukte` contract check |
 
 ## Features at a glance
 
@@ -25,6 +28,8 @@ without ERP involvement for the common cases.
 | **Authorization** | Cedar ABAC (`policies/processd.cedar`) |
 | **NB STP rate target** | ≥ 95 % (requires NIS grid records via `nis-syncd` or manual provisioning) |
 | **LF E_0624 window** | 45 min (2700 s) regulatory deadline; entries expire 5 min before |
+| **REQOTE auto-response** | Auto-dispatches QUOTES from `PreisblattMessung`; eliminates ERC A97 deadline risk. Disable: `[msb] auto_preisanfrage = false` |
+| **§14a Steuerungsauftrag** | Auto-confirms iMS ORDERS when `istFernschaltbar=true` AND `produktcode` is in `konfigurationsprodukte` (BK6-24-174 §4.3) |
 | **§20 EnWG parity** | `initiator_is_affiliate` on every `anmeldung_decisions` row |
 
 ---
@@ -152,6 +157,40 @@ Background task runs every 60 s to expire stale `Pending` entries.
 | `get_stp_rate` | NB | STP rate over last N days (target ≥ 95%) |
 | `list_queue` | LF | Approval queue entries needing operator action |
 | `get_queue_entry` | LF | Single queue entry by UUID |
+
+---
+
+## MSB module — REQOTE auto-response
+
+When `processd` receives `de.mako.process.initiated` for PIDs 35001–35005 (REQOTE Preisanfrage
+from an nMSB), it **automatically dispatches a QUOTES response** using the active
+`PreisblattMessung` from `marktd`. This eliminates the manual ERP trigger that previously
+risked APERAK ERC A97 deadline breach.
+
+Enabled by default. Disable for manual QUOTES dispatch (e.g. during PreisblattMessung update
+windows):
+
+```toml
+# processd.toml
+[msb]
+auto_preisanfrage = false
+```
+
+---
+
+## MSB module — §14a Steuerungsauftrag auto-ORDRSP
+
+When an MSB receives a WiM Steuerungsauftrag (iMS ORDERS, `makoworkflow = wim-steuerungsauftrag`),
+`processd` evaluates the request automatically:
+
+- `istFernschaltbar = true` AND `produktcode` is in the SR's `konfigurationsprodukte` list
+  → auto-confirm (`wim.steuerungsauftrag.bestaetigen`)
+- `istFernschaltbar = true` AND `produktcode` **not** contracted
+  → auto-reject with ERC A05 (`wim.steuerungsauftrag.ablehnen`) per BK6-24-174 §4.3
+- `istFernschaltbar = false` OR SR not found
+  → escalate to operator approval queue
+
+`konfigurationsprodukte` are managed via `marktd`'s typed sub-resource API.
 
 ---
 

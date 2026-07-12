@@ -10,7 +10,8 @@
 # STP auto-responder.
 
 [storage.postgres]
-url = "env:DATABASE_URL"
+# url is injected via MARKTD_STORAGE__POSTGRES__URL env var
+url = "postgres://demo:demo-secret@postgres/marktd"
 
 [http]
 addr = "0.0.0.0:8180"
@@ -20,9 +21,11 @@ addr = "0.0.0.0:8180"
 
 [makod]
 base_url  = "http://makod:8080"
-api_key   = "env:MAKOD_API_KEY"
+# api_key is injected via MARKTD_MAKOD__API_KEY env var
+api_key   = ""
 tenant_id = "9900357000004"
 
 [webhook]
 inbound_path   = "/api/v1/events"
-inbound_secret = "env:MAKOD_WEBHOOK_SECRET"
+# inbound_secret is injected via MARKTD_WEBHOOK__INBOUND_SECRET env var
+inbound_secret = ""

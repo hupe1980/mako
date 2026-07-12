@@ -23,7 +23,7 @@ use mako_markt::{
     },
 };
 use mako_service::cedar::CedarEnforcer;
-use rubo4e::current::Marktlokation;
+use rubo4e::current::{Lastprofil, Marktlokation, Profilart};
 use serde::{Deserialize, Serialize};
 use time::Date;
 use utoipa::{IntoParams, ToSchema};
@@ -159,6 +159,16 @@ pub struct ListQuery {
     /// Filter by `rollencodenummer` (GLN) in active role assignments.
     #[serde(default)]
     pub rollencodenummer: Option<String>,
+    /// Filter by Gas GaBi RLM Fallgruppe (e.g. `GABI_RLM_MIT_TAGESBAND`).
+    /// Gas only — Strom MaLos have no Fallgruppe.
+    #[serde(default)]
+    pub fallgruppe: Option<String>,
+    /// Filter by billing mode (e.g. `RLM`, `SLP`, `IMS`).
+    #[serde(default)]
+    pub bilanzierungsmethode: Option<String>,
+    /// Filter by Regelzone EIC code (e.g. `10YDE-EON------1`).
+    #[serde(default)]
+    pub regelzone: Option<String>,
     #[param(example = 0)]
     #[serde(default)]
     pub page: u32,
@@ -454,6 +464,9 @@ where
         sparte,
         zuordnungstyp: q.zuordnungstyp,
         rollencodenummer: q.rollencodenummer,
+        fallgruppe: q.fallgruppe,
+        bilanzierungsmethode: q.bilanzierungsmethode,
+        regelzone: q.regelzone,
         page: q.page,
         size: q.size.min(500),
     };
@@ -510,4 +523,149 @@ pub(crate) fn today_berlin() -> Date {
         d.day() as u8,
     )
     .expect("jiff date maps to a valid time::Date")
+}
+
+// ── Lastprofil derivation ─────────────────────────────────────────────────────
+
+/// `GET /api/v1/malo/{id}/lastprofil`
+///
+/// Returns the SLP `Lastprofil` COM array for a MaLo.
+///
+/// ## Resolution order
+///
+/// 1. If `Marktlokation.lastprofile` is populated in the stored JSONB data, the
+///    stored values are returned verbatim (already typed BO4E).
+/// 2. Otherwise a default profile is **derived** from `bilanzierungsmethode` +
+///    `sparte` according to §§10–12 StromNZV / BDEW SLP registry:
+///
+/// | bilanzierungsmethode | sparte | derived profilschar | profilart |
+/// |---|---|---|---|
+/// | `SLP` | `STROM` | `H0` | `ART_STANDARDLASTPROFIL` |
+/// | `SLP` | `GAS` | `G000` | `ART_STANDARDLASTPROFIL` |
+/// | `RLM` | any | — | 404 — RLM meters use Lastgang, not SLP |
+/// | `IMS` | any | — | 404 — iMSys uses measured values, not SLP |
+///
+/// ## Motivation
+///
+/// `billingd` uses the SLP profile to:
+/// - Select the correct NNE tariff zone (H0 vs G0/G1–G6 vs L0 have different
+///   NNE rates in some DSO grid areas).
+/// - Verify Zählerstand plausibility against typical H0/G0 consumption curves.
+///
+/// Calling this endpoint from `billingd` replaces the current hard-coded
+/// `Eintarif` assumption for all SLP meters.
+#[utoipa::path(
+    get,
+    path = "/api/v1/malo/{id}/lastprofil",
+    params(("id" = String, Path, description = "11-digit MaLo-ID")),
+    responses(
+        (status = 200, description = "Lastprofil array for this MaLo"),
+        (status = 404, description = "MaLo not found or RLM/IMS meter (no SLP profile)"),
+    )
+)]
+pub async fn get_malo_lastprofil<Ma, Me, Co, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    claims: Claims,
+    Path(id): Path<String>,
+) -> impl IntoResponse
+where
+    Ma: MaloRepository + Clone,
+    Me: MeloRepository + Clone,
+    Co: ContractRepository + Clone,
+    Su: SubscriptionRepository + Clone,
+    Ci: CorrelationIndex + Clone,
+    Pa: PartnerRepository + Clone,
+{
+    if enforcer
+        .check(&claims.principal(), "read-malo", &state.tenant_gln)
+        .is_err()
+    {
+        return MdmError::Forbidden {
+            reason: "access denied",
+        }
+        .into_response();
+    }
+
+    let malo_id = match id.parse::<MaloId>() {
+        Ok(id) => id,
+        Err(e) => {
+            return MdmError::InvalidMaloId {
+                id,
+                reason: e.to_string(),
+            }
+            .into_response();
+        }
+    };
+
+    let record = match state.malo_repo.find(&malo_id, today_berlin()).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return MdmError::NotFound {
+                resource_type: "malo",
+                id: malo_id.to_string(),
+            }
+            .into_response();
+        }
+        Err(e) => return e.into_response(),
+    };
+
+    // RLM and IMS meters use Lastgang / measured values — no SLP profile.
+    let bilanzierungsmethode = record
+        .bilanzierungsmethode
+        .as_deref()
+        .unwrap_or("")
+        .to_uppercase();
+    if bilanzierungsmethode == "RLM" || bilanzierungsmethode == "IMS" {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!(
+                    "MaLo {malo_id} uses bilanzierungsmethode={bilanzierungsmethode}; \
+                     no SLP Lastprofil applies (use edmd Lastgang for metered values)"
+                )
+            })),
+        )
+            .into_response();
+    }
+
+    // 1. Try to extract stored lastprofile from the JSONB data.
+    let stored_profile: Vec<Lastprofil> = record
+        .data
+        .get("lastprofile")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    if !stored_profile.is_empty() {
+        return Json(serde_json::json!({
+            "malo_id": malo_id.to_string(),
+            "bilanzierungsmethode": record.bilanzierungsmethode,
+            "lastprofile": stored_profile,
+            "source": "stored",
+        }))
+        .into_response();
+    }
+
+    // 2. Derive default SLP profile from sparte (§§10–12 StromNZV / BDEW).
+    let profilschar = match record.sparte {
+        Sparte::Gas => "G000", // DVGW G 685 — Standardlastprofil Erdgas
+        _ => "H0",             // BDEW — Standardlastprofil Haushalt Strom
+    };
+    let derived = Lastprofil {
+        profilschar: Some(profilschar.to_owned()),
+        profilart: Some(Profilart::ArtStandardlastprofil),
+        bezeichnung: Some(match record.sparte {
+            Sparte::Gas => "Standardlastprofil Gas (G000 — DVGW G 685)".to_owned(),
+            _ => "Standardlastprofil Haushalt Strom (H0 — BDEW)".to_owned(),
+        }),
+        ..Default::default()
+    };
+
+    Json(serde_json::json!({
+        "malo_id": malo_id.to_string(),
+        "bilanzierungsmethode": record.bilanzierungsmethode,
+        "lastprofile": [derived],
+        "source": "derived",
+    }))
+    .into_response()
 }

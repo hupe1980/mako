@@ -8,7 +8,7 @@
 //! | Tool | Description |
 //! |---|---|
 //! | `get_process`     | Read a process projection by UUID |
-//! | `list_overdue`    | List processes past their regulatory deadline |
+//! | `list_overdue_processes` | List MaKo processes past their regulatory deadline |
 //! | `get_kpi_report`  | Get BNetzA KPI report for a PID and month |
 
 use std::sync::Arc;
@@ -25,9 +25,12 @@ use mako_service::{
 };
 use rmcp::{
     ErrorData as McpError, ServerHandler,
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    handler::server::{
+        router::{prompt::PromptRouter, tool::ToolRouter},
+        wrapper::Parameters,
+    },
     model::*,
-    schemars, tool, tool_handler, tool_router,
+    prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     },
@@ -70,6 +73,8 @@ pub struct ObsdMcpHandler {
     state: Arc<ObsdMcpState>,
     #[allow(dead_code)]
     tool_router: ToolRouter<ObsdMcpHandler>,
+    #[allow(dead_code)]
+    prompt_router: PromptRouter<ObsdMcpHandler>,
 }
 
 #[tool_router]
@@ -78,6 +83,7 @@ impl ObsdMcpHandler {
         Self {
             state,
             tool_router: Self::tool_router(),
+            prompt_router: Self::prompt_router(),
         }
     }
 
@@ -86,7 +92,10 @@ impl ObsdMcpHandler {
     /// Returns the full CQRS read-model entry: PID, state, partner GLNs,
     /// timestamps, and deadline risk score.  The data is a projection of
     /// all `de.mako.*` events received so far for this process.
-    #[tool(description = "Read a process projection by UUID")]
+    #[tool(
+        description = "Read a process projection by UUID",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn get_process(
         &self,
         Parameters(p): Parameters<GetProcessParams>,
@@ -160,7 +169,7 @@ impl ObsdMcpHandler {
     ///
     /// Returns up to 200 results ordered by deadline ascending (most urgent first).
     #[tool(description = "List processes past their regulatory deadline (most urgent first)")]
-    async fn list_overdue(&self) -> Result<CallToolResult, McpError> {
+    async fn list_overdue_processes(&self) -> Result<CallToolResult, McpError> {
         let rows = sqlx::query_as::<
             _,
             (
@@ -220,7 +229,10 @@ impl ObsdMcpHandler {
     ///
     /// `pid` — BDEW Prüfidentifikator (e.g. 55001 for GPKE Lieferbeginn).
     /// `period` — `YYYY-MM` (default: current month).
-    #[tool(description = "Get BNetzA KPI report for a PID and billing month (YYYY-MM)")]
+    #[tool(
+        description = "Get BNetzA KPI report for a PID and billing month (YYYY-MM)",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn get_kpi_report(
         &self,
         Parameters(p): Parameters<GetKpiReportParams>,
@@ -311,10 +323,57 @@ impl ObsdMcpHandler {
     }
 }
 
+#[prompt_router]
+impl ObsdMcpHandler {
+    #[prompt(
+        name = "audit-kpi",
+        description = "Step-by-step: run BNetzA KPI audit for a reporting period"
+    )]
+    async fn audit_kpi_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "How do I generate BNetzA KPI data for regulatory reporting?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "1. Use `get_kpi_report` with from/to dates for the reporting period.\n\
+                 2. Key KPIs: prozesse_total, completion_rate, aperak_violations, avg_lead_time_hours.\n\
+                 3. BNetzA targets: completion_rate >= 99%, aperak_violations <= 0.1%.\n\
+                 4. Drill into violations: use `list_overdue_processes` for individual cases.\n\
+                 5. Export the JSON response for inclusion in Qualitätsbericht (§35 EnWG).",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "investigate-aperak-violation",
+        description = "Step-by-step: investigate an APERAK deadline violation"
+    )]
+    async fn investigate_aperak_violation_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "A process shows an APERAK deadline violation. How do I investigate?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "1. Use `get_process` with the process_id to see the full projection.\n\
+                 2. Key timing: initiated_at, aperak_deadline_at (initiated + 45 min for UTILMD/ORDERS weekday),\n\
+                    aperak_sent_at.\n\
+                 3. If aperak_sent_at > aperak_deadline_at: BNetzA violation — document root cause.\n\
+                 4. APERAK AHB 1.0: Strom UTILMD/ORDERS weekday -> 45 Minuten;\n\
+                    Gas Initialprozesse -> 3 Werktage; Gas Folgeprozesse -> nächster Werktag 12 Uhr.",
+            ),
+        ]
+    }
+}
+
 #[tool_handler]
+#[prompt_handler]
 impl ServerHandler for ObsdMcpHandler {
     fn get_info(&self) -> ServerInfo {
-        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
             .with_server_info(Implementation::new("obsd", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "# obsd — Process Observability\n\
@@ -324,7 +383,7 @@ impl ServerHandler for ObsdMcpHandler {
              \n\
              ## Tools\n\
              - `get_process` — read a full process projection by UUID\n\
-             - `list_overdue` — list processes past their regulatory deadline (escalation queue)\n\
+             - `list_overdue_processes` — list MaKo processes past their regulatory APERAK/response deadline (escalation queue)\n\
              - `get_kpi_report` — BNetzA KPI report for a PID and billing month\n\
              \n\
              ## Process states\n\

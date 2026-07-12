@@ -44,6 +44,5 @@
       "AAO",
       "ACD"
     ]
-  },
-  "_note_sts_status_23012": "Änd-ID 23012 (INSRPT AHB 1.1g, Stand 11.12.2025): ZS1 (Reparatur ohne Gerätewechsel) added to Anwendungsfall 23012 STS qualifier set alongside ZB8 and ZC1. No allow-list codegen validation for STS qualifier codes — profile accepts any value. Conformance test for ZS1 to be added via cargo xtask generate-fixtures."
+  }
 }

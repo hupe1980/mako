@@ -27,9 +27,11 @@ use marktd::{
         contract::{get_contract, put_contract},
         correlation::{get_correlation, list_correlations},
         device::{
-            get_steuerbare_ressource, get_technische_ressource, get_zaehlwerke, list_geraete,
-            list_technische_ressourcen_by_malo, list_zaehler, put_geraet, put_steuerbare_ressource,
-            put_technische_ressource, put_zaehler,
+            delete_konfigurationsprodukt, get_konfigurationsprodukte, get_steuerbare_ressource,
+            get_tariff_zone, get_technische_ressource, get_zaehlwerke, list_geraete,
+            list_technische_ressourcen_by_malo, list_zaehler, list_zaehler_register,
+            list_zaehler_saisons, put_geraet, put_konfigurationsprodukte, put_steuerbare_ressource,
+            put_technische_ressource, put_zaehler, put_zaehler_register, put_zaehler_saison,
         },
         dlq::{delete_dlq_entry, list_dlq, retry_dlq_entry},
         event_ingest::{InboundWebhookSecret, ingest_event},
@@ -39,11 +41,13 @@ use marktd::{
             delete_lokationszuordnung, get_malo_lokationen, get_melo_lokationen,
             put_lokationszuordnung,
         },
-        malo::{get_malo, list_malo, put_malo},
+        malo::{get_malo, get_malo_lastprofil, list_malo, put_malo},
         malo_grid::{get_malo_grid, put_malo_grid},
-        melo::{get_melo, put_melo},
+        melo::{get_melo, get_melo_standorteigenschaften, put_melo},
         metrics::metrics_handler,
+        mmma_preise,
         nb_contract::{get_nb_contract, list_nb_contracts, put_nb_contract},
+        nb_energiemix::{get_nb_energiemix, get_nb_energiemix_history, put_nb_energiemix},
         nelo::{get_nelo, list_nelos, put_nelo},
         partner::{get_as4_address, get_partner, list_partners, put_partner},
         preisblatt::{
@@ -61,11 +65,12 @@ use marktd::{
     pg::{
         PgContractRepository, PgCorrelationIndex, PgDeviceRepository,
         PgLokationszuordnungRepository, PgMaloGridRepository, PgMaloRepository, PgMeloRepository,
-        PgNbContractRepository, PgNeLoRepository, PgPartnerRepository,
-        PgPreisblattDienstleistungRepository, PgPreisblattHardwareRepository,
-        PgPreisblattKaRepository, PgPreisblattMessungRepository, PgPreisblattRepository,
-        PgPriCatRepository, PgSteuerbareRessourceRepository, PgSubscriptionRepository,
-        PgTechnischeRessourceRepository, PgVersorgungsStatusRepository,
+        PgMmmPreisStromRepository, PgMmmaPreisGasRepository, PgNbContractRepository,
+        PgNeLoRepository, PgPartnerRepository, PgPreisblattDienstleistungRepository,
+        PgPreisblattHardwareRepository, PgPreisblattKaRepository, PgPreisblattMessungRepository,
+        PgPreisblattRepository, PgPriCatRepository, PgSteuerbareRessourceRepository,
+        PgSubscriptionRepository, PgTechnischeRessourceRepository, PgVersorgungsStatusRepository,
+        PgZaehlzeitRepository,
     },
 };
 
@@ -151,11 +156,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connecting to PostgreSQL")?;
 
-    info!("marktd: running migrations");
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .context("running database migrations")?;
+    // Schema must be applied manually — see migrations/0001_initial.sql for DDL.
 
     // ── --check mode early exit ────────────────────────────────────────────────
     //
@@ -184,11 +185,14 @@ async fn main() -> anyhow::Result<()> {
     let tr_repo = std::sync::Arc::new(PgTechnischeRessourceRepository::new(pool.clone()));
     let lz_repo = std::sync::Arc::new(PgLokationszuordnungRepository::new(pool.clone()));
     let device_repo = std::sync::Arc::new(PgDeviceRepository::new(pool.clone()));
+    let zaehzeit_repo = std::sync::Arc::new(PgZaehlzeitRepository::new(pool.clone()));
     let nb_contract_repo = std::sync::Arc::new(PgNbContractRepository::new(pool.clone()));
     let vs_repo = std::sync::Arc::new(PgVersorgungsStatusRepository::new(pool.clone()));
     let pricat_repo = std::sync::Arc::new(PgPriCatRepository::new(pool.clone()));
     let nelo_repo = std::sync::Arc::new(PgNeLoRepository::new(pool.clone()));
     let malo_grid_repo = Arc::new(PgMaloGridRepository::new(pool.clone()));
+    let mmma_gas_repo = std::sync::Arc::new(PgMmmaPreisGasRepository::new(pool.clone()));
+    let mmm_strom_repo = std::sync::Arc::new(PgMmmPreisStromRepository::new(pool.clone()));
 
     // ── OIDC verifier ─────────────────────────────────────────────────────────
     let http = reqwest::Client::builder()
@@ -221,6 +225,8 @@ async fn main() -> anyhow::Result<()> {
     // `Value`-typed so the fan-out worker and the `EventBus` abstraction
     // share the same channel without a typed `MarktEvent` dep in mako-service.
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+    // Clone for background workers that need to emit CloudEvents.
+    let event_tx_for_workers = event_tx.clone();
 
     // ── EventBus abstraction ─────────────────────────────────────────────────
     // Wraps the fan-out MPSC channel behind `Arc<dyn EventBus>`.
@@ -314,6 +320,25 @@ async fn main() -> anyhow::Result<()> {
             .context("loading Cedar policies from policies/marktd.cedar")?,
     );
 
+    // ── B12: MMMA/MMM price import background worker ──────────────────────────
+    {
+        use marktd::mmma_worker::spawn_mmma_worker;
+        let mmma_gas_repo = Arc::new(marktd::pg::mmma_preise::PgMmmaPreisGasRepository::new(
+            pool.clone(),
+        ));
+        let mmma_strom_repo = Arc::new(marktd::pg::mmma_preise::PgMmmPreisStromRepository::new(
+            pool.clone(),
+        ));
+        spawn_mmma_worker(
+            Arc::new(cfg.mmma_import.clone()),
+            mmma_gas_repo,
+            mmma_strom_repo,
+            cfg.makod.tenant_id.clone(),
+            event_tx_for_workers.clone(),
+            shutdown.clone(),
+        );
+    }
+
     // ── MCP server ────────────────────────────────────────────────────────────
     let mcp_state = Arc::new(marktd::mcp_server::MdmdMcpState {
         pool: pool.clone(),
@@ -331,9 +356,18 @@ async fn main() -> anyhow::Result<()> {
             .route("/api/v1/malo", get(list_malo::<_, _, _, _, _, _>))
             .route("/api/v1/malo/{id}", put(put_malo::<_, _, _, _, _, _>))
             .route("/api/v1/malo/{id}", get(get_malo::<_, _, _, _, _, _>))
+            // Lastprofil derivation — SLP profile for NNE tariff zone + billingd (L7)
+            .route(
+                "/api/v1/malo/{id}/lastprofil",
+                get(get_malo_lastprofil::<_, _, _, _, _, _>),
+            )
             // MeLo
             .route("/api/v1/melo/{id}", put(put_melo::<_, _, _, _, _, _>))
             .route("/api/v1/melo/{id}", get(get_melo::<_, _, _, _, _, _>))
+            .route(
+                "/api/v1/melos/{id}/standorteigenschaften",
+                get(get_melo_standorteigenschaften::<_, _, _, _, _, _>),
+            )
             // Contracts
             .route(
                 "/api/v1/contracts/{id}",
@@ -393,6 +427,23 @@ async fn main() -> anyhow::Result<()> {
             .route(
                 "/api/v1/preisblaetter-ka/{nb_mp_id}",
                 get(get_preisblatt_ka).put(put_preisblatt_ka),
+            )
+            // MMMA Gas settlement prices (C18 — Trading Hub Europe, monthly)
+            .route("/api/v1/mmma-preise/gas", get(mmma_preise::list_mmma_gas))
+            .route(
+                "/api/v1/mmma-preise/gas/{year}/{month}",
+                get(mmma_preise::get_mmma_gas).put(mmma_preise::put_mmma_gas),
+            )
+            // MMM Strom settlement prices (C18 — ÜNB per §22 StromNZV, monthly)
+            .route(
+                "/api/v1/mmm-preise/strom/{year}/{month}",
+                get(mmma_preise::get_mmm_strom).put(mmma_preise::put_mmm_strom),
+            )
+            // B12: Manual import trigger — immediately runs the monthly import cycle.
+            // Useful for catch-up after downtime or testing the configured import URLs.
+            .route(
+                "/api/v1/mmma-preise/import-trigger",
+                axum::routing::post(mmma_preise::post_import_trigger),
             )
             // MSB service price sheets (PreisblattDienstleistung)
             .route(
@@ -461,6 +512,16 @@ async fn main() -> anyhow::Result<()> {
                     marktd::pg::PgVersorgungsStatusRepository,
                 >),
             )
+            // NB Energiemix authority (§42 EnWG — N8)
+            // NB publishes annual grid-area renewable mix; LFs use for Reststrommix disclosure.
+            .route(
+                "/api/v1/energiemix/{nb_mp_id}",
+                get(get_nb_energiemix).put(put_nb_energiemix),
+            )
+            .route(
+                "/api/v1/energiemix/{nb_mp_id}/history",
+                get(get_nb_energiemix_history),
+            )
             // Netz-Element-Lokationen (Redispatch 2.0, Phase 3)
             .route("/api/v1/nelo", get(list_nelos))
             .route("/api/v1/nelo/{id}", get(get_nelo).put(put_nelo))
@@ -473,6 +534,17 @@ async fn main() -> anyhow::Result<()> {
             .route(
                 "/api/v1/steuerbare-ressourcen/{sr_id}",
                 get(get_steuerbare_ressource).put(put_steuerbare_ressource),
+            )
+            // M1: typed Konfigurationsprodukte sub-resource — used by makod before
+            // dispatching wim.steuerungsauftrag.bestaetigen to validate produktcode
+            .route(
+                "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte",
+                get(get_konfigurationsprodukte).put(put_konfigurationsprodukte),
+            )
+            // M1: individual product DELETE by produktcode
+            .route(
+                "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}",
+                axum::routing::delete(delete_konfigurationsprodukt),
             )
             // TechnischeRessource registry (B9 — EMobility/Redispatch 2.0)
             .route(
@@ -509,6 +581,19 @@ async fn main() -> anyhow::Result<()> {
                 "/api/v1/geraete/{geraet_id}",
                 axum::routing::put(put_geraet),
             )
+            // ZaehlzeitRegister + ZaehlzeitSaison (M4 — iMSys TOU register definitions)
+            .route(
+                "/api/v1/zaehler/{zaehler_id}/register",
+                get(list_zaehler_register).put(put_zaehler_register),
+            )
+            .route(
+                "/api/v1/zaehler-register/{register_id}/saisons",
+                get(list_zaehler_saisons).put(put_zaehler_saison),
+            )
+            .route(
+                "/api/v1/zaehler/{zaehler_id}/tariff-zone",
+                get(get_tariff_zone),
+            )
             // Inbound makod events
             .route(&inbound_path, post(ingest_event::<_, _, _, _, _, _>))
             // Dead-letter queue admin (F-003 — §22 MessZV compliance)
@@ -533,6 +618,11 @@ async fn main() -> anyhow::Result<()> {
             .layer(Extension(preisblatt_messung_repo))
             // KA price sheet repository extension (B3)
             .layer(Extension(preisblatt_ka_repo))
+            // MMMA Gas + MMM Strom settlement price repos (C18)
+            .layer(Extension(mmma_gas_repo))
+            .layer(Extension(mmm_strom_repo))
+            // B12: MMMA import config for manual trigger endpoint
+            .layer(Extension(Arc::new(cfg.mmma_import.clone())))
             // MSB Dienstleistung + Hardware price sheet repos
             .layer(Extension(preisblatt_dl_repo))
             .layer(Extension(preisblatt_hw_repo))
@@ -554,6 +644,8 @@ async fn main() -> anyhow::Result<()> {
             .layer(Extension(lz_repo))
             // Device registry extension (B3)
             .layer(Extension(device_repo))
+            // ZaehlzeitRegister + ZaehlzeitSaison (M4 — iMSys TOU)
+            .layer(Extension(zaehzeit_repo))
             // event_tx extension for handlers that emit CloudEvents without AppState
             .layer(Extension(state.event_tx.clone()))
             // Cedar ABAC enforcer (M6)

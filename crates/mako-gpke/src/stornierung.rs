@@ -156,8 +156,10 @@ pub struct GpkeStornierungData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum GpkeStornierungState {
     /// No events yet.
+    #[default]
     New,
     /// 55022 received; awaiting validation result.
     Initiated(GpkeStornierungData),
@@ -172,12 +174,6 @@ pub enum GpkeStornierungState {
         /// Human-readable reason for the rejection.
         reason: String,
     },
-}
-
-impl Default for GpkeStornierungState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl GpkeStornierungState {

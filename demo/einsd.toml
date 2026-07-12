@@ -1,0 +1,24 @@
+# einsd.toml — demo configuration
+# Einspeiser Registry + EEG Settlement daemon.
+# Calculates monthly EEG Vergütung / Direktvermarktung Marktprämie /
+# Post-EEG Spot settlement for registered feed-in plants.
+# DO NOT use in production — auth disabled.
+
+# database_url is injected via EINSD_DATABASE_URL env var
+database_url = "postgres://demo:demo-secret@postgres/einsd"
+port         = 9180
+tenant       = "9910000000002"   # operator BDEW-Codenummer
+
+# Optional: ERP webhook for CloudEvent delivery
+# erp_webhook_url = "http://erp:8000/webhooks/eeg"
+# erp_hmac_secret = ""  # set via EINSD_ERP_HMAC_SECRET env var
+
+# Optional: tarifbd URL for automatic EPEX price sync
+# tarifbd_url = "http://tarifbd:9480"
+
+# Background alert interval for 180-day Förderungsendedatum checks (default 6 h)
+alert_interval_secs = 21600
+
+# [oidc]  — omit to disable auth (dev mode only)
+# [otel]
+# endpoint = "http://otel-collector:4317"

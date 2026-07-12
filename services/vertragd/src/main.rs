@@ -1,0 +1,298 @@
+//! `vertragd` — B2B + B2C Contract & Customer Management.
+//!
+//! Manages the full retail contract lifecycle for both B2C (Haushalt/SLP) and
+//! B2B (Gewerbe/RLM/HV) customers:
+//!
+//! ## Data model
+//!
+//! ```text
+//! Kunde (B2C: Person/Haushalt, B2B: Unternehmen/Gewerbe)
+//! ├── [B2B] Rahmenvertrag (Master Framework Contract)
+//! │    └── N × Versorgungsvertrag  (one per delivery location / site)
+//! │          └── N × Vertragskomponente  (STROM|GAS|HEMS|...)
+//! └── [B2C] Versorgungsvertrag  (bundle, no Rahmenvertrag)
+//!       └── N × Vertragskomponente
+//! ```
+//!
+//! ## Key capabilities
+//!
+//! - **Kundenverwaltung**: typed `rubo4e::current::Geschaeftspartner` with OIDC sub for
+//!   `portald` resource-level authorization (OIDC `sub` → Kunde → MaLo IDs)
+//! - **B2B Rahmenverträge**: portfolio pricing, consolidated invoicing, indexation clauses,
+//!   multi-site Lieferbeginn orchestration, auto-renewal
+//! - **Vertragsmanagement**: notice periods, price guarantees, Tarifwechsel,
+//!   Kündigung with coordinated Schlussablesung
+//! - **MaKo orchestration**: triggers GPKE/GeLi Gas Lieferbeginn/-ende via `processd`
+//! - **Ablesesteuerung**: automatic LIEFERBEGINN/LIEFERENDE reading orders to `edmd`
+//! - **Post-confirmation provisioning**: `tarifbd` product assignment + `accountingd`
+//!   billing account
+//!
+//! ## CloudEvents emitted
+//!
+//! | Event | Trigger |
+//! |---|---|
+//! | `de.vertrag.aktiv` | All components confirmed, billing can start |
+//! | `de.vertrag.teilerfuellung` | First component confirmed |
+//! | `de.vertrag.gekuendigt` | Lieferende dispatched |
+//! | `de.vertrag.abgeschlossen` | All components ended |
+//!
+//! Port: `:9780`
+//!
+//! ## Endpoints
+//!
+//! | Method | Path | Description |
+//! |---|---|---|
+//! | `POST` | `/api/v1/kunden` | Create / upsert customer (idempotent on erp_kunde_id) |
+//! | `GET`  | `/api/v1/kunden/{id}` | Get customer + active MaLo IDs |
+//! | `GET`  | `/api/v1/kunden/by-sub/{sub}` | portald authorization: OIDC sub → customer + MaLos |
+//! | `POST` | `/api/v1/kunden/{id}/rahmenvertraege` | Create B2B framework contract |
+//! | `POST` | `/api/v1/kunden/{id}/vertraege` | Create supply contract (B2C or B2B) |
+//! | `GET`  | `/api/v1/vertraege` | List open contracts |
+//! | `GET`  | `/api/v1/vertraege/{id}` | Get contract + components |
+//! | `POST` | `/api/v1/vertraege/{id}/kuendigen` | Terminate contract (Lieferende) |
+//! | `POST` | `/api/v1/events` | Inbound CloudEvents from makod / processd |
+
+mod config;
+mod events;
+mod handlers;
+mod mcp_server;
+mod pg;
+
+use anyhow::Context as _;
+use axum::{
+    Extension, Router,
+    routing::{get, post},
+};
+use mako_service::{health::health_routes, load_config};
+use sqlx::PgPool;
+use std::sync::Arc;
+use tracing::info;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
+    let cfg: config::VertragdConfig = load_config("vertragd").context("load config")?;
+    let cfg = Arc::new(cfg);
+
+    let pool = PgPool::connect(&cfg.database_url)
+        .await
+        .context("connect PostgreSQL")?;
+
+    let mcp_state = Arc::new(mcp_server::VertragdMcpState {
+        pool: pool.clone(),
+        tenant: cfg.tenant.clone(),
+        oidc: mako_service::oidc::OidcVerifier::disabled(&cfg.tenant),
+        cedar: Arc::new(
+            mako_service::cedar::CedarEnforcer::from_policy_str(
+                "permit(principal, action, resource);",
+            )
+            .unwrap(),
+        ),
+    });
+
+    let app = Router::new()
+        .merge(health_routes(|| async { true }))
+        // Customer management
+        .route("/api/v1/kunden", post(handlers::post_create_kunde))
+        .route(
+            "/api/v1/kunden/:id",
+            get(handlers::get_kunde).put(handlers::put_update_kunde),
+        )
+        .route(
+            "/api/v1/kunden/by-sub/:sub",
+            get(handlers::get_kunde_by_sub),
+        )
+        .route(
+            "/api/v1/kunden/authenticate",
+            get(handlers::get_authenticate),
+        )
+        // Identity management (B2B portal users: 1 company → N logins)
+        .route(
+            "/api/v1/kunden/:id/identitaeten",
+            post(handlers::post_upsert_identitaet).get(handlers::list_kunde_identitaeten),
+        )
+        // Person sub-object — B2C natural person details (L13 — GDPR Art. 15)
+        .route(
+            "/api/v1/kunden/:id/person",
+            get(handlers::get_person).put(handlers::put_person),
+        )
+        // Rahmenvertrag MaLo enumeration for Sammelrechnung (L2)
+        .route(
+            "/api/v1/rahmenvertraege/:id/malos",
+            get(handlers::get_rahmenvertrag_malos),
+        )
+        // Framework + supply contracts
+        .route(
+            "/api/v1/kunden/:id/rahmenvertraege",
+            get(handlers::list_kunde_rahmenvertraege).post(handlers::post_create_rahmenvertrag),
+        )
+        .route(
+            "/api/v1/kunden/:id/vertraege",
+            get(handlers::list_kunde_vertraege).post(handlers::post_create_vertrag),
+        )
+        // Supply contracts (B2C + B2B)
+        .route("/api/v1/vertraege", get(handlers::list_vertraege))
+        .route("/api/v1/vertraege/:id", get(handlers::get_vertrag))
+        .route(
+            "/api/v1/vertraege/:id/kuendigen",
+            post(handlers::kuendige_vertrag),
+        )
+        .route(
+            "/api/v1/vertraege/:id/tarifwechsel",
+            post(handlers::tarifwechsel_vertrag),
+        )
+        // CloudEvent webhook
+        .route("/api/v1/events", post(handlers::post_cloud_event))
+        .merge(mcp_server::router(
+            mcp_state,
+            tokio_util::sync::CancellationToken::new(),
+        ))
+        .layer(Extension(Arc::clone(&cfg)))
+        .layer(Extension(pool.clone()));
+
+    let port = cfg.port.unwrap_or(9780);
+    let addr = format!("0.0.0.0:{port}");
+    info!(%addr, "vertragd starting");
+
+    // \u2500\u2500 Preisanpassungsbenachrichtigung background worker (B13) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // Runs daily and:
+    //   1. Applies pending Tarifwechsel whose wirksamkeit date has arrived.
+    //   2. Emits `de.vertrag.preisaenderung.ankuendigung` CE for Tarifwechsel
+    //      whose wirksamkeit is ~42 days away (\u00a741 Abs. 3 EnWG: \u22656 weeks advance notice).
+    {
+        let pool_bg = pool.clone();
+        let cfg_bg = Arc::clone(&cfg);
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
+            loop {
+                let today = time::OffsetDateTime::now_utc().date();
+
+                // Phase 1: Apply due Tarifwechsel
+                match pg::find_tarifwechsel_due_today(&pool_bg, &cfg_bg.tenant, today).await {
+                    Ok(due) => {
+                        for row in &due {
+                            if let Err(e) =
+                                pg::apply_pending_tarifwechsel(&pool_bg, row.komp_id).await
+                            {
+                                tracing::error!(
+                                    komp_id = %row.komp_id,
+                                    error = %e,
+                                    "vertragd: apply_pending_tarifwechsel failed"
+                                );
+                                continue;
+                            }
+                            tracing::info!(
+                                komp_id = %row.komp_id,
+                                new_product = %row.pending_product_code,
+                                wirksamkeit = %row.pending_wirksamkeit,
+                                "vertragd: Tarifwechsel applied"
+                            );
+                            // Emit tarifwechsel CE
+                            if let Some(ref url) = cfg_bg.erp_webhook_url {
+                                let ce = serde_json::json!({
+                                    "specversion": "1.0",
+                                    "type": "de.vertrag.tarifwechsel",
+                                    "source": format!("urn:vertragd:lf:{}", cfg_bg.lf_mp_id),
+                                    "id": uuid::Uuid::new_v4().to_string(),
+                                    "time": time::OffsetDateTime::now_utc().to_string(),
+                                    "datacontenttype": "application/json",
+                                    "data": {
+                                        "komp_id": row.komp_id.to_string(),
+                                        "malo_id": row.malo_id,
+                                        "new_product_code": row.pending_product_code,
+                                        "wirksamkeit": row.pending_wirksamkeit.to_string(),
+                                    }
+                                });
+                                let client = reqwest::Client::new();
+                                let _ = client
+                                    .post(url)
+                                    .header("Content-Type", "application/cloudevents+json")
+                                    .json(&ce)
+                                    .send()
+                                    .await;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "vertragd: find_tarifwechsel_due_today failed");
+                    }
+                }
+
+                // Phase 2: Emit 6-week advance notifications (\u00a741 Abs. 3 EnWG)
+                match pg::find_tarifwechsel_needing_notif(&pool_bg, &cfg_bg.tenant, today).await {
+                    Ok(pending) => {
+                        for row in &pending {
+                            tracing::info!(
+                                komp_id = %row.komp_id,
+                                wirksamkeit = %row.pending_wirksamkeit,
+                                product = %row.pending_product_code,
+                                "vertragd: emitting Preisanpassungsbenachrichtigung (§41 Abs. 3 EnWG)"
+                            );
+                            if let Some(ref url) = cfg_bg.erp_webhook_url {
+                                let ce = serde_json::json!({
+                                    "specversion": "1.0",
+                                    "type": "de.vertrag.preisaenderung.ankuendigung",
+                                    "source": format!("urn:vertragd:lf:{}", cfg_bg.lf_mp_id),
+                                    "id": uuid::Uuid::new_v4().to_string(),
+                                    "time": time::OffsetDateTime::now_utc().to_string(),
+                                    "datacontenttype": "application/json",
+                                    "data": {
+                                        "komp_id": row.komp_id.to_string(),
+                                        "malo_id": row.malo_id,
+                                        "current_product_code": row.current_product_code,
+                                        "new_product_code": row.pending_product_code,
+                                        "wirksamkeit": row.pending_wirksamkeit.to_string(),
+                                        "days_until_change": 42,
+                                        "regulatory_basis": "\u{00a7}41 Abs. 3 EnWG",
+                                    }
+                                });
+                                let client = reqwest::Client::new();
+                                match client
+                                    .post(url)
+                                    .header("Content-Type", "application/cloudevents+json")
+                                    .json(&ce)
+                                    .send()
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        let _ = pg::mark_preisanpassung_notif_sent(
+                                            &pool_bg,
+                                            row.komp_id,
+                                        )
+                                        .await;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            komp_id = %row.komp_id,
+                                            error = %e,
+                                            "vertragd: Preisanpassungsbenachrichtigung webhook failed -- will retry"
+                                        );
+                                    }
+                                }
+                            } else {
+                                // No webhook configured: mark sent anyway so we don't log endlessly.
+                                tracing::warn!(
+                                    komp_id = %row.komp_id,
+                                    "vertragd: Preisanpassungsbenachrichtigung -- no erp_webhook_url configured"
+                                );
+                                let _ =
+                                    pg::mark_preisanpassung_notif_sent(&pool_bg, row.komp_id).await;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "vertragd: find_tarifwechsel_needing_notif failed");
+                    }
+                }
+
+                // Run daily; 23h interval is DST-safe.
+                tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
+            }
+        });
+    }
+
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .context("bind TCP")?;
+    axum::serve(listener, app).await.context("serve")
+}

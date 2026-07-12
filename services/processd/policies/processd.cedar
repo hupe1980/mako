@@ -9,7 +9,14 @@
 //   "read-decisions"   — GET /api/v1/decisions (NB STP audit log)
 //   "read-queue"       — GET /api/v1/queue     (LF approval queue)
 //   "write-queue"      — POST /api/v1/queue/:id/approve|reject
+//   "read-parity"      — GET /api/v1/parity    (§20 EnWG affiliate parity report)
 //   "use-mcp"          — POST|GET /mcp
+//
+// §20 EnWG Diskriminierungsfreiheitspflicht enforcement:
+//   Automatic acceptance (auto_accept=true) is suppressed in the nb_module
+//   when initiator_is_affiliate==true.  The Cedar policy layer reflects this
+//   invariant: "read-parity" is always permitted for same-tenant callers so
+//   BNetzA audit evidence is always accessible.
 
 // Any authenticated caller may read and act on data that belongs to their tenant.
 permit(
@@ -18,6 +25,7 @@ permit(
         Action::"read-decisions",
         Action::"read-queue",
         Action::"write-queue",
+        Action::"read-parity",
         Action::"use-mcp"
     ],
     resource

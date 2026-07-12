@@ -755,3 +755,150 @@ CREATE TABLE IF NOT EXISTS event_log (
 
 CREATE INDEX IF NOT EXISTS event_log_type_time ON event_log (ce_type, received_at DESC);
 CREATE INDEX IF NOT EXISTS event_log_time      ON event_log (received_at DESC);
+
+-- Migration 0002: MMMA / MMM settlement price store
+--
+-- Both `netzbilanzd` (NB — generates INVOIC 31002/31005/31007/31008) and
+-- `invoicd` (LF — validates inbound MMM invoices) need monthly settlement prices:
+--
+--   • Gas:   Trading Hub Europe (THE) publishes `mmma_preise_gas` monthly.
+--   • Strom: Each ÜNB publishes `mmm_preise_strom` per §22 StromNZV monthly.
+--
+-- Both services query `marktd` instead of requiring the ERP to supply prices
+-- manually on every billing run (eliminates the current single point of failure).
+
+-- ── Gas MMM Abrechnungspreise (THE / MGV) ────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS mmma_preise_gas (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- First day of the billing month (German local time).
+    price_month     DATE        NOT NULL,
+    -- Marktgebiet — 'THE' (Trading Hub Europe, the only German gas market area since 2021).
+    marktgebiet     TEXT        NOT NULL DEFAULT 'THE',
+    -- Ausgleichsenergiepreis Überschuss: price for Mehrmengen (LF over-consumed) ct/kWh.
+    mehr_ct_kwh     NUMERIC     NOT NULL CHECK (mehr_ct_kwh >= 0),
+    -- Ausgleichsenergiepreis Defizit: price for Mindermengen (LF under-consumed) ct/kWh.
+    minder_ct_kwh   NUMERIC     NOT NULL CHECK (minder_ct_kwh >= 0),
+    -- How this record entered the system.
+    source          TEXT        NOT NULL DEFAULT 'manual'
+                                CHECK (source IN ('manual', 'the-api', 'csv-import')),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (price_month, marktgebiet)
+);
+
+CREATE INDEX IF NOT EXISTS mmma_gas_month
+    ON mmma_preise_gas (price_month DESC, marktgebiet);
+
+-- ── Strom MMM Ausgleichsenergie prices (ÜNB per §22 StromNZV) ────────────────
+
+CREATE TABLE IF NOT EXISTS mmm_preise_strom (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- First day of the billing month (German local time).
+    price_month     DATE        NOT NULL,
+    -- ÜNB MP-ID (BDEW-Codenummer 99…): 50Hertz, TenneT, Amprion, TransnetBW.
+    unb_mp_id       TEXT        NOT NULL,
+    -- Surplus energy price (Mehrmengen, LF over-consumed) ct/kWh.
+    mehr_ct_kwh     NUMERIC     NOT NULL CHECK (mehr_ct_kwh >= 0),
+    -- Deficit energy price (Mindermengen, LF under-consumed) ct/kWh.
+    minder_ct_kwh   NUMERIC     NOT NULL CHECK (minder_ct_kwh >= 0),
+    source          TEXT        NOT NULL DEFAULT 'manual'
+                                CHECK (source IN ('manual', 'uenb-api', 'csv-import')),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (price_month, unb_mp_id)
+);
+
+CREATE INDEX IF NOT EXISTS mmm_strom_month
+    ON mmm_preise_strom (price_month DESC, unb_mp_id);
+
+-- ── marktd migration 0003 — ZaehlzeitRegister + ZaehlzeitSaison ─────────────
+--
+-- Provides the PostgreSQL persistence for iMSys Time-of-Use (TOU) register
+-- definitions.  Required for §14a Modul 2 accurate HT/NT window classification
+-- from smart meter data.
+--
+-- Sources:
+--   - MsbG §19; BO4E Zaehlwerk schema (v202607)
+--   - BDEW WiM AHB BK6-24-174: Stammdaten ZAK+ZD segment
+--   - §14a EnWG Modul 2: time-banded grid fee windows
+
+-- ── ZaehlzeitRegister: one metering register per Zähler ─────────────────────
+
+CREATE TABLE IF NOT EXISTS zaehler_register (
+    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    zaehler_id       TEXT        NOT NULL,    -- owning Zähler serial number
+    tenant           TEXT        NOT NULL,    -- operator GLN
+    bezeichnung      TEXT        NOT NULL,    -- "HT", "NT", "Gesamt", etc.
+    -- BO4E Zaehlerauspraegung: HT | NT | EINZEL
+    zaehlerauspraegung TEXT      NOT NULL
+                     CHECK (zaehlerauspraegung IN ('HT', 'NT', 'EINZEL')),
+    -- IEC 62056-61 OBIS kennzahl identifying this register in MSCONS
+    -- e.g. "1-1:1.29.0" for HT import, "1-1:2.8.0" for NT export
+    obis_kennzahl    TEXT,
+    -- Unit: default KWH; KVAR for reactive energy, KW for demand
+    einheit          TEXT        NOT NULL DEFAULT 'KWH',
+    valid_from       DATE        NOT NULL,
+    valid_to         DATE,                    -- NULL = currently active
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (zaehler_id, tenant, bezeichnung, valid_from)
+);
+
+CREATE INDEX IF NOT EXISTS zr_zaehler_tenant ON zaehler_register (zaehler_id, tenant);
+CREATE INDEX IF NOT EXISTS zr_obis           ON zaehler_register (obis_kennzahl, tenant)
+    WHERE obis_kennzahl IS NOT NULL;
+CREATE INDEX IF NOT EXISTS zr_active         ON zaehler_register (zaehler_id, tenant)
+    WHERE valid_to IS NULL;
+
+-- ── ZaehlzeitSaison: time-of-use windows per register ───────────────────────
+
+CREATE TABLE IF NOT EXISTS zaehler_saisons (
+    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    register_id      UUID        NOT NULL REFERENCES zaehler_register (id) ON DELETE CASCADE,
+    -- Season key: SOMMER | WINTER | GESAMT (year-round)
+    saison           TEXT        NOT NULL
+                     CHECK (saison IN ('SOMMER', 'WINTER', 'GESAMT')),
+    -- Days-of-week bitmask stored as a JSONB integer array.
+    -- ISO weekday: 1=Mon … 7=Sun.  Example: [1,2,3,4,5] = Mon–Fri.
+    wochentage       JSONB       NOT NULL,
+    -- Window start/end in local German time (HH:MM, 24-h clock).
+    -- Start is inclusive; end is exclusive (standard half-open interval).
+    zeit_von         TEXT        NOT NULL,    -- e.g. "07:00"
+    zeit_bis         TEXT        NOT NULL,    -- e.g. "22:00"
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS zs_register ON zaehler_saisons (register_id);
+
+-- marktd migration 0004: NB Energiemix authority table
+--
+-- N8: NB publishes annual grid-area Energiemix per §42 EnWG.
+--
+-- The NB is the authoritative source for the renewable energy mix in their grid
+-- area, derived from local EEG plants feeding into the grid.  LFs and portald
+-- query this for §42 Abs. 5 EnWG Reststrommix disclosure and Ökostrom labelling.
+--
+-- One row per (tenant, nb_mp_id, gueltig_fuer) with the most recent being the
+-- active disclosure.
+
+CREATE TABLE IF NOT EXISTS nb_energiemix (
+    nb_mp_id        TEXT        NOT NULL,
+    tenant          TEXT        NOT NULL,
+    -- Calendar year this Energiemix is valid for (§42 EnWG annual disclosure).
+    gueltig_fuer    SMALLINT    NOT NULL DEFAULT extract(year FROM now()),
+    -- rubo4e::current::Energiemix COM JSON (camelCase, validated on PUT).
+    energiemix      JSONB       NOT NULL,
+    -- Snapshot of total EEG feed-in kWh this year (optional, informational).
+    eeg_einspeisung_kwh NUMERIC(18, 0),
+    -- Snapshot of total grid withdrawal kWh this year (for percentage calc).
+    gesamtentnahme_kwh  NUMERIC(18, 0),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, nb_mp_id, gueltig_fuer)
+);
+
+CREATE INDEX IF NOT EXISTS nb_energiemix_nb    ON nb_energiemix (nb_mp_id, gueltig_fuer DESC);
+CREATE INDEX IF NOT EXISTS nb_energiemix_year  ON nb_energiemix (tenant, gueltig_fuer DESC);
+
+COMMENT ON TABLE nb_energiemix IS
+    'Annual grid-area Energiemix published by the NB per §42 EnWG. '
+    'One row per (nb_mp_id, year). LFs use this for §42 Abs. 5 Reststrommix disclosure.';

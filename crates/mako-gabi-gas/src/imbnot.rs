@@ -120,9 +120,10 @@ impl EventPayload for ImbalanceEvent {
 // ── State ─────────────────────────────────────────────────────────────────────
 
 /// Process state for the GaBi Gas IMBNOT workflow.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub enum ImbalanceState {
     /// Initial state — no IMBNOT received yet.
+    #[default]
     New,
     /// IMBNOT received and recorded (terminal).
     Received(ImbalanceData),
@@ -134,12 +135,6 @@ impl ImbalanceState {
             Self::New => "New",
             Self::Received(_) => "Received",
         }
-    }
-}
-
-impl Default for ImbalanceState {
-    fn default() -> Self {
-        Self::New
     }
 }
 

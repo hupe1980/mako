@@ -115,6 +115,20 @@ async fn main() -> anyhow::Result<()> {
         oidc,
         cedar,
         shutdown,
+        erp_webhook_url: cfg.webhook.erp_webhook_url,
+        archive: if cfg.archive.enabled {
+            // Resolve env references in archive credentials.
+            let mut archive = cfg.archive;
+            if let Some(key) = archive.access_key_id.as_deref() {
+                archive.access_key_id = config::resolve_env(key).ok();
+            }
+            if let Some(secret) = archive.secret_access_key.as_deref() {
+                archive.secret_access_key = config::resolve_env(secret).ok();
+            }
+            Some(archive)
+        } else {
+            None
+        },
     })
     .await
 }

@@ -1,5 +1,11 @@
 //! [`EngineModule`] trait, [`EngineBuilder`], and [`EngineContext`].
 //!
+// Allow using deprecated Noop stores as *type-level defaults* in EngineBuilder / EngineContext
+// generic parameters.  The types are deprecated to prevent instantiation in production code,
+// but using them as default type parameters in struct definitions (not instantiating them) is
+// the intended pattern for the type-state builder API.
+#![allow(deprecated)]
+//!
 //! # Summary
 //!
 //! `EngineBuilder` assembles all engine infrastructure into a single

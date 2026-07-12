@@ -1,4 +1,4 @@
-//! TOML configuration loader with `env:VAR_NAME` resolution.
+//! Layered TOML + environment-variable configuration loader.
 //!
 //! # File discovery
 //!
@@ -6,18 +6,45 @@
 //! 1. `MYSERVICE_CONFIG` environment variable (absolute or relative path)
 //! 2. `./myservice.toml` in the current working directory
 //!
-//! # Env-var references
+//! If the TOML file is absent the loader continues with env vars only — useful
+//! for container environments where every value is injected via env.
 //!
-//! Any string value in the TOML file that starts with `"env:"` is replaced
-//! with the corresponding environment variable value at load time:
+//! # Environment-variable overrides
 //!
-//! ```toml
-//! [storage.postgres]
-//! url = "env:DATABASE_URL"
+//! Every TOML key can be overridden via a service-prefixed environment variable.
+//! Use **double-underscore** (`__`) as the TOML-section separator:
 //!
-//! [oidc]
-//! client_secret = "env:OIDC_CLIENT_SECRET"
+//! ```text
+//! # Overrides top-level `database_url` (flat config)
+//! ACCOUNTINGD_DATABASE_URL=postgres://prod-host/accountingd
+//!
+//! # Overrides [database] url  (nested section)
+//! INVOICD_DATABASE__URL=postgres://prod-host/invoicd
+//!
+//! # Overrides [makod] api_key  (nested section)
+//! INVOICD_MAKOD__API_KEY=secret
+//!
+//! # Overrides [storage.postgres] url  (three levels)
+//! MARKTD_STORAGE__POSTGRES__URL=postgres://prod-host/marktd
 //! ```
+//!
+//! # Secret-file loading (`_FILE` suffix)
+//!
+//! Any env var whose name ends in `_FILE` is treated as a path to a file
+//! whose **contents** become the config value — the `_FILE` suffix is stripped
+//! from the key name.  This is the standard pattern for Kubernetes Secrets and
+//! Docker Swarm secrets:
+//!
+//! ```text
+//! # Equivalent to INVOICD_MAKOD__API_KEY=<file contents>
+//! INVOICD_MAKOD__API_KEY_FILE=/run/secrets/makod-api-key
+//!
+//! # Equivalent to ACCOUNTINGD_DATABASE_URL=<file contents>
+//! ACCOUNTINGD_DATABASE_URL_FILE=/run/secrets/db-url
+//! ```
+//!
+//! The TOML file is loaded first (base layer); env vars take precedence.
+//! This follows the [12-factor](https://12factor.net/config) methodology.
 //!
 //! # Example
 //!
@@ -37,84 +64,36 @@ use std::path::PathBuf;
 
 use serde::de::DeserializeOwned;
 
-/// Errors that can occur when loading a service configuration file.
-#[derive(Debug, thiserror::Error)]
-pub enum ConfigError {
-    /// The config file path could not be read.
-    #[error("cannot read config file '{path}': {source}")]
-    Io {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
+/// Configuration loading error — wraps [`figment::Error`].
+pub type ConfigError = figment::Error;
 
-    /// The TOML file is syntactically invalid.
-    #[error("TOML parse error in '{path}': {source}")]
-    Toml {
-        path: String,
-        #[source]
-        source: toml::de::Error,
-    },
-
-    /// An `"env:VAR_NAME"` reference in the config points to an unset variable.
-    #[error("environment variable '{var}' referenced in config is not set")]
-    EnvVarMissing { var: String },
-
-    /// The resolved TOML value cannot be deserialized into the target type.
-    #[error("config deserialization error in '{path}': {source}")]
-    Deserialize {
-        path: String,
-        #[source]
-        source: toml::de::Error,
-    },
-
-    /// Internal serialization error during env-var resolution round-trip.
-    #[error("internal config processing error in '{path}': {message}")]
-    Internal { path: String, message: String },
-}
-
-/// Load a typed configuration `C` from a TOML file.
+/// Load a typed configuration `C` from a TOML file with an env-var layer on top.
 ///
-/// See [module docs](self) for file discovery rules and env-var resolution.
+/// See [module docs](self) for file-discovery rules and override conventions.
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError`] when the file is not found, contains invalid TOML,
-/// references an unset environment variable, or cannot be deserialized into `C`.
+/// Returns [`ConfigError`] when the TOML contains invalid syntax, a required
+/// field is missing from both the file and env, or the values cannot be
+/// deserialized into `C`.
+#[allow(clippy::result_large_err)] // figment::Error is inherently large; loaded once at startup
 pub fn load_config<C: DeserializeOwned>(name: &str) -> Result<C, ConfigError> {
+    use figment::{
+        Figment,
+        providers::{Env, Format, Toml},
+    };
+    use figment_file_provider_adapter::FileAdapter;
     let path = config_path(name);
-    let path_str = path.display().to_string();
-
-    let content = std::fs::read_to_string(&path).map_err(|source| ConfigError::Io {
-        path: path_str.clone(),
-        source,
-    })?;
-
-    let raw: toml::Value = content.parse().map_err(|source| ConfigError::Toml {
-        path: path_str.clone(),
-        source,
-    })?;
-
-    let resolved = resolve_env_vars(raw)?;
-
-    // Serialize resolved value back to TOML string so we can use `toml::from_str`
-    // which drives the standard serde path. This round-trip is negligible for
-    // config loading and avoids depending on toml::Value as a Deserializer.
-    let serialized = toml::to_string(&resolved).map_err(|e| ConfigError::Internal {
-        path: path_str.clone(),
-        message: e.to_string(),
-    })?;
-
-    toml::from_str(&serialized).map_err(|source| ConfigError::Deserialize {
-        path: path_str,
-        source,
-    })
+    let prefix = format!("{}_", name.to_uppercase().replace('-', "_"));
+    Figment::new()
+        .merge(FileAdapter::wrap(Toml::file(path)))
+        .merge(FileAdapter::wrap(Env::prefixed(&prefix).split("__")))
+        .extract()
 }
 
 // ── Internals ─────────────────────────────────────────────────────────────────
 
 fn config_path(name: &str) -> PathBuf {
-    // Check {NAME}_CONFIG env var first
     let env_key = format!("{}_CONFIG", name.to_uppercase().replace('-', "_"));
     if let Ok(p) = std::env::var(&env_key) {
         return PathBuf::from(p);
@@ -122,102 +101,20 @@ fn config_path(name: &str) -> PathBuf {
     PathBuf::from(format!("{name}.toml"))
 }
 
-/// Recursively replace `"env:VAR_NAME"` string values using `getter`.
-///
-/// `getter(var_name)` returns `Some(value)` when the var is set, `None` when
-/// it is unset.  In production this calls `std::env::var`; in tests a closure
-/// provides deterministic values without touching process state.
-fn resolve_env_vars_with(
-    value: toml::Value,
-    getter: impl Fn(&str) -> Option<String> + Copy,
-) -> Result<toml::Value, ConfigError> {
-    match value {
-        toml::Value::String(ref s) if s.starts_with("env:") => {
-            let var = &s[4..];
-            getter(var)
-                .map(toml::Value::String)
-                .ok_or_else(|| ConfigError::EnvVarMissing {
-                    var: var.to_owned(),
-                })
-        }
-        toml::Value::Table(map) => {
-            let mut out = toml::Table::new();
-            for (k, v) in map {
-                out.insert(k, resolve_env_vars_with(v, getter)?);
-            }
-            Ok(toml::Value::Table(out))
-        }
-        toml::Value::Array(arr) => {
-            let resolved: Result<Vec<_>, _> = arr
-                .into_iter()
-                .map(|v| resolve_env_vars_with(v, getter))
-                .collect();
-            Ok(toml::Value::Array(resolved?))
-        }
-        other => Ok(other),
-    }
-}
-
-fn resolve_env_vars(value: toml::Value) -> Result<toml::Value, ConfigError> {
-    resolve_env_vars_with(value, |var| std::env::var(var).ok())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn resolve_plain_string_unchanged() {
-        let v = toml::Value::String("hello".to_owned());
-        let out = resolve_env_vars_with(v, |_| None).unwrap();
-        assert_eq!(out, toml::Value::String("hello".to_owned()));
+    fn config_path_default() {
+        let p = config_path("myservice");
+        assert_eq!(p, PathBuf::from("myservice.toml"));
     }
 
     #[test]
-    fn resolve_env_ref_found() {
-        let v = toml::Value::String("env:MY_VAR".to_owned());
-        let out = resolve_env_vars_with(v, |var| {
-            if var == "MY_VAR" {
-                Some("resolved_value".to_owned())
-            } else {
-                None
-            }
-        })
-        .unwrap();
-        assert_eq!(out, toml::Value::String("resolved_value".to_owned()));
-    }
-
-    #[test]
-    fn resolve_env_ref_missing_returns_error() {
-        let v = toml::Value::String("env:MISSING_VAR".to_owned());
-        let err = resolve_env_vars_with(v, |_| None).unwrap_err();
-        assert!(matches!(err, ConfigError::EnvVarMissing { var } if var == "MISSING_VAR"));
-    }
-
-    #[test]
-    fn resolve_nested_table() {
-        let raw: toml::Value = toml::from_str(
-            r#"[database]
-url = "env:DB_URL"
-"#,
-        )
-        .unwrap();
-        let resolved = resolve_env_vars_with(raw, |var| {
-            if var == "DB_URL" {
-                Some("postgres://localhost/test".to_owned())
-            } else {
-                None
-            }
-        })
-        .unwrap();
-        let url = resolved["database"]["url"].as_str().unwrap();
-        assert_eq!(url, "postgres://localhost/test");
-    }
-
-    #[test]
-    fn non_env_string_in_table_unchanged() {
-        let raw: toml::Value = toml::from_str(r#"key = "plain_value""#).unwrap();
-        let resolved = resolve_env_vars_with(raw, |_| None).unwrap();
-        assert_eq!(resolved["key"].as_str().unwrap(), "plain_value");
+    fn config_path_hyphen_service() {
+        // "nis-syncd" -> NIS_SYNCD_CONFIG (hyphens become underscores in env key).
+        let p = config_path("nis-syncd");
+        assert_eq!(p, PathBuf::from("nis-syncd.toml"));
     }
 }

@@ -274,8 +274,10 @@ pub struct InitiatedData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum SupplierChangeState {
     /// No events yet. Stream exists but process has not started.
+    #[default]
     New,
     /// UTILMD received and `Initiated` event applied.
     Initiated(InitiatedData),
@@ -295,12 +297,6 @@ pub enum SupplierChangeState {
         /// Human-readable rejection reason for read models and auditing.
         reason: String,
     },
-}
-
-impl Default for SupplierChangeState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl SupplierChangeState {
@@ -357,6 +353,27 @@ pub enum SupplierChangeCommand {
         document_date: String,
         /// Process-specific date (e.g. Lieferbeginn-Datum, DTM 163), `YYYYMMDD`.
         process_date: String,
+        /// Bilanzierungsgebiet EIC code extracted from the UTILMD (NAD+Z09 / LOC+237).
+        ///
+        /// Used by `processd` NB check 4 (bilanzierungsgebiet consistency).
+        /// The adapter in `makod/src/adapters.rs` should populate this when the
+        /// UTILMD carries a `LOC+237` segment; `None` when absent (rare in practice).
+        ///
+        /// Propagated verbatim into the `ProcessInitiated` outbox message so that
+        /// `processd` can use it directly without a `marktd` fallback round-trip.
+        bilanzierungsgebiet: Option<String>,
+        /// Bilanzierungsmethode extracted from UTILMD `TM+EM` segment.
+        ///
+        /// `"SLP"` | `"RLM"` | `"IMS"` — maps to BO4E `Bilanzierungsmethode`.
+        /// Populated from TM+EM qualifier: Z01=SLP, Z02=RLM, Z04=IMS.
+        /// Used by `marktd` to update `malo.bilanzierungsmethode` on receipt of
+        /// `de.mako.process.initiated`.
+        bilanzierungsmethode: Option<String>,
+        /// Gas GaBi RLM Fallgruppe from UTILMD `TM+Z10` segment.
+        ///
+        /// Only set for Gas RLM MaLos. Populated from TM qualifier Z10 + category code.
+        /// Stored in `marktd` `malo.fallgruppe` for Gas GaBi MMM billing.
+        fallgruppe: Option<String>,
         /// EDIFACT message reference.
         message_ref: MessageRef,
         /// UTC timestamp at which the inbound UTILMD was received at the transport layer.
@@ -658,6 +675,9 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 location_id,
                 document_date,
                 process_date,
+                bilanzierungsgebiet,
+                bilanzierungsmethode,
+                fallgruppe,
                 message_ref,
                 received_at,
                 validation_passed,
@@ -716,11 +736,18 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                             "ProcessInitiated",
                             receiver.as_str(),
                             serde_json::json!({
-                                "pid":           pid.as_u32(),
-                                "malo_id":       location_id.as_str(),
-                                "new_supplier":  sender.as_str(),
-                                "grid_operator": receiver.as_str(),
-                                "process_date":  process_date,
+                                "pid":                   pid.as_u32(),
+                                "malo_id":               location_id.as_str(),
+                                "new_supplier":          sender.as_str(),
+                                "grid_operator":         receiver.as_str(),
+                                "process_date":          process_date,
+                                // bilanzierungsgebiet is consumed by processd NB check 4.
+                                // Populated by makod adapter from UTILMD LOC+237/NAD+Z09.
+                                "bilanzierungsgebiet":   bilanzierungsgebiet,
+                                // bilanzierungsmethode and fallgruppe are consumed by
+                                // marktd to update malo columns (L1/N1).
+                                "bilanzierungsmethode":  bilanzierungsmethode,
+                                "fallgruppe":            fallgruppe,
                             }),
                         )
                         // Caused by ValidationPassed (index 1), not Initiated (index 0),

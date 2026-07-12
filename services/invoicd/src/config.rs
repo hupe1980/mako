@@ -78,9 +78,10 @@ impl Config {
     #[must_use]
     pub fn check_config(&self) -> CheckConfig {
         CheckConfig {
-            arithmetic_tolerance: self.check.arithmetic_tolerance,
-            total_tolerance: self.check.total_tolerance,
-            tariff_tolerance: self.check.tariff_tolerance,
+            arithmetic_tolerance_ppm: (self.check.arithmetic_tolerance * 1_000_000.0).round()
+                as u32,
+            total_tolerance_ppm: (self.check.total_tolerance * 1_000_000.0).round() as u32,
+            tariff_tolerance_ppm: (self.check.tariff_tolerance * 1_000_000.0).round() as u32,
             require_tariff: self.check.require_tariff,
         }
     }
@@ -206,13 +207,14 @@ impl Default for SubscriptionConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckSectionConfig {
-    /// Relative tolerance for per-line arithmetic (qty × price = net).
+    /// Per-line arithmetic tolerance as a fraction (0.01 = 1 %).
+    /// Converted to ppm when building `CheckConfig`.
     #[serde(default = "default_arithmetic_tolerance")]
     pub arithmetic_tolerance: f64,
-    /// Relative tolerance for document total (Σ line nets = Gesamtnetto).
+    /// Document-total tolerance as a fraction (0.01 = 1 %).
     #[serde(default = "default_total_tolerance")]
     pub total_tolerance: f64,
-    /// Relative tolerance for tariff unit-price comparison against PRICAT.
+    /// Tariff unit-price tolerance as a fraction (0.03 = 3 %).
     #[serde(default = "default_tariff_tolerance")]
     pub tariff_tolerance: f64,
     /// When `true`, a missing PRICAT entry escalates from `Warn` to `Dispute`.

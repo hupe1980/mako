@@ -31,9 +31,12 @@ use mako_service::{
 };
 use rmcp::{
     ErrorData as McpError, ServerHandler,
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    handler::server::{
+        router::{prompt::PromptRouter, tool::ToolRouter},
+        wrapper::Parameters,
+    },
     model::*,
-    schemars, tool, tool_handler, tool_router,
+    prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     },
@@ -107,11 +110,20 @@ pub struct GetCorrelationParams {
 
 // ── MCP handler ───────────────────────────────────────────────────────────────
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PricatParams {
+    /// NB GLN (BDEW-Codenummer, 13 digits, starts with 99).
+    /// For Gas: DVGW-Codenummer (starts with 98).
+    pub nb_mp_id: String,
+}
+
 #[derive(Clone)]
 pub struct MdmdMcpHandler {
     state: Arc<MdmdMcpState>,
     #[allow(dead_code)]
     tool_router: ToolRouter<MdmdMcpHandler>,
+    #[allow(dead_code)]
+    prompt_router: PromptRouter<MdmdMcpHandler>,
 }
 
 #[tool_router]
@@ -120,6 +132,7 @@ impl MdmdMcpHandler {
         Self {
             state,
             tool_router: Self::tool_router(),
+            prompt_router: Self::prompt_router(),
         }
     }
 
@@ -128,7 +141,10 @@ impl MdmdMcpHandler {
     /// Returns the full MaLo record including address, Sparte, NB and MSB GLNs,
     /// and associated MeLo IDs.  Returns an error when the MaLo has not been
     /// registered with this instance.
-    #[tool(description = "Read a Marktlokation (MaLo) record by 11-digit malo_id")]
+    #[tool(
+        description = "Read a Marktlokation (MaLo) record by 11-digit malo_id",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn get_malo(
         &self,
         Parameters(p): Parameters<GetMaloParams>,
@@ -181,7 +197,10 @@ impl MdmdMcpHandler {
     /// Returns partner records with GLN, name, AS4 endpoint URL, and
     /// configured market roles.  Use `limit` and `cursor` to page through
     /// large directories.
-    #[tool(description = "List registered trading partners (paginated, max 500)")]
+    #[tool(
+        description = "List registered trading partners (paginated, max 500)",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn list_partners(
         &self,
         Parameters(p): Parameters<ListPartnersParams>,
@@ -241,7 +260,10 @@ impl MdmdMcpHandler {
     /// Returns the price sheet used by `invoicd` to validate INVOIC billing
     /// plausibility (§22 MessZV).  Pass `date` to retrieve the sheet valid
     /// on a specific billing date (default: today).
-    #[tool(description = "Read the PreisblattNetznutzung (NNE price sheet) for an NB GLN")]
+    #[tool(
+        description = "Read the PreisblattNetznutzung (NNE price sheet) for an NB GLN",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn get_preisblatt(
         &self,
         Parameters(p): Parameters<GetPreisblattParams>,
@@ -300,7 +322,8 @@ impl MdmdMcpHandler {
     /// This is the authoritative source for automated LFA E_0624 responses
     /// and process routing in `makod`.
     #[tool(
-        description = "Read the VersorgungsStatus (delivery status) for a MaLo by 11-digit malo_id"
+        description = "Read the VersorgungsStatus (delivery status) for a MaLo by 11-digit malo_id",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_versorgungsstatus(
         &self,
@@ -373,7 +396,8 @@ impl MdmdMcpHandler {
     /// to validate billing-cycle plausibility (§22 MessZV).  Pass `date` to
     /// retrieve the contract valid on a specific billing date; defaults to today.
     #[tool(
-        description = "Read the active NB network contract for a MaLo (netzebene, billing_schedule, RLM/SLP)"
+        description = "Read the active NB network contract for a MaLo (netzebene, billing_schedule, RLM/SLP)",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_nb_contract(
         &self,
@@ -465,7 +489,8 @@ impl MdmdMcpHandler {
     /// Typical use: an ERP integration polls `get_correlation` after submitting
     /// a command via `makod` to confirm the process has reached `COMPLETED`.
     #[tool(
-        description = "Get a process correlation record by process_id UUID or erp_order_id string"
+        description = "Get a process correlation record by process_id UUID or erp_order_id string",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_correlation(
         &self,
@@ -537,12 +562,126 @@ impl MdmdMcpHandler {
             )])),
         }
     }
+    #[tool(
+        description = "List PRICAT (Preisblatt) version history for an NB MP-ID. \
+Shows all PRICAT 27003 versions with valid_from/valid_to dates, dispatch_state (pending/queued/done/error), and source. \
+Use after a tariff change to verify the new PRICAT was dispatched to all LF counterparties.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_pricat_versions(
+        &self,
+        Parameters(p): Parameters<PricatParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::PgPriCatRepository;
+        use mako_markt::repository::PriCatRepository as _;
+        let repo = PgPriCatRepository::new(self.state.pool.clone());
+        match repo.list_versions(&p.nb_mp_id, &self.state.tenant).await {
+            Ok(versions) => {
+                let out: Vec<serde_json::Value> = versions
+                    .iter()
+                    .map(|v| {
+                        serde_json::json!({
+                            "id": v.id,
+                            "nb_mp_id": v.nb_mp_id,
+                            "valid_from": v.valid_from,
+                            "valid_to": v.valid_to,
+                            "dispatch_state": format!("{:?}", v.dispatch_state),
+                            "source": format!("{:?}", v.source),
+                            "created_at": v.created_at,
+                        })
+                    })
+                    .collect();
+                ContentBlock::json(serde_json::json!({
+                    "nb_mp_id": p.nb_mp_id,
+                    "version_count": out.len(),
+                    "versions": out,
+                }))
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None))
+            }
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Trigger (re-)dispatch of the latest PRICAT 27003 version for an NB to all active LF counterparties. \
+Use after an AS4 connectivity incident or to force distribution to newly on-boarded LF partners. \
+Returns the version_id that was queued. Actual dispatch is asynchronous. \
+⚠ NB-role only — Informatorisches Unbundling: LF actors must not trigger NB PRICAT dispatch.",
+        annotations(read_only_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn dispatch_pricat(
+        &self,
+        Parameters(p): Parameters<PricatParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::PgPriCatRepository;
+        use mako_markt::repository::PriCatRepository as _;
+        let repo = PgPriCatRepository::new(self.state.pool.clone());
+        match repo.find_latest(&p.nb_mp_id, &self.state.tenant).await {
+            Ok(Some(v)) => {
+                match repo.mark_queued(v.id).await {
+                    Ok(()) => ContentBlock::json(serde_json::json!({
+                        "version_id": v.id,
+                        "nb_mp_id": p.nb_mp_id,
+                        "valid_from": v.valid_from,
+                        "status": "queued",
+                        "note": "PRICAT dispatch enqueued. Check list_pricat_versions in ~30s for dispatch_state=done.",
+                    }))
+                    .map(|b| CallToolResult::success(vec![b]))
+                    .map_err(|e| McpError::internal_error(e.message, None)),
+                    Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+                }
+            }
+            Ok(None) => Ok(CallToolResult::error(vec![ContentBlock::text(
+                format!("No PRICAT version found for NB GLN {}", p.nb_mp_id),
+            )])),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+}
+
+#[prompt_router]
+impl MdmdMcpHandler {
+    #[prompt(
+        name = "lookup-malo",
+        description = "Step-by-step: query and interpret a Marktlokation record"
+    )]
+    async fn lookup_malo_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "How do I look up and interpret a Marktlokation (MaLo) in marktd?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "1. Use `get_malo` with the 11-digit malo_id.\n                 2. Key fields to check:\n                    - netzebene: HSS/HS/MS/NS — determines NNE tariff tier\n                    - bilanzierungsgebiet: Bilanzierungsgebiet-EIC (required for UTILMD)\n                    - energierichtung: EINSP (feed-in) or VERB (consumption)\n                    - sparte: STROM or GAS\n                    - gasqualitaet: H_GAS or L_GAS (Gas only)\n\n                 3. Use `get_versorgungsstatus` to check if the MaLo is currently supplied.\n                 4. Use `get_nb_contract` to find the active network contract (billing_schedule, RLM/SLP).",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "investigate-supply-gap",
+        description = "Step-by-step: investigate a supply gap or VersorgungsStatus anomaly"
+    )]
+    async fn investigate_supply_gap_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "A MaLo shows an unexpected VersorgungsStatus. How do I investigate?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "1. Use `get_versorgungsstatus` — compare current vs expected status.\n                 2. Use `get_correlation` with the erp_order_id to find the triggering process.\n                 3. Check makod process log: GET /api/v1/processes?malo_id=... in makod.\n                 4. A status of Unbeliefert means no active Liefervertrag — check if:\n                    - Lieferbeginn UTILMD 55001 was sent and APERAK received\n                    - Lieferbeginn 55003 (Bestätigung) was received from NB\n                    - VersorgungsStatus was updated by processd on process.completed event.\n                 5. Fix: re-trigger the Anmeldung via processd POST /api/v1/start-supply.",
+            ),
+        ]
+    }
 }
 
 #[tool_handler]
+#[prompt_handler]
 impl ServerHandler for MdmdMcpHandler {
     fn get_info(&self) -> ServerInfo {
-        InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+        InitializeResult::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
             .with_server_info(Implementation::new("marktd", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "# marktd — Master Data Management\n\

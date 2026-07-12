@@ -1,0 +1,997 @@
+//! HTTP handlers for `vertragd`.
+
+use axum::{
+    Extension, Json,
+    extract::{Path, Query},
+    http::StatusCode,
+    response::IntoResponse,
+};
+use serde::Deserialize;
+use sqlx::PgPool;
+use std::sync::Arc;
+use uuid::Uuid;
+
+use crate::{
+    config::VertragdConfig,
+    events::{build_cloud_event, parse_mako_outcome},
+    pg::{
+        CreateKundeInput, CreateRahmenvertragInput, CreateVersorgungsvertragInput, KuendigungInput,
+        TarifwechselInput, UpdateKundeInput, UpsertIdentitaetInput, derive_vertrag_status,
+        extract_sub_from_bearer, fetch_identitaet_by_sub, fetch_komponente, fetch_kunde,
+        fetch_kunde_by_sub, fetch_person, fetch_vertrag, idempotent_event, insert_rahmenvertrag,
+        insert_versorgungsvertrag, list_aktive_malo_ids, list_identitaeten, list_komponenten,
+        list_offene_vertraege, list_rahmenvertraege_by_kunde, list_rahmenvertrag_malos,
+        list_vertraege_by_kunde, store_pending_tarifwechsel, update_komponente_product,
+        update_komponente_status, update_kunde, update_vertrag_status, upsert_identitaet,
+        upsert_kunde, upsert_person,
+    },
+};
+
+// ── Kunde ─────────────────────────────────────────────────────────────────────
+
+/// `POST /api/v1/kunden` — create or update a customer profile (B2C or B2B).
+///
+/// Idempotent on `erp_kunde_id`.  Sets `oidc_sub` for portal authentication.
+pub async fn post_create_kunde(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Json(input): Json<CreateKundeInput>,
+) -> impl IntoResponse {
+    match upsert_kunde(&pool, &cfg.tenant, &input).await {
+        Ok(id) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "kunden_id": id })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/kunden/{id}` — get customer profile + active MaLo IDs.
+pub async fn get_kunde(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match fetch_kunde(&pool, id, &cfg.tenant).await {
+        Ok(Some(k)) => {
+            let (malo_ids, identitaeten) = tokio::join!(
+                list_aktive_malo_ids(&pool, id, &cfg.tenant),
+                list_identitaeten(&pool, id, &cfg.tenant),
+            );
+            Json(serde_json::json!({
+                "kunde": k,
+                "active_malo_ids": malo_ids.unwrap_or_default(),
+                "identitaeten": identitaeten.unwrap_or_default(),
+            }))
+            .into_response()
+        }
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/kunden/by-sub/{oidc_sub}` — resolve OIDC subject to customer + MaLo IDs.
+///
+/// Used by `portald` to authorize customer requests.  Returns the full customer
+/// profile and all currently active MaLo IDs for resource-level authorization.
+pub async fn get_kunde_by_sub(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(oidc_sub): Path<String>,
+) -> impl IntoResponse {
+    match fetch_kunde_by_sub(&pool, &oidc_sub, &cfg.tenant).await {
+        Ok(Some(k)) => {
+            let identity = fetch_identitaet_by_sub(&pool, &oidc_sub, &cfg.tenant)
+                .await
+                .ok()
+                .flatten();
+            let mut malo_ids = list_aktive_malo_ids(&pool, k.id, &cfg.tenant)
+                .await
+                .unwrap_or_default();
+            // Apply site scope if the identity has a standort_filter
+            if let Some(ref ident) = identity
+                && let Some(ref filter) = ident.standort_filter
+            {
+                let vertraege = list_vertraege_by_kunde(&pool, k.id, &cfg.tenant)
+                    .await
+                    .unwrap_or_default();
+                let scoped_vertrag_ids: std::collections::HashSet<Uuid> = vertraege
+                    .iter()
+                    .filter(|v| v.standort_bezeichnung.as_deref() == Some(filter.as_str()))
+                    .map(|v| v.id)
+                    .collect();
+                let mut scoped_malos = Vec::new();
+                for vid in &scoped_vertrag_ids {
+                    if let Ok(komps) = list_komponenten(&pool, *vid).await {
+                        for komp in komps {
+                            if let Some(m) = komp.malo_id {
+                                scoped_malos.push(m);
+                            }
+                        }
+                    }
+                }
+                malo_ids.retain(|m| scoped_malos.contains(m));
+            }
+            let vertraege_count = list_vertraege_by_kunde(&pool, k.id, &cfg.tenant)
+                .await
+                .map(|v| v.len())
+                .unwrap_or(0);
+            Json(serde_json::json!({
+                "kunde": k,
+                "active_malo_ids": malo_ids,
+                "vertraege_count": vertraege_count,
+                "rolle": identity.as_ref().map(|i| &i.rolle),
+                "standort_filter": identity.as_ref().and_then(|i| i.standort_filter.as_deref()),
+            }))
+            .into_response()
+        }
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── Rahmenvertrag (B2B Framework Contract) ────────────────────────────────────
+
+/// `POST /api/v1/kunden/{id}/rahmenvertraege` — create a B2B framework contract.
+///
+/// A Rahmenvertrag is a master agreement that sets shared pricing, notice periods,
+/// and billing terms for N individual Versorgungsverträge (supply contracts) under it.
+/// Primarily used for B2B_RLM and B2B_HV portfolio customers with multiple delivery points.
+pub async fn post_create_rahmenvertrag(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(kunden_id): Path<Uuid>,
+    Json(input): Json<CreateRahmenvertragInput>,
+) -> impl IntoResponse {
+    // Verify customer belongs to tenant
+    match fetch_kunde(&pool, kunden_id, &cfg.tenant).await {
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(Some(_)) => {}
+    }
+    match insert_rahmenvertrag(&pool, kunden_id, &cfg.tenant, &input).await {
+        Ok(id) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "rahmenvertrag_id": id })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── Versorgungsvertrag (Supply Contract) ──────────────────────────────────────
+
+/// `POST /api/v1/kunden/{id}/vertraege` — create a supply contract for a customer.
+///
+/// Supports both B2C (no `rahmenvertrag_id`) and B2B (with `rahmenvertrag_id`).
+///
+/// For each commodity `Vertragskomponente`:
+/// - STROM/GAS/WAERME/SOLAR/EEG/WAERMEPUMPE/WALLBOX → `processd /start-supply`
+/// - HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG → direct fulfillment
+///
+/// Idempotent on `erp_contract_id`.
+pub async fn post_create_vertrag(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(kunden_id): Path<Uuid>,
+    Json(input): Json<CreateVersorgungsvertragInput>,
+) -> impl IntoResponse {
+    match fetch_kunde(&pool, kunden_id, &cfg.tenant).await {
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(Some(_)) => {}
+    }
+    let vertrag_id =
+        match insert_versorgungsvertrag(&pool, kunden_id, &cfg.tenant, &cfg.lf_mp_id, &input).await
+        {
+            Ok(id) => id,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+
+    // Dispatch MaKo Lieferbeginn for commodity components
+    let mut dispatched = 0u32;
+    for komp in &input.komponenten {
+        if requires_mako_workflow(&komp.sparte)
+            && let Some(malo_id) = &komp.malo_id
+            && let Some(nb_mp_id) = &komp.nb_mp_id
+        {
+            tokio::spawn(dispatch_lieferbeginn(
+                Arc::clone(&cfg),
+                vertrag_id,
+                pool.clone(),
+                malo_id.clone(),
+                nb_mp_id.clone(),
+                komp.sparte.clone(),
+                komp.lieferbeginn,
+            ));
+            dispatched += 1;
+        }
+    }
+
+    if dispatched > 0 {
+        let _ = update_vertrag_status(&pool, vertrag_id, "IN_BEARBEITUNG").await;
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "vertrag_id":  vertrag_id,
+            "status":      if dispatched > 0 { "IN_BEARBEITUNG" } else { "ANGELEGT" },
+            "komponenten": input.komponenten.len(),
+            "mako_dispatched": dispatched,
+        })),
+    )
+        .into_response()
+}
+
+/// `GET /api/v1/vertraege/{id}` — get Versorgungsvertrag + all components.
+pub async fn get_vertrag(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match fetch_vertrag(&pool, id, &cfg.tenant).await {
+        Ok(Some(v)) => {
+            let komp = list_komponenten(&pool, id).await.unwrap_or_default();
+            Json(serde_json::json!({ "vertrag": v, "komponenten": komp })).into_response()
+        }
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/vertraege` — list open contracts.
+pub async fn list_vertraege(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Query(q): Query<ListQuery>,
+) -> impl IntoResponse {
+    match list_offene_vertraege(&pool, &cfg.tenant, q.limit.unwrap_or(100).min(500)).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ListQuery {
+    pub limit: Option<i64>,
+}
+
+/// `POST /api/v1/vertraege/{id}/kuendigen` — initiate Lieferende for all commodity components.
+pub async fn kuendige_vertrag(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<KuendigungInput>,
+) -> impl IntoResponse {
+    let vertrag = match fetch_vertrag(&pool, id, &cfg.tenant).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    if !matches!(vertrag.status.as_str(), "AKTIV" | "TEILERFUELLUNG") {
+        return (
+            StatusCode::CONFLICT,
+            format!(
+                "Vertrag status '{}' cannot be cancelled — must be AKTIV",
+                vertrag.status
+            ),
+        )
+            .into_response();
+    }
+    let komponenten = list_komponenten(&pool, id).await.unwrap_or_default();
+    let mut dispatched = 0u32;
+    for k in komponenten
+        .iter()
+        .filter(|k| matches!(k.status.as_str(), "AKTIV" | "BESTAETIGT"))
+    {
+        if requires_mako_workflow(&k.sparte)
+            && let Some(malo_id) = &k.malo_id
+            && let Some(nb_mp_id) = &k.nb_mp_id
+        {
+            tokio::spawn(dispatch_lieferende(
+                Arc::clone(&cfg),
+                k.id,
+                pool.clone(),
+                malo_id.clone(),
+                nb_mp_id.clone(),
+                k.sparte.clone(),
+                input.lieferende,
+            ));
+            dispatched += 1;
+        } else {
+            let _ = update_komponente_status(&pool, k.id, "BEENDET", None, None, None, None).await;
+        }
+    }
+    let _ = update_vertrag_status(
+        &pool,
+        id,
+        if dispatched > 0 {
+            "GEKÜNDIGT"
+        } else {
+            "ABGELAUFEN"
+        },
+    )
+    .await;
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "vertrag_id": id,
+            "lieferende": input.lieferende.to_string(),
+            "mako_dispatched": dispatched,
+        })),
+    )
+        .into_response()
+}
+
+// ── Identity management (portal users) ────────────────────────────────────────
+
+/// `POST /api/v1/kunden/{id}/identitaeten`
+///
+/// Add a portal user to a Kunde.  Idempotent on `oidc_sub`.
+/// B2B customers call this endpoint for each employee who needs portal access.
+/// B2C customers typically have exactly one identity (created automatically at Kunde creation).
+pub async fn post_upsert_identitaet(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(kunden_id): Path<Uuid>,
+    Json(input): Json<UpsertIdentitaetInput>,
+) -> impl IntoResponse {
+    match fetch_kunde(&pool, kunden_id, &cfg.tenant).await {
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(Some(_)) => {}
+    }
+    match upsert_identitaet(&pool, kunden_id, &cfg.tenant, &input).await {
+        Ok(id) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "id": id,
+                "kunden_id": kunden_id,
+                "oidc_sub": input.oidc_sub,
+                "rolle": input.rolle.as_deref().unwrap_or("VOLLZUGRIFF"),
+            })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/kunden/{id}/identitaeten` — list all active portal users.
+pub async fn list_kunde_identitaeten(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(kunden_id): Path<Uuid>,
+) -> impl IntoResponse {
+    match list_identitaeten(&pool, kunden_id, &cfg.tenant).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── Additional customer / contract endpoints ──────────────────────────────────
+
+/// `PUT /api/v1/kunden/{id}` — update customer profile (especially oidc_sub for portal auth).
+pub async fn put_update_kunde(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<UpdateKundeInput>,
+) -> impl IntoResponse {
+    match update_kunde(&pool, id, &cfg.tenant, &input).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/kunden/{id}/rahmenvertraege` — list B2B framework contracts for a customer.
+pub async fn list_kunde_rahmenvertraege(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(kunden_id): Path<Uuid>,
+) -> impl IntoResponse {
+    match list_rahmenvertraege_by_kunde(&pool, kunden_id, &cfg.tenant).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/kunden/{id}/vertraege` — list all Versorgungsverträge for a customer.
+pub async fn list_kunde_vertraege(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(kunden_id): Path<Uuid>,
+) -> impl IntoResponse {
+    match list_vertraege_by_kunde(&pool, kunden_id, &cfg.tenant).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/kunden/authenticate?malo_id={malo_id}`
+///
+/// portald authorization endpoint.  Extracts the OIDC `sub` from the inbound
+/// `Authorization: Bearer <jwt>` header (no signature verification — the API
+/// gateway or Axum OIDC verifier has already done that), then checks whether
+/// this customer owns `malo_id`.
+///
+/// Returns:
+/// - `200 OK` — customer is authorized for this MaLo
+/// - `401 Unauthorized` — no Authorization header or no customer profile for this sub
+/// - `403 Forbidden` — customer found but does not own this MaLo
+/// - `404 Not Found` — customer not found
+pub async fn get_authenticate(
+    headers: axum::http::HeaderMap,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Query(q): Query<AuthenticateQuery>,
+) -> impl IntoResponse {
+    // Extract sub from JWT payload (no sig verification — trust the outer auth layer)
+    let auth_val = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let sub = match extract_sub_from_bearer(auth_val) {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                "cannot extract sub from Bearer token",
+            )
+                .into_response();
+        }
+    };
+
+    let kunde = match fetch_kunde_by_sub(&pool, &sub, &cfg.tenant).await {
+        Ok(Some(k)) => k,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    // Check MaLo ownership with standort_filter scope
+    let identity = fetch_identitaet_by_sub(&pool, &sub, &cfg.tenant)
+        .await
+        .ok()
+        .flatten();
+    let malo_ids = list_aktive_malo_ids(&pool, kunde.id, &cfg.tenant)
+        .await
+        .unwrap_or_default();
+    let owns_malo = malo_ids.iter().any(|id| id == &q.malo_id);
+    if !owns_malo {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    // Enforce standort_filter if set: identity can only access MaLos for their site
+    if let Some(ref ident) = identity
+        && let Some(ref filter) = ident.standort_filter
+    {
+        let vertraege = list_vertraege_by_kunde(&pool, kunde.id, &cfg.tenant)
+            .await
+            .unwrap_or_default();
+        let scoped_malos: Vec<String> = {
+            let mut out = Vec::new();
+            for v in vertraege
+                .iter()
+                .filter(|v| v.standort_bezeichnung.as_deref() == Some(filter.as_str()))
+            {
+                if let Ok(komps) = list_komponenten(&pool, v.id).await {
+                    for komp in komps {
+                        if let Some(m) = komp.malo_id {
+                            out.push(m);
+                        }
+                    }
+                }
+            }
+            out
+        };
+        if !scoped_malos.contains(&q.malo_id) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
+    // portald needs the kunden_id to resolve write operations.
+    // Return it in the body so portald avoids a second roundtrip.
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "kunden_id": kunde.id,
+            "kundentyp": kunde.kundentyp,
+            "malo_id": q.malo_id,
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct AuthenticateQuery {
+    pub malo_id: String,
+}
+
+/// `POST /api/v1/vertraege/{id}/tarifwechsel` — change tariff for a component.
+///
+/// Tarifwechsel changes the product/pricing for an existing Vertragskomponente
+/// without triggering a new UTILMD Lieferbeginn.  Only `product_code` in `tarifbd`
+/// is updated; the MaKo supply status (UTILMD) remains unchanged.
+///
+/// ## Future vs. immediate Tarifwechsel
+///
+/// - `wirksamkeit > today`: stores as **pending** Tarifwechsel.  The background worker
+///   applies it on `wirksamkeit` and emits `de.vertrag.preisaenderung.ankuendigung`
+///   42 days before (§41 Abs. 3 EnWG: ≥ 6 weeks advance notice).
+/// - `wirksamkeit ≤ today`: applied immediately (urgent correction / retroactive change).
+pub async fn tarifwechsel_vertrag(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(vertrag_id): Path<Uuid>,
+    Json(input): Json<TarifwechselInput>,
+) -> impl IntoResponse {
+    // Verify component belongs to this contract
+    let komp = match fetch_komponente(&pool, input.komp_id).await {
+        Ok(Some(k)) if k.vertrag_id == vertrag_id => k,
+        Ok(Some(_)) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "component does not belong to this Vertrag",
+            )
+                .into_response();
+        }
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    let today = time::OffsetDateTime::now_utc().date();
+    let is_future = input.wirksamkeit > today;
+
+    if is_future {
+        // Store as pending — background worker will apply on wirksamkeit
+        // and emit 6-week advance notification per §41 Abs. 3 EnWG.
+        if let Err(e) = store_pending_tarifwechsel(
+            &pool,
+            input.komp_id,
+            &input.new_product_code,
+            input.wirksamkeit,
+        )
+        .await
+        {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    } else {
+        // Apply immediately (urgent / retroactive correction).
+        if let Err(e) =
+            update_komponente_product(&pool, input.komp_id, &input.new_product_code).await
+        {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+
+        // Update tarifbd product assignment
+        if let Some(ref malo_id) = komp.malo_id {
+            let url = format!(
+                "{}/api/v1/customer/{}/product",
+                cfg.tarifbd_url.trim_end_matches('/'),
+                malo_id
+            );
+            let body = serde_json::json!({
+                "product_code": input.new_product_code,
+                "lf_mp_id": cfg.lf_mp_id,
+                "assigned_from": input.wirksamkeit.to_string(),
+            });
+            let client = reqwest::Client::new();
+            let mut req = client.put(&url);
+            if let Some(ref k) = cfg.tarifbd_api_key {
+                req = req.bearer_auth(k);
+            }
+            let _ = req.json(&body).send().await;
+        }
+    }
+
+    // Emit CloudEvent (tarifwechsel for immediate, tarifwechsel_geplant for future)
+    let ce_type = if is_future {
+        "tarifwechsel_geplant"
+    } else {
+        "tarifwechsel"
+    };
+    if let Some(ref url) = cfg.erp_webhook_url {
+        emit_event(
+            url,
+            build_cloud_event(
+                ce_type,
+                vertrag_id,
+                &cfg.tenant,
+                serde_json::json!({
+                    "vertrag_id": vertrag_id,
+                    "komp_id": input.komp_id,
+                    "new_product_code": input.new_product_code,
+                    "wirksamkeit": input.wirksamkeit.to_string(),
+                    "geplant": is_future,
+                }),
+            ),
+        )
+        .await;
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "vertrag_id": vertrag_id,
+            "komp_id": input.komp_id,
+            "new_product_code": input.new_product_code,
+            "wirksamkeit": input.wirksamkeit.to_string(),
+            "applied_immediately": !is_future,
+            "pending": is_future,
+        })),
+    )
+        .into_response()
+}
+
+// ── CloudEvent webhook ─────────────────────────────────────────────────────────
+
+/// `POST /api/v1/events` — inbound CloudEvents from makod / processd.
+pub async fn post_cloud_event(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Json(ce): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let ce_id = ce.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let ce_type = ce.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let is_new = match idempotent_event(&pool, ce_id, ce_type, &ce).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!(error=%e, "vertragd: event inbox write failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if !is_new {
+        return StatusCode::OK.into_response();
+    }
+
+    if let Some(outcome) = parse_mako_outcome(&ce) {
+        let process_id = outcome.process_id.as_deref().unwrap_or("");
+        if let Ok(rows) = sqlx::query_as::<_, crate::pg::VertragskomponenteRow>(
+            "SELECT k.* FROM vertragskomponenten k
+             JOIN versorgungsvertraege v ON v.id = k.vertrag_id
+             WHERE k.mako_process_id=$1 AND v.tenant=$2",
+        )
+        .bind(process_id)
+        .bind(&cfg.tenant)
+        .fetch_all(&pool)
+        .await
+        {
+            for k in &rows {
+                let new_status = if outcome.confirmed {
+                    "BESTAETIGT"
+                } else {
+                    "ABGELEHNT"
+                };
+                let _ = update_komponente_status(
+                    &pool,
+                    k.id,
+                    new_status,
+                    None,
+                    outcome.malo_id.as_deref(),
+                    outcome.erc_code.as_deref(),
+                    outcome.reason.as_deref(),
+                )
+                .await;
+
+                // Post-confirmation: Ablesesteuerung + product assignment
+                if outcome.confirmed
+                    && let Some(ref malo_id) = outcome.malo_id
+                {
+                    tokio::spawn(post_bestaetigt_actions(
+                        Arc::clone(&cfg),
+                        pool.clone(),
+                        malo_id.clone(),
+                        k.id,
+                        k.product_code.clone(),
+                        k.lieferbeginn,
+                    ));
+                }
+
+                // Recompute Versorgungsvertrag status
+                if let Ok(all_komp) = list_komponenten(&pool, k.vertrag_id).await {
+                    let new_vv_status = derive_vertrag_status(&all_komp);
+                    let _ = update_vertrag_status(&pool, k.vertrag_id, new_vv_status).await;
+                    // Emit de.vertrag.aktiv when all components confirmed
+                    if new_vv_status == "AKTIV"
+                        && let Some(ref url) = cfg.erp_webhook_url
+                    {
+                        emit_event(
+                            url,
+                            build_cloud_event(
+                                "aktiv",
+                                k.vertrag_id,
+                                &cfg.tenant,
+                                serde_json::json!({"vertrag_id": k.vertrag_id}),
+                            ),
+                        )
+                        .await;
+                        // Provision accountingd billing account
+                        if let Some(ref malo_id) = outcome.malo_id {
+                            tokio::spawn(provision_billing_account(
+                                Arc::clone(&cfg),
+                                pool.clone(),
+                                malo_id.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    StatusCode::OK.into_response()
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn requires_mako_workflow(sparte: &str) -> bool {
+    matches!(
+        sparte,
+        "STROM" | "GAS" | "WAERME" | "SOLAR" | "EEG" | "EINSPEISUNG" | "WAERMEPUMPE" | "WALLBOX"
+    )
+}
+
+async fn dispatch_lieferbeginn(
+    cfg: Arc<VertragdConfig>,
+    komp_id: Uuid,
+    pool: PgPool,
+    malo_id: String,
+    nb_mp_id: String,
+    sparte: String,
+    lieferbeginn: time::Date,
+) {
+    let endpoint = if sparte == "GAS" {
+        "start-supply-gas"
+    } else {
+        "start-supply"
+    };
+    let url = format!(
+        "{}/api/v1/{}",
+        cfg.processd_url.trim_end_matches('/'),
+        endpoint
+    );
+    let body = serde_json::json!({ "malo_id": malo_id, "nb_mp_id": nb_mp_id, "lf_mp_id": cfg.lf_mp_id, "lieferbeginn": lieferbeginn.to_string() });
+    let client = reqwest::Client::new();
+    let mut req = client.post(&url);
+    if let Some(ref k) = cfg.processd_api_key {
+        req = req.bearer_auth(k);
+    }
+    match req.json(&body).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            if let Ok(data) = resp.json::<serde_json::Value>().await {
+                let process_id = data.get("process_id").and_then(|v| v.as_str());
+                let _ = update_komponente_status(
+                    &pool,
+                    komp_id,
+                    "ANGEMELDET",
+                    process_id,
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+            }
+        }
+        Ok(resp) => {
+            tracing::warn!(komp_id=%komp_id, status=%resp.status(), "vertragd: processd Lieferbeginn failed")
+        }
+        Err(e) => tracing::error!(komp_id=%komp_id, error=%e, "vertragd: processd request error"),
+    }
+}
+
+async fn dispatch_lieferende(
+    cfg: Arc<VertragdConfig>,
+    komp_id: Uuid,
+    pool: PgPool,
+    malo_id: String,
+    nb_mp_id: String,
+    sparte: String,
+    lieferende: time::Date,
+) {
+    let endpoint = if sparte == "GAS" {
+        "end-supply-gas"
+    } else {
+        "end-supply"
+    };
+    let url = format!(
+        "{}/api/v1/{}",
+        cfg.processd_url.trim_end_matches('/'),
+        endpoint
+    );
+    let body = serde_json::json!({ "malo_id": malo_id, "nb_mp_id": nb_mp_id, "lf_mp_id": cfg.lf_mp_id, "lieferende": lieferende.to_string() });
+    let client = reqwest::Client::new();
+    let mut req = client.post(&url);
+    if let Some(ref k) = cfg.processd_api_key {
+        req = req.bearer_auth(k);
+    }
+    match req.json(&body).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            let _ =
+                update_komponente_status(&pool, komp_id, "BEENDET", None, None, None, None).await;
+            trigger_ablesesteuerung(&cfg, komp_id, &malo_id, "LIEFERENDE", lieferende).await;
+        }
+        Ok(resp) => {
+            tracing::warn!(komp_id=%komp_id, status=%resp.status(), "vertragd: Lieferende failed")
+        }
+        Err(e) => tracing::error!(komp_id=%komp_id, error=%e, "vertragd: Lieferende error"),
+    }
+}
+
+async fn post_bestaetigt_actions(
+    cfg: Arc<VertragdConfig>,
+    pool: PgPool,
+    malo_id: String,
+    komp_id: Uuid,
+    product_code: String,
+    lieferbeginn: time::Date,
+) {
+    trigger_ablesesteuerung(&cfg, komp_id, &malo_id, "LIEFERBEGINN", lieferbeginn).await;
+    let url = format!(
+        "{}/api/v1/customer/{}/product",
+        cfg.tarifbd_url.trim_end_matches('/'),
+        malo_id
+    );
+    let body = serde_json::json!({ "product_code": product_code, "lf_mp_id": cfg.lf_mp_id, "assigned_from": lieferbeginn.to_string() });
+    let client = reqwest::Client::new();
+    let mut req = client.put(&url);
+    if let Some(ref k) = cfg.tarifbd_api_key {
+        req = req.bearer_auth(k);
+    }
+    if let Err(e) = req.json(&body).send().await {
+        tracing::warn!(malo_id, error=%e, "vertragd: tarifbd product assignment failed");
+        let _ = pool;
+    }
+}
+
+async fn provision_billing_account(cfg: Arc<VertragdConfig>, _pool: PgPool, malo_id: String) {
+    let url = format!(
+        "{}/api/v1/accounts",
+        cfg.accountingd_url.trim_end_matches('/')
+    );
+    let body = serde_json::json!({ "malo_id": malo_id, "lf_mp_id": cfg.lf_mp_id });
+    let client = reqwest::Client::new();
+    let mut req = client.post(&url);
+    if let Some(ref k) = cfg.accountingd_api_key {
+        req = req.bearer_auth(k);
+    }
+    if let Err(e) = req.json(&body).send().await {
+        tracing::warn!(malo_id, error=%e, "vertragd: accountingd provisioning failed");
+    }
+}
+
+async fn trigger_ablesesteuerung(
+    cfg: &VertragdConfig,
+    komp_id: Uuid,
+    malo_id: &str,
+    anlass: &str,
+    geplant_am: time::Date,
+) {
+    let url = format!(
+        "{}/api/v1/reading-orders",
+        cfg.edmd_url.trim_end_matches('/')
+    );
+    let body = serde_json::json!({ "malo_id": malo_id, "anlass": anlass, "auftraggeber_rolle": "LF", "geplant_am": geplant_am.to_string(), "auftrag_position_id": komp_id });
+    let client = reqwest::Client::new();
+    let mut req = client.post(&url);
+    if let Some(ref k) = cfg.edmd_api_key {
+        req = req.bearer_auth(k);
+    }
+    if let Err(e) = req.json(&body).send().await {
+        tracing::warn!(malo_id, anlass, error=%e, "vertragd: Ablesesteuerung failed");
+    }
+}
+
+async fn emit_event(webhook_url: &str, ce: serde_json::Value) {
+    let client = reqwest::Client::new();
+    if let Err(e) = client
+        .post(webhook_url)
+        .header("Content-Type", "application/cloudevents+json")
+        .json(&ce)
+        .send()
+        .await
+    {
+        tracing::warn!(error=%e, "vertragd: ERP webhook error");
+    }
+}
+
+// ── Person sub-object (BO4E Person BO, L13 — GDPR Art. 15) ───────────────────
+
+/// `PUT /api/v1/kunden/{id}/person`
+///
+/// Store or replace the BO4E `Person` BO for a B2C customer.
+///
+/// Body: `rubo4e::current::Person` JSON (camelCase).
+///
+/// Validation:
+/// - `_typ: "PERSON"` is auto-injected when absent; wrong value → 422.
+/// - All enum fields (`anrede`, `titel`) are validated via deserialization.
+/// - Re-serialised to canonical BO4E camelCase before storage.
+///
+/// **Hard cut — GDPR Art. 15 data export.** `portald`/ERP can reconstruct a
+/// structured data-subject response from the stored `Person` without parsing
+/// free-text fields.  Correct `anrede` is required for correspondence templates.
+pub async fn put_person(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(id): Path<Uuid>,
+    Json(mut body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use rubo4e::current::Person;
+    // Inject _typ: "PERSON" when absent; reject mismatches.
+    match body.get("_typ").and_then(|v| v.as_str()) {
+        None => {
+            body["_typ"] = serde_json::json!("PERSON");
+        }
+        Some("PERSON") => {}
+        Some(other) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(
+                    serde_json::json!({ "error": format!("expected _typ=PERSON, got {other:?}") }),
+                ),
+            )
+                .into_response();
+        }
+    }
+    // Validate via rubo4e roundtrip (validates anrede, titel enums).
+    let typed: Person = match serde_json::from_value(body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("invalid Person payload: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let canonical = serde_json::to_value(&typed).unwrap_or_default();
+
+    match upsert_person(&pool, id, &cfg.tenant, canonical).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) if e.to_string().contains("not found") => {
+            (StatusCode::NOT_FOUND, e.to_string()).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/kunden/{id}/person`
+///
+/// Retrieve the stored BO4E `Person` BO for a customer.
+///
+/// Returns 404 when the customer exists but no `Person` has been stored
+/// (B2B Geschäftspartner / legal entity without personal data).
+pub async fn get_person(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match fetch_person(&pool, id, &cfg.tenant).await {
+        Ok(Some(p)) => Json(p).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "no Person stored for this Kunde (B2B entity or not yet set)"
+            })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── Rahmenvertrag MaLo enumeration (L2 — Sammelrechnung) ─────────────────────
+
+/// `GET /api/v1/rahmenvertraege/{id}/malos`
+///
+/// Returns all active MaLo IDs + product codes for a Rahmenvertrag.
+///
+/// Used by `billingd` `POST /api/v1/billing/sammelrechnung/{id}` to enumerate
+/// the sites to include in a consolidated B2B Sammelrechnung.
+pub async fn get_rahmenvertrag_malos(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match list_rahmenvertrag_malos(&pool, id, &cfg.tenant).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}

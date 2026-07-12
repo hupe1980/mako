@@ -185,8 +185,10 @@ pub struct SperrungData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum SperrungState {
     /// No events yet.
+    #[default]
     New,
     /// ORDERS Sperrauftrag/Entsperrauftrag (17115/17116/17117) received; awaiting validation.
     AnweisungErhalten(SperrungData),
@@ -201,12 +203,6 @@ pub enum SperrungState {
         /// Human-readable rejection reason.
         reason: String,
     },
-}
-
-impl Default for SperrungState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl SperrungState {

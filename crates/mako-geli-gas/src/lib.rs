@@ -77,6 +77,8 @@
 //!     validation_passed: report.is_valid(),
 //!     validation_errors: report.errors().iter()
 //!                         .map(|i| format!("{i}")).collect(),
+//!     bilanzierungsmethode: None,
+//!     fallgruppe: None,
 //! };
 //!
 //! process.execute(cmd).await?;

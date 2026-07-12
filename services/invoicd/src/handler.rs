@@ -216,6 +216,84 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
         )
     };
 
+    // ── Check 6 (MMM settlement prices) ──────────────────────────────────────
+    // For MMM PIDs (31002/31005 Strom, 31007/31008 Gas), validate that
+    // Mehrmengen/Mindermengen position prices match the MMMA reference stored
+    // in `marktd`. Adds additional Findings to the report when prices deviate.
+    let report = {
+        const MMM_PIDS: &[u32] = &[31002, 31005, 31007, 31008];
+        if MMM_PIDS.contains(&pid) {
+            let billing_date = rechnung
+                .billing_period()
+                .map(|(s, _)| s)
+                .or(rechnung.rechnungsdatum)
+                .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+            let (y, m) = (billing_date.year(), billing_date.month() as u8);
+
+            // Try Gas MMM prices first (THE), then Strom MMM prices (ÜNB).
+            // For Strom, the sender IS the NB (ÜNB per §22 StromNZV) — use sender_mp_id.
+            let mmm_prices = if pid == 31007 || pid == 31008 {
+                state
+                    .preisblatt_client
+                    .get_mmma_gas(y, m, "THE")
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|r| (r.mehr_ct_kwh, r.minder_ct_kwh))
+            } else {
+                state
+                    .preisblatt_client
+                    .get_mmm_strom(y, m, &sender_mp_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|r| (r.mehr_ct_kwh, r.minder_ct_kwh))
+            };
+
+            if let Some((mehr_ct, minder_ct)) = mmm_prices {
+                let mmm_findings = InvoicCheckEngine::check_mmm_settlement(
+                    &rechnung,
+                    mehr_ct,
+                    minder_ct,
+                    &state.check_config,
+                );
+                if !mmm_findings.is_empty() {
+                    use invoic_checker::CheckOutcome;
+                    let extra_outcome = mmm_findings
+                        .iter()
+                        .map(|f| {
+                            if f.is_dispute {
+                                CheckOutcome::Dispute
+                            } else {
+                                CheckOutcome::Warn
+                            }
+                        })
+                        .max()
+                        .unwrap_or(CheckOutcome::Ok);
+                    let merged_outcome = report.outcome.max(extra_outcome);
+                    let mut merged = report;
+                    merged.findings.extend(mmm_findings);
+                    merged.outcome = merged_outcome;
+                    merged
+                } else {
+                    report
+                }
+            } else {
+                // MMMA prices not yet imported for this month — skip check 6.
+                // Logged at debug level to avoid noise in NB deployments without MMMA data.
+                tracing::debug!(
+                    pid,
+                    year = y,
+                    month = m,
+                    "invoicd: MMMA prices not found in marktd — MMM settlement check skipped"
+                );
+                report
+            }
+        } else {
+            report
+        }
+    };
+
     let checked_at = OffsetDateTime::now_utc();
 
     info!(
@@ -235,7 +313,7 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
             state.auto_dispute_threshold_eur_cents > 0
                 && report
                     .total_net_invoic
-                    .map(|t| t.0 > state.auto_dispute_threshold_eur_cents)
+                    .map(|t| t.to_raw() > state.auto_dispute_threshold_eur_cents)
                     .unwrap_or(false)
         }
         CheckOutcome::Dispute => true,
@@ -451,27 +529,27 @@ async fn handle_wim_31009_initiated(state: HandlerState, subject: String, data: 
         .or(rechnung.rechnungsdatum)
         .unwrap_or(time::macros::date!(2025 - 01 - 01));
 
-    // ── 4. Plausibility check (same pipeline as GPKE 31001/31002/31005) ───────
+    // ── 4. Plausibility check — PID 31009 uses PreisblattMessung, not NNE ────
+    //
+    // BUG FIX (M5): the MSB-Rechnung (31009) is billed between the NB and the
+    // Messstellenbetreiber.  The applicable tariff reference is `PreisblattMessung`
+    // (MSB metering service price sheet), NOT `PreisblattNetznutzung` (NNE tariff).
+    // Using the NNE tariff produces incorrect check 4/5 results.
+    //
+    // `InvoicCheckEngine::check_msb_rechnung()` builds an on-the-fly price list
+    // from `PreisblattMessung.preispositionen` and re-uses the standard arithmetic
+    // and period checks (1–3) alongside the MSB-aware tariff checks (4–5).
     let report = {
-        let sheet = state
+        let preisblatt_messung = state
             .preisblatt_client
-            .get_preisblatt(&sender_mp_id, billing_date)
+            .get_preisblatt_messung(&sender_mp_id, billing_date)
             .await
             .ok()
             .flatten();
-        let preisblatt_store = {
-            use invoic_checker::tariff::InMemoryPreisblattStore;
-            let mut store = InMemoryPreisblattStore::new();
-            if let Some(s) = sheet {
-                store.insert(sender_mp_id.clone(), s);
-            }
-            store
-        };
-        InvoicCheckEngine::check(
-            31009,
+        InvoicCheckEngine::check_msb_rechnung(
             &sender_mp_id,
             &rechnung,
-            &preisblatt_store,
+            preisblatt_messung.as_ref(),
             &state.check_config,
         )
     };
@@ -491,7 +569,7 @@ async fn handle_wim_31009_initiated(state: HandlerState, subject: String, data: 
             state.auto_dispute_threshold_eur_cents > 0
                 && report
                     .total_net_invoic
-                    .map(|t| t.0 > state.auto_dispute_threshold_eur_cents)
+                    .map(|t| t.to_raw() > state.auto_dispute_threshold_eur_cents)
                     .unwrap_or(false)
         }
         CheckOutcome::Dispute => true,

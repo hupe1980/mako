@@ -1,0 +1,30 @@
+[package]
+name        = "portald"
+description = "Customer portal read-model gateway (LF role). Aggregates Lastgang (edmd), invoices (billingd), account balance (accountingd), VersorgungsStatus (marktd), and EEG settlement (einsd) into a single customer-facing REST/SSE API. OIDC bearer-token authentication. Port :9480."
+version.workspace     = true
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+
+[[bin]]
+name = "portald"
+path = "src/main.rs"
+
+[dependencies]
+mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
+axum         = { version = "0.8" }
+tokio        = { version = "1", features = ["full"] }
+serde        = { workspace = true, features = ["derive"] }
+serde_json   = { workspace = true }
+time         = { workspace = true }
+uuid         = { workspace = true, features = ["v4", "serde"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing      = "0.1"
+reqwest      = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+anyhow       = "1"
+rmcp         = { workspace = true }
+tokio-util   = { workspace = true }
+futures      = "0.3"
+tokio-stream = { version = "0.1", features = ["sync", "time"] }

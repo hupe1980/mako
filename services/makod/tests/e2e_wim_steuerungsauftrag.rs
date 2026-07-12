@@ -107,6 +107,7 @@ impl MockMsb {
                 execution_time_from: "2025-01-15T06:00:00Z".to_owned(),
                 max_power_kw: max_power_kw.to_owned(),
                 execution_time_until: execution_time_until.map(str::to_owned),
+                produkt_code: None, // test: no product eligibility check
             })
             .await
             .expect("ReceiveKonfiguration");
@@ -329,6 +330,7 @@ async fn e2e_wim_steuerungsauftrag_duplicate_receive_rejected() {
             execution_time_from: "2025-01-16T06:00:00Z".to_owned(),
             max_power_kw: "6.0".to_owned(),
             execution_time_until: None,
+            produkt_code: None,
         })
         .await;
 

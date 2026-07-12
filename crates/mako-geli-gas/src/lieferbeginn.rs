@@ -355,8 +355,10 @@ impl EventPayload for GasSupplierChangeEvent {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum GasSupplierChangeState {
     /// No events yet; stream exists but process has not started.
+    #[default]
     New,
     /// Inbound Anfrage received; AHB validation in progress.
     Initiated(GasSupplierChangeData),
@@ -380,12 +382,6 @@ pub enum GasSupplierChangeState {
         /// Human-readable rejection reason.
         reason: String,
     },
-}
-
-impl Default for GasSupplierChangeState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl GasSupplierChangeState {
@@ -461,6 +457,14 @@ pub enum GasSupplierChangeCommand {
         /// and the 10-Werktage process deadline (BK7-24-01-009) that are
         /// registered atomically with the `Initiated` event.
         received_at: OffsetDateTime,
+        /// Bilanzierungsmethode from UTILMD G `TM+EM` segment (L1/N1).
+        /// `"SLP"` | `"RLM"` | `"IMS"` — propagated to `ProcessInitiated` outbox
+        /// so `marktd` can update `malo.bilanzierungsmethode`.
+        bilanzierungsmethode: Option<String>,
+        /// Gas GaBi RLM Fallgruppe from UTILMD G `TM+Z10` segment (L1/N1).
+        /// Only set for Gas RLM MaLos. Propagated to `ProcessInitiated` outbox
+        /// so `marktd` can update `malo.fallgruppe`.
+        fallgruppe: Option<String>,
     },
     /// Send the outbound UTILMD G Antwort (responder role).
     ///
@@ -687,6 +691,8 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 validation_passed,
                 validation_errors,
                 received_at,
+                bilanzierungsmethode,
+                fallgruppe,
             } => {
                 if !matches!(state, GasSupplierChangeState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
@@ -704,6 +710,9 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 let receiver_gln = receiver.clone();
                 // 44001 = Lieferbeginn Anfrage (Initialprozess); all others are Folgeprozesse.
                 let is_initialprozess = pid.as_u32() == 44_001;
+                // Clone before move into Initiated event for ProcessInitiated outbox (L1/N1).
+                let malo_id_str = malo_id.as_str().to_owned();
+                let process_date_clone = process_date.clone();
 
                 let mut events = vec![GasSupplierChangeEvent::Initiated {
                     variant,
@@ -739,7 +748,26 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     );
                     Ok(WorkflowOutput::with_outbox_and_deadlines(
                         events,
-                        vec![],
+                        // Notify the GNB ERP via de.mako.process.initiated so it can
+                        // decide to Bestätigen or Ablehnen the Anmeldung.
+                        // Also carries bilanzierungsmethode + fallgruppe so marktd
+                        // can update malo.bilanzierungsmethode / malo.fallgruppe (L1/N1).
+                        vec![
+                            PendingOutbox::new(
+                                "ProcessInitiated",
+                                receiver_gln.as_str(),
+                                serde_json::json!({
+                                    "pid":                  pid.as_u32(),
+                                    "malo_id":              malo_id_str,
+                                    "new_supplier":         sender_mp_id.as_str(),
+                                    "grid_operator":        receiver_gln.as_str(),
+                                    "process_date":         process_date_clone,
+                                    "bilanzierungsmethode": bilanzierungsmethode,
+                                    "fallgruppe":           fallgruppe,
+                                }),
+                            )
+                            .caused_by(1),
+                        ],
                         vec![aperak_send_dl, process_dl],
                     ))
                 } else {
@@ -1196,6 +1224,8 @@ mod tests {
                 vec!["AHB violation".to_owned()]
             },
             received_at: time::OffsetDateTime::now_utc(),
+            bilanzierungsmethode: None,
+            fallgruppe: None,
         }
     }
 

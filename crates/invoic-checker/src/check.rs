@@ -56,21 +56,22 @@ use crate::{amount::EuroAmount, tariff::PreisblattStore};
 /// Configuration for [`InvoicCheckEngine::check`].
 #[derive(Debug, Clone)]
 pub struct CheckConfig {
-    /// Tolerance for arithmetic checks (line quantity × unit price vs. line net).
+    /// Tolerance for arithmetic checks (line quantity × unit price vs. line net),
+    /// expressed in parts-per-million (ppm). Unsigned — zero means strict equality.
     ///
-    /// Default: `0.01` (1 %). Increase for rough invoice types (e.g. MMM
+    /// Default: `10_000` ppm = 1 %. Increase for rough invoice types (e.g. MMM
     /// settlement that uses SLP approximations).
-    pub arithmetic_tolerance: f64,
+    pub arithmetic_tolerance_ppm: u32,
 
     /// Tolerance for the cross-check between sum of line nets and total net.
     ///
-    /// Default: `0.01` (1 %).
-    pub total_tolerance: f64,
+    /// Default: `10_000` ppm = 1 %.
+    pub total_tolerance_ppm: u32,
 
     /// Tolerance for tariff deviation findings.
     ///
-    /// Default: `0.02` (2 %).
-    pub tariff_tolerance: f64,
+    /// Default: `20_000` ppm = 2 %.
+    pub tariff_tolerance_ppm: u32,
 
     /// When `true`, a missing tariff entry for the sender GLN produces a
     /// `Dispute`-severity finding.  When `false` (default), it produces `Warn`.
@@ -83,9 +84,9 @@ pub struct CheckConfig {
 impl Default for CheckConfig {
     fn default() -> Self {
         Self {
-            arithmetic_tolerance: 0.01,
-            total_tolerance: 0.01,
-            tariff_tolerance: 0.02,
+            arithmetic_tolerance_ppm: 10_000,
+            total_tolerance_ppm: 10_000,
+            tariff_tolerance_ppm: 20_000,
             require_tariff: false,
         }
     }
@@ -194,8 +195,8 @@ impl Finding {
 
 fn deviation(expected: Option<EuroAmount>, actual: Option<EuroAmount>) -> Option<f64> {
     match (expected, actual) {
-        (Some(exp), Some(act)) if exp.0 != 0 => {
-            Some((act.0 - exp.0) as f64 / exp.0.unsigned_abs() as f64 * 100.0)
+        (Some(exp), Some(act)) if exp.to_raw() != 0 => {
+            Some((act.to_raw() - exp.to_raw()) as f64 / exp.to_raw().unsigned_abs() as f64 * 100.0)
         }
         _ => None,
     }
@@ -353,7 +354,7 @@ impl InvoicCheckEngine {
     /// Stage 2: For each position with quantity + unit_price, verify
     /// `positions_menge × einzelpreis ≈ gesamtpreis` (BO4E v202607).
     ///
-    /// Uses pure `Decimal` arithmetic via `multiply_by_kwh_decimal` — no `f64`
+    /// Uses `billing::Amount::checked_sub` + `checked_mul_qty` — no `f64`
     /// intermediate — satisfying the §40 EnWG itemised-billing accuracy requirement.
     fn check_arithmetic(rechnung: &Rechnung, config: &CheckConfig, findings: &mut Vec<Finding>) {
         for pos in rechnung.rechnungspositionen.iter().flatten() {
@@ -368,8 +369,11 @@ impl InvoicCheckEngine {
                 .and_then(EuroAmount::from_decimal);
 
             if let (Some(qty), Some(price), Some(stated_net)) = (qty, price, stated_net) {
-                let computed = price.multiply_by_kwh_decimal(qty);
-                if !stated_net.within_tolerance(computed, config.arithmetic_tolerance) {
+                let computed = price.mul_qty(qty);
+                if !stated_net
+                    .within_tolerance_ppm(computed, config.arithmetic_tolerance_ppm)
+                    .unwrap_or(false)
+                {
                     let (line_no, malo) = pos_ident(pos);
                     findings.push(Finding {
                         kind: FindingKind::ArithmeticError,
@@ -421,7 +425,9 @@ impl InvoicCheckEngine {
             .gesamtnetto
             .wert_decimal()
             .and_then(EuroAmount::from_decimal)
-            && !stated.within_tolerance(computed, config.total_tolerance)
+            && !stated
+                .within_tolerance_ppm(computed, config.total_tolerance_ppm)
+                .unwrap_or(false)
         {
             findings.push(Finding::warn(
                 FindingKind::TotalMismatch,
@@ -496,11 +502,22 @@ impl InvoicCheckEngine {
                 continue;
             };
 
-            // Collect all published Einheitspreise from all Preispositionen and
-            // their Preisstaffeln.  If the INVOIC Einzelpreis is within tolerance
-            // of ANY published rate, the line passes.
-            let tol = config.tariff_tolerance;
-            let published: Vec<EuroAmount> = preisblatt
+            // Collect published prices split into flat and ToU (§14a Modul 2) sets.
+            //
+            // - `flat_prices`: prices from `Preisposition.preisstaffeln`
+            //   (flat Arbeitspreis, Leistungspreis, Grundpreis)
+            // - `tou_prices`: prices from `zeitvariablePreispositionen` extension
+            //   (HT/NT band prices per §14a Modul 2 BK6-22-300)
+            //
+            // ToU-aware matching (L3):
+            //   • Position text contains "HT" (Hochlast/Hochtarif) → only `tou_prices`
+            //   • Position text contains "NT" (Niedertarif) → only `tou_prices`
+            //   • All others → `flat_prices` (primary) then fallback to all prices
+            //
+            // This prevents a ToU-banded NB INVOIC from accidentally passing
+            // plausibility when a flat band price coincidentally equals a ToU rate.
+            let tol = config.tariff_tolerance_ppm;
+            let flat_prices: Vec<EuroAmount> = preisblatt
                 .preispositionen
                 .iter()
                 .flatten()
@@ -508,6 +525,60 @@ impl InvoicCheckEngine {
                 .filter_map(|ps| ps.preis)
                 .filter_map(EuroAmount::from_decimal)
                 .collect();
+
+            // Extract (zaehlzeitregister, price) pairs from zeitvariablePreispositionen.
+            // Band codes are validated on PUT (M5) — every entry has a non-empty register.
+            use rubo4e::json::Bo4eExtensionData as _;
+            let tou_bands: Vec<(String, EuroAmount)> = preisblatt
+                .extension_data()
+                .get("zeitvariablePreispositionen")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|entry| {
+                            let register = entry
+                                .get("zaehlzeitregister")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_owned();
+                            let price_val = entry
+                                .get("preis")
+                                .and_then(|p| p.get("wert"))
+                                .and_then(|w| w.as_str())
+                                .and_then(|s| rust_decimal::Decimal::from_str_exact(s).ok())
+                                .and_then(EuroAmount::from_decimal)?;
+                            Some((register, price_val))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // Determine which band(s) apply to this INVOIC position.
+            // 1. Try direct `zaehlzeitregister` match (case-insensitive contains).
+            // Match position text against published `zaehlzeitregister` band codes.
+            let pos_text = pos.positionstext.as_deref().unwrap_or("").to_lowercase();
+
+            let matching_band_prices: Vec<EuroAmount> = tou_bands
+                .iter()
+                .filter(|(code, _)| {
+                    let code_lc = code.to_lowercase();
+                    !code_lc.is_empty() && pos_text.contains(code_lc.as_str())
+                })
+                .map(|(_, price)| *price)
+                .collect();
+
+            let all_tou_prices: Vec<EuroAmount> = tou_bands.iter().map(|(_, p)| *p).collect();
+
+            let published: Vec<EuroAmount> = if !matching_band_prices.is_empty() {
+                // Direct zaehlzeitregister match — most precise.
+                matching_band_prices
+            } else if !flat_prices.is_empty() {
+                // No matching band: use flat prices.
+                flat_prices.clone()
+            } else {
+                // No flat prices — fall back to all ToU band prices.
+                all_tou_prices
+            };
 
             if published.is_empty() {
                 findings.push(Finding::warn(
@@ -525,12 +596,12 @@ impl InvoicCheckEngine {
 
             if !published
                 .iter()
-                .any(|p| invoic_price.within_tolerance(*p, tol))
+                .any(|p| invoic_price.within_tolerance_ppm(*p, tol).unwrap_or(false))
             {
                 // Report the closest published rate for diagnostics.
                 let closest = *published
                     .iter()
-                    .min_by_key(|p| (invoic_price.0 - p.0).unsigned_abs())
+                    .min_by_key(|p| (invoic_price.to_raw() - p.to_raw()).unsigned_abs())
                     .unwrap_or(&EuroAmount::ZERO);
                 findings.push(Finding::dispute(
                     FindingKind::TariffDeviation,
@@ -538,7 +609,7 @@ impl InvoicCheckEngine {
                         "Line {line_no} ({malo}): einzelpreis {invoic_price} EUR/kWh \
                          does not match any published rate in Preisblatt for GLN {sender_mp_id} \
                          on {line_date} (closest: {closest} EUR/kWh, tolerance {pct:.1}%)",
-                        pct = tol * 100.0,
+                        pct = tol as f64 / 10_000.0,
                     ),
                     Some(line_no),
                     Some(closest),
@@ -546,6 +617,278 @@ impl InvoicCheckEngine {
                 ));
             }
         }
+    }
+
+    // ── Stage 5: MMM settlement price check ──────────────────────────────────
+
+    /// Check 6 (MMM settlement): validate that `mehr_preis` / `minder_preis`
+    /// positions in an MMM INVOIC (PIDs 31002, 31005, 31007, 31008) match the
+    /// reference prices from the `marktd` MMMA store within tolerance.
+    ///
+    /// Check a WiM MSB-Rechnung (PID 31009) against `PreisblattMessung`.
+    ///
+    /// Replaces the standard `check()` call for PID 31009.  The key difference:
+    /// - Checks 1–3 (period, arithmetic, totals) run identically.
+    /// - Checks 4–5 (tariff deviation / not found) use `PreisblattMessung.preispositionen`
+    ///   instead of `PreisblattNetznutzung.preispositionen`.
+    ///
+    /// `PreisblattMessung` has `preispositionen: Option<Vec<Preisposition>>` — the same type
+    /// as `PreisblattNetznutzung` — so the price extraction logic is identical.
+    ///
+    /// When `preisblatt_messung` is `None`, tariff checks (4–5) emit warnings
+    /// (never hard disputes) to match the standard engine's missing-tariff behaviour.
+    #[must_use]
+    pub fn check_msb_rechnung(
+        sender_mp_id: &str,
+        rechnung: &Rechnung,
+        preisblatt_messung: Option<&rubo4e::current::PreisblattMessung>,
+        config: &CheckConfig,
+    ) -> CheckReport {
+        Self::check_msb_rechnung_with_aufabschlaege(
+            sender_mp_id,
+            rechnung,
+            preisblatt_messung,
+            &[],
+            config,
+        )
+    }
+
+    /// MSB-Rechnung (INVOIC 31009) plausibility check with `AufAbschlag` validation.
+    ///
+    /// Extends `check_msb_rechnung` with check 6:
+    ///
+    /// | # | Check | Source |
+    /// |---|---|---|
+    /// | 6 | Discount/surcharge positions are backed by a contracted `AufAbschlag` | WiM PRICAT 27001–27003 |
+    ///
+    /// `contracted_names` is the list of contracted AufAbschlag names from
+    /// `PreisblattMessungRecord.auf_abschlaege` (pre-extracted by the caller).
+    /// Pass `&[]` when absent (check 6 is then skipped, not disputed).
+    pub fn check_msb_rechnung_with_aufabschlaege(
+        sender_mp_id: &str,
+        rechnung: &Rechnung,
+        preisblatt_messung: Option<&rubo4e::current::PreisblattMessung>,
+        contracted_names: &[String],
+        config: &CheckConfig,
+    ) -> CheckReport {
+        let mut findings = Vec::new();
+
+        // Checks 1–3 are identical to the standard pipeline.
+        Self::check_periods(rechnung, &mut findings);
+        Self::check_arithmetic(rechnung, config, &mut findings);
+        let computed_total = Self::check_total(rechnung, config, &mut findings);
+
+        // Checks 4–5 against PreisblattMessung.preispositionen.
+        let billing_date: time::Date = rechnung
+            .billing_period()
+            .map(|(start, _)| start)
+            .or(rechnung.rechnungsdatum)
+            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+
+        let published_prices: Vec<EuroAmount> = preisblatt_messung
+            .and_then(|pm| pm.preispositionen.as_ref())
+            .into_iter()
+            .flatten()
+            .flat_map(|pp| pp.preisstaffeln.iter().flatten())
+            .filter_map(|ps| ps.preis)
+            .filter_map(EuroAmount::from_decimal)
+            .collect();
+
+        if preisblatt_messung.is_none() {
+            findings.push(Finding {
+                kind: FindingKind::TariffNotFound,
+                is_dispute: config.require_tariff,
+                message: format!(
+                    "No PreisblattMessung found for MSB GLN {sender_mp_id} on {billing_date}. \
+                     Tariff check 4/5 skipped — upload via \
+                     PUT /api/v1/preisblaetter-messung/{{msb_mp_id}}.",
+                ),
+                line_number: None,
+                expected: None,
+                actual: None,
+                deviation_pct: None,
+            });
+        } else {
+            let tol = config.tariff_tolerance_ppm;
+            for pos in rechnung.rechnungspositionen.iter().flatten() {
+                let Some(invoic_price) = pos
+                    .einzelpreis
+                    .wert_decimal()
+                    .and_then(EuroAmount::from_decimal)
+                else {
+                    continue;
+                };
+                let (line_no, malo) = pos_ident(pos);
+
+                if published_prices.is_empty() {
+                    findings.push(Finding::warn(
+                        FindingKind::TariffNotFound,
+                        format!(
+                            "Line {line_no} ({malo}): PreisblattMessung for GLN \
+                             {sender_mp_id} contains no Preisstaffeln — skipping price check",
+                        ),
+                        Some(line_no),
+                        None,
+                        Some(invoic_price),
+                    ));
+                    continue;
+                }
+
+                if !published_prices
+                    .iter()
+                    .any(|p| invoic_price.within_tolerance_ppm(*p, tol).unwrap_or(false))
+                {
+                    let closest = *published_prices
+                        .iter()
+                        .min_by_key(|p| (invoic_price.to_raw() - p.to_raw()).unsigned_abs())
+                        .unwrap_or(&EuroAmount::ZERO);
+                    findings.push(Finding::dispute(
+                        FindingKind::TariffDeviation,
+                        format!(
+                            "Line {line_no} ({malo}): einzelpreis {invoic_price} does not \
+                             match any MSB tariff in PreisblattMessung for GLN {sender_mp_id} \
+                             on {billing_date} (closest: {closest}, tolerance {pct:.1}%)",
+                            pct = tol as f64 / 10_000.0,
+                        ),
+                        Some(line_no),
+                        Some(closest),
+                        Some(invoic_price),
+                    ));
+                }
+            }
+        }
+
+        // Check 6 — AufAbschlag: verify discount/surcharge positions are contracted.
+        // `contracted_names` contains the lowercase names of all authorised AufAbschlag
+        // entries from the MSB's PRICAT 27001–27003.  When empty, check 6 is skipped.
+        if !contracted_names.is_empty() {
+            let name_set: std::collections::HashSet<String> =
+                contracted_names.iter().map(|s| s.to_lowercase()).collect();
+
+            for pos in rechnung.rechnungspositionen.iter().flatten() {
+                let net = pos.einzelpreis.wert_decimal().unwrap_or_default();
+                if net >= rust_decimal::Decimal::ZERO {
+                    continue; // Only check negative (discount) positions
+                }
+                let (line_no, malo) = pos_ident(pos);
+                let description = pos.positionstext.as_deref().unwrap_or("").to_lowercase();
+
+                let is_contracted = name_set
+                    .iter()
+                    .any(|name: &String| description.contains(name.as_str()));
+
+                if !is_contracted {
+                    findings.push(Finding::dispute(
+                        FindingKind::TariffNotFound,
+                        format!(
+                            "Line {line_no} ({malo}): discount \"{}\" not backed by \
+                             any AufAbschlag in PreisblattMessung for GLN {sender_mp_id} \
+                             (check 6). Verify PRICAT 27001-27003.",
+                            pos.positionstext.as_deref().unwrap_or("?"),
+                        ),
+                        Some(line_no),
+                        None,
+                        None,
+                    ));
+                }
+            }
+        }
+
+        let outcome = findings
+            .iter()
+            .map(|f| {
+                if f.is_dispute {
+                    CheckOutcome::Dispute
+                } else {
+                    CheckOutcome::Warn
+                }
+            })
+            .max()
+            .unwrap_or(CheckOutcome::Ok);
+
+        let total_net_invoic = rechnung
+            .gesamtnetto
+            .wert_decimal()
+            .and_then(EuroAmount::from_decimal);
+
+        CheckReport {
+            outcome,
+            findings,
+            pid: 31009,
+            total_net_invoic,
+            total_net_computed: computed_total,
+            line_items_checked: rechnung.rechnungspositionen.iter().flatten().count(),
+        }
+    }
+
+    /// Called by `invoicd` handler **after** the standard 5-check pipeline when
+    /// `mehr_ct_kwh` / `minder_ct_kwh` are available from `marktd`.
+    ///
+    /// Returns additional `Finding` objects to be merged into an existing
+    /// `CheckReport`. Does not modify the existing findings.
+    pub fn check_mmm_settlement(
+        rechnung: &Rechnung,
+        mehr_ct_kwh: rust_decimal::Decimal,
+        minder_ct_kwh: rust_decimal::Decimal,
+        config: &CheckConfig,
+    ) -> Vec<Finding> {
+        let tol = config.tariff_tolerance_ppm;
+
+        // Convert reference prices from ct/kWh → EUR/kWh
+        let ref_mehr = EuroAmount::from_decimal(mehr_ct_kwh / rust_decimal::Decimal::from(100));
+        let ref_minder = EuroAmount::from_decimal(minder_ct_kwh / rust_decimal::Decimal::from(100));
+
+        let mut findings = Vec::new();
+
+        for pos in rechnung.rechnungspositionen.iter().flatten() {
+            let Some(invoic_price) = pos
+                .einzelpreis
+                .wert_decimal()
+                .and_then(EuroAmount::from_decimal)
+            else {
+                continue;
+            };
+            let (line_no, malo) = pos_ident(pos);
+            let text = pos.positionstext.as_deref().unwrap_or("").to_lowercase();
+            let is_mehr = text.contains("mehrmengen");
+            let is_minder = text.contains("mindermengen");
+            if !is_mehr && !is_minder {
+                continue;
+            }
+            let Some(ref_p) = (if is_mehr { ref_mehr } else { ref_minder }) else {
+                continue;
+            };
+
+            if !invoic_price
+                .within_tolerance_ppm(ref_p, tol)
+                .unwrap_or(false)
+            {
+                let ref_raw = ref_p.to_raw() as f64;
+                let pct = if ref_raw != 0.0 {
+                    ((invoic_price.to_raw() as f64 - ref_raw) / ref_raw.abs() * 100.0).abs()
+                } else {
+                    0.0
+                };
+                let kind_str = if is_mehr {
+                    "Mehrmengen"
+                } else {
+                    "Mindermengen"
+                };
+                findings.push(Finding {
+                    kind: FindingKind::TariffDeviation,
+                    is_dispute: config.require_tariff,
+                    message: format!(
+                        "Line {line_no} ({malo}): MMM {kind_str} price {invoic_price} EUR/kWh                          deviates {pct:.1}% from MMMA reference {ref_p} EUR/kWh                          (tolerance {t:.1}%)",
+                        t = tol as f64 / 10_000.0,
+                    ),
+                    line_number: Some(line_no),
+                    expected: Some(ref_p),
+                    actual: Some(invoic_price),
+                    deviation_pct: Some(pct),
+                });
+            }
+        }
+        findings
     }
 }
 
@@ -576,7 +919,7 @@ mod tests {
 
     fn betrag(eur: EuroAmount) -> Betrag {
         Betrag {
-            wert: Some(Decimal::from_str_exact(&eur.to_eur_string()).expect("valid decimal")),
+            wert: Some(Decimal::from_str_exact(&eur.to_string()).expect("valid decimal")),
             ..Default::default()
         }
     }
@@ -614,7 +957,7 @@ mod tests {
                 ..Default::default()
             }),
             einzelpreis: price.map(|pr| Preis {
-                wert: Some(Decimal::from_str_exact(&pr.to_eur_string()).expect("valid decimal")),
+                wert: Some(Decimal::from_str_exact(&pr.to_string()).expect("valid decimal")),
                 ..Default::default()
             }),
             gesamtpreis: net.map(betrag),
@@ -646,7 +989,7 @@ mod tests {
     fn seeded_store(price: EuroAmount) -> InMemoryPreisblattStore {
         use rust_decimal::Decimal;
         let mut store = InMemoryPreisblattStore::new();
-        let einheitspreis = Decimal::from_str_exact(&price.to_eur_string()).expect("valid decimal");
+        let einheitspreis = Decimal::from_str_exact(&price.to_string()).expect("valid decimal");
         let sheet = PreisblattNetznutzung {
             gueltigkeit: None,
             herausgeber: None,
@@ -714,8 +1057,8 @@ mod tests {
             1,
             "DE001",
             Some("1000.0"),
-            Some(EuroAmount(3_456)),
-            Some(EuroAmount(3_456_000)),
+            Some(EuroAmount::from_raw_units(3_456)),
+            Some(EuroAmount::from_raw_units(3_456_000)),
         );
         let r = make_rechnung(vec![pos], None);
         let report =
@@ -735,8 +1078,8 @@ mod tests {
             1,
             "DE001",
             Some("1000.0"),
-            Some(EuroAmount(3_456)),
-            Some(EuroAmount(4_000_000)),
+            Some(EuroAmount::from_raw_units(3_456)),
+            Some(EuroAmount::from_raw_units(4_000_000)),
         );
         let r = make_rechnung(vec![pos], None);
         let report =
@@ -757,11 +1100,11 @@ mod tests {
             1,
             "DE001",
             Some("1000.0"),
-            Some(EuroAmount(3_456)),
-            Some(EuroAmount(3_490_000)),
+            Some(EuroAmount::from_raw_units(3_456)),
+            Some(EuroAmount::from_raw_units(3_490_000)),
         );
         let config = CheckConfig {
-            arithmetic_tolerance: 0.01,
+            arithmetic_tolerance_ppm: 10_000,
             ..Default::default()
         };
         let r = make_rechnung(vec![pos], None);
@@ -778,8 +1121,14 @@ mod tests {
 
     #[test]
     fn total_match_no_finding() {
-        let pos = make_pos(1, "DE001", None, None, Some(EuroAmount(3_456_000)));
-        let r = make_rechnung(vec![pos], Some(EuroAmount(3_456_000)));
+        let pos = make_pos(
+            1,
+            "DE001",
+            None,
+            None,
+            Some(EuroAmount::from_raw_units(3_456_000)),
+        );
+        let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(3_456_000)));
         let report =
             InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
         assert!(
@@ -792,8 +1141,14 @@ mod tests {
 
     #[test]
     fn total_mismatch_is_warn() {
-        let pos = make_pos(1, "DE001", None, None, Some(EuroAmount(3_456_000)));
-        let r = make_rechnung(vec![pos], Some(EuroAmount(5_000_000)));
+        let pos = make_pos(
+            1,
+            "DE001",
+            None,
+            None,
+            Some(EuroAmount::from_raw_units(3_456_000)),
+        );
+        let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(5_000_000)));
         let report =
             InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
         assert!(!report.has_dispute()); // warn only
@@ -834,13 +1189,13 @@ mod tests {
 
     #[test]
     fn tariff_match_no_finding() {
-        let price = EuroAmount(3_456);
+        let price = EuroAmount::from_raw_units(3_456);
         let pos = make_pos(
             1,
             "DE001",
             Some("1000.0"),
             Some(price),
-            Some(EuroAmount(3_456_000)),
+            Some(EuroAmount::from_raw_units(3_456_000)),
         );
         let r = make_rechnung(vec![pos], None);
         let report = InvoicCheckEngine::check(
@@ -860,14 +1215,14 @@ mod tests {
 
     #[test]
     fn tariff_deviation_is_dispute() {
-        let tariff_price = EuroAmount(3_456); // 0.03456 EUR/kWh (PRICAT)
-        let invoic_price = EuroAmount(4_000); // 0.04000 EUR/kWh (INVOIC, +15.7%)
+        let tariff_price = EuroAmount::from_raw_units(3_456); // 0.03456 EUR/kWh (PRICAT)
+        let invoic_price = EuroAmount::from_raw_units(4_000); // 0.04000 EUR/kWh (INVOIC, +15.7%)
         let pos = make_pos(
             1,
             "DE001",
             Some("1000.0"),
             Some(invoic_price),
-            Some(EuroAmount(4_000_000)),
+            Some(EuroAmount::from_raw_units(4_000_000)),
         );
         let r = make_rechnung(vec![pos], None);
         let report = InvoicCheckEngine::check(
@@ -888,8 +1243,8 @@ mod tests {
 
     #[test]
     fn clean_invoice_outcome_is_ok() {
-        let price = EuroAmount(3_456);
-        let net = EuroAmount(3_456_000);
+        let price = EuroAmount::from_raw_units(3_456);
+        let net = EuroAmount::from_raw_units(3_456_000);
         let pos = make_pos(1, "DE001", Some("1000.0"), Some(price), Some(net));
         let r = make_rechnung(vec![pos], Some(net));
         let report = InvoicCheckEngine::check(

@@ -192,6 +192,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             received_at: time::OffsetDateTime::now_utc(),
             validation_passed,
             validation_errors: validation_errors.clone(),
+            bilanzierungsgebiet: None,
+            bilanzierungsmethode: None,
+            fallgruppe: None,
         })
         .await?;
 
@@ -373,6 +376,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             received_at: time::OffsetDateTime::now_utc(),
             validation_passed: true,
             validation_errors: vec![],
+            bilanzierungsgebiet: None,
+            bilanzierungsmethode: None,
+            fallgruppe: None,
         })
         .await
         .unwrap_err();

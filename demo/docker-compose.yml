@@ -85,9 +85,9 @@ services:
     volumes:
       - ./marktd.toml:/etc/marktd/marktd.toml:ro
     environment:
-      DATABASE_URL:          postgres://demo:demo-secret@postgres/marktd
-      MAKOD_API_KEY:         demo-secret-change-me
-      MAKOD_WEBHOOK_SECRET:  demo-makod-webhook-secret
+      MARKTD_STORAGE__POSTGRES__URL: postgres://demo:demo-secret@postgres/marktd
+      MARKTD_MAKOD__API_KEY:         demo-secret-change-me
+      MARKTD_WEBHOOK__INBOUND_SECRET: demo-makod-webhook-secret
     command:
       - "--config=/etc/marktd/marktd.toml"
     # distroless has no shell — use service_started dependency instead of healthcheck
@@ -115,10 +115,10 @@ services:
       - ./processd.toml:/etc/processd/processd.toml:ro
     environment:
       # Secrets are read via `env:` references in processd.toml.
-      DATABASE_URL:           postgres://demo:demo-secret@postgres/processd
-      MAKOD_API_KEY:          demo-secret-change-me
-      MARKTD_API_KEY:         demo-processd-key
-      INBOUND_WEBHOOK_SECRET: processd-webhook-secret
+      PROCESSD_DATABASE__URL:         postgres://demo:demo-secret@postgres/processd
+      PROCESSD_MAKOD__API_KEY:        demo-secret-change-me
+      PROCESSD_MARKTD__API_KEY:       demo-processd-key
+      PROCESSD_WEBHOOK__INBOUND_SECRET: processd-webhook-secret
     command:
       - "--config=/etc/processd/processd.toml"
     # distroless has no shell — use service_started dependency instead of healthcheck
@@ -143,8 +143,8 @@ services:
       MAKOD_DATA_DIR:                 ""     # in-memory (no persistence)
       MAKOD_EDIFACT_OUTBOX_WEBHOOK_URL: http://webhook:8000
       # Push process lifecycle CloudEvents to marktd so processd can react
-      MAKOD_ERP_WEBHOOK_URL:          http://marktd:8180/api/v1/events
-      MAKOD_ERP_WEBHOOK_SECRET:       demo-makod-webhook-secret
+      MAKOD_ERP__WEBHOOK_URL:           http://marktd:8180/api/v1/events
+      MAKOD_ERP__WEBHOOK_SECRET:        demo-makod-webhook-secret
     command:
       - "--config=/etc/makod/makod.toml"
       - "--auth-key=demo=demo-secret-change-me"
@@ -169,10 +169,10 @@ services:
     volumes:
       - ./invoicd.toml:/etc/invoicd/invoicd.toml:ro
     environment:
-      DATABASE_URL:           postgres://demo:demo-secret@postgres/invoicd
-      INVOICD_MAKOD_API_KEY:  demo-secret-change-me
-      INVOICD_MARKTD_API_KEY: demo-invoicd-key
-      INVOICD_INBOUND_SECRET: invoicd-webhook-secret
+      INVOICD_DATABASE__URL:          postgres://demo:demo-secret@postgres/invoicd
+      INVOICD_MAKOD__API_KEY:         demo-secret-change-me
+      INVOICD_MARKTD__API_KEY:        demo-invoicd-key
+      INVOICD_WEBHOOK__INBOUND_SECRET: invoicd-webhook-secret
     command:
       - "--config=/etc/invoicd/invoicd.toml"
     healthcheck:
@@ -195,9 +195,9 @@ services:
     volumes:
       - ./edmd.toml:/etc/edmd/edmd.toml:ro
     environment:
-      DATABASE_URL:        postgres://demo:demo-secret@postgres/edmd
-      EDMD_MARKTD_API_KEY: demo-edmd-key
-      EDMD_INBOUND_SECRET: edmd-webhook-secret
+      EDMD_DATABASE__URL:  postgres://demo:demo-secret@postgres/edmd
+      EDMD_MARKTD__API_KEY: demo-edmd-key
+      EDMD_WEBHOOK__INBOUND_SECRET: edmd-webhook-secret
     command:
       - "--config=/etc/edmd/edmd.toml"
     healthcheck:
@@ -221,9 +221,9 @@ services:
     volumes:
       - ./obsd.toml:/etc/obsd/obsd.toml:ro
     environment:
-      DATABASE_URL:        postgres://demo:demo-secret@postgres/obsd
-      OBSD_MARKTD_API_KEY: demo-obsd-key
-      OBSD_INBOUND_SECRET: obsd-webhook-secret
+      OBSD_DATABASE__URL:  postgres://demo:demo-secret@postgres/obsd
+      OBSD_MARKTD__API_KEY: demo-obsd-key
+      OBSD_WEBHOOK__INBOUND_SECRET: obsd-webhook-secret
     command:
       - "--config=/etc/obsd/obsd.toml"
     healthcheck:
@@ -248,7 +248,7 @@ services:
     volumes:
       - ./netzbilanzd.toml:/etc/netzbilanzd/netzbilanzd.toml:ro
     environment:
-      DATABASE_URL:                  postgres://demo:demo-secret@postgres/netzbilanzd
+      NETZBILANZD_DATABASE_URL:      postgres://demo:demo-secret@postgres/netzbilanzd
       NETZBILANZD_MARKTD_API_KEY:    demo-netzbilanzd-key
       NETZBILANZD_MAKOD_API_KEY:     demo-secret-change-me
     command:
@@ -273,7 +273,7 @@ services:
     volumes:
       - ./sperrd.toml:/etc/sperrd/sperrd.toml:ro
     environment:
-      DATABASE_URL:            postgres://demo:demo-secret@postgres/sperrd
+      SPERRD_DATABASE_URL:     postgres://demo:demo-secret@postgres/sperrd
       SPERRD_MAKOD_API_KEY:    demo-secret-change-me
     command:
       - "--config=/etc/sperrd/sperrd.toml"
@@ -300,6 +300,29 @@ services:
     command:
       - "--config=/etc/nis-syncd/nis-syncd.toml"
     # Stateless — no database, no healthcheck needed
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  # ── agentd — Autonomous LLM Agent Daemon (LF role) ─────────────────────────
+  # ReAct agent that subscribes to CloudEvents and dispatches MCP tool calls.
+  # Triggered by process escalations, invoice disputes, and EEG lifecycle events.
+  agentd:
+    image: agentd:dev
+    depends_on:
+      makod:
+        condition: service_started
+      marktd:
+        condition: service_started
+    ports:
+      - "9580:9580"
+    volumes:
+      - ./agentd.toml:/etc/agentd/agentd.toml:ro
+    environment:
+      AGENTD_LLM__API_KEY:    ""  # set your Anthropic / OpenAI key here
+      AGENTD_MCP_API_KEY:     demo-secret-change-me
+    command:
+      - "--config=/etc/agentd/agentd.toml"
     healthcheck:
       disable: true
     restart: unless-stopped

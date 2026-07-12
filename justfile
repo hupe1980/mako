@@ -210,42 +210,4 @@ doc-all:
 fuzz target:
     cd fuzz && cargo +nightly fuzz run {{ target }}
 
-# ── SQLx ──────────────────────────────────────────────────────────────────────
 
-# Generate .sqlx offline query cache using a temporary PostgreSQL container.
-# Requires Docker. Installs sqlx-cli if not present.
-# Run this after any SQL query change, then commit the updated .sqlx/ directory.
-sqlx-prepare:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "==> Starting temporary PostgreSQL container..."
-    CONTAINER=$(docker run -d \
-        -e POSTGRES_PASSWORD=mako_test \
-        -e POSTGRES_USER=mako \
-        -e POSTGRES_DB=mako \
-        -p 15432:5432 \
-        postgres:16-alpine)
-    trap "docker rm -f $CONTAINER >/dev/null" EXIT
-    echo "    Container: $CONTAINER"
-    echo "==> Waiting for PostgreSQL to be ready..."
-    for i in $(seq 1 30); do
-        docker exec "$CONTAINER" pg_isready -U mako >/dev/null 2>&1 && break
-        sleep 1
-    done
-    BASE_URL="postgres://mako:mako_test@localhost:15432"
-    echo "==> Installing sqlx-cli (if not present)..."
-    cargo install sqlx-cli --no-default-features --features rustls,postgres --quiet 2>/dev/null || true
-    echo "==> Running migrations and preparing .sqlx/ cache for each service..."
-    for svc in marktd processd invoicd edmd obsd; do
-        DB_URL="${BASE_URL}/${svc}"
-        echo "  -- $svc --"
-        docker exec "$CONTAINER" psql -U mako -c "CREATE DATABASE $svc;" >/dev/null 2>&1 || true
-        DATABASE_URL="$DB_URL" cargo sqlx migrate run --source "services/$svc/migrations" 2>/dev/null || true
-        (cd "services/$svc" && DATABASE_URL="$DB_URL" cargo sqlx prepare --workspace) 2>/dev/null || \
-        (cd "services/$svc" && DATABASE_URL="$DB_URL" cargo sqlx prepare) || true
-    done
-    echo "==> Done. Commit the updated .sqlx/ directories."
-
-# Check that .sqlx/ offline cache is up-to-date (run in CI after sqlx-prepare)
-sqlx-check:
-    SQLX_OFFLINE=true cargo check --all-features

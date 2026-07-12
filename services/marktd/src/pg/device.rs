@@ -129,6 +129,29 @@ impl SteuerbareRessourceRepository for PgSteuerbareRessourceRepository {
             })
             .collect())
     }
+
+    async fn replace_sr_konfigurationsprodukte(
+        &self,
+        sr_id: &str,
+        tenant: &str,
+        konfigurationsprodukte: serde_json::Value,
+    ) -> Result<bool, MdmError> {
+        let updated = sqlx::query_scalar::<_, i64>(
+            r"UPDATE steuerbare_ressourcen
+              SET konfigurationsprodukte = $3,
+                  version                = version + 1,
+                  updated_at             = now()
+              WHERE sr_id = $1 AND tenant = $2
+              RETURNING 1",
+        )
+        .bind(sr_id)
+        .bind(tenant)
+        .bind(&konfigurationsprodukte)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Ok(updated.is_some())
+    }
 }
 
 // ── Device registry (Zaehler + Geraete) ──────────────────────────────────────

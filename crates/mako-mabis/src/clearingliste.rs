@@ -200,8 +200,10 @@ impl EventPayload for ClearinglisteEvent {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum ClearinglisteState {
     /// No events yet.
+    #[default]
     New,
     /// Clearingliste UTILMD received; awaiting validation result.
     Erhalten(ClearinglisteData),
@@ -212,12 +214,6 @@ pub enum ClearinglisteState {
         /// Validation error reason.
         reason: String,
     },
-}
-
-impl Default for ClearinglisteState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl ClearinglisteState {

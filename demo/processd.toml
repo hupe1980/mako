@@ -14,7 +14,8 @@ addr = "0.0.0.0:8580"
 [database]
 # Each service owns its own database (microservices DB autonomy).
 # The `processd` database is created by demo/init-db.sh on first boot.
-url       = "env:DATABASE_URL"
+# url is injected via PROCESSD_DATABASE__URL env var
+url       = "postgres://demo:demo-secret@postgres/processd"
 pool_size = 10
 
 [identity]
@@ -26,16 +27,19 @@ own_mp_id = "9900357000004"
 
 [makod]
 url     = "http://makod:8080"
-api_key = "env:MAKOD_API_KEY"    # must match makod --auth-key
+# api_key is injected via PROCESSD_MAKOD__API_KEY env var
+api_key = ""  # must match makod --auth-key
 
 [marktd]
 url     = "http://marktd:8180"
-api_key = "env:MARKTD_API_KEY"   # any non-empty value accepted in demo (OIDC disabled)
+# api_key is injected via PROCESSD_MARKTD__API_KEY env var
+api_key = ""  # any non-empty value accepted in demo (OIDC disabled)
 
 [webhook]
 # HMAC-SHA256 secret — must match the webhook_secret registered with marktd.
 # Set to the same value as [subscription].webhook_url in the marktd subscription.
-inbound_secret = "env:INBOUND_WEBHOOK_SECRET"
+# inbound_secret is injected via PROCESSD_WEBHOOK__INBOUND_SECRET env var
+inbound_secret = ""
 
 [subscription]
 # processd self-registers this subscription with marktd on startup.
@@ -56,6 +60,13 @@ auto_accept = true
 # 45-min LFW24 window without ERP involvement.
 auto_respond   = true
 queue_ttl_secs = 2700   # 45 min — LFW24 regulatory deadline
+
+[msb]
+# M3: REQOTE auto-response — when an nMSB sends a Preisanfrage (PIDs 35001–35005),
+# processd automatically dispatches QUOTES from the current PreisblattMessung.
+# If no PreisblattMessung is found in marktd, the REQOTE is escalated to the operator.
+# Set to false to require manual QUOTES dispatch via ERP.
+auto_preisanfrage = true
 
 # [oidc] — intentionally absent: authentication is disabled in demo mode.
 # All API requests are accepted with synthetic dev-admin claims.

@@ -1,7 +1,7 @@
 ---
 layout: default
 title: PID Reference
-nav_order: 41
+nav_order: 11
 parent: Regulatory
 description: >
   Complete Prüfidentifikator (PID) reference for all German energy market

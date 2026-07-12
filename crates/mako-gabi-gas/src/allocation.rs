@@ -157,17 +157,13 @@ impl EventPayload for AllocationEvent {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum AllocationState {
     /// No ALOCAT received yet.
+    #[default]
     New,
     /// ALOCAT received and recorded (terminal).
     AllocationReceived(AllocationData),
-}
-
-impl Default for AllocationState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl AllocationState {

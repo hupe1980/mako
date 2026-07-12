@@ -85,8 +85,10 @@ pub struct GeliGasSperrprozesseInvoicData {
 /// Current state of a GeLi Gas AWH Sperrprozesse INVOIC billing process.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum GeliGasSperrprozesseInvoicState {
     /// No INVOIC received yet.
+    #[default]
     New,
     /// INVOIC received from the GNB/VNB; AHB validation pending or in progress.
     InvoicReceived(GeliGasSperrprozesseInvoicData),
@@ -106,12 +108,6 @@ pub enum GeliGasSperrprozesseInvoicState {
         /// Human-readable rejection reason.
         reason: String,
     },
-}
-
-impl Default for GeliGasSperrprozesseInvoicState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl GeliGasSperrprozesseInvoicState {

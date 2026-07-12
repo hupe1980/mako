@@ -1,7 +1,7 @@
 ---
 layout: default
 title: BNetzA Regulatory Reference
-nav_order: 40
+nav_order: 10
 parent: Regulatory
 description: >
   Complete BNetzA ruling index for German energy market communication:

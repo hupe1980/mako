@@ -42,10 +42,11 @@ hmac               = { version = "0.12", features = ["std"] }
 sha2               = "0.10"
 jiff               = "0.2"
 reqwest            = { workspace = true }
+rust_decimal       = { workspace = true }
 utoipa             = { version = "5", features = ["axum_extras", "uuid", "time"] }
 utoipa-axum        = "0.2"
 utoipa-swagger-ui  = { version = "9", features = ["axum"] }
-sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "migrate"] }
+sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "rust_decimal"] }
 
 [dev-dependencies]
 mako-markt  = { path = "../../crates/mako-markt", features = ["testing"] }

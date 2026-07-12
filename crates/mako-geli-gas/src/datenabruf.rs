@@ -98,8 +98,10 @@ impl EventPayload for GeliGasDatanabrufEvent {
 /// State of a GeLi Gas Datenabruf process stream.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum GeliGasDatanabrufState {
     /// No events yet.
+    #[default]
     New,
     /// ORDERS received; waiting for NB response within 10 Werktage.
     AnfrageGesendet {
@@ -114,12 +116,6 @@ pub enum GeliGasDatanabrufState {
     Abgelehnt,
     /// Deadline expired without a response.
     DeadlineExpired,
-}
-
-impl Default for GeliGasDatanabrufState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl GeliGasDatanabrufState {

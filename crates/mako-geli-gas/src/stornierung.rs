@@ -178,8 +178,10 @@ pub struct GeliGasStornierungData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum GeliGasStornierungState {
     /// No events yet.
+    #[default]
     New,
     /// 44022 received; awaiting validation result.
     Initiated(GeliGasStornierungData),
@@ -194,12 +196,6 @@ pub enum GeliGasStornierungState {
         /// Human-readable reason for the rejection.
         reason: String,
     },
-}
-
-impl Default for GeliGasStornierungState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl GeliGasStornierungState {

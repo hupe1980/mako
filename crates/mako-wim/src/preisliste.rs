@@ -107,8 +107,10 @@ pub struct PreislisteData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum PreislisteState {
     /// No events yet.
+    #[default]
     New,
     /// PRICAT received; awaiting recording.
     Eingegangen(PreislisteData),
@@ -119,12 +121,6 @@ pub enum PreislisteState {
         /// Reason.
         reason: String,
     },
-}
-
-impl Default for PreislisteState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl PreislisteState {

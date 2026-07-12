@@ -47,18 +47,23 @@ search:
 aux_links:
   "GitHub":
     - "https://github.com/hupe1980/mako"
-  "crates.io":
+  "edi-energy":
     - "https://crates.io/crates/edi-energy"
+  "mako-engine":
+    - "https://crates.io/crates/mako-engine"
 
 aux_links_new_tab: true
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 footer_content: >-
+  <strong>mako</strong> — German energy market communication in Rust.
+  &nbsp;·&nbsp;
   <a href="https://github.com/hupe1980/mako/blob/main/LICENSE-MIT">MIT</a>
   or
   <a href="https://github.com/hupe1980/mako/blob/main/LICENSE-APACHE">Apache 2.0</a>
   &nbsp;·&nbsp;
   Conforms to <a href="https://www.edi-energy.de/">BDEW EDI@Energy</a>
+  FV2025-10-01 + FV2026-10-01
 
 back_to_top: true
 back_to_top_text: "Back to top"

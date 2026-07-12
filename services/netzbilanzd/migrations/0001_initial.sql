@@ -31,3 +31,70 @@ CREATE INDEX IF NOT EXISTS id_malo_period   ON invoice_drafts (malo_id, period_f
 CREATE INDEX IF NOT EXISTS id_nb_status     ON invoice_drafts (nb_mp_id, status);
 CREATE INDEX IF NOT EXISTS id_status_pid    ON invoice_drafts (status, pid);
 CREATE INDEX IF NOT EXISTS id_created       ON invoice_drafts (created_at DESC);
+
+-- netzbilanzd migration 0002: Redispatch 2.0 Kostenblatt (N4)
+--
+-- BK6-20-061: NB (VNB) must submit monthly Kostenblatt to ÜNB by the 15th.
+-- One record per Redispatch 2.0 activation event per resource.
+--
+-- Einsatzkosten = Dispatch_kWh × Arbeitspreis_EUR_per_kWh
+-- Plus optional Fremdkosten (ÜNB pass-through, measured deviations).
+
+CREATE TABLE IF NOT EXISTS kostenblatt_records (
+    id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant                  TEXT        NOT NULL,
+
+    -- Redispatch activation reference (mako process UUID from mako-engine).
+    activation_id           TEXT        NOT NULL,
+    -- TechnischeRessource-ID of the dispatched resource.
+    tr_id                   TEXT        NOT NULL,
+    -- MaLo-ID of the connection point (from TechnischeRessource).
+    malo_id                 TEXT,
+
+    -- Billing period (always the calendar month containing the activation).
+    period_year             SMALLINT    NOT NULL,
+    period_month            SMALLINT    NOT NULL CHECK (period_month BETWEEN 1 AND 12),
+
+    -- ÜNB receiving the Kostenblatt (counterparty).
+    uenb_mp_id              TEXT        NOT NULL,
+    -- VNB (our own NB / sender).
+    vnb_mp_id               TEXT        NOT NULL,
+
+    -- Einsatzkosten calculation.
+    dispatch_kwh            NUMERIC(18, 3) NOT NULL DEFAULT 0,
+    arbeitspreis_eur_per_kwh NUMERIC(12, 6) NOT NULL DEFAULT 0,
+    einsatzkosten_eur       NUMERIC(16, 5)
+        GENERATED ALWAYS AS (dispatch_kwh * arbeitspreis_eur_per_kwh) STORED,
+
+    -- Fremdkosten positions (rubo4e::current::Kosten JSONB — optional).
+    -- Stores the full typed BO4E cost breakdown for XSD/CIM export.
+    kosten_json             JSONB,
+
+    -- Submission state.
+    status                  TEXT        NOT NULL DEFAULT 'pending'
+                            CHECK (status IN (
+                                'pending',      -- calculated, not yet submitted
+                                'submitted',    -- sent to ÜNB via makod
+                                'confirmed',    -- ÜNB acknowledged
+                                'disputed'      -- ÜNB raised dispute
+                            )),
+    submitted_at            TIMESTAMPTZ,
+    -- makod command UUID (when dispatched).
+    dispatch_ref            TEXT,
+
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- One record per activation per resource.
+    UNIQUE (tenant, activation_id, tr_id)
+);
+
+CREATE INDEX IF NOT EXISTS kb_period       ON kostenblatt_records (tenant, period_year, period_month, status);
+CREATE INDEX IF NOT EXISTS kb_activation   ON kostenblatt_records (activation_id);
+CREATE INDEX IF NOT EXISTS kb_pending_15th ON kostenblatt_records (period_year, period_month)
+    WHERE status = 'pending';
+
+COMMENT ON TABLE kostenblatt_records IS
+    'Redispatch 2.0 Kostenblatt positions (BK6-20-061). '
+    'One row per activation event per TechnischeRessource. '
+    'Monthly submission to ÜNB due 15th of following month.';

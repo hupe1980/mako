@@ -2,6 +2,7 @@
 //!
 //! Projects every `de.mako.*` event into a [`ProcessProjection`] row.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::{
@@ -29,6 +30,11 @@ pub struct HandlerState {
     pub inbound_secret: Arc<Option<SecretString>>,
     /// Tenant identifier — used as Cedar resource_tenant for REST queries.
     pub tenant: String,
+    /// All operator MP-IDs for §20 EnWG `initiator_is_affiliate` detection.
+    ///
+    /// Membership test against `data.new_supplier` on Lieferbeginn events
+    /// (PIDs 55001, 55016, 44001).  `Arc<HashSet>` for O(1) lookup without clone.
+    pub own_mp_ids: Arc<HashSet<String>>,
 }
 
 /// `POST /webhook` — receive any `MarktEvent` from `marktd`.
@@ -130,6 +136,17 @@ pub async fn handle_webhook(
         .map(|d| DeadlineRisk::classify(d, event_time))
         .unwrap_or(DeadlineRisk::Green);
 
+    // §20 EnWG Diskriminierungsfreiheitspflicht: detect affiliate initiators.
+    // For Lieferbeginn PIDs (55001, 55016, 44001) the event data carries
+    // `new_supplier` (the initiating LF's MP-ID).  A match against any of
+    // own_mp_ids means the LF is a subsidiary of the operating NB/GNB.
+    // Covers both Strom (BDEW 99…) and Gas (DVGW 98…) in one check.
+    let initiator_is_affiliate = matches!(pid, 55001 | 55016 | 44001)
+        && !state.own_mp_ids.is_empty()
+        && data["new_supplier"]
+            .as_str()
+            .is_some_and(|s| state.own_mp_ids.contains(s));
+
     let projection = ProcessProjection {
         process_id,
         pid,
@@ -144,6 +161,7 @@ pub async fn handle_webhook(
         started_at,
         last_event_at: event_time,
         erc_code,
+        initiator_is_affiliate,
         tenant: state.tenant.clone(),
     };
 

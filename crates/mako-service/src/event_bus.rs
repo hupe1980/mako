@@ -126,6 +126,9 @@ pub struct WebhookBus {
     /// MPSC sender to the `marktd::fanout` worker task.
     /// `None` in test / dev mode when no fanout worker is running.
     sender: Option<Arc<tokio::sync::mpsc::UnboundedSender<Value>>>,
+    /// Optional plugin registry — `CloudEventPlugin`s run before delivery.
+    /// Set via [`WebhookBus::with_plugins`]. `None` when no plugins are configured.
+    plugins: Option<std::sync::Arc<mako_plugin::PluginRegistry>>,
 }
 
 impl WebhookBus {
@@ -136,10 +139,10 @@ impl WebhookBus {
         Self {
             config,
             sender: None,
+            plugins: None,
         }
     }
 
-    /// Attach a fanout MPSC sender.
     ///
     /// The sender delivers events to the `marktd::fanout::spawn` worker task.
     pub fn with_sender(mut self, sender: tokio::sync::mpsc::UnboundedSender<Value>) -> Self {
@@ -150,6 +153,49 @@ impl WebhookBus {
     /// Fanout configuration.
     pub fn config(&self) -> &WebhookBusConfig {
         &self.config
+    }
+
+    // ── Internal helpers ─────────────────────────────────────────────────────
+
+    /// Run all registered `CloudEventPlugin`s on the payload before delivery.
+    ///
+    /// Returns the (potentially mutated) payload.  When the `plugins` feature
+    /// is disabled or no plugins are registered, returns `payload` unchanged
+    /// with zero overhead.
+    fn enrich_payload_with_plugins(&self, ce_type: &str, mut payload: Value) -> Value {
+        if let Some(ref reg) = self.plugins
+            && !reg.is_empty()
+        {
+            let ctx = mako_plugin::PluginContext {
+                tenant: payload
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_owned(),
+                config: serde_json::Value::Null,
+            };
+            reg.run_cloud_event_plugins(ce_type, &mut payload, &ctx);
+        }
+        payload
+    }
+
+    /// Attach a plugin registry.
+    ///
+    /// All registered [`mako_plugin::CloudEventPlugin`]s will be called for
+    /// every [`EventBus::publish`] call before the event is handed to the
+    /// fanout sender.
+    ///
+    /// ```rust,no_run
+    /// # use mako_service::event_bus::{WebhookBus, WebhookBusConfig};
+    /// # use mako_plugin::PluginRegistry;
+    /// # use std::sync::Arc;
+    /// let plugins = Arc::new(PluginRegistry::default());
+    /// let bus = WebhookBus::new(WebhookBusConfig::default())
+    ///     .with_plugins(plugins);
+    /// ```
+    pub fn with_plugins(mut self, registry: std::sync::Arc<mako_plugin::PluginRegistry>) -> Self {
+        self.plugins = Some(registry);
+        self
     }
 }
 
@@ -165,6 +211,9 @@ impl EventBus for WebhookBus {
     ) -> Pin<Box<dyn Future<Output = Result<(), EventBusError>> + Send + '_>> {
         let ce_type = ce_type.to_owned();
         let sender = self.sender.clone();
+        // Run CloudEvent plugins synchronously before entering the async block
+        // (plugin calls are synchronous; the async block only does the channel send).
+        let payload = self.enrich_payload_with_plugins(ce_type.as_str(), payload);
         Box::pin(async move {
             let _bytes = serde_json::to_vec(&payload)
                 .map_err(|e| EventBusError::Serialise(e.to_string()))?;

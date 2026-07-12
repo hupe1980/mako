@@ -133,6 +133,19 @@ pub enum StammdatenEvent {
         response_pid: Pruefidentifikator,
         /// Message reference of the response ORDERS.
         response_ref: MessageRef,
+        /// Extracted `Standorteigenschaften` JSONB for `marktd` auto-update.
+        ///
+        /// Contains `regelzone` (EIC), `bilanzierungsgebiet`, `netzgebiet`,
+        /// `gasqualitaet`, and `eigenschaftenStrom` / `eigenschaftenGas` arrays.
+        /// `None` when the EDIFACT payload did not carry LOC/QTY/MEA Stammdaten.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        standorteigenschaften: Option<serde_json::Value>,
+        /// Extracted Zaehlwerk records (from ZAK+ZE segments) for device registry.
+        ///
+        /// Each entry is a JSON object matching `rubo4e::current::Zaehlwerk`.
+        /// Used by `makod` to auto-populate `marktd` `zaehler/zaehlwerke` on receipt.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        zaehlwerke: Vec<serde_json::Value>,
     },
     /// Request rejected (data unavailable or validation failure).
     Abgelehnt {
@@ -268,6 +281,15 @@ pub enum StammdatenCommand {
         response_pid: Pruefidentifikator,
         /// Message reference assigned to the outbound ORDERS.
         response_ref: MessageRef,
+        /// Extracted `Standorteigenschaften` JSONB for `marktd` auto-update.
+        ///
+        /// Derived from LOC/QTY/MEA segments of the ORDERS payload.
+        /// Pass `None` when the EDIFACT does not carry location attributes.
+        standorteigenschaften: Option<serde_json::Value>,
+        /// Extracted `Zaehlwerk` records from ZAK+ZE segments.
+        ///
+        /// Used by `makod` to auto-populate device registers in `marktd`.
+        zaehlwerke: Vec<serde_json::Value>,
     },
     /// Reject the data request (data unavailable, permission denied, etc.).
     RejectAnforderung {
@@ -410,6 +432,8 @@ impl Workflow for WimStammdatenWorkflow {
             StammdatenCommand::TransmitStammdaten {
                 response_pid,
                 response_ref,
+                standorteigenschaften,
+                zaehlwerke,
             } => {
                 if !matches!(state, StammdatenState::ValidationPassed(_)) {
                     return Err(WorkflowError::invalid_state(
@@ -426,6 +450,8 @@ impl Workflow for WimStammdatenWorkflow {
                 Ok(vec![StammdatenEvent::StammdatenUebermittelt {
                     response_pid,
                     response_ref,
+                    standorteigenschaften,
+                    zaehlwerke,
                 }]
                 .into())
             }
@@ -640,6 +666,8 @@ mod tests {
             StammdatenCommand::TransmitStammdaten {
                 response_pid: Pruefidentifikator::new(17102).unwrap(),
                 response_ref: MessageRef::new("MSG-17102-001"),
+                standorteigenschaften: None,
+                zaehlwerke: vec![],
             },
         )
         .unwrap();
@@ -710,6 +738,8 @@ mod tests {
                 StammdatenCommand::TransmitStammdaten {
                     response_pid: Pruefidentifikator::new(pid).unwrap(),
                     response_ref: MessageRef::new("MSG-RESP"),
+                    standorteigenschaften: None,
+                    zaehlwerke: vec![],
                 },
             );
             assert!(result.is_ok(), "PID {pid} must be accepted as Übermittlung");

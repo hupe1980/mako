@@ -23,7 +23,9 @@ Five distinct layers live here:
   (45-minute window). Role-gated Cargo features for §7 EnWG binary separation.
 - **`edmd`** — Energy Data Management daemon: MSCONS meter readings, BO4E `Energiemenge` deliveries API,
   `Lastgang` + `Zeitreihe` time-series export, `MeterBillingPeriod` (RLM Spitzenleistung + Gas Brennwert/Zustandszahl),
-  Mehr-/Mindermengensaldo imbalance. PostgreSQL-backed.
+  Mehr-/Mindermengensaldo imbalance. **Apache Iceberg V2 OLAP archival** via `iceberg = "0.9.1"` + PostgreSQL SQL catalog
+  (no Nessie/Glue/Polaris required) + DataFusion — reads >12 months exported to Parquet on S3/GCS;
+  `GET /api/v1/archive/olap/{malo_id}` for ≥10× faster MMM aggregation.
 - **`obsd`** — Business-process observability daemon: `ProcessProjection`, BNetzA KPI
   reports, overdue-process detection, §20 EnWG parity (`initiator_is_affiliate`).
 - **`mako-service`** — Shared service infrastructure library: `ServiceBuilder`
@@ -32,7 +34,7 @@ Five distinct layers live here:
 
 [![CI](https://github.com/hupe1980/mako/actions/workflows/ci.yml/badge.svg)](https://github.com/hupe1980/mako/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](./LICENSE-MIT)
-[![Rust](https://img.shields.io/badge/rust-1.89+-orange?logo=rust)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.94+-orange?logo=rust)](https://www.rust-lang.org/)
 [![BDEW](https://img.shields.io/badge/BDEW-EDI%40Energy-green)](https://www.edi-energy.de/)
 [![Container](https://img.shields.io/badge/ghcr.io-makod-blue?logo=docker)](https://github.com/hupe1980/mako/pkgs/container/makod)
 
@@ -61,6 +63,7 @@ Five distinct layers live here:
 | `mako-edm` | Energy data library — `MeterDataReceipt`, `TimeSeriesRepository`, `ImbalanceReport`, MSCONS PID set |
 | `mako-obs` | Observability library — `ProcessProjection`, `KpiReport`, `DeadlineRisk`, `ProcessProjectionRepository` |
 | `mako-service` | Shared service infrastructure — `ServiceBuilder`, `load_config`, health routes, HMAC-SHA256 webhook verification |
+| `mako-plugin` | WASM plugin extension system — `CloudEventPlugin`, `McpToolPlugin`, `BillingPlugin`, `ValidatorPlugin`, `WebhookPlugin`; Tier 1 native Rust + Tier 2 WASM via Extism (Wasmtime sandbox); loaded at runtime from `[[plugin]]` TOML manifests |
 | **`makod`** | Protocol daemon — all 45+ workflows, AS4 (`:4080`), REST (`:8080`), iMS (`:8090`), SlateDB, MCP server, OTLP, Cedar ABAC |
 | **`marktd`** | Market Data Hub — MaLo/MeLo/NeLo/TR/SR with **typed `rubo4e::current` API responses** (Marktlokation, Messlokation, Zaehler, Geraet), `fallgruppe`, `standorteigenschaften JSONB`, `konfigurationsprodukte`, `Vec<Zaehlwerk>` register access, Lokationszuordnung graph, preisblaetter, VersorgungsStatus, `event_log` replay; EventBus fan-out; PostgreSQL, OIDC/JWT; `:8180` |
 | `processd` | Process Decision Engine — NB Anmeldung STP (netz-checker, ≥ 95 %) + LF E_0624 auto-response; role-gated §7 EnWG features; `:8580` |
@@ -69,7 +72,14 @@ Five distinct layers live here:
 | `netzbilanzd` | NNE/KA/MMM/MSB billing daemon (NB role) — generates INVOIC 31001/31002/31005/31009; `invoice_drafts` lifecycle (`draft → dispatched/rejected`); `:8680` |
 | `sperrd` | Sperrung execution tracking daemon (NB role) — `sperr_orders` lifecycle; IFTSTA 21039 auto-dispatch on field confirmation; `:8780` |
 | `nis-syncd` | NIS/GIS grid topology import adapter (NB role, stateless) — `POST /api/v1/grid/sync`; dry-run mode; drift detection; lifts `processd` NB STP to ≥95%; `:9680` |
-| `edmd` | Energy Data Management daemon — MSCONS meter readings, BO4E `Energiemenge` deliveries, `Lastgang` + `Zeitreihe` time-series, `MeterBillingPeriod` (RLM / Gas), imbalance; PostgreSQL; `:8380` |
+| `einsd` | Einspeiser Registry + EEG/KWKG Settlement (NB/LF role) — plant register; **8 settlement models** (Vergütung, Mieterstrom §38a, Direktvermarktung Gleitende Marktprämie, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag §7 KWKG 2023, Flexibilitätsprämie §50 EEG); Repowering §22 EEG; Zusammenlegung §24; KWKG Förderdauer; built-in EEG 2000–2023 + KWKG 2023 rate table; CloudEvents `de.eeg.verguetung.berechnet` + `de.eeg.marktpraemie.berechnet` + `de.eeg.anlage.foerderung_auslaufend`; `:9180` |
+| `tarifbd` | Product & Tariff Catalog (LF role) — user-defined retail energy products (`STROM`/`GAS`/`WAERME`/`SOLAR`/`EEG`/`EINSPEISUNG`/`WAERMEPUMPE`/`WALLBOX`/`HEMS`/`EMOBILITY`/`ENERGIEDIENSTLEISTUNG`/`BUNDLE`) with `Tarifpreisblatt` JSONB + version history; MaLo→product assignment (Tarifwechsel); hourly EPEX Spot day-ahead prices for §41a; `:9080` |
+| `billingd` | Energy Billing Engine (LF role) — **all commercial prices user-defined in `tarifbd`**; `STROM` (Eintarif/Zweitarif HT/NT/RLM; §14a Modul 1/3; EEG Gutschrift); `GAS` (Brennwertkorrektur §10 GasGVV, Energiesteuer, BEHG CO₂); `WAERME` Fernwärme; `SOLAR` Mieterstrom §42b / §42a GGV; `EEG`/`EINSPEISUNG` feed-in settlement; `WAERMEPUMPE`/`WALLBOX` §14a; `HEMS`/`EMOBILITY`/`ENERGIEDIENSTLEISTUNG`; **§41a dynamic tariffs** (15-min Lastgang × hourly EPEX); `/preview` dry-run; **XRechnung 3.0 / ZUGFeRD 2.3** (EN16931, B2G mandate 01.01.2027); emits `de.billing.rechnung.erstellt`; `:9280` |
+| `accountingd` | Massenkontokorrent / Customer Account Ledger (LF role) — running debit/credit ledger per customer; idempotent CloudEvent ingest; CAMT.054 bank statement import with IBAN matching; SEPA pain.008 XML for direct-debit collection; Mahnwesen Mahnstufe 1–3; Sperrauftrag trigger on Mahnstufe 3; `:9380` |
+| `portald` | Customer Portal read-model gateway (LF role) — aggregates Lastgang (edmd), invoices (billingd), account balance (accountingd), VersorgungsStatus (marktd), and EEG settlement (einsd) into single REST + SSE API; `GET /api/v1/portal/{malo_id}/dashboard` (parallel aggregation); `/lastgang`, `/invoices`, `/balance`, `/kontoauszug`, `/eeg`, `/versorgung`, `/events` (SSE); OIDC bearer-token auth; `:9480` |
+| `vertragd` | Contract & Customer Management (LF role) — `Kunden` (B2C + B2B) with role-based multi-user portal access (`kunden_identitaeten`: N OIDC logins per company, role=VOLLZUGRIFF/ADMIN/FINANZEN/TECHNIK/READONLY, optional `standort_filter`); `Rahmenverträge` for B2B portfolio contracts (Sammelrechnung, indexation, volume discount); `Versorgungsverträge` per site/commodity; triggers GPKE/GeLi Gas Lieferbeginn/-ende via `processd`; Tarifwechsel endpoint (§41 EnWG notice boundary); OIDC sub → MaLo authorization gateway for `portald`; `:9780` |
+| `agentd` | Multi-agent LLM orchestration daemon — Orchestrator + Specialist Mesh; 3 LLM providers (OpenAI, Anthropic, AWS Bedrock SigV4); ReAct loop with MCP tool calls; **LanceDB RAG** (persistent vector store, S3/GCS/local, ANN search); CloudEvent webhook trigger + `/api/v1/run` manual; emits `de.agent.decision.made`; WASM plugin support via `mako-plugin`; `:9580` |
+| `edmd` | Energy Data Management daemon — MSCONS meter readings, BO4E `Energiemenge` deliveries, `Lastgang` + `Zeitreihe` time-series, `MeterBillingPeriod` (RLM / Gas), imbalance. **Apache Iceberg V2 archival**: reads >12 months auto-exported to S3/GCS via iceberg 0.9.1 + PostgreSQL SQL catalog; DataFusion OLAP (≥ 10× faster MMM). PostgreSQL; `:8380` |
 | `obsd` | Business-process observability daemon — process projections, BNetzA KPI reports, deadline alerts; PostgreSQL; `:8480` |
 
 
@@ -123,16 +133,21 @@ Five distinct layers live here:
 
 ### BO4E typed API (`marktd`)
 
-**25 active `rubo4e::current` types — schema validated at every read/write boundary.**
+**41 active `rubo4e::current` types — schema validated at every read/write boundary.**
 
 | Category | Detail |
 |---|---|
 | 📦 **Typed responses** | `GET /api/v1/malo` → `Marktlokation`; `GET /api/v1/melo` → `Messlokation`; `GET /api/v1/zaehler` → `Zaehler`; `GET /api/v1/geraete` → `Geraet` — all canonical BO4E camelCase |
 | 🔍 **Schema validation on write** | `PUT` endpoints reject wrong `_typ` with 422; validate enum fields (`bilanzierungsmethode`, `netzebene`, `vertragsart`, …) against `rubo4e::current` types |
 | 📋 **`Vertrag` for LRV exchange** | `nb_contracts` stores full BO4E `Vertrag` JSONB + typed SQL columns; `PUT /api/v1/nb-contracts` validates `vertragsart` / `vertragsstatus`; emits `de.markt.nb-contract.updated` CloudEvent |
+| 👤 **`Geschaeftspartner` typed partners** | `PUT /api/v1/partners/{mp_id}` validates the BO4E `Geschaeftspartner` payload (auto-injects `_typ`; validates `marktrolle`, `rollencodetyp`, `marktteilnehmerstatus`, `adresse`). `GET` returns the typed `geschaeftspartner` field. |
 | 🔢 **`Zaehlwerk` register access** | `GET /api/v1/zaehler/{id}/zaehlwerke` → `Vec<Zaehlwerk>` — OBIS registers for TOU billing and iMSyS demand management |
+| ⏰ **`ZaehlzeitRegister` + `ZaehlzeitSaison`** | `GET/PUT /api/v1/zaehler/{id}/register` + `/zaehler-register/{id}/saisons` — iMSys TOU register definitions (HT/NT/EINZEL); `GET /api/v1/zaehler/{id}/tariff-zone?datetime=ISO` resolves zone in one SQL JOIN (§14a Modul 2) |
 | ⚡ **`Energiemenge` deliveries** | `GET /api/v1/deliveries/{malo_id}` → `Vec<Energiemenge>` — typed ERP-consumable meter readings without EDIFACT parsing |
-
+| 💰 **MMMA settlement prices** | `GET/PUT /api/v1/mmma-preise/gas/{year}/{month}` — Gas MMM Abrechnungspreise (Trading Hub Europe); `GET/PUT /api/v1/mmm-preise/strom/{year}/{month}` — Strom MMM Ausgleichsenergie per ÜNB. Both auto-fetched by `netzbilanzd` and validated by `invoicd` check 6. |
+| 🗂️ **Fallgruppe + Bilanzierungsmethode auto-extract** | `makod` adapters extract `bilanzierungsmethode` (Z01→SLP, Z02→RLM, Z04→IMS) and `fallgruppe` (GaBi Gas, TM+Z10) from UTILMD `TM+EM` / `TM+Z10` segments. `marktd` `event_ingest` calls `patch_typenmerkmal()` on `de.mako.process.initiated` (PIDs 55001/44001) to keep `malo.fallgruppe` / `malo.bilanzierungsmethode` in sync. || 🏷️ **`Tarifpreisblatt` + `Preisblatt`** | `tarifbd` stores all energy products as `Tarifpreisblatt` JSONB; category drives calculator selection; all prices are user-defined; schema validated on PUT (wrong `_typ` → 422); queried by `billingd` calculator for pricing inputs |
+| 🧾 **`Steuerbetrag` + `Registeranzahl`** | `billingd` calculator generates typed Stromsteuer (2.05 ct/kWh) and MwSt (19%) positions as `Steuerbetrag` entries; `Registeranzahl` (Eintarif/Zweitarif) drives HT/NT position branching |
+| 🏦 **`Zahlungsinformation` + `Zahlungsart`** | `accountingd` SEPA mandate registry stores structured payment info; pain.008 XML generated from `SepaMandateRow` (IBAN, BIC, Kontoinhaber, Mandatsreferenz) |
 ### Process engine layer (`mako-engine` + domain crates)
 
 | Category | Detail |
@@ -347,13 +362,18 @@ let repo = InMemoryMaloRepository::default();
 | [API-Webdienste Strom](./docs/api-webdienste.md) | REST/JSON channel for iMS processes (`energy-api`) |
 | [makod Operator Guide](./docs/makod.md) | Production daemon: persistence, ports, auth, MCP, Kubernetes |
 | [marktd Operator Guide](./docs/marktd.md) | Market Data Hub: MaLo/MeLo, subscriptions, VersorgungsStatus, OIDC, Docker |
-| [processd Operator Guide](./docs/processd.md) | NB STP auto-decisions (netz-checker) + LF E_0624 auto-response; §7 EnWG role features |
-| [invoicd Operator Guide](./docs/invoicd.md) | INVOIC plausibility-check daemon: PostgreSQL persistence, §22 MessZV, tariff seeding |
+| [processd Operator Guide](./docs/processd.md) | NB Anmeldung STP (netz-checker, ≥ 95 %) + LF E_0624 auto-response + MSB-Wechsel STP; §7 EnWG role features |
+| [invoicd Operator Guide](./docs/invoicd.md) | INVOIC plausibility-check daemon: §22 MessZV receipts, 6-check pipeline (incl. AufAbschlag check 6) |
 | [netzbilanzd Operator Guide](./docs/netzbilanzd.md) | NNE/KA/MMM billing daemon: invoice generation, draft lifecycle, dispatch to `makod` |
 | [sperrd Operator Guide](./docs/sperrd.md) | Sperrung execution tracker: order lifecycle, IFTSTA 21039 auto-dispatch, GPKE compliance |
 | [nis-syncd Operator Guide](./docs/nis-syncd.md) | NIS/GIS grid topology import: sync, dry-run, drift detection, STP impact |
-| [edmd Operator Guide](./docs/edmd.md) | Energy Data Management: MSCONS storage, BO4E `Energiemenge` deliveries, `Lastgang`/`Zeitreihe` time-series, `MeterBillingPeriod` |
+| [edmd Operator Guide](./docs/edmd.md) | Energy Data Management: MSCONS storage, BO4E `Energiemenge` deliveries, `Lastgang`/`Zeitreihe`, `MeterBillingPeriod` |
 | [obsd Operator Guide](./docs/obsd.md) | Observability: process projections, KPI reports, §20 EnWG parity |
+| [einsd Operator Guide](./docs/einsd.md) | EEG/KWKG Settlement: 8 settlement models, Repowering §22, KWKG Förderdauer, CloudEvents |
+| [tarifbd Operator Guide](./docs/tarifbd.md) | Product & Tariff Catalog: STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE, EPEX Spot prices for §41a |
+| [billingd Operator Guide](./docs/billingd.md) | Energy Billing Engine: STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY; §41a dynamic; XRechnung 3.0 |
+| [accountingd Operator Guide](./docs/accountingd.md) | Massenkontokorrent: Kundenkonto ledger, CAMT.054, SEPA pain.008, Mahnwesen |
+| [portald Operator Guide](./docs/portald.md) | Customer Portal gateway: REST + SSE dashboard aggregating all LF services |
 | [Release Lifecycle](./docs/release-lifecycle.md) | Annual BDEW profile updates, codegen pipeline |
 | [Schema Versioning](./docs/schema-versioning.md) | Profile JSON schema evolution and archive lifecycle |
 | [PID Reference](./docs/pid-reference.md) | Prüfidentifikatoren — authoritative crate ownership table |

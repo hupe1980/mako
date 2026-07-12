@@ -147,8 +147,10 @@ pub struct AnforderungData {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
+#[derive(Default)]
 pub enum AllokationslisteState {
     /// No request sent yet.
+    #[default]
     New,
     /// LF sent the request; awaiting MSCONS data or rejection.
     AnforderungGesendet(AnforderungData),
@@ -171,12 +173,6 @@ pub enum AllokationslisteState {
         /// Original request.
         anforderung: AnforderungData,
     },
-}
-
-impl Default for AllokationslisteState {
-    fn default() -> Self {
-        Self::New
-    }
 }
 
 impl AllokationslisteState {

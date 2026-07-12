@@ -3,14 +3,21 @@
 Quick-start guide for running and testing the full mako stack:
 
 - **`makod`** `:8080` — EDIFACT process engine (GPKE, WiM, GeLi Gas, MABIS, GaBi Gas)
-- **`marktd`** `:8180` — Market Data Hub (MaLo/MeLo, contracts, VersorgungsStatus, PRICAT, subscriptions)
-- **`processd`** `:8580` — NB STP auto-responder (validates Anmeldungen, dispatches bestaetigen/ablehnen)
+- **`marktd`** `:8180` — Market Data Hub (MaLo/MeLo, contracts, VersorgungsStatus, PRICAT, subscriptions, konfigurationsprodukte typed API, MMMA monthly price import worker, ZeitvariablePreisposition validation)
+- **`processd`** `:8580` — NB STP auto-responder (validates Anmeldungen, dispatches bestaetigen/ablehnen) + LF E_0624 auto-response + MSB REQOTE auto-response from PreisblattMessung + §14a Steuerungsauftrag produktcode contract check
 - **`invoicd`** `:8280` — INVOIC plausibility-check daemon (LF role; auto-settles/disputes inbound invoices)
-- **`edmd`** `:8380` — Energy Data Management (MSCONS meter readings, Lastgang/Zeitreihe export, billing period)
+- **`edmd`** `:8380` — Energy Data Management (MSCONS meter readings, iMSys direct push for §41a real-time billing, Hampel-filter quality scoring A/B/C/F, Ablesesteuerung reading orders with INSRPT auto-scheduling, Lastgang/Zeitreihe export, billing period)
 - **`obsd`** `:8480` — Observability daemon (process projections, BNetzA KPIs)
 - **`netzbilanzd`** `:8680` — NNE/KA/MMM/MSB billing daemon (NB role; generates INVOIC 31001/31002/31005/31009)
 - **`sperrd`** `:8780` — Sperrung execution tracking (NB role; IFTSTA 21039 auto-dispatch)
 - **`nis-syncd`** `:9680` — NIS/GIS grid topology import adapter (pushes malo_grid, drift CloudEvents)
+- **`einsd`** `:9180` — Einspeiser Registry + EEG/KWKG Settlement (8 settlement models: Vergütung, Mieterstrom §38a, Direktvermarktung Marktprämie, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag, Flexibilitätsprämie; Repowering §22 EEG; Zusammenlegung §24; KWKG Förderdauer; CloudEvents `de.eeg.verguetung.berechnet` + `de.eeg.marktpraemie.berechnet`)
+- **`tarifbd`** `:9080` — Product & Tariff Catalog (user-defined energy products: STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE; all prices in `Tarifpreisblatt` JSONB; EPEX Spot for §41a)
+- **`billingd`** `:9280` — Energy Billing Engine (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG — all prices user-defined; §41a dynamic 15-min Lastgang × EPEX; `POST /preview` dry-run; `GET /{id}/xrechnung` XRechnung 3.0)
+- **`accountingd`** `:9380` — Customer Account Ledger (running debit/credit ledger; CAMT.054 bank statement import; SEPA pain.008 XML; Mahnwesen Mahnstufe 1–3; Sperrauftrag trigger)
+- **`portald`** `:9480` — Customer Portal read-model gateway (aggregates edmd + billingd + accountingd + marktd + einsd; `GET /portal/{malo_id}/dashboard`; SSE `/events` stream)
+- **`vertragd`** `:9780` — Contract & Customer Management (B2C + B2B Kunden with `kunden_identitaeten` N-login portal access; Rahmenverträge for B2B portfolio contracts; Versorgungsverträge per site/commodity; Tarifwechsel §41 EnWG; Kündigung with Schlussablesung; OIDC→MaLo auth gateway for portald)
+- **`agentd`** `:9580` — Multi-agent LLM orchestration daemon (Orchestrator + Specialist Mesh with 8 specialists: billing anomaly AI, payment reconciliation, MSB device history RAG, grid anomaly detection, EEG lifecycle, compliance; LanceDB vector store; all MCP tools wired; OpenAI/Anthropic/Bedrock providers)
 - **`webhook`** `:8000` — In-memory ERP event receiver
 
 Both daemons run with authentication **disabled** in the demo (`--auth-disabled` / `--auth-key`) — suitable for local development only. See the [production guide](../docs/getting-started.md) for OIDC setup.
@@ -74,6 +81,20 @@ The demo runs the stack as **Netzbetreiber Strom (NB)** with GLN `9900357000004`
 | sperrd | Auth | disabled (dev mode) |
 | nis-syncd | HTTP port | `:9680` |
 | nis-syncd | Auth | disabled (dev mode) |
+| einsd | HTTP port | `:9180` |
+| einsd | Auth | disabled (dev mode) |
+| tarifbd | HTTP port | `:9080` |
+| vertragd | HTTP port | `:9780` |
+| agentd | HTTP port | `:9580` |
+| tarifbd | Auth | disabled (dev mode) |
+| vertragd | Auth | disabled (dev mode) |
+| agentd | Auth | disabled (dev mode) |
+| billingd | HTTP port | `:9280` |
+| billingd | Auth | disabled (dev mode) |
+| accountingd | HTTP port | `:9380` |
+| accountingd | Auth | disabled (dev mode) |
+| portald | HTTP port | `:9480` |
+| portald | Auth | disabled (dev mode) |
 
 ---
 
@@ -233,5 +254,18 @@ curl http://localhost:8000/events | jq '.[].body | {type,subject}'
 | netzbilanzd drafts | http://localhost:8680/api/v1/billing/drafts | Invoice draft review queue |
 | sperrd orders | http://localhost:8780/api/v1/sperr-orders | Sperrung execution tracker |
 | nis-syncd sync | http://localhost:9680/api/v1/grid/sync | NIS grid topology import |
+| einsd plants | http://localhost:9180/api/v1/anlagen | EEG/KWKG plant register |
+| einsd settle | http://localhost:9180/api/v1/anlagen/{tr_id}/settle/{year}/{month} | Monthly settlement |
+| einsd rate lookup | http://localhost:9180/api/v1/verguetungssatz-lookup | EEG/KWKG tariff rate lookup |
+| tarifbd products | http://localhost:9080/api/v1/products/9910000000002 | Tariff catalog |
+| tarifbd epex | http://localhost:9080/api/v1/epex-prices/2026-07-12/hourly | EPEX day-ahead prices |
+| billingd calculate | http://localhost:9280/api/v1/billing/51238696781/calculate | Trigger billing run |
+| billingd preview | http://localhost:9280/api/v1/billing/51238696781/preview | Dry-run (no persist) |
+| billingd xrechnung | http://localhost:9280/api/v1/billing/{id}/xrechnung | XRechnung 3.0 / ZUGFeRD 2.3 CII XML |
+| billingd records | http://localhost:9280/api/v1/billing | Billing record history |
+| accountingd balance | http://localhost:9380/api/v1/accounts/51238696781/balance | Customer balance |
+| accountingd kontoauszug | http://localhost:9380/api/v1/accounts/51238696781/kontoauszug | Account statement |
+| portald dashboard | http://localhost:9480/api/v1/portal/51238696781/dashboard | Aggregated customer snapshot |
+| portald events | http://localhost:9480/api/v1/portal/51238696781/events | SSE stream |
 | ERP webhook receiver | http://localhost:8000/events | View delivered CloudEvents |
 

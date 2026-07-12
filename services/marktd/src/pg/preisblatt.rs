@@ -210,6 +210,11 @@ impl PreisblattMessungRepository for PgPreisblattMessungRepository {
                     .try_get("bo4e_version")
                     .unwrap_or_else(|_| "v202607.0.0".to_owned()),
                 source,
+                auf_abschlaege: r
+                    .try_get::<serde_json::Value, _>("auf_abschlaege")
+                    .ok()
+                    .and_then(|v| v.as_array().cloned())
+                    .unwrap_or_default(),
                 created_at: r.get("created_at"),
                 updated_at: r.get("updated_at"),
             }

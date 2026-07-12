@@ -29,3 +29,21 @@ CREATE INDEX IF NOT EXISTS pp_partner    ON process_projections (partner_mp_id) 
 CREATE INDEX IF NOT EXISTS pp_tenant     ON process_projections (tenant) WHERE tenant <> '';
 CREATE INDEX IF NOT EXISTS pp_deadline   ON process_projections (deadline_at) WHERE deadline_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS pp_started    ON process_projections (started_at DESC);
+
+-- 0002_affiliate_parity.sql
+-- obsd: §20 EnWG Diskriminierungsfreiheitspflicht parity column.
+--
+-- initiator_is_affiliate: true when the initiating LF MP-ID matches the
+-- operator's own MP-ID (vertically integrated utility deployment).
+-- Populated on de.mako.process.initiated for Lieferbeginn PIDs (55001, 55016, 44001).
+--
+-- Used for BNetzA audit evidence: allows structured query of all processes
+-- where the auto-acceptance guard fired (§20 EnWG non-discrimination proof).
+
+ALTER TABLE process_projections
+    ADD COLUMN IF NOT EXISTS initiator_is_affiliate BOOLEAN NOT NULL DEFAULT false;
+
+-- Index for §20 parity report: "show all affiliate Anmeldungen in period X"
+CREATE INDEX IF NOT EXISTS pp_affiliate
+    ON process_projections (tenant, initiator_is_affiliate, started_at DESC)
+    WHERE initiator_is_affiliate = true;

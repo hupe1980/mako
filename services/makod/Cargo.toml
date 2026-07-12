@@ -31,7 +31,7 @@ edifact-rs       = { workspace = true }
 mako-as4     = { path = "../../crates/mako-as4", features = ["server"] }
 energy-api   = { path = "../../crates/energy-api", features = ["server", "client"] }
 rubo4e       = { workspace = true }
-mako-markt   = { path = "../../crates/mako-markt" }
+mako-markt   = { path = "../../crates/mako-markt", features = ["marktd-client"] }
 rust_decimal = { workspace = true }
 asx-rs       = { version = "0.5", features = ["as4", "client", "interop-strict", "server"] }
 edi-energy   = { path = "../../crates/edi-energy", default-features = false, features = [

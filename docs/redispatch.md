@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Redispatch 2.0
-nav_order: 7
+nav_order: 8
 mermaid: true
 description: >-
   Redispatch 2.0 in mako: XML document types, 8 event-sourced workflows,
