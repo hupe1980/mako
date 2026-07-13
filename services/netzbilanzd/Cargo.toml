@@ -8,6 +8,10 @@ license.workspace     = true
 repository.workspace  = true
 rust-version.workspace = true
 
+[lib]
+name = "netzbilanzd"
+path = "src/lib.rs"
+
 [[bin]]
 name = "netzbilanzd"
 path = "src/main.rs"

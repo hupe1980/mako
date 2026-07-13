@@ -18,11 +18,8 @@
 //!
 //! `:9480`
 
-mod clients;
-mod config;
-mod handlers;
-mod mcp_server;
 
+use portald::{clients, config, handlers, mcp_server};
 use std::sync::Arc;
 
 use axum::{

@@ -5,7 +5,21 @@ use std::sync::Arc;
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde_json::Value;
 
-use crate::AppState;
+use crate::{
+    agent::{AgentRegistry, OrchestratorAgent},
+    config::AgentdConfig,
+    mcp::McpPool,
+    rag::RagEngine,
+};
+
+/// Shared application state injected into all handlers via `axum::extract::State`.
+pub struct AppState {
+    pub cfg: AgentdConfig,
+    pub orchestrator: OrchestratorAgent,
+    pub registry: AgentRegistry,
+    pub mcp: McpPool,
+    pub rag: Option<RagEngine>,
+}
 
 pub async fn webhook(
     State(state): State<Arc<AppState>>,

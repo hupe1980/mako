@@ -31,10 +31,12 @@ Port: **`:9780`** · PostgreSQL · OIDC/JWT + API-key auth
 | **Framework contracts** | `Rahmenverträge` for B2B — portfolio pricing, indexation, Sammelrechnung |
 | **Supply contracts** | `Versorgungsverträge` per site/commodity with status lifecycle |
 | **MaKo triggering** | `POST processd /start-supply` per commodity on contract creation |
-| **Tarifwechsel** | Changes product code without new UTILMD — §41 EnWG notification boundary |
+| **Tarifwechsel** | Changes product code without new UTILMD — §41 EnWG notification boundary; **Preisgarantie guard** blocks changes within a price-lock window |
 | **Kündigung** | Coordinated Lieferende + Schlussablesung across all commodities |
 | **portald auth** | `GET /kunden/authenticate?malo_id=` — OIDC sub → MaLo ownership check |
 | **Billing provisioning** | Auto-provisions `tarifbd` product + `accountingd` account on NB confirmation |
+| **Preisgarantie** | Typed BO4E `Preisgarantie` COM — `PUT/GET /api/v1/vertraege/{id}/preisgarantie`; blocks `tarifwechsel` within the guarantee window |
+| **Person (B2C)** | `PUT/GET /api/v1/kunden/{id}/person` — `rubo4e::current::Person` BO (GDPR Art. 15) |
 
 ---
 
@@ -232,6 +234,66 @@ Content-Type: application/json
 for ERP-side customer notification (§41 Abs. 3 EnWG: ≥ 6 weeks notice required before
 price increases).
 
+### Preisgarantie guard
+
+If the contract has an active price guarantee (`preisgarantie_bis ≥ today`), the
+`tarifwechsel` endpoint **rejects requests whose `wirksamkeit` falls within the guarantee
+window** with `HTTP 422` and a structured error body:
+
+```json
+{
+  "error": "Tarifwechsel blocked by Preisgarantie",
+  "preisgarantie_bis": "2027-06-30",
+  "wirksamkeit": "2027-01-01",
+  "hint": "Set override_preisgarantie=true to bypass (operator use only)"
+}
+```
+
+Operators can bypass with `"override_preisgarantie": true` — use only with documented
+customer consent (contractual waiver of price-lock).
+
+The `Preisgarantie` itself is stored as a typed `rubo4e::current::Preisgarantie` BO via:
+
+```http
+PUT /api/v1/vertraege/{id}/preisgarantie
+Content-Type: application/json
+
+{
+  "_typ": "PREISGARANTIE",
+  "preisgarantietyp": "ALLE_PREISBESTANDTEILE",
+  "zeitlicheGueltigkeit": {
+    "_typ": "ZEITRAUM",
+    "startdatum": "2025-01-01",
+    "enddatum":   "2027-06-30"
+  },
+  "beschreibung": "3-Jahres-Preisgarantie laut Rahmenvertrag"
+}
+```
+
+---
+
+## Person sub-object (B2C customers)
+
+B2C customers have an optional `rubo4e::current::Person` sub-object for natural-person
+details (GDPR Art. 15 right-to-access and correct Anrede in correspondence):
+
+```http
+PUT /api/v1/kunden/{id}/person
+Content-Type: application/json
+
+{
+  "_typ": "PERSON",
+  "vorname":     "Max",
+  "nachname":    "Mustermann",
+  "geburtstag":  "1985-03-15",
+  "anrede":      "HERR",
+  "titel":       null
+}
+```
+
+Returns `HTTP 422` with a precise error if any field violates the BO4E schema.
+Returns `HTTP 404` for B2B `Geschaeftspartner` records that have no Person stored.
+
 ---
 
 ## REST API
@@ -252,8 +314,10 @@ price increases).
 | `GET` | `/api/v1/kunden/{id}/vertraege` | List supply contracts for customer |
 | `GET` | `/api/v1/vertraege` | All active contracts (`?tenant=&status=`) |
 | `GET` | `/api/v1/vertraege/{id}` | Contract + Komponenten + status |
-| `POST` | `/api/v1/vertraege/{id}/tarifwechsel` | Change product code (no new UTILMD) |
+| `POST` | `/api/v1/vertraege/{id}/tarifwechsel` | Change product code (no new UTILMD); blocked within Preisgarantie window |
 | `POST` | `/api/v1/vertraege/{id}/kuendigen` | Initiate Lieferende for all commodities |
+| `GET\|PUT` | `/api/v1/vertraege/{id}/preisgarantie` | Typed `rubo4e::current::Preisgarantie` COM |
+| `GET\|PUT` | `/api/v1/kunden/{id}/person` | `rubo4e::current::Person` BO for B2C customers (GDPR Art. 15) |
 | `POST` | `/api/v1/events` | Inbound CloudEvents from `makod` / `processd` |
 | `GET` | `/health` | Liveness |
 | `GET` | `/health/ready` | Readiness |
@@ -266,6 +330,9 @@ price increases).
 |---|---|
 | `de.vertrag.aktiv` | All commodity Komponenten confirmed by NB |
 | `de.vertrag.tarifwechsel` | Product change committed |
+| `de.vertrag.tarifwechsel_geplant` | Future Tarifwechsel stored (applied by background worker on `wirksamkeit`) |
+| `de.vertrag.preisaenderung.ankuendigung` | Emitted 42 days before `wirksamkeit` (§41 Abs. 3 EnWG ≥ 6 weeks notice) |
+| `de.vertrag.preisgarantie.updated` | Preisgarantie COM stored or replaced |
 | `de.vertrag.abgeschlossen` | All Lieferende confirmed; Schlussrechnung trigger |
 | `de.vertrag.position.abgelehnt` | NB rejected a commodity (ERC A02 / A05 / A97) |
 

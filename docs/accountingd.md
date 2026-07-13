@@ -99,16 +99,61 @@ balance_ct > 0 AND stufe 2 unresolved for 14 days
 | `GET` | `/api/v1/accounts/{malo_id}/ledger` | Paged ledger entries |
 | `GET` | `/api/v1/accounts/{malo_id}/kontoauszug` | Account statement (portald-consumable) |
 | `PUT` | `/api/v1/accounts/{malo_id}/abschlag` | Update monthly advance payment amount |
+| `GET/PUT` | `/api/v1/accounts/{malo_id}/vorauszahlung` | Typed `rubo4e::current::Vorauszahlung` (Intervall, Betrag, Gueltigkeit) |
 | `POST` | `/api/v1/payments/import` | Ingest CAMT.054 bank statement (JSON array) |
 | `GET` | `/api/v1/offene-posten` | Overdue accounts (`?min_balance_eur=&limit=`) |
 | `GET` | `/api/v1/dunning` | Open dunning cases |
 | `POST` | `/api/v1/dunning/{account_id}/escalate` | Manual Mahnstufe escalation |
 | `POST` | `/api/v1/dunning/{id}/resolve` | Mark dunning case resolved |
-| `POST` | `/api/v1/sepa/mandates` | Register SEPA mandate |
+| `POST` | `/api/v1/sepa/mandates` | Register SEPA mandate (IBAN validated via mod-97) |
 | `GET` | `/api/v1/sepa/mandates/{id}` | Fetch mandate |
 | `POST` | `/api/v1/sepa/run` | Generate pain.008 XML for all active Abschlag mandates |
 | `GET` | `/health` | Liveness |
 | `GET` | `/health/ready` | Readiness |
+
+---
+
+## Vorauszahlung (§40 Abs. 1 EnWG)
+
+`accountingd` stores the monthly advance payment both as a raw `abschlag_ct` column (for
+fast scheduler queries) and as a typed `rubo4e::current::Vorauszahlung` BO4E COM:
+
+```bash
+curl -s -X PUT "http://accountingd:9380/api/v1/accounts/51238696780/vorauszahlung?lf_mp_id=9900357000004" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "_typ": "VORAUSZAHLUNG",
+    "betrag": {
+      "_typ": "BETRAG",
+      "wert": "75.00",
+      "waehrung": "EUR"
+    },
+    "gueltigkeit": {
+      "_typ": "ZEITRAUM",
+      "startdatum": "2026-08-01"
+    }
+  }'
+```
+
+The `wert` is synced to `abschlag_ct` (EUR × 100 = ct). The GET returns the stored `Vorauszahlung`
+or falls back to a synthesised value from `abschlag_ct` when no typed BO4E object has been stored.
+
+---
+
+## IBAN validation
+
+Every SEPA mandate PUT validates the IBAN using the **ISO 13616 mod-97 algorithm**:
+
+1. Remove whitespace, uppercase.
+2. Move the first 4 characters to the end.
+3. Replace each letter with its numeric code (A=10 … Z=35).
+4. Compute the decimal value mod 97 in rolling 9-digit chunks.
+5. Valid if result == 1.
+
+Malformed IBANs are rejected at the API boundary with `HTTP 422` — before reaching the
+SEPA pain.008 XML generator. The validation logic is covered by **21 unit tests**
+(`cargo test -p accountingd --test unit_tests`), including DE, GB, NL, AT, and CH
+IBAN formats, checksum failures, length errors, and lowercase normalization.
 
 ---
 

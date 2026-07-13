@@ -8,6 +8,10 @@ license.workspace     = true
 repository.workspace  = true
 rust-version.workspace = true
 
+[lib]
+name = "portald"
+path = "src/lib.rs"
+
 [[bin]]
 name = "portald"
 path = "src/main.rs"

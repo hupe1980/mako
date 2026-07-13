@@ -545,6 +545,10 @@ the entire scheduler implementation.
 
 ## Testing strategy
 
+Every service is structured as a **lib + binary crate**: `src/lib.rs` re-exports all
+modules as `pub`, and `src/main.rs` is a thin driver. This enables `tests/` integration
+test files that `use {service_name}::*` without any database or HTTP infrastructure.
+
 | Layer | Test type | Tooling |
 |---|---|---|
 | EDIFACT parse/validate | Unit + property | `edi-energy` tests, `cargo-fuzz` (1 100+ corpus entries) |
@@ -553,6 +557,17 @@ the entire scheduler implementation.
 | Deadline arithmetic | Unit | `fristen` crate with Germany public holiday fixtures |
 | CloudEvents delivery | Integration | `OutboxErpWorker` test with mock HTTP server |
 | AS4 inbound routing | Integration | `e2e_ahb_conformance.rs` — real fixture EDIFACT → full pipeline |
+| EEG settlement formulas | Unit (no DB) | `cargo test -p einsd --test settlement_tests` (18 tests) |
+| IBAN mod-97 algorithm | Unit (no DB) | `cargo test -p accountingd --test unit_tests` (21 tests) |
+| Billing arithmetic | Unit (no DB) | `cargo test -p billingd --test calculator_tests` (15 tests) |
+
+Run all pure-logic tests without a database:
+
+```bash
+cargo test -p billingd --test calculator_tests \
+           -p accountingd --test unit_tests \
+           -p einsd --test settlement_tests
+```
 
 ---
 

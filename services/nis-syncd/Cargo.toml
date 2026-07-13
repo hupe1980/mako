@@ -8,6 +8,10 @@ license.workspace     = true
 repository.workspace  = true
 rust-version.workspace = true
 
+[lib]
+name = "nis_syncd"
+path = "src/lib.rs"
+
 [[bin]]
 name = "nis-syncd"
 path = "src/main.rs"

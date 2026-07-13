@@ -48,13 +48,8 @@
 //! | `GET` | `/health` | Liveness |
 //! | `GET` | `/health/ready` | Readiness |
 
-mod calculator;
-mod clients;
-mod config;
-mod handlers;
-mod pg;
-mod xrechnung;
 
+use billingd::{calculator, clients, config, handlers, pg, xrechnung};
 use anyhow::Context as _;
 use axum::{
     Extension, Router,

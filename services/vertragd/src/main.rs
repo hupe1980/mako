@@ -52,12 +52,8 @@
 //! | `POST` | `/api/v1/vertraege/{id}/kuendigen` | Terminate contract (Lieferende) |
 //! | `POST` | `/api/v1/events` | Inbound CloudEvents from makod / processd |
 
-mod config;
-mod events;
-mod handlers;
-mod mcp_server;
-mod pg;
 
+use vertragd::{config, events, handlers, mcp_server, pg};
 use anyhow::Context as _;
 use axum::{
     Extension, Router,
@@ -140,6 +136,11 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/vertraege/:id/tarifwechsel",
             post(handlers::tarifwechsel_vertrag),
+        )
+        // Preisgarantie typed BO4E REST resource (guard on tarifwechsel enforces it)
+        .route(
+            "/api/v1/vertraege/:id/preisgarantie",
+            get(handlers::get_preisgarantie).put(handlers::put_preisgarantie),
         )
         // CloudEvent webhook
         .route("/api/v1/events", post(handlers::post_cloud_event))

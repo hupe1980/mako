@@ -17,11 +17,8 @@
 //! | `GET`  | `/health` | Liveness check |
 //! | `GET`  | `/health/ready` | Readiness check |
 
-mod billing;
-mod config;
-mod handlers;
-mod pg;
 
+use netzbilanzd::{billing, config, handlers, pg};
 use anyhow::Context as _;
 use axum::{
     Extension, Router,

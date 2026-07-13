@@ -37,11 +37,8 @@
 //! | `GET`  | `/health/live` | Liveness probe |
 //! | `GET`  | `/health/ready` | Readiness probe |
 
-mod config;
-mod handlers;
-mod mcp_server;
-mod sync;
 
+use nis_syncd::{config, handlers, mcp_server, sync};
 use anyhow::Context as _;
 use axum::{Extension, Router};
 use mako_service::{health::health_routes, load_config};

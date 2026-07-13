@@ -18,12 +18,12 @@ use crate::{
         CreateKundeInput, CreateRahmenvertragInput, CreateVersorgungsvertragInput, KuendigungInput,
         TarifwechselInput, UpdateKundeInput, UpsertIdentitaetInput, derive_vertrag_status,
         extract_sub_from_bearer, fetch_identitaet_by_sub, fetch_komponente, fetch_kunde,
-        fetch_kunde_by_sub, fetch_person, fetch_vertrag, idempotent_event, insert_rahmenvertrag,
-        insert_versorgungsvertrag, list_aktive_malo_ids, list_identitaeten, list_komponenten,
-        list_offene_vertraege, list_rahmenvertraege_by_kunde, list_rahmenvertrag_malos,
-        list_vertraege_by_kunde, store_pending_tarifwechsel, update_komponente_product,
-        update_komponente_status, update_kunde, update_vertrag_status, upsert_identitaet,
-        upsert_kunde, upsert_person,
+        fetch_kunde_by_sub, fetch_person, fetch_preisgarantie, fetch_vertrag, idempotent_event,
+        insert_rahmenvertrag, insert_versorgungsvertrag, list_aktive_malo_ids, list_identitaeten,
+        list_komponenten, list_offene_vertraege, list_rahmenvertraege_by_kunde,
+        list_rahmenvertrag_malos, list_vertraege_by_kunde, store_pending_tarifwechsel,
+        update_komponente_product, update_komponente_status, update_kunde, update_vertrag_status,
+        upsert_identitaet, upsert_kunde, upsert_person, upsert_preisgarantie,
     },
 };
 
@@ -538,7 +538,37 @@ pub async fn tarifwechsel_vertrag(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
+    // ── Preisgarantie guard (§ contractual price-lock) ───────────────────────
+    // If the contract has an active price guarantee (preisgarantie_bis ≥ today),
+    // a Tarifwechsel that would increase prices is a contractual breach.
+    // We reject any Tarifwechsel whose wirksamkeit falls within the guarantee
+    // window unless the caller explicitly opts out with `override_preisgarantie=true`.
+    // This guard protects the LF from accidentally violating B2B/B2C price-lock
+    // clauses that Wilken ENER:GY and SAP IS-U enforce natively.
     let today = time::OffsetDateTime::now_utc().date();
+    if !input.override_preisgarantie {
+        match fetch_vertrag(&pool, vertrag_id, &cfg.tenant).await {
+            Ok(Some(v)) => {
+                if let Some(garantie_bis) = v.preisgarantie_bis {
+                    if input.wirksamkeit <= garantie_bis {
+                        return (
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            Json(serde_json::json!({
+                                "error": "Tarifwechsel blocked by Preisgarantie",
+                                "preisgarantie_bis": garantie_bis.to_string(),
+                                "wirksamkeit": input.wirksamkeit.to_string(),
+                                "hint": "Set override_preisgarantie=true to bypass (operator use only)"
+                            })),
+                        )
+                            .into_response();
+                    }
+                }
+            }
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    }
+
     let is_future = input.wirksamkeit > today;
 
     if is_future {
@@ -992,6 +1022,103 @@ pub async fn get_rahmenvertrag_malos(
 ) -> impl IntoResponse {
     match list_rahmenvertrag_malos(&pool, id, &cfg.tenant).await {
         Ok(rows) => Json(rows).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── Preisgarantie typed REST resource ───────────────────────────────
+
+/// `PUT /api/v1/vertraege/{id}/preisgarantie`
+///
+/// Store or replace the BO4E `Preisgarantie` COM for a contract.
+///
+/// Body: `rubo4e::current::Preisgarantie` JSON (camelCase).
+///
+/// The `tarifwechsel` endpoint already enforces the guarantee window —
+/// this endpoint exposes the structured metadata for ERP systems to
+/// display guarantee windows in customer-facing UIs.
+///
+/// Emits `de.vertrag.preisgarantie.updated`.
+pub async fn put_preisgarantie(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(vertrag_id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use rubo4e::current::Preisgarantie;
+
+    let typed: Preisgarantie = match serde_json::from_value(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("invalid Preisgarantie payload: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let canonical = match serde_json::to_value(&typed) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    // Extract preisgarantie_bis from zeitlicheGueltigkeit.enddatum for the guard column.
+    let bis = canonical
+        .pointer("/zeitlicheGueltigkeit/enddatum")
+        .and_then(|v| v.as_str())
+        .and_then(|s| {
+            let parts: Vec<&str> = s.splitn(4, '-').collect();
+            if parts.len() >= 3 {
+                let y: i32 = parts[0].parse().ok()?;
+                let m: u8 = parts[1].parse().ok()?;
+                let d: u8 = parts[2].parse().ok()?;
+                let month = time::Month::try_from(m).ok()?;
+                time::Date::from_calendar_date(y, month, d).ok()
+            } else {
+                None
+            }
+        });
+
+    match upsert_preisgarantie(&pool, vertrag_id, &cfg.tenant, canonical, bis).await {
+        Ok(()) => {
+            // Emit CloudEvent to ERP.
+            if let Some(ref url) = cfg.erp_webhook_url {
+                let ce = build_cloud_event(
+                    "preisgarantie_updated",
+                    vertrag_id,
+                    &cfg.tenant,
+                    serde_json::json!({ "vertrag_id": vertrag_id }),
+                );
+                let client = reqwest::Client::new();
+                let _ = client.post(url).json(&ce).send().await;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/vertraege/{id}/preisgarantie`
+///
+/// Retrieve the stored BO4E `Preisgarantie` COM for a contract.
+///
+/// Returns 404 when the contract exists but no `Preisgarantie` has been stored
+/// (i.e. the contract has no price-lock clause).
+pub async fn get_preisgarantie(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(vertrag_id): Path<Uuid>,
+) -> impl IntoResponse {
+    match fetch_preisgarantie(&pool, vertrag_id, &cfg.tenant).await {
+        Ok(Some(p)) => Json(p).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "no Preisgarantie stored for this contract (no price-lock clause)"
+            })),
+        )
+            .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

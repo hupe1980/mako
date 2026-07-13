@@ -293,7 +293,7 @@ dependencies = [
  "miniz_oxide",
  "num-bigint",
  "quad-rand",
- "rand 0.9.4",
+ "rand 0.9.5",
  "regex-lite",
  "serde",
  "serde_bytes",
@@ -1513,9 +1513,9 @@ checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
 
 [[package]]
 name = "bytemuck"
-version = "1.25.0"
+version = "1.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
+checksum = "d6aedf8ae72766347502cf3cb4f41cf5e9cc37d28bee90f1fdaaae15f9cf9424"
 
 [[package]]
 name = "byteorder"
@@ -1578,7 +1578,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8144c22e24bbcf26ade86cb6501a0916c46b7e4787abdb0045a467eb1645a1d"
 dependencies = [
  "ambient-authority",
- "rand 0.8.6",
+ "rand 0.8.7",
 ]
 
 [[package]]
@@ -1660,9 +1660,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.66"
+version = "1.2.67"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5d6cac793997bd970000024b2934968efe83b382de4fdcf4fcb46b6ee4ad996"
+checksum = "e17dd265a7d0f31ef544e1b20e03add05d3b45b491b633b10d67145d2acc1a38"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -2634,7 +2634,7 @@ dependencies = [
  "object_store 0.12.5",
  "parking_lot",
  "parquet",
- "rand 0.9.4",
+ "rand 0.9.5",
  "regex",
  "sqlparser 0.59.0",
  "tempfile",
@@ -2684,7 +2684,7 @@ dependencies = [
  "log",
  "object_store 0.13.2",
  "parking_lot",
- "rand 0.9.4",
+ "rand 0.9.5",
  "regex",
  "sqlparser 0.61.0",
  "tempfile",
@@ -2886,7 +2886,7 @@ dependencies = [
  "liblzma",
  "log",
  "object_store 0.12.5",
- "rand 0.9.4",
+ "rand 0.9.5",
  "tokio",
  "tokio-util",
  "url",
@@ -2917,7 +2917,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "object_store 0.13.2",
- "rand 0.9.4",
+ "rand 0.9.5",
  "tokio",
  "url",
 ]
@@ -3120,7 +3120,7 @@ dependencies = [
  "log",
  "object_store 0.12.5",
  "parking_lot",
- "rand 0.9.4",
+ "rand 0.9.5",
  "tempfile",
  "url",
 ]
@@ -3143,7 +3143,7 @@ dependencies = [
  "log",
  "object_store 0.13.2",
  "parking_lot",
- "rand 0.9.4",
+ "rand 0.9.5",
  "tempfile",
  "url",
 ]
@@ -3243,7 +3243,7 @@ dependencies = [
  "log",
  "md-5 0.10.6",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.9.5",
  "regex",
  "sha2 0.10.9",
  "unicode-segmentation",
@@ -3275,7 +3275,7 @@ dependencies = [
  "md-5 0.10.6",
  "memchr",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.9.5",
  "regex",
  "sha2 0.10.9",
  "unicode-segmentation",
@@ -4245,6 +4245,7 @@ dependencies = [
  "reqwest 0.13.1",
  "rmcp",
  "rust_decimal",
+ "rust_decimal_macros",
  "schemars 1.2.1",
  "secrecy",
  "serde",
@@ -4548,7 +4549,7 @@ checksum = "c6f4a147ba57fcd64323c54c8f69fd4e045456a99574163010ccf5eea3168aaa"
 dependencies = [
  "log",
  "once_cell",
- "rand 0.9.4",
+ "rand 0.9.5",
  "tokio",
 ]
 
@@ -4872,7 +4873,7 @@ dependencies = [
  "mea",
  "parking_lot",
  "pin-project",
- "rand 0.9.4",
+ "rand 0.9.5",
  "serde",
  "tracing",
  "twox-hash",
@@ -4932,7 +4933,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7af6e24ed12cf382082d5a7f365df2b8e3d6b1518f615d54c85165e9b9718250"
 dependencies = [
  "arrow-array 58.3.0",
- "rand 0.9.4",
+ "rand 0.9.5",
 ]
 
 [[package]]
@@ -5218,7 +5219,7 @@ dependencies = [
  "parking_lot",
  "portable-atomic",
  "quanta",
- "rand 0.8.6",
+ "rand 0.8.7",
  "smallvec",
  "spinning_top",
 ]
@@ -5618,7 +5619,7 @@ dependencies = [
  "once_cell",
  "ordered-float 4.6.0",
  "parquet",
- "rand 0.9.4",
+ "rand 0.9.5",
  "reqwest 0.12.28",
  "roaring",
  "serde",
@@ -6245,7 +6246,7 @@ dependencies = [
  "nom 8.0.0",
  "num-traits",
  "ordered-float 5.3.0",
- "rand 0.9.4",
+ "rand 0.9.5",
  "serde",
  "serde_json",
  "zmij",
@@ -6338,7 +6339,7 @@ dependencies = [
  "lz4_flex 0.11.6",
  "parking_lot",
  "pbkdf2",
- "rand 0.9.4",
+ "rand 0.9.5",
  "rustls",
  "sha2 0.10.9",
  "snap",
@@ -6443,7 +6444,7 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
- "rand 0.9.4",
+ "rand 0.9.5",
  "rayon",
  "roaring",
  "rustc-hash",
@@ -6478,7 +6479,7 @@ dependencies = [
  "half",
  "jsonb",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.9.5",
 ]
 
 [[package]]
@@ -6546,7 +6547,7 @@ dependencies = [
  "object_store 0.13.2",
  "pin-project",
  "prost",
- "rand 0.9.4",
+ "rand 0.9.5",
  "roaring",
  "serde_json",
  "snafu 0.9.1",
@@ -6605,7 +6606,7 @@ dependencies = [
  "futures",
  "half",
  "hex",
- "rand 0.9.4",
+ "rand 0.9.5",
  "rand_distr",
  "rand_xoshiro 0.7.0",
 ]
@@ -6650,7 +6651,7 @@ dependencies = [
  "num-traits",
  "prost",
  "prost-build",
- "rand 0.9.4",
+ "rand 0.9.5",
  "strum 0.26.3",
  "tokio",
  "tracing",
@@ -6742,7 +6743,7 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
- "rand 0.9.4",
+ "rand 0.9.5",
  "rand_distr",
  "rangemap",
  "rayon",
@@ -6788,7 +6789,7 @@ dependencies = [
  "path_abs",
  "pin-project",
  "prost",
- "rand 0.9.4",
+ "rand 0.9.5",
  "serde",
  "tempfile",
  "tokio",
@@ -6810,7 +6811,7 @@ dependencies = [
  "lance-arrow",
  "lance-core",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.9.5",
 ]
 
 [[package]]
@@ -6850,7 +6851,7 @@ dependencies = [
  "lance-table",
  "log",
  "object_store 0.13.2",
- "rand 0.9.4",
+ "rand 0.9.5",
  "roaring",
  "serde_json",
  "time",
@@ -6916,7 +6917,7 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
- "rand 0.9.4",
+ "rand 0.9.5",
  "rangemap",
  "roaring",
  "semver",
@@ -6941,7 +6942,7 @@ dependencies = [
  "lance-arrow",
  "num-traits",
  "pprof",
- "rand 0.9.4",
+ "rand 0.9.5",
 ]
 
 [[package]]
@@ -7009,7 +7010,7 @@ dependencies = [
  "num-traits",
  "object_store 0.13.2",
  "pin-project",
- "rand 0.9.4",
+ "rand 0.9.5",
  "regex",
  "semver",
  "serde",
@@ -8204,7 +8205,7 @@ dependencies = [
  "num-integer",
  "num-iter",
  "num-traits",
- "rand 0.8.6",
+ "rand 0.8.7",
  "smallvec",
  "zeroize",
 ]
@@ -8626,7 +8627,7 @@ dependencies = [
  "opentelemetry",
  "percent-encoding",
  "portable-atomic",
- "rand 0.9.4",
+ "rand 0.9.5",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -9008,7 +9009,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d"
 dependencies = [
  "phf_shared 0.11.3",
- "rand 0.8.6",
+ "rand 0.8.7",
 ]
 
 [[package]]
@@ -9160,9 +9161,9 @@ dependencies = [
 
 [[package]]
 name = "polyval"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dfc63250416fea14f5749b90725916a6c903f599d51cb635aa7a52bfd03eede"
+checksum = "b20f20e954175de5f463f67781b35583397d916b1d148738923711b2ad16bee8"
 dependencies = [
  "cpubits",
  "cpufeatures 0.3.0",
@@ -9219,9 +9220,9 @@ dependencies = [
 
 [[package]]
 name = "postgres-protocol"
-version = "0.6.11"
+version = "0.6.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56201207dac53e2f38e848e31b4b91616a6bb6e0c7205b77718994a7f49e70fc"
+checksum = "08808e3c483c46e999108051c78334f473d5adb59d78bb80a1268c7e6aa6c514"
 dependencies = [
  "base64",
  "byteorder",
@@ -9237,9 +9238,9 @@ dependencies = [
 
 [[package]]
 name = "postgres-types"
-version = "0.2.13"
+version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dc729a129e682e8d24170cd30ae1aa01b336b096cbb56df6d534ffec133d186"
+checksum = "851ca9db4932932d69f3ea811b1abe63087a0f740a47692619dd40d4899b68be"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -9451,7 +9452,7 @@ dependencies = [
  "bit-vec",
  "bitflags 2.13.0",
  "num-traits",
- "rand 0.9.4",
+ "rand 0.9.5",
  "rand_chacha 0.9.0",
  "rand_xorshift",
  "regex-syntax",
@@ -9760,9 +9761,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.8.6"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a"
+checksum = "22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a"
 dependencies = [
  "libc",
  "rand_chacha 0.3.1",
@@ -9771,9 +9772,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.9.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
+checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
 dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.5",
@@ -9841,7 +9842,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8615d50dcf34fa31f7ab52692afec947c4dd0ab803cc87cb3b0b4570ff7463"
 dependencies = [
  "num-traits",
- "rand 0.9.4",
+ "rand 0.9.5",
 ]
 
 [[package]]
@@ -10124,7 +10125,7 @@ dependencies = [
  "log",
  "percent-encoding",
  "quick-xml 0.37.5",
- "rand 0.8.6",
+ "rand 0.8.7",
  "reqwest 0.12.28",
  "rsa",
  "rust-ini",
@@ -10503,7 +10504,7 @@ dependencies = [
  "bytes",
  "num-traits",
  "postgres-types",
- "rand 0.8.6",
+ "rand 0.8.7",
  "rkyv 0.7.46",
  "serde",
  "serde_json",
@@ -11075,9 +11076,9 @@ dependencies = [
 
 [[package]]
 name = "sha1"
-version = "0.10.6"
+version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
@@ -11230,7 +11231,7 @@ dependencies = [
  "object_store 0.14.0",
  "ouroboros",
  "parking_lot",
- "rand 0.9.4",
+ "rand 0.9.5",
  "serde",
  "serde_json",
  "siphasher",
@@ -11257,7 +11258,7 @@ dependencies = [
  "chrono",
  "log",
  "object_store 0.14.0",
- "rand 0.9.4",
+ "rand 0.9.5",
  "rand_xoshiro 0.7.0",
  "serde",
  "thread_local",
@@ -11595,7 +11596,7 @@ dependencies = [
  "memchr",
  "once_cell",
  "percent-encoding",
- "rand 0.8.6",
+ "rand 0.8.7",
  "rsa",
  "rust_decimal",
  "serde",
@@ -11636,7 +11637,7 @@ dependencies = [
  "md-5 0.10.6",
  "memchr",
  "once_cell",
- "rand 0.8.6",
+ "rand 0.8.7",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -12163,9 +12164,9 @@ dependencies = [
 
 [[package]]
 name = "thread_local"
-version = "1.1.9"
+version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
+checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
 dependencies = [
  "cfg-if",
 ]
@@ -12261,9 +12262,9 @@ dependencies = [
 
 [[package]]
 name = "tinyvec"
-version = "1.11.0"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e61e67053d25a4e82c844e8424039d9745781b3fc4f32b8d55ed50f5f667ef3"
+checksum = "bb4ebadaa0af04fab11ae01eb5f9fdb5f9c5b875506e210e71c07873528baa7f"
 dependencies = [
  "tinyvec_macros",
 ]
@@ -12701,7 +12702,7 @@ dependencies = [
  "http",
  "httparse",
  "log",
- "rand 0.9.4",
+ "rand 0.9.5",
  "rustls",
  "rustls-pki-types",
  "sha1",
@@ -12714,7 +12715,7 @@ version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
 dependencies = [
- "rand 0.9.4",
+ "rand 0.9.5",
 ]
 
 [[package]]
@@ -12785,7 +12786,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "470dbf6591da1b39d43c14523b2b469c86879a53e8b758c8e090a470fe7b1fbe"
 dependencies = [
- "rand 0.9.4",
+ "rand 0.9.5",
  "serde",
  "web-time",
 ]
@@ -13042,9 +13043,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.23.4"
+version = "1.23.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf80a72845275afea99e7f2b434723d3bc7e38470fcd1c7ed39a599c73319a53"
+checksum = "ea5fab0d6c3c01ae70085a09cb03d4c7a1d6314e2b3e075392783396d724ca0a"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -14433,9 +14434,9 @@ checksum = "b142a20ec14a91d5bc708c1dc21b080c550113d8aa77afa29635673a65dd02c5"
 
 [[package]]
 name = "zmij"
-version = "1.0.21"
+version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+checksum = "bd2f034a4bebf216c9e4b7083603e024cf930873fd67830cfb083c9fa33129d9"
 
 [[package]]
 name = "zopfli"

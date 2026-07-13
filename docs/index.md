@@ -361,7 +361,7 @@ mako consists of 16 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/einsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">einsd</span>
     <span class="mako-service-card__port">:9180</span>
-    <span class="mako-service-card__desc">Einspeiser registry. 8 EEG/KWKG settlement models. Repowering §22 EEG. Built-in rate table 2000–2023.</span>
+    <span class="mako-service-card__desc">Einspeiser registry. 8 EEG/KWKG settlement models. Repowering §22. Foerderendedatum alerts. Built-in rate table EEG 2000–2023 + KWKG 2023.</span>
   </a>
   <a href="{{ '/obsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">obsd</span>
@@ -385,12 +385,12 @@ mako consists of 16 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/billingd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">billingd</span>
     <span class="mako-service-card__port">:9280</span>
-    <span class="mako-service-card__desc">Energy billing engine. §41a dynamic EPEX. Gas Brennwertkorrektur. §14a Modul 1/3. XRechnung 3.0.</span>
+    <span class="mako-service-card__desc">Energy billing engine. §41a dynamic EPEX. Gas Brennwertkorrektur + H2-blend audit. §14a Modul 1/3. §42a GGV community solar. XRechnung 3.0 / ZUGFeRD 2.3.</span>
   </a>
   <a href="{{ '/accountingd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">accountingd</span>
     <span class="mako-service-card__port">:9380</span>
-    <span class="mako-service-card__desc">Massenkontokorrent ledger. CAMT.054 bank import. SEPA pain.008 XML. Mahnwesen Mahnstufe 1–3.</span>
+    <span class="mako-service-card__desc">Massenkontokorrent ledger. CAMT.054 bank import. SEPA pain.008 XML (N−5 scheduler). Vorauszahlung BO4E. Mahnwesen Mahnstufe 1–3. IBAN mod-97 validation.</span>
   </a>
 </div>
 
@@ -399,7 +399,7 @@ mako consists of 16 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/vertragd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">vertragd</span>
     <span class="mako-service-card__port">:9780</span>
-    <span class="mako-service-card__desc">Contract &amp; Customer Management. Kunden (B2C+B2B). Rahmenverträge. kunden_identitaeten (N portal users). Tarifwechsel. OIDC→MaLo auth gateway.</span>
+    <span class="mako-service-card__desc">Contract &amp; Customer Management. Kunden (B2C+B2B). Rahmenverträge. kunden_identitaeten (N portal users). Tarifwechsel with Preisgarantie guard. Person BO4E (GDPR Art. 15). OIDC→MaLo auth gateway.</span>
   </a>
   <a href="{{ '/portald' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">portald</span>

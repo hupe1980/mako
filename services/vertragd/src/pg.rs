@@ -192,6 +192,11 @@ pub struct TarifwechselInput {
     /// Optional reason for audit trail.
     #[allow(dead_code)]
     pub grund: Option<String>,
+    /// Operator override: bypass `preisgarantie_bis` contract-lock guard.
+    /// Must only be set by operators with explicit customer consent (price-lock waiver).
+    /// Default `false` — normal requests are blocked when within the guarantee window.
+    #[serde(default)]
+    pub override_preisgarantie: bool,
 }
 
 #[allow(dead_code)]
@@ -978,4 +983,47 @@ pub async fn find_tarifwechsel_needing_notif(
     .bind(window_end)
     .fetch_all(pool)
     .await?)
+}
+
+// ── Preisgarantie typed REST resource ─────────────────────────────────────────
+
+/// Store or replace the BO4E `Preisgarantie` COM JSON for a Versorgungsvertrag.
+///
+/// Also updates the `preisgarantie_bis` date column (used by the `tarifwechsel`
+/// guard to reject price-lock violations without loading the full JSONB).
+pub async fn upsert_preisgarantie(
+    pool: &PgPool,
+    vertrag_id: Uuid,
+    tenant: &str,
+    preisgarantie: serde_json::Value,
+    bis: Option<time::Date>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE versorgungsvertraege \
+         SET preisgarantie = $3, preisgarantie_bis = $4, updated_at = now() \
+         WHERE id = $1 AND tenant = $2",
+    )
+    .bind(vertrag_id)
+    .bind(tenant)
+    .bind(&preisgarantie)
+    .bind(bis)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Fetch the stored `Preisgarantie` BO JSON for a Versorgungsvertrag, or `None` if not set.
+pub async fn fetch_preisgarantie(
+    pool: &PgPool,
+    vertrag_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let row = sqlx::query(
+        "SELECT preisgarantie FROM versorgungsvertraege WHERE id=$1 AND tenant=$2",
+    )
+    .bind(vertrag_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|r| r.try_get::<serde_json::Value, _>("preisgarantie").ok()))
 }

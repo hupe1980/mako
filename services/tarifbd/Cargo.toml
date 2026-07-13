@@ -8,6 +8,10 @@ license.workspace     = true
 repository.workspace  = true
 rust-version.workspace = true
 
+[lib]
+name = "tarifbd"
+path = "src/lib.rs"
+
 [[bin]]
 name = "tarifbd"
 path = "src/main.rs"

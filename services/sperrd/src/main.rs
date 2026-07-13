@@ -21,10 +21,8 @@
 //! | `GET`   | `/health` | Liveness check |
 //! | `GET`   | `/health/ready` | Readiness check |
 
-mod config;
-mod handlers;
-mod pg;
 
+use sperrd::{config, handlers, pg};
 use anyhow::Context as _;
 use axum::{Extension, Router, routing::get};
 use mako_markt::makod_client::MakodClient;

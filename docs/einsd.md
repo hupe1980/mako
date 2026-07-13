@@ -91,6 +91,13 @@ German EEG/KWKG law requires the grid operator (NB) to:
 **KWKG rates** by plant size: ≤50 kW = 8.0 ct, 50–100 kW = 6.0 ct, 100–250 kW = 5.0 ct,
 250 kW–2 MW = 4.4 ct, >2 MW = 3.1 ct (§7 Abs. 1 KWKG 2023, valid from 01.01.2023).
 
+**Precision:** All arithmetic uses `rust_decimal::Decimal` — never `f64`. The
+`DIREKTVERMARKTUNG` Marktprämie is clamped to zero with `max(0, AW − EPEX)`: when EPEX
+prices exceed the Anzulegender Wert (negative spread), the prämie is zero — there is no
+clawback mechanism in German law.
+
+**Settlement formulas are covered by 18 unit tests** (`cargo test -p einsd --test settlement_tests`), including negative-spread clamping, Repowering Förderdauer reset, Decimal precision, and KWKG rate correctness.
+
 ---
 
 ## Repowering (§22 EEG 2023)

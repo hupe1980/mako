@@ -131,6 +131,13 @@ MwSt                    [from billingd.toml] 19%
 Supply `gas_meter.messung_qm3` + `brennwert_kwh_per_qm3` + `zustandszahl` in the request.
 `billingd` computes `kWh_Hs = m³ × Hs × Z` and uses it for all price positions.
 
+**H2-blend / `gasqualitaet`:** Supply the optional `gasqualitaet` field from
+`marktd.malo.gasqualitaet` (e.g. `"H_GAS"`, `"L_GAS"`, `"H2_BLEND"`). The field does **not**
+alter the billing amount — per DVGW G 260, `edmd` already reports the measured Brennwert
+reflecting the actual gas blend. `billingd` records `gasqualitaet` as a `ZusatzAttribut` on
+the `Rechnung` for regulatory audit transparency, enabling operators to trace billing periods
+during H2-blend transitions.
+
 ### WAERME — District Heat (Fernwärme)
 
 ```

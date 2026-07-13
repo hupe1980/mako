@@ -23,11 +23,8 @@
 //!
 //! Port: `:9380`
 
-mod config;
-mod handlers;
-mod pg;
-mod sepa;
 
+use accountingd::{config, handlers, pg, sepa};
 use anyhow::Context as _;
 use axum::{
     Extension, Router,
@@ -124,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
                 let now_utc = time::OffsetDateTime::now_utc();
                 let today = now_utc.date();
                 let day_of_month = today.day() as i16;
-                match crate::pg::find_accounts_due(&pool_bg, &tenant_bg, day_of_month).await {
+                match accountingd::pg::find_accounts_due(&pool_bg, &tenant_bg, day_of_month).await {
                     Ok(accounts) if !accounts.is_empty() => {
                         tracing::info!(
                             day = day_of_month,
@@ -138,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
                                 today.year(),
                                 today.month() as u8
                             );
-                            if let Err(e) = crate::pg::write_entry(
+                            if let Err(e) = accountingd::pg::write_entry(
                                 &pool_bg,
                                 acct.account_id,
                                 &tenant_bg,
@@ -194,7 +191,7 @@ async fn main() -> anyhow::Result<()> {
                 let target_date = today + time::Duration::days(5);
                 let target_billing_day = target_date.day() as i16;
 
-                match crate::pg::find_accounts_due_for_sepa(
+                match accountingd::pg::find_accounts_due_for_sepa(
                     &pool_sepa,
                     &cfg_sepa.tenant,
                     target_billing_day,
@@ -209,13 +206,13 @@ async fn main() -> anyhow::Result<()> {
                         );
 
                         // Build pain.008 XML batch
-                        let entries: Vec<(&crate::pg::SepaMandateRow, i64)> =
+                        let entries: Vec<(&accountingd::pg::SepaMandateRow, i64)> =
                             pairs.iter().map(|(m, a)| (m, a.abschlag_ct)).collect();
                         let creditor_iban = cfg_sepa
                             .creditor_iban
                             .as_deref()
                             .unwrap_or("DE00000000000000000000");
-                        let pain_xml = crate::sepa::build_pain_008(creditor_iban, &entries);
+                        let pain_xml = accountingd::sepa::build_pain_008(creditor_iban, &entries);
 
                         // Emit `de.accounting.payment.due` CE to ERP webhook
                         if let Some(ref url) = cfg_sepa.erp_webhook_url {

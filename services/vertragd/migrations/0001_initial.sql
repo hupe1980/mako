@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS versorgungsvertraege (
     -- Terms
     kundentyp           TEXT        NOT NULL,          -- B2C | B2B_SLP | B2B_RLM | B2B_HV
     preisgarantie_bis   DATE,
+    preisgarantie       JSONB,                         -- BO4E Preisgarantie COM (typed; synced with preisgarantie_bis)
     kuendigungsfrist_monate INT NOT NULL DEFAULT 1,
     auto_renewal        BOOLEAN     NOT NULL DEFAULT false,
     renewal_monate      INT         NOT NULL DEFAULT 12,

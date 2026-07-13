@@ -239,6 +239,8 @@ pub struct GasMeterInput {
     /// Volume as measured by the meter (m³, at meter conditions).
     pub messung_qm3: Decimal,
     /// Calorific value (Brennwert) in kWh/m³ — from metering point.
+    /// For H2-blended gas this already reflects the actual blended Brennwert
+    /// as reported by the grid operator via MSCONS / DVGW G 260.
     #[serde(default)]
     pub brennwert_kwh_per_qm3: Option<Decimal>,
     /// Compressibility factor (Zustandszahl) — from metering point.
@@ -247,6 +249,12 @@ pub struct GasMeterInput {
     /// Pre-computed kWh_Hs (takes precedence over Brennwert × Zustandszahl).
     #[serde(default)]
     pub kwh_hs: Option<Decimal>,
+    /// Gas quality from `marktd.malo.gasqualitaet` (e.g. `"H_GAS"`, `"L_GAS"`, `"H2_BLEND"`).
+    /// When set, recorded as `ZusatzAttribut` on the Rechnung for regulatory audit transparency.
+    /// The Brennwert used for billing is ALWAYS the measured value from `edmd` — this field
+    /// is for documentation purposes, not for applying a separate correction factor.
+    #[serde(default)]
+    pub gasqualitaet: Option<String>,
 }
 
 /// Fernwärme metering input.
@@ -1469,7 +1477,7 @@ pub fn calculate_gas(
         notes: None,
     };
     let doc = t.bill(meta, meter)?;
-    Ok(billing_result_from_doc(
+    let mut result = billing_result_from_doc(
         doc,
         malo_id,
         lf_mp_id,
@@ -1477,7 +1485,25 @@ pub fn calculate_gas(
         period_from,
         period_to,
         "ABSCHLAGSRECHNUNG",
-    ))
+    );
+    // Inject gas quality metadata as ZusatzAttribut for regulatory audit transparency.
+    // Per DVGW G 260: the Brennwert used for billing is always the measured value reported
+    // by the grid operator — this is purely an audit annotation, not a correction factor.
+    if let Some(ref gq) = meter.gasqualitaet {
+        if let Some(obj) = result.rechnung_json.as_object_mut() {
+            let attrs = obj
+                .entry("zusatzAttribute")
+                .or_insert_with(|| serde_json::Value::Array(vec![]));
+            if let Some(arr) = attrs.as_array_mut() {
+                arr.push(serde_json::json!({
+                    "_typ": "ZUSATZ_ATTRIBUT",
+                    "name": "gasqualitaet",
+                    "wert": gq
+                }));
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// Calculate a district heat (Fernwärme) billing invoice (WAERME).
@@ -1825,6 +1851,7 @@ mod tests {
             brennwert_kwh_per_qm3: Some(dec!(10.55)),
             zustandszahl: Some(dec!(0.9994)),
             kwh_hs: None,
+            gasqualitaet: None,
         };
         let kwh = gas_kwh_hs(&meter);
         assert!(

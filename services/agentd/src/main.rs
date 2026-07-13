@@ -21,13 +21,8 @@
 //!
 //! ## Port: 9580
 
-mod agent;
-mod config;
-mod handlers;
-mod llm;
-mod mcp;
-mod rag;
 
+use agentd::{agent, config, handlers, llm, mcp, rag};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -35,18 +30,7 @@ use axum::{Router, routing::post};
 use mako_service::{health::health_routes, load_config};
 use tracing::info;
 
-use agent::{AgentRegistry, OrchestratorAgent};
-use config::AgentdConfig;
-use mcp::McpPool;
-use rag::RagEngine;
-
-pub struct AppState {
-    pub cfg: AgentdConfig,
-    pub orchestrator: OrchestratorAgent,
-    pub registry: AgentRegistry,
-    pub mcp: McpPool,
-    pub rag: Option<RagEngine>,
-}
+use agentd::{agent::{AgentRegistry, OrchestratorAgent}, config::AgentdConfig, handlers::AppState, mcp::McpPool, rag::RagEngine};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

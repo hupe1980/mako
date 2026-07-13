@@ -8,6 +8,10 @@ license.workspace     = true
 repository.workspace  = true
 rust-version.workspace = true
 
+[lib]
+name = "vertragd"
+path = "src/lib.rs"
+
 [[bin]]
 name = "vertragd"
 path = "src/main.rs"

@@ -41,10 +41,8 @@
 //!
 //! Port: `:9080`
 
-mod config;
-mod handlers;
-mod pg;
 
+use tarifbd::{config, handlers, pg};
 use anyhow::Context as _;
 use axum::{
     Extension, Router,
@@ -146,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
             loop {
-                match crate::pg::expire_stale_angebote(&pool_bg).await {
+                match tarifbd::pg::expire_stale_angebote(&pool_bg).await {
                     Ok(n) if n > 0 => {
                         tracing::info!(expired = n, "tarifbd: auto-expired stale Angebote")
                     }
