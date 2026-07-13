@@ -459,6 +459,11 @@ version = "0.6"
 reason  = "wasm-compose (via wasmtime 43/extism/mako-plugin) pins petgraph 0.6; iceberg uses 0.7; datafusion/lancedb use 0.8."
 
 [[bans.skip]]
+name    = "fixedbitset"
+version = "0.4"
+reason  = "companion to petgraph 0.6 (wasm-compose/wasmtime 43 chain); petgraph 0.7/0.8 use fixedbitset 0.5."
+
+[[bans.skip]]
 name    = "phf"
 version = "=0.11"
 reason  = "some crates require phf 0.11; workspace uses phf 0.12."
@@ -742,7 +747,13 @@ name    = "bitflags"
 version = "1"
 reason  = "Some ecosystem crates still depend on bitflags 1.x; workspace uses 2.x."
 
-# ── lz4_flex 0.12 vs 0.13 ────────────────────────────────────────────────────────
+# ── lz4_flex three-way split (0.11 / 0.12 / 0.13) ─────────────────────────────
+# krafka 0.12 pins lz4_flex 0.11; arrow 57 (lancedb/datafusion 52) pins 0.12; 0.13 is current.
+[[bans.skip]]
+name    = "lz4_flex"
+version = "0.11"
+reason  = "krafka 0.12 (mako-service kafka feature) pins lz4_flex 0.11; arrow 57 uses 0.12; 0.13 is current."
+
 [[bans.skip]]
 name    = "lz4_flex"
 version = "0.12"
@@ -826,9 +837,39 @@ name    = "socket2"
 version = "0.5"
 reason  = "krafka 0.12 (mako-service kafka feature) pins socket2 0.5; tokio/modern stack uses 0.6."
 
+[[bans.skip]]
+name    = "windows-sys"
+version = "0.52"
+reason  = "socket2 0.5 (krafka) pulls windows-sys 0.52; modern stack uses 0.59/0.61."
+
+[[bans.skip]]
+name    = "dashmap"
+version = "5"
+reason  = "governor 0.6 (mako-service rate-limit) pins dashmap 5; asx-rs/datafusion use dashmap 6."
+
 # ── rand_xoshiro 0.6 (wasm-compose/wasmtime 43) ─────────────────────────────
 # im-rc (via wasm-compose/wasmtime 43/extism/mako-plugin) pins rand_xoshiro 0.6;
 # lance-datagen/slatedb use 0.7.
+
+# ── addr2line / gimli / object split (backtrace vs wasmtime 43) ───────────────────
+# backtrace 0.3 (miette/cedar/pprof chain) uses addr2line 0.25/gimli 0.32/object 0.37.
+# wasmtime 43 (extism/mako-plugin WASM sandbox) uses addr2line 0.26/gimli 0.33/object 0.38.
+# Resolve when backtrace updates its addr2line/gimli/object deps.
+
+[[bans.skip]]
+name    = "addr2line"
+version = "0.25"
+reason  = "backtrace 0.3 (miette/cedar/pprof chain) uses addr2line 0.25; wasmtime 43 uses 0.26."
+
+[[bans.skip]]
+name    = "gimli"
+version = "0.32"
+reason  = "companion to addr2line 0.25 (backtrace chain); wasmtime 43 uses gimli 0.33."
+
+[[bans.skip]]
+name    = "object"
+version = "0.37"
+reason  = "ar_archive_writer/backtrace chain uses object 0.37; wasmtime 43 uses object 0.38."
 
 [[bans.skip]]
 name    = "rand_xoshiro"
