@@ -292,25 +292,6 @@ version = "0.48"
 reason  = "windows_x86_64_gnu 0.48 legacy path alongside newer version."
 
 
-# ── governor / prometheus transitive version skew (mako-service) ─────────────────
-# mako-service pulls governor 0.6 (rate-limit) → dashmap 5.5.3.
-# asx-rs (AS4 transport) pulls dashmap 6.2.1 directly. No shared state.
-[[bans.skip]]
-name    = "dashmap"
-version = "5"
-reason  = "governor 0.6 (mako-service rate-limit) pins dashmap 5; asx-rs uses 6. Resolve when governor bumps dashmap."
-
-# mako-service pulls prometheus 0.14 → procfs 0.17 → rustix 0.38 / linux-raw-sys 0.4.
-# asx-rs + fd-lock + modern stack pull rustix 1.x / linux-raw-sys 0.12.
-[[bans.skip]]
-name    = "rustix"
-version = "0.38"
-reason  = "prometheus 0.14 → procfs 0.17 → rustix 0.38; modern stack uses rustix 1.x. Resolve when prometheus bumps procfs."
-
-[[bans.skip]]
-name    = "linux-raw-sys"
-version = "0.4"
-reason  = "Companion to rustix 0.38 (prometheus/procfs chain); linux-raw-sys 0.12 pulled by rustix 1.x."
 
 # ── p256/ecdsa vs asx-rs const-oid split ─────────────────────────────────────────
 # p256/ecdsa (energy-api) use const-oid 0.9 (RustCrypto 2022 generation).
@@ -411,11 +392,6 @@ reason  = "paired with darling 0.20 skip above."
 name    = "darling_macro"
 version = "=0.20"
 reason  = "paired with darling 0.20 skip above."
-
-[[bans.skip]]
-name    = "itertools"
-version = "=0.10"
-reason  = "slatedb transitively requires itertools 0.10; workspace code uses 0.13/0.14/0.15."
 
 [[bans.skip]]
 name    = "itertools"
@@ -761,16 +737,11 @@ name    = "bitflags"
 version = "1"
 reason  = "Some ecosystem crates still depend on bitflags 1.x; workspace uses 2.x."
 
-# ── lz4_flex three-way split (0.11 / 0.12 / 0.13) ───────────────────────────────
-[[bans.skip]]
-name    = "lz4_flex"
-version = "0.11"
-reason  = "lz4_flex three-way split: 0.11 pulled by older parquet/iceberg ecosystem."
-
+# ── lz4_flex 0.12 vs 0.13 ────────────────────────────────────────────────────────
 [[bans.skip]]
 name    = "lz4_flex"
 version = "0.12"
-reason  = "lz4_flex three-way split: 0.12 pulled by mid-generation parquet crates; 0.13 is current."
+reason  = "lz4_flex 0.12 pulled by arrow 57 / datafusion 52 (lancedb chain); 0.13 is current."
 
 # ── nix 0.26 vs 0.31 ─────────────────────────────────────────────────────────────
 [[bans.skip]]
