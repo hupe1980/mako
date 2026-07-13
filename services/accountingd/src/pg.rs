@@ -224,6 +224,40 @@ pub async fn write_entry(
     booking_date: Date,
     description: Option<&str>,
 ) -> anyhow::Result<Option<Uuid>> {
+    write_entry_with_value_date(
+        pool,
+        account_id,
+        tenant,
+        entry_type,
+        amount_ct,
+        reference_id,
+        ce_type,
+        ce_id,
+        booking_date,
+        booking_date,
+        description,
+    )
+    .await
+    .map(Some)
+}
+
+/// Write a ledger entry with explicit booking and value dates.
+///
+/// Value date may differ from booking date for backdated corrections or
+/// manual bookings posted after the fact (§238 HGB Buchungsdatum vs. Wertstellung).
+pub async fn write_entry_with_value_date(
+    pool: &PgPool,
+    account_id: Uuid,
+    tenant: &str,
+    entry_type: &str,
+    amount_ct: i64,
+    reference_id: Option<&str>,
+    ce_type: Option<&str>,
+    ce_id: Option<&str>,
+    booking_date: Date,
+    value_date: Date,
+    description: Option<&str>,
+) -> anyhow::Result<Uuid> {
     // Idempotency: skip if CloudEvent already processed.
     if let Some(ce) = ce_id {
         let exists: bool =
@@ -233,25 +267,25 @@ pub async fn write_entry(
                 .await
                 .context("check idempotency")?;
         if exists {
-            return Ok(None);
+            return Ok(Uuid::nil()); // already processed — idempotent no-op
         }
     }
 
     let mut tx = pool.begin().await.context("begin tx")?;
 
-    // Lock account row.
+    // Lock account row for serializable balance update.
     sqlx::query("SELECT account_id FROM accounts WHERE account_id = $1 FOR UPDATE")
         .bind(account_id)
         .execute(&mut *tx)
         .await
         .context("lock account")?;
 
-    // Insert ledger entry.
+    // Insert ledger entry with explicit value_date.
     let id: Uuid = sqlx::query_scalar(
         r"INSERT INTO ledger_entries
               (account_id, tenant, entry_type, amount_ct, reference_id, ce_type, ce_id,
                booking_date, value_date, description)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
           RETURNING id",
     )
     .bind(account_id)
@@ -262,6 +296,7 @@ pub async fn write_entry(
     .bind(ce_type)
     .bind(ce_id)
     .bind(booking_date)
+    .bind(value_date)
     .bind(description)
     .fetch_one(&mut *tx)
     .await
@@ -278,7 +313,7 @@ pub async fn write_entry(
     .await
     .context("update balance")?;
 
-    // Mark CloudEvent as processed.
+    // Mark CloudEvent as processed (idempotency guard for CE-driven entries).
     if let Some(ce) = ce_id {
         sqlx::query("INSERT INTO processed_events (ce_id) VALUES ($1) ON CONFLICT DO NOTHING")
             .bind(ce)
@@ -288,7 +323,7 @@ pub async fn write_entry(
     }
 
     tx.commit().await.context("commit")?;
-    Ok(Some(id))
+    Ok(id)
 }
 
 pub async fn list_ledger(

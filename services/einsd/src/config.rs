@@ -41,4 +41,7 @@ pub struct EinsdConfig {
     /// How often (in seconds) the background alert worker checks for plants
     /// whose `foerderendedatum` is within 180 days.  Defaults to 21600 (6 h).
     pub alert_interval_secs: Option<u64>,
+    /// Bearer token required on `Authorization: Bearer <key>` for `/mcp` requests.
+    /// When absent, the MCP endpoint is unauthenticated (development only).
+    pub mcp_api_key: Option<String>,
 }

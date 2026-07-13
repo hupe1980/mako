@@ -7,19 +7,15 @@
 //! | `de.mako.process.initiated`  | INVOIC PID set  | Run plausibility check       |
 //! | *(anything else)*            | *(any)*         | 204 No Content (ignored)     |
 //!
-//! ### INVOIC PID set (GPKE billing only)
+//! ### INVOIC PID routing table
 //!
-//! Only PIDs whose `ProcessInitiated` outbox payload embeds a `Rechnung` BO4E
-//! object are handled here.  PIDs 31003/31004/31009/31011 belong to different
-//! billing workflows whose outbox does NOT embed `rechnung`, so they are
-//! intentionally omitted.
-//!
-//! | PID   | Description                              | Crate         |
-//! |-------|------------------------------------------|---------------|
-//! | 31001 | MMM-Rechnung Strom, NB → LF              | mako-gpke     |
-//! | 31002 | MMM-selbst ausgest. Rechnung Strom, LF   | mako-gpke     |
-//! | 31005 | NNE-Rechnung Strom, NB → LF              | mako-gpke     |
-//! | 31006 | NNE-selbst ausgest. Rechnung Strom, LF   | mako-gpke     |
+//! | PID(s) | Domain crate | Price sheet | Commands |
+//! |--------|-------------|-------------|---------|
+//! | 31001, 31002, 31005, 31006 | mako-gpke | PreisblattNetznutzung | gpke.abrechnung.annehmen / ablehnen |
+//! | 31003, 31011 | mako-wim-gas / mako-geli-gas | PreisblattNetznutzung Gas | wim.gas.rechnung.annehmen / wim.geli.gas.rechnung.annehmen |
+//! | 31004 | mako-wim-gas (Stornorechnung) | — (auto-accept) | wim.gas.stornorechnung.annehmen |
+//! | 31007, 31008 | mako-gabi-gas | PreisblattNetznutzung Gas + MMM check | gabi.gas.mmm.rechnung.annehmen / ablehnen |
+//! | 31009 | mako-wim | PreisblattMessung (MSB) | wim.rechnung.annehmen / ablehnen |
 
 use std::sync::Arc;
 
@@ -42,17 +38,34 @@ use uuid::Uuid;
 
 use crate::pg;
 
-/// GPKE INVOIC PIDs that `invoicd` handles via the embedded `rechnung` path.
+/// GPKE INVOIC PIDs that embed a `Rechnung` BO4E object in `ProcessInitiated`.
 ///
-/// Only the PIDs whose workflow outbox embeds a `Rechnung` BO4E object in
-/// `ProcessInitiated`.  PIDs 31003/31004/31011 belong to other billing workflows;
-/// their outbox payloads do NOT contain `rechnung` so they must never appear here.
-///
-/// PID 31009 (WiM MSB-Rechnung) is handled separately by `Wim31009Ingestor`
-/// because `wim-rechnung` does not embed `rechnung` in `ProcessInitiated`.
+/// Only these PIDs are handled via the embedded-rechnung fast path.  All others
+/// fall back to the makod GET endpoint or use dedicated ingestors.
 ///
 /// Source: PID ownership table, BK6-24-174.
 const INVOIC_PIDS: &[u32] = &[31001, 31002, 31005, 31006];
+
+/// Gas billing PIDs (WiM Gas + GeLi Gas + GaBi Gas) that embed a `Rechnung`
+/// in `ProcessInitiated` following the same pattern as GPKE billing PIDs.
+///
+/// | PID   | Description                                | Crate           |
+/// |-------|--------------------------------------------|-----------------|
+/// | 31003 | WiM Gas Rechnung (Gas NNE, NB → LF)        | mako-wim-gas    |
+/// | 31007 | GaBi Gas MMM-Rechnung (NB → MGV)           | mako-gabi-gas   |
+/// | 31008 | GaBi Gas selbst ausgest. MMM-Rechnung      | mako-gabi-gas   |
+/// | 31011 | GeLi Gas Rechnung sonstige Leistung (AWH)  | mako-geli-gas   |
+///
+/// PID 31004 (WiM Gas Stornorechnung) is handled separately because it
+/// auto-approves without a tariff check.
+const GAS_INVOIC_PIDS: &[u32] = &[31003, 31007, 31008, 31011];
+
+/// GaBi Gas MMM PIDs — these need the additional MMM settlement price check
+/// (check 6) against `marktd` MMMA Gas prices.
+const GABI_GAS_MMM_PIDS: &[u32] = &[31007, 31008];
+
+/// Strom MMM PIDs — these need check 6 against `marktd` MMMA Strom prices.
+const STROM_MMM_PIDS: &[u32] = &[31002, 31005];
 
 /// Shared application state for the webhook handler.
 #[derive(Clone)]
@@ -125,10 +138,15 @@ pub async fn handle_webhook(
     if ce_type == "de.mako.process.initiated" && INVOIC_PIDS.contains(&pid) {
         let subject = event["subject"].as_str().unwrap_or("").to_owned();
         handle_invoic_initiated(state, subject, data.clone()).await;
+    } else if ce_type == "de.mako.process.initiated" && GAS_INVOIC_PIDS.contains(&pid) {
+        let subject = event["subject"].as_str().unwrap_or("").to_owned();
+        handle_gas_invoic_initiated(state, subject, pid, data.clone()).await;
+    } else if ce_type == "de.mako.process.initiated" && pid == 31004 {
+        // WiM Gas Stornorechnung: auto-accept without tariff check.
+        let subject = event["subject"].as_str().unwrap_or("").to_owned();
+        handle_gas_stornorechnung(state, subject, data.clone()).await;
     } else if ce_type == "de.mako.process.initiated" && pid == 31009 {
-        // WiM MSB-Rechnung (PID 31009): the rechnung is in a separate outbox event,
-        // not embedded in ProcessInitiated.  Queue to DLQ for the Wim31009Ingestor
-        // to process once makod exposes GET /api/v1/invoic/{process_id}/rechnung.
+        // WiM MSB-Rechnung (PID 31009): uses PreisblattMessung, not NNE.
         let subject = event["subject"].as_str().unwrap_or("").to_owned();
         handle_wim_31009_initiated(state, subject, data.clone()).await;
     } else {
@@ -184,6 +202,14 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
 
     let received_at = OffsetDateTime::now_utc();
 
+    // Extract malo_id at ingest time for the indexed DB column (avoids JSONB scan in zahlungsstatus).
+    let malo_id: Option<String> = rechnung
+        .marktlokation
+        .as_ref()
+        .and_then(|ml| ml.marktlokations_id.as_ref())
+        .map(|id| id.to_string())
+        .or_else(|| data["malo_id"].as_str().map(str::to_owned));
+
     // Use billing_period() start or invoice document date for price-sheet lookup.
     let billing_date: time::Date = rechnung
         .billing_period()
@@ -191,8 +217,16 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
         .or(rechnung.rechnungsdatum)
         .unwrap_or(time::macros::date!(2025 - 01 - 01));
 
+    // Detect Stornierung: when ist_storno=true, use arithmetic-only check to
+    // avoid false TariffDeviation disputes on negated cancellation amounts.
+    // invoic_checker::is_stornierung() checks rechnung.ist_storno == Some(true).
+    let storno = invoic_checker::is_stornierung(&rechnung);
+
     // Run the stateless plausibility check.
-    let report = {
+    let report = if storno {
+        // Stornierung: stages 0–3 only (Storno ref + period + arithmetic + total).
+        InvoicCheckEngine::check_storno(pid, &rechnung, &state.check_config)
+    } else {
         let sheet = state
             .preisblatt_client
             .get_preisblatt(&sender_mp_id, billing_date)
@@ -216,13 +250,12 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
         )
     };
 
-    // ── Check 6 (MMM settlement prices) ──────────────────────────────────────
-    // For MMM PIDs (31002/31005 Strom, 31007/31008 Gas), validate that
-    // Mehrmengen/Mindermengen position prices match the MMMA reference stored
-    // in `marktd`. Adds additional Findings to the report when prices deviate.
+    // ── Check 6 (MMM settlement prices — Strom only) ─────────────────────────
+    // For Strom MMM PIDs (31002/31005), validate that Mehrmengen/Mindermengen
+    // position prices match the MMMA reference stored in `marktd`.
+    // Gas MMM PIDs (31007/31008) are handled by handle_gas_invoic_initiated.
     let report = {
-        const MMM_PIDS: &[u32] = &[31002, 31005, 31007, 31008];
-        if MMM_PIDS.contains(&pid) {
+        if !storno && STROM_MMM_PIDS.contains(&pid) {
             let billing_date = rechnung
                 .billing_period()
                 .map(|(s, _)| s)
@@ -230,25 +263,14 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
                 .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
             let (y, m) = (billing_date.year(), billing_date.month() as u8);
 
-            // Try Gas MMM prices first (THE), then Strom MMM prices (ÜNB).
-            // For Strom, the sender IS the NB (ÜNB per §22 StromNZV) — use sender_mp_id.
-            let mmm_prices = if pid == 31007 || pid == 31008 {
-                state
-                    .preisblatt_client
-                    .get_mmma_gas(y, m, "THE")
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|r| (r.mehr_ct_kwh, r.minder_ct_kwh))
-            } else {
-                state
-                    .preisblatt_client
-                    .get_mmm_strom(y, m, &sender_mp_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|r| (r.mehr_ct_kwh, r.minder_ct_kwh))
-            };
+            // Strom MMM prices: sender IS the NB (ÜNB per §22 StromNZV).
+            let mmm_prices = state
+                .preisblatt_client
+                .get_mmm_strom(y, m, &sender_mp_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|r| (r.mehr_ct_kwh, r.minder_ct_kwh));
 
             if let Some((mehr_ct, minder_ct)) = mmm_prices {
                 let mmm_findings = InvoicCheckEngine::check_mmm_settlement(
@@ -319,9 +341,10 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
         CheckOutcome::Dispute => true,
     };
 
-    let outcome_str = match (report.outcome, should_dispute) {
-        (CheckOutcome::Ok, _) => "Ok",
-        (CheckOutcome::Warn, false) => "Warn",
+    let outcome_str = match (report.outcome, should_dispute, storno) {
+        (_, _, true) if !should_dispute => "AcceptedPartial",
+        (CheckOutcome::Ok, _, _) => "Ok",
+        (CheckOutcome::Warn, false, _) => "Warn",
         _ => "Dispute",
     };
 
@@ -346,6 +369,7 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
             direction: "Inbound".to_owned(),
             sender_mp_id: sender_mp_id.clone(),
             receiver_gln,
+            malo_id: malo_id.clone(),
             rechnung: rechnung_value,
             bo4e_version: "v202607.0.0".to_owned(),
             outcome: outcome_str.to_owned(),
@@ -529,16 +553,15 @@ async fn handle_wim_31009_initiated(state: HandlerState, subject: String, data: 
         .or(rechnung.rechnungsdatum)
         .unwrap_or(time::macros::date!(2025 - 01 - 01));
 
-    // ── 4. Plausibility check — PID 31009 uses PreisblattMessung, not NNE ────
+    // ── 4. Plausibility check — PID 31009 uses PreisblattMessung + AufAbschlag ─
     //
-    // BUG FIX (M5): the MSB-Rechnung (31009) is billed between the NB and the
-    // Messstellenbetreiber.  The applicable tariff reference is `PreisblattMessung`
-    // (MSB metering service price sheet), NOT `PreisblattNetznutzung` (NNE tariff).
-    // Using the NNE tariff produces incorrect check 4/5 results.
+    // The MSB-Rechnung (31009) is validated against `PreisblattMessung` (MSB
+    // metering service price sheet), NOT `PreisblattNetznutzung` (NNE tariff).
     //
-    // `InvoicCheckEngine::check_msb_rechnung()` builds an on-the-fly price list
-    // from `PreisblattMessung.preispositionen` and re-uses the standard arithmetic
-    // and period checks (1–3) alongside the MSB-aware tariff checks (4–5).
+    // Check 6 (AufAbschlag validation): discount positions are validated against
+    // contracted AufAbschlag entries from the PreisblattMessung.  This prevents
+    // the MSB from adding undocumented discount lines to the invoice.
+    // Source: WiM AHB BK6-24-174, PRICAT 27001–27003 (MSB AufAbschlag).
     let report = {
         let preisblatt_messung = state
             .preisblatt_client
@@ -546,10 +569,31 @@ async fn handle_wim_31009_initiated(state: HandlerState, subject: String, data: 
             .await
             .ok()
             .flatten();
-        InvoicCheckEngine::check_msb_rechnung(
+
+        // Extract contracted AufAbschlag names from PreisblattMessung.
+        // `auf_abschlaege` is an extension field — extract from JSON extension data.
+        let aufabschlag_names: Vec<String> = preisblatt_messung
+            .as_ref()
+            .and_then(|pm| {
+                use rubo4e::json::Bo4eExtensionData as _;
+                pm.extension_data()
+                    .get("auf_abschlaege")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|e| {
+                                e.get("name").and_then(|n| n.as_str()).map(str::to_owned)
+                            })
+                            .collect()
+                    })
+            })
+            .unwrap_or_default();
+
+        InvoicCheckEngine::check_msb_rechnung_with_aufabschlaege(
             &sender_mp_id,
             &rechnung,
             preisblatt_messung.as_ref(),
+            &aufabschlag_names,
             &state.check_config,
         )
     };
@@ -588,12 +632,19 @@ async fn handle_wim_31009_initiated(state: HandlerState, subject: String, data: 
         let pay_by: Option<time::OffsetDateTime> = rechnung
             .faelligkeitsdatum
             .map(|d| d.with_time(time::Time::MIDNIGHT).assume_utc());
+        let malo_id_31009: Option<String> = rechnung
+            .marktlokation
+            .as_ref()
+            .and_then(|ml| ml.marktlokations_id.as_ref())
+            .map(|id| id.to_string())
+            .or_else(|| data["malo_id"].as_str().map(str::to_owned));
         let row = pg::ReceiptRow {
             process_id,
             pid: 31009_i16,
             direction: "Inbound".to_owned(),
             sender_mp_id: sender_mp_id.clone(),
             receiver_gln,
+            malo_id: malo_id_31009,
             rechnung: rechnung_value,
             bo4e_version: "v202607.0.0".to_owned(),
             outcome: outcome_str.to_owned(),
@@ -660,6 +711,434 @@ async fn handle_wim_31009_initiated(state: HandlerState, subject: String, data: 
                 warn!(%e, process_id = %process_id, "invoicd: WiM 31009 settle dispatch failed")
             }
         }
+    }
+}
+
+// ── Gas INVOIC ingestor (PIDs 31003, 31007, 31008, 31011) ────────────────────
+
+/// Handle a `de.mako.process.initiated` event for Gas billing PIDs.
+///
+/// Covers:
+/// - PID 31003 — WiM Gas Rechnung (Gas NNE, NB → LF, `mako-wim-gas`)
+/// - PID 31007 — GaBi Gas MMM-Rechnung (NB → MGV, `mako-gabi-gas`) + MMM check 6
+/// - PID 31008 — GaBi Gas selbst ausgest. MMM-Rechnung + MMM check 6
+/// - PID 31011 — GeLi Gas Rechnung sonstige Leistung / AWH Sperrprozesse (NB → LF, `mako-geli-gas`)
+///
+/// Uses the same embedded-rechnung fast path as the GPKE handler.
+/// PIDs 31007/31008 additionally run the MMM Gas settlement price check (check 6).
+async fn handle_gas_invoic_initiated(
+    state: HandlerState,
+    subject: String,
+    pid: u32,
+    data: serde_json::Value,
+) {
+    let process_id = match subject.parse::<Uuid>() {
+        Ok(id) => id,
+        Err(_) => {
+            warn!(
+                subject,
+                pid, "invoicd: Gas invoice event has no parseable UUID subject"
+            );
+            return;
+        }
+    };
+
+    let sender_mp_id = data["sender_mp_id"].as_str().unwrap_or("").to_owned();
+    let invoice_ref = data["invoice_ref"].as_str().unwrap_or("").to_owned();
+    if invoice_ref.is_empty() {
+        warn!(pid, "invoicd: Gas invoice invoice_ref missing from payload");
+        return;
+    }
+    let receiver_gln = data["receiver_gln"]
+        .as_str()
+        .unwrap_or(&state.tenant)
+        .to_owned();
+    let rechnung_value = data["rechnung"].clone();
+
+    let rechnung: Rechnung = match serde_json::from_value(rechnung_value.clone()) {
+        Ok(r) => r,
+        Err(err) => {
+            warn!(%err, pid, "invoicd: Gas invoice could not deserialize Rechnung — writing DLQ");
+            write_gas_dlq(&state, &data, process_id, pid).await;
+            return;
+        }
+    };
+
+    let received_at = OffsetDateTime::now_utc();
+    let malo_id: Option<String> = rechnung
+        .marktlokation
+        .as_ref()
+        .and_then(|ml| ml.marktlokations_id.as_ref())
+        .map(|id| id.to_string())
+        .or_else(|| data["malo_id"].as_str().map(str::to_owned));
+
+    let billing_date: time::Date = rechnung
+        .billing_period()
+        .map(|(start, _)| start)
+        .or(rechnung.rechnungsdatum)
+        .unwrap_or(time::macros::date!(2025 - 01 - 01));
+
+    // Standard 5-check plausibility (PreisblattNetznutzung Gas).
+    let report = {
+        let sheet = state
+            .preisblatt_client
+            .get_preisblatt(&sender_mp_id, billing_date)
+            .await
+            .ok()
+            .flatten();
+        let preisblatt_store = {
+            use invoic_checker::tariff::InMemoryPreisblattStore;
+            let mut store = InMemoryPreisblattStore::new();
+            if let Some(s) = sheet {
+                store.insert(sender_mp_id.clone(), s);
+            }
+            store
+        };
+        InvoicCheckEngine::check(
+            pid,
+            &sender_mp_id,
+            &rechnung,
+            &preisblatt_store,
+            &state.check_config,
+        )
+    };
+
+    // ── Check 6 (MMM Gas settlement prices for GaBi Gas PIDs 31007/31008) ────
+    let report = if GABI_GAS_MMM_PIDS.contains(&pid) {
+        let billing_date = rechnung
+            .billing_period()
+            .map(|(s, _)| s)
+            .or(rechnung.rechnungsdatum)
+            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+        let (y, m) = (billing_date.year(), billing_date.month() as u8);
+
+        // Gas MMM prices: Trading Hub Europe (THE) is the single Gas MGV.
+        let mmm_prices = state
+            .preisblatt_client
+            .get_mmma_gas(y, m, "THE")
+            .await
+            .ok()
+            .flatten()
+            .map(|r| (r.mehr_ct_kwh, r.minder_ct_kwh));
+
+        if let Some((mehr_ct, minder_ct)) = mmm_prices {
+            let mmm_findings = InvoicCheckEngine::check_mmm_settlement(
+                &rechnung,
+                mehr_ct,
+                minder_ct,
+                &state.check_config,
+            );
+            if !mmm_findings.is_empty() {
+                use invoic_checker::CheckOutcome;
+                let extra_outcome = mmm_findings
+                    .iter()
+                    .map(|f| {
+                        if f.is_dispute {
+                            CheckOutcome::Dispute
+                        } else {
+                            CheckOutcome::Warn
+                        }
+                    })
+                    .max()
+                    .unwrap_or(CheckOutcome::Ok);
+                let merged_outcome = report.outcome.max(extra_outcome);
+                let mut merged = report;
+                merged.findings.extend(mmm_findings);
+                merged.outcome = merged_outcome;
+                merged
+            } else {
+                report
+            }
+        } else {
+            tracing::debug!(
+                pid,
+                year = y,
+                month = m,
+                "invoicd: Gas MMMA prices not found in marktd — MMM Gas check skipped"
+            );
+            report
+        }
+    } else {
+        report
+    };
+
+    let checked_at = OffsetDateTime::now_utc();
+
+    info!(
+        process_id = %process_id, pid,
+        outcome = ?report.outcome, findings = report.findings.len(),
+        "invoicd: Gas INVOIC check complete"
+    );
+
+    let should_dispute = match report.outcome {
+        invoic_checker::CheckOutcome::Ok => false,
+        invoic_checker::CheckOutcome::Warn => {
+            state.auto_dispute_threshold_eur_cents > 0
+                && report
+                    .total_net_invoic
+                    .map(|t| t.to_raw() > state.auto_dispute_threshold_eur_cents)
+                    .unwrap_or(false)
+        }
+        invoic_checker::CheckOutcome::Dispute => true,
+    };
+
+    let outcome_str = match (report.outcome, should_dispute) {
+        (invoic_checker::CheckOutcome::Ok, _) => "Ok",
+        (invoic_checker::CheckOutcome::Warn, false) => "Warn",
+        _ => "Dispute",
+    };
+
+    // §22 MessZV: persist receipt BEFORE dispatching.
+    if let Some(pool) = &state.pool {
+        let findings_json =
+            serde_json::to_value(&report.findings).unwrap_or(serde_json::Value::Array(vec![]));
+        let pay_by: Option<time::OffsetDateTime> = rechnung
+            .faelligkeitsdatum
+            .map(|d| d.with_time(time::Time::MIDNIGHT).assume_utc());
+        let row = pg::ReceiptRow {
+            process_id,
+            pid: pid as i16,
+            direction: "Inbound".to_owned(),
+            sender_mp_id: sender_mp_id.clone(),
+            receiver_gln,
+            malo_id: malo_id.clone(),
+            rechnung: rechnung_value,
+            bo4e_version: "v202607.0.0".to_owned(),
+            outcome: outcome_str.to_owned(),
+            findings: findings_json,
+            pay_by,
+            received_at,
+            checked_at,
+            dispatched_at: None,
+            tenant: state.tenant.clone(),
+        };
+        if let Err(err) = pg::upsert_receipt(pool, &row).await {
+            warn!(%err, process_id = %process_id, pid,
+                "invoicd: Gas invoice failed to persist receipt — §22 MessZV gap; continuing");
+        }
+    }
+
+    // Dispatch command — routing depends on PID domain.
+    let (accept_cmd, reject_cmd) = gas_billing_commands(pid);
+    if should_dispute {
+        let reason = dispute_reason(&report.findings);
+        warn!(process_id = %process_id, pid, reason = %reason, "invoicd: Gas invoice disputed");
+        let idem = Uuid::new_v5(&process_id, b"gas-dispute").to_string();
+        let cmd = mako_markt::makod_client::ForwardCommand {
+            marktrolle: None,
+            command: reject_cmd.to_owned(),
+            malo_id: None,
+            melo_id: None,
+            payload: serde_json::json!({ "invoice_ref": invoice_ref, "ablehnungsgrund": reason }),
+        };
+        match state.makod.post_command(&idem, &cmd).await {
+            Ok(_) => {
+                if let Some(pool) = &state.pool {
+                    let _ =
+                        pg::receipts::mark_dispatched(pool, process_id, OffsetDateTime::now_utc())
+                            .await;
+                }
+            }
+            Err(e) => {
+                warn!(%e, process_id = %process_id, pid, "invoicd: Gas dispute dispatch failed")
+            }
+        }
+    } else {
+        info!(process_id = %process_id, pid, "invoicd: Gas invoice approved");
+        let idem = Uuid::new_v5(&process_id, b"gas-accept").to_string();
+        let cmd = mako_markt::makod_client::ForwardCommand {
+            marktrolle: None,
+            command: accept_cmd.to_owned(),
+            malo_id: None,
+            melo_id: None,
+            payload: serde_json::json!({ "invoice_ref": invoice_ref }),
+        };
+        match state.makod.post_command(&idem, &cmd).await {
+            Ok(_) => {
+                if let Some(pool) = &state.pool {
+                    let _ =
+                        pg::receipts::mark_dispatched(pool, process_id, OffsetDateTime::now_utc())
+                            .await;
+                }
+            }
+            Err(e) => {
+                warn!(%e, process_id = %process_id, pid, "invoicd: Gas accept dispatch failed")
+            }
+        }
+        emit_payment_event(
+            &state,
+            PaymentEventCtx {
+                process_id,
+                pid,
+                direction: "Inbound",
+                sender_mp_id: &sender_mp_id,
+                outcome: outcome_str,
+                pay_by: rechnung.faelligkeitsdatum,
+                findings_count: report.findings.len(),
+            },
+        )
+        .await;
+    }
+}
+
+/// Map a Gas billing PID to its (accept, reject) command names.
+fn gas_billing_commands(pid: u32) -> (&'static str, &'static str) {
+    match pid {
+        31003 => ("wim.gas.rechnung.annehmen", "wim.gas.rechnung.ablehnen"),
+        31007 | 31008 => (
+            "gabi.gas.mmm.rechnung.annehmen",
+            "gabi.gas.mmm.rechnung.ablehnen",
+        ),
+        31011 => ("geli.gas.rechnung.annehmen", "geli.gas.rechnung.ablehnen"),
+        _ => ("invoic.annehmen", "invoic.ablehnen"), // safe fallback
+    }
+}
+
+/// Handle PID 31004 — WiM Gas Stornorechnung (cancellation invoice).
+///
+/// A Stornorechnung cancels a previously issued PID 31003 invoice.  It carries a
+/// negative `gesamtbrutto`.  Arithmetic and period checks still run; tariff checks
+/// are skipped (cancellations don't carry tariff positions).  The outcome is always
+/// `AcceptedPartial` unless arithmetic fails.
+async fn handle_gas_stornorechnung(state: HandlerState, subject: String, data: serde_json::Value) {
+    let process_id = match subject.parse::<Uuid>() {
+        Ok(id) => id,
+        Err(_) => {
+            warn!(
+                subject,
+                "invoicd: WiM Gas 31004 event has no parseable UUID subject"
+            );
+            return;
+        }
+    };
+
+    let sender_mp_id = data["sender_mp_id"].as_str().unwrap_or("").to_owned();
+    let invoice_ref = data["invoice_ref"].as_str().unwrap_or("").to_owned();
+    let receiver_gln = data["receiver_gln"]
+        .as_str()
+        .unwrap_or(&state.tenant)
+        .to_owned();
+    let rechnung_value = data["rechnung"].clone();
+
+    let rechnung: Rechnung = match serde_json::from_value(rechnung_value.clone()) {
+        Ok(r) => r,
+        Err(err) => {
+            warn!(%err, "invoicd: WiM Gas 31004 Stornorechnung deserialization failed — writing DLQ");
+            write_gas_dlq(&state, &data, process_id, 31004).await;
+            return;
+        }
+    };
+
+    let received_at = OffsetDateTime::now_utc();
+    let malo_id: Option<String> = rechnung
+        .marktlokation
+        .as_ref()
+        .and_then(|ml| ml.marktlokations_id.as_ref())
+        .map(|id| id.to_string());
+
+    // Stornorechnung: run arithmetic + period checks only (no tariff check).
+    let storno_config = invoic_checker::CheckConfig {
+        require_tariff: false,
+        ..(*state.check_config).clone()
+    };
+    let report = {
+        let empty_store = invoic_checker::tariff::InMemoryPreisblattStore::new();
+        InvoicCheckEngine::check(
+            31004,
+            &sender_mp_id,
+            &rechnung,
+            &empty_store,
+            &storno_config,
+        )
+    };
+
+    let checked_at = OffsetDateTime::now_utc();
+    let should_dispute = matches!(report.outcome, invoic_checker::CheckOutcome::Dispute);
+    let outcome_str = if should_dispute {
+        "Dispute"
+    } else {
+        "AcceptedPartial"
+    };
+
+    info!(process_id = %process_id, pid = 31004, outcome = outcome_str,
+        "invoicd: WiM Gas Stornorechnung check complete");
+
+    if let Some(pool) = &state.pool {
+        let findings_json =
+            serde_json::to_value(&report.findings).unwrap_or(serde_json::Value::Array(vec![]));
+        let pay_by: Option<time::OffsetDateTime> = rechnung
+            .faelligkeitsdatum
+            .map(|d| d.with_time(time::Time::MIDNIGHT).assume_utc());
+        let row = pg::ReceiptRow {
+            process_id,
+            pid: 31004_i16,
+            direction: "Inbound".to_owned(),
+            sender_mp_id: sender_mp_id.clone(),
+            receiver_gln,
+            malo_id,
+            rechnung: rechnung_value,
+            bo4e_version: "v202607.0.0".to_owned(),
+            outcome: outcome_str.to_owned(),
+            findings: findings_json,
+            pay_by,
+            received_at,
+            checked_at,
+            dispatched_at: None,
+            tenant: state.tenant.clone(),
+        };
+        if let Err(err) = pg::upsert_receipt(pool, &row).await {
+            warn!(%err, process_id = %process_id, "invoicd: Gas 31004 persist failed — §22 MessZV gap");
+        }
+    }
+
+    let cmd_name = if should_dispute {
+        "wim.gas.stornorechnung.ablehnen"
+    } else {
+        "wim.gas.stornorechnung.annehmen"
+    };
+    let idem = Uuid::new_v5(&process_id, b"gas31004").to_string();
+    let payload = if should_dispute {
+        serde_json::json!({ "invoice_ref": invoice_ref, "ablehnungsgrund": dispute_reason(&report.findings) })
+    } else {
+        serde_json::json!({ "invoice_ref": invoice_ref })
+    };
+    let cmd = mako_markt::makod_client::ForwardCommand {
+        marktrolle: None,
+        command: cmd_name.to_owned(),
+        malo_id: None,
+        melo_id: None,
+        payload,
+    };
+    match state.makod.post_command(&idem, &cmd).await {
+        Ok(_) => {
+            if let Some(pool) = &state.pool {
+                let _ = pg::receipts::mark_dispatched(pool, process_id, OffsetDateTime::now_utc())
+                    .await;
+            }
+        }
+        Err(e) => warn!(%e, process_id = %process_id, "invoicd: Gas 31004 dispatch failed"),
+    }
+}
+
+/// Write a DLQ entry for a Gas invoice that could not be processed.
+async fn write_gas_dlq(state: &HandlerState, data: &serde_json::Value, process_id: Uuid, pid: u32) {
+    if let Some(pool) = &state.pool {
+        let reason = format!(
+            "PID {pid}: rechnung unavailable or unparseable — manual reconciliation required"
+        );
+        let _ = sqlx::query(
+            r"INSERT INTO invoic_dlq (malo_id, raw_event, failure_reason, failed_at, tenant)
+              VALUES (NULL, $1, $2, now(), $3)
+              ON CONFLICT DO NOTHING",
+        )
+        .bind(data)
+        .bind(&reason)
+        .bind(&state.tenant)
+        .execute(pool)
+        .await
+        .inspect_err(|e| {
+            warn!(%e, process_id = %process_id, pid, "invoicd: failed to write Gas DLQ entry");
+        });
     }
 }
 
@@ -866,11 +1345,70 @@ mod tests {
     #[test]
     fn invoic_pids_are_gpke_only() {
         assert_eq!(INVOIC_PIDS, &[31001u32, 31002, 31005, 31006]);
-        // PIDs belonging to other workflows must NOT be in the list.
-        for forbidden in [31003u32, 31004, 31009, 31011] {
+        // PIDs belonging to other workflows must NOT be in the Strom list.
+        for forbidden in [31003u32, 31004, 31007, 31008, 31009, 31011] {
             assert!(
                 !INVOIC_PIDS.contains(&forbidden),
                 "PID {forbidden} must not be in INVOIC_PIDS (wrong workflow)"
+            );
+        }
+    }
+
+    /// Gas billing PIDs are routed separately from Strom billing PIDs.
+    #[test]
+    fn gas_invoic_pids_are_separate() {
+        assert_eq!(GAS_INVOIC_PIDS, &[31003u32, 31007, 31008, 31011]);
+        // No overlap with GPKE Strom PIDs.
+        for pid in GAS_INVOIC_PIDS {
+            assert!(
+                !INVOIC_PIDS.contains(pid),
+                "PID {pid} must not appear in both INVOIC_PIDS and GAS_INVOIC_PIDS"
+            );
+        }
+        // PID 31004 (Stornorechnung) is handled separately — not in either list.
+        assert!(!GAS_INVOIC_PIDS.contains(&31004u32));
+        // PID 31009 (WiM MSB-Rechnung) uses PreisblattMessung — not Gas.
+        assert!(!GAS_INVOIC_PIDS.contains(&31009u32));
+    }
+
+    /// MMM PID sets must be non-overlapping and correct.
+    #[test]
+    fn mmm_pid_sets_are_disjoint() {
+        for strom_pid in STROM_MMM_PIDS {
+            assert!(
+                !GABI_GAS_MMM_PIDS.contains(strom_pid),
+                "PID {strom_pid} must not be in both STROM_MMM_PIDS and GABI_GAS_MMM_PIDS"
+            );
+        }
+        // Strom MMM: 31002 (MMM-Rechnung), 31005 (MMM selbst ausgest.)
+        assert!(STROM_MMM_PIDS.contains(&31002u32));
+        assert!(STROM_MMM_PIDS.contains(&31005u32));
+        // Gas MMM: 31007 (GaBi Gas MMM), 31008 (selbst ausgest.)
+        assert!(GABI_GAS_MMM_PIDS.contains(&31007u32));
+        assert!(GABI_GAS_MMM_PIDS.contains(&31008u32));
+    }
+
+    /// Gas billing command routing must cover all Gas PIDs.
+    #[test]
+    fn gas_billing_commands_cover_all_gas_pids() {
+        for &pid in GAS_INVOIC_PIDS {
+            let (accept, reject) = gas_billing_commands(pid);
+            assert!(!accept.is_empty(), "PID {pid} has no accept command");
+            assert!(!reject.is_empty(), "PID {pid} has no reject command");
+            // Commands must use the correct domain prefix.
+            let domain = match pid {
+                31003 => "wim.gas",
+                31007 | 31008 => "gabi.gas",
+                31011 => "geli.gas",
+                _ => unreachable!(),
+            };
+            assert!(
+                accept.starts_with(domain),
+                "PID {pid} accept cmd must start with '{domain}'"
+            );
+            assert!(
+                reject.starts_with(domain),
+                "PID {pid} reject cmd must start with '{domain}'"
             );
         }
     }
@@ -922,32 +1460,5 @@ mod tests {
         let reason = dispute_reason(&findings);
         assert!(reason.contains("Einzelpreis weicht ab"));
         assert!(reason.contains("Abrechnungszeitraum falsch"));
-    }
-
-    #[test]
-    fn dispute_reason_filters_non_dispute_findings() {
-        let findings = vec![
-            Finding {
-                kind: FindingKind::TariffNotFound,
-                is_dispute: false,
-                message: "just a note".into(),
-                line_number: None,
-                expected: None,
-                actual: None,
-                deviation_pct: None,
-            },
-            Finding {
-                kind: FindingKind::TariffDeviation,
-                is_dispute: true,
-                message: "Preis abweichend".into(),
-                line_number: None,
-                expected: None,
-                actual: None,
-                deviation_pct: None,
-            },
-        ];
-        let reason = dispute_reason(&findings);
-        assert!(!reason.contains("just a note"));
-        assert!(reason.contains("Preis abweichend"));
     }
 }

@@ -12,10 +12,24 @@
 //!
 //! | Tool | Description |
 //! |---|---|
-//! | `get_malo`                | Read a MaLo record by 11-digit ID |
-//! | `list_partners`           | List registered trading partners |
-//! | `get_preisblatt`          | Read the current PreisblattNetznutzung for an NB |
-//! | `get_versorgungsstatus`   | Read the VersorgungsStatus (delivery status) for a MaLo |
+//! | `get_malo`                        | Read a MaLo record by 11-digit ID |
+//! | `list_malo`                       | List MaLos with optional filters |
+//! | `get_melo`                        | Read a MeLo record |
+//! | `get_melo_standorteigenschaften`  | Read BO4E Standorteigenschaften for a MeLo |
+//! | `list_partners`                   | List registered trading partners |
+//! | `get_partner`                     | Read a single partner by MP-ID |
+//! | `get_preisblatt`                  | Read the current PreisblattNetznutzung for an NB |
+//! | `get_versorgungsstatus`           | Read the current VersorgungsStatus for a MaLo |
+//! | `get_versorgungsstatus_history`   | Read full supply-state change history |
+//! | `get_versorgung_at`               | Point-in-time VersorgungsStatus query |
+//! | `get_lokationszuordnung`          | Read active role assignments for a MaLo |
+//! | `get_nb_contract`                 | Read the NB contract for a MaLo |
+//! | `get_correlation`                 | Correlate process ID or ERP order ref |
+//! | `list_pricat_versions`            | List available PRICAT versions for an NB |
+//! | `dispatch_pricat`                 | Trigger PRICAT dispatch to LF |
+//! | `get_nb_energiemix`               | Read §42 EnWG Energiemix for an NB |
+//! | `get_technische_ressource`        | Read a TechnischeRessource (TR) record |
+//! | `get_steuerbare_ressource`        | Read a SteuerbareRessource (SR) + §14a config |
 
 use std::sync::Arc;
 
@@ -117,6 +131,80 @@ pub struct PricatParams {
     pub nb_mp_id: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListMaloParams {
+    /// Filter by Sparte: `STROM` or `GAS`.
+    pub sparte: Option<String>,
+    /// Filter by bilanzierungsmethode: `RLM`, `SLP`, `IMS`, `TLP_GEMEINSAM`, etc.
+    pub bilanzierungsmethode: Option<String>,
+    /// Filter by netzebene.
+    pub netzebene: Option<String>,
+    /// Maximum results (default 50, max 200).
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetMeloParams {
+    /// MeLo ID (DE + 31 alphanumeric characters).
+    pub melo_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetLokaionsZuordnungParams {
+    /// 11-digit MaLo ID.
+    pub malo_id: String,
+    /// Reference date (YYYY-MM-DD). Defaults to today.
+    pub date: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetVersorgungsStatusHistoryParams {
+    /// 11-digit MaLo ID.
+    pub malo_id: String,
+    /// Maximum results (default 20).
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetNbEnergiemixParams {
+    /// 13-digit NB MP-ID.
+    pub nb_mp_id: String,
+    /// Calendar year (defaults to most recent available).
+    pub year: Option<i16>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetTechnischeRessourceParams {
+    /// TechnischeRessource ID (from `marktd` PUT endpoint).
+    pub tr_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetSteuerbareRessourceParams {
+    /// SteuerbareRessource ID.
+    pub sr_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetPartnerParams {
+    /// 13-digit BDEW/DVGW MP-ID (Marktpartner-ID).
+    pub mp_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetMeloStandorteigenschaftenParams {
+    /// MeLo-ID (DE + 31 alphanumeric characters).
+    pub melo_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetVersorgungAtParams {
+    /// 11-digit MaLo ID.
+    pub malo_id: String,
+    /// Reference date (YYYY-MM-DD).  Returns the supply status valid on that date.
+    pub at: String,
+}
+
 #[derive(Clone)]
 pub struct MdmdMcpHandler {
     state: Arc<MdmdMcpState>,
@@ -152,42 +240,61 @@ impl MdmdMcpHandler {
         let row = sqlx::query_as::<
             _,
             (
-                uuid::Uuid,
-                String,
-                String,
-                Option<String>,
-                Option<String>,
-                Option<String>,
+                String,            // malo_id
+                String,            // sparte
+                Option<String>,    // netzebene
+                Option<String>,    // bilanzierungsmethode
+                Option<String>,    // bilanzierungsgebiet
+                Option<String>,    // gasqualitaet
+                Option<String>,    // energierichtung
+                Option<String>,    // regelzone
+                Option<String>,    // fallgruppe
+                i64,               // version
+                serde_json::Value, // data (full BO4E MARKTLOKATION)
             ),
         >(
-            r#"
-            SELECT id, malo_id, sparte, nb_mp_id, msb_mp_id, address_json::text
-            FROM malos
-            WHERE tenant = $1 AND malo_id = $2
-            "#,
+            r"SELECT malo_id, sparte, netzebene, bilanzierungsmethode,
+                     bilanzierungsgebiet, gasqualitaet, energierichtung,
+                     regelzone, fallgruppe, version, data
+              FROM malo
+              WHERE malo_id = $1",
         )
-        .bind(&self.state.tenant)
         .bind(&p.malo_id)
         .fetch_optional(&self.state.pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         match row {
-            Some((id, malo_id, sparte, nb_mp_id, msb_mp_id, address_json)) => {
-                ContentBlock::json(serde_json::json!({
-                    "id": id,
-                    "malo_id": malo_id,
-                    "sparte": sparte,
-                    "nb_mp_id": nb_mp_id,
-                    "msb_mp_id": msb_mp_id,
-                    "address": address_json.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
-                }))
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None))
-            }
+            Some((
+                malo_id,
+                sparte,
+                netzebene,
+                bilanzierungsmethode,
+                bilanzierungsgebiet,
+                gasqualitaet,
+                energierichtung,
+                regelzone,
+                fallgruppe,
+                version,
+                data,
+            )) => ContentBlock::json(serde_json::json!({
+                "malo_id": malo_id,
+                "sparte": sparte,
+                "netzebene": netzebene,
+                "bilanzierungsmethode": bilanzierungsmethode,
+                "bilanzierungsgebiet": bilanzierungsgebiet,
+                "gasqualitaet": gasqualitaet,
+                "energierichtung": energierichtung,
+                "regelzone": regelzone,
+                "fallgruppe": fallgruppe,
+                "version": version,
+                "data": data,
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
             None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "malo_not_found: MaLo '{}' not registered in tenant '{}'.",
-                p.malo_id, self.state.tenant
+                "malo_not_found: MaLo '{}' not found.",
+                p.malo_id
             ))])),
         }
     }
@@ -212,16 +319,20 @@ impl MdmdMcpHandler {
             .and_then(|c| c.parse().ok())
             .unwrap_or(0i64);
 
-        let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(
-            r#"
-            SELECT mp_id, name, as4_endpoint, roles_json::text
-            FROM partners
-            WHERE tenant = $1
-            ORDER BY mp_id
-            LIMIT $2 OFFSET $3
-            "#,
+        let rows = sqlx::query_as::<
+            _,
+            (
+                String,
+                Option<String>,
+                Option<Vec<String>>,
+                serde_json::Value,
+            ),
+        >(
+            r"SELECT mp_id, display_name, makoadresse, channels
+              FROM partners
+              ORDER BY mp_id
+              LIMIT $1 OFFSET $2",
         )
-        .bind(&self.state.tenant)
         .bind(limit)
         .bind(offset)
         .fetch_all(&self.state.pool)
@@ -230,13 +341,13 @@ impl MdmdMcpHandler {
 
         let partners: Vec<serde_json::Value> = rows
             .into_iter()
-            .map(|(mp_id, name, as4_endpoint, roles_json)| {
+            .map(|(mp_id, display_name, makoadresse, channels)| {
                 serde_json::json!({
                     "mp_id": mp_id,
-                    "name": name,
-                    "as4_endpoint": as4_endpoint,
-                    "roles": roles_json
-                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
+                    "display_name": display_name,
+                    "as4_endpoint": makoadresse.as_ref().and_then(|v| v.first()).cloned(),
+                    "makoadresse": makoadresse,
+                    "channels": channels,
                 })
             })
             .collect();
@@ -268,7 +379,6 @@ impl MdmdMcpHandler {
         &self,
         Parameters(p): Parameters<GetPreisblattParams>,
     ) -> Result<CallToolResult, McpError> {
-        use time::format_description::well_known::Rfc3339;
         let date = p
             .date
             .as_deref()
@@ -277,24 +387,18 @@ impl MdmdMcpHandler {
             })
             .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
 
-        let row = sqlx::query_as::<_, (uuid::Uuid, time::OffsetDateTime, serde_json::Value)>(
-            r#"
-            SELECT id, valid_from, preisblatt
-            FROM preisblaetter
-            WHERE tenant = $1
-              AND nb_mp_id = $2
-              AND valid_from <= $3
-            ORDER BY valid_from DESC
-            LIMIT 1
-            "#,
+        let row = sqlx::query_as::<_, (uuid::Uuid, time::Date, serde_json::Value)>(
+            r"SELECT id, valid_from, preisblatt
+              FROM preisblaetter
+              WHERE tenant = $1
+                AND nb_mp_id = $2
+                AND valid_from <= $3
+              ORDER BY valid_from DESC
+              LIMIT 1",
         )
         .bind(&self.state.tenant)
         .bind(&p.nb_mp_id)
-        .bind(
-            time::OffsetDateTime::new_utc(date, time::Time::MIDNIGHT)
-                .format(&Rfc3339)
-                .unwrap_or_default(),
-        )
+        .bind(date)
         .fetch_optional(&self.state.pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -303,7 +407,7 @@ impl MdmdMcpHandler {
             Some((id, valid_from, preisblatt)) => ContentBlock::json(serde_json::json!({
                 "id": id,
                 "nb_mp_id": p.nb_mp_id,
-                "valid_from": valid_from,
+                "valid_from": valid_from.to_string(),
                 "preisblatt": preisblatt,
             }))
             .map(|b| CallToolResult::success(vec![b]))
@@ -638,6 +742,464 @@ Returns the version_id that was queued. Actual dispatch is asynchronous. \
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
+
+    // ── New tools ──────────────────────────────────────────────────────────
+
+    #[tool(
+        description = "List Marktlokationen with optional filters: sparte (STROM/GAS), bilanzierungsmethode (RLM/SLP/IMS), netzebene. Returns up to 200 MaLos.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_malo(
+        &self,
+        Parameters(p): Parameters<ListMaloParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = p.limit.unwrap_or(50).clamp(1, 200);
+        let rows = sqlx::query(
+            r"SELECT malo_id, sparte, netzebene, bilanzierungsmethode,
+                     bilanzierungsgebiet, gasqualitaet, energierichtung, fallgruppe
+              FROM malo
+              WHERE ($1::text IS NULL OR sparte = $1)
+                AND ($2::text IS NULL OR bilanzierungsmethode = $2)
+                AND ($3::text IS NULL OR netzebene = $3)
+              ORDER BY malo_id
+              LIMIT $4",
+        )
+        .bind(&p.sparte)
+        .bind(&p.bilanzierungsmethode)
+        .bind(&p.netzebene)
+        .bind(limit)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        use sqlx::Row as _;
+        let malos: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
+            "malo_id": r.try_get::<String,_>("malo_id").ok(),
+            "sparte": r.try_get::<String,_>("sparte").ok(),
+            "netzebene": r.try_get::<Option<String>,_>("netzebene").ok().flatten(),
+            "bilanzierungsmethode": r.try_get::<Option<String>,_>("bilanzierungsmethode").ok().flatten(),
+            "bilanzierungsgebiet": r.try_get::<Option<String>,_>("bilanzierungsgebiet").ok().flatten(),
+            "gasqualitaet": r.try_get::<Option<String>,_>("gasqualitaet").ok().flatten(),
+            "energierichtung": r.try_get::<Option<String>,_>("energierichtung").ok().flatten(),
+            "fallgruppe": r.try_get::<Option<String>,_>("fallgruppe").ok().flatten(),
+        })).collect();
+
+        ContentBlock::json(serde_json::json!({ "count": malos.len(), "malos": malos }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    #[tool(
+        description = "Read a Messlokation (MeLo) record by ID. Returns netzebene_messung, regelzone, standorteigenschaften, and the full BO4E data.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_melo(
+        &self,
+        Parameters(p): Parameters<GetMeloParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let row = sqlx::query(
+            r"SELECT melo_id, malo_id, netzebene_messung, regelzone,
+                     standorteigenschaften, data, version
+              FROM melo WHERE melo_id = $1",
+        )
+        .bind(&p.melo_id)
+        .fetch_optional(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        use sqlx::Row as _;
+        match row {
+            Some(r) => ContentBlock::json(serde_json::json!({
+                "melo_id": r.try_get::<String,_>("melo_id").ok(),
+                "malo_id": r.try_get::<Option<String>,_>("malo_id").ok().flatten(),
+                "netzebene_messung": r.try_get::<Option<String>,_>("netzebene_messung").ok().flatten(),
+                "regelzone": r.try_get::<Option<String>,_>("regelzone").ok().flatten(),
+                "standorteigenschaften": r.try_get::<Option<serde_json::Value>,_>("standorteigenschaften").ok().flatten(),
+                "version": r.try_get::<i64,_>("version").ok(),
+                "data": r.try_get::<serde_json::Value,_>("data").ok(),
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "melo_not_found: MeLo '{}' not found.", p.melo_id
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Get temporal role assignments (Lokationszuordnung) for a MaLo: NB, MSB, LF with valid_from/valid_to dates. Essential for GPKE/GeLi process routing.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_lokationszuordnung(
+        &self,
+        Parameters(p): Parameters<GetLokaionsZuordnungParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let date = p
+            .date
+            .as_deref()
+            .and_then(|s| {
+                time::Date::parse(s, time::macros::format_description!("[year]-[month]-[day]")).ok()
+            })
+            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+
+        let rows = sqlx::query(
+            r"SELECT zuordnungstyp, rollencodenummer, valid_from, valid_to
+              FROM lokationszuordnung
+              WHERE malo_id = $1
+                AND valid_from <= $2
+                AND (valid_to IS NULL OR valid_to >= $2)
+              ORDER BY zuordnungstyp",
+        )
+        .bind(&p.malo_id)
+        .bind(date)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        use sqlx::Row as _;
+        let assignments: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
+            "zuordnungstyp": r.try_get::<String,_>("zuordnungstyp").ok(),
+            "rollencodenummer": r.try_get::<String,_>("rollencodenummer").ok(),
+            "valid_from": r.try_get::<time::Date,_>("valid_from").ok().map(|d| d.to_string()),
+            "valid_to": r.try_get::<Option<time::Date>,_>("valid_to").ok().flatten().map(|d| d.to_string()),
+        })).collect();
+
+        ContentBlock::json(serde_json::json!({
+            "malo_id": p.malo_id,
+            "reference_date": date.to_string(),
+            "count": assignments.len(),
+            "assignments": assignments,
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    #[tool(
+        description = "Get VersorgungsStatus change history for a MaLo. Shows all supply state transitions with timestamps — useful for investigating Lieferbeginn/Lieferende timing.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_versorgungsstatus_history(
+        &self,
+        Parameters(p): Parameters<GetVersorgungsStatusHistoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = p.limit.unwrap_or(20).clamp(1, 100);
+        let rows = sqlx::query(
+            r"SELECT id, lieferstatus, lf_mp_id, lf_mp_id_next,
+                     lf_next_lieferbeginn, lieferbeginn, lieferende,
+                     msb_mp_id, nb_mp_id, valid_from
+              FROM versorgungsstatus_history
+              WHERE tenant = $1 AND malo_id = $2
+              ORDER BY valid_from DESC
+              LIMIT $3",
+        )
+        .bind(&self.state.tenant)
+        .bind(&p.malo_id)
+        .bind(limit)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        use sqlx::Row as _;
+        let history: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
+            "id": r.try_get::<i64,_>("id").ok(),
+            "lieferstatus": r.try_get::<String,_>("lieferstatus").ok(),
+            "lf_mp_id": r.try_get::<Option<String>,_>("lf_mp_id").ok().flatten(),
+            "lf_mp_id_next": r.try_get::<Option<String>,_>("lf_mp_id_next").ok().flatten(),
+            "lf_next_lieferbeginn": r.try_get::<Option<time::Date>,_>("lf_next_lieferbeginn").ok().flatten().map(|d| d.to_string()),
+            "lieferbeginn": r.try_get::<Option<time::Date>,_>("lieferbeginn").ok().flatten().map(|d| d.to_string()),
+            "lieferende": r.try_get::<Option<time::Date>,_>("lieferende").ok().flatten().map(|d| d.to_string()),
+            "msb_mp_id": r.try_get::<Option<String>,_>("msb_mp_id").ok().flatten(),
+            "nb_mp_id": r.try_get::<String,_>("nb_mp_id").ok(),
+            "valid_from": r.try_get::<time::OffsetDateTime,_>("valid_from").ok().map(|t| t.to_string()),
+        })).collect();
+
+        ContentBlock::json(serde_json::json!({
+            "malo_id": p.malo_id,
+            "count": history.len(),
+            "history": history,
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    #[tool(
+        description = "Get the §42 EnWG annual Energiemix (grid-area renewable mix) for a Netzbetreiber. Used by LF for Reststrommix disclosure on customer bills.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_nb_energiemix(
+        &self,
+        Parameters(p): Parameters<GetNbEnergiemixParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let row = sqlx::query(
+            r"SELECT nb_mp_id, gueltig_fuer, energiemix,
+                     eeg_einspeisung_kwh, gesamtentnahme_kwh, updated_at
+              FROM nb_energiemix
+              WHERE tenant = $1
+                AND nb_mp_id = $2
+                AND ($3::smallint IS NULL OR gueltig_fuer = $3)
+              ORDER BY gueltig_fuer DESC
+              LIMIT 1",
+        )
+        .bind(&self.state.tenant)
+        .bind(&p.nb_mp_id)
+        .bind(p.year)
+        .fetch_optional(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        use sqlx::Row as _;
+        match row {
+            Some(r) => ContentBlock::json(serde_json::json!({
+                "nb_mp_id": r.try_get::<String,_>("nb_mp_id").ok(),
+                "gueltig_fuer": r.try_get::<i16,_>("gueltig_fuer").ok(),
+                "energiemix": r.try_get::<serde_json::Value,_>("energiemix").ok(),
+                "eeg_einspeisung_kwh": r.try_get::<Option<i64>,_>("eeg_einspeisung_kwh").ok().flatten(),
+                "gesamtentnahme_kwh": r.try_get::<Option<i64>,_>("gesamtentnahme_kwh").ok().flatten(),
+                "updated_at": r.try_get::<time::OffsetDateTime,_>("updated_at").ok().map(|t| t.to_string()),
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "nb_energiemix_not_found: No Energiemix for NB '{}'. Use PUT /api/v1/energiemix/{{nb_mp_id}} to publish.",
+                p.nb_mp_id
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Get a TechnischeRessource (smart meter, generation unit) by TR-ID. Returns device type, installed capacity, commissioning date, and §14a EnWG steuerkanal info.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_technische_ressource(
+        &self,
+        Parameters(p): Parameters<GetTechnischeRessourceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let row = sqlx::query(
+            r"SELECT tr_id, malo_id, melo_id, tr_typ, ist_fernschaltbar, data, version, updated_at
+              FROM technische_ressourcen
+              WHERE tr_id = $1 AND tenant = $2",
+        )
+        .bind(&p.tr_id)
+        .bind(&self.state.tenant)
+        .fetch_optional(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        use sqlx::Row as _;
+        match row {
+            Some(r) => ContentBlock::json(serde_json::json!({
+                "tr_id": r.try_get::<String,_>("tr_id").ok(),
+                "malo_id": r.try_get::<Option<String>,_>("malo_id").ok().flatten(),
+                "melo_id": r.try_get::<Option<String>,_>("melo_id").ok().flatten(),
+                "tr_typ": r.try_get::<Option<String>,_>("tr_typ").ok().flatten(),
+                "ist_fernschaltbar": r.try_get::<Option<bool>,_>("ist_fernschaltbar").ok().flatten(),
+                "version": r.try_get::<i64,_>("version").ok(),
+                "updated_at": r.try_get::<time::OffsetDateTime,_>("updated_at").ok().map(|t| t.to_string()),
+                "data": r.try_get::<serde_json::Value,_>("data").ok(),
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "tr_not_found: TechnischeRessource '{}' not found.", p.tr_id
+            ))])),
+        }
+    }
+
+    #[tool(
+        description = "Get a SteuerbareRessource (controllable load, §14a EnWG) by SR-ID, including all Konfigurationsprodukte (BK6-24-174 §4.3 produktcode).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_steuerbare_ressource(
+        &self,
+        Parameters(p): Parameters<GetSteuerbareRessourceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let row = sqlx::query(
+            r"SELECT sr_id, malo_id, melo_id, data, konfigurationsprodukte, version, updated_at
+              FROM steuerbare_ressourcen
+              WHERE sr_id = $1 AND tenant = $2",
+        )
+        .bind(&p.sr_id)
+        .bind(&self.state.tenant)
+        .fetch_optional(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        use sqlx::Row as _;
+        match row {
+            Some(r) => ContentBlock::json(serde_json::json!({
+                "sr_id": r.try_get::<String,_>("sr_id").ok(),
+                "malo_id": r.try_get::<Option<String>,_>("malo_id").ok().flatten(),
+                "melo_id": r.try_get::<Option<String>,_>("melo_id").ok().flatten(),
+                "version": r.try_get::<i64,_>("version").ok(),
+                "updated_at": r.try_get::<time::OffsetDateTime,_>("updated_at").ok().map(|t| t.to_string()),
+                "data": r.try_get::<serde_json::Value,_>("data").ok(),
+                "konfigurationsprodukte": r.try_get::<Option<serde_json::Value>,_>("konfigurationsprodukte").ok().flatten(),
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "sr_not_found: SteuerbareRessource '{}' not found.", p.sr_id
+            ))])),
+        }
+    }
+
+    /// Read a single trading partner by its 13-digit MP-ID.
+    ///
+    /// Returns display name, AS4 / MaKo communication channels, roles, and
+    /// the applicable EDIFACT identification scheme (BDEW `293`, DVGW `332`,
+    /// or GS1 `9`).
+    #[tool(
+        description = "Read a single trading partner (Marktpartner) by 13-digit MP-ID",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_partner(
+        &self,
+        Parameters(p): Parameters<GetPartnerParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let row = sqlx::query(
+            r"SELECT mp_id, display_name, makoadresse, channels, updated_at
+              FROM partners
+              WHERE mp_id = $1",
+        )
+        .bind(&p.mp_id)
+        .fetch_optional(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        use sqlx::Row as _;
+        match row {
+            Some(r) => ContentBlock::json(serde_json::json!({
+                "mp_id": r.try_get::<String, _>("mp_id").ok(),
+                "display_name": r.try_get::<Option<String>, _>("display_name").ok().flatten(),
+                "makoadresse": r.try_get::<Option<String>, _>("makoadresse").ok().flatten(),
+                "channels": r.try_get::<Option<serde_json::Value>, _>("channels").ok().flatten(),
+                "updated_at": r.try_get::<Option<time::OffsetDateTime>, _>("updated_at").ok().flatten().map(|t| t.to_string()),
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "partner_not_found: Marktpartner '{}' not found.", p.mp_id
+            ))])),
+        }
+    }
+
+    /// Read the BO4E `Standorteigenschaften` for a Messlokation.
+    ///
+    /// `Standorteigenschaften` carries the Strom/Gas location properties
+    /// required for Redispatch 2.0 `NetworkConstraintDocument` cross-references
+    /// (`StandorteigenschaftenStrom`: regelzone EIC, bilanzierungsgebietEic) and
+    /// Gas billing zone routing (`StandorteigenschaftenGas`: druckstufe).
+    ///
+    /// Returns 404-style error when the MeLo is unknown or has no Standorteigenschaften
+    /// yet (populated by `nis-syncd` or a WiM Stammdaten PUT).
+    #[tool(
+        description = "Read BO4E Standorteigenschaften for a MeLo (needed for Redispatch 2.0 and Gas zone routing)",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_melo_standorteigenschaften(
+        &self,
+        Parameters(p): Parameters<GetMeloStandorteigenschaftenParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let row = sqlx::query(
+            r"SELECT melo_id, malo_id, standorteigenschaften, netzebene_messung, regelzone
+              FROM melo
+              WHERE melo_id = $1",
+        )
+        .bind(&p.melo_id)
+        .fetch_optional(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        use sqlx::Row as _;
+        match row {
+            Some(r) => {
+                let se = r
+                    .try_get::<Option<serde_json::Value>, _>("standorteigenschaften")
+                    .ok()
+                    .flatten();
+                match se {
+                    Some(v) => ContentBlock::json(serde_json::json!({
+                        "melo_id": r.try_get::<String, _>("melo_id").ok(),
+                        "malo_id": r.try_get::<Option<String>, _>("malo_id").ok().flatten(),
+                        "netzebene_messung": r.try_get::<Option<String>, _>("netzebene_messung").ok().flatten(),
+                        "regelzone": r.try_get::<Option<String>, _>("regelzone").ok().flatten(),
+                        "standorteigenschaften": v,
+                    }))
+                    .map(|b| CallToolResult::success(vec![b]))
+                    .map_err(|e| McpError::internal_error(e.message, None)),
+                    None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                        "standorteigenschaften_not_found: MeLo '{}' has no Standorteigenschaften yet.", p.melo_id
+                    ))])),
+                }
+            }
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "melo_not_found: MeLo '{}' not found.",
+                p.melo_id
+            ))])),
+        }
+    }
+
+    /// Read the VersorgungsStatus valid on a specific reference date.
+    ///
+    /// Use this for point-in-time supply-state queries (e.g. for billing period
+    /// reconstruction or gap analysis).  For the current state use
+    /// `get_versorgungsstatus` instead.
+    #[tool(
+        description = "Read the VersorgungsStatus for a MaLo at a specific date (YYYY-MM-DD)",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_versorgung_at(
+        &self,
+        Parameters(p): Parameters<GetVersorgungAtParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let at_date = time::Date::parse(
+            &p.at,
+            &time::format_description::well_known::Iso8601::DEFAULT,
+        )
+        .map_err(|e| McpError::invalid_params(format!("invalid date '{}': {e}", p.at), None))?;
+
+        // Find the history row whose valid_from is the latest on or before `at_date`.
+        let row = sqlx::query(
+            r"SELECT h.malo_id, h.lieferstatus, h.lf_mp_id, h.lf_mp_id_next,
+                     h.lieferbeginn, h.lieferende, h.msb_mp_id, h.nb_mp_id,
+                     h.valid_from, h.lf_next_lieferbeginn
+              FROM versorgungsstatus_history h
+              WHERE h.malo_id = $1
+                AND h.tenant  = $2
+                AND h.valid_from <= $3
+              ORDER BY h.valid_from DESC
+              LIMIT 1",
+        )
+        .bind(&p.malo_id)
+        .bind(&self.state.tenant)
+        .bind(at_date)
+        .fetch_optional(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        use sqlx::Row as _;
+        match row {
+            Some(r) => ContentBlock::json(serde_json::json!({
+                "malo_id": r.try_get::<String, _>("malo_id").ok(),
+                "lieferstatus": r.try_get::<String, _>("lieferstatus").ok(),
+                "lf_mp_id": r.try_get::<Option<String>, _>("lf_mp_id").ok().flatten(),
+                "lf_mp_id_next": r.try_get::<Option<String>, _>("lf_mp_id_next").ok().flatten(),
+                "lieferbeginn": r.try_get::<Option<time::Date>, _>("lieferbeginn").ok().flatten().map(|d| d.to_string()),
+                "lieferende": r.try_get::<Option<time::Date>, _>("lieferende").ok().flatten().map(|d| d.to_string()),
+                "msb_mp_id": r.try_get::<Option<String>, _>("msb_mp_id").ok().flatten(),
+                "nb_mp_id": r.try_get::<Option<String>, _>("nb_mp_id").ok().flatten(),
+                "valid_from": r.try_get::<time::OffsetDateTime, _>("valid_from").ok().map(|t| t.to_string()),
+                "lf_next_lieferbeginn": r.try_get::<Option<time::Date>, _>("lf_next_lieferbeginn").ok().flatten().map(|d| d.to_string()),
+                "queried_at": p.at,
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "versorgung_not_found: No VersorgungsStatus found for MaLo '{}' on or before '{}'.",
+                p.malo_id, p.at
+            ))])),
+        }
+    }
 }
 
 #[prompt_router]
@@ -671,7 +1233,72 @@ impl MdmdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "1. Use `get_versorgungsstatus` — compare current vs expected status.\n                 2. Use `get_correlation` with the erp_order_id to find the triggering process.\n                 3. Check makod process log: GET /api/v1/processes?malo_id=... in makod.\n                 4. A status of Unbeliefert means no active Liefervertrag — check if:\n                    - Lieferbeginn UTILMD 55001 was sent and APERAK received\n                    - Lieferbeginn 55003 (Bestätigung) was received from NB\n                    - VersorgungsStatus was updated by processd on process.completed event.\n                 5. Fix: re-trigger the Anmeldung via processd POST /api/v1/start-supply.",
+                "1. `get_versorgungsstatus` — compare current vs expected status.\n\
+                 2. `get_versorgungsstatus_history` — see all transitions with timestamps.\n\
+                 3. `get_correlation` with erp_order_id — find the triggering process.\n\
+                 4. `get_lokationszuordnung` — verify NB/MSB/LF role assignments are current.\n\
+                 5. Status Unbeliefert means no active Liefervertrag — check:\n\
+                    - Was UTILMD 55001 (Lieferbeginn) sent and APERAK received?\n\
+                    - Was 55003 (NB-Bestätigung) received from NB?\n\
+                    - Did processd update VersorgungsStatus on process.completed?\n\
+                 6. Fix: re-trigger via processd POST /api/v1/start-supply.",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "versorgungswechsel-tracking",
+        description = "Track a Lieferantenwechsel (supplier switch) end-to-end across marktd + makod"
+    )]
+    async fn versorgungswechsel_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "How do I track a Lieferantenwechsel (GPKE supplier switch) end-to-end?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "## GPKE Lieferantenwechsel Tracking (UTILMD 55001–55009)\n\n\
+                 1. `get_malo` — confirm malo_id, sparte=STROM, bilanzierungsgebiet (needed for UTILMD)\n\
+                 2. `get_versorgungsstatus` — check lf_mp_id_next and lf_next_lieferbeginn\n\
+                    - lf_mp_id_next set = Anmeldung in flight (55001 received by NB)\n\
+                    - lf_mp_id set = Beliefert (55003 confirmation received)\n\
+                 3. `get_correlation` by process_id — see workflow_name=gpke-supplier-change, status=RUNNING/COMPLETED\n\
+                 4. `get_versorgungsstatus_history` — review full transition timeline\n\
+                 5. `get_lokationszuordnung` — verify new LF role assignment valid_from matches Lieferbeginn\n\
+                 6. `get_nb_contract` — confirm NB contract valid_from ≤ Lieferbeginn\n\n\
+                 GPKE deadlines: NB must respond within 24h (APERAK) and 10 Werktage (55002/55003/55004).\n\
+                 APERAK 45-min deadline is enforced by makod automatically.",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "grid-topology",
+        description = "Investigate grid topology: MaLo → MeLo → NeLo → lokationszuordnung chains"
+    )]
+    async fn grid_topology_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "How do I understand the grid topology for a MaLo in marktd?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "## Grid Topology Investigation\n\n\
+                 1. `get_malo` — start with malo_id; check sparte, netzebene, bilanzierungsgebiet, regelzone\n\
+                 2. `get_lokationszuordnung` — temporal role chain:\n\
+                    - NB (or GNB for Gas): grid operator\n\
+                    - MSB: Messstellenbetreiber (meter operator)\n\
+                    - LF/LFG: active supplier\n\
+                 3. `get_melo` — get the MeLo linked to this MaLo:\n\
+                    - netzebene_messung: where the meter is physically connected\n\
+                    - standorteigenschaften: for Redispatch 2.0 Stammdaten\n\
+                    - regelzone: for MABIS IFTSTA routing (→ ÜNB)\n\
+                 4. For §14a EnWG steuerbare Ressourcen: `get_steuerbare_ressource`\n\
+                 5. For MSB device info: `get_technische_ressource` (smart meter, generation unit)\n\
+                 6. lokationszuordnungen (the graph edges): GET /api/v1/malo/{id}/lokationen\n\
+                    returns BFS-traversal of all linked MaLo/MeLo/NeLo nodes.",
             ),
         ]
     }
@@ -686,17 +1313,30 @@ impl ServerHandler for MdmdMcpHandler {
             .with_instructions(
                 "# marktd — Master Data Management\n\
              \n\
-             Provides MaLo/MeLo master data, trading partner registry, NNE price sheets, and supply status.\n\
+             Provides MaLo/MeLo master data, trading partner registry, NNE price sheets, supply status, and grid topology.\n\
              \n\
-             ## Tools\n\
-             - `get_malo` — read a MaLo by 11-digit ID\n\
-             - `list_partners` — list registered trading partners (GLN, AS4 endpoint, roles)\n\
-             - `get_preisblatt` — read the PreisblattNetznutzung for an NB (used by invoicd)\n\
-             - `get_versorgungsstatus` — read the VersorgungsStatus (Beliefert/Unbeliefert/…) for a MaLo\n\
-             - `get_nb_contract` — read the active NB network contract (netzebene, billing_schedule, RLM/SLP)\n\
-             - `get_correlation` — look up a process correlation by process_id UUID or erp_order_id\n\
+             ## Tools (13)\n\
+             - `get_malo` — read a MaLo by 11-digit ID (sparte, netzebene, bilanzierungsmethode, regelzone, full BO4E data)\n\
+             - `list_malo` — list/filter MaLos by sparte, bilanzierungsmethode, netzebene\n\
+             - `get_melo` — read a MeLo by ID (netzebene_messung, regelzone, standorteigenschaften)\n\
+             - `list_partners` — list registered trading partners (GLN, AS4 endpoint, channels)\n\
+             - `get_preisblatt` — read the PreisblattNetznutzung for an NB (used by invoicd for §22 MessZV)\n\
+             - `get_versorgungsstatus` — read VersorgungsStatus (Beliefert/Unbeliefert/…) for a MaLo\n\
+             - `get_versorgungsstatus_history` — full supply state transition history for a MaLo\n\
+             - `get_lokationszuordnung` — temporal NB/MSB/LF role assignments for a MaLo\n\
+             - `get_nb_contract` — active NB network contract (netzebene, billing_schedule, RLM/SLP)\n\
+             - `get_correlation` — look up a process correlation by process_id or erp_order_id\n\
+             - `list_pricat_versions` — PRICAT 27003 version history for an NB\n\
+             - `dispatch_pricat` — trigger PRICAT re-dispatch to LF counterparties (NB-only)\n\
+             - `get_nb_energiemix` — §42 EnWG annual grid-area renewable mix for an NB\n\
+             - `get_technische_ressource` — smart meter / generation unit by TR-ID\n\
+             - `get_steuerbare_ressource` — §14a EnWG controllable load + Konfigurationsprodukte by SR-ID\n\
              \n\
-             All reads are tenant-scoped.  Cross-tenant access is denied by Cedar ABAC.",
+             ## Prompts (5)\n\
+             `lookup-malo`, `investigate-supply-gap`, `versorgungswechsel-tracking`, `grid-topology`, `msb-preisanfrage`\n\
+             \n\
+             All reads are tenant-scoped. Cross-tenant access is denied by Cedar ABAC.\n\
+             §9 EnWG Informatorisches Unbundling: LF actors must not access NB-private endpoints.",
             )
     }
 }

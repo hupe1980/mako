@@ -30,6 +30,7 @@ uuid         = { workspace = true, features = ["v4", "serde"] }
 rust_decimal = { workspace = true }
 rubo4e       = { workspace = true }
 reqwest      = { workspace = true }
+sepa         = { workspace = true, features = ["json"] }
 tracing      = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower-http   = { version = "0.6" }

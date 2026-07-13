@@ -1,23 +1,30 @@
 //! MCP server for `billingd` — Multi-Product Billing Engine.
 //!
-//! ## Tools
+//! ## Tools (10)
 //!
 //! | Tool | Description |
 //! |---|---|
 //! | `list_billing_records` | List billing records for a MaLo |
 //! | `get_billing_record` | Get a single billing record with full Rechnung BO4E |
 //! | `preview_billing` | Dry-run billing calculation (no persist, no CloudEvent) |
-//! | `get_customer_product` | Look up the active product assignment for a MaLo |
 //! | `get_xrechnung` | Fetch XRechnung 3.0 / ZUGFeRD 2.3 CII XML for B2G submission |
 //! | `check_billing_anomaly` | AI anomaly detection: rolling 3-month average vs latest invoice |
+//! | `list_vpp_settlements` | List VPP aggregation settlement records |
+//! | `list_corrections` | List Korrekturrechnung / Stornorechnung records (§22 MessZV) |
+//! | `calculate_billing` | Trigger a billing calculation run for a MaLo |
+//! | `list_product_categories` | Describe all 12 billing categories and their required fields |
+//! | `get_billing_summary` | Aggregate billing stats per MaLo (total billed, avg monthly) |
 //!
-//! ## Prompts
+//! ## Prompts (6)
 //!
 //! | Prompt | Description |
 //! |---|---|
+//! | `order-to-cash` | Full Order-to-Cash: GPKE Lieferbeginn → Jahresabschluss |
 //! | `preview-invoice` | Step-by-step: preview a customer invoice before billing run |
 //! | `check-dynamic-tariff` | Step-by-step: verify §41a dynamic tariff configuration |
-//! | `order-to-cash` | Full Order-to-Cash: GPKE Lieferbeginn → Jahresabschluss |
+//! | `14a-steuerungsrabatt` | Configure §14a EnWG Steuerungsrabatt (Wärmepumpe / Wallbox) |
+//! | `eeg-billing` | Configure EEG/EINSPEISUNG billing for feed-in plants |
+//! | `gas-billing` | Configure Gas billing — Brennwertkorrektur, BEHG CO₂, H2-blend |
 
 use std::sync::Arc;
 
@@ -44,6 +51,8 @@ pub struct BillingdMcpState {
     pub tenant: String,
     pub oidc: OidcVerifier,
     pub cedar: Arc<CedarEnforcer>,
+    /// Self base URL (e.g. `"http://localhost:9280"`) — used by MCP tools to call the HTTP API.
+    pub self_url: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -153,21 +162,36 @@ impl BillingdMcpHandler {
         &self,
         Parameters(params): Parameters<PreviewParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Delegate to the HTTP preview endpoint via internal reqwest for now.
-        // A direct in-process call would require access to tarifbd/edmd clients which
-        // live in the Axum Extension layer. For MCP we return a description of inputs.
-        ContentBlock::json(serde_json::json!({
-            "hint": "Use POST /api/v1/billing/{malo_id}/preview with the same parameters for a full dry-run calculation.",
-            "params": {
-                "malo_id": params.malo_id,
-                "lf_mp_id": params.lf_mp_id,
-                "nb_mp_id": params.nb_mp_id,
-                "period_from": params.period_from,
-                "period_to": params.period_to,
+        // Call the billingd preview endpoint via HTTP (carries tarifbd/edmd/marktd context)
+        let url = format!("{}/api/v1/billing/{}/preview", self.state.self_url, params.malo_id);
+        let body = serde_json::json!({
+            "lf_mp_id": params.lf_mp_id,
+            "nb_mp_id": params.nb_mp_id,
+            "period_from": params.period_from,
+            "period_to": params.period_to,
+        });
+        match reqwest::Client::new()
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                let json: serde_json::Value = resp.json().await
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                ContentBlock::json(json)
+                    .map(|b| CallToolResult::success(vec![b]))
+                    .map_err(|e| McpError::internal_error(e.message, None))
             }
-        }))
-        .map(|b| CallToolResult::success(vec![b]))
-        .map_err(|e| McpError::internal_error(e.message, None))
+            Ok(resp) => {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                Err(McpError::internal_error(
+                    format!("Preview failed ({status}): {text}"), None
+                ))
+            }
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
     }
     #[tool(
         description = "Fetch the XRechnung 3.0 / ZUGFeRD 2.3 CII XML for a billing record UUID. \
@@ -260,6 +284,200 @@ agentd billing-anomaly-agent calls this on every de.billing.rechnung.erstellt ev
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
+
+    // ── VPP Aggregation Settlement (B12 — RED III Article 17) ────────────────
+
+    #[tool(description = "List VPP (Virtual Power Plant) aggregation settlement records for a VPP portfolio. \
+Returns billing records with category=VPP showing dispatch events, total flexibility kWh, and Einsatzkosten. \
+CloudEvent de.vpp.settlement.berechnet is emitted per settlement. RED III Article 17 / §41b EnWG (expected 2026).",
+        annotations(read_only_hint = true, open_world_hint = false))]
+    async fn list_vpp_settlements(&self, Parameters(p): Parameters<serde_json::Value>) -> Result<CallToolResult, McpError> {
+        use crate::pg::list_billing_records;
+        let lf_mp_id = p.get("lf_mp_id").and_then(|v| v.as_str());
+        let limit = p.get("limit").and_then(|v| v.as_i64()).unwrap_or(20).min(100);
+        // VPP records use category=VPP stored under the vpp_id as malo_id.
+        let vpp_malo = p.get("vpp_id").and_then(|v| v.as_str());
+        match list_billing_records(
+            &self.state.pool,
+            vpp_malo,
+            lf_mp_id,
+            None,
+            limit,
+        ).await {
+            Ok(rows) => {
+                let vpp_rows: Vec<_> = rows.iter()
+                    .filter(|r| {
+                        r.get("category")
+                            .and_then(|v| v.as_str())
+                            .map(|c| c.starts_with("VPP"))
+                            .unwrap_or(false)
+                    })
+                    .collect();
+                ContentBlock::json(serde_json::json!({
+                    "count": vpp_rows.len(),
+                    "records": vpp_rows,
+                    "hint": "POST /api/v1/billing/vpp/{vpp_id} to generate a new VPP settlement from dispatch events. CloudEvent de.vpp.settlement.berechnet is emitted to ERP."
+                }))
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None))
+            }
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "List Korrekturrechnung and Stornorechnung records (§22 MessZV audit trail). \
+Returns all correction/reversal billing records for a MaLo. \
+Each record includes original_record_id, correction_reason, and whether it negates the original.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_corrections(
+        &self,
+        Parameters(params): Parameters<ListRecordsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::list_billing_records;
+        // Fetch all records; filter is_correction = true in memory to avoid
+        // a separate pg function (corrections are rare — no perf concern).
+        match list_billing_records(
+            &self.state.pool,
+            params.malo_id.as_deref(),
+            params.lf_mp_id.as_deref(),
+            None, // outcome filter not applied — show all corrections
+            params.limit.unwrap_or(50).min(200),
+        )
+        .await
+        {
+            Ok(rows) => {
+                let corrections: Vec<_> = rows.iter()
+                    .filter(|r| r.get("is_correction").and_then(|v| v.as_bool()).unwrap_or(false))
+                    .collect();
+                ContentBlock::json(serde_json::json!({
+                    "count": corrections.len(),
+                    "records": corrections,
+                    "note": "Use POST /api/v1/billing/{id}/correction to create a new correction."
+                }))
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None))
+            }
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Trigger a billing calculation run for a MaLo. \
+Calls POST /api/v1/billing/{malo_id}/calculate, persists the Rechnung, and emits de.billing.rechnung.erstellt. \
+Use preview_billing first to verify the result without side effects.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false)
+    )]
+    async fn calculate_billing(
+        &self,
+        Parameters(params): Parameters<PreviewParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let url = format!("{}/api/v1/billing/{}/calculate", self.state.self_url, params.malo_id);
+        let body = serde_json::json!({
+            "lf_mp_id": params.lf_mp_id,
+            "nb_mp_id": params.nb_mp_id,
+            "period_from": params.period_from,
+            "period_to": params.period_to,
+        });
+        match reqwest::Client::new().post(&url).json(&body).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let json: serde_json::Value = resp.json().await
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                ContentBlock::json(json)
+                    .map(|b| CallToolResult::success(vec![b]))
+                    .map_err(|e| McpError::internal_error(e.message, None))
+            }
+            Ok(resp) => {
+                let st = resp.status();
+                let txt = resp.text().await.unwrap_or_default();
+                Err(McpError::internal_error(format!("Billing run failed ({st}): {txt}"), None))
+            }
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "List all 12 billing product categories with their required and optional \
+TariffInput fields. Use this to discover what fields to set in tarifbd for a given product type. \
+Returns a structured description of STROM, GAS, WAERME, SOLAR, EEG, EINSPEISUNG, WAERMEPUMPE, \
+WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM also covered).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_product_categories(
+        &self,
+        Parameters(_p): Parameters<serde_json::Value>,
+    ) -> Result<CallToolResult, McpError> {
+        let categories = serde_json::json!([
+            { "category": "STROM", "description": "Standard electricity — Eintarif/Zweitarif/Mehrtarif", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["grundpreis_ct_per_day", "arbeitspreis_ht_ct_per_kwh", "arbeitspreis_nt_ct_per_kwh", "dynamic_epex", "dynamic_epex_floor_ct_kwh"], "regulatory": "§41a EnWG for dynamic; §3 StromStG levy included" },
+            { "category": "GAS", "description": "Natural gas with Brennwertkorrektur and CO₂ levies", "required": ["gas_arbeitspreis_ct_per_kwh_hs"], "optional": ["gas_grundpreis_ct_per_day", "energiesteuer_gas_ct_per_kwh_override", "behg_gas_ct_per_kwh_override"], "regulatory": "§10 GasGVV (Brennwertkorrektur), §2 EnergieStG, BEHG" },
+            { "category": "WAERME", "description": "Fernwärme — Grundpreis, Arbeitspreis, Leistungspreis", "required": ["waerme_arbeitspreis_ct_per_kwh"], "optional": ["waerme_grundpreis_eur_per_month", "waerme_leistungspreis_eur_per_kw_month", "mwst_rate_override: 0.07 for renewable Fernwärme"], "regulatory": "§12 Abs.2 Nr.1 UStG: 7% MwSt for renewable heat (set mwst_rate_override: 0.07)" },
+            { "category": "SOLAR", "description": "Solar self-consumption, Mieterstrom §38a, §42a GGV community solar", "required": ["solar_arbeitspreis_ct_per_kwh"], "optional": ["mieterstrom_aufschlag_ct_per_kwh", "gemeinschaft_rabatt_ct_per_kwh", "solar_include_stromsteuer", "mwst_rate_override: 0 for PV ≤30kWp from 2023"], "regulatory": "§12 Abs.3 UStG: 0% MwSt for PV ≤30kWp since 01.01.2023 (set mwst_rate_override: 0)" },
+            { "category": "EEG", "description": "EEG feed-in Vergütung — credit note to plant operator (LF role, contractual)", "required": ["eeg_verguetungssatz_ct_per_kwh"], "optional": ["eeg_marktpraemie_ct_per_kwh", "eeg_managementpraemie_ct_per_kwh", "kwkg_zuschlag_ct_per_kwh"], "meter": "eeg_meter.einspeisung_kwh, eeg_meter.kwh_during_negative_epex (§51 contractual suspension)", "regulatory": "§21 EEG Vergütung; §20 EEG Marktprämie; §51 EEG Negativpreisregel (contractual for LF)" },
+            { "category": "EINSPEISUNG", "description": "Direktvermarktung settlement — Marktwert minus Vermarktungsgebühr", "required": ["marktwert_ct_per_kwh"], "optional": ["vermarktungsgebuehr_ct_per_kwh"], "regulatory": "§20 EEG Direktvermarktung; Direktvermarkter bears negative-price risk (§51 does NOT apply)" },
+            { "category": "WAERMEPUMPE", "description": "Heat pump electricity with §14a EnWG Steuerungsrabatt Modul 1/3", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["steuerungsrabatt_modul1_eur_per_kw_year", "steuerungsrabatt_modul3_eur_per_kw_year"], "meter": "meter.spitzenleistung_kw (required for §14a), meter.steuerung_stunden (Modul 3)", "regulatory": "§14a EnWG; BK6-22-300; mandatory for controlled devices ≥3.7kW from 01.01.2024" },
+            { "category": "WALLBOX", "description": "EV charging box with §14a EnWG Steuerungsrabatt Modul 1/3 — same as WAERMEPUMPE", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["steuerungsrabatt_modul1_eur_per_kw_year", "steuerungsrabatt_modul3_eur_per_kw_year"], "regulatory": "§14a EnWG same as WAERMEPUMPE" },
+            { "category": "HEMS", "description": "Home Energy Management System — platform subscription + optimization events", "required": ["hems_platform_fee_eur_per_month"], "optional": ["hems_optimization_event_eur", "hems_readout_event_eur"], "meter": "hems_meter.months, hems_meter.optimization_events, hems_meter.readout_events" },
+            { "category": "EMOBILITY", "description": "EV charging CPO/EMSP — service fee + kWh + session fees", "required": ["emobility_service_fee_eur_per_month or emobility_arbeitspreis_ct_per_kwh"], "optional": ["emobility_session_fee_eur", "emobility_roaming_fee_eur"], "meter": "emobility_meter.months, emobility_meter.kwh_charged, emobility_meter.sessions" },
+            { "category": "ENERGIEDIENSTLEISTUNG", "description": "Energy services (MSB, maintenance, analytics) — flat fee + event count", "required": ["service_fee_eur or service_event_price_eur"], "optional": [], "meter": "service_meter.months, service_meter.event_count" },
+            { "category": "BUNDLE", "description": "Composite product — NOT YET IMPLEMENTED. Submit individual calculate requests per component.", "required": [], "note": "Returns 501 Not Implemented. Submit separate requests per component product." }
+        ]);
+        ContentBlock::json(categories)
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    #[tool(
+        description = "Aggregate billing statistics for a MaLo: total billed, monthly average, \
+category breakdown, and comparison of last 3 months vs previous 3 months. \
+Use to spot billing trends, detect anomalies, and verify consistent tariff application.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_billing_summary(
+        &self,
+        Parameters(params): Parameters<ListRecordsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::list_billing_records;
+        use rust_decimal::Decimal;
+        let malo_id = params.malo_id.as_deref();
+        let lf_mp_id = params.lf_mp_id.as_deref();
+        match list_billing_records(&self.state.pool, malo_id, lf_mp_id, None, 100).await {
+            Ok(rows) => {
+                let mut total_brutto = Decimal::ZERO;
+                let mut count = 0usize;
+                let mut by_category: std::collections::HashMap<String, (usize, Decimal)> = std::collections::HashMap::new();
+                for row in &rows {
+                    if let Some(brutto) = row.get("total_brutto_eur").and_then(|v| {
+                        v.as_str().and_then(|s| s.parse::<Decimal>().ok())
+                            .or_else(|| v.as_f64().and_then(|f| Decimal::try_from(f).ok()))
+                    }) {
+                        total_brutto += brutto;
+                        count += 1;
+                        if let Some(cat) = row.get("category").and_then(|v| v.as_str()) {
+                            let e = by_category.entry(cat.to_owned()).or_insert((0, Decimal::ZERO));
+                            e.0 += 1;
+                            e.1 += brutto;
+                        }
+                    }
+                }
+                let avg_monthly = if count > 0 { total_brutto / Decimal::from(count) } else { Decimal::ZERO };
+                let category_summary: Vec<_> = by_category.iter()
+                    .map(|(cat, (cnt, total))| serde_json::json!({ "category": cat, "count": cnt, "total_brutto_eur": total.to_string() }))
+                    .collect();
+                ContentBlock::json(serde_json::json!({
+                    "malo_id": malo_id,
+                    "lf_mp_id": lf_mp_id,
+                    "record_count": count,
+                    "total_brutto_eur": total_brutto.to_string(),
+                    "avg_monthly_brutto_eur": avg_monthly.to_string(),
+                    "by_category": category_summary,
+                }))
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None))
+            }
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
 }
 
 
@@ -308,6 +526,119 @@ impl BillingdMcpHandler {
             PromptMessage::new_text(Role::User, "Verify the §41a dynamic EPEX tariff is correctly configured."),
             PromptMessage::new_text(Role::Assistant, 
                 "For §41a dynamic tariff (mandatory for iMSys customers since Jan 2025):\n                 1. Verify the product in tarifbd has dynamic_epex: true\n                 2. Verify EPEX day-ahead prices are imported for the billing period:\n                    PUT /api/v1/epex-prices/{date} in tarifbd\n                 3. Verify the customer has 15-min Lastgang data in edmd:\n                    GET /api/v1/lastgang/{malo_id}?from=...&to=...\n                 4. Run a preview: POST /api/v1/billing/{malo_id}/preview with dynamic product\n\n                 If Lastgang is unavailable, billingd falls back to static arbeitsmenge_kwh billing.",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "14a-steuerungsrabatt",
+        description = "Step-by-step: configure §14a EnWG Steuerungsrabatt billing for Wärmepumpe or Wallbox"
+    )]
+    async fn steuerungsrabatt_14a_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(Role::User, "How do I set up §14a billing for a heat pump customer?"),
+            PromptMessage::new_text(Role::Assistant,
+                "§14a EnWG (Steuerbarkeitsrabatt) has 3 implementation models:\n\n\
+                **Modul 1 — Capacity-based NNE reduction (kW/year)**\n\
+                In tarifbd: set `steuerungsrabatt_modul1_eur_per_kw_year` in the WAERMEPUMPE/WALLBOX product.\n\
+                Example: 150 EUR/kW/year → 5 kW WP → 750 EUR/year Netzentgelteinsparung (vor MwSt).\n\
+                Requires: spitzenleistung_kw in the meter reading or billing request.\n\
+                Formula: kW × rate_eur_per_kw_year / 12 × billing_months → credit position.\n\n\
+                **Modul 2 — Event-based (per dispatch hour) — NOT YET IN billingd**\n\
+                Requires ZeitvariablePreisposition from marktd + actual controlled kWh from edmd.\n\
+                Planned: integrate with processd §14a Steuerungsauftrag CloudEvent pipeline.\n\n\
+                **Modul 3 — Load-shedding compensation (Laststeuerung hours × kW)**\n\
+                In tarifbd: set `steuerungsrabatt_modul3_eur_per_kw_year` in the product.\n\
+                Requires: steuerung_stunden in the meter reading (from agentd/processd).\n\
+                Formula: kW × rate × (steuerung_stunden / 8760) → credit position.\n\n\
+                **Setup steps:**\n\
+                1. GET tarifbd /api/v1/products → find WAERMEPUMPE or WALLBOX product\n\
+                2. PUT tarifbd /api/v1/products/{id} add steuerungsrabatt_modul1_eur_per_kw_year\n\
+                3. POST /api/v1/billing/{malo_id}/preview — verify Steuerungsrabatt position appears\n\
+                4. Check: position tagged 'steuerungsrabatt_modul1' → negative credit amount\n\
+                5. Confirm: brutto_eur is LOWER than without §14a\n\n\
+                **Regulatory basis:** §14a EnWG (Gesetz zur Änderung des EnWG 2022), BNetzA Festlegung BK6-22-300.\n\
+                Pflicht ab 01.01.2024 für alle neuen steuerbaren Anlagen ≥3.7 kW.",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "eeg-billing",
+        description = "Configure EEG/EINSPEISUNG billing for feed-in plants — Vergütung, Direktvermarktung, KWKG"
+    )]
+    async fn eeg_billing_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(Role::User, "How do I set up billing for a solar feed-in customer?"),
+            PromptMessage::new_text(Role::Assistant,
+                "EEG billing in billingd covers two categories:\n\n\
+                **Category `EEG` — Vergütung (statutory feed-in tariff, §21 EEG)**\n\
+                Used when the plant receives a fixed kWh rate for 20 years.\n\
+                In tarifbd: set `eeg_verguetungssatz_ct_per_kwh` (e.g. 8.51 for ≤10 kWp solar 2024).\n\
+                Optional additions:\n\
+                - `eeg_marktpraemie_ct_per_kwh`: Gleitende Marktprämie (§20 EEG, Direktvermarktung)\n\
+                - `eeg_managementpraemie_ct_per_kwh`: Managementprämie (0.4 ct/kWh ≤100 MW)\n\
+                - `kwkg_zuschlag_ct_per_kwh`: KWKG Zuschlag for CHP plants (§7 KWKG 2023)\n\
+                Input: `eeg_meter { einspeisung_kwh: 500 }`\n\
+                Output: GUTSCHRIFT Rechnung (LF pays the plant owner)\n\n\
+                **Category `EINSPEISUNG` — Direktvermarktung (market price, §20 EEG)**\n\
+                Used when the Direktvermarkter sells to the spot market.\n\
+                In tarifbd: set `marktwert_ct_per_kwh` (e.g. current EPEX monthly average).\n\
+                Optional: `vermarktungsgebuehr_ct_per_kwh` (Direktvermarkter service fee deducted).\n\
+                Input: `eeg_meter { einspeisung_kwh: 800 }`\n\
+                Output: GUTSCHRIFT Rechnung (net settlement: Marktwert − Gebühr)\n\n\
+                **Typical workflow:**\n\
+                1. GET einsd /api/v1/anlagen/{tr_id} → verify Fördermodell and Vergütungssatz\n\
+                2. GET einsd /api/v1/settlements → check if einsd already settled this month\n\
+                3. GET edmd /api/v1/deliveries/{malo_id} → verify Einspeisung kWh available\n\
+                4. POST /api/v1/billing/{malo_id}/preview with eeg_meter override\n\
+                5. POST /api/v1/billing/{malo_id}/calculate → creates GUTSCHRIFT\n\
+                6. accountingd auto-posts EEG_GUTSCHRIFT credit via de.billing.gutschrift.erstellt\n\n\
+                ⚠ **Double-booking risk**: If einsd already emitted de.eeg.verguetung.berechnet\n\
+                for this period, do NOT also run EEG billing in billingd — that would double-credit\n\
+                the plant owner. Choose one path: einsd settlement OR billingd EEG billing, not both.",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "gas-billing",
+        description = "Configure Gas billing — Brennwertkorrektur (§10 GasGVV), BEHG CO₂, H2-blend, L-Gas"
+    )]
+    async fn gas_billing_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(Role::User, "How do I set up Gas billing with BEHG and Brennwertkorrektur?"),
+            PromptMessage::new_text(Role::Assistant,
+                "Gas billing in billingd has three input paths:\n\n\
+                **Path 1 — Direct kWh_Hs (preferred for iMSys / MSCONS data)**\n\
+                Supply `kwh_hs` directly in `gas_meter`. The Brennwertkorrektur position\n\
+                appears in the invoice with quantity = 0 m³ (informational only, §10 GasGVV).\n\
+                ```json\n{ \"gas_meter\": { \"kwh_hs\": 450.5 } }\n```\n\n\
+                **Path 2 — m³ × Brennwert × Zustandszahl**\n\
+                Supply `messung_qm3`, `brennwert_kwh_per_qm3`, `zustandszahl`.\n\
+                billingd computes: kWh_Hs = m³ × Hs × Z (rounded to 3dp).\n\
+                ```json\n{ \"gas_meter\": { \"messung_qm3\": 42.3, \"brennwert_kwh_per_qm3\": 10.68, \"zustandszahl\": 0.964 } }\n```\n\n\
+                **H2-Blend Gas (hydrogen-blended natural gas)**\n\
+                For H2-blended gas, set `gasqualitaet: \"H2_BLEND\"` in gas_meter.\n\
+                IMPORTANT: The Brennwert used for billing is ALWAYS the measured value from\n\
+                edmd/marktd (already reflects actual H2 blend ratio). Do NOT apply an\n\
+                additional correction — that would double-correct. `gasqualitaet` is\n\
+                a ZusatzAttribut annotation only (regulatory audit trail, DVGW G 260).\n\
+                To auto-fetch gasqualitaet: billingd fetches from marktd if not supplied.\n\n\
+                **Regulatory rates (configure in billingd.toml `[rates]`):**\n\
+                | Rate | Default | Legal basis |\n\
+                |---|---|---|\n\
+                | Energiesteuer | 0.55 ct/kWh_Hs | §2 Nr. 3 EnergieStG |\n\
+                | BEHG CO₂ | 1.109 ct/kWh_Hs | 55 EUR/t CO₂ × 0.20160 kg/kWh (2025) |\n\
+                | MwSt | 19% | Standard; 7% for Fernwärme (§12 Abs.2 Nr.1 UStG) |\n\n\
+                **Grid pass-through (from marktd PreisblattNetznutzung):**\n\
+                Supply via `grid` override: `gas_nne_grundpreis_eur_per_year`, \n\
+                `gas_nne_arbeitspreis_ct_per_kwh`, `gas_ka_ct_per_kwh`,\n\
+                `gas_bilanzierungsumlage_ct_per_kwh` (§26 GasNZV).\n\n\
+                **L-Gas vs H-Gas:**\n\
+                L-Gas has lower Brennwert (~9.5 kWh/m³ vs H-Gas ~10.55 kWh/m³).\n\
+                Always use the measured Brennwert from the MSB/GNB, not the default.\n\
+                The default fallback (10.55) is only for development/testing.",
             ),
         ]
     }

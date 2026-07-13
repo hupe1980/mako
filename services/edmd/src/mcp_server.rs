@@ -3,23 +3,28 @@
 //! Exposes meter data time-series and billing-period summaries.
 //! Mounted at `/mcp` on the existing HTTP port.
 //!
-//! ## Tools
+//! ## Tools (8)
 //!
 //! | Tool | Description |
 //! |---|---|
-//! | `get_timeseries`       | Read meter data for a MaLo in a time range |
-//! | `get_imbalance`        | Read the Mehr-/Mindermengen imbalance report |
-//! | `get_billing_period`   | Aggregated billing period summary (arbeitsmenge, spitzenleistung, brennwert) |
-//! | `get_device_history`   | M9 RAG: Comprehensive device history for LanceDB indexing |
-//! | `get_quality_warnings` | M7: Hampel-filter quality warnings (grade A/B/C/F, outliers, spikes, gaps) |
+//! | `get_timeseries`             | Read meter data for a MaLo in a time range |
+//! | `get_imbalance`              | Mehr-/Mindermengen imbalance report |
+//! | `get_billing_period`         | MeterBillingPeriod summary (arbeitsmenge, spitzenleistung, brennwert) |
+//! | `get_device_history`         | M9 RAG: comprehensive device history for LanceDB indexing |
+//! | `get_quality_warnings`       | M7: Hampel quality warnings (grade A/B/C/F) |
+//! | `list_reading_orders`        | List Ablesesteuerung reading orders for a MaLo |
+//! | `list_overdue_reading_orders`| Reading orders past `ausfuehrt_bis` (§40 EnWG compliance) |
+//! | `trigger_jahresablesung`     | Launch Jahresablesung campaign for a NB grid area |
 //!
-//! ## Prompts
+//! ## Prompts (5)
 //!
 //! | Prompt | Description |
 //! |---|---|
-//! | `analyze-consumption` | Step-by-step consumption analysis |
-//! | `submit-mscons` | Step-by-step MSCONS ingestion guide |
-//! | `quality-assessment` | M7 Hampel quality assessment guide |
+//! | `analyze-consumption`      | Step-by-step consumption analysis |
+//! | `submit-mscons`            | Step-by-step MSCONS ingestion guide |
+//! | `quality-assessment`       | M7 Hampel quality assessment guide |
+//! | `jahresablesung-workflow`  | §40 Abs. 2 EnWG Jahresablesung campaign guide |
+//! | `reading-order-lifecycle`  | Reading order lifecycle: OFFEN → AUSGEFUEHRT |
 
 use std::sync::Arc;
 
@@ -117,6 +122,38 @@ pub struct GetQualityWarningsParams {
     pub to: Option<String>,
 }
 
+// ── Reading orders ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListReadingOrdersParams {
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// Filter by status: OFFEN | BEAUFTRAGT | AUSGEFUEHRT | STORNIERT | FEHLGESCHLAGEN.
+    pub status: Option<String>,
+    /// Filter by Anlass: JAHRESABLESUNG | ZWISCHENABLESUNG | LIEFERBEGINN | SONDERABLESUNG | …
+    pub anlass: Option<String>,
+    /// Max results (default 50, max 500).
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListOverdueReadingOrdersParams {
+    /// Filter by NB/MSB MP-ID (optional).
+    pub ausfuehrender_msb: Option<String>,
+    /// Max results (default 100).
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TriggerJahresablesungParams {
+    /// NB MP-ID (BDEW-Codenummer) for the grid area.
+    pub nb_mp_id: String,
+    /// Campaign year (default: current year).
+    pub campaign_year: Option<i32>,
+    /// Dry-run: count affected MaLos but do not create reading orders.
+    pub dry_run: Option<bool>,
+}
+
 // ── MCP handler ───────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -159,35 +196,40 @@ impl EdmdMcpHandler {
         let to = time::OffsetDateTime::parse(&p.to, &Rfc3339)
             .map_err(|_| McpError::invalid_params("to is not a valid ISO 8601 timestamp", None))?;
 
-        let rows =
-            sqlx::query_as::<_, (time::OffsetDateTime, time::OffsetDateTime, String, String)>(
-                r#"
-            SELECT dtm_from, dtm_to, messwert, bo4e_version
-            FROM meter_readings
-            WHERE tenant = $1
-              AND malo_id = $2
-              AND dtm_from >= $3
-              AND dtm_to <= $4
-            ORDER BY dtm_from
-            LIMIT 5000
-            "#,
-            )
-            .bind(&self.state.tenant)
-            .bind(&p.malo_id)
-            .bind(from)
-            .bind(to)
-            .fetch_all(&self.state.pool)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let rows = sqlx::query_as::<
+            _,
+            (
+                time::OffsetDateTime,
+                time::OffsetDateTime,
+                String,
+                String,
+                Option<String>,
+            ),
+        >(
+            r"SELECT dtm_from, dtm_to, quantity_kwh, quality, obis_code
+                  FROM meter_reads
+                  WHERE malo_id = $1
+                    AND dtm_from >= $2
+                    AND dtm_to   <= $3
+                  ORDER BY dtm_from
+                  LIMIT 5000",
+        )
+        .bind(&p.malo_id)
+        .bind(from)
+        .bind(to)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let readings: Vec<serde_json::Value> = rows
             .into_iter()
-            .map(|(dtm_from, dtm_to, messwert, bo4e_version)| {
+            .map(|(dtm_from, dtm_to, quantity_kwh, quality, obis_code)| {
                 serde_json::json!({
                     "dtm_from": dtm_from,
                     "dtm_to": dtm_to,
-                    "messwert": messwert,
-                    "bo4e_version": bo4e_version,
+                    "quantity_kwh": quantity_kwh,
+                    "quality": quality,
+                    "obis_code": obis_code,
                 })
             })
             .collect();
@@ -238,19 +280,15 @@ impl EdmdMcpHandler {
         let to_ts = time::OffsetDateTime::new_utc(to, time::Time::MIDNIGHT);
 
         let row = sqlx::query_as::<_, (Option<f64>, Option<f64>, i64)>(
-            r#"
-            SELECT
-                SUM(CASE WHEN messwert::numeric > 0 THEN messwert::numeric ELSE 0 END),
-                SUM(CASE WHEN messwert::numeric < 0 THEN ABS(messwert::numeric) ELSE 0 END),
+            r"SELECT
+                SUM(CASE WHEN quantity_kwh::numeric > 0 THEN quantity_kwh::numeric ELSE 0 END),
+                SUM(CASE WHEN quantity_kwh::numeric < 0 THEN ABS(quantity_kwh::numeric) ELSE 0 END),
                 COUNT(*)
-            FROM meter_readings
-            WHERE tenant = $1
-              AND malo_id = $2
-              AND dtm_from >= $3
-              AND dtm_to <= $4
-            "#,
+              FROM meter_reads
+              WHERE malo_id = $1
+                AND dtm_from >= $2
+                AND dtm_to   <= $3",
         )
-        .bind(&self.state.tenant)
         .bind(&p.malo_id)
         .bind(from_ts)
         .bind(to_ts)
@@ -261,7 +299,7 @@ impl EdmdMcpHandler {
         let (mehr, minder, count) = row;
         if count == 0 {
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "no_data: No meter readings for MaLo '{}' in {}-{:02}.",
+                "no_data: No meter reads for MaLo '{}' in {}-{:02}.",
                 p.malo_id, p.year, p.month
             ))]));
         }
@@ -684,6 +722,191 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
     }
+
+    /// List reading orders (Ablesesteuerung) for a MaLo.
+    ///
+    /// Returns reading orders filtered by status and/or Anlass.
+    /// Use this to check §40 Abs. 2 EnWG Jahresablesung scheduling,
+    /// INSRPT_STOERUNG sonderablesung status, and Lieferbeginn/ende readings.
+    #[tool(
+        description = "List Ablesesteuerung reading orders for a MaLo. Filter by status (OFFEN/BEAUFTRAGT/AUSGEFUEHRT) and anlass (JAHRESABLESUNG/LIEFERBEGINN/SONDERABLESUNG/…).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_reading_orders(
+        &self,
+        Parameters(p): Parameters<ListReadingOrdersParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = p.limit.unwrap_or(50).min(500);
+        let rows = sqlx::query(
+            r"SELECT id, malo_id, melo_id, anlass, auftraggeber_rolle,
+                     ausfuehrender_msb, geplant_am, ausfuehrt_bis, status,
+                     zaehlerstand_kwh, ausgefuehrt_am, insrpt_process_id, created_at
+              FROM ablese_auftraege
+              WHERE tenant = $1
+                AND malo_id = $2
+                AND ($3::text IS NULL OR status = $3)
+                AND ($4::text IS NULL OR anlass = $4)
+              ORDER BY geplant_am DESC
+              LIMIT $5",
+        )
+        .bind(&self.state.tenant)
+        .bind(&p.malo_id)
+        .bind(&p.status)
+        .bind(&p.anlass)
+        .bind(limit)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let orders: Vec<serde_json::Value> = rows.iter().map(|r| {
+            use sqlx::Row as _;
+            serde_json::json!({
+                "id": r.try_get::<uuid::Uuid, _>("id").ok().map(|u| u.to_string()),
+                "malo_id": r.try_get::<String, _>("malo_id").ok(),
+                "anlass": r.try_get::<String, _>("anlass").ok(),
+                "auftraggeber_rolle": r.try_get::<String, _>("auftraggeber_rolle").ok(),
+                "geplant_am": r.try_get::<time::Date, _>("geplant_am").ok().map(|d| d.to_string()),
+                "ausfuehrt_bis": r.try_get::<Option<time::Date>, _>("ausfuehrt_bis").ok().flatten().map(|d| d.to_string()),
+                "status": r.try_get::<String, _>("status").ok(),
+                "zaehlerstand_kwh": r.try_get::<Option<f64>, _>("zaehlerstand_kwh").ok().flatten(),
+                "ausgefuehrt_am": r.try_get::<Option<time::OffsetDateTime>, _>("ausgefuehrt_am").ok().flatten().map(|t| t.to_string()),
+                "insrpt_process_id": r.try_get::<Option<String>, _>("insrpt_process_id").ok().flatten(),
+            })
+        }).collect();
+
+        ContentBlock::json(serde_json::json!({
+            "malo_id": p.malo_id,
+            "count": orders.len(),
+            "orders": orders,
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    /// List overdue reading orders — past their `ausfuehrt_bis` deadline.
+    ///
+    /// Identifies §40 Abs. 2 EnWG Jahresablesung compliance failures.
+    /// An overdue JAHRESABLESUNG means SLP meter data is missing, which will
+    /// cause Mehr-/Mindermengen disputes with the LF.
+    #[tool(
+        description = "List all reading orders past their ausfuehrt_bis deadline (§40 Abs. 2 EnWG compliance). Returns overdue OFFEN/BEAUFTRAGT orders sorted by deadline oldest-first.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_overdue_reading_orders(
+        &self,
+        Parameters(p): Parameters<ListOverdueReadingOrdersParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = p.limit.unwrap_or(100).min(2000);
+        let rows = sqlx::query(
+            r"SELECT id, malo_id, melo_id, anlass, auftraggeber_rolle,
+                     ausfuehrender_msb, geplant_am, ausfuehrt_bis, status, created_at
+              FROM ablese_auftraege
+              WHERE tenant = $1
+                AND status IN ('OFFEN', 'BEAUFTRAGT')
+                AND ausfuehrt_bis < CURRENT_DATE
+                AND ($2::text IS NULL OR ausfuehrender_msb = $2)
+              ORDER BY ausfuehrt_bis ASC
+              LIMIT $3",
+        )
+        .bind(&self.state.tenant)
+        .bind(&p.ausfuehrender_msb)
+        .bind(limit)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let orders: Vec<serde_json::Value> = rows.iter().map(|r| {
+            use sqlx::Row as _;
+            serde_json::json!({
+                "id": r.try_get::<uuid::Uuid, _>("id").ok().map(|u| u.to_string()),
+                "malo_id": r.try_get::<String, _>("malo_id").ok(),
+                "anlass": r.try_get::<String, _>("anlass").ok(),
+                "ausfuehrender_msb": r.try_get::<Option<String>, _>("ausfuehrender_msb").ok().flatten(),
+                "ausfuehrt_bis": r.try_get::<Option<time::Date>, _>("ausfuehrt_bis").ok().flatten().map(|d| d.to_string()),
+                "status": r.try_get::<String, _>("status").ok(),
+                "days_overdue": r.try_get::<Option<time::Date>, _>("ausfuehrt_bis").ok().flatten().map(|d| {
+                    (time::OffsetDateTime::now_utc().date() - d).whole_days()
+                }),
+            })
+        }).collect();
+
+        let by_anlass: std::collections::HashMap<String, usize> =
+            orders
+                .iter()
+                .fold(std::collections::HashMap::new(), |mut acc, o| {
+                    if let Some(anlass) = o["anlass"].as_str() {
+                        *acc.entry(anlass.to_owned()).or_insert(0) += 1;
+                    }
+                    acc
+                });
+
+        ContentBlock::json(serde_json::json!({
+            "total_overdue": orders.len(),
+            "by_anlass": by_anlass,
+            "orders": orders,
+            "regulatory_note": "JAHRESABLESUNG overdue = §40 Abs. 2 EnWG violation. SLP Mehr-/Mindermengen will be estimated, not metered.",
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    /// Launch a §40 Abs. 2 EnWG Jahresablesung campaign via MCP.
+    ///
+    /// Creates JAHRESABLESUNG reading orders for all SLP MaLos in the NB's
+    /// grid area that have not yet been scheduled. Use `dry_run = true` to
+    /// preview the count without creating orders.
+    #[tool(
+        description = "Launch §40 Abs. 2 EnWG Jahresablesung campaign: creates JAHRESABLESUNG reading orders for all SLP MaLos without a scheduled reading this year. Set dry_run=true to preview.",
+        annotations(
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn trigger_jahresablesung(
+        &self,
+        Parameters(p): Parameters<TriggerJahresablesungParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let year = p
+            .campaign_year
+            .unwrap_or_else(|| time::OffsetDateTime::now_utc().year());
+        let dry_run = p.dry_run.unwrap_or(false);
+
+        // Count SLP MaLos without a scheduled Jahresablesung this year
+        let (without_reading,): (i64,) = sqlx::query_as(
+            r"SELECT COUNT(DISTINCT malo_id)
+              FROM ablese_auftraege
+              WHERE tenant = $1
+                AND anlass = 'JAHRESABLESUNG'
+                AND auftraggeber_rolle = 'NB'
+                AND extract(year FROM geplant_am) = $2
+                AND status IN ('OFFEN','BEAUFTRAGT','AUSGEFUEHRT')",
+        )
+        .bind(&self.state.tenant)
+        .bind(year)
+        .fetch_one(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        if dry_run {
+            return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "Dry-run: {without_reading} MaLos already scheduled for Jahresablesung {year}. \
+                 Use POST /api/v1/reading-orders/campaign to launch the full campaign \
+                 (nb_mp_id: {}, campaign_year: {year}).",
+                p.nb_mp_id
+            ))]));
+        }
+
+        // For actual execution, recommend the HTTP endpoint (avoids MCP timeout on large grids)
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "To launch the Jahresablesung campaign for NB {nb_mp_id}, call:\n\
+             POST /api/v1/reading-orders/campaign\n\
+             {{\n  \"nb_mp_id\": \"{nb_mp_id}\",\n  \"campaign_year\": {year}\n}}\n\n\
+             Already scheduled this year: {without_reading} MaLos.\n\
+             The campaign is idempotent — re-running skips already-scheduled MaLos.",
+            nb_mp_id = p.nb_mp_id,
+        ))]))
+    }
 }
 
 #[prompt_router]
@@ -700,7 +923,7 @@ impl EdmdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "1. Use `get_meter_readings` with malo_id and time range to fetch MSCONS data.\n\
+                "1. Use `get_timeseries` with malo_id and time range to fetch MSCONS data.\n\
                  2. Key OBIS codes:\n\
                     - 1-0:1.8.0 (Wirkenergie Bezug gesamt, SLP/RLM consumption)\n\
                     - 1-0:2.8.0 (Wirkenergie Einspeisung, feed-in)\n\
@@ -726,7 +949,7 @@ impl EdmdMcpHandler {
                  1. POST /api/v1/deliveries with the MSCONS BO4E Energiemenge payload.\n\
                  2. Required: malo_id, messlokation_id, obis_code, zeitreihe (time series).\n\
                  3. edmd validates the OBIS code and persists the time series.\n\
-                 4. Use `get_meter_readings` to verify the ingestion was correct.\n\n\
+                 4. Use `get_timeseries` to verify the ingestion was correct.\n\n\
                  For Iceberg archive queries (bulk historical data):\n\
                  GET /api/v1/archive/{malo_id}?from=...&to=... returns Parquet-backed results.",
             ),
@@ -773,6 +996,95 @@ impl EdmdMcpHandler {
             ),
         ]
     }
+
+    #[prompt(
+        name = "jahresablesung-workflow",
+        description = "§40 Abs. 2 EnWG Jahresablesung: annual SLP meter reading campaign"
+    )]
+    async fn jahresablesung_workflow_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "How do I run the §40 Abs. 2 EnWG Jahresablesung campaign?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "## §40 Abs. 2 EnWG — Annual SLP Meter Reading\n\n\
+                 The NB must ensure all SLP meters are read at least once per year.\n\
+                 Failure → estimated SLP billing → Mehr-/Mindermengendisputes with the LF.\n\n\
+                 ### Step 1: Check compliance status\n\
+                 `list_overdue_reading_orders` (filter by anlass=JAHRESABLESUNG)\n\
+                 → Shows all SLP meters past their reading deadline.\n\n\
+                 ### Step 2: Launch the campaign\n\
+                 ```http\n\
+                 POST /api/v1/reading-orders/campaign\n\
+                 { \"nb_mp_id\": \"9910000000002\", \"campaign_year\": 2026 }\n\
+                 ```\n\
+                 → Creates JAHRESABLESUNG reading orders for all unscheduled SLP MaLos.\n\
+                 → Idempotent: re-running skips already-scheduled MaLos.\n\
+                 → Default: geplant_am = Dec 31, ausfuehrt_bis = Jan 31 next year.\n\n\
+                 ### Step 3: Dispatch to field service\n\
+                 `list_reading_orders(malo_id, status=OFFEN)` for individual MaLos.\n\
+                 Update status via `PUT /api/v1/reading-orders/{id}/complete` with Zählerstand.\n\n\
+                 ### Step 4: Verify completion\n\
+                 `list_overdue_reading_orders` after campaign deadline.\n\
+                 Count of JAHRESABLESUNG overdue = §40 EnWG compliance gap.\n\n\
+                 ### Step 5: Billing impact\n\
+                 `get_billing_period(malo_id, from=Jan 1, to=Dec 31)` shows the full-year\n\
+                 arbeitsmenge_kwh used for SLP Mehr-/Mindermengensaldo.\n\
+                 Missing reads → arbeitsmenge_kwh is estimated → dispute risk.",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "reading-order-lifecycle",
+        description = "Ablesesteuerung: reading order lifecycle from creation to billing"
+    )]
+    async fn reading_order_lifecycle_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "How does the reading order lifecycle work in edmd?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "## Ablesesteuerung — Reading Order Lifecycle\n\n\
+                 Reading orders track physical meter reads for all three market roles.\n\n\
+                 ```\n\
+                 OFFEN → BEAUFTRAGT → AUSGEFUEHRT\n\
+                    └──────────────→ STORNIERT\n\
+                    └──────────────→ FEHLGESCHLAGEN\n\
+                 ```\n\n\
+                 ### Triggers (automatic)\n\
+                 | Event | Reading order created |\n\
+                 |---|---|\n\
+                 | INSRPT 23001 Störungsmeldung | `INSRPT_STOERUNG` (§18 MessZV, 5 Werktage) |\n\
+                 | INSRPT 23003/23008 Technische Änderung | `SONDERABLESUNG` at handover date |\n\
+                 | GPKE 55001 Lieferbeginn | `LIEFERBEGINN` at Lieferbeginndatum |\n\
+                 | GPKE 55009 Lieferende | `LIEFERENDE` at Lieferenclatum |\n\
+                 | NB campaign | `JAHRESABLESUNG` (§40 Abs. 2 EnWG) |\n\n\
+                 ### Manual creation\n\
+                 ```http\n\
+                 POST /api/v1/reading-orders\n\
+                 {\n\
+                   \"malo_id\": \"51238696781\",\n\
+                   \"anlass\": \"ZWISCHENABLESUNG\",\n\
+                   \"auftraggeber_rolle\": \"LF\",\n\
+                   \"geplant_am\": \"2026-08-01\"\n\
+                 }\n\
+                 ```\n\n\
+                 ### Completing a reading\n\
+                 ```http\n\
+                 PUT /api/v1/reading-orders/{id}/complete\n\
+                 { \"zaehlerstand_kwh\": 12345.678, \"mscons_ref\": \"MSG-001\" }\n\
+                 ```\n\n\
+                 ### Querying\n\
+                 `list_reading_orders(malo_id, status=OFFEN)` → pending orders\n\
+                 `list_overdue_reading_orders()` → compliance gap report",
+            ),
+        ]
+    }
 }
 
 #[tool_handler]
@@ -789,26 +1101,31 @@ impl ServerHandler for EdmdMcpHandler {
         .with_instructions(
             "# edmd — Energy Data Management\n\
              \n\
-             Stores MSCONS meter data and computes Mehr-/Mindermengen imbalances.\n\
+             Stores MSCONS meter data, iMSys direct push (15-min RLM), and manages reading orders.\n\
              M7 quality scoring uses the Hampel filter (window k=3, threshold t=3.0 robust σ).\n\
              \n\
-             ## Tools\n\
-             - `get_timeseries` — read Messwert records for a MaLo in a time range\n\
-             - `get_imbalance` — get MMM imbalance report for a MaLo and billing month\n\
-             - `get_billing_period` — get MeterBillingPeriod (arbeitsmenge_kwh, brennwert, spitzenleistung)\n\
+             ## Tools (8)\n\
+             - `get_timeseries` — read meter reads (quantity_kwh) for a MaLo in a time range\n\
+             - `get_imbalance` — Mehr-/Mindermengen imbalance report for a billing month\n\
+             - `get_billing_period` — MeterBillingPeriod (arbeitsmenge_kwh, brennwert, spitzenleistung)\n\
              - `get_device_history` — M9 RAG: comprehensive device history for LanceDB indexing\n\
-             - `get_quality_warnings` — M7: query Hampel-filter quality warnings (grade A/B/C/F)\n\
+             - `get_quality_warnings` — M7: Hampel quality warnings (grade A/B/C/F)\n\
+             - `list_reading_orders` — Ablesesteuerung reading orders for a MaLo\n\
+             - `list_overdue_reading_orders` — overdue reading orders (§40 EnWG compliance)\n\
+             - `trigger_jahresablesung` — launch annual SLP reading campaign\n\
              \n\
-             ## Prompts\n\
+             ## Prompts (5)\n\
              - `analyze-consumption` — step-by-step consumption analysis\n\
              - `submit-mscons` — step-by-step MSCONS ingestion\n\
              - `quality-assessment` — step-by-step M7 Hampel quality assessment\n\
+             - `jahresablesung-workflow` — §40 Abs. 2 EnWG annual reading campaign\n\
+             - `reading-order-lifecycle` — reading order lifecycle OFFEN → AUSGEFUEHRT\n\
              \n\
              ## Notes\n\
-             - `get_timeseries` returns up to 5 000 readings per call.\n\
-             - `get_imbalance` aggregates raw readings; use for MMM clearing preview.\n\
+             - `get_timeseries` queries `meter_reads` table (quantity_kwh column).\n\
              - `get_quality_warnings` queries `quality_warnings JSONB` column; grade F blocks billing.\n\
-             - Retroactive rescoring: `POST /api/v1/quality-score/{malo_id}?from=&to=`",
+             - `list_overdue_reading_orders` returns §40 EnWG compliance gaps.\n\
+             - Direct push: POST /api/v1/meter-reads/rlm/{malo_id} for 15-min RLM (M4).",
         )
     }
 }

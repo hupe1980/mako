@@ -295,6 +295,7 @@ fn extract_tariff_from_product_data(
         behg_gas_ct_per_kwh_override: get_decimal("behg_gas_ct_per_kwh_override"),
         mwst_rate_override: get_decimal("mwst_rate_override"),
         dynamic_epex,
+        dynamic_epex_floor_ct_kwh: get_decimal("dynamic_epex_floor_ct_kwh"),
     })
 }
 

@@ -1,0 +1,27 @@
+[package]
+name         = "energy-billing"
+description  = "Pure multi-product retail energy billing for German markets. STROM, GAS, WAERME, SOLAR, EEG, EINSPEISUNG, §14a WAERMEPUMPE/WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, §41a EPEX dynamic. Regulatory rates: §3 StromStG, §2 EnergieStG, BEHG CO₂. BO4E Rechnung JSON. Zero I/O, zero async, no float money."
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+
+[dependencies]
+billing             = { version = "0.4.0", features = ["serde"] }
+rust_decimal        = { workspace = true }
+rust_decimal_macros = "1"
+serde               = { workspace = true, features = ["derive"] }
+serde_json          = { workspace = true }
+time                = { workspace = true }
+tracing             = { version = "0.1", default-features = false }
+
+[dev-dependencies]
+rust_decimal_macros = "1"
+time = { workspace = true, features = ["macros"] }
+serde_json = { workspace = true }
+
+[[test]]
+name = "calculator_tests"
+path = "tests/calculator_tests.rs"

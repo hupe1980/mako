@@ -51,6 +51,7 @@ total_tolerance            = 0.01   # 1 % — Σ line nets = Gesamtnetto
 tariff_tolerance           = 0.03   # 3 % — PRICAT unit price vs INVOIC
 require_tariff             = false  # true → missing tariff escalates to Dispute
 auto_dispute_threshold_eur = 0.0    # 0.0 → Warn always auto-approved
+max_zahlungsziel_days      = 30     # §7 Allgemeine Festlegungen V6.1d; 0 = disable
 
 # [oidc]  — omit to disable auth (dev mode only)
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"

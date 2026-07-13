@@ -41,8 +41,6 @@
 //!
 //! Port: `:9080`
 
-
-use tarifbd::{config, handlers, pg};
 use anyhow::Context as _;
 use axum::{
     Extension, Router,
@@ -51,6 +49,7 @@ use axum::{
 use mako_service::{health::health_routes, load_config};
 use sqlx::PgPool;
 use std::sync::Arc;
+use tarifbd::{config, handlers, pg};
 use tracing::info;
 
 #[tokio::main]

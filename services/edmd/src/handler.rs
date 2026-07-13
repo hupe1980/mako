@@ -5,7 +5,11 @@
 //! | `ce_type`                    | `makopid` | Action |
 //! |------------------------------|-----------|--------|
 //! | `de.mako.process.completed`  | MSCONS set | Store `MeterDataReceipt` |
-//! | `de.mako.process.initiated`  | 23001 (INSRPT Störungsmeldung) | M2: auto-create `INSRPT_STOERUNG` reading order |
+//! | `de.mako.process.initiated`  | 23001 (INSRPT Störungsmeldung) | Auto-create `INSRPT_STOERUNG` reading order (§18 MessZV) |
+//! | `de.mako.process.initiated`  | 23003/23008 (INSRPT Technische Änderung/Gerätebefund) | Auto-create `SONDERABLESUNG` reading order |
+//! | `de.mako.process.initiated`  | 23005/23009 (WiM Gas INSRPT) | Auto-create `SONDERABLESUNG` reading order |
+//! | `de.mako.process.completed`  | 55001 (GPKE Lieferbeginn) | Auto-create `LIEFERBEGINN` reading order |
+//! | `de.mako.process.completed`  | 55009 (GPKE Lieferende) | Auto-create `LIEFERENDE` reading order |
 //! | *(anything else)*            | *(any)*   | 204 No Content (ignored) |
 //!
 //! ## M2 — INSRPT → reading-order automation
@@ -15,8 +19,12 @@
 //! with `anlass = 'INSRPT_STOERUNG'` so field-service scheduling is never
 //! blocked on manual ERP input.
 //!
-//! The reading order is idempotent on `insrpt_process_id` — re-delivery of the
-//! same event produces a no-op.
+//! PIDs 23003/23008 (Technische Änderung / Gerätebefund) and WiM Gas PIDs
+//! 23005/23009 trigger `SONDERABLESUNG` orders for similar reasons.
+//!
+//! PIDs 55001/55009 (Lieferbeginn/Lieferende completion) trigger reading
+//! orders to capture the meter reading at the supply handover boundary —
+//! required for accurate Mehr-/Mindermengensaldo calculation.
 
 use std::sync::Arc;
 
@@ -92,15 +100,25 @@ pub async fn handle_webhook(
 
     debug!(ce_type, pid, "edmd: received event");
 
-    // ── M2: INSRPT Störungsmeldung → auto-create INSRPT_STOERUNG reading order ─
+    // ── M2+: INSRPT → auto-create reading orders ──────────────────────────────
     //
-    // §18 MessZV mandates a Sonderablesung when an INSRPT (PID 23001) is received.
-    // Auto-creating the reading order here ensures the field-service scheduler
-    // never blocks on a manual ERP trigger — eliminating billing gaps after
-    // device swaps.
-    //
-    // Idempotent: ON CONFLICT (insrpt_process_id) DO NOTHING.
-    if ce_type == "de.mako.process.initiated" && pid == 23001 {
+    // PID 23001: Störungsmeldung (LF→MSB) → INSRPT_STOERUNG (§18 MessZV)
+    // PID 23003: Technische Änderung / Geräteübernahme → SONDERABLESUNG
+    // PID 23005: WiM Gas INSRPT → SONDERABLESUNG
+    // PID 23008: Gerätebefund (device inspection) → SONDERABLESUNG
+    // PID 23009: WiM Gas INSRPT → SONDERABLESUNG
+    if ce_type == "de.mako.process.initiated"
+        && matches!(pid, 23001 | 23003 | 23005 | 23008 | 23009)
+    {
+        let (anlass, description) = match pid {
+            23001 => ("INSRPT_STOERUNG", "§18 MessZV Störungsmeldung"),
+            23003 => ("SONDERABLESUNG", "INSRPT Technische Änderung (PID 23003)"),
+            23005 => ("SONDERABLESUNG", "WiM Gas INSRPT (PID 23005)"),
+            23008 => ("SONDERABLESUNG", "INSRPT Gerätebefund (PID 23008)"),
+            23009 => ("SONDERABLESUNG", "WiM Gas INSRPT (PID 23009)"),
+            _ => unreachable!(),
+        };
+
         let process_id_str = event["subject"].as_str().unwrap_or("").to_owned();
         let data = &event["data"];
         let malo_id = data["malo_id"]
@@ -117,14 +135,11 @@ pub async fn handle_webhook(
         if malo_id.is_empty() || process_id_str.is_empty() {
             warn!(
                 pid,
-                "edmd M2: INSRPT 23001 missing malo_id or process_id — skipping"
+                "edmd M2+: INSRPT missing malo_id or process_id — skipping"
             );
             return StatusCode::NO_CONTENT.into_response();
         }
 
-        // §18 MessZV / WiM AHB BK6-24-174: Sonderablesung within 5 Werktage.
-        // `geplant_am` = next working day; `ausfuehrt_bis` = +7 calendar days
-        // (covers 5 Werktage reliably including Saturdays = Werktag).
         let today = time::OffsetDateTime::now_utc().date();
         let geplant_am = today.next_day().unwrap_or(today);
         let ausfuehrt_bis = geplant_am
@@ -136,12 +151,13 @@ pub async fn handle_webhook(
             r#"INSERT INTO ablese_auftraege
                (malo_id, melo_id, tenant, anlass, auftraggeber_rolle, ausfuehrender_msb,
                 geplant_am, ausfuehrt_bis, insrpt_process_id)
-               VALUES ($1, $2, $3, 'INSRPT_STOERUNG', 'MSB', $4, $5, $6, $7)
+               VALUES ($1, $2, $3, $4, 'MSB', $5, $6, $7, $8)
                ON CONFLICT DO NOTHING"#,
         )
         .bind(&malo_id)
         .bind(&melo_id)
         .bind(&state.tenant)
+        .bind(anlass)
         .bind(&msb_mp_id)
         .bind(geplant_am)
         .bind(ausfuehrt_bis)
@@ -154,21 +170,103 @@ pub async fn handle_webhook(
                 info!(
                     malo_id = %malo_id,
                     process_id = %process_id_str,
+                    anlass,
                     geplant_am = %geplant_am,
-                    "edmd M2: auto-created INSRPT_STOERUNG reading order (§18 MessZV)"
+                    "edmd: auto-created {description} reading order"
                 );
             }
             Ok(_) => {
                 debug!(
                     malo_id = %malo_id,
                     process_id = %process_id_str,
-                    "edmd M2: INSRPT_STOERUNG reading order already exists — idempotent"
+                    "edmd: {description} reading order already exists — idempotent"
                 );
             }
             Err(e) => {
-                warn!(error = %e, malo_id = %malo_id, "edmd M2: failed to create INSRPT_STOERUNG reading order");
+                warn!(error = %e, malo_id = %malo_id, "edmd: failed to create {description} reading order");
             }
         }
+        return StatusCode::NO_CONTENT.into_response();
+    }
+
+    // ── Lieferbeginn / Lieferende → reading orders ────────────────────────────
+    //
+    // When a GPKE Lieferbeginn (PID 55001) or Lieferende (PID 55009) process
+    // completes, create a reading order to capture the meter reading at the
+    // supply handover boundary. This is required for accurate Mehr-/Mindermengensaldo.
+    //
+    // Legal basis: GPKE BK6-22-024 §3; §9 MessZV Ablesung bei Lieferbeginn/-ende.
+    if ce_type == "de.mako.process.completed" && matches!(pid, 55001 | 55009) {
+        let (anlass, label) = if pid == 55001 {
+            ("LIEFERBEGINN", "Lieferbeginn")
+        } else {
+            ("LIEFERENDE", "Lieferende")
+        };
+
+        let data = &event["data"];
+        let malo_id = data["malo_id"]
+            .as_str()
+            .or_else(|| data["location_id"].as_str())
+            .unwrap_or("")
+            .to_owned();
+
+        // The reading date is the Lieferbeginndatum / Lieferenclatum from the event.
+        // Fall back to today when the field is absent.
+        let reading_date_str = data["lieferbeginn_datum"]
+            .as_str()
+            .or_else(|| data["lieferende_datum"].as_str())
+            .or_else(|| data["wechseldatum"].as_str());
+
+        let geplant_am = reading_date_str
+            .and_then(|s| {
+                use time::format_description::well_known::Iso8601;
+                time::Date::parse(s, &Iso8601::DEFAULT).ok()
+            })
+            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+
+        let ausfuehrt_bis = geplant_am
+            .checked_add(time::Duration::days(3))
+            .unwrap_or(geplant_am);
+
+        if !malo_id.is_empty() {
+            let process_id_str = event["subject"].as_str().unwrap_or("").to_owned();
+            let pool = state.repo.pool();
+            let result = sqlx::query(
+                r#"INSERT INTO ablese_auftraege
+                   (malo_id, tenant, anlass, auftraggeber_rolle,
+                    geplant_am, ausfuehrt_bis, insrpt_process_id)
+                   VALUES ($1, $2, $3, 'LF', $4, $5, $6)
+                   ON CONFLICT DO NOTHING"#,
+            )
+            .bind(&malo_id)
+            .bind(&state.tenant)
+            .bind(anlass)
+            .bind(geplant_am)
+            .bind(ausfuehrt_bis)
+            .bind(if process_id_str.is_empty() {
+                None
+            } else {
+                Some(process_id_str.clone())
+            })
+            .execute(pool)
+            .await;
+
+            match result {
+                Ok(r) if r.rows_affected() > 0 => {
+                    info!(
+                        malo_id = %malo_id,
+                        anlass,
+                        geplant_am = %geplant_am,
+                        "edmd: auto-created {label} reading order (§9 MessZV)"
+                    );
+                }
+                Ok(_) => debug!(malo_id = %malo_id, "edmd: {label} reading order already exists"),
+                Err(e) => {
+                    warn!(error = %e, malo_id = %malo_id, "edmd: failed to create {label} reading order")
+                }
+            }
+        }
+        // Fall through to MSCONS handling (55001/55009 are NOT MSCONS PIDs — returns NO_CONTENT)
         return StatusCode::NO_CONTENT.into_response();
     }
 

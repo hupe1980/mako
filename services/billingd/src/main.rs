@@ -40,6 +40,7 @@
 //! | `POST` | `/api/v1/billing/{id}/correction` | Korrekturrechnung / Stornorechnung (\u00a722 Me\u00dfZV) |
 //! | `POST` | `/api/v1/billing/sammelrechnung/{rv_id}` | B2B consolidated Sammelrechnung |
 //! | `POST` | `/api/v1/billing/ggv/{ggv_id}` | \u00a742a GGV multi-tenant community solar billing |
+//! | `POST` | `/api/v1/billing/vpp/{vpp_id}` | VPP aggregation settlement (RED III Art. 17) |
 //! | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G submission (\u00a727 EGovG 01.01.2027) |
 //! | `GET` | `/api/v1/billing` | List records (`?malo_id=&lf_mp_id=&outcome=`) |
 //! | `GET` | `/api/v1/billing/{id}` | Fetch single record |
@@ -48,13 +49,12 @@
 //! | `GET` | `/health` | Liveness |
 //! | `GET` | `/health/ready` | Readiness |
 
-
-use billingd::{calculator, clients, config, handlers, pg, xrechnung};
 use anyhow::Context as _;
 use axum::{
     Extension, Router,
     routing::{get, post},
 };
+use billingd::{clients, config, handlers};
 use mako_markt::marktd_client::MarktdClient;
 use mako_service::{health::health_routes, load_config};
 use secrecy::SecretString;
@@ -119,6 +119,11 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/billing/ggv/:ggv_id",
             post(handlers::post_ggv_billing),
+        )
+        // B12: VPP aggregation billing (RED III Article 17) — de.vpp.settlement.berechnet
+        .route(
+            "/api/v1/billing/vpp/:vpp_id",
+            post(handlers::post_vpp_billing),
         )
         // B10: XRechnung B2G submission (\u00a727 EGovG — mandatory from 01.01.2027)
         .route(

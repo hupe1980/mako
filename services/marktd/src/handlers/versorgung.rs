@@ -14,6 +14,7 @@ use axum::{
     response::IntoResponse,
 };
 use mako_markt::{
+    cloudevents::{EventExtensions, MarktEvent},
     domain::MaloId,
     error::MdmError,
     repository::{
@@ -395,6 +396,27 @@ where
     };
     match vs_repo.upsert(rec, if_version).await {
         Ok(new_version) => {
+            // Emit de.markt.versorgung.changed so ERP subscribers (vertragd, billingd)
+            // are notified of supply-state transitions (Lieferbeginn, Lieferende,
+            // Lieferant changes) in near-real-time without polling.
+            let malo_id_str2 = malo_id_str.clone();
+            let evt = MarktEvent::new(
+                &state.tenant_gln,
+                "de.markt.versorgung.changed",
+                malo_id_str2,
+                serde_json::json!({
+                    "lieferstatus": body.lieferstatus,
+                    "version": new_version,
+                }),
+            )
+            .with_extensions(EventExtensions {
+                marktmaloid: Some(malo_id_str.clone()),
+                ..Default::default()
+            });
+            if let Ok(payload) = serde_json::to_value(&evt) {
+                let _ = state.event_tx.send(payload);
+            }
+
             let mut resp_headers = HeaderMap::new();
             resp_headers.insert("ETag", etag(new_version).parse().unwrap());
             (StatusCode::OK, resp_headers).into_response()

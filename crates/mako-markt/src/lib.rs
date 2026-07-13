@@ -17,7 +17,7 @@
 //! | Module | Contents |
 //! |--------|----------|
 //! | [`domain`] | `Sparte`, `ProcessStatus`; re-exports `MaloId`, `MeloId`, `MarktpartnerId` from [`rubo4e::identifiers`]; `nad_agency_code()` for NAD DE3055 coding authority |
-//! | [`repository`] | Repository traits: `MaloRepository`, `MeloRepository`, `ContractRepository`, `SubscriptionRepository`, `CorrelationIndex`, `PartnerRepository`, `VersorgungsStatusRepository`, **`MaloGridRepository`**; record types incl. `VersorgungsStatusRecord`, `LieferStatus`, `NbContractRecord`, **`MaloGridRecord`** |
+//! | [`repository`] | Repository traits: `MaloRepository`, `MeloRepository`, `ContractRepository`, `SubscriptionRepository`, `CorrelationIndex`, `PartnerRepository`, `VersorgungsStatusRepository`, **`MaloGridRepository`**, **`NbEnergiemixRepository`**; record types incl. `VersorgungsStatusRecord`, `LieferStatus`, `NbContractRecord`, **`MaloGridRecord`**, **`NbEnergiemixRecord`** |
 //! | [`cloudevents`] | CloudEvents 1.0 envelope types: `InboundMakoEvent` (from `makod`) and `MarktEvent` (`marktd`-emitted `de.markt.*`) |
 //! | [`makod_client`] | Typed HTTP client for `makod` admin + command APIs (reqwest-backed); requires `makod-client` feature |
 //! | [`error`] | `MdmError` — all domain-level error variants |

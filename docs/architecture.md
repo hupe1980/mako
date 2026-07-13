@@ -208,9 +208,38 @@ Process::execute_and_enqueue_with_snapshot_and_retry
 
 ---
 
+## Domain library crates
+
+These are the pure, zero-I/O library crates that domain logic is extracted into.
+Each is independently testable and suitable for crates.io publication.
+
+| Crate | Role | Key API |
+|---|---|---|
+| `edi-energy` | EDIFACT parse / validate / build | `parse()`, `Platform`, `Validator` |
+| `mako-engine` | Event-sourced process runtime | `Workflow`, `EventStore`, `OutboxStore`, `DeadlineStore` |
+| `mako-markt` | Market data domain types + repo traits | `MaloId`, `MeloId`, `MarktpartnerId`, `VersorgungsStatus` |
+| `mako-nne` | NNE/KA/MMM/MSB invoice arithmetic | `calculate_nne_invoice`, `EuroAmount` |
+| `energy-billing` | Pure multi-product retail energy billing (LF) | `calculate_strom/gas/waerme/solar/eeg/einspeisung/dynamic_strom`; 12 categories; §14a; §41a EPEX dynamic + price floor; §51 EEG contractual; 44 tests; zero I/O |
+| `eeg-billing` | EEG/KWKG settlement formulas (NB) | `calculate_settlement`, 9 models, §25/§27 rules |
+| `metering` | German energy metering domain | `MeterInterval`, `aggregate`, `gas_m3_to_kwh_hs`, `score_intervals` (Hampel, QualityGrade A/B/C/F) |
+| `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
+| `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A97/A99 |
+| `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
+| `mako-service` | Shared service infrastructure | `ServiceBuilder`, `load_config`, HMAC verification |
+| `mako-plugin` | WASM plugin extension system | `PluginRegistry`, 5 extension-point traits, Extism sandbox |
+
+### External crates.io dependencies
+
+| Crate | Version | Purpose |
+|---|---|---|
+| [`billing`](https://crates.io/crates/billing) | `0.4` | Generic tariff billing engine — graduated/volume/block/capacity pricing, compound taxes, allocation; used by `eeg-billing` (`LineItem` bridge) and `billingd` |
+| [`sepa`](https://crates.io/crates/sepa) | `0.2` | SEPA payment utilities — IBAN (ISO 13616), BIC (ISO 9362), `CreditorId` (EPC AT-02), pain.008 direct-debit XML, pain.001 credit-transfer XML, CAMT.054; used by `accountingd` and `vertragd` |
+
+---
+
 ## Companion daemons
 
-All thirteen daemons share a common operational model:
+All sixteen daemons share a common operational model:
 - **TOML configuration** — loaded from a file (`makod.toml`, `marktd.toml`, …) with `env:VAR_NAME` secret interpolation
 - **Cedar ABAC** — all HTTP endpoints gated by Cedar attribute-based access control
 - **OIDC/JWT** — asymmetric algorithm only; JWKS cached with background refresh; omit `[oidc]` for dev mode
@@ -228,7 +257,7 @@ All thirteen daemons share a common operational model:
 | `nis-syncd` | `:9680` | NIS/GIS grid topology import (NB role, stateless) — pushes `malo_grid` to `marktd`; STP ~80%→≥95% | `nis-syncd.toml` |
 | `edmd` | `:8380` | Energy data management — MSCONS meter readings, BO4E `Energiemenge` deliveries, `Lastgang` + `Zeitreihe` time-series, `MeterBillingPeriod` | `edmd.toml` |
 | `obsd` | `:8480` | Process observability — KPI reports, deadline-risk alerts, §20 EnWG parity | `obsd.toml` |
-| `einsd` | `:9180` | Einspeiser Registry + EEG/KWKG Settlement (NB/LF role) — 8 settlement models (Vergütung, Mieterstrom §38a, Direktvermarktung, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag §7 KWKG 2023, Flexibilitätsprämie §50 EEG); Repowering §22 EEG; KWKG Förderdauer; built-in rate table EEG 2000–2023 + KWKG 2023; CloudEvents `de.eeg.verguetung.berechnet` + `de.eeg.marktpraemie.berechnet` + `de.eeg.anlage.foerderung_auslaufend` | `einsd.toml` |
+| `einsd` | `:9180` | Einspeiser Registry + EEG/KWKG Settlement (NB/LF role) — **9 settlement models** (Vergütung, Mieterstrom §38a, Direktvermarktung, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag §7 KWKG 2023, Flexibilitätsprämie §50 EEG, Flexibilitätszuschlag §50b EEG); Repowering §22 EEG; KWKG Förderdauer; built-in rate table EEG 2000–2023 + KWKG 2023; CloudEvents `de.eeg.verguetung.berechnet` + `de.eeg.marktpraemie.berechnet` + `de.eeg.anlage.foerderung_auslaufend` | `einsd.toml` |
 | `tarifbd` | `:9080` | Product & Tariff Catalog (LF role) — user-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE); all prices in `Tarifpreisblatt` JSONB; version history; MaLo→product assignment; EPEX Spot for §41a | `tarifbd.toml` |
 | `billingd` | `:9280` | Energy Billing Engine (LF role) — all prices user-defined in `tarifbd`; 12 categories (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE); §41a dynamic; `/preview` dry-run; XRechnung 3.0 / ZUGFeRD 2.3; `de.billing.rechnung.erstellt` | `billingd.toml` |
 | `accountingd` | `:9380` | Customer Account Ledger (LF role) — running Kundenkonto ledger; idempotent CE ingest (billing/EEG credits); CAMT.054 import; SEPA pain.008 XML; Mahnwesen Mahnstufe 1–3 | `accountingd.toml` |

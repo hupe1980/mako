@@ -19,6 +19,7 @@ path = "src/main.rs"
 [dependencies]
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 billing      = { workspace = true }
+eeg-billing  = { path = "../../crates/eeg-billing" }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
 axum         = { version = "0.8" }
@@ -29,6 +30,8 @@ serde_json   = { workspace = true }
 time         = { workspace = true }
 uuid         = { workspace = true, features = ["v4", "serde"] }
 rust_decimal = { workspace = true }
+rust_decimal_macros = "1"
+tokio-util   = { workspace = true }
 reqwest      = { workspace = true }
 tracing      = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -38,5 +41,4 @@ secrecy      = { version = "0.10" }
 
 
 [dev-dependencies]
-rust_decimal_macros = "1"
 time = { workspace = true }

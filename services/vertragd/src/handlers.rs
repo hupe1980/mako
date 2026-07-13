@@ -1122,3 +1122,118 @@ pub async fn get_preisgarantie(
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
+
+// ── Zahlungsinformation (BO4E typed payment info — IBAN + BIC + SEPA) ────────
+
+/// `PUT /api/v1/kunden/{id}/zahlungsinformation`
+///
+/// Store or replace the BO4E `Zahlungsinformation` COM for a customer.
+///
+/// Body: `rubo4e::current::Zahlungsinformation` JSON (camelCase).
+/// Accepts: `iban`, `bic`, `kontoinhaber`, `sepaReferenz`, `zahlungsart`.
+///
+/// Validation:
+/// - IBAN is validated via mod-97 (ISO 13616) before storage.
+/// - Stored as canonical BO4E camelCase JSONB.
+///
+/// **Hard cut.** Enables ERP-side BO4E `Zahlungsinformation` payload for SEPA
+/// batch onboarding and structured GDPR Art. 15 data export.
+pub async fn put_zahlungsinformation_kunde(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(kunden_id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use rubo4e::current::Zahlungsinformation;
+
+    // Verify customer exists
+    match fetch_kunde(&pool, kunden_id, &cfg.tenant).await {
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(Some(_)) => {}
+    }
+
+    let typed: Zahlungsinformation = match serde_json::from_value(body) {
+        Ok(z) => z,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("invalid Zahlungsinformation: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    // Validate IBAN when present.
+    if let Some(ref iban) = typed.iban {
+        if let Err(msg) = sepa::validate_iban(iban) {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("invalid IBAN: {msg}") })),
+            )
+                .into_response();
+        }
+    }
+
+    let canonical = serde_json::to_value(&typed).unwrap_or_default();
+
+    let res =
+        sqlx::query("UPDATE kunden SET zahlungsinformation = $1 WHERE id = $2 AND tenant = $3")
+            .bind(&canonical)
+            .bind(kunden_id)
+            .bind(&cfg.tenant)
+            .execute(&pool)
+            .await;
+
+    match res {
+        Ok(r) if r.rows_affected() == 0 => StatusCode::NOT_FOUND.into_response(),
+        Ok(_) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "kunden_id": kunden_id,
+                "zahlungsinformation": canonical,
+            })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/kunden/{id}/zahlungsinformation`
+///
+/// Retrieve the stored `Zahlungsinformation` for a customer.
+/// Returns 404 when no typed payment information has been stored.
+pub async fn get_zahlungsinformation_kunde(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(kunden_id): Path<Uuid>,
+) -> impl IntoResponse {
+    let row =
+        sqlx::query("SELECT zahlungsinformation FROM kunden WHERE id = $1 AND tenant = $2 LIMIT 1")
+            .bind(kunden_id)
+            .bind(&cfg.tenant)
+            .fetch_optional(&pool)
+            .await;
+
+    match row {
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(Some(row)) => {
+            use sqlx::Row as _;
+            let data: Option<serde_json::Value> = row.try_get("zahlungsinformation").ok().flatten();
+            match data {
+                Some(json) => Json::<serde_json::Value>(json).into_response(),
+                None => (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": "no Zahlungsinformation stored for this customer"
+                    })),
+                )
+                    .into_response(),
+            }
+        }
+    }
+}
+
+// IBAN validation is provided by the `sepa` workspace crate (ISO 13616 mod-97).
+// The old inline `validate_iban_mod97` has been removed — use `sepa::validate_iban` instead.

@@ -4,6 +4,11 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+// Quality scoring and Gas conversion are provided by the `metering` crate.
+// The inline `hampel_filter` has been replaced; `compute_quality` still uses
+// edmd-specific types but delegates the filter to `metering::hampel_filter`.
+use metering::hampel_filter;
+
 use axum::{
     Extension, Json, Router,
     extract::{Path, Query, State},
@@ -828,7 +833,10 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
                         let secret: &str = s.expose_secret();
                         secret
                     }),
-                    event_types: &["de.mako.process.completed"],
+                    // Receive MSCONS completions for meter data storage
+                    // + INSRPT initiations for reading-order auto-creation (M2+)
+                    // + Lieferbeginn/Lieferende completions for supply handover readings
+                    event_types: &["de.mako.process.completed", "de.mako.process.initiated"],
                     makopid_filter: mako_edm::domain::MSCONS_PIDS,
                     active: true,
                 },
@@ -1609,78 +1617,10 @@ pub struct QualityReport {
     pub grade: &'static str,
 }
 
-/// Compute the Hampel filter for a time series.
-///
-/// Returns the indices of outlier values using a sliding window of half-size `k`
-/// (total window = 2k+1) and threshold `t` (default 3.0 = 3 robust-sigma).
-///
-/// The Hampel filter is referenced in:
-/// - IEEE 1459-2010 (power quality)
-/// - BDEW MDM documentation for RLM quality validation
-/// - IEC 61968-9 (meter data management)
-fn hampel_filter(values: &[f64], k: usize, t: f64) -> Vec<usize> {
-    // Constant: converts MAD to equivalent Gaussian standard deviation.
-    const K_MAD: f64 = 1.4826;
-    let n = values.len();
-    let mut outliers = Vec::new();
-    for i in 0..n {
-        let lo = i.saturating_sub(k);
-        let hi = (i + k + 1).min(n);
-        let window: Vec<f64> = values[lo..hi].to_vec();
-        if window.is_empty() {
-            continue;
-        }
-        let mut sorted_w = window.clone();
-        sorted_w.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let median = if sorted_w.len().is_multiple_of(2) {
-            (sorted_w[sorted_w.len() / 2 - 1] + sorted_w[sorted_w.len() / 2]) / 2.0
-        } else {
-            sorted_w[sorted_w.len() / 2]
-        };
-        // MAD = median(|x - median|) over window
-        let mut abs_devs: Vec<f64> = window.iter().map(|x| (x - median).abs()).collect();
-        abs_devs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let mad = if abs_devs.len().is_multiple_of(2) {
-            (abs_devs[abs_devs.len() / 2 - 1] + abs_devs[abs_devs.len() / 2]) / 2.0
-        } else {
-            abs_devs[abs_devs.len() / 2]
-        };
-        let sigma = K_MAD * mad;
-        // Degenerate case: MAD = 0 means all window values equal the median.
-        // Any value that differs from the median is then infinitely many
-        // robust-sigma away — flag it unconditionally.
-        if sigma <= 0.0 {
-            if (values[i] - median).abs() > 0.0 {
-                outliers.push(i);
-            }
-        } else if (values[i] - median).abs() > t * sigma {
-            outliers.push(i);
-        }
-    }
-    outliers
-}
-
 /// Compute quality metrics for a set of accepted intervals.
 ///
-/// ## M7 checks — best-in-class
-///
-/// 1. **Gap detection** — adjacent pairs where `to[i] ≠ from[i+1]`.
-/// 2. **Consecutive zero-run** — longest run of zero-value intervals.
-/// 3. **Hampel filter outliers** — sliding-window robust outlier detection
-///    (window k=3, threshold t=3.0, MAD-based σ estimate).
-/// 4. **Spike detection** — `value > spike_factor × window_median` catches
-///    erroneous high-magnitude readings that pass Hampel (e.g. decimal-point errors).
-/// 5. **Interval consistency** — all intervals have same duration.
-/// 6. **Coverage** — accepted / expected × 100 %.
-///
-/// ## Quality grade
-///
-/// | Grade | Condition |
-/// |---|---|
-/// | A | No warnings (clean data) |
-/// | B | Minor: gaps ≤ 1 OR coverage ≥ 99 % OR 1 outlier |
-/// | C | Significant: gaps ≤ 3 OR coverage ≥ 95 % OR ≤ 3 outliers |
-/// | F | Unusable: more than 3 gaps, coverage < 90 %, or > 3 outliers |
+/// Delegates Hampel filter computation to `metering::hampel_filter`.
+/// See [`metering::score_intervals`] for the full `MeterInterval`-based API.
 fn compute_quality(
     accepted: &[&DirectInterval],
     period_start: OffsetDateTime,
@@ -1902,9 +1842,6 @@ async fn post_direct_reads_inner(
     source_default: &str,
 ) -> axum::response::Response {
     use rust_decimal::Decimal;
-    let _dec10_55 = Decimal::from_str_exact("10.55").unwrap_or(Decimal::from(10));
-    let _dec1_0 = Decimal::ONE;
-
     let pool = state.repo.pool();
     let source = if req.source.is_empty() {
         source_default.to_owned()
@@ -1947,9 +1884,10 @@ async fn post_direct_reads_inner(
     }
 
     // \u2500\u2500 Interval validation + kWh conversion \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // Gas m³ → kWh_Hs via metering::gas_m3_to_kwh_hs (§24 GasGVV / DVGW G 685)
     let hs = req
         .brennwert_kwh_per_m3
-        .unwrap_or_else(|| Decimal::from_str_exact("10.55").unwrap_or(Decimal::from(10)));
+        .unwrap_or_else(|| metering::GasConversionParams::default_erdgas_h().hs_kwh_per_m3);
     let z = req.zustandszahl.unwrap_or(Decimal::ONE);
 
     let mut accepted: Vec<&DirectInterval> = Vec::new();
@@ -2022,9 +1960,9 @@ async fn post_direct_reads_inner(
     let melo_id = req.melo_id.as_deref();
 
     for iv in &accepted {
-        // Convert m\u00b3 \u2192 kWh_Hs for Gas.
+        // Convert m³ → kWh_Hs for Gas via metering::gas_m3_to_kwh_hs (§24 GasGVV).
         let kwh = if iv.unit.to_lowercase() == "m3" {
-            (iv.value * hs * z).round_dp(6)
+            metering::gas_m3_to_kwh_hs(iv.value, hs, z)
         } else {
             iv.value
         };

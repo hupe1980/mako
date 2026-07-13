@@ -29,6 +29,7 @@ time          = { workspace = true }
 reqwest       = { workspace = true }
 rubo4e        = { workspace = true }
 rust_decimal  = { workspace = true }
+sepa          = { workspace = true }
 tracing       = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow        = { workspace = true }

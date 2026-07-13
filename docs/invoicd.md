@@ -46,7 +46,10 @@ graph TB
 │  POST /webhook                      ← marktd CloudEvents        │
 │  GET  /api/v1/receipts              ← INVOIC receipt ledger     │
 │  GET  /api/v1/receipts/{id}         ← single receipt by UUID    │
+│  GET  /api/v1/receipts/{id}/rechnung← full BO4E Rechnung JSON   │
 │  POST /api/v1/receipts/{id}/confirm-payment  ← ERP payment ack  │
+│  POST /api/v1/receipts/{id}/dispatch-remadv  ← manual REMADV    │
+│  POST /api/v1/receipts/{id}/resolve-dispute  ← close dispute    │
 │  GET  /api/v1/disputes              ← open disputes             │
 │  GET  /api/v1/overdue-remadv        ← receipts near pay_by      │
 │  GET  /api/v1/zahlungsstatus/{malo_id}  ← payment status per MaLo│
@@ -61,32 +64,40 @@ graph TB
 
 ## Handled PIDs
 
-| PID | Description | Direction | Status |
-|-----|-------------|-----------|--------|
-| 31001 | Abschlagsrechnung Netznutzung (NB → LF) | Inbound | ✅ |
-| 31002 | Netznutzungsabrechnung (NB → LF) | Inbound | ✅ |
-| 31005 | MMM-Rechnung Mehr-/Mindermengensaldo | Inbound | ✅ |
-| 31006 | MMM-Rechnung selbst ausgestellt (LF → NB) | Inbound + Outbound | ✅ |
-| 31009 | MSB-Rechnung (MSB → LF, WiM) | Inbound | ✅ |
+| PID | Description | Direction | Sparte | Status |
+|-----|-------------|-----------|--------|--------|
+| 31001 | Abschlagsrechnung Netznutzung (NB → LF) | Inbound | Strom | ✅ |
+| 31002 | Netznutzungsabrechnung (NB → LF) | Inbound | Strom | ✅ |
+| 31003 | WiM Gas Rechnung (NB → LF) | Inbound | Gas | ✅ |
+| 31004 | WiM Gas Stornorechnung (NB → LF) | Inbound | Gas | ✅ auto-accept |
+| 31005 | MMM-Rechnung Mehr-/Mindermengensaldo | Inbound | Strom | ✅ |
+| 31006 | MMM-Rechnung selbst ausgestellt (LF → NB) | Inbound + Outbound | Strom | ✅ |
+| 31007 | GaBi Gas Aggreg. MMM-Rechnung (NB → MGV) | Inbound | Gas | ✅ + MMM check 6 |
+| 31008 | GaBi Gas selbst ausgest. Aggreg. MMM-Rechnung | Inbound | Gas | ✅ + MMM check 6 |
+| 31009 | MSB-Rechnung (MSB → LF, WiM) | Inbound | Strom | ✅ PreisblattMessung |
+| 31011 | GeLi Gas Rechnung sonstige Leistung (AWH) | Inbound | Gas | ✅ |
 
-**PID 31009 (WiM MSB-Rechnung):** Handled by `Wim31009Ingestor`. The `WimRechnungWorkflow`
-embeds the BO4E `Rechnung` directly in the `ProcessInitiated` outbox payload.
-`invoicd` extracts it and runs `InvoicCheckEngine::check_msb_rechnung()` —
-a dedicated check method that uses **`PreisblattMessung`** (MSB metering service tariff,
-fetched via `GET /api/v1/preisblaetter-messung/{msb_mp_id}`) for checks 4 and 5,
-instead of the NNE `PreisblattNetznutzung`. This ensures Messstellenbetrieb Grundgebühr
-and hardware rental positions are validated against the correct MSB price sheet.
-Checks 1–3 (period, arithmetic, totals) run identically to other PIDs.
-On completion, `invoicd` persists the §22 MessZV receipt and dispatches REMADV via
-`wim.rechnung.annehmen` or `wim.rechnung.ablehnen`. Fallback endpoint for operator inspection:
-`GET /api/v1/invoic/{process_id}/rechnung` on `makod`.
+**PID 31009 (WiM MSB-Rechnung):** Handled by `Wim31009Ingestor`. Uses `PreisblattMessung` (MSB metering service tariff) for checks 4/5. Fallback to `GET /api/v1/invoic/{process_id}/rechnung` on `makod` when Rechnung is not embedded in `ProcessInitiated`.
+
+**Gas PIDs 31003/31004/31011:** Use the standard 5-check pipeline with `PreisblattNetznutzung` Gas tariff. PID 31004 (Stornorechnung) skips the tariff check (checks 4/5) and always resolves as `AcceptedPartial` unless arithmetic fails.
+
+**GaBi Gas PIDs 31007/31008:** Standard 5 checks + MMM Gas check 6 against Trading Hub Europe (THE) MMMA prices from `marktd`. These are Gas MGV billing PIDs (`mako-gabi-gas`). Previously the Gas MMM check was dead code — fixed in this release.
 
 ---
 
-## invoic-checker — 6+1 plausibility checks
+## invoic-checker — checks
 
 | # | Check | PIDs | Outcome on failure |
 |---|-------|------|--------------------|
+| 0 | **Storno reference** — `ist_storno=true` must have `original_rechnungsnummer` | all | `Dispute` |
+| 1 | **Billing period validity** (boundaries consistent, in scope) | all | `Dispute` |
+| 1.5 | **Zahlungsziel** — `faelligkeitsdatum` must not precede `rechnungsdatum` (invalid: `Dispute`) or exceed `max_zahlungsziel_days` (exceeded: `Warn`) | all | `Dispute` or `Warn` |
+| 2 | **Position arithmetic** (unit price × quantity = line net; tolerance 1%) | all | `Dispute` |
+| 3 | **Document total** (sum of positions = Gesamtnetto; tolerance 1%) | all | `Warn` |
+| 4 | **Tariff unit price** within tolerance — ToU-aware: each INVOIC position’s text is matched against the `zaehlzeitregister` band code of `zeitvariablePreispositionen` entries. Flat positions fall back to `Preisstaffel` prices. **PID 31009:** uses `PreisblattMessung`. **Stornorechnungen: skipped** (`ist_storno=true` carries negated original amounts, not tariff positions) | all (not Storno) | `Warn` or `Dispute` |
+| 5 | **Tariff entry found** in price sheet | all (not Storno) | `Warn` or `Dispute` |
+| 6 | **MMM settlement price** — for Strom MMM PIDs (31002/31005): MMMA Strom reference; for Gas MMM PIDs (31007/31008): MMMA Gas reference (THE) | 31002/31005/31007/31008 | `Warn` or `Dispute` |
+| 6 | **AufAbschlag discount validation** — for PID 31009: every negative position must match a contracted `AufAbschlag` name from `PreisblattMessung.auf_abschlaege` (WiM PRICAT 27001–27003). AufAbschlag names are now fetched from `marktd` and passed to `check_msb_rechnung_with_aufabschlaege` | 31009 | `Dispute` |
 | 1 | Billing period validity (boundaries consistent, in scope) | all | `Dispute` |
 | 2 | Position arithmetic (unit price × quantity = line net; tolerance 1%) | all | `Dispute` |
 | 3 | Document total (sum of positions = Gesamtnetto; tolerance 1%) | all | `Dispute` |
@@ -279,7 +290,8 @@ stateDiagram-v2
     Dispatched --> Settled : POST /confirm-payment (ERP ack)
     Dispatched --> Overdue : pay_by passes without confirmation
     Overdue --> Settled : POST /confirm-payment (late ERP ack)
-    Disputed --> [*] : operator resolution via COMDIS
+    Disputed --> Resolved : POST /resolve-dispute (operator closes after NB agreement)
+    Resolved --> [*] : §22 MessZV audit trail complete
     Settled --> [*] : §22 MessZV audit trail complete
 ```
 
@@ -344,6 +356,7 @@ total_tolerance            = 0.01   # 1 % — Σ line nets = Gesamtnetto
 tariff_tolerance           = 0.03   # 3 % — PRICAT unit price vs INVOIC
 require_tariff             = false  # true → missing tariff escalates to Dispute
 auto_dispute_threshold_eur = 0.0    # 0.0 → Warn always auto-approved
+max_zahlungsziel_days      = 30     # 0 = disable; default 30 (§7 Allg. Festlegungen)
 
 [erp]
 # Required for ERP accounts-payable automation.
@@ -427,7 +440,20 @@ The `[edmd]` section is required. Without it, `POST /api/v1/selbstausstellen` re
 | `list_disputes` | List all receipts with outcome `Dispute` |
 | `get_check_result` | Get the full invoic-checker findings for a process |
 | `list_overdue_remadv` | Receipts approaching Zahlungsziel without dispatched REMADV |
-| `get_zahlungsstatus` | Payment status per MaLo (settled / pending / overdue counts) |
+| `get_zahlungsstatus` | Payment status per MaLo-ID (settled / pending / overdue counts) |
+| `summarize_billing_month` | Monthly billing volume + dispute rate per NB counterparty |
+| `dispatch_remadv` | Check dispatch status for a stuck receipt (see REST API for action) |
+
+## MCP prompts
+
+| Prompt | Description |
+|--------|-------------|
+| `resolve-dispute` | Guided dispute investigation (check classification + resolution steps) |
+| `check-overdue-remadv` | Monitor and action overdue REMADV dispatches |
+| `monthly-billing-review` | §22 MessZV monthly reconciliation checklist |
+| `detect-systematic-errors` | Find NB counterparties with systematic billing errors |
+
+The `invoice-reconciliation-agent` in `agentd` subscribes to `de.invoic.payment.overdue` and `de.invoic.receipt.disputed`, runs the systematic-error detection workflow automatically, and escalates when a single NB exceeds 10% dispute rate over 2+ consecutive months.
 
 ---
 
@@ -450,6 +476,7 @@ not have received the REMADV and will begin a dispute window.
 | `invoicd_receipts_total` | Total INVOIC receipts persisted (§22 MessZV) |
 | `invoicd_disputes_total` | Receipts with `Dispute` outcome |
 | `invoicd_overdue_remadv_total` | Receipts with `pay_by < now() + 3 days` and no `dispatched_at` |
+| `invoicd_receipts_by_pid_outcome{pid, outcome}` | Receipt count broken down by PID and outcome |
 
 ```sql
 -- invoic_receipts (§22 MessZV, 3-year retention)

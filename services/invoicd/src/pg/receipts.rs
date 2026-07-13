@@ -20,7 +20,7 @@ use uuid::Uuid;
 pub struct ReceiptRow {
     /// Workflow process ID from the CloudEvent `subject` field.
     pub process_id: Uuid,
-    /// BDEW PID (31001 | 31002 | 31005 | 31006).
+    /// BDEW PID (31001–31009, 31011).
     pub pid: i16,
     /// Message flow direction: `"Inbound"` (NB/MSB → LF) or `"Outbound"` (LF selbstausgestellt).
     pub direction: String,
@@ -32,12 +32,17 @@ pub struct ReceiptRow {
     /// - Inbound: the LF's own tenant GLN.
     /// - Outbound: the NB GLN.
     pub receiver_gln: String,
-    /// Full BO4E Rechnung object as received.
+    /// MaLo-ID extracted from `rechnung.marktlokationsId` at ingest time.
+    /// Indexed via `invoic_receipts_malo_id_tenant` for fast zahlungsstatus lookups.
+    /// `None` for PIDs that don't carry a MaLo (e.g. Gas capacity invoices PID 31010).
+    pub malo_id: Option<String>,
+    /// Full BO4E Rechnung object as received (schema-pinned via bo4e_version).
     pub rechnung: serde_json::Value,
     /// BO4E schema version string, e.g. `"v202607.0.0"`.
     pub bo4e_version: String,
     /// Plausibility outcome: `"Ok"`, `"AcceptedPartial"`, `"Warn"`, `"Dispute"`,
-    /// `"Dispatched"` (outbound 31006 sent), or `"Paid"` (outbound 31006 settled).
+    /// `"Resolved"` (dispute closed by operator), `"Dispatched"` (outbound 31006 sent),
+    /// or `"Paid"` (outbound 31006 settled by NB).
     pub outcome: String,
     /// Serialised plausibility findings.
     pub findings: serde_json::Value,
@@ -66,15 +71,17 @@ pub async fn upsert_receipt(pool: &PgPool, row: &ReceiptRow) -> Result<(), sqlx:
     sqlx::query(
         r#"
         INSERT INTO invoic_receipts
-            (process_id, pid, direction, sender_mp_id, receiver_gln, rechnung, bo4e_version,
-             outcome, findings, pay_by, received_at, checked_at, dispatched_at, tenant)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            (process_id, pid, direction, sender_mp_id, receiver_gln, malo_id,
+             rechnung, bo4e_version, outcome, findings, pay_by,
+             received_at, checked_at, dispatched_at, tenant)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         ON CONFLICT (process_id) DO UPDATE SET
             outcome       = EXCLUDED.outcome,
             findings      = EXCLUDED.findings,
             pay_by        = EXCLUDED.pay_by,
             checked_at    = EXCLUDED.checked_at,
-            dispatched_at = EXCLUDED.dispatched_at
+            dispatched_at = EXCLUDED.dispatched_at,
+            malo_id       = COALESCE(EXCLUDED.malo_id, invoic_receipts.malo_id)
         "#,
     )
     .bind(row.process_id)
@@ -82,6 +89,7 @@ pub async fn upsert_receipt(pool: &PgPool, row: &ReceiptRow) -> Result<(), sqlx:
     .bind(&row.direction)
     .bind(&row.sender_mp_id)
     .bind(&row.receiver_gln)
+    .bind(row.malo_id.as_deref())
     .bind(&row.rechnung)
     .bind(&row.bo4e_version)
     .bind(&row.outcome)
@@ -260,4 +268,76 @@ pub async fn fetch_erp_pending(
             },
         )
         .collect())
+}
+
+/// Mark a disputed receipt as resolved by the operator.
+///
+/// Sets `outcome = 'Resolved'`, `dispute_resolved_at = now()`, and stores
+/// an optional operator note.  Only affects rows currently in `'Dispute'` state.
+///
+/// Returns `true` when the row was updated; `false` when the receipt was not
+/// found or was not in `Dispute` state.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` on database failure.
+pub async fn resolve_dispute(
+    pool: &PgPool,
+    id: Uuid,
+    tenant: &str,
+    note: Option<&str>,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        r"UPDATE invoic_receipts
+          SET outcome = 'Resolved',
+              dispute_resolved_at = now(),
+              dispute_resolution_note = $3
+          WHERE id = $1 AND tenant = $2 AND outcome = 'Dispute'",
+    )
+    .bind(id)
+    .bind(tenant)
+    .bind(note)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Retrieve all receipts for a given MaLo-ID (indexed lookup, no JSONB scan).
+///
+/// Used by `GET /api/v1/zahlungsstatus/{malo_id}`.  The `malo_id` column is
+/// populated at ingest time from `rechnung.marktlokationsId` and indexed by
+/// migration `0002_malo_id_and_dispute_resolution`.
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` on database failure.
+pub async fn fetch_by_malo_id(
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+) -> Result<
+    Vec<(
+        Uuid,
+        Uuid,
+        i16,
+        String,
+        Option<OffsetDateTime>,
+        Option<OffsetDateTime>,
+        Option<OffsetDateTime>,
+        OffsetDateTime,
+    )>,
+    sqlx::Error,
+> {
+    sqlx::query_as(
+        r"SELECT id, process_id, pid, outcome,
+                 pay_by, dispatched_at, payment_confirmed_at, received_at
+          FROM invoic_receipts
+          WHERE tenant = $1 AND malo_id = $2
+          ORDER BY received_at DESC
+          LIMIT 100",
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .fetch_all(pool)
+    .await
 }

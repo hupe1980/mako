@@ -634,6 +634,9 @@ context and step-by-step instructions:
 | `gpke-lieferbeginn` | `malo_id`, `lieferbeginn_datum` | Guided GPKE Lieferbeginn Strom workflow (electricity supplier change) |
 | `geli-lieferbeginn` | `malo_id`, `lieferbeginn_datum` | Guided GeLi Gas Lieferbeginn workflow (gas supplier change) |
 | `wim-geraetewechsel` | `melo_id`, `wechseldatum`, `marktrolle` | Guided WiM Gerätewechsel workflow (meter device change) |
+| `msb-preisanfrage` | *(none)* | Step-by-step MSB Preisanfrage (REQOTE/QUOTES, PRICAT 27003 dispatch) |
+| `wim-gas-anmeldung` | *(none)* | Guided WiM Gas MSB-Wechsel Anmeldung (GNB approve/reject within 10 WT) |
+| `gpke-sperrung` | *(none)* | Guided GPKE Sperrung Strom (LF confirms disconnection to NB) |
 
 Each prompt returns a `User` message that instructs the LLM to call the right tools
 in the right order, with the correct payload fields and applicable regulatory deadline.
@@ -899,6 +902,12 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `mabis.abrechnung.begleichen` | `BKV` or `ÜNB` | MABIS | 13003 | Mark billing period settled |
 | `gpke.vollzugsmeldung.empfangen` | `NB`/`LFN`/`LFA` | GPKE | 21024–21033 | Vollzugsmeldung received via REST (manual replay) |
 | `wim.iftsta.empfangen` | `NB`/`MSB` | WiM | 21009–21018 | WiM IFTSTA status received via REST (manual replay) |
+| `wim.gas.anmeldung.bestaetigen` | `NB`/`GNB` | WiM Gas | 44042–44053 | GNB accepts GMSB Anmeldung (positive APERAK within 10 WT) |
+| `wim.gas.anmeldung.ablehnen` | `NB`/`GNB` | WiM Gas | 44042–44053 | GNB rejects GMSB Anmeldung (negative APERAK within 10 WT) |
+| `wim.gas.kuendigung.bestaetigen` | `NB`/`GNB` | WiM Gas | 44039–44041 | GNB accepts GMSB Kündigung |
+| `wim.gas.kuendigung.ablehnen` | `NB`/`GNB` | WiM Gas | 44039–44041 | GNB rejects GMSB Kündigung |
+| `wim.gas.stornierung.bestaetigen` | `NB`/`GNB` | WiM Gas | 44022–44024 | GNB sends positive APERAK 44023 to LF Stornierung |
+| `wim.gas.stornierung.ablehnen` | `NB`/`GNB` | WiM Gas | 44022–44024 | GNB sends negative APERAK 44024 to LF Stornierung |
 | `mabis.iftsta.empfangen` | `BKV`/`NB`/`ÜNB`/`BIKO` | MABIS | 21000–21003, 21005, 21007 | MABIS IFTSTA informational status received via REST |
 | `mabis.datenstatus.empfangen` | `BKV`/`NB`/`BIKO` | MABIS | 21004 | MABIS Datenstatus received via REST (BIKO → BKV/NB) |
 
@@ -921,6 +930,12 @@ GLNs resolved by the engine (sender, receiver) are intentionally absent.
 | `geli.lieferbeginn.anmelden` | `malo_id` (gas MaLo), `lieferbeginn_datum` |
 | `geli.lieferende.anmelden` | `malo_id` (gas MaLo), `lieferende_datum` |
 | `wim.geraetewechsel.beauftragen` | `melo_id`², `wechseldatum` |
+| `wim.gas.anmeldung.bestaetigen` | `malo_id` (gas MaLo) |
+| `wim.gas.anmeldung.ablehnen` | `malo_id` (gas MaLo), `reason` (ERC code + text) |
+| `wim.gas.kuendigung.bestaetigen` | `malo_id` (gas MaLo) |
+| `wim.gas.kuendigung.ablehnen` | `malo_id` (gas MaLo), `reason` |
+| `wim.gas.stornierung.bestaetigen` | `vorgang_id` (Vorgangsnummer from PID 44022 IDE+24) |
+| `wim.gas.stornierung.ablehnen` | `vorgang_id`, `reason` |
 | `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |
 
 ¹ `alter_lf_mp_id` is required only when the old supplier is a different legal entity.

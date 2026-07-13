@@ -79,6 +79,15 @@ pub struct CheckConfig {
     /// Set to `true` once the tariff store is fully seeded and the LF has
     /// received PRICAT 27003 from all active NB counterparties.
     pub require_tariff: bool,
+
+    /// Maximum allowed payment term (Zahlungsziel) in days from the invoice date
+    /// (`rechnungsdatum`) to the due date (`faelligkeitsdatum`, DTM+92).
+    ///
+    /// Per §7 Allgemeine Festlegungen V6.1d: standard GPKE and WiM payment term
+    /// is **30 days**. Set to `0` to disable this check.
+    ///
+    /// Default: `30`.
+    pub max_zahlungsziel_days: u16,
 }
 
 impl Default for CheckConfig {
@@ -88,6 +97,7 @@ impl Default for CheckConfig {
             total_tolerance_ppm: 10_000,
             tariff_tolerance_ppm: 20_000,
             require_tariff: false,
+            max_zahlungsziel_days: 30,
         }
     }
 }
@@ -125,6 +135,18 @@ pub enum FindingKind {
     TariffDeviation,
     /// No PRICAT tariff exists in the store for this sender GLN.
     TariffNotFound,
+    /// `ist_storno = true` but `original_rechnungsnummer` is absent.
+    ///
+    /// Per BK6-24-174 §5: a Stornorechnung must reference the original invoice
+    /// number so the LF can reconcile it against the original receipt.
+    StorniertWithoutReference,
+    /// `faelligkeitsdatum` (DTM+92) exceeds the maximum allowed payment term.
+    ///
+    /// Basis: §7 Allgemeine Festlegungen V6.1d — standard GPKE/WiM payment
+    /// term is 30 days from invoice date.
+    ZahlungszielExceeded,
+    /// `faelligkeitsdatum` (DTM+92) is in the past or before `rechnungsdatum`.
+    ZahlungszielInvalid,
 }
 
 // ── Finding ───────────────────────────────────────────────────────────────────
@@ -239,6 +261,29 @@ impl CheckReport {
 
 // ── InvoicCheckEngine ─────────────────────────────────────────────────────────
 
+/// Return `true` when `rechnung` is a Stornorechnung (cancellation invoice).
+///
+/// A Stornorechnung is identified by `ist_storno = Some(true)`.
+/// When true, the tariff check (stage 4) must be skipped — cancellations
+/// do not carry original tariff positions, they carry negated amounts.
+///
+/// The presence of `original_rechnungsnummer` is checked separately by
+/// `InvoicCheckEngine::check` (finding kind `StorniertWithoutReference`).
+///
+/// # Example
+///
+/// ```rust
+/// use invoic_checker::check::is_stornierung;
+/// use rubo4e::current::Rechnung;
+/// let mut r = Rechnung::default();
+/// r.ist_storno = Some(true);
+/// assert!(is_stornierung(&r));
+/// ```
+#[must_use]
+pub fn is_stornierung(rechnung: &Rechnung) -> bool {
+    rechnung.ist_storno == Some(true)
+}
+
 /// Stateless INVOIC plausibility check engine.
 ///
 /// All logic is in [`InvoicCheckEngine::check`], which is a pure function over
@@ -266,23 +311,57 @@ impl InvoicCheckEngine {
     ) -> CheckReport {
         let mut findings: Vec<Finding> = Vec::new();
 
+        let storno = is_stornierung(rechnung);
+
+        // ── Stage 0: Stornierung reference check ──────────────────────────────
+        // When ist_storno=true, original_rechnungsnummer must be present.
+        // Source: BK6-24-174 §5; Allgemeine Festlegungen §8.
+        if storno
+            && rechnung
+                .original_rechnungsnummer
+                .as_deref()
+                .unwrap_or("")
+                .is_empty()
+        {
+            findings.push(Finding::dispute(
+                FindingKind::StorniertWithoutReference,
+                "Stornorechnung (ist_storno=true) does not reference the original invoice \
+                 (original_rechnungsnummer is missing). \
+                 Source: BK6-24-174 §5; Allgemeine Festlegungen §8.",
+                None,
+                None,
+                None,
+            ));
+        }
+
         // ── Stage 1: Period validity ──────────────────────────────────────────
         Self::check_periods(rechnung, &mut findings);
 
-        // ── Stage 2: Arithmetic (qty × unit_price ≈ gesamtpreis) ─────────
+        // ── Stage 1.5: Zahlungsziel check ─────────────────────────────────────
+        // DTM+92 (faelligkeitsdatum) must not exceed max_zahlungsziel_days.
+        // Source: §7 Allgemeine Festlegungen V6.1d; BK6-22-024 §5.
+        if config.max_zahlungsziel_days > 0 {
+            Self::check_zahlungsziel(rechnung, config, &mut findings);
+        }
+
+        // ── Stage 2: Arithmetic (qty × unit_price ≈ gesamtpreis) ─────────────
         Self::check_arithmetic(rechnung, config, &mut findings);
 
-        // ── Stage 3: Total consistency (Σ gesamtpreis ≈ gesamtnetto) ─────
+        // ── Stage 3: Total consistency (Σ gesamtpreis ≈ gesamtnetto) ──────────
         let computed_total = Self::check_total(rechnung, config, &mut findings);
 
         // ── Stage 4: Tariff check (PRICAT vs INVOIC unit price) ───────────────
-        Self::check_tariffs(
-            rechnung,
-            sender_mp_id,
-            preisblatt_store,
-            config,
-            &mut findings,
-        );
+        // Skipped for Stornorechnungen: they carry negated original amounts,
+        // not tariff positions. Skipping prevents false TariffDeviation disputes.
+        if !storno {
+            Self::check_tariffs(
+                rechnung,
+                sender_mp_id,
+                preisblatt_store,
+                config,
+                &mut findings,
+            );
+        }
 
         // ── Derive overall outcome ────────────────────────────────────────────
         let outcome = findings
@@ -313,6 +392,60 @@ impl InvoicCheckEngine {
     }
 
     // ── Stage implementations ──────────────────────────────────────────────────
+
+    /// Stage 1.5: Validate `faelligkeitsdatum` (Zahlungsziel / DTM+92).
+    ///
+    /// Checks:
+    /// - If `faelligkeitsdatum < rechnungsdatum`: invalid (past due before issued).
+    ///   Produces a `Dispute` finding (`ZahlungszielInvalid`).
+    /// - If `faelligkeitsdatum - rechnungsdatum > max_zahlungsziel_days`:
+    ///   exceeds contractual/regulatory payment term.
+    ///   Produces a `Warn` finding (`ZahlungszielExceeded`).
+    ///
+    /// Source: §7 Allgemeine Festlegungen V6.1d (30 days standard);
+    ///         BK6-22-024 §5; BK7-24-01-009 §5.
+    fn check_zahlungsziel(rechnung: &Rechnung, config: &CheckConfig, findings: &mut Vec<Finding>) {
+        let Some(faellig) = rechnung.faelligkeitsdatum else {
+            return; // DTM+92 absent — not required on all PID types
+        };
+        let rechnungs_datum = match rechnung.rechnungsdatum {
+            Some(d) => d,
+            None => return, // Cannot compute term without invoice date
+        };
+
+        if faellig < rechnungs_datum {
+            findings.push(Finding::dispute(
+                FindingKind::ZahlungszielInvalid,
+                format!(
+                    "Zahlungsziel {faellig} is before invoice date {rechnungs_datum}. \
+                     DTM+92 must not precede rechnungsdatum. \
+                     Source: §7 Allgemeine Festlegungen V6.1d.",
+                ),
+                None,
+                None,
+                None,
+            ));
+            return;
+        }
+
+        let days = (faellig - rechnungs_datum).whole_days();
+        let max = config.max_zahlungsziel_days as i64;
+        if max > 0 && days > max {
+            findings.push(Finding {
+                kind: FindingKind::ZahlungszielExceeded,
+                is_dispute: false, // Warn, not Dispute — give the NB a chance to correct
+                message: format!(
+                    "Zahlungsziel is {days} days (from {rechnungs_datum} to {faellig}), \
+                     exceeding the {max}-day maximum per §7 Allgemeine Festlegungen V6.1d. \
+                     Review before payment.",
+                ),
+                line_number: None,
+                expected: None,
+                actual: None,
+                deviation_pct: Some(days as f64 - max as f64),
+            });
+        }
+    }
 
     /// Stage 1: Verify that every billing period has start < end.
     ///
@@ -821,6 +954,95 @@ impl InvoicCheckEngine {
         }
     }
 
+    /// Arithmetic-only check for Stornorechnungen (cancellation invoices).
+    ///
+    /// Runs stages 0–3 (Storno reference, period, arithmetic, totals) only.
+    /// Stage 4 (tariff check) is skipped because a Stornierung carries negated
+    /// amounts from the original invoice, not new tariff positions.
+    ///
+    /// Returns a `CheckReport` with outcome `AcceptedPartial` when all checks
+    /// pass (represented as `Ok` in `CheckOutcome` — the `AcceptedPartial` label
+    /// is set by `invoicd` when it detects a Storno outcome).
+    ///
+    /// Call this instead of `check()` when you know the invoice is a Storno
+    /// (either by PID routing — e.g. PID 31004 — or by `is_stornierung()` check).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use invoic_checker::check::{CheckConfig, CheckOutcome, InvoicCheckEngine, is_stornierung};
+    /// use rubo4e::current::Rechnung;
+    ///
+    /// let mut r = Rechnung::default();
+    /// r.ist_storno = Some(true);
+    /// r.original_rechnungsnummer = Some("31001-2026-001".to_owned());
+    /// assert!(is_stornierung(&r));
+    ///
+    /// let report = InvoicCheckEngine::check_storno(31004, &r, &CheckConfig::default());
+    /// assert_eq!(report.outcome, CheckOutcome::Ok);
+    /// ```
+    #[must_use]
+    pub fn check_storno(pid: u32, rechnung: &Rechnung, config: &CheckConfig) -> CheckReport {
+        let mut findings = Vec::new();
+
+        // Stage 0: Storno reference must be present.
+        if rechnung
+            .original_rechnungsnummer
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+        {
+            findings.push(Finding::dispute(
+                FindingKind::StorniertWithoutReference,
+                "Stornorechnung does not reference the original invoice \
+                 (original_rechnungsnummer is missing). Source: BK6-24-174 §5.",
+                None,
+                None,
+                None,
+            ));
+        }
+
+        // Stage 1: Period validity (same as full check).
+        Self::check_periods(rechnung, &mut findings);
+
+        // Stage 1.5: Zahlungsziel check.
+        if config.max_zahlungsziel_days > 0 {
+            Self::check_zahlungsziel(rechnung, config, &mut findings);
+        }
+
+        // Stage 2 + 3: Arithmetic and total (still apply to Storno amounts).
+        Self::check_arithmetic(rechnung, config, &mut findings);
+        let computed_total = Self::check_total(rechnung, config, &mut findings);
+
+        // Stage 4: SKIPPED — Storno carries negated original amounts.
+
+        let outcome = findings
+            .iter()
+            .map(|f| {
+                if f.is_dispute {
+                    CheckOutcome::Dispute
+                } else {
+                    CheckOutcome::Warn
+                }
+            })
+            .max()
+            .unwrap_or(CheckOutcome::Ok);
+
+        let total_net_invoic = rechnung
+            .gesamtnetto
+            .wert_decimal()
+            .and_then(EuroAmount::from_decimal);
+
+        CheckReport {
+            outcome,
+            findings,
+            pid,
+            total_net_invoic,
+            total_net_computed: computed_total,
+            line_items_checked: rechnung.rechnungspositionen.iter().flatten().count(),
+        }
+    }
+
     /// Called by `invoicd` handler **after** the standard 5-check pipeline when
     /// `mehr_ct_kwh` / `minder_ct_kwh` are available from `marktd`.
     ///
@@ -1264,5 +1486,173 @@ mod tests {
         let report =
             InvoicCheckEngine::check(31005, SENDER, &r, &empty_store(), &CheckConfig::default());
         assert_eq!(report.pid, 31005);
+    }
+
+    // ── Stornierung tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn stornierung_with_reference_skips_tariff_check() {
+        // A valid Storno: ist_storno=true + original_rechnungsnummer present.
+        // Tariff stage must be skipped — no TariffNotFound finding expected.
+        let price = EuroAmount::from_raw_units(3_456);
+        let net = EuroAmount::from_raw_units(3_456_000);
+        let pos = make_pos(1, "DE001", Some("1000.0"), Some(price), Some(net));
+        let mut r = make_rechnung(vec![pos], Some(net));
+        r.ist_storno = Some(true);
+        r.original_rechnungsnummer = Some("31001-2025-0042".to_owned());
+
+        // Empty tariff store — would produce TariffNotFound if tariff stage ran.
+        let report =
+            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert_eq!(
+            report.outcome,
+            CheckOutcome::Ok,
+            "Storno with valid ref + correct arithmetic should be Ok"
+        );
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::TariffNotFound),
+            "Tariff stage must be skipped for Stornierung"
+        );
+    }
+
+    #[test]
+    fn stornierung_without_reference_is_dispute() {
+        // ist_storno=true but original_rechnungsnummer absent → StorniertWithoutReference.
+        let mut r = make_rechnung(vec![], None);
+        r.ist_storno = Some(true);
+        r.original_rechnungsnummer = None;
+
+        let report =
+            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert!(report.has_dispute());
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::StorniertWithoutReference),
+            "Missing original_rechnungsnummer must produce StorniertWithoutReference"
+        );
+    }
+
+    #[test]
+    fn is_stornierung_predicate() {
+        let mut r = Rechnung::default();
+        assert!(!is_stornierung(&r), "default Rechnung is not a Storno");
+        r.ist_storno = Some(true);
+        assert!(is_stornierung(&r), "ist_storno=true → is Storno");
+        r.ist_storno = Some(false);
+        assert!(!is_stornierung(&r), "ist_storno=false → not Storno");
+    }
+
+    #[test]
+    fn check_storno_clean_returns_ok() {
+        let price = EuroAmount::from_raw_units(3_456);
+        let net = EuroAmount::from_raw_units(3_456_000);
+        let pos = make_pos(1, "DE001", Some("1000.0"), Some(price), Some(net));
+        let mut r = make_rechnung(vec![pos], Some(net));
+        r.ist_storno = Some(true);
+        r.original_rechnungsnummer = Some("31001-2025-0042".to_owned());
+
+        let report = InvoicCheckEngine::check_storno(31004, &r, &CheckConfig::default());
+        assert_eq!(report.outcome, CheckOutcome::Ok);
+        assert!(report.findings.is_empty());
+    }
+
+    #[test]
+    fn check_storno_without_reference_is_dispute() {
+        let mut r = make_rechnung(vec![], None);
+        r.ist_storno = Some(true);
+        r.original_rechnungsnummer = None;
+
+        let report = InvoicCheckEngine::check_storno(31004, &r, &CheckConfig::default());
+        assert!(report.has_dispute());
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::StorniertWithoutReference)
+        );
+    }
+
+    // ── Zahlungsziel tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn zahlungsziel_within_limit_no_finding() {
+        let mut r = make_rechnung(vec![], None);
+        r.rechnungsdatum = Some(parse_date("2026-07-01"));
+        r.faelligkeitsdatum = Some(parse_date("2026-07-31")); // exactly 30 days
+
+        let report =
+            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::ZahlungszielExceeded),
+            "Exactly 30 days is within the default limit"
+        );
+    }
+
+    #[test]
+    fn zahlungsziel_exceeded_is_warn() {
+        let mut r = make_rechnung(vec![], None);
+        r.rechnungsdatum = Some(parse_date("2026-07-01"));
+        r.faelligkeitsdatum = Some(parse_date("2026-09-01")); // 62 days — exceeds 30
+
+        let report =
+            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.kind == FindingKind::ZahlungszielExceeded);
+        assert!(
+            finding.is_some(),
+            "62-day payment term must produce ZahlungszielExceeded"
+        );
+        assert!(
+            !finding.unwrap().is_dispute,
+            "ZahlungszielExceeded is Warn, not Dispute"
+        );
+    }
+
+    #[test]
+    fn zahlungsziel_before_invoice_date_is_dispute() {
+        let mut r = make_rechnung(vec![], None);
+        r.rechnungsdatum = Some(parse_date("2026-07-15"));
+        r.faelligkeitsdatum = Some(parse_date("2026-07-01")); // before invoice date
+
+        let report =
+            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert!(report.has_dispute());
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::ZahlungszielInvalid),
+            "pay_by before rechnungsdatum must produce ZahlungszielInvalid Dispute"
+        );
+    }
+
+    #[test]
+    fn zahlungsziel_check_disabled_at_zero() {
+        let mut r = make_rechnung(vec![], None);
+        r.rechnungsdatum = Some(parse_date("2026-01-01"));
+        r.faelligkeitsdatum = Some(parse_date("2026-12-31")); // 364 days — would normally trigger
+
+        let config = CheckConfig {
+            max_zahlungsziel_days: 0,
+            ..Default::default()
+        };
+        let report = InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &config);
+        assert!(
+            !report.findings.iter().any(|f| matches!(
+                f.kind,
+                FindingKind::ZahlungszielExceeded | FindingKind::ZahlungszielInvalid
+            )),
+            "Zahlungsziel check must be skipped when max_zahlungsziel_days = 0"
+        );
     }
 }

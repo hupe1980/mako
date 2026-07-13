@@ -21,13 +21,12 @@
 //! | `GET`   | `/health` | Liveness check |
 //! | `GET`   | `/health/ready` | Readiness check |
 
-
-use sperrd::{config, handlers, pg};
 use anyhow::Context as _;
 use axum::{Extension, Router, routing::get};
 use mako_markt::makod_client::MakodClient;
 use mako_service::{health::health_routes, load_config};
 use secrecy::SecretString;
+use sperrd::{config, handlers, pg};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::info;

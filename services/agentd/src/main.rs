@@ -21,7 +21,6 @@
 //!
 //! ## Port: 9580
 
-
 use agentd::{agent, config, handlers, llm, mcp, rag};
 use std::sync::Arc;
 
@@ -30,7 +29,13 @@ use axum::{Router, routing::post};
 use mako_service::{health::health_routes, load_config};
 use tracing::info;
 
-use agentd::{agent::{AgentRegistry, OrchestratorAgent}, config::AgentdConfig, handlers::AppState, mcp::McpPool, rag::RagEngine};
+use agentd::{
+    agent::{AgentRegistry, OrchestratorAgent},
+    config::AgentdConfig,
+    handlers::AppState,
+    mcp::McpPool,
+    rag::RagEngine,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

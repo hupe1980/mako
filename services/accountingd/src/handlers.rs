@@ -31,6 +31,18 @@ use crate::{
     },
     sepa::build_pain_008,
 };
+// Re-export sepa crate's validate_iban so test code can import from this module.
+pub use sepa::validate_iban;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Convert an amount in ct (i64, × 10⁻² EUR) to a `"1234.56"` EUR string.
+/// Uses pure integer arithmetic — no f64.
+pub fn format_ct_as_eur(ct: i64) -> String {
+    let sign = if ct < 0 { "-" } else { "" };
+    let abs = ct.unsigned_abs();
+    format!("{sign}{}.{:02}", abs / 100, abs % 100)
+}
 
 // ── Account endpoints ─────────────────────────────────────────────────────────
 
@@ -77,7 +89,7 @@ pub async fn get_balance(
         Ok(Some(row)) => Json(serde_json::json!({
             "malo_id": malo_id,
             "balance_ct": row.balance_ct,
-            "balance_eur": format!("{:.2}", row.balance_ct as f64 / 100.0),
+            "balance_eur": format_ct_as_eur(row.balance_ct),
             "status": if row.balance_ct > 0 { "overdue" } else if row.balance_ct < 0 { "credit" } else { "settled" },
         }))
         .into_response(),
@@ -191,10 +203,13 @@ pub async fn ingest_webhook(
     let ce_type = ce.get("type").and_then(|v| v.as_str()).unwrap_or("");
     let ce_id = ce.get("id").and_then(|v| v.as_str()).map(str::to_owned);
     let data = ce.get("data");
-
     let today = OffsetDateTime::now_utc().date();
 
     match ce_type {
+        // ── Billing invoice (billingd) ────────────────────────────────────────
+        // de.billing.rechnung.erstellt:
+        //   is_correction=false → RECHNUNG debit  (customer owes money)
+        //   is_correction=true  → STORNO debit/credit (negated amount; billing reversal)
         "de.billing.rechnung.erstellt" => {
             let malo_id = data
                 .and_then(|d| d.get("malo_id"))
@@ -204,21 +219,28 @@ pub async fn ingest_webhook(
                 .and_then(|d| d.get("lf_mp_id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or(&cfg.tenant);
-            // L8: corrections emit the same event type with is_correction=true.
-            // A correction Rechnung has negated amounts already; writing the entry
-            // as-is produces the CREDIT effect automatically.
             let is_correction: bool = data
                 .and_then(|d| d.get("is_correction"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let total_brutto_eur: f64 = data
+            // Parse as Decimal to avoid f64 rounding errors on money amounts.
+            let amount_ct: i64 = data
                 .and_then(|d| d.get("rechnung"))
                 .and_then(|r| r.get("gesamtbrutto"))
                 .and_then(|g| g.get("wert"))
                 .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.0);
-            let amount_ct = (total_brutto_eur * 100.0).round() as i64;
+                .and_then(|s| {
+                    use rust_decimal::Decimal;
+                    use std::str::FromStr;
+                    Decimal::from_str(s).ok().map(|d| {
+                        (d * Decimal::from(100))
+                            .round()
+                            .to_string()
+                            .parse::<i64>()
+                            .unwrap_or(0)
+                    })
+                })
+                .unwrap_or(0);
             let account_id = upsert_account(&pool, malo_id, lf_mp_id, &cfg.tenant)
                 .await
                 .unwrap_or(Uuid::nil());
@@ -226,22 +248,19 @@ pub async fn ingest_webhook(
                 let record_id = data
                     .and_then(|d| d.get("record_id"))
                     .and_then(|v| v.as_str());
-                let entry_type = if is_correction {
-                    "KORREKTURRECHNUNG"
+                // STORNO: billing reversal (Stornorechnung). Amount already negated by billingd.
+                // RECHNUNG: normal invoice debit.
+                let (entry_type, description) = if is_correction {
+                    ("STORNO", "Stornorechnung / Korrekturrechnung")
                 } else {
-                    "RECHNUNG"
-                };
-                let description = if is_correction {
-                    "Korrekturrechnung / Stornorechnung (Gutschrift)"
-                } else {
-                    "Kundenrechnung"
+                    ("RECHNUNG", "Kundenrechnung")
                 };
                 let _ = write_entry(
                     &pool,
                     account_id,
                     &cfg.tenant,
                     entry_type,
-                    amount_ct, // already negative for corrections (amounts negated in Rechnung)
+                    amount_ct,
                     record_id,
                     Some(ce_type),
                     ce_id.as_deref(),
@@ -252,20 +271,127 @@ pub async fn ingest_webhook(
             }
             StatusCode::OK.into_response()
         }
-        "de.invoic.receipt.settled" => {
-            // NNE receipt settled = credit (NB paid us, or we confirmed receipt)
-            // For LF: when an inbound NNE invoice is settled (annehmen), it's a debit.
-            // We record it as the payment obligation confirmed.
+
+        // ── Credit note (billingd) ─────────────────────────────────────────────
+        // de.billing.gutschrift.erstellt: credit note, negative amount (credit to customer).
+        "de.billing.gutschrift.erstellt" => {
+            let malo_id = data
+                .and_then(|d| d.get("malo_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let lf_mp_id = data
+                .and_then(|d| d.get("lf_mp_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(&cfg.tenant);
+            let gutschrift_ct: i64 = data
+                .and_then(|d| d.get("betrag_eur"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| {
+                    use rust_decimal::Decimal;
+                    use std::str::FromStr;
+                    Decimal::from_str(s).ok().map(|d| {
+                        -(d * Decimal::from(100))
+                            .round()
+                            .to_string()
+                            .parse::<i64>()
+                            .unwrap_or(0)
+                    })
+                })
+                .unwrap_or(0);
+            let account_id = upsert_account(&pool, malo_id, lf_mp_id, &cfg.tenant)
+                .await
+                .unwrap_or(Uuid::nil());
+            if account_id != Uuid::nil() && gutschrift_ct != 0 {
+                let record_id = data
+                    .and_then(|d| d.get("record_id"))
+                    .and_then(|v| v.as_str());
+                let _ = write_entry(
+                    &pool,
+                    account_id,
+                    &cfg.tenant,
+                    "GUTSCHRIFT",
+                    gutschrift_ct,
+                    record_id,
+                    Some(ce_type),
+                    ce_id.as_deref(),
+                    today,
+                    Some("Gutschrift / Rechnungskorrektur"),
+                )
+                .await;
+            }
             StatusCode::OK.into_response()
         }
-        "de.eeg.verguetung.berechnet" => {
-            let malo_id = ce.get("subject").and_then(|v| v.as_str()).unwrap_or("");
-            let settlement_eur: f64 = data
+
+        // ── NNE / INVOIC receipt settled (invoicd) ────────────────────────────
+        // de.invoic.receipt.settled: the LF confirmed an inbound NNE invoice from the NB.
+        // For the customer ledger this is not directly relevant (it's an NB↔LF settlement),
+        // but if the LF passes the NNE cost through to the customer (MSB pass-through billing),
+        // a corresponding RECHNUNG should have been created by billingd already.
+        // We log the settlement as a ZAHLUNG credit if `settlement_eur` is present,
+        // meaning the NB confirmed receiving payment from the LF.
+        "de.invoic.receipt.settled" => {
+            let malo_id = data
+                .and_then(|d| d.get("malo_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let settlement_ct: i64 = data
                 .and_then(|d| d.get("settlement_eur"))
                 .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.0);
-            let amount_ct = -(settlement_eur * 100.0).round() as i64; // negative = credit
+                .and_then(|s| {
+                    use rust_decimal::Decimal;
+                    use std::str::FromStr;
+                    // Positive settlement_eur = NB received payment → ZAHLUNG credit for customer.
+                    Decimal::from_str(s).ok().map(|d| {
+                        -(d * Decimal::from(100))
+                            .round()
+                            .to_string()
+                            .parse::<i64>()
+                            .unwrap_or(0)
+                    })
+                })
+                .unwrap_or(0);
+            if !malo_id.is_empty() && settlement_ct != 0 {
+                let account_id = upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant)
+                    .await
+                    .unwrap_or(Uuid::nil());
+                if account_id != Uuid::nil() {
+                    let _ = write_entry(
+                        &pool,
+                        account_id,
+                        &cfg.tenant,
+                        "ZAHLUNG",
+                        settlement_ct,
+                        ce_id.as_deref(),
+                        Some(ce_type),
+                        ce_id.as_deref(),
+                        today,
+                        Some("NNE-Zahlung bestätigt (INVOIC settled)"),
+                    )
+                    .await;
+                }
+            }
+            StatusCode::OK.into_response()
+        }
+
+        // ── EEG Einspeisevergütung (einsd) ────────────────────────────────────
+        // de.eeg.verguetung.berechnet: fixed-rate EEG settlement → EEG_GUTSCHRIFT credit.
+        "de.eeg.verguetung.berechnet" => {
+            let malo_id = ce.get("subject").and_then(|v| v.as_str()).unwrap_or("");
+            let amount_ct: i64 = data
+                .and_then(|d| d.get("settlement_eur"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| {
+                    use rust_decimal::Decimal;
+                    use std::str::FromStr;
+                    Decimal::from_str(s).ok().map(|d| {
+                        -(d * Decimal::from(100))
+                            .round()
+                            .to_string()
+                            .parse::<i64>()
+                            .unwrap_or(0)
+                    })
+                })
+                .unwrap_or(0);
             let account_id = upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant)
                 .await
                 .unwrap_or(Uuid::nil());
@@ -280,14 +406,55 @@ pub async fn ingest_webhook(
                     Some(ce_type),
                     ce_id.as_deref(),
                     today,
-                    Some("EEG Einspeisevergütung"),
+                    Some("EEG Einspeisevergütung §21 EEG"),
                 )
                 .await;
             }
             StatusCode::OK.into_response()
         }
+
+        // ── EEG Direktvermarktung Marktprämie (einsd) ─────────────────────────
+        // de.eeg.marktpraemie.berechnet: Direktvermarktung / Ausschreibung settlement.
+        // Gleitende Marktprämie (§20 EEG) + Managementprämie → EEG_MARKTPRAEMIE credit.
+        "de.eeg.marktpraemie.berechnet" => {
+            let malo_id = ce.get("subject").and_then(|v| v.as_str()).unwrap_or("");
+            let amount_ct: i64 = data
+                .and_then(|d| d.get("settlement_eur"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| {
+                    use rust_decimal::Decimal;
+                    use std::str::FromStr;
+                    Decimal::from_str(s).ok().map(|d| {
+                        -(d * Decimal::from(100))
+                            .round()
+                            .to_string()
+                            .parse::<i64>()
+                            .unwrap_or(0)
+                    })
+                })
+                .unwrap_or(0);
+            let account_id = upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant)
+                .await
+                .unwrap_or(Uuid::nil());
+            if account_id != Uuid::nil() && amount_ct != 0 {
+                let _ = write_entry(
+                    &pool,
+                    account_id,
+                    &cfg.tenant,
+                    "EEG_MARKTPRAEMIE",
+                    amount_ct,
+                    ce_id.as_deref(),
+                    Some(ce_type),
+                    ce_id.as_deref(),
+                    today,
+                    Some("EEG Direktvermarktung Marktprämie §20 EEG"),
+                )
+                .await;
+            }
+            StatusCode::OK.into_response()
+        }
+
         _ => {
-            // Unknown event type — log and ignore.
             tracing::debug!(ce_type, "accountingd: unknown CloudEvent type — ignored");
             StatusCode::OK.into_response()
         }
@@ -296,56 +463,56 @@ pub async fn ingest_webhook(
 
 /// `POST /api/v1/payments/import`  — ingest CAMT.054 bank statement (JSON array).
 ///
-/// Each entry should have: `{ "iban": "...", "amount_eur": ..., "reference": "...", "date": "YYYY-MM-DD" }`
+/// Each entry: `{ "iban": "...", "amount_eur": "155.42", "reference": "...", "date": "YYYY-MM-DD" }`
+///
+/// Uses `sepa::camt054::parse_simple_json` — **no f64 rounding errors**.
+/// Positive `amount_eur` → ZAHLUNG credit. Negative → BANKRUECKLAST debit.
 pub async fn import_payments(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Json(entries): Json<Vec<serde_json::Value>>,
 ) -> impl IntoResponse {
     let mut accepted = 0usize;
-    for entry in &entries {
-        let amount_eur: f64 = entry
-            .get("amount_eur")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
-        let reference = entry.get("reference").and_then(|v| v.as_str());
-        let iban = entry.get("iban").and_then(|v| v.as_str()).unwrap_or("");
-        let date_str = entry.get("date").and_then(|v| v.as_str()).unwrap_or("");
-        let date = time::Date::parse(
-            date_str,
+    for raw in &entries {
+        let Some(entry) = sepa::camt054::parse_simple_json(raw) else {
+            continue;
+        };
+        let Ok(date) = time::Date::parse(
+            &entry.value_date,
             &time::format_description::well_known::Iso8601::DEFAULT,
-        )
-        .ok();
-        let amount_ct = -(amount_eur * 100.0).round() as i64; // credit
+        ) else {
+            continue;
+        };
 
-        if let (Some(date), Some(reference)) = (date, reference) {
-            // Match by IBAN — find account.
-            let account_row = sqlx::query(
-                "SELECT account_id FROM accounts WHERE iban = $1 AND tenant = $2 LIMIT 1",
-            )
-            .bind(iban)
-            .bind(&cfg.tenant)
-            .fetch_optional(&pool)
-            .await;
+        let account_row =
+            sqlx::query("SELECT account_id FROM accounts WHERE iban = $1 AND tenant = $2 LIMIT 1")
+                .bind(&entry.iban)
+                .bind(&cfg.tenant)
+                .fetch_optional(&pool)
+                .await;
 
-            if let Ok(Some(row)) = account_row {
-                let account_id: Uuid = row.try_get("account_id").unwrap_or(Uuid::nil());
-                if account_id != Uuid::nil() {
-                    let _ = write_entry(
-                        &pool,
-                        account_id,
-                        &cfg.tenant,
-                        "ZAHLUNG",
-                        amount_ct,
-                        Some(reference),
-                        None,
-                        None,
-                        date,
-                        Some("CAMT.054 Zahlung"),
-                    )
-                    .await;
-                    accepted += 1;
-                }
+        if let Ok(Some(row)) = account_row {
+            let account_id: Uuid = row.try_get("account_id").unwrap_or(Uuid::nil());
+            if account_id != Uuid::nil() {
+                let entry_type = if entry.is_return() {
+                    "BANKRUECKLAST"
+                } else {
+                    "ZAHLUNG"
+                };
+                let _ = write_entry(
+                    &pool,
+                    account_id,
+                    &cfg.tenant,
+                    entry_type,
+                    entry.to_ledger_ct(),
+                    Some(entry.reference.as_str()),
+                    None,
+                    None,
+                    date,
+                    Some(entry.description().as_str()),
+                )
+                .await;
+                accepted += 1;
             }
         }
     }
@@ -473,6 +640,35 @@ pub async fn get_mandate(
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `DELETE /api/v1/sepa/mandates/{mandate_id}`  — revoke SEPA mandate.
+///
+/// Sets `revoked_at = today` on the mandate. Revoked mandates are excluded from
+/// future pain.008 generation (§58 ZAG: debtor may revoke at any time until
+/// the cut-off time of the collection date).
+///
+/// Does NOT affect existing `accounts.iban` or `mandatsref` columns —
+/// update those separately if needed via `PUT /api/v1/accounts/{malo_id}`.
+pub async fn delete_mandate(
+    Extension(pool): Extension<PgPool>,
+    Path(mandate_id): Path<Uuid>,
+) -> impl IntoResponse {
+    let today = time::OffsetDateTime::now_utc().date();
+    let rows = sqlx::query(
+        "UPDATE sepa_mandates SET revoked_at = $1, updated_at = now() \
+         WHERE mandate_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(today)
+    .bind(mandate_id)
+    .execute(&pool)
+    .await;
+
+    match rows {
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(r) if r.rows_affected() == 0 => StatusCode::NOT_FOUND.into_response(),
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
     }
 }
 
@@ -637,57 +833,141 @@ pub struct VorauszahlungQuery {
     pub lf_mp_id: Option<String>,
 }
 
+// ── Manual booking ────────────────────────────────────────────────────────────
+
+/// Request body for `POST /api/v1/accounts/{malo_id}/buchen`.
+#[derive(Debug, serde::Deserialize)]
+pub struct BuchenRequest {
+    /// Buchungsart. Must be a valid `entry_type` value.
+    /// Allowed: `RECHNUNG`, `ZAHLUNG`, `GUTSCHRIFT`, `BANKRUECKLAST`,
+    /// `MAHNGEBUEHR`, `ABSCHLAG`, `KORREKTUR`, `STORNO`.
+    pub entry_type: String,
+    /// Amount in ct (× 10⁻² EUR). Positive = debit; negative = credit.
+    pub amount_ct: i64,
+    /// External reference (invoice number, payment reference, etc.).
+    pub reference_id: Option<String>,
+    /// Human-readable description for the Kontoauszug.
+    pub description: Option<String>,
+    /// ISO 8601 booking date. Defaults to today when absent.
+    pub booking_date: Option<String>,
+    /// ISO 8601 value date. Defaults to `booking_date` when absent.
+    pub value_date: Option<String>,
+    pub lf_mp_id: Option<String>,
+}
+
+/// `POST /api/v1/accounts/{malo_id}/buchen`
+///
+/// Post a manual ledger entry to a customer account (operator interface).
+///
+/// Use cases:
+/// - Manual ZAHLUNG credit when a customer pays by bank transfer outside SEPA mandate
+/// - BANKRUECKLAST debit when a SEPA direct debit is returned by the bank
+/// - KORREKTUR for operator-authorised adjustments
+/// - GUTSCHRIFT for one-off credits (e.g. goodwill, §40 EnWG compensation)
+///
+/// ## Idempotency
+/// Supply `reference_id` — re-posting with the same `reference_id` will create
+/// a new entry (no idempotency guard on this endpoint; use with care).
+pub async fn post_buchen(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(malo_id): Path<String>,
+    Json(req): Json<BuchenRequest>,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Iso8601;
+
+    // Validate entry_type against the allowed set (DB constraint mirrors this).
+    const ALLOWED: &[&str] = &[
+        "RECHNUNG",
+        "ZAHLUNG",
+        "GUTSCHRIFT",
+        "EEG_GUTSCHRIFT",
+        "EEG_MARKTPRAEMIE",
+        "BANKRUECKLAST",
+        "MAHNGEBUEHR",
+        "ABSCHLAG",
+        "JAHRESABSCHLUSS",
+        "KORREKTUR",
+        "STORNO",
+    ];
+    if !ALLOWED.contains(&req.entry_type.as_str()) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "unknown entry_type '{}'; allowed: {}",
+                req.entry_type,
+                ALLOWED.join(", ")
+            ),
+        )
+            .into_response();
+    }
+    if req.amount_ct == 0 {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "amount_ct must be non-zero",
+        )
+            .into_response();
+    }
+
+    let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
+    let account_id = match upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await {
+        Ok(id) => id,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    let today = OffsetDateTime::now_utc().date();
+    let booking_date = req
+        .booking_date
+        .as_deref()
+        .and_then(|s| time::Date::parse(s, &Iso8601::DEFAULT).ok())
+        .unwrap_or(today);
+    let value_date = req
+        .value_date
+        .as_deref()
+        .and_then(|s| time::Date::parse(s, &Iso8601::DEFAULT).ok())
+        .unwrap_or(booking_date);
+
+    match crate::pg::write_entry_with_value_date(
+        &pool,
+        account_id,
+        &cfg.tenant,
+        &req.entry_type,
+        req.amount_ct,
+        req.reference_id.as_deref(),
+        None,
+        None,
+        booking_date,
+        value_date,
+        req.description.as_deref(),
+    )
+    .await
+    {
+        Ok(entry_id) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "entry_id": entry_id,
+                "malo_id": malo_id,
+                "entry_type": req.entry_type,
+                "amount_ct": req.amount_ct,
+                "amount_eur": format_ct_as_eur(req.amount_ct),
+                "booking_date": booking_date.to_string(),
+            })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 // ── IBAN validation ───────────────────────────────────────────────────────────
 
 /// Validate an IBAN using the ISO 13616 mod-97 algorithm.
 ///
 /// 1. Remove whitespace and convert to uppercase.
 /// 2. Move the first 4 characters to the end.
-/// 3. Replace each letter `X` with `(X as u32 - 'A' as u32 + 10).to_string()`.
-/// 4. Compute the decimal value mod 97 in 9-digit chunks to avoid overflow.
-/// 5. If result == 1, the IBAN is valid.
-///
-/// Returns `Ok(())` for a valid IBAN, `Err(reason)` otherwise.
-pub fn validate_iban(iban: &str) -> Result<(), String> {
-    let iban: String = iban
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect::<String>()
-        .to_uppercase();
-    if iban.len() < 15 || iban.len() > 34 {
-        return Err(format!(
-            "length {} is outside the valid range 15–34",
-            iban.len()
-        ));
-    }
-    // Rearrange: move first 4 chars to the end.
-    let rearranged = format!("{}{}", &iban[4..], &iban[..4]);
-    // Expand each letter to its two-digit numeric equivalent.
-    let digits: String = rearranged
-        .chars()
-        .map(|c| {
-            if c.is_ascii_uppercase() {
-                (c as u32 - b'A' as u32 + 10).to_string()
-            } else {
-                c.to_string()
-            }
-        })
-        .collect();
-    // Validate all characters are digits (catches unexpected symbols).
-    if !digits.chars().all(|c| c.is_ascii_digit()) {
-        return Err("contains invalid characters (expected alphanumeric only)".to_string());
-    }
-    // Compute mod 97 using 9-digit rolling chunks (fits in u64).
-    let mut remainder: u64 = 0;
-    for ch in digits.chars() {
-        remainder = (remainder * 10 + ch.to_digit(10).unwrap() as u64) % 97;
-    }
-    if remainder == 1 {
-        Ok(())
-    } else {
-        Err("checksum mismatch — IBAN is invalid".to_string())
-    }
-}
+// ── IBAN validation ───────────────────────────────────────────────────────────
+//
+// validate_iban is re-exported from the `sepa` workspace crate (see imports above).
+// The sepa crate implements ISO 13616 mod-97 and is shared with vertragd.
 
 // ── Jahresabschluss REST API ──────────────────────────────────────────────────
 
@@ -747,20 +1027,29 @@ pub async fn post_jahresabschluss(
         .filter(|e| e.entry_type == "ABSCHLAG")
         .map(|e| e.amount_ct)
         .sum(); // negative — Abschläge are credits
+
+    // Sum ALL debit entries for the year (§40 Abs. 1 EnWG: Jahresabrechnung must
+    // reflect actual billed amounts, including corrections/stornos).
+    // RECHNUNG   = regular invoices (positive/debit)
+    // STORNO     = billing reversals (may be negative/credit)
+    // MAHNGEBUEHR = dunning fees (positive/debit)
     let rechnung_sum: i64 = entries
         .iter()
-        .filter(|e| e.entry_type == "RECHNUNG")
+        .filter(|e| matches!(e.entry_type.as_str(), "RECHNUNG" | "STORNO" | "MAHNGEBUEHR"))
         .map(|e| e.amount_ct)
-        .sum(); // positive — Rechnungen are debits
+        .sum();
 
     // settlement_ct > 0  → Nachzahlung (customer still owes)
     // settlement_ct < 0  → Erstattung (customer overpaid → refund)
     // settlement_ct == 0 → ausgeglichen
     let settlement_ct = rechnung_sum + abschlag_sum;
-    let new_abschlag_ct = if rechnung_sum > 0 {
-        rechnung_sum / 12
+    // New monthly Abschlag = actual annual billed ÷ 12 (§40 Abs. 1 EnWG).
+    // Only update when there were actual Rechnungen this year; keep unchanged
+    // for years with no billed amounts to avoid zeroing the Abschlag on empty years.
+    let new_abschlag_ct = if rechnung_sum.abs() > 0 {
+        rechnung_sum.abs() / 12
     } else {
-        acct.abschlag_ct // no change when there were no Rechnungen this year
+        acct.abschlag_ct
     };
 
     let action = if settlement_ct > 0 {
@@ -778,7 +1067,7 @@ pub async fn post_jahresabschluss(
             "rechnung_sum_ct": rechnung_sum,
             "abschlag_paid_ct": abschlag_sum,
             "settlement_ct": settlement_ct,
-            "settlement_eur": format!("{:.2}", settlement_ct as f64 / 100.0),
+            "settlement_eur": format_ct_as_eur(settlement_ct),
             "new_monthly_abschlag_ct": new_abschlag_ct,
             "action": action,
             "dry_run": true,
@@ -790,13 +1079,9 @@ pub async fn post_jahresabschluss(
     let today = OffsetDateTime::now_utc().date();
     let ce_id = Uuid::new_v4().to_string();
 
-    // 3. Write settlement entry when non-zero.
+    // 3. Write settlement entry when non-zero using JAHRESABSCHLUSS entry type
+    // for clear auditability separate from regular RECHNUNG/GUTSCHRIFT entries.
     if settlement_ct != 0 {
-        let entry_type = if settlement_ct > 0 {
-            "RECHNUNG"
-        } else {
-            "GUTSCHRIFT"
-        };
         let description = format!(
             "{} Jahresabschluss {year} (Abschlag gesamt: {} ct, Rechnung gesamt: {} ct)",
             action, abschlag_sum, rechnung_sum
@@ -805,7 +1090,7 @@ pub async fn post_jahresabschluss(
             &pool,
             acct.account_id,
             lf_mp_id,
-            entry_type,
+            "JAHRESABSCHLUSS",
             settlement_ct,
             None,
             Some("de.accounting.jahresabschluss.abgeschlossen"),
@@ -848,7 +1133,7 @@ pub async fn post_jahresabschluss(
         "rechnung_sum_ct": rechnung_sum,
         "abschlag_paid_ct": abschlag_sum,
         "settlement_ct": settlement_ct,
-        "settlement_eur": format!("{:.2}", settlement_ct as f64 / 100.0),
+        "settlement_eur": format_ct_as_eur(settlement_ct),
         "new_monthly_abschlag_ct": new_abschlag_ct,
         "action": action,
         "dry_run": false,
@@ -856,6 +1141,143 @@ pub async fn post_jahresabschluss(
         "ce_id": ce_id,
     }))
     .into_response()
+}
+
+// ── Zahlungsinformation (BO4E typed payment info — IBAN + BIC + SEPA) ────────
+
+/// Query param helper for Zahlungsinformation endpoints.
+#[derive(Debug, serde::Deserialize)]
+pub struct ZahlungsQuery {
+    pub lf_mp_id: Option<String>,
+}
+
+/// `PUT /api/v1/accounts/{malo_id}/zahlungsinformation`
+///
+/// Store or replace the BO4E `Zahlungsinformation` COM for an account.
+///
+/// Body: `rubo4e::current::Zahlungsinformation` JSON (camelCase).
+/// Accepts: `iban`, `bic`, `kontoinhaber`, `sepaReferenz`, `zahlungsart`.
+///
+/// Side effects:
+/// - Validates IBAN via mod-97 before storing.
+/// - Atomically syncs `accounts.iban` column from `typed.iban` so that
+///   `import_payments` (CAMT.054) matching continues to work.
+pub async fn put_zahlungsinformation(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(malo_id): Path<String>,
+    Query(q): Query<ZahlungsQuery>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use rubo4e::current::Zahlungsinformation;
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
+
+    let typed: Zahlungsinformation = match serde_json::from_value(body) {
+        Ok(z) => z,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("invalid Zahlungsinformation: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    // Validate IBAN when present.
+    if let Some(ref iban) = typed.iban {
+        if let Err(msg) = validate_iban(iban) {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("invalid IBAN: {msg}") })),
+            )
+                .into_response();
+        }
+    }
+
+    let canonical = serde_json::to_value(&typed).unwrap_or_default();
+
+    // Ensure account row exists.
+    let account_id = match upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await {
+        Ok(id) => id,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    // Store typed Zahlungsinformation JSON + sync iban column for payment matching.
+    let iban_to_sync = typed.iban.clone();
+    let bic_to_sync = typed.bic.clone();
+    let res = sqlx::query(
+        r"UPDATE accounts
+          SET zahlungsinformation = $1,
+              iban = COALESCE($2, iban),
+              updated_at = now()
+          WHERE account_id = $3",
+    )
+    .bind(&canonical)
+    .bind(&iban_to_sync)
+    .bind(account_id)
+    .execute(&pool)
+    .await;
+
+    match res {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "malo_id": malo_id,
+                "iban": iban_to_sync,
+                "bic": bic_to_sync,
+                "zahlungsinformation": canonical,
+            })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/accounts/{malo_id}/zahlungsinformation`
+///
+/// Retrieve the stored `Zahlungsinformation` for an account.
+/// Falls back to a minimal object from `accounts.iban` when no typed payload has
+/// been PUT yet (backward-compatible with legacy IBAN-only mandates).
+pub async fn get_zahlungsinformation(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(malo_id): Path<String>,
+    Query(q): Query<ZahlungsQuery>,
+) -> impl IntoResponse {
+    use rubo4e::current::Zahlungsinformation;
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
+    let row = sqlx::query(
+        "SELECT iban, zahlungsinformation FROM accounts \
+         WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3 LIMIT 1",
+    )
+    .bind(&malo_id)
+    .bind(lf_mp_id)
+    .bind(&cfg.tenant)
+    .fetch_optional(&pool)
+    .await;
+
+    match row {
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(Some(row)) => {
+            let typed_json: Option<serde_json::Value> =
+                row.try_get("zahlungsinformation").ok().flatten();
+            let iban: Option<String> = row.try_get("iban").ok().flatten();
+            let payload = if let Some(json) = typed_json {
+                json
+            } else if let Some(ref iban_str) = iban {
+                // Synthesise minimal Zahlungsinformation from legacy iban column.
+                let z = Zahlungsinformation {
+                    iban: Some(iban_str.clone()),
+                    ..Default::default()
+                };
+                serde_json::to_value(&z).unwrap_or_default()
+            } else {
+                return StatusCode::NOT_FOUND.into_response();
+            };
+            Json(payload).into_response()
+        }
+    }
 }
 
 #[cfg(test)]

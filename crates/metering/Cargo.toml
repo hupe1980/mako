@@ -1,0 +1,23 @@
+[package]
+name        = "metering"
+description = "German energy metering domain library — interval types, Gas conversion (m3→kWh_Hs), billing period aggregation (Spitzenleistung, HT/NT), SLP/RLM/iMSys classification, Mehr-/Mindermengensaldo, and Hampel-filter quality scoring. Zero I/O, no async, no float money."
+version.workspace     = true
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+
+[dependencies]
+rust_decimal = { workspace = true }
+serde        = { workspace = true, features = ["derive"], optional = true }
+thiserror    = { workspace = true }
+time         = { workspace = true }
+
+[features]
+default = []
+serde   = ["dep:serde", "rust_decimal/serde"]
+
+[dev-dependencies]
+rust_decimal_macros = "1"
+time = { workspace = true, features = ["macros"] }

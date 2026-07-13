@@ -32,6 +32,7 @@ graph TB
 
     subgraph specialists [Specialist Agents]
         MAKO["mako-agent\n(Anthropic Claude)\nEDIFACT · UTILMD · deadlines"]
+        DEADLINE["deadline-alert-agent\n(Anthropic Claude)\nAPERAK 45-min · 10WT · §20 EnWG"]
         BILLING["billing-agent\n(OpenAI GPT)\nbillingd · invoicd · O2C"]
         ANOMALY["billing-anomaly-agent\nrolling 3-month deviation check"]
         EEG["eeg-agent\n(Anthropic Claude)\neinsd · §21 EEG · settlements"]
@@ -74,7 +75,6 @@ graph TB
 ---
 
 ## Agent Mesh
-## Agent Mesh
 
 `agentd` uses the **Orchestrator + Specialist Mesh** pattern:
 
@@ -96,13 +96,16 @@ graph TB
 | Specialist | Provider | Triggers | MCP tools used |
 |---|---|---|---|
 | `mako-agent` | Anthropic Claude | `de.mako.process.*`, `de.mako.aperak.*` | makod, marktd, processd, obsd |
+| `deadline-alert-agent` | Anthropic Claude | `de.mako.process.escalated`, `de.mako.process.timedout`, `de.obs.stp.parity.alert` | makod, obsd, marktd |
 | `billing-agent` | OpenAI GPT | `de.invoic.receipt.disputed`, `de.accounting.*` | invoicd, billingd, accountingd, netzbilanzd |
+| `invoice-reconciliation-agent` | Anthropic Claude | `de.invoic.payment.overdue`, `de.invoic.receipt.disputed` | invoicd, marktd, netzbilanzd |
 | `billing-anomaly-agent` | OpenAI GPT | `de.billing.rechnung.erstellt` | billingd, tarifbd, edmd |
 | `eeg-agent` | Anthropic Claude | `de.eeg.*` | einsd, edmd, marktd |
 | `compliance-agent` | Anthropic Claude | `de.mako.process.escalated` | obsd, makod, marktd |
 | `payment-reconciliation-agent` | OpenAI GPT | `de.accounting.payment.due`, `de.accounting.bankruecklast` | accountingd |
 | `msb-history-agent` | Anthropic Claude | `de.edmd.reading.quality.warning`, `de.edmd.reading.direct.stored` | edmd, makod, marktd |
 | `grid-anomaly-agent` | Anthropic Claude | `de.markt.grid.drift.detected`, `de.markt.nb-contract.updated` | marktd, obsd |
+| `tariff-optimization-agent` | OpenAI GPT | `de.billing.rechnung.erstellt`, `de.mako.process.completed` | billingd, tarifbd, edmd, marktd |
 
 All specialists are configured in `agentd.toml` — see `demo/agentd.toml` for a fully working example.
 

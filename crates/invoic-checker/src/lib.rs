@@ -67,6 +67,8 @@ pub mod tariff;
 // ── Convenient re-exports ─────────────────────────────────────────────────────
 
 pub use amount::EuroAmount;
-pub use check::{CheckConfig, CheckOutcome, CheckReport, Finding, FindingKind, InvoicCheckEngine};
+pub use check::{
+    CheckConfig, CheckOutcome, CheckReport, Finding, FindingKind, InvoicCheckEngine, is_stornierung,
+};
 pub use error::CheckError;
 pub use tariff::{InMemoryPreisblattStore, PreisblattStore};

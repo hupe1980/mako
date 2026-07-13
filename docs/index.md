@@ -28,6 +28,7 @@ permalink: /
     </a>
     <img src="https://img.shields.io/badge/BDEW-FV2026--10--01-green" alt="BDEW format version FV2026-10-01">
     <img src="https://img.shields.io/badge/unsafe-0_blocks-red?logo=rust" alt="Zero unsafe blocks">
+    <img src="https://img.shields.io/badge/mako--service-shared_infra-f59e0b?logo=rust" alt="mako-service shared service infrastructure">
   </div>
 
   <h1 class="mako-hero__title">mako ⚡</h1>
@@ -148,13 +149,31 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
   </div>
 
   <div class="mako-feature">
+    <div class="mako-feature__icon">🌱</div>
+    <h3>EEG/KWKG Settlement</h3>
+    <p>
+      <strong>9 settlement models</strong> — Vergütung (§21 EEG), Mieterstrom (§38a),
+      Direktvermarktung Gleitende Marktprämie (§20 + §20 Abs. 3 Managementprämie),
+      Ausschreibung (§§22a,28), Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag (§7 KWKG 2023),
+      Flexibilitätsprämie (§50 EEG), Flexibilitätszuschlag (§50b EEG). §25 MaStR sanctions enforcement and §27
+      negative-price deduction built in. Each settlement returns
+      <strong>auditable billing positions</strong> per component.
+      Repowering §22, Zusammenlegung §24, auto-settle worker, batch API.
+    </p>
+    <a href="{{ '/einsd' | relative_url }}">einsd guide →</a>
+  </div>
+
+  <div class="mako-feature">
     <div class="mako-feature__icon">🧾</div>
     <h3>Energy Billing Engine</h3>
     <p>
       12 product categories — STROM, GAS, WAERME, SOLAR, EEG/EINSPEISUNG, WAERMEPUMPE,
       WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, BUNDLE.
-      All prices user-defined in <code>tarifbd</code>. §41a EPEX dynamic tariffs.
-      XRechnung 3.0 / ZUGFeRD 2.3 output.
+      Pure calculation extracted into the <strong><code>energy-billing</code></strong> crate
+      (44 tests, zero I/O) — the same pattern as <code>eeg-billing</code> for <code>einsd</code>.
+      §41a EPEX dynamic tariffs with optional price floor.
+      §51 EEG Negativpreisregel (contractual LF feature).
+      XRechnung 3.0 / ZUGFeRD 2.3 output (EN16931).
     </p>
     <a href="{{ '/billingd' | relative_url }}">billingd guide →</a>
   </div>
@@ -178,8 +197,10 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <p>
       <code>edmd</code> accepts 15-min interval data directly from SMGW/iMSys gateways
       without waiting for the MSCONS round-trip. A <strong>Hampel-filter quality scorer</strong>
-      (window k=3, MAD-based σ, grades A/B/C/F) runs on every batch. Grade F blocks the
-      billing run; grade C/F emits <code>de.edmd.reading.quality.warning</code> to the
+      (window k=3, MAD-based σ, grades A/B/C/F) runs on every batch via the
+      <code>metering</code> domain library
+      (Gas m³→kWh conversion, SLP/RLM/iMSys classification, billing period aggregation).
+      Grade F blocks the billing run; grade C/F emits <code>de.edmd.reading.quality.warning</code> to the
       <code>agentd</code> MSB-history specialist for LanceDB RAG indexing.
     </p>
     <a href="{{ '/edmd' | relative_url }}">edmd guide →</a>
@@ -193,6 +214,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       <code>agentd</code> runs an Orchestrator + Specialist Mesh with LanceDB RAG
       (ANN vector search, S3/GCS/local). OpenAI, Anthropic, AWS Bedrock SigV4 providers.
       WASM plugins via <code>mako-plugin</code> (Extism sandbox). Specialists include
+      <strong>tariff-optimization-agent</strong> (§41a switch recommendations),
       grid anomaly detection, billing anomaly AI, MSB device history RAG, and payment reconciliation.
     </p>
     <a href="{{ '/agentd' | relative_url }}">agentd guide →</a>
@@ -224,13 +246,13 @@ graph TB
         direction LR
         processd["processd :8580\nAnmeldung STP ≥95%\nLF E_0624 45-min auto-response"]
         invoicd["invoicd :8280\ninvoic-checker 6 checks\n§22 MessZV receipts"]
-        netzbilanzd["netzbilanzd :8680\nNNE/KA/MMM billing\nINVOIC 31001/31002/31005"]
+        netzbilanzd["netzbilanzd :8680\nNNE/KA/MMM/MSB/AWH billing\nINVOIC 31001/31002/31005/31009/31011\nREMADV lifecycle · 13-tool MCP"]
     end
 
     subgraph energy ["Energy Data"]
         direction LR
         edmd["edmd :8380\nMSCONS meter reads\nIceberg/S3 OLAP archive"]
-        einsd["einsd :9180\nEEG/KWKG settlement\n8 settlement models"]
+        einsd["einsd :9180\nEEG/KWKG settlement\n8 models · eeg-billing crate\n§25 sanctions · §27 neg-price\nbatch auto-settle worker"]
     end
 
     subgraph retail ["Retail Billing (LF)"]
@@ -342,7 +364,7 @@ mako consists of 16 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/netzbilanzd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">netzbilanzd</span>
     <span class="mako-service-card__port">:8680</span>
-    <span class="mako-service-card__desc">NNE/KA/MMM billing — generates INVOIC 31001/31002/31005. Self-validates before dispatch.</span>
+    <span class="mako-service-card__desc">NNE/KA/MMM/MSB/AWH billing (INVOIC 31001/31002/31005/31009/31011). §14a Modul 2 ToU. §42a GGV. REMADV lifecycle. Redispatch 2.0 Kostenblatt. 13-tool MCP.</span>
   </a>
   <a href="{{ '/sperrd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">sperrd</span>
@@ -361,7 +383,7 @@ mako consists of 16 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/einsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">einsd</span>
     <span class="mako-service-card__port">:9180</span>
-    <span class="mako-service-card__desc">Einspeiser registry. 8 EEG/KWKG settlement models. Repowering §22. Foerderendedatum alerts. Built-in rate table EEG 2000–2023 + KWKG 2023.</span>
+    <span class="mako-service-card__desc">Einspeiser registry. 9 EEG/KWKG settlement models. Repowering §22. Foerderendedatum alerts. Built-in rate table EEG 2000–2023 + KWKG 2023.</span>
   </a>
   <a href="{{ '/obsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">obsd</span>

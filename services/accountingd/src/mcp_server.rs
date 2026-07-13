@@ -115,6 +115,20 @@ pub struct SuggestPaymentMatchParams {
     pub tolerance_pct: Option<f64>,
 }
 
+#[derive(Debug, schemars::JsonSchema, serde::Deserialize)]
+pub struct ManualBuchungParams {
+    pub malo_id: String,
+    /// Buchungsart. One of: RECHNUNG, ZAHLUNG, GUTSCHRIFT, EEG_GUTSCHRIFT, EEG_MARKTPRAEMIE,
+    /// BANKRUECKLAST, MAHNGEBUEHR, ABSCHLAG, JAHRESABSCHLUSS, KORREKTUR, STORNO.
+    pub entry_type: String,
+    /// Amount in ct (× 10⁻² EUR). Positive = debit; negative = credit.
+    pub amount_ct: i64,
+    /// External reference for audit trail (invoice number, CAMT ref, etc.).
+    pub reference_id: Option<String>,
+    /// Human-readable description for the Kontoauszug.
+    pub description: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct AccountingdMcpHandler {
     state: Arc<AccountingdMcpState>,
@@ -300,12 +314,13 @@ Only generates for MaLo accounts that have an IBAN + signed mandate (sequence_ty
 
     #[tool(
         description = "Compute the annual Jahresabschluss settlement for a customer MaLo. \
-Compares actual Rechnung totals vs Σ(Abschläge) collected during the year. \
-Returns: settlement_ct (positive = customer owes more; negative = refund), \
-and the recommended new monthly Abschlag (actual annual ÷ 12). \
-⚠ This tool is a calculation preview — it does NOT post ledger entries. \
-Sequence: (1) review result, (2) post RECHNUNG/GUTSCHRIFT via billingd, (3) call update_abschlag.",
-        annotations(read_only_hint = true, open_world_hint = false)
+Compares actual Rechnung/Storno totals vs Σ(Abschläge) collected during the year. \
+Returns: settlement_ct (positive = Nachzahlung; negative = Erstattung/refund), \
+and the recommended new monthly Abschlag (actual annual ÷ 12, §40 Abs. 1 EnWG). \
+Use ?dry_run=true for preview without committing. When committed, writes a JAHRESABSCHLUSS \
+entry and updates the monthly Abschlag. \
+Regulatory: §40 Abs. 1 EnWG — Abschlag must reflect actual estimated consumption.",
+        annotations(read_only_hint = false, open_world_hint = false)
     )]
     async fn trigger_jahresabschluss(
         &self,
@@ -605,6 +620,58 @@ Use import_payments to confirm the match.",
             "candidates_count": candidates.len(),
             "candidates": candidates,
             "note": "Candidates ranked by similarity_score. HIGH (>=80) = auto-match safe. MEDIUM/LOW = review. Confirm with import_payments.",
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    #[tool(
+        description = "Post a manual ledger entry (Buchung) to a customer account. \
+Use for: ZAHLUNG (incoming bank transfer), BANKRUECKLAST (returned SEPA direct debit), \
+KORREKTUR (operator adjustment), GUTSCHRIFT (one-off credit). \
+The entry immediately updates the account balance. \
+Allowed entry_type: RECHNUNG, ZAHLUNG, GUTSCHRIFT, EEG_GUTSCHRIFT, EEG_MARKTPRAEMIE, \
+BANKRUECKLAST, MAHNGEBUEHR, ABSCHLAG, JAHRESABSCHLUSS, KORREKTUR, STORNO. \
+amount_ct: positive = debit (increases balance); negative = credit (reduces balance). \
+⚠ This is an authorised operator action — always document via reference_id and description.",
+        annotations(read_only_hint = false, open_world_hint = false)
+    )]
+    async fn post_manual_booking(
+        &self,
+        Parameters(p): Parameters<ManualBuchungParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::{upsert_account, write_entry_with_value_date};
+        use time::OffsetDateTime;
+
+        let account_id = upsert_account(&self.state.pool, &p.malo_id, &self.state.tenant, &self.state.tenant)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let today = OffsetDateTime::now_utc().date();
+        let entry_id = write_entry_with_value_date(
+            &self.state.pool,
+            account_id,
+            &self.state.tenant,
+            &p.entry_type,
+            p.amount_ct,
+            p.reference_id.as_deref(),
+            None,
+            None,
+            today,
+            today,
+            p.description.as_deref(),
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        ContentBlock::json(serde_json::json!({
+            "entry_id": entry_id,
+            "malo_id": p.malo_id,
+            "entry_type": p.entry_type,
+            "amount_ct": p.amount_ct,
+            "amount_eur": crate::handlers::format_ct_as_eur(p.amount_ct),
+            "booking_date": today.to_string(),
+            "committed": entry_id != uuid::Uuid::nil(),
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))

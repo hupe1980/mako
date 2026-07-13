@@ -4,23 +4,24 @@ title: netzbilanzd
 nav_order: 25
 parent: Services
 description: >-
-  Operator guide for netzbilanzd — the NNE/KA/MMM/MSB billing daemon that generates
-  INVOIC 31001, 31002, 31005, and 31009 invoices for the NB (Netzbetreiber) role,
-  self-validates via invoic-checker, and dispatches via makod.
+  Operator guide for netzbilanzd — the NNE/KA/MMM/MSB/AWH billing daemon that generates
+  INVOIC 31001, 31002, 31005, 31009, and 31011 invoices for the NB (Netzbetreiber) role,
+  self-validates via invoic-checker, dispatches via makod, and closes the payment lifecycle
+  on REMADV receipt.
 ---
 
 # `netzbilanzd` Operator Guide
 {: .no_toc }
 
-`netzbilanzd` automates the outbound billing cycle for network operators:
+`netzbilanzd` automates the full outbound billing cycle for network operators (NB, GNB):
 generating Netznutzungsentgelt (NNE), Konzessionsabgabe (KA),
-Mehr-/Mindermengen (MMM), and MSB-Rechnung (Messstellenbetreiber settlement)
-invoices, running plausibility checks, and dispatching via `makod` as
-INVOIC 31001/31002/31005/31009.
+Mehr-/Mindermengen (MMM), MSB-Rechnung, and GeLi Gas AWH Sperrprozesse invoices;
+running mandatory pre-dispatch plausibility checks; dispatching via `makod`; and
+updating payment status when REMADV responses arrive.
 
 **Port:** `:8680`  
-**Storage:** PostgreSQL (`invoice_drafts` table)  
-**Role:** NB (Netzbetreiber) role only
+**Storage:** PostgreSQL (`invoice_drafts`, `kostenblatt_records`, `fremdkosten_records`)  
+**Role:** NB (Netzbetreiber) / GNB (Gasnetzbetreiber) only
 
 {: .toc }
 1. TOC
@@ -30,221 +31,315 @@ INVOIC 31001/31002/31005/31009.
 
 ## Architecture
 
+### Full billing lifecycle
+
 ```mermaid
 sequenceDiagram
-    participant Op as Operator / ERP
+    participant ERP as ERP / Operator
     participant nd as netzbilanzd :8680
     participant marktd as marktd :8180
     participant edmd as edmd :8380
     participant chk as invoic-checker
     participant makod as makod :8080
+    participant LF as LF / MSB
 
-    Op->>nd: POST /api/v1/billing/run<br/>{malo_ids, period, tariff data}
-    nd->>chk: calculate_nne_invoice() / calculate_mmm_invoice()
-    chk-->>nd: BillingResult { rechnung, total_eur }
+    ERP->>nd: POST /api/v1/billing/run<br/>{positions: [{malo_id, billing_type, kwh, tariff…}]}
+    nd->>marktd: GET mmm-preise (auto-fetch, optional)
+    nd->>nd: mako_nne::calculate_*_invoice()
     nd->>chk: InvoicCheckEngine::check()<br/>(period · arithmetic · total)
-    chk-->>nd: CheckReport { outcome: Ok | Warn | Dispute }
-    nd-->>Op: { draft_ids: [...] }
+    chk-->>nd: CheckReport { outcome }
+    nd->>nd: INSERT invoice_drafts (status=draft)
+    nd-->>ERP: { draft_ids: […] }
+    nd-)ERP: de.netzbilanz.invoic.drafted (CloudEvent)
 
-    Op->>nd: PUT /api/v1/billing/drafts/{id}/dispatch
-    nd->>chk: re-validate before dispatch
-    alt outcome != Dispute
-        nd->>makod: POST /api/v1/commands<br/>dispatch INVOIC 31001/31002/31005/31009
-        makod-->>nd: { dispatch_ref }
-        nd-->>Op: { dispatch_ref }
-    else outcome == Dispute
-        nd-->>Op: 422 Unprocessable Entity
+    ERP->>nd: PUT /api/v1/billing/drafts/{id}/dispatch
+    alt check_outcome != Dispute
+        nd->>makod: POST /api/v1/commands<br/>gpke.nne.rechnung.stellen / gpke.mmm…
+        makod->>LF: INVOIC 31001/31002/31005/31009/31011 (EDIFACT)
+        makod-->>nd: { process_id }
+        nd->>nd: UPDATE status = dispatched
+        nd-)ERP: de.netzbilanz.invoic.dispatched (CloudEvent)
+    else check_outcome == Dispute
+        nd-->>ERP: 422 Unprocessable Entity
+    end
+
+    LF->>makod: REMADV 33001/33002/33003 (EDIFACT)
+    makod-)nd: POST /api/v1/webhooks/remadv (CloudEvent)
+    alt REMADV 33001/33003 (Zahlung bestätigt)
+        nd->>nd: UPDATE status = paid
+        nd-)ERP: de.netzbilanz.invoic.paid (CloudEvent)
+    else REMADV 33002 (Zahlung abgelehnt)
+        nd->>nd: UPDATE check_outcome = Dispute
+        nd-)ERP: de.netzbilanz.invoic.disputed (CloudEvent)
     end
 ```
 
-### Billing pipeline
+### Service integration topology
 
-1. **Input collection** — the operator (or ERP) provides meter readings
-   (`arbeitsmenge_kwh`, `spitzenleistung_kw`) and tariff data from `marktd`
-   (`arbeitspreis_ct_per_kwh`, `leistungspreis_eur_per_kw`, `ka_satz_ct_per_kwh`).
-   `netzbilanzd` does not query `marktd` or `edmd` autonomously for tariff data
-   — all inputs are supplied in the billing-run request, making the run idempotent.
+```mermaid
+graph LR
+    ERP([ERP / Operator])
+    nd[netzbilanzd :8680]
+    marktd[(marktd :8180)]
+    edmd[(edmd :8380)]
+    makod[makod :8080]
+    netzbilanz-agent[netzbilanz-agent\nagentd :9580]
 
-   **Exception — MMM Abrechnungspreise (auto-fetch):** for `billing_type = "mmm"`,
-   the fields `mehr_preis_ct_per_kwh` and `minder_preis_ct_per_kwh` are optional.
-   When omitted, `netzbilanzd` automatically fetches them from `marktd`:
-   - Gas MMM → `GET /api/v1/mmma-preise/gas/{year}/{month}` (Trading Hub Europe monthly)
-   - Strom MMM → `GET /api/v1/mmm-preise/strom/{year}/{month}?unb_mp_id=...` (ÜNB, §22 StromNZV)
+    ERP -->|POST /billing/run\nPUT /dispatch\nPUT /mark-paid| nd
+    nd -->|tariffs\nMMM prices\nLokationszuordnung| marktd
+    nd -->|imbalance\nbilling-period| edmd
+    nd -->|INVOIC 31001/31002\n31005/31009/31011| makod
+    nd -.->|CloudEvents| ERP
+    nd -.->|CloudEvents| netzbilanz-agent
+```
 
-   Import these prices into `marktd` monthly via
-   `PUT /api/v1/mmma-preise/gas/{year}/{month}` before running Gas MMM billing.
-   Without them the billing run will fall back to requiring manual ERP input.
+### Billing pipeline (step by step)
 
-   **SLP profile audit trail (auto-annotate):** for `billing_type = "mmm"`, the
-   optional `lastprofil` field (e.g. `"H0"`, `"G0"`, `"L0"`) identifies the
-   SLP profile used in the billing period. When omitted, `netzbilanzd` auto-fetches
-   `malo.bilanzierungsmethode` from `marktd` (populated from UTILMD `TM+EM` at supply-start)
-   and stores it as `Rechnung.zusatz_attribute[{name:"lastprofil"}]` for downstream
-   ERP import and BNetzA audit. This ensures the correct SLP variant (H0 household vs.
-   G0 commercial vs. L0 agricultural) is traceable per billing period without manual
-   ERP intervention.
+1. **Input collection** — ERP provides meter readings (`arbeitsmenge_kwh`, `spitzenleistung_kw`)
+   and tariff data (`arbeitspreis_ct_per_kwh`, `leistungspreis_eur_per_kw`, `ka_satz_ct_per_kwh`).
 
-2. **Invoice generation** — the pure `mako-nne` library calculates billing
-   positions with no floating-point money (all amounts in `EuroAmount` = `i64 × 10⁻⁵ EUR`).
+   **Tariff auto-fetch exceptions** — the following fields are optional when
+   `netzbilanzd` can resolve them automatically:
 
-3. **Self-validation** — `invoic-checker` runs checks 1–3 (period validity,
-   position arithmetic, document total) immediately after generation. Generated
-   invoices satisfy these checks by construction.
+   | Field | Auto-fetch source | Condition |
+   |---|---|---|
+   | `mehr_preis_ct_per_kwh` (Gas) | `marktd GET /api/v1/mmma-preise/gas/{y}/{m}` | `billing_type = "mmm_gas"` |
+   | `mehr_preis_ct_per_kwh` (Strom) | `marktd GET /api/v1/mmm-preise/strom/{y}/{m}` | `billing_type = "mmm_strom"` + `unb_mp_id` configured |
+   | `minder_preis_ct_per_kwh` | Same as above | Same as above |
+   | `lastprofil` | `marktd GET /api/v1/malo/{id}` → `bilanzierungsmethode` | `billing_type = "mmm_*"`, field absent |
 
-4. **Draft persistence** — every generated invoice is stored as a draft in
-   `invoice_drafts` with status `draft`. No `makod` command is issued yet.
+2. **Invoice generation** — pure `mako-nne` library, no I/O, all amounts in
+   `EuroAmount` = `i64 × 10⁻⁵ EUR` (no `f64` in billing path).
 
-5. **Operator review** — the operator reviews drafts via `GET /api/v1/billing/drafts`.
-   An operator approval step prevents erroneous invoices from reaching counterparties.
+3. **Self-validation** — `invoic-checker` checks 1–3 run immediately.
+   Check outcomes: `Ok` → safe to dispatch; `Warn` → operator review; `Dispute` → **blocks dispatch**.
 
-6. **Dispatch** — `PUT /api/v1/billing/drafts/{id}/dispatch` re-validates,
-   then dispatches to `makod` as an INVOIC 31001/31002/31005/31009 command.
-   The `lf_mp_id` is used as the counterparty for all types except `msb_31009`,
-   which uses `msb_mp_id` as the invoice recipient (MSB, not LF).
+4. **Draft persistence** — every invoice stored in `invoice_drafts` with `status = 'draft'`.
+   Double-billing is prevented by a partial `UNIQUE` index on `(tenant, malo_id, period_from, period_to, pid)`
+   for `rechnungsart = 'RECHNUNG'` (Stornorechnung/Korrekturrechnung allowed).
+
+5. **Operator review** — list drafts with `GET /api/v1/billing/drafts`;
+   inspect full `rechnung` BO4E payload with `GET /api/v1/billing/drafts/{id}`.
+
+6. **Dispatch** — `PUT /api/v1/billing/drafts/{id}/dispatch` re-validates
+   then issues the corresponding `makod` command. The `lf_mp_id` is the counterparty
+   for all types except `msb_31009` (uses `msb_mp_id`).
+
+7. **Payment lifecycle** — REMADV responses update `status` automatically via
+   the `POST /api/v1/webhooks/remadv` CloudEvent endpoint.
 
 ---
 
 ## Billing types
 
-| `billing_type` | PID | Description | Required fields |
-|---|---|---|---|
-| `nne_strom` | 31001 | NNE Strom — monthly network usage (NB → LF) | `arbeitsmenge_kwh`, `arbeitspreis_ct_per_kwh` |
-| `nne_gas` | 31005 | NNE Gas — monthly gas network usage (GNB → LFG) | `arbeitsmenge_kwh`, `arbeitspreis_ct_per_kwh` |
-| `mmm` | 31002 | Mehr-/Mindermengen settlement | `arbeitsmenge_kwh` (actual), `profil_kwh`, `mehr_preis_ct_per_kwh`\*, `minder_preis_ct_per_kwh`\* |
+| `billing_type` | PID | Direction | Description | Regulatory basis |
+|---|---|---|---|---|
+| `nne_strom` | 31001 | NB → LF | Netznutzungsentgelt Strom, monthly | GPKE BK6-22-024 |
+| `mmm_strom` | 31002 | NB → LF | Mehr-/Mindermengensaldo Strom | §40 StromNZV |
+| `mmm_gas` | 31002 | GNB → LFG | Mehr-/Mindermengensaldo Gas (THE prices) | GasNZV |
+| `nne_gas` | 31005 | GNB → LFG | Netznutzungsentgelt Gas, monthly | GasNZV |
+| `msb_31009` | 31009 | NB → MSB | MSB-Rechnung (metering service) | WiM BK6-24-174 |
+| `nne_gas_awh_31011` | 31011 | GNB → LFG | AWH Sperrprozesse Gas (Abrechnungswürdige Handlungen) | GeLi Gas BK7-24-01-009 §5.4 |
 
-> \* MMM prices are auto-fetched from `marktd` when not supplied — see [MMM price auto-fetch](#mmm-abrechnungspreise-auto-fetch) below. Supply `lastprofil` (e.g. `"H0"`, `"G0"`) to annotate the SLP profile in the generated `Rechnung.zusatz_attribute`; omit to have `netzbilanzd` auto-fetch it from `malo.bilanzierungsmethode` in `marktd`.
-| `msb_31009` | 31009 | MSB-Rechnung — metering service settlement (NB → MSB) | `msb_mp_id`, `grundgebuehr_eur_per_month`, `billing_months` |
+> `"mmm"` (legacy alias) maps to `"mmm_strom"`. Use `"mmm_strom"` or `"mmm_gas"` in new integrations.
 
-### NNE billing positions (flat-rate)
-
-Standard static NNE — one Arbeit position plus optional Leistung (RLM) and KA:
+### NNE billing positions
 
 | # | Position | Formula | Condition |
 |---|---|---|---|
-| 1 | Netznutzung Arbeit | `arbeitsmenge_kwh × arbeitspreis_ct_per_kwh ÷ 100` | Always (flat) |
-| 2 | Netznutzung Leistung (RLM) | `spitzenleistung_kw × leistungspreis_eur_per_kw` | When `spitzenleistung_kw` set |
-| 3 | Konzessionsabgabe | `arbeitsmenge_kwh × ka_satz_ct_per_kwh ÷ 100` | When `ka_satz_ct_per_kwh` set |
+| 1 | Netznutzung Arbeit | `kwh × ct/kWh ÷ 100` | Always (flat) |
+| 2 | Netznutzung Leistung (RLM) | `spitzenleistung_kw × EUR/kW` | When `spitzenleistung_kw` supplied |
+| 3 | Konzessionsabgabe | `kwh × ka_ct/kWh ÷ 100` | When `ka_satz_ct_per_kwh` supplied |
 
-### §14a Modul 2 ToU billing positions (time-variable NNE)
+### §14a Modul 2 — Time-of-Use NNE (mandatory since 01.01.2024)
 
-**Mandatory since 01.01.2024** (BNetzA BK6-22-300) for controllable loads (heat pumps,
-EV charging points, §14a-eligible assets). When `arbeitsmenge_ht_kwh` **and**
-`arbeitsmenge_nt_kwh` are both provided, `mako-nne` auto-generates separate HT + NT
-positions instead of a single blended Arbeit position:
+For controllable loads (Wärmepumpen, Wallboxen, §14a-eligible assets), set
+`arbeitsmenge_ht_kwh` **and** `arbeitsmenge_nt_kwh` to split the Arbeit position
+into separate HT (Hochlast) and NT (Niedertarif) positions:
 
-| # | Position | Formula | Source |
+| # | Position | Formula | Condition |
 |---|---|---|---|
-| 1 | Netznutzung Arbeit HT (§14a Modul 2) | `arbeitsmenge_ht_kwh × arbeitspreis_ht_ct_per_kwh ÷ 100` | Hochlast band |
-| 2 | Netznutzung Arbeit NT (§14a Modul 2) | `arbeitsmenge_nt_kwh × arbeitspreis_nt_ct_per_kwh ÷ 100` | Niedertarif band |
-| 3 | Netznutzung Leistung (RLM) | `spitzenleistung_kw × leistungspreis_eur_per_kw` | When `spitzenleistung_kw` set |
-| 4 | Konzessionsabgabe | `(ht_kwh + nt_kwh) × ka_satz_ct_per_kwh ÷ 100` | When `ka_satz_ct_per_kwh` set |
+| 1 | Netznutzung Arbeit HT | `ht_kwh × ht_ct/kWh ÷ 100` | HT/NT split supplied |
+| 2 | Netznutzung Arbeit NT | `nt_kwh × nt_ct/kWh ÷ 100` | HT/NT split supplied |
+| 3 | Netznutzung Leistung (RLM) | `spitzenleistung_kw × EUR/kW` | When set |
+| 4 | Konzessionsabgabe | `(ht_kwh + nt_kwh) × ka_ct/kWh ÷ 100` | When set |
 
-**How to populate the ToU inputs:**
-
-1. **Consumption split** — read `arbeitsmenge_ht_kwh` and `arbeitsmenge_nt_kwh` from
-   `edmd GET /api/v1/billing-period/{malo_id}` (populated from MSCONS HT/NT OBIS codes).
-2. **Band prices** — read `zeitvariablePreispositionen` from
-   `marktd GET /api/v1/preisblaetter/{nb_mp_id}` (published via PRICAT 27003).
-   The response field `zeitvariable_preispositionen` contains a JSON array of
-   `ZeitvariablePreisposition` objects; extract `preisHt` and `preisNt` (ct/kWh).
-
-```bash
-# 1. Get HT/NT split from edmd
-PERIOD=$(curl -s "http://edmd:8380/api/v1/billing-period/10001234567?from=2025-01-01&to=2025-01-31" \
-  -H "Authorization: Bearer <token>")
-HT_KWH=$(echo "$PERIOD" | jq -r '.arbeitsmenge_ht_kwh // empty')
-NT_KWH=$(echo "$PERIOD" | jq -r '.arbeitsmenge_nt_kwh // empty')
-
-# 2. Get ToU prices from marktd
-PREISBLATT=$(curl -s "http://marktd:8180/api/v1/preisblaetter/9900357000004?date=2025-01-01" \
-  -H "Authorization: Bearer <token>")
-HT_PREIS=$(echo "$PREISBLATT" | jq -r '.zeitvariable_preispositionen[0].preisHt')
-NT_PREIS=$(echo "$PREISBLATT" | jq -r '.zeitvariable_preispositionen[0].preisNt')
-```
+**Data sources for §14a ToU:**
+- HT/NT split → `edmd GET /api/v1/billing-period/{malo_id}` (OBIS codes HT/NT)
+- Band prices → `marktd GET /api/v1/preisblaetter/{nb_mp_id}` → field `zeitvariable_preispositionen`
 
 ### MMM billing positions
 
 | # | Position | Formula | Condition |
 |---|---|---|---|
-| 1 | Mehrmengen | `max(0, actual − profil) × mehr_preis_ct_per_kwh ÷ 100` | actual > profil |
-| 2 | Mindermengen (Gutschrift) | `−max(0, profil − actual) × minder_preis_ct_per_kwh ÷ 100` | profil > actual (negative = credit) |
+| 1 | Mehrmengen | `max(0, actual − profil) × mehr_ct ÷ 100` | actual > profil |
+| 2 | Mindermengen (Gutschrift) | `−max(0, profil − actual) × minder_ct ÷ 100` | profil > actual |
 
 ### MSB billing positions
 
-For `msb_31009`, the NB invoices the MSB for the metering service period.
-Tariff data is fetched from `marktd` (`PreisblattMessung`) by the operator
-before calling the billing-run endpoint.
-
 | # | Position | Formula | Condition |
 |---|---|---|---|
-| 1 | Grundgebühr Messstellenbetrieb | `grundgebuehr_eur_per_month × billing_months` | Always |
-| 2 | Messdienstleistung | `messdienstleistung_eur` (flat) | When `messdienstleistung_eur` is set |
+| 1 | Grundgebühr Messstellenbetrieb | `grundgebuehr_eur/month × months` | Always |
+| 2 | Messdienstleistung | flat amount | When `messdienstleistung_eur` supplied |
+
+### §42a GGV — Community solar / shared metering
+
+`POST /api/v1/billing/ggv-nne/{ggv_malo_id}` generates N × INVOIC 31001 drafts,
+one per GGV tenant MaLo. Proportional attribution via `tenant_consumption` map or
+equal-split fallback when consumption data is unavailable. The GGV topology is
+auto-discovered from `marktd` Lokationszuordnung (edges `beziehungstyp = "GGV_MIETER"`).
 
 ---
 
-## HTTP API
+## HTTP API reference
 
-### `POST /api/v1/billing/run`
+### Billing run
 
-Generate invoice drafts for one or more MaLos in a billing period.
+```
+POST /api/v1/billing/run
+```
 
 ```json
 {
   "nb_mp_id":               "9900357000004",
   "lf_mp_id":               "9900012345678",
-  "invoice_date":           "2025-02-15",
-  "due_date":               "2025-03-15",
-  "rechnungsnummer_prefix": "NNE-2025-01",
+  "invoice_date":           "2026-02-15",
+  "due_date":               "2026-03-17",
+  "rechnungsnummer_prefix": "NNE-2026-01",
   "positions": [
     {
       "malo_id":                  "51238696780",
-      "period_from":              "2025-01-01",
-      "period_to":                "2025-01-31",
+      "period_from":              "2026-01-01",
+      "period_to":                "2026-01-31",
       "billing_type":             "nne_strom",
       "arbeitsmenge_kwh":         "1500.000",
       "arbeitspreis_ct_per_kwh":  "3.500",
       "spitzenleistung_kw":       "12.500",
       "leistungspreis_eur_per_kw":"4.200",
-      "ka_satz_ct_per_kwh":       "0.110"
-    },
-    {
-      "malo_id":                   "51238696780",
-      "period_from":               "2025-01-01",
-      "period_to":                 "2025-01-31",
-      "billing_type":              "msb_31009",
-      "msb_mp_id":                 "9900123400001",
-      "grundgebuehr_eur_per_month": "12.50",
-      "billing_months":             1,
-      "messdienstleistung_eur":     "8.00"
+      "ka_satz_ct_per_kwh":       "1.320"
     }
   ]
 }
 ```
 
 Response `201 Created`:
-
 ```json
 { "draft_ids": ["550e8400-e29b-41d4-a716-446655440000"] }
 ```
 
-### `GET /api/v1/billing/drafts`
-
-Query parameters: `status`, `malo_id`, `nb_mp_id`, `limit` (default 100, max 1000).
-
-### `GET /api/v1/billing/drafts/{id}`
-
-Returns the full draft including `rechnung` (BO4E JSON), `check_outcome`, and `status`.
-
-### `PUT /api/v1/billing/drafts/{id}/dispatch`
-
-Dispatches a `draft` invoice to `makod`. Blocked if `check_outcome == "Dispute"`.
-
-Response `200 OK`: `{ "dispatch_ref": "<makod-command-id>" }`
-
-### `PUT /api/v1/billing/drafts/{id}/reject`
+### §14a Modul 2 example
 
 ```json
-{ "reason": "Tariff mismatch — awaiting updated PRICAT from NB" }
+{
+  "billing_type": "nne_strom",
+  "malo_id":      "51238696780",
+  "period_from":  "2026-01-01",
+  "period_to":    "2026-01-31",
+  "arbeitsmenge_kwh":           "1000.000",
+  "arbeitspreis_ct_per_kwh":    "3.500",
+  "arbeitsmenge_ht_kwh":        "600.000",
+  "arbeitspreis_ht_ct_per_kwh": "4.200",
+  "arbeitsmenge_nt_kwh":        "400.000",
+  "arbeitspreis_nt_ct_per_kwh": "1.500",
+  "ka_satz_ct_per_kwh":         "1.320"
+}
+```
+
+### MMM auto-run (recommended)
+
+For SLP MaLos the entire MMM calculation — including edmd profil_kwh fetch
+and optional marktd MMM price lookup — is automated:
+
+```
+POST /api/v1/billing/mmm-run/{malo_id}
+{
+  "nb_mp_id":    "9900357000004",
+  "lf_mp_id":    "9900012345678",
+  "period_year": 2026,
+  "period_month": 1
+}
+```
+
+Auto-fetches: `profil_kwh` ← `edmd /imbalance/{malo_id}`;
+prices ← `marktd /mmm-preise/strom` (when `unb_mp_id` configured) or `marktd /mmma-preise/gas`.
+
+### Draft lifecycle endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET`  | `/api/v1/billing/drafts` | List (`?status=&malo_id=&nb_mp_id=&limit=`) |
+| `GET`  | `/api/v1/billing/drafts/{id}` | Full Rechnung BO4E JSON |
+| `PUT`  | `/api/v1/billing/drafts/{id}/dispatch` | Validate + dispatch to makod |
+| `PUT`  | `/api/v1/billing/drafts/{id}/reject` | Reject with reason |
+| `PUT`  | `/api/v1/billing/drafts/{id}/mark-paid` | REMADV 33001/33003/33004 — payment confirmed |
+| `PUT`  | `/api/v1/billing/drafts/{id}/mark-disputed` | REMADV 33002 — dispute received |
+| `POST` | `/api/v1/billing/drafts/dispatch-batch` | Dispatch all approved drafts (max 500) |
+| `POST` | `/api/v1/billing/drafts/{id}/correction` | Create Stornorechnung or Korrekturrechnung |
+
+#### mark-paid request body
+
+```json
+{ "remadv_ref": "33001-2026-01-REF-001" }
+```
+
+#### mark-disputed request body
+
+```json
+{ "erc_code": "Z32", "reason": "Arbeitspreis weicht von PRICAT ab" }
+```
+
+Common ERC codes: `Z32` = Tariff deviation, `Z34` = Period invalid, `Z35` = MMM price deviation.
+
+### REMADV webhook (automatic lifecycle)
+
+Wire your `makod` outbox or ERP to:
+```
+POST /api/v1/webhooks/remadv
+Content-Type: application/cloudevents+json
+
+{
+  "specversion": "1.0",
+  "type": "de.invoic.receipt.settled",
+  "source": "makod",
+  "data": {
+    "draft_id": "550e8400-...",
+    "remadv_ref": "33001-REF-001"
+  }
+}
+```
+
+Accepted `type` values: `de.invoic.receipt.settled`, `de.invoic.receipt.disputed`,
+`de.netzbilanz.invoic.paid`, `de.netzbilanz.invoic.disputed`.
+
+### Analytics and audit
+
+| Method | Path | Description |
+|---|---|---|
+| `GET`  | `/api/v1/billing/summary` | Monthly totals by PID × status (`?year=&month=`) |
+| `GET`  | `/api/v1/billing/audit` | §22 MessZV BNetzA audit export (`?from=&to=&pid=&status=&limit=`) |
+| `GET`  | `/api/v1/billing/malo/{malo_id}` | Per-MaLo billing history (lightweight, no JSONB) |
+
+The `audit` endpoint returns up to 50 000 rows without Rechnung JSONB for fast
+BNetzA audit responses. Full Rechnung BO4E is available via the individual `GET /drafts/{id}`.
+
+### Fremdkosten (§22 MessZV external costs)
+
+Associates typed `rubo4e::current::Fremdkosten` + `FremdkostenBlock` + `FremdkostenPosition`
+with an existing draft (e.g. ÜNB balancing charges):
+
+```
+PUT /api/v1/billing/fremdkosten/{draft_id}
+{
+  "fremdkosten_json": {
+    "_typ": "FREMDKOSTEN",
+    "summe": [{
+      "_typ": "FREMDKOSTENBLOCK",
+      "kostenblocksbezeichnung": "ÜNB Ausgleichsenergie",
+      "kostenpositionen": [{ "_typ": "FREMDKOSTENPOSITION", … }]
+    }]
+  },
+  "total_eur": "25.50"
+}
 ```
 
 ---
@@ -253,12 +348,119 @@ Response `200 OK`: `{ "dispatch_ref": "<makod-command-id>" }`
 
 ```mermaid
 stateDiagram-v2
+    direction LR
     [*] --> draft : POST /billing/run
-    draft --> dispatched : PUT /dispatch<br/>(check_outcome != Dispute)
-    draft --> rejected : PUT /reject
-    dispatched --> [*]
-    rejected --> [*]
+
+    draft --> dispatched  : PUT /dispatch\n(check_outcome ≠ Dispute)
+    draft --> rejected    : PUT /reject
+    draft --> draft       : PUT /dispatch blocked\n(check_outcome = Dispute)
+
+    dispatched --> paid      : PUT /mark-paid\n(REMADV 33001/33003/33004)
+    dispatched --> dispatched: PUT /mark-disputed\n(REMADV 33002 → check_outcome=Dispute)
+
+    paid     --> [*]
+    rejected --> draft : new billing run\n(UNIQUE index allows retry)
 ```
+
+---
+
+## Redispatch 2.0 Kostenblatt
+
+BK6-20-061 §4.2 — VNB must submit a monthly Kostenblatt to the ÜNB by the **15th of the following month**.
+
+```mermaid
+sequenceDiagram
+    participant VNB as VNB (netzbilanzd)
+    participant edmd as edmd :8380
+    participant UNB as ÜNB
+
+    Note over VNB: After each Redispatch activation
+    VNB->>edmd: GET /api/v1/billing-period/{malo_id}
+    edmd-->>VNB: dispatch_kwh (actual SMGW reading)
+    VNB->>VNB: einsatzkosten = dispatch_kwh × arbeitspreis
+    VNB->>VNB: INSERT kostenblatt_records (status=pending)
+
+    Note over VNB: By 15th of following month
+    VNB->>VNB: POST /redispatch/kostenblatt/submit/{y}/{m}
+    VNB->>UNB: Kostenblatt (CIM XML / typed BO4E Kosten JSON)
+```
+
+### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `PUT` | `/api/v1/redispatch/kostenblatt/{activation_id}` | Create/update Kostenblatt record |
+| `GET` | `/api/v1/redispatch/kostenblatt/{activation_id}` | Fetch record |
+| `GET` | `/api/v1/redispatch/kostenblatt` | List by period (`?year=&month=&status=`) |
+| `POST`| `/api/v1/redispatch/kostenblatt/{activation_id}/compute` | Auto-compute via edmd |
+| `POST`| `/api/v1/redispatch/kostenblatt/submit/{year}/{month}` | Submit all pending |
+
+---
+
+## Background workers
+
+Both workers are activated only when `erp_webhook_url` is configured.
+
+| Worker | Interval | CloudEvent emitted | Condition |
+|---|---|---|---|
+| Undispatched draft alert | 1 hour (configurable) | `de.netzbilanz.invoic.dispatch_overdue` | Drafts in `status=draft` older than 48 h |
+| Kostenblatt deadline | 1 day (configurable) | `de.netzbilanz.kostenblatt.deadline_approaching` | Day 10–14 of month + pending records exist |
+
+The dispatch-overdue event includes the list of `draft_ids` so the ERP can trigger
+a `dispatch-batch` call automatically. The `netzbilanz-agent` in `agentd` subscribes
+to both event types.
+
+---
+
+## CloudEvents emitted
+
+All events are CloudEvents 1.0 (`application/cloudevents+json`) POSTed to `erp_webhook_url`.
+
+| Event type | Trigger | Key fields in `data` |
+|---|---|---|
+| `de.netzbilanz.invoic.drafted` | `POST /billing/run` | `draft_id`, `tenant` |
+| `de.netzbilanz.invoic.dispatched` | `PUT /drafts/{id}/dispatch` | `draft_id`, `dispatch_ref`, `tenant` |
+| `de.netzbilanz.invoic.paid` | `PUT /mark-paid` or REMADV webhook | `draft_id`, `remadv_ref`, `tenant` |
+| `de.netzbilanz.invoic.disputed` | `PUT /mark-disputed` or REMADV webhook | `draft_id`, `erc_code`, `reason`, `tenant` |
+| `de.netzbilanz.invoic.dispatch_overdue` | Background worker (hourly) | `draft_ids[]`, `undispatched_count` |
+| `de.netzbilanz.kostenblatt.deadline_approaching` | Background worker (daily) | `period_year`, `period_month`, `pending_count`, `days_until_deadline` |
+
+---
+
+## MCP server
+
+Available at `/mcp` (Streamable HTTP, MCP 2025-11-25). Authenticate with
+`Authorization: Bearer <mcp_api_key>`. When `mcp_api_key` is unset, all requests
+are allowed (dev mode).
+
+### Tools (13)
+
+| Tool | Description |
+|---|---|
+| `list_nne_drafts` | List drafts by `malo_id`, `lf_mp_id`, `status`, or `outcome` |
+| `list_disputed` | All invoices with `check_outcome = Dispute` (REMADV 33002 candidates) |
+| `get_nne_draft` | Full Rechnung BO4E + invoic-checker findings for one draft |
+| `get_billing_summary` | Monthly totals by PID × status for ERP reconciliation |
+| `list_undispatched_drafts` | Stuck drafts older than N hours (default 48 h) |
+| `list_pending_kostenblatt` | Redispatch 2.0 Kostenblatt due for 15th-of-month submission |
+| `compute_kostenblatt` | Compute Kostenblatt (manual kWh override) |
+| `dispatch_draft` | Check dispatch readiness; instructs on REST call |
+| `reject_draft` | Reject a draft (unlocks same period for re-billing) |
+| `trigger_mmm_auto_run` | Prepare MMM auto-run request body for one MaLo |
+| `list_corrections` | Stornorechnung / Korrekturrechnung audit trail (§22 MessZV) |
+| `get_payment_stats` | Paid vs. outstanding totals by PID (Zahlungsverzug detection) |
+| `list_paid_invoices` | All REMADV-confirmed paid invoices |
+
+### Prompts (6)
+
+| Prompt | Description |
+|---|---|
+| `trigger-nne-billing` | Full NNE billing run step-by-step |
+| `investigate-dispute` | REMADV 33002 root-cause investigation |
+| `mmm-monthly-run` | Complete monthly MMM billing workflow |
+| `redispatch-monthly-submit` | Prepare and submit BK6-20-061 Kostenblatt |
+| `ggv-nne-billing` | §42a GGV community solar multi-tenant NNE |
+| `nb-invoic-overview` | All NB INVOIC types, PIDs, and compliance rules |
 
 ---
 
@@ -266,39 +468,123 @@ stateDiagram-v2
 
 ```toml
 # netzbilanzd.toml
-database_url   = "env:DATABASE_URL"
-port           = 8680
 
+# PostgreSQL connection string
+database_url = "env:NETZBILANZD_DATABASE_URL"
+
+# HTTP port (default 8680)
+port = 8680
+
+# Tenant identifier for multi-tenant deployments (default "default")
+# Typically the NB's MP-ID or a logical name
+tenant = "9900357000004"
+
+# marktd for tariff lookups and MMM prices
 marktd_url     = "http://marktd:8180"
-marktd_api_key = "env:MARKTD_API_KEY"
+marktd_api_key = "env:NETZBILANZD_MARKTD_API_KEY"
 
-makod_url      = "http://makod:8080"
-makod_api_key  = "env:MAKOD_API_KEY"
+# makod for INVOIC command dispatch
+makod_url     = "http://makod:8080"
+makod_api_key = "env:NETZBILANZD_MAKOD_API_KEY"
+
+# edmd for MeterBillingPeriod (imbalance for MMM, billing-period for Kostenblatt)
+edmd_url     = "http://edmd:8380"
+edmd_api_key = "env:NETZBILANZD_EDMD_API_KEY"
+
+# ÜNB MP-ID for Strom MMM price auto-fetch from marktd.
+# Identifies your Regelzone. Without this, callers must supply
+# mehr_preis_ct_per_kwh / minder_preis_ct_per_kwh explicitly.
+# Common values:
+#   50Hertz:   "9907324000007"
+#   TenneT:    "9907324000008"
+#   Amprion:   "9907324000009"
+#   TransnetBW:"9907324000010"
+unb_mp_id = "9907324000007"
+
+# ERP webhook — receives all de.netzbilanz.* CloudEvents
+# Also required for background workers to fire
+erp_webhook_url = "http://erp:9000/webhooks/mako"
+
+# MCP server auth (leave unset to allow all requests in dev)
+mcp_api_key = "env:NETZBILANZD_MCP_API_KEY"
+
+# Background worker intervals (seconds, 0 = disable)
+dispatch_alert_interval_secs    = 3600   # hourly undispatched-draft alert
+kostenblatt_alert_interval_secs = 86400  # daily Kostenblatt 15th deadline
 ```
+
+### Environment variable overrides
+
+All keys support `_FILE` suffix for Kubernetes secrets:
+`NETZBILANZD_MAKOD_API_KEY_FILE=/run/secrets/makod-key`.
+Nested keys use double underscore: `NETZBILANZD_DATABASE__URL`.
 
 ---
 
 ## PostgreSQL schema
 
+Migrations run automatically at startup via `sqlx::migrate!`.
+
 ```sql
--- invoice_drafts: stores BO4E Rechnung drafts.
--- status: draft → dispatched | rejected
+-- invoice_drafts: core billing ledger (migrations 0001–0002)
 CREATE TABLE invoice_drafts (
     id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant           TEXT        NOT NULL DEFAULT 'default',
     malo_id          TEXT        NOT NULL,
-    nb_mp_id         TEXT        NOT NULL,
-    lf_mp_id         TEXT        NOT NULL,
-    pid              INTEGER     NOT NULL,  -- 31001 | 31002 | 31005 | 31009
+    nb_mp_id         TEXT        NOT NULL,   -- invoice sender (NB/GNB)
+    lf_mp_id         TEXT        NOT NULL,   -- invoice recipient (LF/MSB/LFG)
+    pid              INTEGER     NOT NULL,   -- 31001|31002|31005|31009|31011
+    rechnungsart     TEXT        NOT NULL DEFAULT 'RECHNUNG',
+                     -- 'RECHNUNG'|'STORNORECHNUNG'|'KORREKTURRECHNUNG'
     period_from      DATE        NOT NULL,
     period_to        DATE        NOT NULL,
-    rechnung         JSONB       NOT NULL DEFAULT '{}',
-    gross_eur_units  BIGINT      NOT NULL DEFAULT 0,  -- × 10⁻⁵ EUR
-    check_outcome    TEXT,                -- 'Ok' | 'Warn' | 'Dispute'
+    rechnung         JSONB       NOT NULL DEFAULT '{}',  -- BO4E Rechnung
+    bo4e_version     TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    gross_eur_units  BIGINT      NOT NULL DEFAULT 0,   -- × 10⁻⁵ EUR (lossless)
+    check_outcome    TEXT,                  -- 'Ok'|'Warn'|'Dispute'
     status           TEXT        NOT NULL DEFAULT 'draft',
-    dispatch_ref     TEXT,
-    reject_reason    TEXT,
+                     -- 'draft'|'dispatched'|'paid'|'rejected'
+    dispatch_ref     TEXT,                  -- makod command UUID
+    reject_reason    TEXT,                  -- §22 MessZV audit note
+    original_draft_id UUID REFERENCES invoice_drafts(id) ON DELETE SET NULL,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Prevent double-billing: unique per (tenant, malo_id, period, pid) for RECHNUNG
+CREATE UNIQUE INDEX id_no_double_billing
+    ON invoice_drafts (tenant, malo_id, period_from, period_to, pid)
+    WHERE rechnungsart = 'RECHNUNG' AND status != 'rejected';
+
+-- kostenblatt_records: Redispatch 2.0 Kostenblatt (migration 0001)
+CREATE TABLE kostenblatt_records (
+    id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant                   TEXT NOT NULL,
+    activation_id            TEXT NOT NULL,
+    tr_id                    TEXT NOT NULL,
+    malo_id                  TEXT,
+    period_year              SMALLINT NOT NULL,
+    period_month             SMALLINT NOT NULL,
+    uenb_mp_id               TEXT NOT NULL,
+    vnb_mp_id                TEXT NOT NULL,
+    dispatch_kwh             NUMERIC(18,3) NOT NULL,
+    arbeitspreis_eur_per_kwh NUMERIC(12,6) NOT NULL,
+    einsatzkosten_eur        NUMERIC(16,5) GENERATED ALWAYS AS (dispatch_kwh * arbeitspreis_eur_per_kwh) STORED,
+    kosten_json              JSONB,         -- rubo4e::current::Kosten for CIM export
+    status                   TEXT NOT NULL DEFAULT 'pending',
+                             -- 'pending'|'submitted'|'confirmed'|'disputed'|'paid'
+    UNIQUE (tenant, activation_id, tr_id)
+);
+
+-- fremdkosten_records: typed external-cost pass-through (migration 0003)
+CREATE TABLE fremdkosten_records (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant            TEXT NOT NULL DEFAULT 'default',
+    draft_id          UUID NOT NULL REFERENCES invoice_drafts(id) ON DELETE CASCADE,
+    fremdkosten_json  JSONB NOT NULL,  -- rubo4e::current::Fremdkosten
+    bezeichnung       TEXT,
+    total_eur         NUMERIC(16,5) NOT NULL DEFAULT 0,
+    UNIQUE (tenant, draft_id)
 );
 ```
 
@@ -306,13 +592,28 @@ CREATE TABLE invoice_drafts (
 
 ## Regulatory basis
 
-| Regulation | Requirement |
+| Regulation | Requirement handled |
 |---|---|
-| GPKE BK6-22-024 §5 | NB must issue NNE invoices (Netznutzungsabrechnungen) within the billing cycle |
-| §17 StromNZV | Konzessionsabgabe must be included as a separate position in NNE invoices for Tarifkunden |
-| §22 MessZV | INVOIC receipts must be retained for 3 years — handled by `invoicd` after dispatch |
-| BK6-22-024 §4 | MMM settlement must reflect actual vs. SLP profile deviation for the billing period |
-| WiM BK6-24-174 Teil 1 §12 | NB must settle metering service fees with MSB via INVOIC 31009 (MSB-Rechnung) |
+| GPKE BK6-22-024 §5 | NNE invoice generation and dispatch (INVOIC 31001) |
+| §40 StromNZV | MMM settlement reflecting actual vs. SLP profile deviation (INVOIC 31002) |
+| §17 StromNZV | KA as separate Rechnungsposition; §17 residential (1.32 ct/kWh) and commercial (0.11 ct/kWh) rates accepted |
+| §21 MessZV | Zahlungsziel (due_date) recorded per invoice; §22 MessZV 3-year retention enforced in PostgreSQL |
+| §22 MessZV | BNetzA audit export via `GET /api/v1/billing/audit`; Stornorechnung/Korrekturrechnung with `originalRechnungsnummer` + `korrekturGrund` |
+| WiM BK6-24-174 | MSB-Rechnung (INVOIC 31009): NB → MSB metering service fee |
+| GeLi Gas BK7-24-01-009 §5.4 | AWH Sperrprozesse Gas (INVOIC 31011): GNB → LFG for billable Sperrprozess actions |
+| §14a EnWG (BK6-22-300) | Time-of-Use NNE with separate HT/NT positions; mandatory for controllable loads from 01.01.2024 |
+| §42a EEG 2023 | GGV NNE: each tenant MaLo billed individually for proportional NNE share |
+| BK6-20-061 §4.2 | Redispatch 2.0 Kostenblatt submission to ÜNB by 15th of following month |
 
-> **Note:** `netzbilanzd` generates and dispatches outbound INVOIC messages.
-> Inbound INVOIC plausibility checking (REMADV settlement) is handled by `invoicd`.
+---
+
+## Informatorisches Unbundling
+
+`netzbilanzd` is a **NB-only service**. The LF billing services (`billingd`, `accountingd`,
+`invoicd`) run independently. Access controls:
+
+- Cedar ABAC policies restrict `netzbilanzd` REST API to `NB` role principals.
+- `netzbilanzd` does **not** appear in the LF `agentd` MCP server list.
+- `billingd`/`invoicd` do **not** receive `de.netzbilanz.*` CloudEvents.
+
+See [§9 EnWG Informatorisches Unbundling](./architecture#informatorisches-unbundling).

@@ -2051,3 +2051,62 @@ pub trait MmmPreisStromRepository: Send + Sync {
         unb_mp_id: &str,
     ) -> Result<Option<MmmPreisStromRecord>, MdmError>;
 }
+
+// ── NB Energiemix (§42 EnWG annual grid-area renewable mix) ─────────────────
+
+/// A stored `NbEnergiemix` record.
+///
+/// The NB publishes the annual renewable energy mix of their grid area under
+/// §42 Abs. 5 EnWG.  Lieferanten use this to compute the Reststrommix
+/// for customer bills and to label Ökostrom tariffs in `tarifbd`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NbEnergiemixRecord {
+    /// 13-digit BDEW/DVGW/GS1 NB MP-ID.
+    pub nb_mp_id: String,
+    /// Calendar year this mix is valid for (e.g. `2025`).
+    pub gueltig_fuer: i16,
+    /// Full `rubo4e::current::Energiemix` COM payload (JSONB, camelCase).
+    pub energiemix: serde_json::Value,
+    /// Total EEG feed-in into this grid area in kWh (optional informational).
+    pub eeg_einspeisung_kwh: Option<i64>,
+    /// Total grid withdrawal (`Gesamtentnahme`) in kWh.
+    pub gesamtentnahme_kwh: Option<i64>,
+    /// Wall-clock time (UTC) when this record was last updated.
+    #[serde(with = "time::serde::rfc3339::option", default)]
+    pub updated_at: Option<time::OffsetDateTime>,
+}
+
+/// Read/write access to NB annual grid-area Energiemix (§42 EnWG).
+#[allow(async_fn_in_trait)]
+pub trait NbEnergiemixRepository: Send + Sync {
+    /// Upsert the annual Energiemix for an NB.
+    ///
+    /// Idempotent: re-publishing the same year with updated values replaces
+    /// the existing row.
+    async fn upsert_energiemix(
+        &self,
+        tenant: &str,
+        nb_mp_id: &str,
+        gueltig_fuer: i16,
+        energiemix: serde_json::Value,
+        eeg_einspeisung_kwh: Option<i64>,
+        gesamtentnahme_kwh: Option<i64>,
+    ) -> Result<(), MdmError>;
+
+    /// Return the `NbEnergiemix` for the given NB and year.
+    ///
+    /// When `year` is `None`, returns the most recent available year.
+    async fn find_energiemix(
+        &self,
+        tenant: &str,
+        nb_mp_id: &str,
+        year: Option<i16>,
+    ) -> Result<Option<NbEnergiemixRecord>, MdmError>;
+
+    /// Return all available years for a given NB (for history/audit).
+    async fn list_energiemix_years(
+        &self,
+        tenant: &str,
+        nb_mp_id: &str,
+    ) -> Result<Vec<i16>, MdmError>;
+}

@@ -18,7 +18,6 @@
 //!
 //! `:9480`
 
-
 use portald::{clients, config, handlers, mcp_server};
 use std::sync::Arc;
 
@@ -148,6 +147,16 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/portal/:malo_id/invoices/:record_id/download",
             get(handlers::get_portal_invoice_download),
+        )
+        // SEPA mandate self-service (§41 EnWG customer rights + GDPR Art. 16)
+        .route(
+            "/api/v1/portal/:malo_id/sepa",
+            put(handlers::put_portal_sepa),
+        )
+        // Vorauszahlung (advance payment schedule, §40 Abs. 1 EnWG)
+        .route(
+            "/api/v1/portal/:malo_id/vorauszahlung",
+            get(handlers::get_portal_vorauszahlung),
         )
         // MCP server.
         .merge(mcp_server::router(Arc::clone(&mcp_state), shutdown.clone()))

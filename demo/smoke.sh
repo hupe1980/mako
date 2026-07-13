@@ -2,6 +2,7 @@
 # demo/smoke.sh — full-stack automated smoke test for the mako NB STP demo
 #
 # Tests the complete stack: makod + marktd + processd (NB auto-responder)
+# Optional: netzbilanzd (NB billing daemon)
 #
 # End-to-end flow:
 #   P1.  PUT preisblatt into marktd            (master data pre-load)
@@ -17,12 +18,17 @@
 #   7.   makod dispatches UTILMD 55003 (Bestätigung Lieferbeginn)
 #   8.   webhook receives UTILMD 55003 ✓
 #   m1-m7. marktd smoke tests (health, MaLo, contracts, preisblatt, correlations)
+#   n1-n6. netzbilanzd smoke tests (health, NNE draft, list, summary, audit, MCP)
+#         — enabled when NETZBILANZD_URL is set
 #
 # Prerequisites: docker compose up -d (builds makod:dev + marktd:dev + processd:dev)
 #
 # Usage:
 #   # Full stack (default — requires docker compose up -d):
 #   MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 bash smoke.sh
+#
+#   # With netzbilanzd:
+#   MARKTD_URL=http://localhost:8180 NETZBILANZD_URL=http://localhost:8680 bash smoke.sh
 #
 #   # makod-only (no marktd/processd — manual bestaetigen fallback at step 7):
 #   BASE_URL=http://localhost:8080 AUTH_TOKEN=mytoken bash smoke.sh
@@ -586,6 +592,101 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     fi
 fi
 
+# ── netzbilanzd smoke tests ────────────────────────────────────────────────────
+# Tests NNE billing draft generation, health, summary, and audit endpoints.
+# Requires NETZBILANZD_URL to be set (e.g. http://localhost:8680).
+
+NETZBILANZD_URL="${NETZBILANZD_URL:-}"
+if [[ -n "$NETZBILANZD_URL" ]]; then
+    section "── netzbilanzd smoke tests ──────────────────────────────────────────"
+
+    netzbilanzd_get() {
+        curl -sS -w '\n%{http_code}' "$NETZBILANZD_URL$1" \
+            -H "Authorization: Bearer ${NETZBILANZD_AUTH_TOKEN:-demo-secret}"
+    }
+    netzbilanzd_post() {
+        curl -sS -w '\n%{http_code}' -X POST "$NETZBILANZD_URL$1" \
+            -H "Authorization: Bearer ${NETZBILANZD_AUTH_TOKEN:-demo-secret}" \
+            -H "Content-Type: application/json" \
+            --data-binary "$2"
+    }
+
+    # n1. Health
+    info "[n1/6] netzbilanzd health"
+    resp=$(netzbilanzd_get "/health")
+    code=$(status "$resp")
+    [[ "$code" == "200" ]] || fail "netzbilanzd /health returned $code"
+    pass "GET /health → $code"
+
+    # n2. Generate NNE draft
+    info "[n2/6] POST /api/v1/billing/run — NNE Strom draft"
+    INVOICE_DATE=$(date +%Y-%m-01)
+    PERIOD_FROM="$(date -d 'last month' +%Y-%m-01 2>/dev/null || date -v-1m +%Y-%m-01)"
+    PERIOD_TO="$(date -d 'last month' +%Y-%m-28 2>/dev/null || date -v-1m +%Y-%m-28)"
+    resp=$(netzbilanzd_post "/api/v1/billing/run" "{
+        \"nb_mp_id\": \"9900357000004\",
+        \"lf_mp_id\": \"9900012345678\",
+        \"invoice_date\": \"$INVOICE_DATE\",
+        \"due_date\": \"$(date -d "$INVOICE_DATE + 30 days" +%Y-%m-%d 2>/dev/null || date -v+30d +%Y-%m-%d)\",
+        \"rechnungsnummer_prefix\": \"SMOKE-NNE-$SMOKE_RUN_ID\",
+        \"positions\": [{
+            \"malo_id\": \"$SMOKE_MALO_ID\",
+            \"period_from\": \"$PERIOD_FROM\",
+            \"period_to\": \"$PERIOD_TO\",
+            \"billing_type\": \"nne_strom\",
+            \"arbeitsmenge_kwh\": \"1500.000\",
+            \"arbeitspreis_ct_per_kwh\": \"3.500\",
+            \"ka_satz_ct_per_kwh\": \"1.320\"
+        }]
+    }")
+    code=$(status "$resp")
+    # Accept 201 (created) or 409 (conflict = draft already exists for this period — idempotent)
+    [[ "$code" == "201" || "$code" == "409" || "$code" == "422" ]] \
+        || fail "POST /billing/run returned $code: $(body "$resp")"
+    DRAFT_IDS=$(body "$resp" | jq -r '.draft_ids[0] // "none"')
+    pass "POST /api/v1/billing/run → $code  first_draft_id=$DRAFT_IDS"
+
+    # n3. List drafts
+    info "[n3/6] GET /api/v1/billing/drafts — list"
+    resp=$(netzbilanzd_get "/api/v1/billing/drafts?limit=5")
+    code=$(status "$resp")
+    [[ "$code" == "200" ]] || fail "GET /billing/drafts returned $code"
+    COUNT=$(body "$resp" | jq '. | length' 2>/dev/null || echo "?")
+    pass "GET /api/v1/billing/drafts → $code  count=$COUNT"
+
+    # n4. Monthly summary
+    info "[n4/6] GET /api/v1/billing/summary — monthly totals"
+    resp=$(netzbilanzd_get "/api/v1/billing/summary")
+    code=$(status "$resp")
+    [[ "$code" == "200" ]] || fail "GET /billing/summary returned $code"
+    TOTAL=$(body "$resp" | jq -r '.total_gross_eur // "?"')
+    pass "GET /api/v1/billing/summary → $code  total_gross_eur=$TOTAL"
+
+    # n5. Audit export
+    info "[n5/6] GET /api/v1/billing/audit — §22 MessZV BNetzA export"
+    resp=$(netzbilanzd_get "/api/v1/billing/audit?limit=10")
+    code=$(status "$resp")
+    [[ "$code" == "200" ]] || fail "GET /billing/audit returned $code"
+    AUDIT_COUNT=$(body "$resp" | jq '.count // 0')
+    pass "GET /api/v1/billing/audit → $code  count=$AUDIT_COUNT"
+
+    # n6. MCP server info
+    info "[n6/6] POST /mcp — MCP server initialize"
+    resp=$(curl -sS -w '\n%{http_code}' -X POST "$NETZBILANZD_URL/mcp" \
+        -H "Authorization: Bearer ${NETZBILANZD_AUTH_TOKEN:-demo-secret}" \
+        -H "Content-Type: application/json" \
+        -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}},"id":1}')
+    code=$(status "$resp")
+    [[ "$code" == "200" ]] || fail "POST /mcp initialize returned $code"
+    SERVER_NAME=$(body "$resp" | jq -r '.result.serverInfo.name // "?"')
+    TOOL_COUNT=$(body "$resp" | jq '.result.capabilities.tools // {} | length')
+    pass "POST /mcp → $code  server=$SERVER_NAME"
+
+    echo
+    echo "  netzbilanzd REST   : $NETZBILANZD_URL/api/v1/billing/drafts"
+    echo "  netzbilanzd MCP    : $NETZBILANZD_URL/mcp"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo
@@ -598,5 +699,6 @@ echo "  makod MCP server  : $BASE_URL/mcp"
 [[ -n "${MARKTD_URL:-}" ]] && echo
 [[ -n "${MARKTD_URL:-}" ]] && echo "  Wechselprozess auto-responder: ENABLED"
 [[ -n "${MARKTD_URL:-}" ]] && echo "  Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55003"
+[[ -n "${NETZBILANZD_URL:-}" ]] && echo "  netzbilanzd NB billing: ENABLED"
 echo "================================================="
 echo

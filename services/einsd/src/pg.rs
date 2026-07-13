@@ -1,28 +1,16 @@
 //! PostgreSQL persistence for `einsd`.
 //!
-//! All monetary amounts use `billing::EuroAmount` (`Amount<5>`) internally for
-//! precision validation before DB storage.  `Decimal` is used only at the
-//! sqlx boundary (NUMERIC column mapping).
-//! `foerderendedatum` is computed by the caller:
-//!   - Standard EEG: `inbetriebnahme + 20 years` (§20 EEG 2023)
-//!   - Repowering: `repowering_datum + 20 years` (§22 EEG 2023 — clock resets)
-//!   - KWKG: computed from KWKG Förderdauer (§8 KWKG 2023)
+//! Settlement formulas are implemented in the [`eeg-billing`] crate.
+//! This module is responsible for:
+//! - Plant registration and lifecycle (CRUD on `eeg_anlagen`)
+//! - Persisting settlement receipts (`settlement_receipts`)
+//! - KWKG hour-limit state tracking (`kwk_strom_kwh_gesamt` column)
+//! - EPEX monthly price storage
+//!
+//! [`eeg-billing`]: eeg_billing
 
 use anyhow::Context as _;
-use billing::EuroAmount;
 use rust_decimal::Decimal;
-
-/// Validate and round a computed settlement amount to 5dp.
-///
-/// Uses [`EuroAmount`] (`Amount<5>`) as an intermediate type to enforce
-/// precision and overflow bounds, then converts back to `Decimal` for
-/// `sqlx` DB storage.  Returns `Err` only when the value exceeds the
-/// representable range (> ±92_233_720_368 EUR) — impossible in practice.
-fn to_settlement_eur(d: Decimal) -> anyhow::Result<Decimal> {
-    EuroAmount::checked_from_decimal(d)
-        .map(|a| a.into_decimal())
-        .map_err(|e| anyhow::anyhow!("settlement amount out of range: {e}"))
-}
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use time::{Date, OffsetDateTime};
@@ -78,7 +66,27 @@ pub struct AnlageUpsertRequest {
     /// Registered flex capacity in kW (§50 EEG biomass flex premium).
     pub flex_leistung_kw: Option<Decimal>,
     /// Flexibilitätsprämie rate in ct/kWh.
-    pub flex_praemie_ct_kwh: Option<Decimal>,
+    pub flex_praemie_ct_kwh: Option<Decimal>, // ── MaStR + Bankverbindung ────────────────────────────────────────────────────────────────
+    /// Whether the plant is registered in the Marktstammdatenregister (MaStR).
+    ///
+    /// When `false`: §52 penalty applies until registration is confirmed.
+    /// - EEG 2023 plants: €10/kW/month Pflichtzahlung (§52 Abs. 1 Nr. 11 EEG 2023)
+    /// - EEG ≤2021 plants: Vergütung = 0 (old §52/§47 via §100 Übergangsregelung)
+    ///
+    /// Confirm via `POST /api/v1/anlagen/{tr_id}/mastr-registrierung`.
+    #[serde(default = "default_mastr_true")]
+    pub mastr_registriert: bool,
+    /// MaStR Registrierungsnummer (e.g. `"SEE900000000001"`).
+    pub mastr_nummer: Option<String>,
+    /// Date of MaStR registration (ISO 8601).
+    pub mastr_datum: Option<String>,
+    // ── Bankverbindung for EEG Vergütung SEPA CT payment ────────────────────────────────
+    /// IBAN of the plant operator for monthly EEG Vergütung payment (SEPA CT).
+    pub bank_iban: Option<String>,
+    /// BIC/SWIFT of operator bank (optional, derivable from IBAN for SEPA IBANs).
+    pub bank_bic: Option<String>,
+    /// Full name of payment recipient (Zahlungsempfänger).
+    pub zahlungsempfaenger: Option<String>,
     pub notes: Option<String>,
 }
 
@@ -115,11 +123,22 @@ pub struct AnlageRow {
     pub flex_leistung_kw: Option<Decimal>,
     pub flex_praemie_ct_kwh: Option<Decimal>,
     pub status: String,
+    // MaStR + Bankverbindung (migration 0002)
+    pub mastr_registriert: bool,
+    pub mastr_nummer: Option<String>,
+    pub mastr_datum: Option<Date>,
+    pub bank_iban: Option<String>,
+    pub bank_bic: Option<String>,
+    pub zahlungsempfaenger: Option<String>,
     pub notes: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
+}
+
+fn default_mastr_true() -> bool {
+    true
 }
 
 pub async fn upsert_anlage(
@@ -145,25 +164,38 @@ pub async fn upsert_anlage(
         .transpose()
         .context("parse ursprungs_inbetriebnahme")?;
 
+    let mastr_datum = req
+        .mastr_datum
+        .as_deref()
+        .map(|s| Date::parse(s, &Iso8601::DEFAULT))
+        .transpose()
+        .context("parse mastr_datum")?;
+
     let ist_repowering = req.ist_repowering.unwrap_or(false);
 
     // ── foerderendedatum logic ──────────────────────────────────────────────
-    // Repowering (§22 EEG): clock resets to repowering_datum + 20 years.
-    // KWKG: use kwk_foerderdauer_years if provided.
-    // Standard EEG: inbetriebnahme + 20 years.
+    // §25 Abs. 1 Satz 2 EEG 2023: statutory (non-tender) plants extend to
+    // 31. December of the 20th year; tender plants use exact 20-year date.
+    //
+    // Repowering (§22 EEG): clock resets. KWKG: use kwk_foerderdauer_years.
+    let is_ausschreibung = req.ausschreibungs_zuschlag_id.is_some();
     let foerderendedatum = if ist_repowering {
         let basis = repowering_datum.unwrap_or(inbetriebnahme);
-        basis
-            .replace_year(basis.year() + 20)
+        eeg_billing::foerderendedatum_repowering(basis)
             .context("compute repowering foerderendedatum")?
     } else if let Some(years) = req.kwk_foerderdauer_years {
+        // KWKG: exact years (not December 31 extension — KWKG ≠ EEG)
         inbetriebnahme
             .replace_year(inbetriebnahme.year() + years as i32)
             .context("compute KWKG foerderendedatum")?
+    } else if is_ausschreibung {
+        // Tender plant: exact 20-year anniversary (§25 Satz 2 does NOT apply)
+        eeg_billing::foerderendedatum_eeg_ausschreibung(inbetriebnahme)
+            .context("compute tender foerderendedatum")?
     } else {
-        inbetriebnahme
-            .replace_year(inbetriebnahme.year() + 20)
-            .context("compute foerderendedatum")?
+        // Statutory plant: extend to 31 December of the 20th year (§25 Abs. 1 Satz 2)
+        eeg_billing::foerderendedatum_eeg(inbetriebnahme)
+            .context("compute statutory foerderendedatum")?
     };
 
     let settlement_model = if req.direktvermarktung.unwrap_or(false) {
@@ -182,6 +214,8 @@ pub async fn upsert_anlage(
                parent_tr_id,
                kwk_foerderdauer_h, kwk_foerderdauer_years,
                flex_leistung_kw, flex_praemie_ct_kwh,
+               mastr_registriert, mastr_nummer, mastr_datum,
+               bank_iban, bank_bic, zahlungsempfaenger,
                notes, updated_at
            ) VALUES (
                $1, $2, $3, $4, $5, $6,
@@ -191,7 +225,9 @@ pub async fn upsert_anlage(
                $20,
                $21, $22,
                $23, $24,
-               $25, now()
+               $25, $26, $27,
+               $28, $29, $30,
+               $31, now()
            )
            ON CONFLICT (tr_id, tenant) DO UPDATE SET
                malo_id                   = EXCLUDED.malo_id,
@@ -216,6 +252,12 @@ pub async fn upsert_anlage(
                kwk_foerderdauer_years    = EXCLUDED.kwk_foerderdauer_years,
                flex_leistung_kw          = EXCLUDED.flex_leistung_kw,
                flex_praemie_ct_kwh       = EXCLUDED.flex_praemie_ct_kwh,
+               mastr_registriert         = EXCLUDED.mastr_registriert,
+               mastr_nummer              = COALESCE(EXCLUDED.mastr_nummer, eeg_anlagen.mastr_nummer),
+               mastr_datum               = COALESCE(EXCLUDED.mastr_datum, eeg_anlagen.mastr_datum),
+               bank_iban                 = COALESCE(EXCLUDED.bank_iban, eeg_anlagen.bank_iban),
+               bank_bic                  = COALESCE(EXCLUDED.bank_bic, eeg_anlagen.bank_bic),
+               zahlungsempfaenger        = COALESCE(EXCLUDED.zahlungsempfaenger, eeg_anlagen.zahlungsempfaenger),
                notes                     = EXCLUDED.notes,
                updated_at                = now()",
     )
@@ -243,6 +285,12 @@ pub async fn upsert_anlage(
     .bind(req.kwk_foerderdauer_years)
     .bind(req.flex_leistung_kw)
     .bind(req.flex_praemie_ct_kwh)
+    .bind(req.mastr_registriert)
+    .bind(&req.mastr_nummer)
+    .bind(mastr_datum)
+    .bind(&req.bank_iban)
+    .bind(&req.bank_bic)
+    .bind(&req.zahlungsempfaenger)
     .bind(&req.notes)
     .execute(pool)
     .await
@@ -265,6 +313,7 @@ pub async fn fetch_anlage(
 
 #[derive(Debug, Deserialize)]
 pub struct AnlagenQuery {
+    pub malo_id: Option<String>,
     pub erzeugungsart: Option<String>,
     pub settlement_model: Option<String>,
     pub status: Option<String>,
@@ -279,13 +328,15 @@ pub async fn list_anlagen(
     sqlx::query_as::<_, AnlageRow>(
         r"SELECT * FROM eeg_anlagen
           WHERE tenant = $1
-            AND ($2::text IS NULL OR erzeugungsart = $2)
-            AND ($3::text IS NULL OR settlement_model = $3)
-            AND ($4::text IS NULL OR status = $4)
+            AND ($2::text IS NULL OR malo_id = $2)
+            AND ($3::text IS NULL OR erzeugungsart = $3)
+            AND ($4::text IS NULL OR settlement_model = $4)
+            AND ($5::text IS NULL OR status = $5)
           ORDER BY foerderendedatum ASC
-          LIMIT $5",
+          LIMIT $6",
     )
     .bind(tenant)
+    .bind(&q.malo_id)
     .bind(&q.erzeugungsart)
     .bind(&q.settlement_model)
     .bind(q.status.as_deref().or(Some("aktiv")))
@@ -336,22 +387,38 @@ pub struct SettleInput {
     pub tenant: String,
     pub billing_year: i16,
     pub billing_month: i16,
-    /// Einspeisemenge kWh for the billing month.
-    /// `None` → `status = 'no_data'`.
     pub einspeisemenge_kwh: Option<Decimal>,
-    /// Monthly average EPEX price in ct/kWh.
-    /// Required for DIREKTVERMARKTUNG, POST_EEG_SPOT, KWKG_ZUSCHLAG.
-    /// `None` → `status = 'price_missing'` for those models.
     pub epex_avg_ct_kwh: Option<Decimal>,
     pub settlement_model: String,
-    /// Fixed tariff / KWK-Zuschlag rate in ct/kWh.
     pub verguetungssatz_ct: Decimal,
-    /// Anzulegender Wert for Direktvermarktung / Ausschreibung.
     pub direktverm_aw_ct: Option<Decimal>,
-    /// §38a Mieterstrom surcharge ct/kWh.
     pub mieter_zuschlag_ct: Option<Decimal>,
-    /// Flexibilitätsprämie rate ct/kWh (§50 EEG, biomass only).
     pub flex_praemie_ct_kwh: Option<Decimal>,
+    pub managementpraemie_ct: Option<Decimal>,
+    pub kwk_strom_kwh_gesamt: Option<Decimal>,
+    pub kwk_max_kwh: Option<Decimal>,
+    /// Derived from `mastr_registriert` in `run_settlement` — not set by caller.
+    pub sanktion: Option<eeg_billing::SanktionAlt>,
+    pub kwh_during_negative_epex: Option<Decimal>,
+    /// Plant commissioning date — forwarded to `eeg-billing` for §27 EEG guard.
+    pub inbetriebnahme: Option<Date>,
+    /// Installed peak power — used for §27 threshold check (≥100 kWp) and auto Managementprämie.
+    pub leistung_kwp: Option<Decimal>,
+    /// EEG subsidy end date — triggers automatic `FoerderungBeendet` when billing_date > foerderendedatum.
+    pub foerderendedatum: Option<Date>,
+    /// First day of the billing month — supplied for FoerderungBeendet auto-detection.
+    pub billing_date: Option<Date>,
+    /// EEG law year (e.g. 2017, 2021, 2023, 0 for KWKG) — determines version-specific
+    /// §51 Negativpreisregel threshold and kW exemption.
+    pub eeg_gesetz: i16,
+    /// Plant technology type for §51 EEG 2017 kW exemption dispatch.
+    pub erzeugungsart: String,
+    /// Whether the plant is registered in MaStR (Marktstammdatenregister).
+    ///
+    /// Replaces the old `notes.contains("mastr_not_registered")` hack.
+    /// - `false` + EEG 2023  → Pflichtzahlung €10/kW/month (§52 Abs. 1 Nr. 11 EEG 2023)
+    /// - `false` + EEG ≤2021 → `sanktion = Some(VerguetungAufNull)` (Vergütung = 0, old §47/§52 via §100)
+    pub mastr_registriert: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -372,75 +439,93 @@ pub struct SettleResult {
 /// |---|---|---|
 /// | `VERGUETUNG` | `kwh × verguetungssatz_ct / 100` | §21 EEG 2023 |
 /// | `MIETERSTROM` | VERGUETUNG + `kwh × mieter_zuschlag_ct / 100` | §38a EEG 2023 |
-/// | `DIREKTVERMARKTUNG` | `max(0, aw_ct − epex) × kwh / 100` | §20 EEG 2023 |
+/// | `DIREKTVERMARKTUNG` | `max(0, aw_ct − epex) × kwh / 100 + managementpraemie_ct × kwh / 100` | §20 EEG 2023 |
 /// | `AUSSCHREIBUNG` | same as DIREKTVERMARKTUNG (tendering AW) | §§22a,28 EEG 2023 |
 /// | `POST_EEG_SPOT` | `kwh × epex_avg_ct / 100` | post-Förderung |
 /// | `EIGENVERBRAUCH` | EUR 0 | self-consumption |
-/// | `KWKG_ZUSCHLAG` | `kwh × verguetungssatz_ct / 100` (on top of market price) | §7 KWKG 2023 |
+/// | `KWKG_ZUSCHLAG` | `kwh × verguetungssatz_ct / 100` (on top of market price, capped by hour limit) | §7 KWKG 2023 |
 /// | `FLEXIBILITAET` | VERGUETUNG + `kwh × flex_praemie_ct / 100` | §50 EEG 2023 |
+///
+/// ## KWKG hour-limit enforcement (§8 KWKG 2023)
+///
+/// Plants >2 MW have a maximum full-load-hour Förderdauer (typically 30,000 h).
+/// When `kwk_strom_kwh_gesamt + einspeisemenge_kwh > kwk_max_kwh`:
+/// - Settlement is prorated to the remaining eligible kWh.
+/// - Plant status transitions to `foerderung_beendet` (CE emitted by caller).
+/// - `kwk_strom_kwh_gesamt` is updated atomically with the settlement.
+///
+/// ## §20 Abs. 3 EEG 2023 Managementprämie
+///
+/// Direktvermarktung plants receive a flat Managementprämie (statutory 0.4 ct/kWh,
+/// reduced to 0.2 ct/kWh for plants >100 MW).  The Managementprämie is paid by the
+/// Run the settlement calculation and persist the result.
+///
+/// Delegates all formula logic to the [`eeg_billing`] crate.
+/// See [`eeg_billing::calculate_settlement`] for the formula table and
+/// KWKG hour-limit enforcement details.
 pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result<SettleResult> {
-    let (settlement_eur, status) = match (input.einspeisemenge_kwh, input.settlement_model.as_str())
-    {
-        (None, _) => (None, "no_data"),
-        (Some(_), "EIGENVERBRAUCH") => (Some(EuroAmount::ZERO.into_decimal()), "calculated"),
-
-        (Some(kwh), "VERGUETUNG") => {
-            let base = kwh * input.verguetungssatz_ct / Decimal::from(100);
-            (Some(to_settlement_eur(base)?), "calculated")
-        }
-
-        (Some(kwh), "MIETERSTROM") => {
-            // §38a EEG: base Einspeisevergütung + Mieterstrom-Zuschlag
-            let base = kwh * input.verguetungssatz_ct / Decimal::from(100);
-            let zuschlag = input
-                .mieter_zuschlag_ct
-                .map(|z| kwh * z / Decimal::from(100))
-                .unwrap_or(Decimal::ZERO);
-            (Some(to_settlement_eur(base + zuschlag)?), "calculated")
-        }
-
-        (Some(kwh), "DIREKTVERMARKTUNG") | (Some(kwh), "AUSSCHREIBUNG") => {
-            // Gleitende Marktprämie: max(0, AW − EPEX_monatsmittel)
-            match (input.direktverm_aw_ct, input.epex_avg_ct_kwh) {
-                (Some(aw), Some(epex)) => {
-                    let praemie_ct = (aw - epex).max(Decimal::ZERO);
-                    (
-                        Some(to_settlement_eur(kwh * praemie_ct / Decimal::from(100))?),
-                        "calculated",
-                    )
-                }
-                _ => (None, "price_missing"),
-            }
-        }
-
-        (Some(kwh), "POST_EEG_SPOT") => match input.epex_avg_ct_kwh {
-            Some(epex) => (
-                Some(to_settlement_eur(kwh * epex / Decimal::from(100))?),
-                "calculated",
-            ),
-            None => (None, "price_missing"),
-        },
-
-        (Some(kwh), "KWKG_ZUSCHLAG") => {
-            // KWK-Zuschlag is paid on top of the electricity market price.
-            // The total payment = market_price + KWK-Zuschlag.
-            // We record only the KWK-Zuschlag component here (market revenue tracked separately).
-            let kwk_eur = to_settlement_eur(kwh * input.verguetungssatz_ct / Decimal::from(100))?;
-            (Some(kwk_eur), "calculated")
-        }
-
-        (Some(kwh), "FLEXIBILITAET") => {
-            // §50 EEG: base Einspeisevergütung + Flexibilitätsprämie
-            let base = kwh * input.verguetungssatz_ct / Decimal::from(100);
-            let flex = input
-                .flex_praemie_ct_kwh
-                .map(|f| kwh * f / Decimal::from(100))
-                .unwrap_or(Decimal::ZERO);
-            (Some(to_settlement_eur(base + flex)?), "calculated")
-        }
-
-        _ => (None, "error"),
+    use eeg_billing::{
+        SettleInput as EegInput, SettlementModel, SettlementStatus, calculate_settlement,
     };
+
+    // Map DB string → eeg-billing enum variant.
+    let model = match input.settlement_model.as_str() {
+        "VERGUETUNG" => SettlementModel::Verguetung,
+        "MIETERSTROM" => SettlementModel::Mieterstrom,
+        "DIREKTVERMARKTUNG" => SettlementModel::Direktvermarktung,
+        "AUSSCHREIBUNG" => SettlementModel::Ausschreibung,
+        "POST_EEG_SPOT" => SettlementModel::PostEegSpot,
+        "EIGENVERBRAUCH" => SettlementModel::Eigenverbrauch,
+        "KWKG_ZUSCHLAG" => SettlementModel::KwkgZuschlag,
+        "FLEXIBILITAET" => SettlementModel::Flexibilitaet,
+        "FLEXIBILITAET_ZUSCHLAG" => SettlementModel::FlexibilitaetZuschlag,
+        other => anyhow::bail!("unknown settlement_model: {other}"),
+    };
+
+    let output = calculate_settlement(&EegInput {
+        model,
+        einspeisemenge_kwh: input.einspeisemenge_kwh,
+        epex_avg_ct_kwh: input.epex_avg_ct_kwh,
+        verguetungssatz_ct: input.verguetungssatz_ct,
+        direktverm_aw_ct: input.direktverm_aw_ct,
+        mieter_zuschlag_ct: input.mieter_zuschlag_ct,
+        flex_praemie_ct_kwh: input.flex_praemie_ct_kwh,
+        managementpraemie_ct: input.managementpraemie_ct,
+        kwk_strom_kwh_gesamt: input.kwk_strom_kwh_gesamt,
+        kwk_max_kwh: input.kwk_max_kwh,
+        // Derive sanktion from mastr_registriert using EegGesetz version logic.
+        // EEG ≤2021: Vergütung = 0 (Abs. 1 VerguetungAufNull); EEG 2023: pflichtverstoss.
+        sanktion: if !input.mastr_registriert
+            && eeg_billing::EegGesetz::from_db_year(input.eeg_gesetz)
+                .unwrap_or(eeg_billing::EegGesetz::Eeg2023)
+                .mastr_nichtregistrierung_suspendiert_verguetung()
+        {
+            Some(eeg_billing::SanktionAlt::VerguetungAufNull)
+        } else {
+            None
+        },
+        kwh_during_negative_epex: input.kwh_during_negative_epex,
+        inbetriebnahme: input.inbetriebnahme,
+        leistung_kwp: input.leistung_kwp,
+        foerderendedatum: input.foerderendedatum,
+        billing_date: input.billing_date,
+        capacity_blocks: vec![],
+        messkonzept: None,
+        pflichtverstoss: None,
+        eeg_gesetz: eeg_billing::EegGesetz::from_db_year(input.eeg_gesetz)
+            .unwrap_or(eeg_billing::EegGesetz::Eeg2023),
+        erzeugungsart: eeg_billing::ErzeugungsArt::from_db_str(&input.erzeugungsart).ok(),
+    });
+
+    let status = match output.status {
+        SettlementStatus::Calculated => "calculated",
+        SettlementStatus::NoData => "no_data",
+        SettlementStatus::PriceMissing => "price_missing",
+        SettlementStatus::FoerderungBeendet => "foerderung_beendet",
+        SettlementStatus::Sanctioned => "sanctioned",
+    };
+    let settlement_eur = output.settlement_eur;
+    let effective_kwh = output.eligible_kwh;
 
     let id = Uuid::new_v4();
     sqlx::query(
@@ -461,12 +546,37 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
     .bind(input.billing_year)
     .bind(input.billing_month)
     .bind(&input.settlement_model)
-    .bind(input.einspeisemenge_kwh)
+    .bind(effective_kwh.or(input.einspeisemenge_kwh))
     .bind(settlement_eur)
     .bind(status)
     .execute(pool)
     .await
     .context("persist settlement")?;
+
+    // ── KWKG: update accumulated kWh + auto-expire when limit reached ────────
+    if input.settlement_model == "KWKG_ZUSCHLAG" {
+        if let Some(kwh_this_period) = effective_kwh.filter(|&k| k > Decimal::ZERO) {
+            let new_status = if status == "foerderung_beendet" {
+                "foerderung_beendet"
+            } else {
+                "aktiv"
+            };
+            sqlx::query(
+                r"UPDATE eeg_anlagen
+                  SET kwk_strom_kwh_gesamt = COALESCE(kwk_strom_kwh_gesamt, 0) + $3,
+                      status = $4,
+                      updated_at = now()
+                  WHERE tr_id = $1 AND tenant = $2",
+            )
+            .bind(&input.tr_id)
+            .bind(&input.tenant)
+            .bind(kwh_this_period)
+            .bind(new_status)
+            .execute(pool)
+            .await
+            .context("update kwk_strom_kwh_gesamt")?;
+        }
+    }
 
     Ok(SettleResult {
         id,
@@ -474,10 +584,119 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
         billing_year: input.billing_year,
         billing_month: input.billing_month,
         settlement_model: input.settlement_model,
-        einspeisemenge_kwh: input.einspeisemenge_kwh,
+        einspeisemenge_kwh: effective_kwh.or(input.einspeisemenge_kwh),
         settlement_eur,
         status: status.to_owned(),
     })
+}
+
+/// List all active plants that have NOT been settled for `(year, month)` yet.
+///
+/// Used by the batch settlement endpoint and the monthly auto-settle worker.
+pub async fn list_unsettled(
+    pool: &PgPool,
+    tenant: &str,
+    year: i16,
+    month: i16,
+) -> anyhow::Result<Vec<AnlageRow>> {
+    sqlx::query_as::<_, AnlageRow>(
+        r"SELECT a.*
+          FROM eeg_anlagen a
+          WHERE a.tenant = $1
+            AND a.status = 'aktiv'
+            AND NOT EXISTS (
+                SELECT 1 FROM settlement_receipts s
+                WHERE s.tr_id = a.tr_id
+                  AND s.tenant = a.tenant
+                  AND s.billing_year = $2
+                  AND s.billing_month = $3
+            )
+          ORDER BY a.tr_id",
+    )
+    .bind(tenant)
+    .bind(year)
+    .bind(month)
+    .fetch_all(pool)
+    .await
+    .context("list_unsettled")
+}
+
+/// §24 EEG 2023 — Zusammenlegung: merge a child plant into a parent entity.
+///
+/// Sets `parent_tr_id` on the child plant and updates its status to `abgemeldet`.
+/// The parent plant continues as the active entity.
+///
+/// ## Legal basis
+///
+/// §24 EEG 2023: Multiple plants at the same Netzverknüpfungspunkt may be merged
+/// into a single entity ("Gesamtanlage") for the purposes of the tariff threshold
+/// (§ 21 EEG 2023 power ranges).  After Zusammenlegung:
+/// - The child plant's `status → abgemeldet` (historical record preserved).
+/// - The parent plant assumes the combined capacity and continues settlement.
+/// - `foerderendedatum` of the parent is NOT reset (unlike Repowering).
+///
+/// Returns `Ok(true)` if the child was found and updated, `Ok(false)` if not found.
+pub async fn zusammenlegen(
+    pool: &PgPool,
+    tenant: &str,
+    child_tr_id: &str,
+    parent_tr_id: &str,
+    combined_leistung_kwp: Option<Decimal>,
+) -> anyhow::Result<bool> {
+    // Verify both plants exist for this tenant.
+    let child = sqlx::query(
+        "SELECT tr_id, leistung_kwp, status FROM eeg_anlagen WHERE tr_id = $1 AND tenant = $2",
+    )
+    .bind(child_tr_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await
+    .context("fetch child plant for Zusammenlegung")?;
+
+    let Some(_child) = child else {
+        return Ok(false);
+    };
+
+    let parent_exists = sqlx::query(
+        "SELECT 1 FROM eeg_anlagen WHERE tr_id = $1 AND tenant = $2 AND status = 'aktiv'",
+    )
+    .bind(parent_tr_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await
+    .context("fetch parent plant for Zusammenlegung")?;
+
+    if parent_exists.is_none() {
+        anyhow::bail!("parent plant {} not found or not aktiv", parent_tr_id);
+    }
+
+    // Mark child as merged (preserves history, stops future settlements).
+    sqlx::query(
+        "UPDATE eeg_anlagen SET status = 'abgemeldet', parent_tr_id = $3, updated_at = now()
+         WHERE tr_id = $1 AND tenant = $2 AND status = 'aktiv'",
+    )
+    .bind(child_tr_id)
+    .bind(tenant)
+    .bind(parent_tr_id)
+    .execute(pool)
+    .await
+    .context("mark child abgemeldet for Zusammenlegung")?;
+
+    // Optionally update parent's combined capacity.
+    if let Some(combined_kwp) = combined_leistung_kwp {
+        sqlx::query(
+            "UPDATE eeg_anlagen SET leistung_kwp = $3, updated_at = now()
+             WHERE tr_id = $1 AND tenant = $2",
+        )
+        .bind(parent_tr_id)
+        .bind(tenant)
+        .bind(combined_kwp)
+        .execute(pool)
+        .await
+        .context("update parent leistung_kwp for Zusammenlegung")?;
+    }
+
+    Ok(true)
 }
 
 pub async fn list_settlement_receipts(

@@ -23,8 +23,7 @@
 //!
 //! Port: `:9380`
 
-
-use accountingd::{config, handlers, pg, sepa};
+use accountingd::{config, handlers};
 use anyhow::Context as _;
 use axum::{
     Extension, Router,
@@ -71,10 +70,19 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/accounts/:malo_id/abschlag",
             put(handlers::put_abschlag),
         )
+        .route(
+            "/api/v1/accounts/:malo_id/buchen",
+            post(handlers::post_buchen),
+        )
         // Vorauszahlung — BO4E typed advance-payment schedule (L12 — §40 Abs. 1 EnWG)
         .route(
             "/api/v1/accounts/:malo_id/vorauszahlung",
             get(handlers::get_vorauszahlung).put(handlers::put_vorauszahlung),
+        )
+        // Zahlungsinformation typed BO4E REST (IBAN + BIC + SEPA, rubo4e::current::Zahlungsinformation)
+        .route(
+            "/api/v1/accounts/:malo_id/zahlungsinformation",
+            get(handlers::get_zahlungsinformation).put(handlers::put_zahlungsinformation),
         )
         // ── Payment import ─────────────────────────────────────────────────────
         .route("/api/v1/payments/import", post(handlers::import_payments))
@@ -94,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/sepa/mandates", post(handlers::post_mandate))
         .route(
             "/api/v1/sepa/mandates/:mandate_id",
-            get(handlers::get_mandate),
+            get(handlers::get_mandate).delete(handlers::delete_mandate),
         )
         .route("/api/v1/sepa/run", post(handlers::run_sepa))
         .route(

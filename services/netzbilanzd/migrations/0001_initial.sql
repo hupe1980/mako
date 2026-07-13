@@ -98,3 +98,48 @@ COMMENT ON TABLE kostenblatt_records IS
     'Redispatch 2.0 Kostenblatt positions (BK6-20-061). '
     'One row per activation event per TechnischeRessource. '
     'Monthly submission to ÜNB due 15th of following month.';
+
+-- ── Fremdkosten (§22 MessZV external cost pass-through, BO4E typed) ───────────
+--
+-- External fees (ÜNB balancing charges, third-party MSB charges) that the NB
+-- passes through to the LF in INVOIC 31002.  Currently stored as free-text
+-- ZusatzAttribut; this table provides typed BO4E
+-- rubo4e::current::Fremdkosten + FremdkostenBlock + FremdkostenPosition storage.
+--
+-- One Fremdkosten record per invoice draft (linked via draft_id).
+-- On dispatch, the fremdkosten_json is merged into the Rechnung.zusatzAttribute
+-- so the LF receives the full breakdown per §22 MessZV.
+
+CREATE TABLE IF NOT EXISTS fremdkosten_records (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant          TEXT        NOT NULL,
+
+    -- Invoice draft this Fremdkosten record belongs to.
+    draft_id        UUID        NOT NULL REFERENCES invoice_drafts(id) ON DELETE CASCADE,
+
+    -- Full typed BO4E Fremdkosten JSON (rubo4e::current::Fremdkosten camelCase).
+    -- Structure: { _typ, summe: [FremdkostenBlock...] }
+    -- Each FremdkostenBlock has kostenblocksbezeichnung + kostenpositionen.
+    -- Each FremdkostenPosition has positionsbezeichnung, menge, einzelpreis, betrag.
+    fremdkosten_json JSONB      NOT NULL DEFAULT '{}',
+
+    -- Description summary for operator overview.
+    bezeichnung     TEXT,
+
+    -- Total Fremdkosten amount EUR (derived from summing FremdkostenPosition.betrag).
+    total_eur       NUMERIC(16, 5) NOT NULL DEFAULT 0,
+
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- One Fremdkosten record per draft (idempotent PUT replaces)
+    UNIQUE (tenant, draft_id)
+);
+
+CREATE INDEX IF NOT EXISTS fk_draft   ON fremdkosten_records (draft_id);
+CREATE INDEX IF NOT EXISTS fk_tenant  ON fremdkosten_records (tenant, created_at DESC);
+
+COMMENT ON TABLE fremdkosten_records IS
+    'Typed BO4E Fremdkosten / FremdkostenBlock / FremdkostenPosition for NB invoice drafts. '
+    'Stores external cost pass-through (ÜNB balancing, third-party MSB). '
+    'Merged into Rechnung.zusatzAttribute on dispatch per §22 MessZV audit trail requirement.';

@@ -1018,12 +1018,11 @@ pub async fn fetch_preisgarantie(
     vertrag_id: Uuid,
     tenant: &str,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let row = sqlx::query(
-        "SELECT preisgarantie FROM versorgungsvertraege WHERE id=$1 AND tenant=$2",
-    )
-    .bind(vertrag_id)
-    .bind(tenant)
-    .fetch_optional(pool)
-    .await?;
+    let row =
+        sqlx::query("SELECT preisgarantie FROM versorgungsvertraege WHERE id=$1 AND tenant=$2")
+            .bind(vertrag_id)
+            .bind(tenant)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.and_then(|r| r.try_get::<serde_json::Value, _>("preisgarantie").ok()))
 }

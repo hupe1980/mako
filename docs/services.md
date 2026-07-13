@@ -34,7 +34,7 @@ mako consists of **16 independently deployable services**, each built as a self-
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [invoicd](./invoicd) | `:8280` | LF | INVOIC plausibility-check — 6 checks (incl. ToU band routing via `zaehlzeitregister`), auto-settle/dispute, §22 MessZV receipts |
-| [netzbilanzd](./netzbilanzd) | `:8680` | NB | NNE/KA/MMM billing — generates INVOIC 31001/31002/31005, draft lifecycle |
+| [netzbilanzd](./netzbilanzd) | `:8680` | NB | NNE/KA/MMM/MSB/AWH billing — generates INVOIC 31001/31002/31005/31009/31011, full REMADV lifecycle, §14a Modul 2 ToU, §42a GGV, Redispatch 2.0 Kostenblatt, 13-tool MCP server |
 | [sperrd](./sperrd) | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch on field confirmation |
 
 ## Energy Data & Observability
@@ -42,7 +42,7 @@ mako consists of **16 independently deployable services**, each built as a self-
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [edmd](./edmd) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Hampel quality scoring, Ablesesteuerung (INSRPT auto-order), Iceberg/S3 OLAP |
-| [einsd](./einsd) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 8 settlement models |
+| [einsd](./einsd) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 9 settlement models |
 | [obsd](./obsd) | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, BNetzA audit export, Alertmanager |
 | [nis-syncd](./nis-syncd) | `:9680` | NB | NIS/GIS grid topology import — lifts Anmeldung STP ~80% → ≥95% (stateless) |
 

@@ -1,12 +1,14 @@
 # netzbilanzd.toml — demo configuration
 # NNE/KA/MMM billing daemon (NB role).
-# Generates INVOIC 31001/31002/31005, self-validates via invoic-checker,
-# and dispatches to makod for EDIFACT delivery to the LF.
+# Generates INVOIC 31001/31002/31005/31009/31011, self-validates via invoic-checker,
+# and dispatches to makod for EDIFACT delivery to the LF/MSB/LFG.
 # DO NOT use in production — auth disabled.
 
 # database_url is injected via NETZBILANZD_DATABASE_URL env var
 database_url    = "postgres://demo:demo-secret@postgres/netzbilanzd"
 port            = 8680
+# tenant identifies this NB in multi-tenant deployments (default = "default")
+tenant          = "default"
 marktd_url      = "http://marktd:8180"
 # marktd_api_key is injected via NETZBILANZD_MARKTD_API_KEY env var
 marktd_api_key  = ""
@@ -17,3 +19,20 @@ makod_api_key   = ""
 # [oidc]  — omit to disable auth (dev mode only)
 # [otel]
 # endpoint = "http://otel-collector:4317"
+
+# MCP server auth — Bearer token required when set
+# mcp_api_key = ""  # set via NETZBILANZD_MCP_API_KEY env var
+
+# ERP webhook — receives CloudEvents de.netzbilanz.invoic.drafted / dispatched / paid / disputed
+# Also triggers background worker alerts (dispatch_overdue, kostenblatt.deadline_approaching)
+# erp_webhook_url = "http://erp:9000/webhooks/mako"
+
+# ÜNB MP-ID for Strom MMM auto-fetch.
+# Set to your Regelzone's ÜNB so mmm_strom billing auto-fetches prices from marktd.
+# Without this, callers must supply mehr_preis_ct_per_kwh / minder_preis_ct_per_kwh explicitly.
+# Example: 50Hertz = "9907324000007", TenneT = "9907324000008"
+# unb_mp_id = ""
+
+# Background worker intervals (0 = disable)
+# dispatch_alert_interval_secs = 3600    # hourly undispatched-draft alert
+# kostenblatt_alert_interval_secs = 86400 # daily Kostenblatt 15th deadline check

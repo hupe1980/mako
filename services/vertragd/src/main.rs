@@ -52,8 +52,6 @@
 //! | `POST` | `/api/v1/vertraege/{id}/kuendigen` | Terminate contract (Lieferende) |
 //! | `POST` | `/api/v1/events` | Inbound CloudEvents from makod / processd |
 
-
-use vertragd::{config, events, handlers, mcp_server, pg};
 use anyhow::Context as _;
 use axum::{
     Extension, Router,
@@ -63,6 +61,7 @@ use mako_service::{health::health_routes, load_config};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::info;
+use vertragd::{config, handlers, mcp_server, pg};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -111,6 +110,12 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/kunden/:id/person",
             get(handlers::get_person).put(handlers::put_person),
+        )
+        // Zahlungsinformation typed BO4E REST (IBAN + BIC + SEPA)
+        .route(
+            "/api/v1/kunden/:id/zahlungsinformation",
+            get(handlers::get_zahlungsinformation_kunde)
+                .put(handlers::put_zahlungsinformation_kunde),
         )
         // Rahmenvertrag MaLo enumeration for Sammelrechnung (L2)
         .route(

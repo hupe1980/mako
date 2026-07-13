@@ -284,7 +284,22 @@ async fn dispatch_calculator(
         }
         // ── Gas ────────────────────────────────────────────────────────────────
         "GAS" => {
-            let meter = req.gas_meter.clone().unwrap_or_default();
+            let mut meter = req.gas_meter.clone().unwrap_or_default();
+            // Auto-fetch gasqualitaet from marktd when not supplied by the ERP.
+            // The measured brennwert_kwh_per_m3 from edmd already reflects the H2 blend;
+            // this annotation ensures §22 MessZV audit transparency on every Gas Rechnung.
+            if meter.gasqualitaet.is_none() {
+                if let Ok(Some(malo_fields)) = marktd.get_malo(malo_id).await {
+                    if malo_fields.gasqualitaet.is_some() {
+                        meter.gasqualitaet = malo_fields.gasqualitaet;
+                        tracing::debug!(
+                            malo_id,
+                            gasqualitaet = ?meter.gasqualitaet,
+                            "billingd GAS: injected gasqualitaet from marktd"
+                        );
+                    }
+                }
+            }
             calculate_gas(
                 malo_id,
                 &req.lf_mp_id,
@@ -1123,6 +1138,277 @@ pub async fn post_ggv_billing(
             "total_netto_eur": sammel_netto,
             "total_brutto_eur": sammel_brutto,
             "tenants": tenant_results,
+        })),
+    )
+        .into_response()
+}
+
+// ── VPP Aggregation Billing (B12 — RED III Article 17) ───────────────────────
+
+/// One confirmed dispatch event for VPP settlement billing.
+///
+/// Source: WiM Steuerungsauftrag IFTSTA confirmation (PID 21039) or equivalent
+/// VPP aggregator dispatch confirmation.
+#[derive(Debug, serde::Deserialize)]
+pub struct VppDispatchEvent {
+    /// UTC dispatch start — ISO-8601 e.g. `"2026-01-15T10:00:00Z"`.
+    pub start_utc: String,
+    /// UTC dispatch end — ISO-8601 e.g. `"2026-01-15T10:15:00Z"`.
+    pub end_utc: String,
+    /// Actual flexibility delivered in kWh (positive = load reduction; negative = load increase).
+    pub flexibility_kwh: rust_decimal::Decimal,
+    /// IFTSTA process UUID from makod (for §20 audit trail).
+    pub process_id: Option<String>,
+}
+
+/// Request body for `POST /api/v1/billing/vpp/{vpp_id}`.
+///
+/// `vpp_id` is the operator-assigned virtual power plant identifier
+/// (typically the SR-ID of the `SteuerbareRessource` portfolio in `marktd`).
+#[derive(Debug, serde::Deserialize)]
+pub struct VppBillingRequest {
+    /// LF/Aggregator MP-ID (invoice issuer).
+    pub lf_mp_id: String,
+    /// MaLo-ID of the VPP aggregation point (or primary resource).
+    pub malo_id: String,
+    /// Billing period start (`YYYY-MM-DD`).
+    pub period_from: String,
+    /// Billing period end (`YYYY-MM-DD`).
+    pub period_to: String,
+    /// Capacity price EUR/kWh (agreed in VPP contract or dynamic market price).
+    pub capacity_price_eur_per_kwh: rust_decimal::Decimal,
+    /// All confirmed dispatch events in the billing period.
+    pub dispatch_events: Vec<VppDispatchEvent>,
+    /// Optional invoice number prefix.
+    pub rechnungsnummer_prefix: Option<String>,
+    /// MwSt rate override (default from billingd config, typically 0.19).
+    pub mwst_rate_override: Option<rust_decimal::Decimal>,
+}
+
+/// `POST /api/v1/billing/vpp/{vpp_id}`
+///
+/// **B12 — VPP Aggregation Settlement (RED III Article 17).**
+///
+/// Generates a settlement `Rechnung` for a Virtual Power Plant aggregator.
+/// Each dispatch event becomes one `Rechnungsposition`.
+///
+/// ## Calculation
+///
+/// ```text
+/// DispatchPosition_eur = flexibility_kwh * capacity_price_eur_per_kwh
+/// Total_netto          = sum(DispatchPosition_eur)
+/// MwSt                 = Total_netto * mwst_rate
+/// Total_brutto         = Total_netto + MwSt
+/// ```
+///
+/// ## CloudEvent emitted
+///
+/// `de.vpp.settlement.berechnet` (type) — consumed by ERP/DSO settlement systems.
+///
+/// ## Regulatory basis
+///
+/// RED III Article 17 (§ 41b EnWG transposition, expected 2026):
+/// Aggregators must provide transparent settlement invoices per dispatch event.
+pub async fn post_vpp_billing(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<BillingdConfig>>,
+    Path(vpp_id): Path<String>,
+    Json(req): Json<VppBillingRequest>,
+) -> impl IntoResponse {
+    use rust_decimal::Decimal;
+
+    if req.dispatch_events.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "VPP billing requires at least one dispatch event",
+        )
+            .into_response();
+    }
+
+    let (period_from, period_to) = match parse_period(&req.period_from, &req.period_to) {
+        Ok(pd) => pd,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+
+    let mwst_rate = req
+        .mwst_rate_override
+        .unwrap_or_else(|| cfg.regulatory_rates().mwst_rate);
+
+    // ── Build Rechnungspositionen from dispatch events ─────────────────────────
+    let mut positions: Vec<serde_json::Value> = Vec::with_capacity(req.dispatch_events.len());
+    let mut total_netto = Decimal::ZERO;
+    let mut total_flex_kwh = Decimal::ZERO;
+
+    for (i, ev) in req.dispatch_events.iter().enumerate() {
+        if ev.flexibility_kwh <= Decimal::ZERO {
+            continue;
+        }
+        let position_netto = (ev.flexibility_kwh * req.capacity_price_eur_per_kwh).round_dp(5);
+        total_netto += position_netto;
+        total_flex_kwh += ev.flexibility_kwh;
+
+        let mut pos = serde_json::json!({
+            "_typ": "RECHNUNGSPOSITION",
+            "positionsnummer": i + 1,
+            "positionstext": format!("VPP Dispatch {} – {}", ev.start_utc, ev.end_utc),
+            "positionsMenge": {
+                "_typ": "MENGE",
+                "wert": ev.flexibility_kwh.to_string(),
+                "einheit": "KWH"
+            },
+            "einzelpreis": {
+                "_typ": "PREIS",
+                "wert": req.capacity_price_eur_per_kwh.to_string(),
+                "einheit": "EUR"
+            },
+            "gesamtpreis": {
+                "_typ": "BETRAG",
+                "wert": position_netto.to_string(),
+                "waehrung": "EUR"
+            },
+            "positionstyp": "vpp_dispatch",
+            "zeitraum": {
+                "_typ": "ZEITRAUM",
+                "startdatum": ev.start_utc,
+                "enddatum": ev.end_utc
+            }
+        });
+        if let (Some(pid), Some(pos_obj)) = (ev.process_id.as_deref(), pos.as_object_mut()) {
+            pos_obj.insert(
+                "referenz".to_owned(),
+                serde_json::json!({ "process_id": pid }),
+            );
+        }
+        positions.push(pos);
+    }
+
+    if total_netto <= Decimal::ZERO {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "all dispatch events have zero or negative flexibility — no billing generated",
+        )
+            .into_response();
+    }
+
+    let mwst_eur = (total_netto * mwst_rate).round_dp(5);
+    let total_brutto = total_netto + mwst_eur;
+
+    let rechnungsnummer = req
+        .rechnungsnummer_prefix
+        .as_deref()
+        .map(|p| format!("{p}-{period_from}"))
+        .unwrap_or_else(|| format!("VPP-{vpp_id}-{period_from}"));
+
+    let rechnung_json = serde_json::json!({
+        "_typ": "RECHNUNG",
+        "rechnungsnummer": rechnungsnummer,
+        "rechnungsart": "ABSCHLAGSRECHNUNG",
+        "rechnungsdatum": time::OffsetDateTime::now_utc().date().to_string(),
+        "marktlokationsId": req.malo_id,
+        "herausgeber": { "_typ": "MARKTTEILNEHMER", "marktpartnercode": req.lf_mp_id },
+        "rechnungsperiode": {
+            "_typ": "ZEITRAUM",
+            "startdatum": period_from.to_string(),
+            "enddatum": period_to.to_string()
+        },
+        "rechnungspositionen": positions,
+        "steuern": [{
+            "_typ": "STEUERBETRAG",
+            "steuerkennzeichen": "UST_19",
+            "steuerbetrag": { "_typ": "BETRAG", "wert": mwst_eur.to_string(), "waehrung": "EUR" },
+            "steuerGrundlage": { "_typ": "BETRAG", "wert": total_netto.to_string(), "waehrung": "EUR" }
+        }],
+        "gesamtnetto": { "_typ": "BETRAG", "wert": total_netto.to_string(), "waehrung": "EUR" },
+        "gesamtbrutto": { "_typ": "BETRAG", "wert": total_brutto.to_string(), "waehrung": "EUR" },
+        "zusatzAttribute": [{
+            "_typ": "ZUSATZ_ATTRIBUT",
+            "name": "vpp_id",
+            "wert": vpp_id
+        }, {
+            "_typ": "ZUSATZ_ATTRIBUT",
+            "name": "total_flexibility_kwh",
+            "wert": total_flex_kwh.to_string()
+        }, {
+            "_typ": "ZUSATZ_ATTRIBUT",
+            "name": "dispatch_event_count",
+            "wert": req.dispatch_events.len().to_string()
+        }, {
+            "_typ": "ZUSATZ_ATTRIBUT",
+            "name": "regulatory_basis",
+            "wert": "RED III Article 17"
+        }]
+    });
+
+    // Persist billing record.
+    let record_id = match insert_billing_record(
+        &pool,
+        &req.malo_id,
+        &req.lf_mp_id,
+        &format!("VPP_{vpp_id}"),
+        "VPP",
+        period_from,
+        period_to,
+        &rechnung_json,
+        total_netto,
+        total_brutto,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    // Emit de.vpp.settlement.berechnet CloudEvent.
+    if let Some(ref webhook_url) = cfg.erp_webhook_url {
+        let ce_id = uuid::Uuid::new_v4();
+        let ce = serde_json::json!({
+            "specversion": "1.0",
+            "type": "de.vpp.settlement.berechnet",
+            "source": format!("urn:billingd:vpp:{vpp_id}"),
+            "id": ce_id.to_string(),
+            "time": time::OffsetDateTime::now_utc().to_string(),
+            "subject": vpp_id,
+            "datacontenttype": "application/json",
+            "data": {
+                "record_id": record_id.to_string(),
+                "vpp_id": vpp_id,
+                "malo_id": req.malo_id,
+                "lf_mp_id": req.lf_mp_id,
+                "total_flexibility_kwh": total_flex_kwh.to_string(),
+                "total_netto_eur": total_netto.to_string(),
+                "total_brutto_eur": total_brutto.to_string(),
+                "dispatch_count": req.dispatch_events.len(),
+                "rechnung": rechnung_json,
+            }
+        });
+        let client = reqwest::Client::new();
+        if let Ok(resp) = client
+            .post(webhook_url)
+            .header("Content-Type", "application/cloudevents+json")
+            .json(&ce)
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                let _ = mark_dispatched(&pool, record_id, ce_id).await;
+            }
+        }
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "record_id": record_id,
+            "vpp_id": vpp_id,
+            "malo_id": req.malo_id,
+            "period_from": period_from.to_string(),
+            "period_to": period_to.to_string(),
+            "dispatch_count": req.dispatch_events.len(),
+            "total_flexibility_kwh": total_flex_kwh.to_string(),
+            "total_netto_eur": total_netto.to_string(),
+            "total_brutto_eur": total_brutto.to_string(),
+            "mwst_eur": mwst_eur.to_string(),
+            "rechnung": rechnung_json,
         })),
     )
         .into_response()

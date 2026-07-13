@@ -1542,6 +1542,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             commands: Arc::clone(&commands_state),
             malo_cache: malo_cache.clone(),
             partner_store: Arc::new(store.as_partner_store()),
+            process_store: Arc::new(store.clone()),
+            deadline_store: store.as_deadline_store(),
         });
         let invoic_api_state = Arc::new(invoic_api::InvoicApiState {
             store: Arc::new(store.clone()),

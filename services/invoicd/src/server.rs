@@ -53,6 +53,15 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/receipts/{id}/confirm-payment",
             post(confirm_payment),
         )
+        .route(
+            "/api/v1/receipts/{id}/dispatch-remadv",
+            post(dispatch_remadv),
+        )
+        .route(
+            "/api/v1/receipts/{id}/resolve-dispute",
+            post(resolve_dispute_endpoint),
+        )
+        .route("/api/v1/receipts/{id}/rechnung", get(get_rechnung))
         .route("/api/v1/disputes", get(list_disputes))
         .route("/api/v1/overdue-remadv", get(list_overdue_remadv))
         .route("/api/v1/zahlungsstatus/{malo_id}", get(get_zahlungsstatus))
@@ -111,6 +120,32 @@ async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
     out.push_str("# HELP invoicd_overdue_remadv_total Receipts approaching pay_by without REMADV dispatch.\n");
     out.push_str("# TYPE invoicd_overdue_remadv_total gauge\n");
     out.push_str(&format!("invoicd_overdue_remadv_total {overdue}\n"));
+
+    // Per-PID breakdowns — useful for detecting volume spikes on specific billing PIDs.
+    if let Some(pool) = state.pool.as_ref() {
+        let pid_rows: Vec<(i16, String, i64)> = sqlx::query_as(
+            r"SELECT pid, outcome, COUNT(*) AS cnt
+              FROM invoic_receipts
+              WHERE tenant = $1
+              GROUP BY pid, outcome",
+        )
+        .bind(&state.tenant)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        if !pid_rows.is_empty() {
+            out.push_str(
+                "# HELP invoicd_receipts_by_pid_outcome Receipts broken down by PID and outcome.\n",
+            );
+            out.push_str("# TYPE invoicd_receipts_by_pid_outcome gauge\n");
+            for (pid, outcome, cnt) in &pid_rows {
+                out.push_str(&format!(
+                    "invoicd_receipts_by_pid_outcome{{pid=\"{pid}\",outcome=\"{outcome}\"}} {cnt}\n"
+                ));
+            }
+        }
+    }
 
     (
         axum::http::StatusCode::OK,
@@ -405,6 +440,246 @@ async fn confirm_payment(
     }
 }
 
+/// `POST /api/v1/receipts/{id}/dispatch-remadv`
+///
+/// Manually trigger a REMADV dispatch for a receipt whose auto-dispatch failed
+/// or was never attempted.  Useful when `dispatched_at IS NULL` and the
+/// Zahlungsziel is approaching.
+///
+/// The command dispatched depends on the current `outcome`:
+/// - `Ok` / `Warn` / `AcceptedPartial` → REMADV 33001 (Zahlungsavis / acceptance)
+/// - `Dispute` → REMADV 33002 (dispute re-dispatch)
+///
+/// Returns `409 Conflict` when the receipt was already dispatched.
+async fn dispatch_remadv(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-receipt", &state.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let Some(ref pool) = state.pool else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "database not configured" })),
+        )
+            .into_response();
+    };
+
+    // Fetch the receipt.
+    let row = sqlx::query(
+        r"SELECT process_id, pid, outcome, dispatched_at
+          FROM invoic_receipts
+          WHERE id = $1 AND tenant = $2",
+    )
+    .bind(id)
+    .bind(&state.tenant)
+    .fetch_optional(pool)
+    .await;
+
+    let row = match row {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "receipt not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    use sqlx::Row;
+    let already_dispatched = row
+        .try_get::<Option<time::OffsetDateTime>, _>("dispatched_at")
+        .ok()
+        .flatten()
+        .is_some();
+    if already_dispatched {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "receipt already dispatched" })),
+        )
+            .into_response();
+    }
+
+    let process_id: uuid::Uuid = match row.try_get("process_id") {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    let pid: i16 = row.try_get("pid").unwrap_or(0);
+    let outcome: String = row.try_get("outcome").unwrap_or_default();
+
+    let (cmd_name, is_dispute) = match outcome.as_str() {
+        "Dispute" => ("gpke.abrechnung.ablehnen", true),
+        _ => ("gpke.abrechnung.annehmen", false),
+    };
+
+    let idem = uuid::Uuid::new_v5(&process_id, b"manual-dispatch").to_string();
+    let payload = if is_dispute {
+        serde_json::json!({ "invoice_ref": process_id.to_string(), "ablehnungsgrund": "Manuell ausgelöst (Operator)" })
+    } else {
+        serde_json::json!({ "invoice_ref": process_id.to_string() })
+    };
+
+    let cmd = mako_markt::makod_client::ForwardCommand {
+        marktrolle: None,
+        command: cmd_name.to_owned(),
+        malo_id: None,
+        melo_id: None,
+        payload,
+    };
+
+    match state.makod.post_command(&idem, &cmd).await {
+        Ok(_) => {
+            let _ =
+                pg::receipts::mark_dispatched(pool, process_id, time::OffsetDateTime::now_utc())
+                    .await;
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "dispatched": true,
+                    "process_id": process_id,
+                    "pid": pid,
+                    "command": cmd_name,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": format!("makod dispatch failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/v1/receipts/{id}/resolve-dispute`
+///
+/// Record the resolution of a disputed receipt after operator negotiation (e.g.
+/// via phone, COMDIS, or corrected re-invoice).  Transitions `outcome` from
+/// `'Dispute'` to `'Resolved'` and stores an optional operator note.
+///
+/// Request body (JSON):
+/// ```json
+/// { "note": "NB confirmed pricing error; corrected invoice received PID 31001 on 2026-08-01" }
+/// ```
+///
+/// Returns `404` if not found or not currently in `'Dispute'` state.
+#[derive(serde::Deserialize)]
+struct ResolveDisputeBody {
+    note: Option<String>,
+}
+
+async fn resolve_dispute_endpoint(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(id): Path<uuid::Uuid>,
+    body: Option<Json<ResolveDisputeBody>>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-receipt", &state.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let Some(ref pool) = state.pool else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "database not configured" })),
+        )
+            .into_response();
+    };
+
+    let note = body.as_ref().and_then(|b| b.note.as_deref());
+    match pg::receipts::resolve_dispute(pool, id, &state.tenant, note).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "receipt not found or not in Dispute state" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/v1/receipts/{id}/rechnung`
+///
+/// Retrieve the full BO4E `Rechnung` JSON stored for a receipt.  Useful for
+/// debugging disputes: the full invoice as received is returned without
+/// modification, alongside the `bo4e_version` it was stored under.
+///
+/// Restricted to callers with the `read-receipt` Cedar action.
+async fn get_rechnung(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-receipt", &state.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let Some(ref pool) = state.pool else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "database not configured" })),
+        )
+            .into_response();
+    };
+
+    let row = sqlx::query(
+        r"SELECT rechnung, bo4e_version, pid FROM invoic_receipts WHERE id = $1 AND tenant = $2",
+    )
+    .bind(id)
+    .bind(&state.tenant)
+    .fetch_optional(pool)
+    .await;
+
+    match row {
+        Ok(Some(r)) => {
+            use sqlx::Row;
+            let rechnung: serde_json::Value = r.try_get("rechnung").unwrap_or_default();
+            let bo4e_version: String = r.try_get("bo4e_version").unwrap_or_default();
+            let pid: i16 = r.try_get("pid").unwrap_or(0);
+            Json(serde_json::json!({ "rechnung": rechnung, "bo4e_version": bo4e_version, "pid": pid })).into_response()
+        }
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 /// `GET /api/v1/zahlungsstatus/{malo_id}`
 ///
 /// Returns the payment status for all INVOIC receipts linked to a MaLo,
@@ -415,10 +690,7 @@ async fn confirm_payment(
 /// - `overdue`  — REMADV dispatched, `pay_by` has passed, `payment_confirmed_at IS NULL`.
 /// - `settled`  — `payment_confirmed_at IS NOT NULL`.
 ///
-/// This closes the §22 MessZV durable payment audit trail gap. Use this endpoint
-/// to feed a dunning workflow or ERP AR reconciliation.
-///
-/// Query parameters: `from=RFC3339`, `to=RFC3339` (filter by `received_at`).
+/// Uses the indexed `malo_id` column (migration 0002) — no JSONB scan.
 async fn get_zahlungsstatus(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -441,17 +713,13 @@ async fn get_zahlungsstatus(
             .into_response();
     };
 
-    // Determine zahlungsstatus from DB columns.
-    // We join on sender_mp_id being the NB's MP-ID for the given malo_id.
-    // Since invoic_receipts doesn't carry malo_id directly, we look it up
-    // via the rechnung->marktlokationsId field in the JSONB payload.
+    // Use the indexed `malo_id` column (migration 0002) — avoids full JSONB scan.
+    // Includes all outcome states so disputes and resolved receipts are visible.
     let rows = sqlx::query(
         r"SELECT id, process_id, pid, sender_mp_id, outcome, pay_by,
                  dispatched_at, payment_confirmed_at, received_at
           FROM invoic_receipts
-          WHERE tenant = $1
-            AND outcome IN ('Ok', 'AcceptedPartial', 'Warn', 'Dispatched', 'Paid')
-            AND rechnung->'marktlokationsId' = to_jsonb($2::text)
+          WHERE tenant = $1 AND malo_id = $2
           ORDER BY received_at DESC
           LIMIT 100",
     )
@@ -807,6 +1075,7 @@ async fn post_selbstausstellen(
         direction: "Outbound".to_owned(),
         sender_mp_id: state.tenant.clone(),
         receiver_gln: body.nb_mp_id.clone(),
+        malo_id: Some(malo_id.clone()),
         rechnung: rechnung_json, // real BO4E Rechnung (not a placeholder)
         bo4e_version: "v202607.0.0".to_owned(),
         outcome: "Dispatched".to_owned(),

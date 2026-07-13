@@ -83,6 +83,7 @@ impl Config {
             total_tolerance_ppm: (self.check.total_tolerance * 1_000_000.0).round() as u32,
             tariff_tolerance_ppm: (self.check.tariff_tolerance * 1_000_000.0).round() as u32,
             require_tariff: self.check.require_tariff,
+            max_zahlungsziel_days: self.check.max_zahlungsziel_days,
         }
     }
 
@@ -224,6 +225,11 @@ pub struct CheckSectionConfig {
     /// `0.0` (default) means `Warn` is always auto-approved.
     #[serde(default)]
     pub auto_dispute_threshold_eur: f64,
+    /// Maximum Zahlungsziel (payment term) in days from `rechnungsdatum` to
+    /// `faelligkeitsdatum` (DTM+92). Set to `0` to disable this check.
+    /// Default: `30` days per §7 Allgemeine Festlegungen V6.1d.
+    #[serde(default = "default_max_zahlungsziel_days")]
+    pub max_zahlungsziel_days: u16,
 }
 
 fn default_arithmetic_tolerance() -> f64 {
@@ -235,6 +241,9 @@ fn default_total_tolerance() -> f64 {
 fn default_tariff_tolerance() -> f64 {
     0.03
 }
+fn default_max_zahlungsziel_days() -> u16 {
+    30
+}
 
 impl Default for CheckSectionConfig {
     fn default() -> Self {
@@ -244,6 +253,7 @@ impl Default for CheckSectionConfig {
             tariff_tolerance: default_tariff_tolerance(),
             require_tariff: false,
             auto_dispute_threshold_eur: 0.0,
+            max_zahlungsziel_days: default_max_zahlungsziel_days(),
         }
     }
 }

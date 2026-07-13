@@ -10,6 +10,7 @@
 //! | `GET` | `/api/v1/partners/{mp_id}` | `bool` (partner known) |
 //! | `GET` | `/api/v1/preisblaetter/{nb_mp_id}?date=…` | `Option<PreisblattNetznutzung>` |
 //! | `GET` | `/api/v1/preisblaetter-messung/{msb_mp_id}?date=…` | `Option<PreisblattMessung>` |
+//! | `GET` | `/api/v1/energiemix/{nb_mp_id}?year=…` | `Option<NbEnergiemixRecord>` |
 //! | `PUT` | `/api/v1/subscriptions/{id}` | `()` (idempotent registration) |
 //!
 //! # Resilience
@@ -974,6 +975,47 @@ impl MarktdClient {
             .map_err(|e| MarktdClientError::Http(e.to_string()))?;
         let body = resp
             .json::<serde_json::Value>()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+        Ok(Some(body))
+    }
+
+    /// `GET /api/v1/energiemix/{nb_mp_id}?year={year}`
+    ///
+    /// Returns the §42 EnWG annual grid-area `Energiemix` for the given NB.
+    ///
+    /// Used by:
+    /// - `billingd` to compute Reststrommix disclosure on customer bills
+    /// - `einsd` for EEG plant context and §42 Abs. 5 EnWG compliance
+    /// - `tarifbd` for Ökostrom/green-tariff labelling
+    ///
+    /// Returns `None` when no Energiemix has been published for this NB yet.
+    /// When `year` is `None`, returns the most recent available year.
+    #[allow(clippy::doc_markdown)]
+    pub async fn get_nb_energiemix(
+        &self,
+        nb_mp_id: &str,
+        year: Option<i16>,
+    ) -> Result<Option<crate::repository::NbEnergiemixRecord>, MarktdClientError> {
+        let mut url = format!("{}/api/v1/energiemix/{}", self.base_url, nb_mp_id);
+        if let Some(y) = year {
+            use std::fmt::Write as _;
+            let _ = write!(url, "?year={y}");
+        }
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        let body = resp
+            .json::<crate::repository::NbEnergiemixRecord>()
             .await
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
         Ok(Some(body))

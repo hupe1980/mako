@@ -30,6 +30,16 @@ Key responsibilities:
 - Accumulate **Mehr-/Mindermengensaldo** imbalance records per MaLo.
 - **Apache Iceberg V2 OLAP archival**: automatically export `meter_reads` older than the configured retention window (default 12 months) to Parquet files on S3/GCS/Azure in Iceberg V2 table format.
 
+The **domain calculation logic** is provided by the [`metering`](https://github.com/hupe1980/mako/tree/main/crates/metering) library crate (zero I/O, no async, 69 tests):
+
+| Function | §-basis | Used in |
+|---|---|---|
+| `gas_m3_to_kwh_hs(m3, hs, z)` | §24 GasGVV / DVGW G 685 | Gas direct push |
+| `aggregate(intervals, AggregationConfig)` | §2 Nr. 17 MessZV | `MeterBillingPeriod` |
+| `classify_messtyp(intervals, source)` | §3/§4 MessZV, §41a EnWG | iMSys classification |
+| `compute_imbalance(actual, contracted)` | §27 MessZV | Mehr-/Mindermengensaldo |
+| `score_intervals(intervals, config)` | — | Hampel quality scoring (A/B/C/F) |
+
 ```mermaid
 graph TB
     marktd["marktd :8180\nEventBus"]

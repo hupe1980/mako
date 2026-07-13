@@ -1748,3 +1748,77 @@ impl ZaehlzeitRepository for InMemoryZaehlzeitRepository {
         Ok(None)
     }
 }
+
+// ── InMemoryNbEnergiemixRepository ───────────────────────────────────────────
+
+use crate::repository::{NbEnergiemixRecord, NbEnergiemixRepository};
+
+/// In-memory `NbEnergiemixRepository` for unit tests.
+///
+/// Key: `(tenant, nb_mp_id, gueltig_fuer)`.
+#[derive(Clone, Default)]
+pub struct InMemoryNbEnergiemixRepository {
+    store: Arc<RwLock<HashMap<(String, String, i16), NbEnergiemixRecord>>>,
+}
+
+impl NbEnergiemixRepository for InMemoryNbEnergiemixRepository {
+    async fn upsert_energiemix(
+        &self,
+        tenant: &str,
+        nb_mp_id: &str,
+        gueltig_fuer: i16,
+        energiemix: serde_json::Value,
+        eeg_einspeisung_kwh: Option<i64>,
+        gesamtentnahme_kwh: Option<i64>,
+    ) -> Result<(), crate::error::MdmError> {
+        let mut store = self.store.write().await;
+        store.insert(
+            (tenant.to_owned(), nb_mp_id.to_owned(), gueltig_fuer),
+            NbEnergiemixRecord {
+                nb_mp_id: nb_mp_id.to_owned(),
+                gueltig_fuer,
+                energiemix,
+                eeg_einspeisung_kwh,
+                gesamtentnahme_kwh,
+                updated_at: Some(time::OffsetDateTime::now_utc()),
+            },
+        );
+        Ok(())
+    }
+
+    async fn find_energiemix(
+        &self,
+        tenant: &str,
+        nb_mp_id: &str,
+        year: Option<i16>,
+    ) -> Result<Option<NbEnergiemixRecord>, crate::error::MdmError> {
+        let store = self.store.read().await;
+        if let Some(y) = year {
+            return Ok(store
+                .get(&(tenant.to_owned(), nb_mp_id.to_owned(), y))
+                .cloned());
+        }
+        // Most recent year
+        let record = store
+            .iter()
+            .filter(|((t, n, _), _)| t == tenant && n == nb_mp_id)
+            .max_by_key(|((_, _, y), _)| *y)
+            .map(|(_, v)| v.clone());
+        Ok(record)
+    }
+
+    async fn list_energiemix_years(
+        &self,
+        tenant: &str,
+        nb_mp_id: &str,
+    ) -> Result<Vec<i16>, crate::error::MdmError> {
+        let store = self.store.read().await;
+        let mut years: Vec<i16> = store
+            .keys()
+            .filter(|(t, n, _)| t == tenant && n == nb_mp_id)
+            .map(|(_, _, y)| *y)
+            .collect();
+        years.sort_unstable_by(|a, b| b.cmp(a)); // desc
+        Ok(years)
+    }
+}

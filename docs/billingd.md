@@ -29,7 +29,42 @@ tariff), the output is always the same `Rechnung`. This means:
 
 - BNetzA §22 MessZV compliance: auditors can re-run the calculation from stored inputs
 - No hidden state: all inputs are either stored in `tarifbd`, `edmd`, or `marktd`
-- Testable: `billingd/src/calculator.rs` has unit tests with known in/out pairs
+- Testable: `energy-billing` has **44 unit tests** with known in/out pairs, all pure Rust
+
+---
+
+## Architecture: `energy-billing` crate
+
+The pure billing logic lives in the **`energy-billing`** crate (extracted from `billingd`).
+This follows the same pattern as `eeg-billing` for `einsd`:
+
+```
+billingd (HTTP service)
+    │   config · persistence · CloudEvents · XRechnung
+    │   HTTP endpoints · tarifbd/edmd/marktd clients
+    │
+    └── energy-billing (pure crate, crates.io)
+            │   TariffInput · MeterInput · GridInput · RegulatoryRates
+            │   BillingResult { positions, netto_eur, mwst_eur, brutto_eur, rechnung_json }
+            │
+            ├── calculate_strom()          §14a Modul 1/3, §41a EPEX, Zweitarif
+            ├── calculate_gas()            §10 GasGVV, §2 EnergieStG, BEHG CO₂
+            ├── calculate_waerme()         Fernwärme Grund/Leistungs/Arbeitspreis
+            ├── calculate_solar()          §42b Mieterstrom, §42a GGV
+            ├── calculate_eeg()            §21/§38 EEG Vergütung/Marktprämie, KWKG
+            ├── calculate_einspeisung()    Direktvermarktung Marktwert
+            ├── calculate_hems()           Platform fee + events
+            ├── calculate_emobility()      CPO/EMSP billing
+            ├── calculate_energiedienstleistung()
+            └── calculate_dynamic_strom()  §41a EPEX per-interval
+```
+
+`energy-billing` is **zero I/O, zero async** — every function is a pure `Result<BillingResult, _>`.
+The `BillingResult` carries `positions: Vec<billing::LineItem>` and `rechnung_json` (BO4E-compatible JSONB).
+Helper methods: `.assert_valid()`, `.position_total_by_tag()`, `.levy_total_eur()`.
+
+Statutory rates (Stromsteuer, Energiesteuer Gas, BEHG CO₂) are injected via `RegulatoryRates`
+from `billingd.toml` — zero hardcoded values in the crate.
 
 ---
 
@@ -173,6 +208,23 @@ MwSt
 
 Net result is typically negative brutto (the LF pays the producer).
 
+> **LF vs NB for §51 EEG Negativpreisregel**
+>
+> The mandatory §51 EEG implementation (suspension of Vergütung during negative-EPEX hours)
+> lives in `eeg-billing` / `einsd` — this governs the **NB paying the plant operator** under
+> the statutory EEG.
+>
+> The `EEG` category in `billingd` is for the **LF** (private contractual billing): Mieterstrom
+> §38a contracts and Direktvermarktung arrangements where the LF is the contracting party.
+> These are **private law contracts** not subject to statutory §51.
+>
+> For contracts that **voluntarily mirror §51** (e.g. "no credit during negative hours"):
+> supply `eeg_meter.kwh_during_negative_epex` to suspend Vergütung/Marktprämie for those kWh.
+> KWKG Zuschlag is always exempt (different law).
+>
+> `§12 Abs. 3 UStG` (0% MwSt for PV ≤30 kWp, from 01.01.2023): set
+> `mwst_rate_override: 0` in the product definition in `tarifbd`.
+
 ### EINSPEISUNG — Direktvermarktung Settlement
 
 ```
@@ -255,6 +307,20 @@ When the product in `tarifbd` has `dynamic_epex: true`, `billingd` automatically
 The `tariff.arbeitspreis_ct_per_kwh` field is ignored when `dynamic_epex: true` — the EPEX
 spot price from `tarifbd` is the actual price applied per hour.
 
+**Price floor (`dynamic_epex_floor_ct_kwh`):** Set this field in the tarifbd product to cap
+how low the EPEX price can go. Common configurations:
+- `null` (default) — full pass-through; negative EPEX → customer receives a credit
+- `0` — zero floor; negative EPEX bills at 0 ct/kWh (no credit, no charge)
+- `5` — minimum 5 ct/kWh regardless of spot price
+
+```json
+{
+  "category": "STROM",
+  "dynamic_epex": true,
+  "dynamic_epex_floor_ct_kwh": "0"
+}
+```
+
 **Fallback**: when Lastgang data is unavailable, `billingd` falls back to `arbeitsmenge_kwh`
 from `edmd`'s `billing-period` endpoint with the static `arbeitspreis_ct_per_kwh`.
 
@@ -291,16 +357,66 @@ Re-running the same billing request updates the existing record — safe to retr
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/v1/billing/{malo_id}/calculate` | Calculate, persist, emit CloudEvent |
+| `POST` | `/api/v1/billing/{malo_id}/preview` | Dry-run calculation (no persist, no CloudEvent) |
 | `GET` | `/api/v1/billing` | List records (`?malo_id=&lf_mp_id=&outcome=`) |
 | `GET` | `/api/v1/billing/{id}` | Fetch single record with full `Rechnung` JSONB |
 | `GET` | `/api/v1/billing/{id}/xrechnung` | XRechnung 3.0 / ZUGFeRD 2.3 CII XML |
-| `POST` | `/api/v1/billing/{malo_id}/preview` | Dry-run calculation (no persist, no CloudEvent) |
+| `GET` | `/api/v1/billing/{id}/ubl` | PEPPOL BIS Billing 3.0 UBL 2.1 (EN16931) |
+| `POST` | `/api/v1/billing/{id}/correction` | Korrekturrechnung / Stornorechnung (§22 MessZV) |
+| `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G submission (§27 EGovG) |
 | `GET` | `/health` | Liveness |
 | `GET` | `/health/ready` | Readiness |
+| `POST\|GET` | `/mcp` | MCP Streamable HTTP (LLM tooling) |
 
 ---
 
-## Energiedienstleistung billing
+## MCP server
+
+`billingd` ships a built-in MCP server at `/mcp` (Streamable HTTP, 2025-11-05). Ten tools
+and six prompts are available to LLM agents:
+
+| Tool | Description |
+|---|---|
+| `list_billing_records` | List records for a MaLo — summary without full `Rechnung` |
+| `get_billing_record` | Full BO4E `Rechnung` JSONB for a specific record UUID |
+| `preview_billing` | Dry-run preview (calls `/preview` internally — no side effects) |
+| `calculate_billing` | Trigger a real billing run (calls `/calculate`) |
+| `get_xrechnung` | Fetch XRechnung 3.0 / ZUGFeRD 2.3 CII XML for B2G submission |
+| `check_billing_anomaly` | Rolling 3-month deviation check — flags invoices outside threshold |
+| `list_vpp_settlements` | List VPP aggregation settlement records |
+| `list_corrections` | List Korrekturrechnung / Stornorechnung records (§22 MessZV) |
+| `list_product_categories` | Describe all 12 categories + required `TariffInput` fields |
+| `get_billing_summary` | Aggregate stats per MaLo: total billed, avg monthly, by category |
+
+| Prompt | Description |
+|---|---|
+| `order-to-cash` | Full O2C: GPKE Lieferbeginn → Jahresabschluss |
+| `preview-invoice` | Step-by-step: preview before committing a billing run |
+| `check-dynamic-tariff` | Verify §41a EPEX tariff configuration |
+| `14a-steuerungsrabatt` | Configure §14a Modul 1/3 for Wärmepumpe / Wallbox |
+| `eeg-billing` | Set up EEG / EINSPEISUNG billing with double-booking guard |
+| `gas-billing` | Configure Brennwertkorrektur, BEHG CO₂, H2-blend, L-Gas |
+
+The `tariff-optimization-agent` in `agentd` calls `list_billing_records` and
+`get_billing_summary` to detect customers on sub-optimal tariffs and automatically suggests
+§41a dynamic tariff switches for iMSys customers.
+
+---
+
+## Korrekturrechnung (§22 MessZV)
+
+`POST /api/v1/billing/{id}/correction` creates a Korrekturrechnung or Stornorechnung:
+
+```json
+{ "reason": "Falsche Zählerstandsaufnahme Q2 2026", "negate": true }
+```
+
+- `negate: true` → Stornorechnung (all positions negated, `is_correction: true` in DB)
+- `negate: false` → Korrekturrechnung (amended positions only)
+
+Both variants include `zusatzAttribute.originalRechnungsnummer` for §22 MessZV audit trail.
+
+---
 
 ### ENERGIEDIENSTLEISTUNG products
 

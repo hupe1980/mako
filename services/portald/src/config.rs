@@ -50,6 +50,10 @@ pub struct PortaldConfig {
     /// Expected JWT `aud` claim.
     #[allow(dead_code)]
     pub oidc_audience: Option<String>,
+
+    /// LF MP-ID (BDEW-Codenummer) — used in self-service SEPA mandate registration.
+    /// Must match the `lf_mp_id` configured in `accountingd`.
+    pub lf_mp_id: Option<String>,
 }
 
 fn default_port() -> u16 {

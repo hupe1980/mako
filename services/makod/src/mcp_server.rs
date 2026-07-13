@@ -29,6 +29,8 @@
 //! | `list_partners` | List all registered trading partners |
 //! | `get_partner` | Get a specific trading partner by GLN |
 //! | `get_health` | Query daemon health and uptime |
+//! | `get_process` | Look up an active process by business key (malo_id, melo_id, or vorgang_id) |
+//! | `list_overdue_deadlines` | List processes with expired regulatory deadlines |
 //!
 //! ## Resources
 //!
@@ -44,6 +46,9 @@
 //! | `gpke-lieferbeginn` | Step-by-step guide: GPKE Lieferbeginn (electricity supplier change) |
 //! | `geli-lieferbeginn` | Step-by-step guide: GeLi Gas Lieferbeginn (gas supplier change) |
 //! | `wim-geraetewechsel` | Step-by-step guide: WiM Gerätewechsel (meter device change) |
+//! | `msb-preisanfrage` | Step-by-step guide: MSB Preisanfrage (REQOTE/QUOTES PIDs 35001/15001) |
+//! | `wim-gas-anmeldung` | Step-by-step guide: WiM Gas MSB-Wechsel (GMSB Anmeldung approval) |
+//! | `gpke-sperrung` | Step-by-step guide: GPKE Sperrung Strom (disconnection confirmation) |
 
 use std::sync::Arc;
 
@@ -53,6 +58,9 @@ use axum::{
     middleware::{self, Next},
     response::IntoResponse,
 };
+use mako_engine::deadline::DeadlineStore as _;
+use mako_engine::registry::ProcessRegistry as _;
+use mako_engine::store_slatedb::{SlateDbDeadlineStore, SlateDbStore};
 use mako_engine::{ids::TenantId, partner::PartnerStore as _, store_slatedb::SlateDbPartnerStore};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
@@ -97,6 +105,10 @@ pub struct MakodMcpState {
     pub malo_cache: Arc<SlateDbMaloCache>,
     /// Trading-partner store.
     pub partner_store: Arc<SlateDbPartnerStore>,
+    /// Process registry — used by `get_process` to look up active processes by business key.
+    pub process_store: Arc<SlateDbStore>,
+    /// Deadline store — used by `list_overdue_deadlines` to surface expired process timers.
+    pub deadline_store: SlateDbDeadlineStore,
 }
 
 // ── Tool parameter types ───────────────────────────────────────────────────────
@@ -175,6 +187,22 @@ pub struct ListPartnersParams {
     /// the next page. Omit or pass `null` to start from the beginning.
     #[schemars(description = "Pagination cursor from a previous list_partners response")]
     pub cursor: Option<String>,
+}
+
+/// Parameters for `get_process`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetProcessParams {
+    /// Business key identifying the process — typically the `malo_id` (11-digit)
+    /// for GPKE and GeLi Gas workflows, the `melo_id` for WiM Strom workflows,
+    /// or the `vorgang_id` for WiM Gas Stornierung.
+    ///
+    /// This is the same key you would pass in the `payload` field when submitting
+    /// the initial `anmelden` command. The registry maps it to the internal process
+    /// stream ID.
+    #[schemars(
+        description = "Business key: malo_id (GPKE/GeLi Gas), melo_id (WiM Strom), or vorgang_id (WiM Gas Stornierung)"
+    )]
+    pub business_key: String,
 }
 
 // ── MCP handler ───────────────────────────────────────────────────────────────
@@ -504,6 +532,133 @@ impl MakodMcpHandler {
         .map(|block| CallToolResult::success(vec![block]))
         .map_err(|e| McpError::internal_error(e.message, None))
     }
+
+    /// Look up an active MaKo process by its business key.
+    ///
+    /// Returns the internal stream ID and any active regulatory deadlines
+    /// registered for the process. Useful for checking whether a command has
+    /// been accepted by the engine and what deadlines are pending.
+    ///
+    /// **business_key** is the same key you pass in the `payload` when submitting
+    /// the initial command:
+    /// - GPKE / GeLi Gas → `malo_id` (11-digit Marktlokations-ID)
+    /// - WiM Strom → `melo_id` (11-digit Messlokations-ID)
+    /// - WiM Gas Stornierung → `vorgang_id` (Vorgangsnummer from PID 44022)
+    ///
+    /// Returns `process_not_found` when no active process exists for this key.
+    #[tool(
+        description = "Look up an active MaKo process by business key (malo_id, melo_id, or vorgang_id). Returns stream ID and pending deadlines.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    #[instrument(skip(self), fields(business_key = %p.business_key))]
+    async fn get_process(
+        &self,
+        Parameters(p): Parameters<GetProcessParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use mako_engine::registry::RegistryKey;
+
+        let key = RegistryKey::parse(&p.business_key)
+            .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+
+        let registry = self.state.process_store.as_process_registry();
+        let identity = registry
+            .lookup(self.state.tenant_id, &key)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        match identity {
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "process_not_found: No active process for business key '{}'. \
+                 Submit the initial command first (e.g. gpke.lieferbeginn.anmelden).",
+                p.business_key
+            ))])),
+            Some(id) => {
+                // Retrieve active deadlines for this stream.
+                let deadlines = self
+                    .state
+                    .deadline_store
+                    .for_stream(id.stream_id())
+                    .await
+                    .unwrap_or_default();
+
+                let deadline_list: Vec<serde_json::Value> = deadlines
+                    .iter()
+                    .map(|d| {
+                        use time::format_description::well_known::Rfc3339;
+                        serde_json::json!({
+                            "deadline_id": d.deadline_id().to_string(),
+                            "label":       d.label(),
+                            "due_at":      d.due_at().format(&Rfc3339).ok(),
+                        })
+                    })
+                    .collect();
+
+                ContentBlock::json(serde_json::json!({
+                    "business_key":  p.business_key,
+                    "stream_id":     id.stream_id().to_string(),
+                    "workflow_name": id.workflow_id.name.as_ref(),
+                    "process_id":    id.process_id.to_string(),
+                    "active":        true,
+                    "deadlines":     deadline_list,
+                }))
+                .map(|block| CallToolResult::success(vec![block]))
+                .map_err(|e| McpError::internal_error(e.message, None))
+            }
+        }
+    }
+
+    /// List processes with expired regulatory deadlines (missed response windows).
+    ///
+    /// Returns up to 50 processes whose deadline has passed but the timer has not
+    /// yet been cleared. A non-empty result means APERAK or response deadlines have
+    /// been missed — these are **regulatory compliance violations** that require
+    /// immediate operator attention.
+    ///
+    /// Deadline labels indicate which regulatory window was missed:
+    /// - `aperak-*`: APERAK sending deadline (45 min Strom / nächster Werktag 12:00 Gas)
+    /// - `response-*`: Process response deadline (24 h GPKE / 5 WT WiM / 10 WT GeLi Gas)
+    ///
+    /// Source: APERAK AHB 1.0 §2.3 / §2.4; BK6-22-024 §5; BK7-24-01-009 §5.
+    #[tool(
+        description = "List processes with expired regulatory deadlines (up to 50). Non-empty = compliance issue requiring immediate action.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    #[instrument(skip(self))]
+    async fn list_overdue_deadlines(&self) -> Result<CallToolResult, McpError> {
+        let result = self
+            .state
+            .deadline_store
+            .due_now(50)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let items: Vec<serde_json::Value> = result
+            .deadlines
+            .iter()
+            .map(|d| {
+                use time::format_description::well_known::Rfc3339;
+                let overdue_mins = (time::OffsetDateTime::now_utc() - d.due_at()).whole_minutes();
+                serde_json::json!({
+                    "deadline_id": d.deadline_id().to_string(),
+                    "stream_id":   d.stream_id().to_string(),
+                    "label":       d.label(),
+                    "due_at":      d.due_at().format(&Rfc3339).ok(),
+                    "overdue_by_mins": overdue_mins,
+                })
+            })
+            .collect();
+
+        ContentBlock::json(serde_json::json!({
+            "overdue_count": items.len(),
+            "has_more":      result.has_more,
+            "alert":         !items.is_empty(),
+            "items":         items,
+            "note": "Each entry is a process that missed its APERAK or response deadline. \
+                     Dispatch the pending command immediately to minimise regulatory risk.",
+        }))
+        .map(|block| CallToolResult::success(vec![block]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
 }
 
 // ── Prompt argument types ─────────────────────────────────────────────────────
@@ -639,7 +794,87 @@ impl MakodMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "**MSB Preisanfrage (WiM Strom BK6-24-174)**\n\n                 The nMSB (new MSB) requests a price quote from the aMSB (existing MSB) before initiating a WiM-Wechsel.\n\n                 **Step 1 — Send REQOTE (PID 35001):**\n                 Use `submit_command` with:\n                 - command: \"wim.preisanfrage.anfordern\"\n                 - marktrolle: \"MSB\"\n                 - payload: {\"melo_id\": \"...\", \"wechseldatum\": \"YYYY-MM-DD\"}\n\n                 **Step 2 — aMSB responds QUOTES (PID 15001) within 5 Werktage:**\n                 The Preisliste is stored in `marktd` as a `PreisblattMessung` record.\n                 Check: marktd `get_preisblatt` with the aMSB MP-ID.\n\n                 **Step 3 — MSB dispatches own PRICAT 27001–27003:**\n                 Before a WiM-Wechsel, the nMSB must have a valid PRICAT on file with the NB.\n                 Check: marktd `list_pricat_versions` with your nb_mp_id.\n                 If dispatch_state != done: use marktd `dispatch_pricat` to (re-)send.\n\n                 **Step 4 — Initiate WiM-Wechsel:**\n                 `submit_command` with command: \"wim.geraetewechsel.beauftragen\"\n\n                 **§14a note:** For controllable loads (iMSys), the PRICAT must include\n                 `ZeitvariablePreisposition` for time-of-use MSB fees (Modul 2/3).\n                 This requires `marktd` PreisblattMessung with `auf_abschlaege` populated.",
+                "**MSB Preisanfrage (WiM Strom BK6-24-174)**\n\n\
+                 The nMSB (new MSB) requests a price quote from the aMSB (existing MSB) before initiating a WiM-Wechsel.\n\n\
+                 **Step 1 — The aMSB receives the inbound REQOTE (PID 35001) via AS4:**\n\
+                 The AS4 inbound layer handles this automatically. The `wim-preisanfrage` workflow\n\
+                 is spawned by `makod` when the REQOTE arrives. No ERP command needed.\n\n\
+                 **Step 2 — aMSB responds QUOTES (PID 15001) within 5 Werktage:**\n\
+                 The Preisliste is stored in `marktd` as a `PreisblattMessung` record.\n\
+                 Check: `get_partner` for the aMSB GLN to verify AS4 connectivity.\n\n\
+                 **Step 3 — Verify process state:**\n\
+                 Call `get_process` with the `melo_id` to check if the Preisanfrage process\n\
+                 is active and what deadlines are pending.\n\n\
+                 **Step 4 — Initiate WiM-Wechsel after price agreement:**\n\
+                 `submit_command` with command: \"wim.geraetewechsel.beauftragen\"\n\n\
+                 **§14a note:** For controllable loads (iMSys), the PRICAT must include\n\
+                 `ZeitvariablePreisposition` for time-of-use MSB fees (Modul 2/3).",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "wim-gas-anmeldung",
+        description = "Guided workflow: WiM Gas MSB-Wechsel (GNB approves or rejects a GMSB Anmeldung request)"
+    )]
+    async fn wim_gas_anmeldung_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "I received a WiM Gas MSB-Wechsel Anmeldung (UTILMD G PID 44042–44053) from the new GMSB. How do I respond?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "**WiM Gas MSB-Wechsel Anmeldung (BK7-24-01-009)**\n\n\
+                 The GNB (Gasnetzbetreiber) must respond within **10 Werktage** (Saturday counts; public holidays do not; German local time CET/CEST).\n\n\
+                 **Step 1 — Verify the process is active:**\n\
+                 Call `get_process` with the gas `malo_id` from the inbound UTILMD G.\n\
+                 - If `active: true` → process exists, proceed to step 2.\n\
+                 - If `process_not_found` → the AS4 message was not yet ingested; check the AS4 inbound log.\n\n\
+                 **Step 2 — Check the deadline:**\n\
+                 Inspect `deadlines` in the get_process response.\n\
+                 The `response-*` deadline must not be in the past. If it is, call `list_overdue_deadlines` to see the full picture.\n\n\
+                 **Step 3a — Accept (positive APERAK, PID 44043 or similar):**\n\
+                 Call `submit_command` with:\n\
+                 - command: \"wim.gas.anmeldung.bestaetigen\"\n\
+                 - marktrolle: \"NB\" (or \"GNB\")\n\
+                 - payload: {\"malo_id\": \"<gas MaLo>\"}\n\n\
+                 **Step 3b — Reject (negative APERAK):**\n\
+                 Call `submit_command` with:\n\
+                 - command: \"wim.gas.anmeldung.ablehnen\"\n\
+                 - marktrolle: \"NB\"\n\
+                 - payload: {\"malo_id\": \"<gas MaLo>\", \"reason\": \"<ERC code + reason>\"}\n\n\
+                 **Valid ERC codes:** A02 (Bilanzierungsgebiet mismatch), A05 (unknown GMSB), A97 (invalid date), A99 (Mindestvorlauffrist not met).\n\n\
+                 **Note:** `processd` auto-STP handles this automatically when configured. Manual dispatch is only needed for escalated cases.",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "gpke-sperrung",
+        description = "Guided workflow: GPKE Sperrung Strom (LF confirms disconnection execution to NB)"
+    )]
+    async fn gpke_sperrung_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "The NB has executed a Sperrung (disconnection) for a MaLo. How do I confirm it?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "**GPKE Sperrung Bestätigung (BK6-22-024)**\n\n\
+                 When `sperrd` has confirmed the physical disconnection (IFTSTA 21039 dispatched),\n\
+                 the LF confirms receipt and acceptance via REMADV or a direct command.\n\n\
+                 **Step 1 — Retrieve the Sperrung process:**\n\
+                 Call `get_process` with the `malo_id` of the disconnected MaLo.\n\
+                 Confirm that `workflow_name` contains `sperrung` and the process is active.\n\n\
+                 **Step 2 — Confirm the Sperrung:**\n\
+                 Call `submit_command` with:\n\
+                 - command: \"gpke.sperrung.bestaetigen\"\n\
+                 - marktrolle: \"LF\"\n\
+                 - payload: {\"malo_id\": \"<11-digit MaLo>\", \"ausfuehrungsdatum\": \"YYYY-MM-DD\"}\n\n\
+                 **`ausfuehrungsdatum`** is the date the physical disconnection was performed.\n\n\
+                 **Source:** GPKE AHB BK6-22-024 §4; ORDERS PIDs 17115–17117.",
             ),
         ]
     }
@@ -712,7 +947,8 @@ impl ServerHandler for MakodMcpHandler {
              \n\
              ## Prompts\n\
              \n\
-             Use the `gpke-lieferbeginn`, `geli-lieferbeginn`, and `wim-geraetewechsel` prompts\n\
+             Use the `gpke-lieferbeginn`, `geli-lieferbeginn`, `wim-geraetewechsel`,\n\
+             `wim-gas-anmeldung`, `gpke-sperrung`, and `msb-preisanfrage` prompts\n\
              for guided step-by-step workflows with pre-filled instructions.",
             ver = self.state.version,
             tenant = self.state.tenant_id_str,
@@ -965,8 +1201,26 @@ fn next_steps_hint(command: &str) -> &'static str {
         "geli.lieferbeginn.anmelden" | "geli.lieferende.anmelden" => {
             "GNB has 10 Werktage to respond with a Bestätigung/Ablehnung (BK7-24-01-009)."
         }
+        "geli.gas.stornierung.initiieren" => {
+            "GNB has 10 Werktage to respond with a positive (44023) or negative (44024) APERAK (BK7-24-01-009)."
+        }
+        "geli.gas.datenabruf.anfragen" => {
+            "GNB has 10 Werktage to respond with the requested meter data (BK7-24-01-009)."
+        }
+        "geli.gas.sperrung.bestaetigen" | "gpke.sperrung.bestaetigen" => {
+            "Sperrung confirmed. sperrd will dispatch IFTSTA 21039 to the NB (BK6-22-024 §4)."
+        }
         "wim.geraetewechsel.beauftragen" => {
             "MSB has 5 Werktage to respond with a Bestätigung/Ablehnung (BK6-24-174)."
+        }
+        "wim.gas.anmeldung.bestaetigen" | "wim.gas.anmeldung.ablehnen" => {
+            "WiM Gas Anmeldung APERAK dispatched. Process closes within 10 Werktage (BK7-24-01-009)."
+        }
+        "wim.gas.kuendigung.bestaetigen" | "wim.gas.kuendigung.ablehnen" => {
+            "WiM Gas Kündigung APERAK dispatched. Process closes within 10 Werktage (BK7-24-01-009)."
+        }
+        "wim.gas.stornierung.bestaetigen" | "wim.gas.stornierung.ablehnen" => {
+            "WiM Gas Stornierung APERAK dispatched (PID 44023 or 44024). Process closes (BK7-24-01-009)."
         }
         "mabis.abrechnung.einleiten" | "mabis.abrechnung.daten-einreichen" => {
             "ÜNB has 1 Werktag to issue a Prüfmitteilung IFTSTA (BK6-24-174 § 13.8)."

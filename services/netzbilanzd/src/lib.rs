@@ -15,4 +15,5 @@
 pub mod billing;
 pub mod config;
 pub mod handlers;
+pub mod mcp_server;
 pub mod pg;

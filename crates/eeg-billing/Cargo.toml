@@ -1,0 +1,25 @@
+[package]
+name        = "eeg-billing"
+description = "Pure EEG/KWKG feed-in settlement for German energy markets. EEG 2017–2024 (Solarpaket I), §§20–50b EEG 2023 + §7 KWKG 2023. Multi-EEG-version rates, §12 Abs. 3 UStG, §51 Negativpreisregel, §24 Anlagenerweiterung. Zero I/O, zero async, no float money."
+version.workspace     = true
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+
+[dependencies]
+billing             = { version = "0.4.0", features = ["serde"] }
+rust_decimal        = { workspace = true }
+rust_decimal_macros = "1"
+serde               = { workspace = true, features = ["derive"], optional = true }
+time                = { workspace = true }
+thiserror           = { workspace = true }
+
+[features]
+default = []
+serde   = ["dep:serde", "rust_decimal/serde"]
+
+[dev-dependencies]
+rust_decimal_macros = "1"
+time = { workspace = true, features = ["macros"] }

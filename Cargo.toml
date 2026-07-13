@@ -23,6 +23,9 @@ members = [
     "crates/invoic-checker",
     "crates/netz-checker",
     "crates/mako-nne",
+    "crates/eeg-billing",
+    "crates/energy-billing",
+    "crates/metering",
     "services/invoicd",
     "services/makod",
     "services/marktd",
@@ -44,7 +47,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version     = "0.8.0"
+version     = "0.9.0"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
@@ -58,7 +61,7 @@ edifact-rs   = "~0.11"
 miette       = { version = "7", features = ["fancy-no-syscall"] }
 rubo4e       = { version = "0.7.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "schemars", "json"] }
 rust_decimal = { version = "1", features = ["db-postgres"] }
-billing      = { version = "0.3.0", features = ["serde"] }
+billing      = { version = "0.4.0", features = ["serde"] }
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
 thiserror    = "2"
@@ -84,16 +87,18 @@ figment-file-provider-adapter = { version = "0.1", package = "figment_file_provi
 schemars                  = { version = "1.2.1" }
 
 # ── Internal workspace crates (path + version so domain crates can be published) ─
-edi-energy       = { path = "crates/edi-energy",  version = "0.8" }
-mako-engine      = { path = "crates/mako-engine",      version = "0.8" }
-mako-markt       = { path = "crates/mako-markt",       version = "0.8" }
-mako-edm         = { path = "crates/mako-edm",         version = "0.8" }
-mako-nne         = { path = "crates/mako-nne",         version = "0.8" }
-mako-obs         = { path = "crates/mako-obs",         version = "0.8" }
-mako-service     = { path = "crates/mako-service",     version = "0.8" }
-mako-plugin      = { path = "crates/mako-plugin",      version = "0.8" }
-invoic-checker   = { path = "crates/invoic-checker",   version = "0.8" }
-netz-checker     = { path = "crates/netz-checker",     version = "0.8" }
+edi-energy       = { path = "crates/edi-energy",  version = "0.9" }
+mako-engine      = { path = "crates/mako-engine",      version = "0.9" }
+mako-markt       = { path = "crates/mako-markt",       version = "0.9" }
+mako-edm         = { path = "crates/mako-edm",         version = "0.9" }
+mako-nne         = { path = "crates/mako-nne",         version = "0.9" }
+mako-obs         = { path = "crates/mako-obs",         version = "0.9" }
+mako-service     = { path = "crates/mako-service",     version = "0.9" }
+mako-plugin      = { path = "crates/mako-plugin",      version = "0.9" }
+invoic-checker   = { path = "crates/invoic-checker",   version = "0.9" }
+netz-checker     = { path = "crates/netz-checker",     version = "0.9" }
+energy-billing   = { path = "crates/energy-billing",   version = "0.9" }
+sepa             = { version = "0.2.0" }
 
 # Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.
 # Required by mako-service feature "kafka" (EventBus scale-out backend).

@@ -36,3 +36,8 @@ tower-http      = { version = "0.6" }
 anyhow          = "1"
 secrecy         = { version = "0.10" }
 rubo4e          = { workspace = true }
+rmcp            = { workspace = true }
+tokio-util      = { workspace = true }
+
+[dev-dependencies]
+rust_decimal_macros = { version = "1" }

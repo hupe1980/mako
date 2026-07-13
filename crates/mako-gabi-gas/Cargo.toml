@@ -11,7 +11,7 @@ keywords     = ["gabi-gas", "gas", "balancing", "mako", "dvgw"]
 categories   = ["data-structures"]
 
 [dependencies]
-dvgw-edi    = { path = "../dvgw-edi", version = "0.8" }
+dvgw-edi    = { path = "../dvgw-edi", version = "0.9" }
 mako-engine = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }

@@ -847,3 +847,137 @@ pub async fn get_portal_invoice_download(
         Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
     }
 }
+
+// ── SEPA mandate self-service ─────────────────────────────────────────────────
+
+/// Request body for `PUT /api/v1/portal/{malo_id}/sepa`.
+#[derive(Debug, Deserialize)]
+pub struct PortalSepaRequest {
+    /// IBAN in any whitespace-separated format — validated via mod-97 by `accountingd`.
+    pub iban: String,
+    /// BIC/SWIFT (optional for SEPA SCT/SDD within SEPA zone).
+    pub bic: Option<String>,
+    /// Kontoinhaber (account holder name — defaults to customer name if absent).
+    pub kontoinhaber: Option<String>,
+    /// Signed-at date in ISO 8601 format (`YYYY-MM-DD`). Defaults to today.
+    pub signed_at: Option<String>,
+    /// SEPA sequence type: `FRST` (first), `RCUR` (recurring), `OOFF` (one-off).
+    /// Defaults to `FRST` for new mandates.
+    #[serde(default = "default_sequence_type")]
+    pub sequence_type: String,
+}
+
+fn default_sequence_type() -> String {
+    "FRST".to_string()
+}
+
+/// `PUT /api/v1/portal/{malo_id}/sepa`
+///
+/// Register a new SEPA direct-debit mandate for the customer's account.
+///
+/// IBAN is validated by `accountingd` using the ISO 13616 mod-97 algorithm
+/// before being stored. Invalid IBANs return `422 Unprocessable Entity`.
+///
+/// The endpoint auto-generates a `mandatsref` from the MaLo-ID if not
+/// provided, and uses today's date as `signed_at` when absent.
+///
+/// Proxies to `POST /api/v1/sepa/mandates` on `accountingd`.
+pub async fn put_portal_sepa(
+    Extension(cfg): Extension<Arc<PortaldConfig>>,
+    Extension(clients): Extension<Arc<PortalClients>>,
+    headers: axum::http::HeaderMap,
+    Path(malo_id): Path<String>,
+    Json(req): Json<PortalSepaRequest>,
+) -> impl IntoResponse {
+    let auth_ctx = match authenticate_and_resolve(&cfg, &headers, &malo_id).await {
+        Ok(ctx) => ctx,
+        Err(resp) => return resp,
+    };
+
+    let accountingd = match &clients.accountingd {
+        Some(c) => c.as_ref(),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "accountingd not configured",
+            )
+                .into_response();
+        }
+    };
+
+    // Auto-generate mandatsref if not supplied.
+    let mandatsref = format!(
+        "PORTAL-{}-{}",
+        malo_id.replace(' ', ""),
+        time::OffsetDateTime::now_utc()
+            .date()
+            .to_string()
+            .replace('-', "")
+    );
+
+    let signed_at = req
+        .signed_at
+        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date().to_string());
+
+    let body = serde_json::json!({
+        "malo_id":      &malo_id,
+        "lf_mp_id":     cfg.lf_mp_id.as_deref().unwrap_or(&cfg.tenant),
+        "iban":         &req.iban,
+        "bic":          req.bic,
+        "kontoinhaber": req.kontoinhaber,
+        "mandatsref":   mandatsref,
+        "sequence_type": req.sequence_type,
+        "signed_at":    signed_at,
+    });
+
+    // Proxy to accountingd — IBAN is validated there (mod-97 checksum).
+    let client = accountingd.client();
+    let url = format!("{}/api/v1/sepa/mandates", accountingd.base_url());
+    let mut post_req = client.post(&url).json(&body);
+    if let Some(key) = accountingd.api_key() {
+        post_req = post_req.bearer_auth(key);
+    }
+
+    match post_req.send().await {
+        Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+            Ok(body) => (StatusCode::CREATED, Json(body)).into_response(),
+            Err(_) => StatusCode::CREATED.into_response(),
+        },
+        Ok(resp) if resp.status().as_u16() == 422 => {
+            // Forward validation error (e.g. invalid IBAN) back to the portal customer.
+            let body = resp.json::<serde_json::Value>().await.unwrap_or_default();
+            (StatusCode::UNPROCESSABLE_ENTITY, Json(body)).into_response()
+        }
+        Ok(resp) => (
+            axum::http::StatusCode::from_u16(resp.status().as_u16())
+                .unwrap_or(StatusCode::BAD_GATEWAY),
+            resp.text().await.unwrap_or_default(),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+    }
+}
+
+// ── Vorauszahlung (advance payment preview) ───────────────────────────────────
+
+/// `GET /api/v1/portal/{malo_id}/vorauszahlung`
+///
+/// Retrieve the typed `Vorauszahlung` (advance payment schedule) for the portal
+/// customer.  Used by portal UIs to show the current Abschlag amount and
+/// billing schedule. Proxies to `accountingd`.
+pub async fn get_portal_vorauszahlung(
+    Extension(cfg): Extension<Arc<PortaldConfig>>,
+    Extension(clients): Extension<Arc<PortalClients>>,
+    headers: axum::http::HeaderMap,
+    Path(malo_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = authenticate_and_resolve(&cfg, &headers, &malo_id).await {
+        return resp;
+    }
+    proxy_or_unavailable(
+        &clients.accountingd,
+        &format!("/api/v1/accounts/{}/vorauszahlung", malo_id),
+        "accountingd",
+    )
+    .await
+}
