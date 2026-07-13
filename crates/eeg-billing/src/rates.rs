@@ -141,7 +141,7 @@ pub fn solar_pv_ueberschuss_lookup(eeg_year: i16) -> Option<RateLookup> {
         ),
 
         // ── EEG 2017 — Q2 2017 starting rate ─────────────────────────────────
-        2017 | 2018 | 2019 | 2020 => Some(
+        2017..=2020 => Some(
             RateLookup::builder()
                 .at_most(dec!(10), amount_ct("12.35")) // ≤10 kWp: 12.35 ct/kWh
                 .at_most(dec!(40), amount_ct("12.00")) // ≤40 kWp: 12.00 ct/kWh
@@ -219,10 +219,9 @@ pub fn solar_pv_volleinspeisung_lookup(eeg_year: i16) -> Option<RateLookup> {
         _ => None,
     }
 }
-/// | 2017 | BGBl I 2017 S. 2532, §21 + Anlage 1 | Q2 2017 starting rate |
-///
-/// Returns `None` for unsupported years (use `einsd`'s DB table instead).
-///
+// | 2017 | BGBl I 2017 S. 2532, §21 + Anlage 1 | Q2 2017 starting rate |
+//
+// Returns `None` for unsupported years (use `einsd`'s DB table instead).
 // ── Wind Onshore ──────────────────────────────────────────────────────────────
 
 /// Return the EEG reference Anzulegender Wert table for **wind onshore** plants.

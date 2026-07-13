@@ -355,7 +355,7 @@ pub fn negativpreis_rule_applies(consecutive_negative_hours: u32) -> bool {
 pub fn verguetungszeitraum_verlaengerung_qh(lost_quarter_hours: u64, is_solar: bool) -> u64 {
     if is_solar {
         // §51a Abs. 2 EEG 2023: multiply by 0.5, round up to next full quarter-hour
-        (lost_quarter_hours + 1) / 2
+        lost_quarter_hours.div_ceil(2)
     } else {
         // §51a Abs. 1 EEG 2023: 1:1 extension
         lost_quarter_hours

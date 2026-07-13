@@ -197,6 +197,7 @@ pub enum SettlementModel {
     /// - EEG 2000 solar PV ≤30 kWp: 50.62 ct/kWh
     /// - EEG 2012 solar PV ≤10 kWp: 24.43 ct/kWh
     /// - EEG 2023 solar PV ≤10 kWp: 8.11 ct/kWh (initial) / 8.51 ct/kWh (after Solarpaket I 2024)
+    ///
     /// Use `eeg_billing::rates::solar_pv_lookup()` or `einsd`'s rate table for
     /// the correct historical rate.
     Verguetung,
@@ -769,13 +770,13 @@ impl SettlePosition {
             b if b.starts_with("\u{00a7}20") || b.starts_with("\u{00a7}\u{00a7}22a") => {
                 builder.tag("marktpraemie")
             }
-            b if b == "\u{00a7}38a EEG 2023" => builder.tag("mieterstrom"),
+            "\u{00a7}38a EEG 2023" => builder.tag("mieterstrom"),
             b if b == "\u{00a7}50b EEG 2023" || b == "\u{00a7}50 EEG 2023" => {
                 builder.tag("flexibilitaet")
             }
             b if b.contains("post-F\u{00f6}rderung") => builder.tag("post-eeg-spot"),
-            b if b == "\u{00a7}7 KWKG 2023" => builder.tag("kwk-zuschlag"),
-            b if b == "\u{00a7}21 EEG 2023" => builder.tag("verguetung"),
+            "\u{00a7}7 KWKG 2023" => builder.tag("kwk-zuschlag"),
+            "\u{00a7}21 EEG 2023" => builder.tag("verguetung"),
             _ => builder,
         };
 

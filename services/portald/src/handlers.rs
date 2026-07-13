@@ -889,7 +889,7 @@ pub async fn put_portal_sepa(
     Path(malo_id): Path<String>,
     Json(req): Json<PortalSepaRequest>,
 ) -> impl IntoResponse {
-    let auth_ctx = match authenticate_and_resolve(&cfg, &headers, &malo_id).await {
+    let _auth_ctx = match authenticate_and_resolve(&cfg, &headers, &malo_id).await {
         Ok(ctx) => ctx,
         Err(resp) => return resp,
     };

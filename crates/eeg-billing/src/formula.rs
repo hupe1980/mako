@@ -53,14 +53,14 @@ fn should_apply_negativpreis_versioned(
     eeg_gesetz: crate::version::EegGesetz,
     erzeugungsart: Option<crate::technology::ErzeugungsArt>,
 ) -> bool {
-    if kwh_during_negative_epex.map_or(true, |k| k <= Decimal::ZERO) {
+    if kwh_during_negative_epex.is_none_or(|k| k <= Decimal::ZERO) {
         return false;
     }
     let art = erzeugungsart.unwrap_or(crate::technology::ErzeugungsArt::Solar);
     let Some(threshold_kw) = eeg_gesetz.negativpreis_kw_grenze(&art) else {
         return false; // §51 not applicable for this EEG version
     };
-    leistung_kwp.map_or(true, |kw| kw >= Decimal::from(threshold_kw))
+    leistung_kwp.is_none_or(|kw| kw >= Decimal::from(threshold_kw))
 }
 
 /// Apply §51 EEG deduction: subtract kWh during negative-price hours.
@@ -103,9 +103,8 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
     let mut total_eligible = Decimal::ZERO;
 
     // ── Primary block ────────────────────────────────────────────────────────
-    let primary_expired = billing_date.map_or(false, |d| {
-        input.foerderendedatum.map_or(false, |fed| d > fed)
-    });
+    let primary_expired =
+        billing_date.is_some_and(|d| input.foerderendedatum.is_some_and(|fed| d > fed));
     if !primary_expired {
         let share = if total_kwp.is_zero() {
             Decimal::ONE
@@ -146,7 +145,7 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
 
     // ── Additional blocks ────────────────────────────────────────────────────
     for (idx, block) in input.capacity_blocks.iter().enumerate() {
-        let block_expired = billing_date.map_or(false, |d| d > block.foerderendedatum);
+        let block_expired = billing_date.is_some_and(|d| d > block.foerderendedatum);
         if block_expired {
             continue;
         }
@@ -339,18 +338,17 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
     // ── Automatic FoerderungBeendet detection ────────────────────────────────
     // Only applies for single-block plants. Multi-block plants handle per-block
     // expiry inside calculate_with_capacity_blocks().
-    if input.capacity_blocks.is_empty() {
-        if let (Some(billing), Some(fed)) = (input.billing_date, input.foerderendedatum) {
-            if billing > fed {
-                return SettleOutput {
-                    settlement_eur: Some(Decimal::ZERO),
-                    eligible_kwh: input.einspeisemenge_kwh,
-                    positions: vec![],
-                    status: SettlementStatus::FoerderungBeendet,
-                    pflichtzahlung_eur: None,
-                };
-            }
-        }
+    if input.capacity_blocks.is_empty()
+        && let (Some(billing), Some(fed)) = (input.billing_date, input.foerderendedatum)
+        && billing > fed
+    {
+        return SettleOutput {
+            settlement_eur: Some(Decimal::ZERO),
+            eligible_kwh: input.einspeisemenge_kwh,
+            positions: vec![],
+            status: SettlementStatus::FoerderungBeendet,
+            pflichtzahlung_eur: None,
+        };
     }
 
     // ── No meter data ─────────────────────────────────────────────────────────

@@ -14,8 +14,8 @@
 //! # Design
 //!
 //! - **Pure library** — zero I/O, zero async.  All calculations are deterministic.
-//! - **No floating-point money** — uses [`billing::EuroAmount`]
-//!   (`i64 × 10⁻⁵ EUR`) for all monetary arithmetic to avoid rounding errors.
+//! - **No floating-point money** — uses `EuroAmount` (`i64 × 10⁻⁵ EUR`) for all
+//!   monetary arithmetic to avoid rounding errors.
 //! - **Self-validating** — all generated invoices satisfy `invoic-checker` checks 1–3
 //!   (period validity, position arithmetic, document total) by construction.
 //!   Check 4–5 (tariff deviation) depends on the `PreisblattStore` supplied by the caller.
