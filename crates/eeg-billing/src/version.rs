@@ -122,7 +122,7 @@ impl EegGesetz {
     /// Always returns `false` for KWKG and EEG ≤2012.
     pub fn negativpreis_stunden_erreicht(self, consecutive_hours: u32) -> bool {
         self.negativpreis_stunden_schwelle()
-            .map_or(false, |t| consecutive_hours >= t)
+            .is_some_and(|t| consecutive_hours >= t)
     }
 
     /// Minimum installed capacity in **kW** above which §51 applies for this

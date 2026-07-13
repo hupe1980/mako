@@ -1608,18 +1608,18 @@ pub fn calculate_gas(
     // Inject gas quality metadata as ZusatzAttribut for regulatory audit transparency.
     // Per DVGW G 260: the Brennwert used for billing is always the measured value reported
     // by the grid operator — this is purely an audit annotation, not a correction factor.
-    if let Some(ref gq) = meter.gasqualitaet {
-        if let Some(obj) = result.rechnung_json.as_object_mut() {
-            let attrs = obj
-                .entry("zusatzAttribute")
-                .or_insert_with(|| serde_json::Value::Array(vec![]));
-            if let Some(arr) = attrs.as_array_mut() {
-                arr.push(serde_json::json!({
-                    "_typ": "ZUSATZ_ATTRIBUT",
-                    "name": "gasqualitaet",
-                    "wert": gq
-                }));
-            }
+    if let Some(ref gq) = meter.gasqualitaet
+        && let Some(obj) = result.rechnung_json.as_object_mut()
+    {
+        let attrs = obj
+            .entry("zusatzAttribute")
+            .or_insert_with(|| serde_json::Value::Array(vec![]));
+        if let Some(arr) = attrs.as_array_mut() {
+            arr.push(serde_json::json!({
+                "_typ": "ZUSATZ_ATTRIBUT",
+                "name": "gasqualitaet",
+                "wert": gq
+            }));
         }
     }
     Ok(result)

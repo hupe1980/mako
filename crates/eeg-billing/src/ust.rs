@@ -266,7 +266,7 @@ pub fn qualifies_for_12_abs3(
     if leistung_kwp > dec!(30) {
         return false;
     }
-    inbetriebnahme.map_or(false, |d| d >= date!(2023 - 01 - 01))
+    inbetriebnahme.is_some_and(|d| d >= date!(2023 - 01 - 01))
 }
 
 /// Return the `billing::TaxLayer` list for a given VAT status.

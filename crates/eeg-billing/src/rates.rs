@@ -110,7 +110,7 @@ pub fn solar_pv_ueberschuss_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
         // ── EEG 2024 / Solarpaket I — valid from 01.05.2024 ──────────────────
         // Source: §48 Abs. 2 EEG 2023 n.F. (Solarpaket I, BGBl I 2024 Nr. 107)
-        2024 | 2025 | 2026 => Some(
+        2024..=2026 => Some(
             RateLookup::builder()
                 .at_most(dec!(10), amount_ct("8.51")) // ≤10 kWp:  8.51 ct/kWh
                 .at_most(dec!(40), amount_ct("7.43")) // ≤40 kWp:  7.43 ct/kWh
@@ -191,7 +191,7 @@ pub fn solar_pv_lookup(eeg_year: i16) -> Option<RateLookup> {
 pub fn solar_pv_volleinspeisung_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
         // ── EEG 2024 (Solarpaket I) Volleinspeisung ────────────────────────────
-        2024 | 2025 | 2026 => Some(
+        2024..=2026 => Some(
             RateLookup::builder()
                 .at_most(dec!(10), amount_ct("13.31")) // 8.51 + 4.80
                 .at_most(dec!(40), amount_ct("11.23")) // 7.43 + 3.80
@@ -253,7 +253,7 @@ pub fn wind_onshore_lookup(eeg_year: i16) -> Option<RateLookup> {
         // Source: §21 EEG 2023 i.V.m. Anlage 2, Referenzwert wind onshore
         // Plants ≤750 kW: statutory AW = 6.28 ct/kWh
         // Plants >750 kW: mandatory tender (AW set by BNetzA per auction round)
-        2023 | 2024 | 2025 | 2026 => Some(
+        2023..=2026 => Some(
             RateLookup::builder()
                 .at_most(dec!(750), amount_ct("6.28")) // ≤750 kW: tender-exempt AW
                 .fallback(amount_ct("6.28")) // >750 kW: tender-based (use direktverm_aw_ct)
@@ -295,7 +295,7 @@ pub fn biomasse_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
         // ── EEG 2023 ──────────────────────────────────────────────────────────
         // Source: §21 EEG 2023 i.V.m. Anlage 3 (Biomasse §21 Abs. 1)
-        2023 | 2024 | 2025 | 2026 => Some(
+        2023..=2026 => Some(
             RateLookup::builder()
                 .at_most(dec!(500), amount_ct("14.67")) // ≤500 kW
                 .at_most(dec!(5_000), amount_ct("11.90")) // ≤5 MW
