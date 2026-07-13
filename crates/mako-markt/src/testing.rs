@@ -1758,6 +1758,7 @@ use crate::repository::{NbEnergiemixRecord, NbEnergiemixRepository};
 /// Key: `(tenant, nb_mp_id, gueltig_fuer)`.
 #[derive(Clone, Default)]
 pub struct InMemoryNbEnergiemixRepository {
+    #[allow(clippy::type_complexity)]
     store: Arc<RwLock<HashMap<(String, String, i16), NbEnergiemixRecord>>>,
 }
 
