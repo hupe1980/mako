@@ -1528,7 +1528,6 @@ impl Tariff for DynamicStromTariff<'_> {
 // ── Public calculate_* functions ──────────────────────────────────────────────
 
 /// Calculate an electricity billing invoice (STROM, WAERMEPUMPE, WALLBOX).
-#[must_use]
 pub fn calculate_strom(
     malo_id: &str,
     lf_mp_id: &str,
@@ -1570,7 +1569,6 @@ pub fn calculate_strom(
 }
 
 /// Calculate a gas billing invoice (GAS).
-#[must_use]
 pub fn calculate_gas(
     malo_id: &str,
     lf_mp_id: &str,
@@ -1628,7 +1626,6 @@ pub fn calculate_gas(
 }
 
 /// Calculate a district heat (Fernwärme) billing invoice (WAERME).
-#[must_use]
 pub fn calculate_waerme(
     malo_id: &str,
     lf_mp_id: &str,
@@ -1661,7 +1658,6 @@ pub fn calculate_waerme(
 }
 
 /// Calculate a solar supply invoice (SOLAR).
-#[must_use]
 pub fn calculate_solar(
     malo_id: &str,
     lf_mp_id: &str,
@@ -1694,7 +1690,6 @@ pub fn calculate_solar(
 }
 
 /// Calculate an EEG feed-in settlement credit note (EEG).
-#[must_use]
 pub fn calculate_eeg(
     malo_id: &str,
     lf_mp_id: &str,
@@ -1727,7 +1722,6 @@ pub fn calculate_eeg(
 }
 
 /// Calculate a non-EEG Direktvermarktung settlement (EINSPEISUNG).
-#[must_use]
 pub fn calculate_einspeisung(
     malo_id: &str,
     lf_mp_id: &str,
@@ -1760,7 +1754,6 @@ pub fn calculate_einspeisung(
 }
 
 /// Calculate a HEMS subscription + event billing invoice (HEMS).
-#[must_use]
 pub fn calculate_hems(
     malo_id: &str,
     lf_mp_id: &str,
@@ -1793,7 +1786,6 @@ pub fn calculate_hems(
 }
 
 /// Calculate an e-mobility CPO/EMSP service invoice (EMOBILITY).
-#[must_use]
 pub fn calculate_emobility(
     malo_id: &str,
     lf_mp_id: &str,
@@ -1826,7 +1818,6 @@ pub fn calculate_emobility(
 }
 
 /// Calculate an energy service invoice (ENERGIEDIENSTLEISTUNG).
-#[must_use]
 pub fn calculate_energiedienstleistung(
     malo_id: &str,
     lf_mp_id: &str,
@@ -1859,7 +1850,6 @@ pub fn calculate_energiedienstleistung(
 }
 
 /// Calculate a §41a dynamic-tariff electricity invoice.
-#[must_use]
 pub fn calculate_dynamic_strom(
     malo_id: &str,
     lf_mp_id: &str,
