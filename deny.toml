@@ -454,6 +454,11 @@ version = "=0.7"
 reason  = "iceberg 0.9.1 uses petgraph 0.7; workspace uses petgraph 0.8."
 
 [[bans.skip]]
+name    = "petgraph"
+version = "0.6"
+reason  = "wasm-compose (via wasmtime 43/extism/mako-plugin) pins petgraph 0.6; iceberg uses 0.7; datafusion/lancedb use 0.8."
+
+[[bans.skip]]
 name    = "phf"
 version = "=0.11"
 reason  = "some crates require phf 0.11; workspace uses phf 0.12."
@@ -793,6 +798,42 @@ reason  = "companion to toml 0.9 (extism cbindgen build-dep chain)."
 name    = "toml_edit"
 version = "=0.22"
 reason  = "runtime (toml 0.8/figment) uses toml_edit 0.22; extism build-dep pulls toml_edit 0.25."
+
+[[bans.skip]]
+name    = "serde_spanned"
+version = "=0.6"
+reason  = "companion to toml 0.8 (runtime figment/slatedb chain); toml 0.9 (extism build-dep) uses serde_spanned 1.1."
+
+# ── rustix 0.38 / linux-raw-sys 0.4 / socket2 0.5 (prometheus + krafka + wasi-common) ──────
+# These older versions are pulled by:
+# - prometheus 0.14 → procfs 0.17 → rustix 0.38 (mako-service rate metrics)
+# - wasi-common 43 → system-interface → rustix 0.38 (extism/mako-plugin WASM sandbox)
+# - krafka 0.12 → socket2 0.5 (mako-service Kafka EventBus feature)
+# Modern stack (asx-rs, foyer/slatedb, tokio) uses rustix 1.x / socket2 0.6.
+
+[[bans.skip]]
+name    = "rustix"
+version = "0.38"
+reason  = "prometheus 0.14 (procfs chain) + wasi-common 43 (extism/mako-plugin) pin rustix 0.38; modern stack uses rustix 1.x."
+
+[[bans.skip]]
+name    = "linux-raw-sys"
+version = "0.4"
+reason  = "companion to rustix 0.38 (prometheus/procfs + wasi-common chain); modern stack pulls linux-raw-sys 0.12."
+
+[[bans.skip]]
+name    = "socket2"
+version = "0.5"
+reason  = "krafka 0.12 (mako-service kafka feature) pins socket2 0.5; tokio/modern stack uses 0.6."
+
+# ── rand_xoshiro 0.6 (wasm-compose/wasmtime 43) ─────────────────────────────
+# im-rc (via wasm-compose/wasmtime 43/extism/mako-plugin) pins rand_xoshiro 0.6;
+# lance-datagen/slatedb use 0.7.
+
+[[bans.skip]]
+name    = "rand_xoshiro"
+version = "0.6"
+reason  = "im-rc (wasm-compose/wasmtime 43/extism) pins rand_xoshiro 0.6; lance-datagen/slatedb use 0.7."
 
 # ── wasm-encoder / wast split (wasmtime 43 internal versioning) ───────────────────
 # wasmtime 43 uses wasm-encoder 0.245 directly; wasm-compose/wat (via wasmtime 43)
