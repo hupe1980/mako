@@ -130,8 +130,7 @@ pub struct RagIngestRequest {
 ///
 /// ## M9 workflow
 ///
-/// ```
-/// 1. agentd receives de.edmd.reading.quality.warning or de.mako.process.initiated (WiM PID)
+/// ```text or de.mako.process.initiated (WiM PID)
 /// 2. msb-history-agent calls edmd MCP get_device_history { malo_id }
 /// 3. msb-history-agent calls POST /api/v1/rag/ingest { source: "msb-{malo_id}", text: <document> }
 /// 4. LanceDB stores chunks → available for natural-language queries

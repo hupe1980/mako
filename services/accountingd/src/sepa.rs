@@ -49,10 +49,10 @@ pub fn build_pain_008(creditor_iban_or_name: &str, entries: &[(&SepaMandateRow, 
                 *amount_ct,
                 mandate.mandatsref.clone(),
             );
-            if let Some(bic_str) = &mandate.bic {
-                if let Ok(bic) = sepa::validate_bic(bic_str) {
-                    entry = entry.with_bic(bic);
-                }
+            if let Some(bic_str) = &mandate.bic
+                && let Ok(bic) = sepa::validate_bic(bic_str)
+            {
+                entry = entry.with_bic(bic);
             }
             entry
         })

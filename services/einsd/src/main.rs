@@ -197,7 +197,7 @@ async fn main() -> anyhow::Result<()> {
                         leistung_kwp: Some(anlage.leistung_kwp),
                         foerderendedatum: Some(anlage.foerderendedatum),
                         billing_date: time::Date::from_calendar_date(
-                            prev_month_year as i32,
+                            prev_month_year,
                             time::Month::try_from(prev_month as u8).unwrap_or(time::Month::January),
                             1,
                         )
@@ -205,25 +205,25 @@ async fn main() -> anyhow::Result<()> {
                         eeg_gesetz: anlage.eeg_gesetz,
                         erzeugungsart: anlage.erzeugungsart.clone(),
                     };
-                    if let Ok(result) = pg::run_settlement(&auto_pool, input).await {
-                        if result.status == "calculated" || result.status == "foerderung_beendet" {
-                            let ce_type = match anlage.settlement_model.as_str() {
-                                "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" => {
-                                    "de.eeg.marktpraemie.berechnet"
-                                }
-                                _ => "de.eeg.verguetung.berechnet",
-                            };
-                            handlers::emit_settlement_ce(
-                                &auto_cfg,
-                                ce_type,
-                                &anlage.tr_id,
-                                &anlage.malo_id,
-                                &result,
-                                prev_month_year as i16,
-                                prev_month,
-                            )
-                            .await;
-                        }
+                    if let Ok(result) = pg::run_settlement(&auto_pool, input).await
+                        && (result.status == "calculated" || result.status == "foerderung_beendet")
+                    {
+                        let ce_type = match anlage.settlement_model.as_str() {
+                            "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" => {
+                                "de.eeg.marktpraemie.berechnet"
+                            }
+                            _ => "de.eeg.verguetung.berechnet",
+                        };
+                        handlers::emit_settlement_ce(
+                            &auto_cfg,
+                            ce_type,
+                            &anlage.tr_id,
+                            &anlage.malo_id,
+                            &result,
+                            prev_month_year as i16,
+                            prev_month,
+                        )
+                        .await;
                     }
                 }
             }

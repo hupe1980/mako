@@ -1184,14 +1184,14 @@ pub async fn put_zahlungsinformation(
     };
 
     // Validate IBAN when present.
-    if let Some(ref iban) = typed.iban {
-        if let Err(msg) = validate_iban(iban) {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": format!("invalid IBAN: {msg}") })),
-            )
-                .into_response();
-        }
+    if let Some(ref iban) = typed.iban
+        && let Err(msg) = validate_iban(iban)
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": format!("invalid IBAN: {msg}") })),
+        )
+            .into_response();
     }
 
     let canonical = serde_json::to_value(&typed).unwrap_or_default();

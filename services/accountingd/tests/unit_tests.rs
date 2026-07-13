@@ -188,7 +188,7 @@ fn format_zero_ct() {
 
 #[test]
 fn format_large_ct() {
-    assert_eq!(format_ct_as_eur(100_000_00), "100000.00");
+    assert_eq!(format_ct_as_eur(10_000_000), "100000.00");
 }
 
 #[test]
@@ -379,7 +379,7 @@ fn dunning_escalation_sequence_is_valid() {
     }
     // Mahnstufe is bounded 1..=3
     let max_stufe: i16 = 3;
-    assert!(max_stufe <= 3 && max_stufe >= 1);
+    assert!((1..=3).contains(&max_stufe));
 }
 
 // ── Sign convention correctness ───────────────────────────────────────────────
@@ -534,7 +534,7 @@ fn pain008_amount_format_large() {
     let formatted = format!("{}.{:02}", abs / 100, abs % 100);
     assert_eq!(formatted, "99999.99");
     // 100_00000 ct = 100000.00 EUR (one hundred thousand)
-    let ct2: i64 = 100_000_00; // 10_000_000 in decimal = 100000.00 EUR
+    let ct2: i64 = 10_000_000; // 10_000_000 ct = 100000.00 EUR (one hundred thousand)
     let abs2 = ct2.unsigned_abs();
     let fmt2 = format!("{}.{:02}", abs2 / 100, abs2 % 100);
     assert_eq!(fmt2, "100000.00");

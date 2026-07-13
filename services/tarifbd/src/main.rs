@@ -49,7 +49,7 @@ use axum::{
 use mako_service::{health::health_routes, load_config};
 use sqlx::PgPool;
 use std::sync::Arc;
-use tarifbd::{config, handlers, pg};
+use tarifbd::{config, handlers};
 use tracing::info;
 
 #[tokio::main]

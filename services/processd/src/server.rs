@@ -16,11 +16,11 @@ use tracing::info;
 
 use mako_service::{cedar::CedarEnforcer, oidc::OidcVerifier};
 
-use crate::{
-    handler::handle_webhook,
-    mcp_server::ProcessdMcpState,
-    pg::{PgAnmeldungRepository, PgApprovalQueue},
-};
+#[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+use crate::pg::PgAnmeldungRepository;
+#[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
+use crate::pg::PgApprovalQueue;
+use crate::{handler::handle_webhook, mcp_server::ProcessdMcpState};
 
 // ── Module state bundles ───────────────────────────────────────────────────────
 

@@ -21,7 +21,7 @@
 //!
 //! ## Port: 9580
 
-use agentd::{agent, config, handlers, llm, mcp, rag};
+use agentd::{handlers, llm};
 use std::sync::Arc;
 
 use anyhow::Context as _;

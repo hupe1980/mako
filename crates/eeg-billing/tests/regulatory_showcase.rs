@@ -648,7 +648,7 @@ fn kwkg_foerderend_calendar_15yr_cap() {
     // This illustrates that kwk_foerderend_calendar catches cases where the plant
     // would otherwise never hit the hour limit.
     assert!(
-        i32::try_from(half_load_h).unwrap() > 30_000,
+        half_load_h > 30_000,
         "at 50% capacity the plant exceeds the hour limit naturally, but calendar cap applies earlier"
     );
 }

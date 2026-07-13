@@ -343,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn spitzenleistung_messZV_definition() {
+    fn spitzenleistung_mess_zv_definition() {
         // §2 Nr. 17 MessZV: Spitzenleistung = höchste Viertelstundenleistung
         // 3.5 kWh in 15 min = 14 kW
         // 1.0 kWh in 15 min = 4 kW

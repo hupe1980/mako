@@ -1387,7 +1387,7 @@ fn negativpreis_eeg2023_settlement_triggers_with_1h() {
     assert_eq!(out.status, SettlementStatus::Calculated);
     assert_eq!(out.eligible_kwh, Some(dec!(90)));
     // 90 × 8.11 / 100 = 7.299
-    assert!(out.settlement_eur.map_or(false, |e| e < dec!(8.11)));
+    assert!(out.settlement_eur.is_some_and(|e| e < dec!(8.11)));
     // Full EUR 0 when all kWh are during negative prices:
     let out_zero = calculate_settlement(&SettleInput {
         model: SettlementModel::Verguetung,

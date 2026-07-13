@@ -554,28 +554,28 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
     .context("persist settlement")?;
 
     // ── KWKG: update accumulated kWh + auto-expire when limit reached ────────
-    if input.settlement_model == "KWKG_ZUSCHLAG" {
-        if let Some(kwh_this_period) = effective_kwh.filter(|&k| k > Decimal::ZERO) {
-            let new_status = if status == "foerderung_beendet" {
-                "foerderung_beendet"
-            } else {
-                "aktiv"
-            };
-            sqlx::query(
-                r"UPDATE eeg_anlagen
-                  SET kwk_strom_kwh_gesamt = COALESCE(kwk_strom_kwh_gesamt, 0) + $3,
-                      status = $4,
-                      updated_at = now()
-                  WHERE tr_id = $1 AND tenant = $2",
-            )
-            .bind(&input.tr_id)
-            .bind(&input.tenant)
-            .bind(kwh_this_period)
-            .bind(new_status)
-            .execute(pool)
-            .await
-            .context("update kwk_strom_kwh_gesamt")?;
-        }
+    if input.settlement_model == "KWKG_ZUSCHLAG"
+        && let Some(kwh_this_period) = effective_kwh.filter(|&k| k > Decimal::ZERO)
+    {
+        let new_status = if status == "foerderung_beendet" {
+            "foerderung_beendet"
+        } else {
+            "aktiv"
+        };
+        sqlx::query(
+            r"UPDATE eeg_anlagen
+              SET kwk_strom_kwh_gesamt = COALESCE(kwk_strom_kwh_gesamt, 0) + $3,
+                  status = $4,
+                  updated_at = now()
+              WHERE tr_id = $1 AND tenant = $2",
+        )
+        .bind(&input.tr_id)
+        .bind(&input.tenant)
+        .bind(kwh_this_period)
+        .bind(new_status)
+        .execute(pool)
+        .await
+        .context("update kwk_strom_kwh_gesamt")?;
     }
 
     Ok(SettleResult {

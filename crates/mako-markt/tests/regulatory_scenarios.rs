@@ -18,6 +18,7 @@ mod tests {
         MaloId::try_from(id).expect("valid MaLo-ID")
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn vs_rec(
         malo: &str,
         tenant: &str,
@@ -424,7 +425,7 @@ mod tests {
             valid_to: None,
         };
         let today = time::OffsetDateTime::now_utc().date();
-        let valid = a.valid_from <= today && a.valid_to.map_or(true, |to| to >= today);
+        let valid = a.valid_from <= today && a.valid_to.is_none_or(|to| to >= today);
         assert!(valid, "open-ended assignment must be valid today");
     }
 
@@ -438,7 +439,7 @@ mod tests {
             valid_to: Some(date!(2021 - 12 - 31)),
         };
         let today = time::OffsetDateTime::now_utc().date();
-        let valid = a.valid_from <= today && a.valid_to.map_or(true, |to| to >= today);
+        let valid = a.valid_from <= today && a.valid_to.is_none_or(|to| to >= today);
         assert!(!valid, "past assignment must be expired");
     }
 
@@ -452,7 +453,7 @@ mod tests {
             valid_to: None,
         };
         let today = time::OffsetDateTime::now_utc().date();
-        let valid = a.valid_from <= today && a.valid_to.map_or(true, |to| to >= today);
+        let valid = a.valid_from <= today && a.valid_to.is_none_or(|to| to >= today);
         assert!(!valid, "future assignment must not yet be valid");
     }
 }

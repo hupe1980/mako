@@ -245,6 +245,7 @@ pub async fn write_entry(
 ///
 /// Value date may differ from booking date for backdated corrections or
 /// manual bookings posted after the fact (§238 HGB Buchungsdatum vs. Wertstellung).
+#[allow(clippy::too_many_arguments)]
 pub async fn write_entry_with_value_date(
     pool: &PgPool,
     account_id: Uuid,

@@ -549,19 +549,19 @@ pub async fn tarifwechsel_vertrag(
     if !input.override_preisgarantie {
         match fetch_vertrag(&pool, vertrag_id, &cfg.tenant).await {
             Ok(Some(v)) => {
-                if let Some(garantie_bis) = v.preisgarantie_bis {
-                    if input.wirksamkeit <= garantie_bis {
-                        return (
-                            StatusCode::UNPROCESSABLE_ENTITY,
-                            Json(serde_json::json!({
-                                "error": "Tarifwechsel blocked by Preisgarantie",
-                                "preisgarantie_bis": garantie_bis.to_string(),
-                                "wirksamkeit": input.wirksamkeit.to_string(),
-                                "hint": "Set override_preisgarantie=true to bypass (operator use only)"
-                            })),
-                        )
-                            .into_response();
-                    }
+                if let Some(garantie_bis) = v.preisgarantie_bis
+                    && input.wirksamkeit <= garantie_bis
+                {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(serde_json::json!({
+                            "error": "Tarifwechsel blocked by Preisgarantie",
+                            "preisgarantie_bis": garantie_bis.to_string(),
+                            "wirksamkeit": input.wirksamkeit.to_string(),
+                            "hint": "Set override_preisgarantie=true to bypass (operator use only)"
+                        })),
+                    )
+                        .into_response();
                 }
             }
             Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -1165,14 +1165,14 @@ pub async fn put_zahlungsinformation_kunde(
     };
 
     // Validate IBAN when present.
-    if let Some(ref iban) = typed.iban {
-        if let Err(msg) = sepa::validate_iban(iban) {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": format!("invalid IBAN: {msg}") })),
-            )
-                .into_response();
-        }
+    if let Some(ref iban) = typed.iban
+        && let Err(msg) = sepa::validate_iban(iban)
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": format!("invalid IBAN: {msg}") })),
+        )
+            .into_response();
     }
 
     let canonical = serde_json::to_value(&typed).unwrap_or_default();
