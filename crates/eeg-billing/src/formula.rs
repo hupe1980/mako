@@ -3,7 +3,6 @@
 use billing::EuroAmount;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use time::macros::date;
 
 use crate::model::{SettleInput, SettleOutput, SettlePosition, SettlementModel, SettlementStatus};
 
@@ -40,25 +39,6 @@ fn total(positions: &[SettlePosition]) -> Option<Decimal> {
     } else {
         Some(positions.iter().map(|p| p.eur).sum())
     }
-}
-
-/// §51 EEG — determine whether the Negativpreisregel applies to this plant.
-///
-/// Uses the plant's `eeg_gesetz` to apply the correct version-specific threshold:
-/// - EEG ≤2014: no rule (returns false)
-/// - EEG 2017: ≥6 consecutive hours, exempt <500 kW (non-wind) / <3 MW (wind)
-/// - EEG 2021: ≥4 consecutive hours, exempt <500 kW (all types)
-/// - EEG 2023 (or None): any period, exempt <100 kW
-fn should_apply_negativpreis(
-    kwh_during_negative_epex: Option<Decimal>,
-    inbetriebnahme: Option<time::Date>,
-    leistung_kwp: Option<Decimal>,
-) -> bool {
-    use crate::version::EegGesetz;
-    let gesetz = inbetriebnahme
-        .map(|d| EegGesetz::from_inbetriebnahme_year(d.year()))
-        .unwrap_or_default();
-    should_apply_negativpreis_versioned(kwh_during_negative_epex, leistung_kwp, gesetz, None)
 }
 
 /// Version-aware §51 applicability check.

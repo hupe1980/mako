@@ -3147,24 +3147,24 @@ async fn dispatch_mabis_iftsta(
 
 // ── Command registry ──────────────────────────────────────────────────────────
 
-/// Registry of all supported ERP commands.
-///
-/// Each entry binds a command name to its permitted Marktrollen, primary PID,
-/// and a typed dispatch function.  This single source of truth prevents the
-/// three parallel data structures that existed before F-022 from drifting apart:
-/// - a `(&str, &[&str])` role table
-/// - a `dispatch_command` match arm
-/// - a `command_primary_pid` match arm
-///
-/// Adding a command here without supplying a `dispatch` function pointer is a
-/// **compile error**.  Stub commands that are not yet fully implemented carry an
-/// explicit `cmd_*` stub function that returns `NotImplemented`.
-///
-/// Sources:
-/// - BDEW GPKE AHB (BK6-22-024, LFW24)
-/// - BDEW GeLi Gas AHB (BK7-24-01-009)
-/// - BDEW WiM AHB (BK6-18-032)
-/// - BDEW MABIS AHB (BK6-24-174)
+// Registry of all supported ERP commands.
+//
+// Each entry binds a command name to its permitted Marktrollen, primary PID,
+// and a typed dispatch function.  This single source of truth prevents the
+// three parallel data structures that existed before F-022 from drifting apart:
+// - a `(&str, &[&str])` role table
+// - a `dispatch_command` match arm
+// - a `command_primary_pid` match arm
+//
+// Adding a command here without supplying a `dispatch` function pointer is a
+// **compile error**.  Stub commands that are not yet fully implemented carry an
+// explicit `cmd_*` stub function that returns `NotImplemented`.
+//
+// Sources:
+// - BDEW GPKE AHB (BK6-22-024, LFW24)
+// - BDEW GeLi Gas AHB (BK7-24-01-009)
+// - BDEW WiM AHB (BK6-18-032)
+// - BDEW MABIS AHB (BK6-24-174)
 
 // ── WiM Gas Invoic dispatch functions ─────────────────────────────────────────
 
