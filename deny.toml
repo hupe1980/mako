@@ -28,6 +28,15 @@ allow = [
     # CC0-1.0: Creative Commons Zero — public domain dedication.
     # Used by some data/test crates as transitive deps.
     "CC0-1.0",
+    # BSL-1.0: Boost Software License 1.0 — OSI-approved, FSF Free/Libre, permissive.
+    # Introduced via xxhash-rust (lancedb → lance-encoding → agentd).
+    "BSL-1.0",
+    # CDDL-1.0: Common Development and Distribution License 1.0 — OSI-approved, FSF Free/Libre.
+    # Weak copyleft (file-level). Introduced via inferno (flamegraph, lancedb profiling).
+    "CDDL-1.0",
+    # MPL-2.0: Mozilla Public License 2.0 — OSI-approved, FSF Free/Libre.
+    # Weak copyleft (file-level). Introduced via option-ext (lance/lancedb transitive dep).
+    "MPL-2.0",
 ]
 confidence-threshold = 0.9
 
@@ -282,19 +291,6 @@ name    = "windows_x86_64_gnu"
 version = "0.48"
 reason  = "windows_x86_64_gnu 0.48 legacy path alongside newer version."
 
-# ── mako-service / krafka transitive version skew (--all-features only) ─────────
-# krafka (Kafka EventBus backend in mako-service) pins socket2 0.5 which brings in
-# windows-sys 0.52; tokio / modern ecosystem uses socket2 0.6 / windows-sys 0.61.
-# Only exposed under --all-features; production binaries use the kafka feature gate.
-[[bans.skip]]
-name    = "socket2"
-version = "0.5"
-reason  = "krafka (mako-service kafka feature) pins socket2 0.5; tokio pulls 0.6. Resolve when krafka bumps socket2."
-
-[[bans.skip]]
-name    = "windows-sys"
-version = "0.52"
-reason  = "socket2 0.5 (krafka) pulls windows-sys 0.52; modern stack uses 0.59/0.61. Resolve when krafka bumps socket2."
 
 # ── governor / prometheus transitive version skew (mako-service) ─────────────────
 # mako-service pulls governor 0.6 (rate-limit) → dashmap 5.5.3.
@@ -376,15 +372,6 @@ ignore = [
     # Docker images in tests, not to extract user-supplied archives.
     # Resolve when testcontainers releases with a patched bollard.
     { id = "RUSTSEC-2025-0134", reason = "tokio-tar PAX smuggling; dev-only dep via testcontainers/bollard — not in production binaries, no user-supplied archive input" },
-    # RUSTSEC-2026-0179: postgres-protocol SCRAM unbounded iteration count CPU-exhaustion DoS.
-    # postgres-protocol is a transitive dep of sqlx. Exploitable only if the PostgreSQL server
-    # is compromised and sends a malicious SCRAM challenge — internal cluster services only.
-    # Resolve when sqlx releases with a patched postgres-protocol.
-    { id = "RUSTSEC-2026-0179", reason = "postgres-protocol SCRAM DoS; internal DB connections only — no untrusted PostgreSQL server in deployment" },
-    # RUSTSEC-2026-0180: postgres-protocol hstore panic on malformed value.
-    # Same crate, same sqlx transitive dep chain. Triggered only by a malicious PostgreSQL
-    # server returning a malformed hstore value — not reachable from user input.
-    { id = "RUSTSEC-2026-0180", reason = "postgres-protocol hstore panic; internal DB connections only — no untrusted PostgreSQL server in deployment" },
     # RUSTSEC-2023-0071: rsa Marvin Attack timing side-channel.
     # rsa is pulled transitively by mako-as4 → asx-rs → WS-Security XML crypto.
     # The rsa crate is used for PKCS#1 signature verification of AS4 messages from
@@ -810,14 +797,10 @@ version = "=0.13"
 reason  = "object_store three-way split after cargo update: 0.12 (slatedb), 0.13 (mid), 0.14 (iceberg). Resolve when all consumers align on 0.14."
 
 # ── toml_edit 0.22 (extism vs figment/runtime toml) ─────────────────────────────
-# extism 1.30.0 (mako-plugin WASM sandbox) transitively pulls toml_edit 0.25 via
-# proc-macro-crate → cbindgen build-dep. The workspace runtime (toml 0.8 / figment)
-# uses toml_edit 0.22. Pure build-time vs runtime split — no shared state.
-# Resolve when extism or cbindgen drops the toml_edit 0.25 dependency.
-[[bans.skip]]
-name    = "toml_edit"
-version = "=0.22"
-reason  = "workspace runtime (toml 0.8/figment) uses toml_edit 0.22; extism (mako-plugin WASM build dep) pulls toml_edit 0.25. Resolve when extism/cbindgen updates."
+# toml_edit 0.25 pulled by extism's cbindgen build-dep is build-time only;
+# cargo-deny evaluates the runtime graph where only toml_edit 0.22 appears.
+# Skip entry retained for completeness; cargo-deny marks it unnecessary on
+# runtime-only graph evaluation.
 
 # ── ordered-float 4.x (three-way: 2 / 4 / 5) ────────────────────────────────────
 # 2 was already skipped above (petgraph 0.7). Adding 4.x for the cargo update bump.
