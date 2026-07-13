@@ -125,7 +125,7 @@ pub fn hampel_filter(values: &[f64], k: usize, t: f64) -> Vec<usize> {
 
         let mut sw = window.clone();
         sw.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let median = if sw.len() % 2 == 0 {
+        let median = if sw.len().is_multiple_of(2) {
             (sw[sw.len() / 2 - 1] + sw[sw.len() / 2]) / 2.0
         } else {
             sw[sw.len() / 2]
@@ -133,7 +133,7 @@ pub fn hampel_filter(values: &[f64], k: usize, t: f64) -> Vec<usize> {
 
         let mut abs_devs: Vec<f64> = window.iter().map(|x| (x - median).abs()).collect();
         abs_devs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let mad = if abs_devs.len() % 2 == 0 {
+        let mad = if abs_devs.len().is_multiple_of(2) {
             (abs_devs[abs_devs.len() / 2 - 1] + abs_devs[abs_devs.len() / 2]) / 2.0
         } else {
             abs_devs[abs_devs.len() / 2]
@@ -227,7 +227,7 @@ pub fn score_intervals(samples: &[MeterInterval], cfg: QualityConfig) -> Quality
         .collect();
 
     // 4. Hampel outlier detection
-    let outlier_indices = if sorted.len() >= cfg.hampel_k * 2 + 1 {
+    let outlier_indices = if sorted.len() > cfg.hampel_k * 2 {
         hampel_filter(&values, cfg.hampel_k, cfg.hampel_t)
     } else {
         vec![]
@@ -344,7 +344,7 @@ pub fn score_intervals_raw(values: &[f64], k: usize, t: f64) -> QualityGrade {
     if values.is_empty() {
         return QualityGrade::F;
     }
-    let outlier_count = if values.len() >= k * 2 + 1 {
+    let outlier_count = if values.len() > k * 2 {
         hampel_filter(values, k, t).len()
     } else {
         0
