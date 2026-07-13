@@ -767,11 +767,48 @@ name    = "object_store"
 version = "=0.13"
 reason  = "object_store three-way split after cargo update: 0.12 (slatedb), 0.13 (mid), 0.14 (iceberg). Resolve when all consumers align on 0.14."
 
-# ── toml_edit 0.22 (extism vs figment/runtime toml) ─────────────────────────────
-# toml_edit 0.25 pulled by extism's cbindgen build-dep is build-time only;
-# cargo-deny evaluates the runtime graph where only toml_edit 0.22 appears.
-# Skip entry retained for completeness; cargo-deny marks it unnecessary on
-# runtime-only graph evaluation.
+# ── toml ecosystem split (extism/mako-plugin/wasmtime build-dep chain) ────────────
+# extism 1.30 (mako-plugin WASM sandbox) + wasmtime 43 pull a newer toml/toml_edit
+# ecosystem via cbindgen, proc-macro-crate, and witx build dependencies.
+# The workspace runtime (figment, slatedb) uses toml 0.8 / toml_edit 0.22.
+# All duplicates below are build-time vs runtime splits — no shared state.
+# Resolve when extism/wasmtime align their build deps with the runtime toml stack.
+
+[[bans.skip]]
+name    = "toml"
+version = "=0.8"
+reason  = "runtime (figment/slatedb) uses toml 0.8; extism cbindgen build-dep uses toml 0.9."
+
+[[bans.skip]]
+name    = "toml_datetime"
+version = "=0.6"
+reason  = "companion to toml 0.8 (toml_edit 0.22 chain)."
+
+[[bans.skip]]
+name    = "toml_datetime"
+version = "=0.7"
+reason  = "companion to toml 0.9 (extism cbindgen build-dep chain)."
+
+[[bans.skip]]
+name    = "toml_edit"
+version = "=0.22"
+reason  = "runtime (toml 0.8/figment) uses toml_edit 0.22; extism build-dep pulls toml_edit 0.25."
+
+# ── wasm-encoder / wast split (wasmtime 43 internal versioning) ───────────────────
+# wasmtime 43 uses wasm-encoder 0.245 directly; wasm-compose/wat (via wasmtime 43)
+# depend on wasm-encoder 0.253 / wast 253. Older wast 35 is pulled by witx/wiggle
+# (also via wasmtime 43). Both splits are internal to the wasmtime 43 dep tree.
+# Resolve when wasmtime aligns its internal wasm-tools versions.
+
+[[bans.skip]]
+name    = "wasm-encoder"
+version = "0.245"
+reason  = "wasmtime 43 (extism/mako-plugin) uses wasm-encoder 0.245; wasm-compose/wat use 0.253."
+
+[[bans.skip]]
+name    = "wast"
+version = "35"
+reason  = "witx/wiggle (wasmtime 43 build deps) use wast 35; wasm-compose/wat use wast 253."
 
 # ── ordered-float 4.x (three-way: 2 / 4 / 5) ────────────────────────────────────
 # 2 was already skipped above (petgraph 0.7). Adding 4.x for the cargo update bump.
