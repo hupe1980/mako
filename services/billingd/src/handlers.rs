@@ -288,17 +288,16 @@ async fn dispatch_calculator(
             // Auto-fetch gasqualitaet from marktd when not supplied by the ERP.
             // The measured brennwert_kwh_per_m3 from edmd already reflects the H2 blend;
             // this annotation ensures §22 MessZV audit transparency on every Gas Rechnung.
-            if meter.gasqualitaet.is_none() {
-                if let Ok(Some(malo_fields)) = marktd.get_malo(malo_id).await {
-                    if malo_fields.gasqualitaet.is_some() {
-                        meter.gasqualitaet = malo_fields.gasqualitaet;
-                        tracing::debug!(
-                            malo_id,
-                            gasqualitaet = ?meter.gasqualitaet,
-                            "billingd GAS: injected gasqualitaet from marktd"
-                        );
-                    }
-                }
+            if meter.gasqualitaet.is_none()
+                && let Ok(Some(malo_fields)) = marktd.get_malo(malo_id).await
+                && malo_fields.gasqualitaet.is_some()
+            {
+                meter.gasqualitaet = malo_fields.gasqualitaet;
+                tracing::debug!(
+                    malo_id,
+                    gasqualitaet = ?meter.gasqualitaet,
+                    "billingd GAS: injected gasqualitaet from marktd"
+                );
             }
             calculate_gas(
                 malo_id,
@@ -1388,10 +1387,9 @@ pub async fn post_vpp_billing(
             .json(&ce)
             .send()
             .await
+            && resp.status().is_success()
         {
-            if resp.status().is_success() {
-                let _ = mark_dispatched(&pool, record_id, ce_id).await;
-            }
+            let _ = mark_dispatched(&pool, record_id, ce_id).await;
         }
     }
 

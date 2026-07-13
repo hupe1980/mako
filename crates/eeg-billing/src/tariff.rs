@@ -6,7 +6,7 @@
 //!
 //! ## Workflow
 //!
-//! 1. Call [`calculate_settlement`] to compute the settlement output.
+//! 1. Call [`crate::calculate_settlement`] to compute the settlement output.
 //! 2. Handle non-billable status variants (`NoData`, `PriceMissing`).
 //! 3. Wrap the output in [`EegSettleTariff`].
 //! 4. Call `.bill(meta, &())` to produce a `BillingDocument`.

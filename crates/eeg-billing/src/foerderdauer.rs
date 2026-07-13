@@ -252,7 +252,7 @@ pub fn kwk_foerderend_calendar(inbetriebnahme: Date) -> Result<Date, ComponentRa
 /// §51 EEG — Return `true` when the Negativpreisregel threshold is met for the given
 /// EEG version and number of consecutive negative-price hours.
 ///
-/// Delegates to [`EegGesetz::negativpreis_stunden_erreicht`].
+/// Delegates to [`crate::version::EegGesetz::negativpreis_stunden_erreicht`].
 ///
 /// # Example
 ///
@@ -277,7 +277,7 @@ pub fn negativpreis_rule_applies_for_version(
 /// §51 EEG — Return the minimum installed capacity in kW below which
 /// the Negativpreisregel exemption applies.
 ///
-/// Delegates to [`EegGesetz::negativpreis_kw_grenze`].
+/// Delegates to [`crate::version::EegGesetz::negativpreis_kw_grenze`].
 /// Pass `None` for `erzeugungsart` to use conservative defaults (non-wind).
 ///
 /// # Example

@@ -118,7 +118,7 @@ impl EegGesetz {
 
     /// Whether the given number of consecutive negative-price hours meets the §51 threshold.
     ///
-    /// Convenience wrapper over [`negativpreis_stunden_schwelle`].
+    /// Convenience wrapper over [`EegGesetz::negativpreis_stunden_schwelle`].
     /// Always returns `false` for KWKG and EEG ≤2012.
     pub fn negativpreis_stunden_erreicht(self, consecutive_hours: u32) -> bool {
         self.negativpreis_stunden_schwelle()

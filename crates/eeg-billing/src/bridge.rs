@@ -1,7 +1,7 @@
 //! Bridge to [`billing`] document types.
 //!
 //! Since [`SettleOutput`] now carries `positions: Vec<SettlePosition>`, this
-//! module is a thin adapter — it calls [`SettlePosition::to_line_item`] on each
+//! module is a thin adapter — it calls `SettlePosition::to_line_item` on each
 //! position and handles the special cases (`NoData`, `PriceMissing`, `Sanctioned`).
 //!
 //! # Why not `billing::Tariff`?
@@ -10,7 +10,7 @@
 //! **scalar calculation** with status variants (`NoData`, `PriceMissing`, `Sanctioned`,
 //! `FoerderungBeendet`) that cannot be represented as `Err(BillingError)`, and with
 //! stateful KWKG hour-limit tracking.  The positions are already computed by
-//! [`calculate_settlement`] — this module only converts them to `billing::LineItem`.
+//! [`crate::calculate_settlement`] — this module only converts them to `billing::LineItem`.
 //!
 //! # Example
 //!
@@ -42,8 +42,8 @@ use crate::model::{SettleOutput, SettlementStatus};
 /// For `Sanctioned`, returns a single EUR 0 line tagged `"§25-sanctioned"` for audit
 /// trail.
 ///
-/// For all other statuses, delegates to [`SettlePosition::to_line_item`] on each
-/// position already computed by [`calculate_settlement`].
+/// For all other statuses, delegates to `SettlePosition::to_line_item` on each
+/// position already computed by [`crate::calculate_settlement`].
 pub fn settlement_to_line_items(output: &SettleOutput) -> Vec<LineItem> {
     match output.status {
         // Nothing to bill — no document positions issued

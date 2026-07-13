@@ -70,7 +70,7 @@ pub enum SanktionAlt {
 /// Each type triggers a payment obligation to the NB of €10/kW/month (§52 Abs. 2).
 /// The obligation can be retroactively reduced to €2/kW/month once fulfilled (§52 Abs. 3).
 ///
-/// Use [`crate::foerderdauer::calculate_pflichtzahlung_§52`] to compute the penalty.
+/// Use [`crate::foerderdauer::calculate_pflichtzahlung`] to compute the penalty.
 ///
 /// ## EEG version note
 ///
@@ -512,7 +512,7 @@ pub struct SettleInput {
     /// | `SpeicherAnforderungNichtErfuellt` | Nr. 2 | §9 Abs. 5: missing storage requirement |
     /// | `MastrNichtRegistriert` | Nr. 11 | Plant not registered in MaStR |
     ///
-    /// Use [`crate::foerderdauer::calculate_pflichtzahlung_§52`] to compute the penalty amount.
+    /// Use [`crate::foerderdauer::calculate_pflichtzahlung`] to compute the penalty amount.
     ///
     /// When `pflichtverstoss` is `Some`, the settlement formula still computes the
     /// **full Vergütung** — the penalty is returned separately in the output's
@@ -670,7 +670,7 @@ pub struct SettleOutput {
     /// Total settlement amount in EUR (sum of all `positions`).
     ///
     /// `None` when `status` is [`NoData`] or [`PriceMissing`].
-    /// `Some(Decimal::ZERO)` when `status` is [`Sanctioned`] or [`Eigenverbrauch`].
+    /// `Some(Decimal::ZERO)` when `status` is [`Sanctioned`] or `Eigenverbrauch`.
     ///
     /// [`NoData`]: SettlementStatus::NoData
     /// [`PriceMissing`]: SettlementStatus::PriceMissing
