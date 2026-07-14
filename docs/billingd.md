@@ -108,11 +108,11 @@ graph LR
         WP["WAERMEPUMPE<br/>§14a mandatory<br/>(like STROM)"]
         WB["WALLBOX<br/>§14a mandatory<br/>(like STROM)"]
     end
-    subgraph heat_gas [Gas & Heat]
+    subgraph heat_gas ["Gas & Heat"]
         GAS["GAS<br/>§10 GasGVV Brennwertkorrektur<br/>Energiesteuer §2 EnergieStG<br/>BEHG CO₂"]
         WAERME["WAERME<br/>Grundpreis + Leistungspreis<br/>+ Arbeitspreis (kWh_th)"]
     end
-    subgraph solar_eeg [Solar & Feed-in]
+    subgraph solar_eeg ["Solar & Feed-in"]
         SOLAR["SOLAR<br/>§42b Mieterstrom-Aufschlag<br/>§42a GGV-Rabatt<br/>Eigenverbrauch supply"]
         EEG["EEG<br/>Vergütung / Marktprämie<br/>Managementprämie / KWKG<br/>(Gutschrift / credit note)"]
         EINSP["EINSPEISUNG<br/>Direktvermarktung<br/>Marktwert − Vermarktungsgebühr"]

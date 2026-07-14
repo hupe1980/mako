@@ -175,7 +175,7 @@ graph TB
     makod["makod :8080 / :4080\nEDIFACT ↔ AS4 · SlateDB\nGPKE / WiM / GeLi Gas / MABIS"]
     marktd["marktd :8180 · PostgreSQL\nMaLo/MeLo/contracts · Vertrag\ntyped rubo4e::current API\nEventBus fan-out"]
     invoicd["invoicd :8280 · PostgreSQL\nINVOIC plausibility · REMADV\n§22 MessZV receipts"]
-    edmd["edmd :8380 · PostgreSQL\nVec&lt;Energiemenge&gt; deliveries\nLastgang · MeterBillingPeriod"]
+    edmd["edmd :8380 · PostgreSQL\nVec<Energiemenge> deliveries\nLastgang · MeterBillingPeriod"]
     obsd["obsd :8480 · PostgreSQL\nprocess projections\nBNetzA §20 KPI reports"]
     processd["processd :8580\nNB STP netz-checker\nLF E_0624 auto-response"]
 
@@ -194,7 +194,7 @@ graph TB
     invoicd -->|"gpke.abrechnung.annehmen/.ablehnen"| makod
     processd -->|"gpke.lieferbeginn.bestaetigen/.ablehnen\ngeli.lieferbeginn.anmelden"| makod
 
-    ERP -->|"GET /api/v1/deliveries/{malo_id}\n(Vec&lt;Energiemenge&gt;)\nGET /obs/kpis"| edmd
+    ERP -->|"GET /api/v1/deliveries/{malo_id}\n(Vec<Energiemenge>)\nGET /obs/kpis"| edmd
     ERP -.->|"GET /obs/kpis\nGET /obs/overdue"| obsd
 ```
 

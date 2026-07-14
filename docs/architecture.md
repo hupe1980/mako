@@ -102,14 +102,14 @@ graph TB
     NB <-->|iMS REST/WS| API
     AS4 & REST & API --> EDI
 
-    SLATE -->|CloudEvents 1.0<br/>HMAC-signed POST| marktd
+    SLATE -->|"CloudEvents 1.0<br/>HMAC-signed POST"| marktd
     FANOUT -->|de.mako.process.initiated| processd
     FANOUT -->|de.mako.process.initiated| invoicd
     FANOUT -->|de.mako.*| edmd
     FANOUT -->|de.mako.*| obsd
-    FANOUT -->|CloudEvents 1.0<br/>HMAC-signed| ERP
+    FANOUT -->|"CloudEvents 1.0<br/>HMAC-signed"| ERP
 
-    NB_MOD -->|GET /api/v1/versorgung<br/>GET /api/v1/malo/{id}/grid| marktd
+    NB_MOD -->|"GET /api/v1/versorgung<br/>GET /api/v1/malo/{id}/grid"| marktd
     LF_MOD -->|GET /api/v1/versorgung| marktd
     NB_MOD & LF_MOD -->|POST /api/v1/commands| makod
 
@@ -118,7 +118,7 @@ graph TB
     CHK -->|POST /api/v1/commands| makod
 
     NNE -->|POST /api/v1/commands| makod
-    SPR -->|POST /api/v1/commands<br/>IFTSTA 21039| makod
+    SPR -->|"POST /api/v1/commands<br/>IFTSTA 21039"| makod
     NIS -->|PUT /api/v1/malo/{id}/grid| marktd
     EEG -->|"GET /api/v1/billing-period
 (Einspeisemenge)"| edmd
