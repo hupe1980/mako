@@ -9,16 +9,17 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [dependencies]
-billing             = { version = "0.4.0", features = ["serde"] }
+billing             = { workspace = true }
+eeg-billing         = { workspace = true, features = ["serde"] }
 rust_decimal        = { workspace = true }
-rust_decimal_macros = "1"
+rust_decimal_macros = { workspace = true }
 serde               = { workspace = true, features = ["derive"] }
 serde_json          = { workspace = true }
 time                = { workspace = true }
+time-tz             = { version = "2", features = ["db"] }
 tracing             = { version = "0.1", default-features = false }
 
 [dev-dependencies]
-rust_decimal_macros = "1"
 time = { workspace = true, features = ["macros"] }
 serde_json = { workspace = true }
 

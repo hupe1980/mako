@@ -20,9 +20,8 @@
 //! use rust_decimal::Decimal;
 //!
 //! let output = calculate_settlement(&SettleInput {
-//!     scheme: eeg_billing::SettlementScheme::FeedInTariff,
+//!     scheme: eeg_billing::SettlementScheme::FeedInTariff { verguetungssatz_ct: Decimal::from_str_exact("8.11").unwrap() },
 //!     einspeisemenge_kwh: Some(Decimal::from(500u32)),
-//!     verguetungssatz_ct: Decimal::from_str_exact("8.11").unwrap(),
 //!     ..SettleInput::default()
 //! });
 //! let items = settlement_to_line_items(&output);

@@ -1,0 +1,16 @@
+[package]
+name        = "grid-billing"
+description = "Role-neutral grid invoice calculation: NNE/KA/MMM/MSB (PIDs 31001/31002/31005/31006/31009/31011) — used by netzbilanzd (NB) and invoicd (LF selbstausstellen). §14a ToU HT/NT. Zero I/O, no float money."
+version.workspace     = true
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+
+[dependencies]
+billing        = { workspace = true }
+rust_decimal   = { workspace = true }
+thiserror      = { workspace = true }
+time           = { workspace = true }
+

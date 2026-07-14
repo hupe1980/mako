@@ -128,6 +128,7 @@ impl SanktionStatus {
             leistung_kw,
             monate_des_verstosses: self.monate_aktiv,
             nachtraeglich_erfuellt: self.erfuellt,
+            technischer_defekt: false, // SanktionStatus tracks ongoing violations, not defects
         })
     }
 }

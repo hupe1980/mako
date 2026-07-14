@@ -9,9 +9,9 @@ repository.workspace  = true
 rust-version.workspace = true
 
 [dependencies]
-billing             = { version = "0.4.0", features = ["serde"] }
+billing             = { workspace = true }
 rust_decimal        = { workspace = true }
-rust_decimal_macros = "1"
+rust_decimal_macros = { workspace = true }
 serde               = { workspace = true, features = ["derive"], optional = true }
 time                = { workspace = true }
 thiserror           = { workspace = true }
@@ -21,5 +21,4 @@ default = []
 serde   = ["dep:serde", "rust_decimal/serde"]
 
 [dev-dependencies]
-rust_decimal_macros = "1"
 time = { workspace = true, features = ["macros"] }

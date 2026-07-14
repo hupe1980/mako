@@ -16,7 +16,7 @@ path = "src/main.rs"
 [dependencies]
 invoic-checker  = { workspace = true }
 mako-markt      = { workspace = true, features = ["makod-client", "marktd-client"] }
-mako-nne        = { workspace = true }
+grid-billing    = { workspace = true }
 mako-edm        = { path = "../../crates/mako-edm" }
 rubo4e          = { workspace = true }
 

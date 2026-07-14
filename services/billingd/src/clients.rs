@@ -146,10 +146,7 @@ fn extract_tariff_from_product_data(
         .and_then(|v| v.as_str())
         .unwrap_or("STROM")
         .to_owned();
-    let register_count = product
-        .and_then(|p| p.get("register_count"))
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+    let register_count = product.and_then(|p| p.get("register_count")).cloned();
     let dynamic_epex = product
         .and_then(|p| p.get("dyn_source"))
         .and_then(|v| v.as_str())
@@ -296,6 +293,18 @@ fn extract_tariff_from_product_data(
         mwst_rate_override: get_decimal("mwst_rate_override"),
         dynamic_epex,
         dynamic_epex_floor_ct_kwh: get_decimal("dynamic_epex_floor_ct_kwh"),
+        // New fields with defaults — populated from tarifbd JSONB when present
+        sect14a_modul1_nne_reduktion_ct_per_kwh: get_decimal(
+            "sect14a_modul1_nne_reduktion_ct_per_kwh",
+        ),
+        sect14a_modul3_entschaedigung_ct_per_kwh: get_decimal(
+            "sect14a_modul3_entschaedigung_ct_per_kwh",
+        ),
+        waerme_leistungspreis_eur_per_kw_year: get_decimal("waerme_leistungspreis_eur_per_kw_year"),
+        hems_subscription_eur_per_month: get_decimal("hems_subscription_eur_per_month"),
+        emobility_service_fee_eur: get_decimal("emobility_service_fee_eur"),
+        emobility_kwh_price_ct: get_decimal("emobility_kwh_price_ct"),
+        // register_count is already set above via shorthand field
     })
 }
 

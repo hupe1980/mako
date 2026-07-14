@@ -10,7 +10,7 @@ Closes the payment lifecycle on REMADV receipt. Zero `f64` in the billing path.
 | **Port** | `:8680` |
 | **Database** | PostgreSQL (`invoice_drafts`, `kostenblatt_records`, `fremdkosten_records`) |
 | **INVOIC PIDs** | 31001 (NNE Strom) · 31002 (MMM Strom/Gas) · 31005 (NNE Gas) · 31009 (MSB-Rechnung) · 31011 (AWH Sperrprozesse Gas) |
-| **Calculation** | `mako_nne::calculate_{nne,mmm,msb}_invoice()` — `EuroAmount` (`i64 × 10⁻⁵`), zero `f64` |
+| **Calculation** | `grid_billing::calculate_{nne,mmm,msb}_invoice()` — returns `GridInvoice` domain type. `into_rechnung()` called locally. `EuroAmount` (`i64 × 10⁻⁵`), zero `f64` |
 | **Pre-dispatch gate** | `invoic-checker` mandatory; `check_outcome = Dispute` blocks dispatch |
 | **MMM prices** | Auto-fetches `mehr`/`minder` from `marktd` (Gas: THE monthly; Strom: ÜNB via `unb_mp_id`) |
 | **Draft lifecycle** | `draft` → `dispatched` → `paid` / `dispatched` ← `Dispute`; `rejected` unblocks re-billing |
@@ -107,5 +107,5 @@ Useful prompts: `nb-invoic-overview`, `mmm-monthly-run`, `investigate-dispute`,
 ## See also
 
 - [Operator guide](../../docs/netzbilanzd.md) — full API reference, configuration, diagrams
-- [`mako-nne`](../../crates/mako-nne/README.md) — pure billing calculation library
+- [`grid-billing`](../../crates/grid-billing/README.md) — pure billing calculation library
 - [`invoic-checker`](../../crates/invoic-checker/README.md) — pre-dispatch plausibility gate

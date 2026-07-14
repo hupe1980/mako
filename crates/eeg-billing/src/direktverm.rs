@@ -26,7 +26,7 @@
 //!
 //! **Important**: Plants in mandatory Direktvermarktung that are temporarily unable
 //! to market (e.g. Direktvermarkter insolvency) use **Ausfallvergütung** (§21 Abs. 1 Nr. 2
-//! EEG 2023, `FailsafeTariff` scheme) — this is NOT the same as switching back to
+//! EEG 2023, `TemporaryFeedInTariff` scheme) — this is NOT the same as switching back to
 //! regular Einspeisevergütung.
 //!
 //! ## Managementprämie (§20 Abs. 3 EEG 2023)

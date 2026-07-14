@@ -386,26 +386,42 @@ pub fn verguetungszeitraum_verlaengerung_qh(lost_quarter_hours: u64, is_solar: b
 /// §24 Abs. 1 Satz 1 Nr. 4 EEG 2023: "innerhalb von zwölf aufeinanderfolgenden
 /// Kalendermonaten in Betrieb genommen worden sind."
 ///
+/// "12 aufeinanderfolgende Kalendermonate" starting from month M covers months M..M+11.
+/// Two plants are within the window when their commissioning months are at most 11 months apart
+/// (month_diff < 12). A plant commissioned exactly 12 calendar months later is **outside**.
+///
 /// # Example
 /// ```rust
 /// use eeg_billing::zusammenlegung_within_12_months;
 /// use time::macros::date;
-/// // Jan 2024 and Dec 2024: same 12-month window → true
+/// // Jan 2024 (month 0) and Dec 2024 (month 11): diff = 11 < 12 → YES
 /// assert!(zusammenlegung_within_12_months(date!(2024-01-15), date!(2024-12-15)));
-/// // Jan 2024 and Jan 2025: exactly 12 months apart → true (boundary)
-/// assert!(zusammenlegung_within_12_months(date!(2024-01-01), date!(2025-01-01)));
-/// // Jan 2024 and Feb 2025: >12 months → false
+/// // Jan 2024 and Jan 2025: diff = 12 months → NO (outside the 12-month window)
+/// assert!(!zusammenlegung_within_12_months(date!(2024-01-01), date!(2025-01-01)));
+/// // Jan 2024 and Feb 2025: diff = 13 months → NO
 /// assert!(!zusammenlegung_within_12_months(date!(2024-01-01), date!(2025-02-01)));
+/// // Dec 2024 and Nov 2025: diff = 11 months → YES
+/// assert!(zusammenlegung_within_12_months(date!(2024-12-01), date!(2025-11-01)));
 /// ```
 pub fn zusammenlegung_within_12_months(ibn_a: Date, ibn_b: Date) -> bool {
-    use time::Duration;
-    let diff = if ibn_a > ibn_b {
-        ibn_a - ibn_b
+    let (earlier, later) = if ibn_a <= ibn_b {
+        (ibn_a, ibn_b)
     } else {
-        ibn_b - ibn_a
+        (ibn_b, ibn_a)
     };
-    // 12 calendar months ≈ 366 days (conservative; covers leap-year February edge)
-    diff <= Duration::days(366)
+    // Calendar-month arithmetic: "innerhalb von zwölf aufeinanderfolgenden Kalendermonaten"
+    // means both plants must fall within the same rolling 12-calendar-month window.
+    //
+    // Example: Jan 2024 (month 0) + Dec 2024 (month 11) → diff = 11 months → YES
+    //          Jan 2024 (month 0) + Jan 2025 (month 12) → diff = 12 months → NO
+    //
+    // The old Duration::days(366) approach was wrong: in a non-leap year it allowed
+    // plants 366 days apart (≈ 12 months + 1 day) to qualify, and in some leap-year
+    // configurations it excluded valid 12-month windows.
+    let month_diff =
+        (later.year() - earlier.year()) as i64 * 12 + later.month() as i64 - earlier.month() as i64;
+    // Strictly less than 12: months [0..11] inclusive = 12 calendar months (§24 Abs. 1 Nr. 4)
+    month_diff < 12
 }
 
 // ── §52 EEG 2023 Pflichtzahlung ───────────────────────────────────────────────
@@ -487,6 +503,7 @@ pub fn zusammenlegung_within_12_months(ibn_a: Date, ibn_b: Date) -> bool {
 ///     leistung_kw: dec!(500),
 ///     monate_des_verstosses: 3,
 ///     nachtraeglich_erfuellt: false,
+///     technischer_defekt: false,
 /// };
 /// let penalty = calculate_pflichtzahlung(&violation);
 /// assert_eq!(penalty, dec!(15000)); // 500 kW × €10 × 3 months
@@ -501,7 +518,8 @@ pub fn zusammenlegung_within_12_months(ibn_a: Date, ibn_b: Date) -> bool {
 ///     typ: SanktionsTyp::VolleinspeisungspflichtVerletzt,
 ///     leistung_kw: dec!(500),
 ///     monate_des_verstosses: 12,
-///     nachtraeglich_erfuellt: false, // has no effect for this type
+///     nachtraeglich_erfuellt: false,
+///     technischer_defekt: false, // has no effect for this type
 /// };
 /// assert_eq!(calculate_pflichtzahlung(&nr10), dec!(12000)); // 500 × €2 × 12
 /// ```
@@ -519,6 +537,26 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
         return dec!(2) * violation.leistung_kw * Decimal::from(violation.monate_des_verstosses);
     }
 
+    // §52 Abs. 3 Satz 2 — technical defect grace: first 2 months waived.
+    // Applies to Nr. 1 (Fernsteuerbarkeit), Nr. 3 (iMSys), Nr. 4 (§10b), Nr. 8 (§21b Abs. 3).
+    // Only for violations occurring after 31 December 2023.
+    let defect_grace_eligible = matches!(
+        violation.typ,
+        SanktionsTyp::FernsteuerbarkeitmFehlend
+            | SanktionsTyp::IMssAnforderungNichtErfuellt
+            | SanktionsTyp::DirektvermarktungspflichtVerletzt
+            | SanktionsTyp::VeraeusserungsformNachweispflichtVerletzt
+    );
+    let effective_months = if violation.technischer_defekt && defect_grace_eligible {
+        // §52 Abs. 3 Satz 2: waive the defect month + following month
+        violation.monate_des_verstosses.saturating_sub(2)
+    } else {
+        violation.monate_des_verstosses
+    };
+    if effective_months == 0 {
+        return Decimal::ZERO;
+    }
+
     // §52 Abs. 3 Nr. 1 — retroactively reduces to €2/kW when obligation is fulfilled
     let reduction_eligible = matches!(
         violation.typ,
@@ -534,7 +572,7 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
         dec!(10) // §52 Abs. 2: base rate for all other violations
     };
 
-    rate * violation.leistung_kw * Decimal::from(violation.monate_des_verstosses)
+    rate * violation.leistung_kw * Decimal::from(effective_months)
 }
 
 /// §36k EEG 2023 — Corrected Anzulegender Wert for wind onshore plants.
@@ -583,4 +621,147 @@ pub fn wind_onshore_korrekturfaktor_corrected_aw(
     korrekturfaktor: Decimal,
 ) -> Decimal {
     (base_aw_ct_kwh * korrekturfaktor).round_dp(5)
+}
+
+// ── §52a Netztrennung ─────────────────────────────────────────────────────────
+
+/// §52a EEG 2023 — Check whether mandatory grid disconnection warning must be issued.
+///
+/// Under §52a Abs. 1 EEG 2023, the NB **must** disconnect the plant (or issue a
+/// one-month warning first per §52a Abs. 2) when the operator has violated §9 Abs. 1/2
+/// or §10b in **at least 6 out of the last 12 calendar months**.
+///
+/// ## Parameters
+///
+/// `violation_months_in_12_month_window` — number of distinct calendar months in the
+/// last 12 months in which the plant was in violation of §9 Abs. 1/2 (Fernsteuerbarkeit)
+/// or §10b (Direktvermarktungspflicht). The caller tracks this from the violation start
+/// dates and the billing history.
+///
+/// ## Return value
+///
+/// `true` when `violation_months_in_12_month_window >= 6`.
+///
+/// ## Legal basis
+///
+/// §52a Abs. 1 EEG 2023:
+/// *„Der Netzbetreiber... muss die Anlage... vom Netz trennen... wenn der Anlagenbetreiber
+/// hinsichtlich dieser Anlage in einem Zeitraum von zwölf Monaten in insgesamt mindestens
+/// sechs Monaten jeweils mindestens einmal gegen §9 Absatz 1 oder Absatz 2 oder gegen
+/// §10b Absatz 1 verstoßen hat..."*
+///
+/// # Example
+///
+/// ```rust
+/// use eeg_billing::foerderdauer::sect52a_netztrennung_erforderlich;
+/// assert!(sect52a_netztrennung_erforderlich(6));
+/// assert!(!sect52a_netztrennung_erforderlich(5));
+/// ```
+#[must_use]
+pub fn sect52a_netztrennung_erforderlich(violation_months_in_12_month_window: u32) -> bool {
+    violation_months_in_12_month_window >= 6
+}
+
+// ── §52 Abs. 6 Satz 3 Verjährung ─────────────────────────────────────────────
+
+/// §52 Abs. 6 Satz 3 EEG 2023 — Compute the Verjährungsdatum for a §52 penalty claim.
+///
+/// The NB's claim for §52 Pflichtzahlung expires at the end of the **second calendar
+/// year following the year of the violation**.
+///
+/// Legal basis: §52 Abs. 6 Satz 3 EEG 2023:
+/// *„Der Anspruch auf die Zahlung verjährt mit Ablauf des zweiten Kalenderjahres,
+/// das auf den Pflichtverstoß nach Absatz 1 folgt."*
+///
+/// | Violation year | Verjährungsdatum |
+/// |---|---|
+/// | 2023 | **2025-12-31** |
+/// | 2024 | **2026-12-31** |
+/// | 2025 | **2027-12-31** |
+///
+/// # Example
+///
+/// ```rust
+/// use eeg_billing::foerderdauer::pflichtzahlung_verjaehrt_am;
+/// use time::macros::date;
+///
+/// assert_eq!(pflichtzahlung_verjaehrt_am(2024).unwrap(), date!(2026-12-31));
+/// assert_eq!(pflichtzahlung_verjaehrt_am(2023).unwrap(), date!(2025-12-31));
+/// ```
+pub fn pflichtzahlung_verjaehrt_am(
+    violation_year: i32,
+) -> Result<time::Date, time::error::ComponentRange> {
+    time::Date::from_calendar_date(violation_year + 2, time::Month::December, 31)
+}
+
+// ── §25 billing_days_fraction ─────────────────────────────────────────────────
+
+/// §25 Abs. 1 Satz 3 / §26 Abs. 1 EEG 2023 — Compute the partial-month billing
+/// fraction for the first commissioning month or the Förderendedatum expiry month.
+///
+/// Returns `Some(fraction)` when a plant is commissioned or decommissioned mid-month.
+/// Returns `None` for full billing months (the common case).
+///
+/// ## Formula
+///
+/// - Commissioning mid-month (day > 1): `fraction = (last_day − day + 1) / days_in_month`
+/// - Förderendedatum mid-month (day < last): `fraction = day / days_in_month`
+///
+/// ## Legal basis
+///
+/// §25 Abs. 1 Satz 3 EEG 2023: "Beginn der Frist... ist der Zeitpunkt der Inbetriebnahme."
+/// §26 Abs. 1 EEG 2023: monthly advance payments for the billing month.
+///
+/// # Example
+///
+/// ```rust
+/// use eeg_billing::foerderdauer::compute_billing_days_fraction;
+/// use time::macros::date;
+///
+/// // Plant commissioned June 15 → 16/30 eligible days
+/// let fraction = compute_billing_days_fraction(
+///     Some(date!(2024-06-15)),
+///     None,
+///     Some(date!(2024-06-01)),
+/// );
+/// assert!(fraction.is_some_and(|f| f > rust_decimal::Decimal::ZERO && f < rust_decimal::Decimal::ONE));
+///
+/// // Full month → None
+/// assert!(compute_billing_days_fraction(None, None, Some(date!(2024-06-01))).is_none());
+/// ```
+pub fn compute_billing_days_fraction(
+    inbetriebnahme: Option<Date>,
+    foerderendedatum: Option<Date>,
+    billing_date: Option<Date>,
+) -> Option<rust_decimal::Decimal> {
+    let bd = billing_date?;
+    let by = bd.year();
+    let bm = bd.month();
+    let days_in_month = bm.length(by) as i64;
+
+    // Check commissioning in current billing month
+    if let Some(ibn) = inbetriebnahme
+        && ibn.year() == by
+        && ibn.month() == bm
+        && ibn.day() > 1
+    {
+        let days_active = (days_in_month - ibn.day() as i64 + 1).max(0);
+        return Some(
+            rust_decimal::Decimal::from(days_active) / rust_decimal::Decimal::from(days_in_month),
+        );
+    }
+
+    // Check Förderdauer expiry in current billing month
+    if let Some(fed) = foerderendedatum
+        && fed.year() == by
+        && fed.month() == bm
+        && fed.day() < days_in_month as u8
+    {
+        let days_active = fed.day() as i64;
+        return Some(
+            rust_decimal::Decimal::from(days_active) / rust_decimal::Decimal::from(days_in_month),
+        );
+    }
+
+    None
 }

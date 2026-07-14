@@ -1,4 +1,10 @@
-//! Role-neutral NNE/KA/MMM invoice calculation for GPKE billing processes.
+//! Role-neutral **grid invoice calculation** for German energy market billing.
+//!
+//! Covers all DSO/TSO-side INVOIC documents:
+//! - **NNE** (Netznutzungsentgelt) — PIDs 31001, 31005, 31011
+//! - **MMM** (Mehr-/Mindermengensaldo) — PID 31002
+//! - **MSB** (Messstellenbetrieb) — PID 31009
+//! - **Selbst ausgestellte Rechnung** — PID 31006 (LF acting as NB)
 //!
 //! Used by both the **NB** (`netzbilanzd`) to generate invoices and the **LF**
 //! (`invoicd`) to self-issue invoices under §20 MessZV.  The formula is identical
@@ -19,11 +25,15 @@
 //! - **Self-validating** — all generated invoices satisfy `invoic-checker` checks 1–3
 //!   (period validity, position arithmetic, document total) by construction.
 //!   Check 4–5 (tariff deviation) depends on the `PreisblattStore` supplied by the caller.
+//! - **BO4E-free output** — returns [`GridInvoice`] (pure domain type).  The service
+//!   layer (netzbilanzd, invoicd) owns the `rubo4e::current::Rechnung` conversion via a
+//!   local `into_rechnung()` helper.  This keeps grid-billing publishable to crates.io
+//!   without pulling in the internal `rubo4e` crate.
 //!
 //! # Example
 //!
 //! ```rust,no_run
-//! use mako_nne::{NneInput, calculate_nne_invoice};
+//! use grid_billing::{NneInput, calculate_nne_invoice};
 //! use rust_decimal::Decimal;
 //! use time::macros::date;
 //!
@@ -57,4 +67,4 @@ pub mod types;
 
 pub use billing::{calculate_mmm_invoice, calculate_msb_invoice, calculate_nne_invoice};
 pub use error::BillingError;
-pub use types::{BillingResult, MmmInput, MsbInput, NneInput};
+pub use types::{GridInvoice, InvoicePosition, MmmInput, MsbInput, NneInput, QuantityUnit};

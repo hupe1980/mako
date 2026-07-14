@@ -51,9 +51,8 @@
 //! use time::macros::date;
 //!
 //! let output = calculate_settlement(&SettleInput {
-//!     scheme: eeg_billing::SettlementScheme::FeedInTariff,
+//!     scheme: eeg_billing::SettlementScheme::FeedInTariff { verguetungssatz_ct: dec!(8.51) },
 //!     einspeisemenge_kwh: Some(dec!(500)),
-//!     verguetungssatz_ct: dec!(8.51),
 //!     leistung_kwp: Some(dec!(9.5)),
 //!     inbetriebnahme: Some(date!(2024-06-01)),
 //!     ..SettleInput::default()

@@ -67,7 +67,7 @@ graph TB
     end
 
     subgraph netzbilanzd ["netzbilanzd :8680 — NNE billing (NB)"]
-        NNE["mako-nne\nNNE/KA/MMM calculation\ninvoic-checker self-validate"]
+        NNE["grid-billing\nNNE/KA/MMM/MSB calculation\nGridInvoice domain type\ninto_rechnung() in service"]
         DRAFT_DB["PostgreSQL\ninvoice_drafts"]
         NNE --> DRAFT_DB
     end
@@ -218,15 +218,49 @@ Each is independently testable and suitable for crates.io publication.
 | `edi-energy` | EDIFACT parse / validate / build | `parse()`, `Platform`, `Validator` |
 | `mako-engine` | Event-sourced process runtime | `Workflow`, `EventStore`, `OutboxStore`, `DeadlineStore` |
 | `mako-markt` | Market data domain types + repo traits | `MaloId`, `MeloId`, `MarktpartnerId`, `VersorgungsStatus` |
-| `mako-nne` | NNE/KA/MMM/MSB invoice arithmetic | `calculate_nne_invoice`, `EuroAmount` |
-| `energy-billing` | Pure multi-product retail energy billing (LF) | `calculate_strom/gas/waerme/solar/eeg/einspeisung/dynamic_strom`; 12 categories; §14a; §41a EPEX dynamic + price floor; §51 EEG contractual; 44 tests; zero I/O |
-| `eeg-billing` | EEG/KWKG settlement formulas (NB) | `calculate_settlement`, 9 models, §25/§27 rules |
-| `metering` | German energy metering domain | `MeterInterval`, `aggregate`, `gas_m3_to_kwh_hs`, `score_intervals` (Hampel, QualityGrade A/B/C/F) |
+| `grid-billing` | NNE/KA/MMM/MSB grid invoice arithmetic | `calculate_nne_invoice`, `GridInvoice`; no rubo4e dep; `into_rechnung()` in service layer |
+| `energy-billing` | Pure multi-product retail energy billing (LF) | `BillingEngine`, `BillingProvider` trait; 12 categories; §41a EPEX dynamic; `GgvNutzungsplan` §42b; 44 tests; zero I/O |
+| `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 9 settlement schemes, §51/§52 rules, 301 tests |
+| `metering` | German energy metering domain | `MeterInterval`, `aggregate`, `fill_gaps` (§17 MessZV), `gas_m3_to_kwh_hs`, `score_intervals` (Hampel A/B/C/F) |
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A97/A99 |
 | `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
 | `mako-service` | **Service SDK** — cross-cutting infrastructure for all 16 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `EventBus`, `ServiceBuilder` |
 | `mako-plugin` | WASM plugin extension system | `PluginRegistry`, 5 extension-point traits, Extism sandbox |
+
+### Billing crate hierarchy
+
+```mermaid
+graph BT
+    billing["billing 0.4\n(crates.io)\nEuroAmount, LineItem,\nBillingError"]
+
+    metering["metering\nMeterInterval · fill_gaps (§17)\nHampel quality A/B/C/F\ngas_m3_to_kwh_hs"]
+
+    eeg["eeg-billing\n9 EEG/KWKG settlement schemes\n§51/§52/§23a/§36k rules\n301 tests · zero I/O"]
+
+    grid["grid-billing\nNNE · KA · MMM · MSB\nGridInvoice (no rubo4e)\ninto_rechnung() in service"]
+
+    energy["energy-billing\nBillingEngine · BillingProvider trait\n12 product categories\n§41a EPEX · GgvNutzungsplan §42b"]
+
+    netzbilanzd["netzbilanzd :8680\nNB billing daemon\nINVOIC 31001/31002/31005/31009/31011\ninvoice_drafts lifecycle"]
+
+    billingd["billingd :9280\nLF retail billing daemon\nXRechnung 3.0 / ZUGFeRD 2.3"]
+
+    einsd["einsd :9180\nEEG/KWKG settlement daemon\n9 settlement schemes · MaStR\n§52 sanctions · Repowering"]
+
+    invoicd["invoicd :8280\nINVOIC plausibility daemon\nLF selbstausstellen 31006"]
+
+    billing --> eeg
+    billing --> energy
+    billing --> grid
+    metering --> energy
+    metering --> netzbilanzd
+    eeg --> energy
+    eeg --> einsd
+    grid --> netzbilanzd
+    grid --> invoicd
+    energy --> billingd
+```
 
 ### External crates.io dependencies
 
@@ -407,8 +441,10 @@ MSB-Rechnung invoices, running `invoic-checker` self-validation, and dispatching
 via `makod` as INVOIC 31001/31002/31005/31009.
 
 Key facts:
-- **`mako-nne` pure library** — all monetary arithmetic uses `EuroAmount` (`i64 × 10⁻⁵ EUR`),
-  zero floating-point money. The same library is used by `invoicd` for LF selbstausstellen (PID 31006).
+- **`grid-billing` pure library** — all monetary arithmetic uses `EuroAmount` (`i64 × 10⁻⁵ EUR`),
+  zero floating-point money. Returns `GridInvoice` domain type — no `rubo4e` dependency.
+  The service layer (`netzbilanzd`, `invoicd`) owns the `into_rechnung()` conversion.
+  The same library is used by `invoicd` for LF selbstausstellen (PID 31006).
 - **Operator-supplied inputs** — `POST /api/v1/billing/run` accepts meter readings and tariff data
   directly in the request body. `netzbilanzd` does not query `marktd` or `edmd` autonomously,
   making each billing run idempotent by design.

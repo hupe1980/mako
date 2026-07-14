@@ -88,6 +88,23 @@ pub struct AnlageUpsertRequest {
     /// Full name of payment recipient (Zahlungsempfänger).
     pub zahlungsempfaenger: Option<String>,
     pub notes: Option<String>,
+    /// §51b EEG 2023 — Biogas Ausschreibungsanlage with slightly-positive price rule.
+    ///
+    /// When `true`, the anzulegender Wert reduces to **zero** for any billing period
+    /// where `epex_avg_ct_kwh ≤ 2 ct/kWh`. §51/§51a Negativpreisregel do NOT apply.
+    ///
+    /// Only valid for biogas plants (fermentation, excluding biomethane) that received
+    /// their AW via BNetzA tender (`ausschreibungs_zuschlag_id` must be set).
+    ///
+    /// Legal basis: §51b EEG 2023. Default: `false`.
+    #[serde(default)]
+    pub is_biogas_sect51b: bool,
+    /// Netzgebiet identifier for §53b regional reduction lookups (migration 0007).
+    ///
+    /// Set to the BNetzA-assigned grid area code for the plant's connection point.
+    /// Required for §53b Regionalnachweise reductions to apply.
+    /// Example: `"DE-TN-001"` (BNetzA Netzgebiet format).
+    pub grid_area: Option<String>,
 }
 
 fn default_verguetung() -> String {
@@ -131,6 +148,42 @@ pub struct AnlageRow {
     pub bank_bic: Option<String>,
     pub zahlungsempfaenger: Option<String>,
     pub notes: Option<String>,
+    // Plant attributes (migration 0003)
+    pub inbetriebnahme_typ: Option<String>,
+    pub solar_bauform: Option<String>,
+    pub wind_guetegrad: Option<Decimal>,
+    pub wind_korrekturfaktor: Option<Decimal>,
+    pub fernsteuerbarkeit_datum: Option<Date>,
+    pub direktvermarktung_pflicht: Option<bool>,
+    pub metering_mode: Option<String>,
+    pub sect52_netting_enabled: Option<bool>,
+    // Settlement lifecycle (migration 0004)
+    pub settlement_state: Option<String>,
+    // §51b EEG 2023 biogas Ausschreibungsanlage (migration 0005)
+    pub is_biogas_sect51b: bool,
+    // Ausschreibung lifecycle (migration 0006)
+    pub award_expired: bool,
+    pub zuschlag_erloeschen_datum: Option<Date>,
+    // §52 violation tracking (migration 0006)
+    pub mastr_violation_start: Option<Date>,
+    pub fernsteuerbarkeit_violation_start: Option<Date>,
+    // §21b Veräußerungsform switch guard (migration 0006)
+    pub last_veraeusserungsform_switch: Option<Date>,
+    // §51a cumulative Verlängerungsanspruch (migration 0006)
+    pub verlaengerungsanspruch_qh_gesamt: i64,
+    // §24 Erweiterung capacity blocks (migration 0003, JSONB)
+    pub capacity_blocks: Option<serde_json::Value>,
+    // §53b grid area for regional reduction lookups (migration 0007)
+    pub grid_area: Option<String>,
+    // §44b Biogas annual quota tracking (migration 0009)
+    pub biogas_quota_kwh_ytd: Decimal,
+    pub biogas_quota_ytd_year: Option<i16>,
+    // §51 Abs. 2 iMSys rollout datum (migration 0009)
+    pub imesys_rollout_datum: Option<Date>,
+    // §42b GGV Nutzungsplan (migration 0009)
+    pub ggv_nutzungsplan: Option<serde_json::Value>,
+    // §21c notification tracking (migration 0009)
+    pub veraeusserungsform_notification_sent_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -216,7 +269,7 @@ pub async fn upsert_anlage(
                flex_leistung_kw, flex_praemie_ct_kwh,
                mastr_registriert, mastr_nummer, mastr_datum,
                bank_iban, bank_bic, zahlungsempfaenger,
-               notes, updated_at
+               notes, is_biogas_sect51b, grid_area, updated_at
            ) VALUES (
                $1, $2, $3, $4, $5, $6,
                $7, $8, $9, $10,
@@ -227,7 +280,7 @@ pub async fn upsert_anlage(
                $23, $24,
                $25, $26, $27,
                $28, $29, $30,
-               $31, now()
+               $31, $32, $33, now()
            )
            ON CONFLICT (tr_id, tenant) DO UPDATE SET
                malo_id                   = EXCLUDED.malo_id,
@@ -259,6 +312,8 @@ pub async fn upsert_anlage(
                bank_bic                  = COALESCE(EXCLUDED.bank_bic, eeg_anlagen.bank_bic),
                zahlungsempfaenger        = COALESCE(EXCLUDED.zahlungsempfaenger, eeg_anlagen.zahlungsempfaenger),
                notes                     = EXCLUDED.notes,
+               is_biogas_sect51b         = EXCLUDED.is_biogas_sect51b,
+               grid_area                 = EXCLUDED.grid_area,
                updated_at                = now()",
     )
     .bind(&req.tr_id)
@@ -292,9 +347,40 @@ pub async fn upsert_anlage(
     .bind(&req.bank_bic)
     .bind(&req.zahlungsempfaenger)
     .bind(&req.notes)
+    .bind(req.is_biogas_sect51b)
+    .bind(&req.grid_area)
     .execute(pool)
     .await
     .context("upsert eeg_anlage")?;
+
+    // ── Auto-set mastr_violation_start on first registration without MaStR ──
+    // §52 Abs. 1 Nr. 11 EEG 2023: penalty accrues from when the NB registers
+    // the plant and notes the missing MaStR entry. Set the start date to today
+    // (using CURRENT_DATE) only when the column is NULL (not already tracking).
+    if !req.mastr_registriert {
+        sqlx::query(
+            r"UPDATE eeg_anlagen
+              SET mastr_violation_start = COALESCE(mastr_violation_start, CURRENT_DATE)
+              WHERE tr_id = $1 AND tenant = $2 AND mastr_violation_start IS NULL",
+        )
+        .bind(&req.tr_id)
+        .bind(tenant)
+        .execute(pool)
+        .await
+        .context("set mastr_violation_start")?;
+    } else {
+        // Plant registered with MaStR confirmed: clear any outstanding violation start.
+        sqlx::query(
+            r"UPDATE eeg_anlagen
+              SET mastr_violation_start = NULL
+              WHERE tr_id = $1 AND tenant = $2",
+        )
+        .bind(&req.tr_id)
+        .bind(tenant)
+        .execute(pool)
+        .await
+        .context("clear mastr_violation_start")?;
+    }
     Ok(())
 }
 
@@ -379,8 +465,6 @@ pub async fn decommission_anlage(pool: &PgPool, tenant: &str, tr_id: &str) -> an
     Ok(rows.rows_affected() > 0)
 }
 
-// ── Settlement receipts ───────────────────────────────────────────────────────
-
 /// Input for a monthly settlement calculation.
 pub struct SettleInput {
     pub tr_id: String,
@@ -400,9 +484,9 @@ pub struct SettleInput {
     /// Derived from `mastr_registriert` in `run_settlement` — not set by caller.
     pub sanktion: Option<eeg_billing::SanktionAlt>,
     pub kwh_during_negative_epex: Option<Decimal>,
-    /// Plant commissioning date — forwarded to `eeg-billing` for §27 EEG guard.
+    /// Plant commissioning date — forwarded to `eeg-billing` for §51 EEG guard.
     pub inbetriebnahme: Option<Date>,
-    /// Installed peak power — used for §27 threshold check (≥100 kWp) and auto Managementprämie.
+    /// Installed peak power — used for §51 threshold check (≥100 kWp) and auto Managementprämie.
     pub leistung_kwp: Option<Decimal>,
     /// EEG subsidy end date — triggers automatic `FoerderungBeendet` when billing_date > foerderendedatum.
     pub foerderendedatum: Option<Date>,
@@ -415,10 +499,51 @@ pub struct SettleInput {
     pub erzeugungsart: String,
     /// Whether the plant is registered in MaStR (Marktstammdatenregister).
     ///
-    /// Replaces the old `notes.contains("mastr_not_registered")` hack.
     /// - `false` + EEG 2023  → Pflichtzahlung €10/kW/month (§52 Abs. 1 Nr. 11 EEG 2023)
     /// - `false` + EEG ≤2021 → `sanktion = Some(VerguetungAufNull)` (Vergütung = 0, old §47/§52 via §100)
     pub mastr_registriert: bool,
+    /// §36k EEG — certified wind onshore Korrekturfaktor from the plant DB record.
+    /// Forwarded directly to `eeg-billing` for MarketPremium wind plants.
+    pub wind_korrekturfaktor: Option<Decimal>,
+    /// §9 EEG — date Fernsteuerbarkeit was installed, if any.
+    /// Used to determine whether `FernsteuerbarkeitmFehlend` §52 violation is active.
+    pub fernsteuerbarkeit_datum: Option<Date>,
+    /// Whether this is a §51b biogas Ausschreibungsanlage.
+    pub is_biogas_sect51b: bool,
+    /// §52 MaStR violation start date for cumulative penalty calculation (migration 0006).
+    pub mastr_violation_start: Option<Date>,
+    /// §52 Fernsteuerbarkeit violation start date (migration 0006).
+    pub fernsteuerbarkeit_violation_start: Option<Date>,
+    /// §33/§35a: whether the Zuschlag has expired. Short-circuits to FoerderungBeendet.
+    pub award_expired: bool,
+    /// §24 capacity blocks JSONB (migration 0003) — deserialized in run_settlement.
+    pub capacity_blocks_json: Option<serde_json::Value>,
+    /// §53b grid area identifier for regional reduction lookup (migration 0007).
+    pub grid_area: Option<String>,
+    /// §19 EEG 2023 — kWh curtailed by NB; NB must compensate at AW rate.
+    pub einspeisemanagement_kwh: Option<Decimal>,
+    /// §51a EEG 2023 — quarter-hours during negative-price periods for Verlängerungsanspruch.
+    pub negative_price_quarter_hours: Option<u64>,
+    // fernsteuerbarkeit_datum is declared above alongside other plant fields
+    /// §22 MessZV — UUID of the original receipt this corrects (None for initial settlements).
+    ///
+    /// When Some, `run_settlement` will:
+    /// 1. Snapshot the existing receipt to `settlement_receipt_history`.
+    /// 2. Upsert the correction, storing `correction_of` and `is_correction = true`.
+    pub correction_of: Option<uuid::Uuid>,
+    /// §44b Abs. 1 EEG 2023 — Biogas >100kW: eligible kWh for this billing period.
+    /// Caller tracks cumulative annual kWh and passes `min(kwh, remaining_annual_quota)`.
+    /// `None` = cap does not apply.
+    pub biogas_sect44b_eligible_kwh: Option<Decimal>,
+    /// §20 Abs. 2 + Anlage 1 EEG 2023 — technology-specific Jahresmarktwert.
+    /// Alternative to `epex_avg_ct_kwh` for MarketPremium. `None` = auto-fetch.
+    pub jahresmarktwert_ct_kwh: Option<Decimal>,
+    /// §44b: year-to-date Einspeisemenge for the Biogas annual quota (from AnlageRow).
+    pub biogas_quota_kwh_ytd: Decimal,
+    /// §44b: calendar year the biogas_quota_kwh_ytd tracks (None = never settled).
+    pub biogas_quota_ytd_year: Option<i16>,
+    /// §51 Abs. 2 Nr. 1 EEG 2023: date iMSys was installed (None = not yet rolled out).
+    pub imesys_rollout_datum: Option<Date>,
 }
 
 #[derive(Debug, Serialize)]
@@ -433,108 +558,577 @@ pub struct SettleResult {
     pub status: String,
 }
 
-/// Run the settlement calculation and persist the result.
+// ── §44b quota computation ─────────────────────────────────────────────────────
+
+/// Compute the §44b eligible kWh for a Biogas plant billing period.
 ///
-/// | Model | Formula | Legal basis |
-/// |---|---|---|
-/// | `VERGUETUNG` | `kwh × verguetungssatz_ct / 100` | §21 EEG 2023 |
-/// | `MIETERSTROM` | VERGUETUNG + `kwh × mieter_zuschlag_ct / 100` | §38a EEG 2023 |
-/// | `DIREKTVERMARKTUNG` | `max(0, aw_ct − epex) × kwh / 100 + managementpraemie_ct × kwh / 100` | §20 EEG 2023 |
-/// | `AUSSCHREIBUNG` | same as DIREKTVERMARKTUNG (tendering AW) | §§22a,28 EEG 2023 |
-/// | `POST_EEG_SPOT` | `kwh × epex_avg_ct / 100` | post-Förderung |
-/// | `EIGENVERBRAUCH` | EUR 0 | self-consumption |
-/// | `KWKG_ZUSCHLAG` | `kwh × verguetungssatz_ct / 100` (on top of market price, capped by hour limit) | §7 KWKG 2023 |
-/// | `FLEXIBILITAET` | VERGUETUNG + `kwh × flex_praemie_ct / 100` | §50 EEG 2023 |
+/// §44b Abs. 1 EEG 2023: fermentation-Biogas plants >100 kW (excl. §39 Ausschreibung)
+/// are capped at 45% of rated capacity × 8760 h/year. Excess kWh receive:
+/// - MarketPremium: AW = 0, Marktprämie = 0
+/// - FeedInTariff: paid at EPEX Marktwert
 ///
-/// ## KWKG hour-limit enforcement (§8 KWKG 2023)
+/// Returns `None` when the cap does not apply to this plant.
+/// Returns `Some(eligible_kwh)` = max(0, annual_quota − ytd_before_this_period).
+async fn compute_biogas_sect44b_eligible(
+    pool: &PgPool,
+    input: &SettleInput,
+) -> anyhow::Result<Option<Decimal>> {
+    use rust_decimal_macros::dec;
+
+    // §44b applies only to: fermentation Biogas, >100 kW, not §51b Ausschreibung
+    let is_applicable = input.erzeugungsart == "BIOGAS"
+        && input.leistung_kwp.is_some_and(|kw| kw > dec!(100))
+        && !input.is_biogas_sect51b;
+
+    if !is_applicable {
+        return Ok(None);
+    }
+
+    // Reset YTD counter when entering a new calendar year
+    let ytd = if input.biogas_quota_ytd_year == Some(input.billing_year) {
+        input.biogas_quota_kwh_ytd
+    } else {
+        // New year: reset the counter atomically before settlement
+        sqlx::query(
+            "UPDATE eeg_anlagen
+             SET biogas_quota_kwh_ytd = 0, biogas_quota_ytd_year = $3
+             WHERE tr_id = $1 AND tenant = $2",
+        )
+        .bind(&input.tr_id)
+        .bind(&input.tenant)
+        .bind(input.billing_year)
+        .execute(pool)
+        .await
+        .context("reset biogas §44b YTD counter")?;
+        Decimal::ZERO
+    };
+
+    let leistung_kw = input.leistung_kwp.unwrap_or(Decimal::ZERO);
+    // §44b Abs. 1: annual quota = leistung_kw × 0.45 × 8760 h
+    let annual_quota = leistung_kw * dec!(0.45) * dec!(8760);
+    let remaining = (annual_quota - ytd).max(Decimal::ZERO);
+    Ok(Some(remaining))
+}
+
+/// Update the Biogas §44b year-to-date counter after a successful settlement.
+async fn update_biogas_quota_ytd(
+    pool: &PgPool,
+    tr_id: &str,
+    tenant: &str,
+    billing_year: i16,
+    kwh_settled: Decimal,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE eeg_anlagen
+         SET biogas_quota_kwh_ytd  = biogas_quota_kwh_ytd + $4,
+             biogas_quota_ytd_year = $3
+         WHERE tr_id = $1 AND tenant = $2",
+    )
+    .bind(tr_id)
+    .bind(tenant)
+    .bind(billing_year)
+    .bind(kwh_settled)
+    .execute(pool)
+    .await
+    .context("update biogas §44b YTD counter")?;
+    Ok(())
+}
+
+// ── §20 Abs. 2 Jahresmarktwert fetch ──────────────────────────────────────────
+
+/// Fetch the technology-specific Jahresmarktwert (§20 Abs. 2 + Anlage 1 EEG 2023).
 ///
-/// Plants >2 MW have a maximum full-load-hour Förderdauer (typically 30,000 h).
-/// When `kwk_strom_kwh_gesamt + einspeisemenge_kwh > kwk_max_kwh`:
-/// - Settlement is prorated to the remaining eligible kWh.
-/// - Plant status transitions to `foerderung_beendet` (CE emitted by caller).
-/// - `kwk_strom_kwh_gesamt` is updated atomically with the settlement.
+/// Lookup order:
+/// 1. Exact technology match in `jahresmarktwert_preise`
+/// 2. `DEFAULT` fallback row in `jahresmarktwert_preise`
+/// 3. Generic EPEX monthly average from `epex_monthly_prices`
+/// 4. `None` (PriceMissing)
+pub async fn fetch_marktwert(
+    pool: &PgPool,
+    billing_year: i16,
+    billing_month: i16,
+    erzeugungsart: &str,
+    epex_fallback: Option<Decimal>,
+) -> anyhow::Result<Option<Decimal>> {
+    // 1 & 2: try jahresmarktwert_preise (exact match, then DEFAULT)
+    let jmw: Option<Decimal> = sqlx::query_scalar(
+        "SELECT avg_ct_kwh FROM jahresmarktwert_preise
+         WHERE billing_year = $1 AND billing_month = $2
+           AND erzeugungsart = ANY(ARRAY[$3, 'DEFAULT'])
+         ORDER BY (erzeugungsart = $3) DESC
+         LIMIT 1",
+    )
+    .bind(billing_year)
+    .bind(billing_month)
+    .bind(erzeugungsart)
+    .fetch_optional(pool)
+    .await
+    .context("fetch Jahresmarktwert")?;
+
+    Ok(jmw.or(epex_fallback))
+}
+
+/// Override values callers can supply to `build_settle_input`.
 ///
-/// ## §20 Abs. 3 EEG 2023 Managementprämie
+/// Fields left `None` use plant-DB or handler-default values.
+#[derive(Debug, Default)]
+pub struct SettleOverrides {
+    /// Explicit Einspeisemenge (overrides edmd auto-fetch).
+    pub einspeisemenge_kwh: Option<Decimal>,
+    /// Explicit EPEX / Jahresmarktwert ct/kWh (overrides DB lookup).
+    pub epex_avg_ct_kwh: Option<Decimal>,
+    /// §20 Abs. 3 Managementprämie override ct/kWh.
+    pub managementpraemie_ct_override: Option<Decimal>,
+    /// §19 EEG curtailed kWh for this billing period.
+    pub einspeisemanagement_kwh: Option<Decimal>,
+    /// §51a quarter-hours during negative EPEX for this period.
+    pub negative_price_quarter_hours: Option<u64>,
+    /// §22 MessZV correction: UUID of original receipt this corrects.
+    pub correction_of: Option<uuid::Uuid>,
+    /// §20 Abs. 2 technology-specific Jahresmarktwert (explicit override).
+    pub jahresmarktwert_ct_kwh: Option<Decimal>,
+}
+
+/// Build a [`SettleInput`] from a plant row and a billing period.
 ///
-/// Direktvermarktung plants receive a flat Managementprämie (statutory 0.4 ct/kWh,
-/// reduced to 0.2 ct/kWh for plants >100 MW).  The Managementprämie is paid by the
+/// This single function is the authoritative mapping between the plant DB record
+/// and the settlement engine input. All four settlement entry points
+/// (single settle, batch settle, correction settle, MCP settle) use this
+/// function so that any new field is automatically threaded everywhere.
+#[must_use]
+pub fn build_settle_input(
+    tenant: &str,
+    anlage: &AnlageRow,
+    billing_year: i16,
+    billing_month: i16,
+    overrides: SettleOverrides,
+) -> SettleInput {
+    use rust_decimal_macros::dec;
+
+    let is_dv = matches!(
+        anlage.settlement_model.as_str(),
+        "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" | "MARKET_PREMIUM"
+    );
+    let managementpraemie_ct = if is_dv {
+        Some(overrides.managementpraemie_ct_override.unwrap_or_else(|| {
+            if anlage.leistung_kwp > dec!(100_000) {
+                dec!(0.2)
+            } else {
+                dec!(0.4)
+            }
+        }))
+    } else {
+        None
+    };
+
+    let billing_date = time::Date::from_calendar_date(
+        billing_year as i32,
+        time::Month::try_from(billing_month as u8).unwrap_or(time::Month::January),
+        1,
+    )
+    .ok();
+
+    SettleInput {
+        tr_id: anlage.tr_id.clone(),
+        tenant: tenant.to_owned(),
+        billing_year,
+        billing_month,
+        einspeisemenge_kwh: overrides.einspeisemenge_kwh,
+        epex_avg_ct_kwh: overrides.epex_avg_ct_kwh,
+        settlement_model: anlage.settlement_model.clone(),
+        verguetungssatz_ct: anlage.verguetungssatz_ct,
+        direktverm_aw_ct: anlage.direktverm_aw_ct,
+        mieter_zuschlag_ct: anlage.mieter_zuschlag_ct,
+        flex_praemie_ct_kwh: anlage.flex_praemie_ct_kwh,
+        managementpraemie_ct,
+        kwk_strom_kwh_gesamt: if anlage.settlement_model == "KWKG_ZUSCHLAG" {
+            anlage.kwk_strom_kwh_gesamt
+        } else {
+            None
+        },
+        kwk_max_kwh: anlage
+            .kwk_foerderdauer_h
+            .map(|h| Decimal::from(h) * anlage.leistung_kwp),
+        sanktion: None, // derived from mastr_registriert in run_settlement
+        mastr_registriert: anlage.mastr_registriert,
+        kwh_during_negative_epex: None,
+        inbetriebnahme: Some(anlage.inbetriebnahme),
+        leistung_kwp: Some(anlage.leistung_kwp),
+        foerderendedatum: Some(anlage.foerderendedatum),
+        billing_date,
+        eeg_gesetz: anlage.eeg_gesetz,
+        erzeugungsart: anlage.erzeugungsart.clone(),
+        wind_korrekturfaktor: anlage.wind_korrekturfaktor,
+        fernsteuerbarkeit_datum: anlage.fernsteuerbarkeit_datum,
+        is_biogas_sect51b: anlage.is_biogas_sect51b,
+        mastr_violation_start: anlage.mastr_violation_start,
+        fernsteuerbarkeit_violation_start: anlage.fernsteuerbarkeit_violation_start,
+        award_expired: anlage.award_expired,
+        capacity_blocks_json: anlage.capacity_blocks.clone(),
+        grid_area: anlage.grid_area.clone(),
+        einspeisemanagement_kwh: overrides.einspeisemanagement_kwh,
+        negative_price_quarter_hours: overrides.negative_price_quarter_hours,
+        correction_of: overrides.correction_of,
+        biogas_sect44b_eligible_kwh: None, // computed by run_settlement from biogas_quota_kwh_ytd
+        jahresmarktwert_ct_kwh: overrides.jahresmarktwert_ct_kwh,
+        biogas_quota_kwh_ytd: anlage.biogas_quota_kwh_ytd,
+        biogas_quota_ytd_year: anlage.biogas_quota_ytd_year,
+        imesys_rollout_datum: anlage.imesys_rollout_datum,
+    }
+}
+
 /// Run the settlement calculation and persist the result.
 ///
 /// Delegates all formula logic to the [`eeg_billing`] crate.
-/// See [`eeg_billing::calculate_settlement`] for the formula table and
-/// KWKG hour-limit enforcement details.
+///
+/// ## §52 EEG 2023 Pflichtzahlungen
+///
+/// For EEG 2023 plants, this function automatically derives §52 violations:
+/// - MaStR not registered → `SanktionsTyp::MastrNichtRegistriert`
+/// - Fernsteuerbarkeit not installed (plant ≥ 25 kW) → `SanktionsTyp::FernsteuerbarkeitmFehlend`
+///
+/// ## §25/§26 billing_days_fraction
+///
+/// When the plant was commissioned in the current billing month, the settlement
+/// is prorated to the days with entitlement (commissioning day to end of month).
 pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result<SettleResult> {
     use eeg_billing::{
         AusschreibungMetadata, SettleInput as EegInput, SettlementScheme, SettlementStatus,
         TariffSource, calculate_settlement,
     };
 
-    // Map DB string → new SettlementScheme + TariffSource.
-    // Ausschreibung → MarketPremium with Auction tariff source (same formula, different label/AW source).
+    // Map DB string → SettlementScheme + TariffSource.
+    // Both old (VERGUETUNG) and new (FEED_IN_TARIFF) naming accepted for migration compatibility.
+    // Note: scheme is built AFTER §54 computation so direktverm_aw_ct_effective is available.
+
+    let eeg_gesetz_enum = eeg_billing::EegGesetz::from_db_year(input.eeg_gesetz)
+        .unwrap_or(eeg_billing::EegGesetz::Eeg2023);
+
+    // ── §52 EEG 2023 Pflichtverstoss derivation ──────────────────────────────
+    // EEG 2023 plants: separate Pflichtzahlungen (Vergütung continues).
+    // EEG ≤2021 plants: old three-tier SanktionAlt model reduces Vergütung.
+    let (sanktion, pflichtverstoss) =
+        if !eeg_gesetz_enum.mastr_nichtregistrierung_suspendiert_verguetung() {
+            // EEG 2023 path: build Pflichtverstoss list from plant compliance status.
+            // monate_des_verstosses is computed from the violation start date stored in the DB
+            // (migration 0006 adds mastr_violation_start / fernsteuerbarkeit_violation_start).
+            // Falls back to 1 when the violation start date is not yet tracked.
+            let billing_date_for_months = time::Date::from_calendar_date(
+                input.billing_year as i32,
+                time::Month::try_from(input.billing_month as u8).unwrap_or(time::Month::January),
+                1,
+            )
+            .unwrap_or(time::Date::MIN);
+
+            let months_since = |start: Option<time::Date>| -> u32 {
+                match start {
+                    None => 1, // violation start not tracked yet → assume this month only
+                    Some(s) => {
+                        // Count inclusive calendar months from start to billing_date
+                        let years = billing_date_for_months.year() - s.year();
+                        let months = billing_date_for_months.month() as i32 - s.month() as i32;
+                        (years * 12 + months + 1).max(1) as u32
+                    }
+                }
+            };
+
+            let mut violations: Vec<eeg_billing::Pflichtverstoss> = vec![];
+
+            if !input.mastr_registriert {
+                // §52 Abs. 1 Nr. 11 EEG 2023: MaStR not registered → €10/kW/month (cumulative)
+                violations.push(eeg_billing::Pflichtverstoss {
+                    typ: eeg_billing::SanktionsTyp::MastrNichtRegistriert,
+                    leistung_kw: input.leistung_kwp.unwrap_or(rust_decimal::Decimal::ZERO),
+                    monate_des_verstosses: months_since(input.mastr_violation_start),
+                    nachtraeglich_erfuellt: false,
+                    technischer_defekt: false,
+                });
+            }
+
+            // §52 Abs. 1 Nr. 1 EEG 2023: Fernsteuerbarkeit (§9) required for plants ≥ 25 kW
+            if input.fernsteuerbarkeit_datum.is_none()
+                && input
+                    .leistung_kwp
+                    .is_some_and(|kw| kw >= rust_decimal::Decimal::from(25))
+            {
+                violations.push(eeg_billing::Pflichtverstoss {
+                    typ: eeg_billing::SanktionsTyp::FernsteuerbarkeitmFehlend,
+                    leistung_kw: input.leistung_kwp.unwrap_or(rust_decimal::Decimal::ZERO),
+                    monate_des_verstosses: months_since(input.fernsteuerbarkeit_violation_start),
+                    nachtraeglich_erfuellt: false,
+                    technischer_defekt: false,
+                });
+            }
+
+            (None, violations)
+        } else {
+            // EEG ≤2021 path: Vergütung reduced to 0 for unregistered plants
+            let sanktion = if !input.mastr_registriert {
+                Some(eeg_billing::SanktionAlt::VerguetungAufNull)
+            } else {
+                input.sanktion
+            };
+            (sanktion, vec![])
+        };
+
+    // ── The eeg-billing library now auto-computes billing_days_fraction from dates ─
+    // No local computation needed — pass billing_days_fraction: None and the library
+    // will derive it from billing_date, inbetriebnahme, and foerderendedatum.
+
+    // ── §33/§35a: short-circuit when Zuschlag has expired ────────────────────
+    if input.award_expired {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            r"INSERT INTO settlement_receipts
+                  (id, tr_id, tenant, billing_year, billing_month,
+                   settlement_model, einspeisemenge_kwh, settlement_eur, status)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+              ON CONFLICT (tr_id, tenant, billing_year, billing_month) DO UPDATE
+              SET status = EXCLUDED.status, settled_at = now()",
+        )
+        .bind(id)
+        .bind(&input.tr_id)
+        .bind(&input.tenant)
+        .bind(input.billing_year)
+        .bind(input.billing_month)
+        .bind(&input.settlement_model)
+        .bind(input.einspeisemenge_kwh)
+        .bind(rust_decimal::Decimal::ZERO)
+        .bind("foerderung_beendet")
+        .execute(pool)
+        .await
+        .context("persist expired-award receipt")?;
+        return Ok(SettleResult {
+            id,
+            tr_id: input.tr_id,
+            billing_year: input.billing_year,
+            billing_month: input.billing_month,
+            settlement_model: input.settlement_model,
+            einspeisemenge_kwh: input.einspeisemenge_kwh,
+            settlement_eur: Some(rust_decimal::Decimal::ZERO),
+            status: "foerderung_beendet".to_owned(),
+        });
+    }
+
+    // ── §24 Abs. 1 EEG 2023 — deserialize CapacityBlocks from JSONB ─────────
+    let capacity_blocks: Vec<eeg_billing::CapacityBlock> = input
+        .capacity_blocks_json
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    // ── §54 EEG 2023 — Ausschreibungsreduzierung: query per-plant AW deduction ─
+    // §54: BNetzA may reduce the awarded AW after commissioning (e.g. grid violations).
+    let sect54_deduction_ct: Option<rust_decimal::Decimal> = if let Some(bd) = input.billing_date {
+        sqlx::query_scalar::<_, rust_decimal::Decimal>(
+            r"SELECT deduction_ct_kwh FROM sect54_reductions
+              WHERE tr_id = $1 AND tenant = $2
+                AND effective_from <= $3
+                AND (effective_until IS NULL OR effective_until >= $3)
+              ORDER BY effective_from DESC LIMIT 1",
+        )
+        .bind(&input.tr_id)
+        .bind(&input.tenant)
+        .bind(bd)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
+
+    // Apply §54 deduction to direktverm_aw_ct (floor 0)
+    let direktverm_aw_ct_effective = input.direktverm_aw_ct.map(|aw| {
+        let deduction = sect54_deduction_ct.unwrap_or(rust_decimal::Decimal::ZERO);
+        (aw - deduction).max(rust_decimal::Decimal::ZERO)
+    });
+
+    // Build data-bearing SettlementScheme variant now that direktverm_aw_ct_effective is ready.
     let (scheme, tariff_source) = match input.settlement_model.as_str() {
-        "VERGUETUNG" => (SettlementScheme::FeedInTariff, TariffSource::Statutory),
-        "MIETERSTROM" => (SettlementScheme::TenantElectricity, TariffSource::Statutory),
-        "DIREKTVERMARKTUNG" => (SettlementScheme::MarketPremium, TariffSource::Statutory),
-        "AUSSCHREIBUNG" => (
-            SettlementScheme::MarketPremium,
-            TariffSource::Auction(AusschreibungMetadata::default()),
-        ),
-        "POST_EEG_SPOT" => (SettlementScheme::PostEeg, TariffSource::Statutory),
-        "EIGENVERBRAUCH" => (SettlementScheme::Eigenverbrauch, TariffSource::Statutory),
-        "KWKG_ZUSCHLAG" => (SettlementScheme::KwkSurcharge, TariffSource::Statutory),
-        "FLEXIBILITAET" => (
-            SettlementScheme::FlexibilityPremium,
+        "FEED_IN_TARIFF" | "VERGUETUNG" => (
+            SettlementScheme::FeedInTariff {
+                verguetungssatz_ct: input.verguetungssatz_ct,
+            },
             TariffSource::Statutory,
         ),
-        "FLEXIBILITAET_ZUSCHLAG" => (
-            SettlementScheme::FlexibilitySurcharge,
+        "TENANT_ELECTRICITY" | "MIETERSTROM" => (
+            SettlementScheme::TenantElectricity {
+                verguetungssatz_ct: input.verguetungssatz_ct,
+                mieter_zuschlag_ct: input.mieter_zuschlag_ct,
+            },
+            TariffSource::Statutory,
+        ),
+        "MARKET_PREMIUM" | "DIREKTVERMARKTUNG" => (
+            SettlementScheme::MarketPremium {
+                direktverm_aw_ct: direktverm_aw_ct_effective.unwrap_or(rust_decimal::Decimal::ZERO),
+                managementpraemie_ct: input.managementpraemie_ct,
+                wind_korrekturfaktor: input.wind_korrekturfaktor,
+                wind_standort: None,
+            },
+            TariffSource::Statutory,
+        ),
+        "AUSSCHREIBUNG" => (
+            SettlementScheme::MarketPremium {
+                direktverm_aw_ct: direktverm_aw_ct_effective.unwrap_or(rust_decimal::Decimal::ZERO),
+                managementpraemie_ct: input.managementpraemie_ct,
+                wind_korrekturfaktor: input.wind_korrekturfaktor,
+                wind_standort: None,
+            },
+            TariffSource::Auction(AusschreibungMetadata {
+                is_biogas_sect51b: input.is_biogas_sect51b,
+                ..AusschreibungMetadata::default()
+            }),
+        ),
+        "POST_EEG" | "POST_EEG_SPOT" => (
+            SettlementScheme::PostEeg { price_floor: None },
+            TariffSource::Statutory,
+        ),
+        "EIGENVERBRAUCH" => (SettlementScheme::Eigenverbrauch, TariffSource::Statutory),
+        "KWK_SURCHARGE" | "KWKG_ZUSCHLAG" => (
+            SettlementScheme::KwkSurcharge {
+                verguetungssatz_ct: input.verguetungssatz_ct,
+                kwh_paid_gesamt: input.kwk_strom_kwh_gesamt,
+                max_kwh: input.kwk_max_kwh,
+            },
+            TariffSource::Statutory,
+        ),
+        "FLEXIBILITY_PREMIUM" | "FLEXIBILITAET" => (
+            SettlementScheme::FlexibilityPremium {
+                verguetungssatz_ct: input.verguetungssatz_ct,
+                flex_praemie_ct_kwh: input.flex_praemie_ct_kwh,
+            },
+            TariffSource::Statutory,
+        ),
+        "FLEXIBILITY_SURCHARGE" | "FLEXIBILITAET_ZUSCHLAG" => (
+            SettlementScheme::FlexibilitySurcharge {
+                rate_eur_per_kw_year: input.verguetungssatz_ct,
+            },
+            TariffSource::Statutory,
+        ),
+        "TEMPORARY_FEED_IN_TARIFF" => (
+            SettlementScheme::TemporaryFeedInTariff {
+                verguetungssatz_ct: input.verguetungssatz_ct,
+            },
+            TariffSource::Statutory,
+        ),
+        // ── §42b EEG 2023 Gemeinschaftliche Gebäudeversorgung ─────────────────
+        // GGV plants receive EEG Einspeisevergütung from the NB like any other
+        // solar plant. The settlement is against the Einspeisemessung (grid
+        // feed-in) at the GGV MaLo, not per-tenant. TenantElectricity is the
+        // correct scheme: Vergütungssatz = §21 EEG rate; mieter_zuschlag_ct =
+        // None (no Mieterstrom surcharge for the NB→LF EEG flow).
+        // The Nutzungsplan allocation among tenants is handled separately in
+        // billingd (POST /api/v1/billing/ggv/{ggv_id}).
+        "GGV" => (
+            SettlementScheme::TenantElectricity {
+                verguetungssatz_ct: input.verguetungssatz_ct,
+                mieter_zuschlag_ct: input.mieter_zuschlag_ct,
+            },
+            TariffSource::Statutory,
+        ),
+        // ── §21a EEG 2023 Sonstige Direktvermarktung ─────────────────────────
+        // No NB EEG payment. Records the period for settlement history.
+        "SONSTIGE_DIREKTVERMARKTUNG" => (
+            SettlementScheme::SonstigeDirektvermarktung,
             TariffSource::Statutory,
         ),
         other => anyhow::bail!("unknown settlement_model: {other}"),
     };
 
+    // ── §53b EEG 2023 — Regional Grünstromkennzeichnung reduction ────────────
+    // §53b: BNetzA-certified grid areas get a reduction on Einspeisevergütung.
+    // Requires the plant's grid_area to be set. Only applies to Vergütung schemes.
+    let sect53b_reduction_ct: Option<rust_decimal::Decimal> =
+        if let (Some(ga), Some(bd)) = (&input.grid_area, input.billing_date) {
+            sqlx::query_scalar::<_, rust_decimal::Decimal>(
+                r"SELECT reduction_ct_kwh FROM sect53b_reductions
+              WHERE tenant = $1 AND grid_area = $2
+                AND effective_from <= $3
+                AND (effective_until IS NULL OR effective_until >= $3)
+              ORDER BY effective_from DESC LIMIT 1",
+            )
+            .bind(&input.tenant)
+            .bind(ga)
+            .bind(bd)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+        } else {
+            None
+        };
+
+    // ── §44b Abs. 1 EEG 2023 — Biogas annual 45%-cap quota ────────────────────
+    // Auto-computed here when the caller did not supply an explicit eligible_kwh.
+    // compute_biogas_sect44b_eligible resets the YTD counter when billing_year changed.
+    let biogas_sect44b_eligible_kwh = if input.biogas_sect44b_eligible_kwh.is_some() {
+        input.biogas_sect44b_eligible_kwh // caller-provided explicit override
+    } else {
+        compute_biogas_sect44b_eligible(pool, &input)
+            .await
+            .context("compute §44b Biogas quota")?
+    };
+
+    // ── §20 Abs. 2 + Anlage 1 EEG 2023 — technology-specific Jahresmarktwert ─
+    // For MarketPremium (Direktvermarktung / Ausschreibung), prefer the
+    // technology-specific Jahresmarktwert over the generic EPEX monthly average.
+    // Lookup order: caller override → jahresmarktwert_preise exact → DEFAULT fallback → EPEX.
+    let effective_marktwert = if input.jahresmarktwert_ct_kwh.is_some() {
+        input.jahresmarktwert_ct_kwh
+    } else if matches!(
+        input.settlement_model.as_str(),
+        "MARKET_PREMIUM" | "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG"
+    ) {
+        fetch_marktwert(
+            pool,
+            input.billing_year,
+            input.billing_month,
+            &input.erzeugungsart,
+            input.epex_avg_ct_kwh,
+        )
+        .await
+        .context("fetch Jahresmarktwert")?
+    } else {
+        input.epex_avg_ct_kwh
+    };
+
+    // ── §51 Abs. 2 Nr. 1 — iMSys rollout: lift <100 kW exemption if installed ─
+    let has_imesys = input
+        .imesys_rollout_datum
+        .zip(input.billing_date)
+        .is_some_and(|(rollout, billing)| rollout <= billing);
+
     let output = calculate_settlement(&EegInput {
         scheme,
         tariff_source,
         einspeisemenge_kwh: input.einspeisemenge_kwh,
-        epex_avg_ct_kwh: input.epex_avg_ct_kwh,
-        verguetungssatz_ct: input.verguetungssatz_ct,
-        direktverm_aw_ct: input.direktverm_aw_ct,
-        mieter_zuschlag_ct: input.mieter_zuschlag_ct,
-        flex_praemie_ct_kwh: input.flex_praemie_ct_kwh,
-        managementpraemie_ct: input.managementpraemie_ct,
-        kwk_strom_kwh_gesamt: input.kwk_strom_kwh_gesamt,
-        kwk_max_kwh: input.kwk_max_kwh,
-        // Derive sanktion from mastr_registriert using EegGesetz version logic.
-        // EEG ≤2021: Vergütung = 0 (Abs. 1 VerguetungAufNull); EEG 2023: pflichtverstoss.
-        sanktion: if !input.mastr_registriert
-            && eeg_billing::EegGesetz::from_db_year(input.eeg_gesetz)
-                .unwrap_or(eeg_billing::EegGesetz::Eeg2023)
-                .mastr_nichtregistrierung_suspendiert_verguetung()
-        {
-            Some(eeg_billing::SanktionAlt::VerguetungAufNull)
-        } else {
-            None
-        },
+        // §20 Abs. 2: use technology-specific Jahresmarktwert for DV plants; EPEX for others.
+        marktwert_ct_kwh: effective_marktwert,
+        sanktion,
         kwh_during_negative_epex: input.kwh_during_negative_epex,
         inbetriebnahme: input.inbetriebnahme,
         leistung_kwp: input.leistung_kwp,
         foerderendedatum: input.foerderendedatum,
         billing_date: input.billing_date,
-        capacity_blocks: vec![],
+        // §24 Abs. 1 EEG 2023: pass deserialized capacity blocks
+        capacity_blocks,
         messkonzept: None,
-        pflichtverstoss: vec![], // §52: violations added when mastr_registriert=false for EEG 2023 plants
-        eeg_gesetz: eeg_billing::EegGesetz::from_db_year(input.eeg_gesetz)
-            .unwrap_or(eeg_billing::EegGesetz::Eeg2023),
+        pflichtverstoss,
+        eeg_gesetz: eeg_gesetz_enum,
         erzeugungsart: eeg_billing::ErzeugungsArt::from_db_str(&input.erzeugungsart).ok(),
-        // §19 EinsMan and §36k Korrekturfaktor: not yet surfaced in einsd SettleInput.
-        einspeisemanagement_kwh: None,
-        wind_korrekturfaktor: None,
-        wind_standort: None,
-        // Post-EEG negative price floor: None = full market exposure (contract-dependent).
-        post_eeg_price_floor: None,
-        sect53b_regional_reduction_ct: None,
-        negative_price_quarter_hours: None,
+        // §19 EEG 2023: curtailment compensation (NB must pay for suppressed kWh)
+        einspeisemanagement_kwh: input.einspeisemanagement_kwh,
+        billing_days_fraction: None, // auto-computed by eeg-billing from billing_date + dates
+        // §53b: regional reduction from BNetzA-certified grid area
+        sect53b_regional_reduction_ct: sect53b_reduction_ct,
+        // §51a: pass quarter-hours for Verlängerungsanspruch computation
+        negative_price_quarter_hours: input.negative_price_quarter_hours,
+        // §44b Abs. 1 EEG 2023: computed above from annual quota tracking
+        biogas_sect44b_eligible_kwh,
+        // §51 Abs. 2 Nr. 1 EEG 2023: iMSys rollout lifts <100 kW exemption
+        has_imesys,
+        marktwert_kategorie: None,
         settlement_type: eeg_billing::SettlementType::default(),
     });
 
@@ -544,22 +1138,98 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
         SettlementStatus::PriceMissing => "price_missing",
         SettlementStatus::FoerderungBeendet => "foerderung_beendet",
         SettlementStatus::Sanctioned => "sanctioned",
+        // Forward-compatible: any future status variant stores as "unknown" and does not block
+        _ => "unknown",
     };
     let settlement_eur = output.settlement_eur;
     let effective_kwh = output.eligible_kwh;
+    let pflichtzahlung_eur = output.pflichtzahlung_eur;
+    let faelligkeitsdatum = output.faelligkeitsdatum;
+    let verlaengerungsanspruch_qh = output.verlaengerungsanspruch_qh as i64;
+    // Use the fraction actually applied by the library (may be auto-computed from dates)
+    let billing_days_fraction_stored = output.billing_days_fraction_applied;
+    // Serialize positions to JSONB for §22 MessZV 3-year audit trail.
+    // Each position: { description, legal_basis, kwh, rate_ct_kwh, eur }
+    let positions_json = serde_json::to_value(
+        output
+            .positions
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "description": p.description,
+                    "legal_basis": p.legal_basis,
+                    "kwh": p.kwh.to_string(),
+                    "rate_ct_kwh": p.rate_ct_kwh.to_string(),
+                    "eur": p.eur.to_string()
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .ok();
 
     let id = Uuid::new_v4();
+
+    // ── §22 MessZV: snapshot ANY existing initial receipt before overwrite ────
+    // This ensures a complete audit trail even for re-runs of initial settlements.
+    // Corrections already snapshot via the correction_of path below; initial re-runs
+    // (operator clicking "re-settle" without using the correction endpoint) also need
+    // to be snapshotted so no calculation is ever silently lost.
+    let existing_initial_id: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id FROM settlement_receipts
+         WHERE tr_id = $1 AND tenant = $2
+           AND billing_year = $3 AND billing_month = $4
+           AND is_correction = false",
+    )
+    .bind(&input.tr_id)
+    .bind(&input.tenant)
+    .bind(input.billing_year)
+    .bind(input.billing_month)
+    .fetch_optional(pool)
+    .await
+    .context("check existing initial receipt")?;
+
+    // §22 MessZV: snapshot original receipt before correction overwrites it
+    let snapshot_id = existing_initial_id.or(input.correction_of);
+    if let Some(original_id) = snapshot_id {
+        sqlx::query(
+            r"INSERT INTO settlement_receipt_history
+                  (original_id, tr_id, tenant, billing_year, billing_month,
+                   settlement_eur, status, settlement_data)
+              SELECT id, tr_id, tenant, billing_year, billing_month,
+                     settlement_eur, status,
+                     to_jsonb(settlement_receipts) AS settlement_data
+              FROM settlement_receipts
+              WHERE id = $1
+              ON CONFLICT DO NOTHING",
+        )
+        .bind(original_id)
+        .execute(pool)
+        .await
+        .context("snapshot receipt before overwrite")?;
+    }
+
     sqlx::query(
         r"INSERT INTO settlement_receipts
               (id, tr_id, tenant, billing_year, billing_month,
-               settlement_model, einspeisemenge_kwh, settlement_eur, status)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-          ON CONFLICT (tr_id, tenant, billing_year, billing_month) DO UPDATE
-          SET settlement_model   = EXCLUDED.settlement_model,
-              einspeisemenge_kwh = EXCLUDED.einspeisemenge_kwh,
-              settlement_eur     = EXCLUDED.settlement_eur,
-              status             = EXCLUDED.status,
-              settled_at         = now()",
+               settlement_model, einspeisemenge_kwh, settlement_eur, status,
+               pflichtzahlung_eur, faelligkeitsdatum,
+               verlaengerungsanspruch_qh, billing_days_fraction, positions_json,
+               is_correction, correction_of)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                  $10, $11, $12, $13, $14, $15, $16)
+          ON CONFLICT ON CONSTRAINT sr_unique_initial DO UPDATE
+          SET settlement_model          = EXCLUDED.settlement_model,
+              einspeisemenge_kwh        = EXCLUDED.einspeisemenge_kwh,
+              settlement_eur            = EXCLUDED.settlement_eur,
+              status                    = EXCLUDED.status,
+              pflichtzahlung_eur        = EXCLUDED.pflichtzahlung_eur,
+              faelligkeitsdatum         = EXCLUDED.faelligkeitsdatum,
+              verlaengerungsanspruch_qh = EXCLUDED.verlaengerungsanspruch_qh,
+              billing_days_fraction     = EXCLUDED.billing_days_fraction,
+              positions_json            = EXCLUDED.positions_json,
+              is_correction             = EXCLUDED.is_correction,
+              correction_of             = EXCLUDED.correction_of,
+              settled_at                = now()",
     )
     .bind(id)
     .bind(&input.tr_id)
@@ -570,9 +1240,54 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
     .bind(effective_kwh.or(input.einspeisemenge_kwh))
     .bind(settlement_eur)
     .bind(status)
+    .bind(pflichtzahlung_eur)
+    .bind(faelligkeitsdatum)
+    .bind(verlaengerungsanspruch_qh)
+    .bind(billing_days_fraction_stored)
+    .bind(positions_json)
+    .bind(input.correction_of.is_some())
+    .bind(input.correction_of)
     .execute(pool)
     .await
     .context("persist settlement")?;
+
+    // ── §44b: update Biogas year-to-date production counter ──────────────────
+    // Only update when settled (Calculated / FoerderungBeendet), not for NoData / PriceMissing.
+    if matches!(
+        output.status,
+        SettlementStatus::Calculated | SettlementStatus::FoerderungBeendet
+    ) && biogas_sect44b_eligible_kwh.is_some()
+    {
+        let kwh_to_add = effective_kwh.unwrap_or(rust_decimal::Decimal::ZERO);
+        if kwh_to_add > rust_decimal::Decimal::ZERO {
+            update_biogas_quota_ytd(
+                pool,
+                &input.tr_id,
+                &input.tenant,
+                input.billing_year,
+                kwh_to_add,
+            )
+            .await
+            .context("update biogas §44b YTD")?;
+        }
+    }
+
+    // ── §51a: update cumulative Verlängerungsanspruch on the plant record ─────
+    if verlaengerungsanspruch_qh > 0 {
+        sqlx::query(
+            r"UPDATE eeg_anlagen
+              SET verlaengerungsanspruch_qh_gesamt =
+                      COALESCE(verlaengerungsanspruch_qh_gesamt, 0) + $3,
+                  updated_at = now()
+              WHERE tr_id = $1 AND tenant = $2",
+        )
+        .bind(&input.tr_id)
+        .bind(&input.tenant)
+        .bind(verlaengerungsanspruch_qh)
+        .execute(pool)
+        .await
+        .context("update verlaengerungsanspruch")?;
+    }
 
     // ── KWKG: update accumulated kWh + auto-expire when limit reached ────────
     if input.settlement_model == "KWKG_ZUSCHLAG"
@@ -597,6 +1312,30 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
         .execute(pool)
         .await
         .context("update kwk_strom_kwh_gesamt")?;
+    }
+
+    // ── H-2: derive_settlement_state and update plant record ─────────────────
+    // §52 EEG 2023 state machine: drive settlement_state from compliance status.
+    if let Some(bd) = input.billing_date {
+        let new_settlement_state = eeg_billing::settlement_state::derive_settlement_state(
+            input.mastr_registriert,
+            input.fernsteuerbarkeit_datum,
+            input.leistung_kwp.unwrap_or(Decimal::ZERO),
+            input.foerderendedatum,
+            bd,
+            eeg_gesetz_enum.to_db_year(),
+        );
+        sqlx::query(
+            r"UPDATE eeg_anlagen
+              SET settlement_state = $3, updated_at = now()
+              WHERE tr_id = $1 AND tenant = $2",
+        )
+        .bind(&input.tr_id)
+        .bind(&input.tenant)
+        .bind(new_settlement_state.to_db_str())
+        .execute(pool)
+        .await
+        .context("update settlement_state")?;
     }
 
     Ok(SettleResult {

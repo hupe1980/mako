@@ -282,9 +282,8 @@ impl EinsdMcpHandler {
         &self,
         Parameters(params): Parameters<TriggerSettleParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::{SettleInput, fetch_anlage, fetch_epex_price, run_settlement};
+        use crate::pg::{fetch_anlage, fetch_epex_price, run_settlement};
         use rust_decimal::Decimal;
-        use rust_decimal_macros::dec;
 
         let anlage = match fetch_anlage(&self.state.pool, &self.state.tenant, &params.tr_id).await {
             Ok(Some(a)) => a,
@@ -307,56 +306,22 @@ impl EinsdMcpHandler {
                 .ok()
                 .flatten(),
         };
-        let managementpraemie_ct = if matches!(
-            anlage.settlement_model.as_str(),
-            "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG"
-        ) {
-            Some(if anlage.leistung_kwp > dec!(100_000) {
-                dec!(0.2)
-            } else {
-                dec!(0.4)
-            })
-        } else {
-            None
-        };
 
-        let input = SettleInput {
-            tr_id: params.tr_id.clone(),
-            tenant: self.state.tenant.clone(),
-            billing_year: params.billing_year,
-            billing_month: params.billing_month,
-            einspeisemenge_kwh,
-            epex_avg_ct_kwh,
-            settlement_model: anlage.settlement_model.clone(),
-            verguetungssatz_ct: anlage.verguetungssatz_ct,
-            direktverm_aw_ct: anlage.direktverm_aw_ct,
-            mieter_zuschlag_ct: anlage.mieter_zuschlag_ct,
-            flex_praemie_ct_kwh: anlage.flex_praemie_ct_kwh,
-            managementpraemie_ct,
-            kwk_strom_kwh_gesamt: if anlage.settlement_model == "KWKG_ZUSCHLAG" {
-                anlage.kwk_strom_kwh_gesamt
-            } else {
-                None
+        let input = crate::pg::build_settle_input(
+            &self.state.tenant,
+            &anlage,
+            params.billing_year,
+            params.billing_month,
+            crate::pg::SettleOverrides {
+                einspeisemenge_kwh,
+                epex_avg_ct_kwh,
+                managementpraemie_ct_override: None,
+                einspeisemanagement_kwh: None,
+                negative_price_quarter_hours: None,
+                correction_of: None,
+                jahresmarktwert_ct_kwh: None,
             },
-            // KWKG §8 KWKG 2023: max kWh = rated_kW * full_load_hours
-            kwk_max_kwh: anlage
-                .kwk_foerderdauer_h
-                .map(|h| Decimal::from(h) * anlage.leistung_kwp),
-            sanktion: None, // computed from mastr_registriert in run_settlement
-            mastr_registriert: anlage.mastr_registriert,
-            kwh_during_negative_epex: None,
-            inbetriebnahme: Some(anlage.inbetriebnahme),
-            leistung_kwp: Some(anlage.leistung_kwp),
-            foerderendedatum: Some(anlage.foerderendedatum),
-            billing_date: time::Date::from_calendar_date(
-                params.billing_year as i32,
-                time::Month::try_from(params.billing_month as u8).unwrap_or(time::Month::January),
-                1,
-            )
-            .ok(),
-            eeg_gesetz: anlage.eeg_gesetz,
-            erzeugungsart: anlage.erzeugungsart.clone(),
-        };
+        );
 
         match run_settlement(&self.state.pool, input).await {
             Ok(result) => ContentBlock::json(serde_json::to_value(&result).unwrap_or_default())

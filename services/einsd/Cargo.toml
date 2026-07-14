@@ -20,7 +20,7 @@ path = "src/main.rs"
 [dependencies]
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 billing      = { workspace = true }
-eeg-billing  = { path = "../../crates/eeg-billing" }
+eeg-billing  = { path = "../../crates/eeg-billing", features = ["serde"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
 axum         = { version = "0.8" }

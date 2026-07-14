@@ -416,7 +416,9 @@ The endpoint performs the following pipeline:
 1. Fetches `MeterBillingPeriod` from `edmd GET /api/v1/billing-period/{malo_id}` — returns **503** if `[edmd]` is not configured.
 2. Fetches `PreisblattNetznutzung` for the MaLo from `marktd` — returns **422** if no active price sheet exists.
 3. Extracts `ArbeitspreisWirkarbeit` and `LeistungspreisWirkleistung` from typed `Preisposition.preisstaffeln`.
-4. Calls `mako_nne::calculate_nne_invoice(NneInput)` to produce a complete §22-MessZV-compliant `Rechnung`.
+4. Calls `grid_billing::calculate_nne_invoice(NneInput)` to produce a `GridInvoice`.
+   `invoicd` calls `into_rechnung()` locally to build the §22-MessZV-compliant `Rechnung`
+   — `grid-billing` has no `rubo4e` dependency.
 5. Persists the real `Rechnung` JSON to `invoic_receipts` (audit trail).
 6. Dispatches `gpke.abrechnung.selbstausstellen` to `makod` with the full `rechnung` payload, which enqueues the outbound INVOIC 31006 for AS4 delivery to the NB.
 

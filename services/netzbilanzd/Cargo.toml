@@ -18,7 +18,7 @@ name = "netzbilanzd"
 path = "src/main.rs"
 
 [dependencies]
-mako-nne        = { workspace = true }
+grid-billing    = { workspace = true }
 mako-markt      = { workspace = true, features = ["makod-client", "marktd-client"] }
 mako-service    = { workspace = true, features = ["oidc", "cedar", "otel"] }
 invoic-checker  = { workspace = true }

@@ -807,6 +807,65 @@ async fn get_zahlungsstatus(
     }
 }
 
+// ── BO4E conversion (service-layer concern) ───────────────────────────────────
+
+/// Convert a `GridInvoice` domain result into a BO4E `Rechnung`.
+///
+/// `grid-billing` has no rubo4e dependency; this function owns the mapping.
+fn grid_billing_into_rechnung(invoice: &grid_billing::GridInvoice) -> rubo4e::current::Rechnung {
+    use rubo4e::current::{Betrag, Menge, Mengeneinheit, Preis, Rechnungsposition, Zeitraum};
+
+    let lz = Zeitraum {
+        startdatum: Some(invoice.period_from),
+        enddatum: Some(invoice.period_to),
+        ..Default::default()
+    };
+
+    let positions: Vec<Rechnungsposition> = invoice
+        .positions
+        .iter()
+        .map(|p| {
+            let einheit = match p.unit {
+                grid_billing::QuantityUnit::Kwh => Some(Mengeneinheit::Kwh),
+                grid_billing::QuantityUnit::Kw => Some(Mengeneinheit::Kw),
+                grid_billing::QuantityUnit::Monat => Some(Mengeneinheit::Monat),
+            };
+            Rechnungsposition {
+                positionsnummer: Some(p.number as i64),
+                positionstext: Some(p.text.clone()),
+                lieferungszeitraum: Some(lz.clone()),
+                positions_menge: Some(Menge {
+                    wert: Some(p.quantity),
+                    einheit,
+                    ..Default::default()
+                }),
+                einzelpreis: Some(Preis {
+                    wert: Some(p.unit_price_eur.round_dp(6)),
+                    ..Default::default()
+                }),
+                gesamtpreis: Some(Betrag {
+                    wert: Some(p.net_eur.round_dp(5)),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        })
+        .collect();
+
+    rubo4e::current::Rechnung {
+        rechnungsnummer: Some(invoice.rechnungsnummer.clone()),
+        rechnungsdatum: Some(invoice.invoice_date),
+        faelligkeitsdatum: Some(invoice.due_date),
+        rechnungsperiode: Some(lz),
+        gesamtnetto: Some(Betrag {
+            wert: Some(invoice.total_eur),
+            ..Default::default()
+        }),
+        rechnungspositionen: Some(positions),
+        ..Default::default()
+    }
+}
+
 /// `POST /api/v1/selbstausstellen/{malo_id}`
 ///
 /// Trigger outbound selbstausgestellt INVOIC 31006 (LF → NB).
@@ -1003,7 +1062,7 @@ async fn post_selbstausstellen(
         .and_then(|staffeln| staffeln.first())
         .and_then(|s| s.preis);
 
-    // ── Step 4: Build NneInput and generate Rechnung via mako-nne ─────
+    // ── Step 4: Build NneInput and generate Rechnung via grid-billing ─────
     use time::OffsetDateTime;
 
     let invoice_date = OffsetDateTime::now_utc().date();
@@ -1016,7 +1075,7 @@ async fn post_selbstausstellen(
         invoice_date.to_string().replace('-', "")
     );
 
-    let input = mako_nne::NneInput {
+    let input = grid_billing::NneInput {
         malo_id: malo_id.clone(),
         nb_mp_id: body.nb_mp_id.clone(),
         lf_mp_id: state.tenant.clone(), // LF is selbstaussteller (= our own tenant)
@@ -1042,7 +1101,7 @@ async fn post_selbstausstellen(
         ka_satz_ct_per_kwh: None, // KA lookup not implemented; ERP can add via COMDIS
     };
 
-    let billing_result = match mako_nne::calculate_nne_invoice(&input) {
+    let billing_result = match grid_billing::calculate_nne_invoice(&input) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(%e, malo_id, "invoicd: selbstausstellen: invoice generation failed");
@@ -1054,7 +1113,9 @@ async fn post_selbstausstellen(
         }
     };
 
-    let rechnung_json = serde_json::to_value(&billing_result.rechnung).unwrap_or_default();
+    // Convert domain invoice to BO4E Rechnung (service-layer concern; grid-billing is BO4E-free)
+    let rechnung = grid_billing_into_rechnung(&billing_result);
+    let rechnung_json = serde_json::to_value(&rechnung).unwrap_or_default();
 
     tracing::info!(
         malo_id = %malo_id,
@@ -1105,7 +1166,7 @@ async fn post_selbstausstellen(
             "period_from": body.period_from,
             "period_to": body.period_to,
             "total_eur": billing_result.total_eur.to_string(),
-            "rechnung": billing_result.rechnung,
+            "rechnung": rechnung,
         }),
     };
 

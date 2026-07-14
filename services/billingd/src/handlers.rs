@@ -15,11 +15,10 @@ use uuid::Uuid;
 
 use crate::{
     calculator::{
-        DynamicInterval, EegMeterInput, EmobilityMeterInput, GasMeterInput, GridInput,
-        HemsMeterInput, MeterInput, ServiceMeterInput, SolarMeterInput, TariffInput,
-        WaermeMeterInput, calculate_dynamic_strom, calculate_eeg, calculate_einspeisung,
-        calculate_emobility, calculate_energiedienstleistung, calculate_gas, calculate_hems,
-        calculate_solar, calculate_strom, calculate_waerme,
+        BillingContext, BillingEngine, DynamicInterval, EegMeterInput, EmobilityMeterInput,
+        GasMeterInput, GridInput, HemsMeterInput, Invoice, InvoiceType, MeterInput, MwStProvider,
+        Quantities, RegulatoryRates, ServiceMeterInput, SolarMeterInput, SolarProvider,
+        TariffInput, WaermeMeterInput,
     },
     clients::{EdmdClient, TarifbdClient, VertragdClient},
     config::BillingdConfig,
@@ -133,7 +132,7 @@ pub async fn post_calculate(
         &tariff.category,
         period_from,
         period_to,
-        &result.rechnung_json,
+        &result.to_rechnung_json(),
         result.netto_eur,
         result.brutto_eur,
     )
@@ -150,7 +149,7 @@ pub async fn post_calculate(
             record_id,
             &malo_id,
             &req.lf_mp_id,
-            &result.rechnung_json,
+            &result.to_rechnung_json(),
         )
         .await;
     }
@@ -165,7 +164,7 @@ pub async fn post_calculate(
             "netto_eur": result.netto_eur,
             "brutto_eur": result.brutto_eur,
             "positions_count": result.positions.len(),
-            "rechnung": result.rechnung_json,
+            "rechnung": result.to_rechnung_json(),
         })),
     )
         .into_response()
@@ -220,14 +219,135 @@ pub async fn post_preview(
             "netto_eur": result.netto_eur,
             "brutto_eur": result.brutto_eur,
             "positions_count": result.positions.len(),
-            "rechnung": result.rechnung_json,
+            "rechnung": result.to_rechnung_json(),
         })),
     )
         .into_response()
 }
 
-// ── Category dispatch ─────────────────────────────────────────────────────────
+// ── Category dispatch via BillingEngine ──────────────────────────────────────
 
+/// Build the `Quantities` for a billing request by resolving meter data.
+async fn build_quantities(
+    tariff: &TariffInput,
+    req: &CalculateRequest,
+    malo_id: &str,
+    period_from: time::Date,
+    period_to: time::Date,
+    edmd: &Arc<EdmdClient>,
+    marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
+) -> Result<Quantities, (StatusCode, String)> {
+    let mut q = Quantities {
+        eeg_gutschrift_eur: req.eeg_gutschrift_eur,
+        ..Default::default()
+    };
+
+    match tariff.category.as_str() {
+        "STROM" | "WAERMEPUMPE" | "WALLBOX" => {
+            if tariff.dynamic_epex {
+                q.dynamic_intervals =
+                    fetch_dynamic_intervals(malo_id, period_from, period_to, edmd).await;
+                q.dynamic_epex_prices = fetch_epex_prices(period_from, period_to, marktd).await;
+            } else {
+                q.electricity =
+                    Some(resolve_strom_meter(req, malo_id, period_from, period_to, edmd).await?);
+            }
+        }
+        "GAS" => {
+            let mut meter = req.gas_meter.clone().unwrap_or_default();
+            // Auto-fetch gasqualitaet from marktd for §22 MessZV audit transparency.
+            if meter.gasqualitaet.is_none()
+                && let Ok(Some(malo_fields)) = marktd.get_malo(malo_id).await
+                && malo_fields.gasqualitaet.is_some()
+            {
+                meter.gasqualitaet = malo_fields.gasqualitaet;
+                tracing::debug!(malo_id, gasqualitaet = ?meter.gasqualitaet, "billingd GAS: injected gasqualitaet from marktd");
+            }
+            q.gas = Some(meter);
+        }
+        "WAERME" => {
+            q.heat = Some(req.waerme_meter.clone().unwrap_or_default());
+        }
+        "SOLAR" => {
+            q.solar = Some(req.solar_meter.clone().unwrap_or_default());
+        }
+        "EEG" | "EINSPEISUNG" => {
+            q.eeg = Some(req.eeg_meter.clone().unwrap_or_default());
+        }
+        "HEMS" => {
+            q.hems = Some(req.hems_meter.clone().unwrap_or_default());
+        }
+        "EMOBILITY" => {
+            q.emobility = Some(req.emobility_meter.clone().unwrap_or_default());
+        }
+        "ENERGIEDIENSTLEISTUNG" => {
+            q.service = Some(req.service_meter.clone().unwrap_or_default());
+        }
+        _ => {
+            // Unknown category: try electricity as fallback
+            q.electricity =
+                Some(resolve_strom_meter(req, malo_id, period_from, period_to, edmd).await?);
+        }
+    }
+    Ok(q)
+}
+
+/// Dispatch a billing request using the new `BillingEngine` architecture.
+///
+/// Replaces the old `dispatch_calculator` function.
+/// Returns an `Invoice` instead of a `BillingResult`.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_invoice(
+    tariff: &TariffInput,
+    req: &CalculateRequest,
+    malo_id: &str,
+    rechnungsnummer: &str,
+    period_from: time::Date,
+    period_to: time::Date,
+    rates: &RegulatoryRates,
+    edmd: &Arc<EdmdClient>,
+    marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
+) -> Result<Invoice, (StatusCode, String)> {
+    // BUNDLE: requires component recursion — not yet supported
+    if tariff.category == "BUNDLE" {
+        return Err((
+            StatusCode::NOT_IMPLEMENTED,
+            "BUNDLE billing: resolve component products and submit individual calculate requests"
+                .to_owned(),
+        ));
+    }
+
+    let grid = req.grid.clone().unwrap_or_default();
+    let quantities =
+        build_quantities(tariff, req, malo_id, period_from, period_to, edmd, marktd).await?;
+
+    let ctx = BillingContext {
+        malo_id: malo_id.to_owned(),
+        lf_mp_id: req.lf_mp_id.clone(),
+        rechnungsnummer: rechnungsnummer.to_owned(),
+        period_from,
+        period_to,
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates.clone(),
+        contract_id: None,
+    };
+
+    let engine = tariff.build_engine(&grid, rates).ok_or_else(|| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("unsupported product category: {}", tariff.category),
+        )
+    })?;
+
+    engine
+        .bill(ctx, &quantities)
+        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))
+}
+
+/// Backward-compat shim: dispatch and return Invoice.
+///
+/// Called by existing HTTP handlers.
+/// New callers should use `dispatch_invoice` directly.
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_calculator(
     tariff: &TariffInput,
@@ -236,211 +356,22 @@ async fn dispatch_calculator(
     rechnungsnummer: &str,
     period_from: time::Date,
     period_to: time::Date,
-    rates: &crate::calculator::RegulatoryRates,
+    rates: &RegulatoryRates,
     edmd: &Arc<EdmdClient>,
     marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
-) -> Result<crate::calculator::BillingResult, (StatusCode, String)> {
-    let grid = req.grid.clone().unwrap_or_default();
-
-    match tariff.category.as_str() {
-        // ── Electricity (SLP/RLM, Wärmepumpe, Wallbox) ────────────────────────
-        "STROM" | "WAERMEPUMPE" | "WALLBOX" => {
-            let meter = resolve_strom_meter(req, malo_id, period_from, period_to, edmd).await?;
-            let calc_err =
-                |e: billing::BillingError| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string());
-            if tariff.dynamic_epex {
-                let intervals =
-                    fetch_dynamic_intervals(malo_id, period_from, period_to, edmd).await;
-                let epex = fetch_epex_prices(period_from, period_to, marktd).await;
-                calculate_dynamic_strom(
-                    malo_id,
-                    &req.lf_mp_id,
-                    rechnungsnummer,
-                    period_from,
-                    period_to,
-                    tariff,
-                    &grid,
-                    req.eeg_gutschrift_eur,
-                    &intervals,
-                    &epex,
-                    rates,
-                )
-                .map_err(calc_err)
-            } else {
-                calculate_strom(
-                    malo_id,
-                    &req.lf_mp_id,
-                    rechnungsnummer,
-                    period_from,
-                    period_to,
-                    tariff,
-                    &meter,
-                    &grid,
-                    req.eeg_gutschrift_eur,
-                    rates,
-                )
-                .map_err(calc_err)
-            }
-        }
-        // ── Gas ────────────────────────────────────────────────────────────────
-        "GAS" => {
-            let mut meter = req.gas_meter.clone().unwrap_or_default();
-            // Auto-fetch gasqualitaet from marktd when not supplied by the ERP.
-            // The measured brennwert_kwh_per_m3 from edmd already reflects the H2 blend;
-            // this annotation ensures §22 MessZV audit transparency on every Gas Rechnung.
-            if meter.gasqualitaet.is_none()
-                && let Ok(Some(malo_fields)) = marktd.get_malo(malo_id).await
-                && malo_fields.gasqualitaet.is_some()
-            {
-                meter.gasqualitaet = malo_fields.gasqualitaet;
-                tracing::debug!(
-                    malo_id,
-                    gasqualitaet = ?meter.gasqualitaet,
-                    "billingd GAS: injected gasqualitaet from marktd"
-                );
-            }
-            calculate_gas(
-                malo_id,
-                &req.lf_mp_id,
-                rechnungsnummer,
-                period_from,
-                period_to,
-                tariff,
-                &meter,
-                &grid,
-                rates,
-            )
-            .map_err(|e: billing::BillingError| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))
-        }
-        // ── Fernwärme ──────────────────────────────────────────────────────────
-        "WAERME" => {
-            let meter = req.waerme_meter.clone().unwrap_or_default();
-            calculate_waerme(
-                malo_id,
-                &req.lf_mp_id,
-                rechnungsnummer,
-                period_from,
-                period_to,
-                tariff,
-                &meter,
-                rates,
-            )
-            .map_err(|e: billing::BillingError| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))
-        }
-        // ── Solar Mieterstrom / §42a ───────────────────────────────────────────
-        "SOLAR" => {
-            let meter = req.solar_meter.clone().unwrap_or_default();
-            calculate_solar(
-                malo_id,
-                &req.lf_mp_id,
-                rechnungsnummer,
-                period_from,
-                period_to,
-                tariff,
-                &meter,
-                rates,
-            )
-            .map_err(|e: billing::BillingError| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))
-        }
-        // ── EEG feed-in settlement ─────────────────────────────────────────────
-        "EEG" => {
-            let meter = req.eeg_meter.clone().unwrap_or_default();
-            calculate_eeg(
-                malo_id,
-                &req.lf_mp_id,
-                rechnungsnummer,
-                period_from,
-                period_to,
-                tariff,
-                &meter,
-                rates,
-            )
-            .map_err(|e: billing::BillingError| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))
-        }
-        // ── Non-EEG Direktvermarktung ──────────────────────────────────────────
-        "EINSPEISUNG" => {
-            let meter = req.eeg_meter.clone().unwrap_or_default();
-            calculate_einspeisung(
-                malo_id,
-                &req.lf_mp_id,
-                rechnungsnummer,
-                period_from,
-                period_to,
-                tariff,
-                &meter,
-                rates,
-            )
-            .map_err(|e: billing::BillingError| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))
-        }
-        // ── HEMS subscription + events ─────────────────────────────────────────
-        "HEMS" => {
-            let usage = req.hems_meter.clone().unwrap_or_default();
-            calculate_hems(
-                malo_id,
-                &req.lf_mp_id,
-                rechnungsnummer,
-                period_from,
-                period_to,
-                tariff,
-                &usage,
-                rates,
-            )
-            .map_err(|e: billing::BillingError| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))
-        }
-        // ── E-Mobility CPO/EMSP ───────────────────────────────────────────────
-        "EMOBILITY" => {
-            let usage = req.emobility_meter.clone().unwrap_or_default();
-            calculate_emobility(
-                malo_id,
-                &req.lf_mp_id,
-                rechnungsnummer,
-                period_from,
-                period_to,
-                tariff,
-                &usage,
-                rates,
-            )
-            .map_err(|e: billing::BillingError| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))
-        }
-        // ── Energiedienstleistungen (MSB, EMS, maintenance) ───────────────────
-        "ENERGIEDIENSTLEISTUNG" => {
-            let usage = req.service_meter.clone().unwrap_or_default();
-            calculate_energiedienstleistung(
-                malo_id,
-                &req.lf_mp_id,
-                rechnungsnummer,
-                period_from,
-                period_to,
-                tariff,
-                &usage,
-                rates,
-            )
-            .map_err(|e: billing::BillingError| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))
-        }
-        // ── BUNDLE: stub — component recursion handled by tarifbd ─────────────
-        "BUNDLE" => Err((
-            StatusCode::NOT_IMPLEMENTED,
-            "BUNDLE billing: resolve component products and submit individual calculate requests"
-                .to_owned(),
-        )),
-        cat => {
-            tracing::warn!(category = %cat, "billingd: unknown product category — treating as STROM");
-            let meter = resolve_strom_meter(req, malo_id, period_from, period_to, edmd).await?;
-            calculate_strom(
-                malo_id,
-                &req.lf_mp_id,
-                rechnungsnummer,
-                period_from,
-                period_to,
-                tariff,
-                &meter,
-                &grid,
-                req.eeg_gutschrift_eur,
-                rates,
-            )
-            .map_err(|e: billing::BillingError| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))
-        }
-    }
+) -> Result<Invoice, (StatusCode, String)> {
+    dispatch_invoice(
+        tariff,
+        req,
+        malo_id,
+        rechnungsnummer,
+        period_from,
+        period_to,
+        rates,
+        edmd,
+        marktd,
+    )
+    .await
 }
 
 // ── Records ────────────────────────────────────────────────────────────────────
@@ -1002,8 +933,11 @@ pub async fn post_ggv_billing(
         }
         tariff.category = "SOLAR".to_owned();
 
-        let meter = SolarMeterInput {
-            eigenverbrauch_kwh: tenant.consumption_kwh,
+        let quantities = Quantities {
+            solar: Some(SolarMeterInput {
+                eigenverbrauch_kwh: tenant.consumption_kwh,
+            }),
+            ..Default::default()
         };
         let rechnungsnummer = tenant
             .product_code
@@ -1011,16 +945,25 @@ pub async fn post_ggv_billing(
             .map(|p| format!("GGV-{ggv_id}-{p}-{period_from}"))
             .unwrap_or_else(|| format!("GGV-{ggv_id}-{}-{period_from}", tenant.malo_id));
 
-        let result = match calculate_solar(
-            &tenant.malo_id,
-            &req.lf_mp_id,
-            &rechnungsnummer,
+        let ctx = BillingContext {
+            malo_id: tenant.malo_id.clone(),
+            lf_mp_id: req.lf_mp_id.clone(),
+            rechnungsnummer: rechnungsnummer.clone(),
             period_from,
             period_to,
-            &tariff,
-            &meter,
-            &rates,
-        ) {
+            invoice_type: InvoiceType::Initial,
+            regulatory_rates: rates.clone(),
+            contract_id: None,
+        };
+        let engine = tariff
+            .build_engine(&GridInput::default(), &rates)
+            .unwrap_or_else(|| {
+                BillingEngine::new()
+                    .add(SolarProvider::from_tariff(&tariff))
+                    .add(MwStProvider::new(rates.mwst_rate))
+            });
+
+        let result = match engine.bill(ctx, &quantities) {
             Ok(r) => r,
             Err(e) => {
                 return (
@@ -1039,7 +982,7 @@ pub async fn post_ggv_billing(
             "SOLAR",
             period_from,
             period_to,
-            &result.rechnung_json,
+            &result.to_rechnung_json(),
             result.netto_eur,
             result.brutto_eur,
         )
@@ -1051,7 +994,8 @@ pub async fn post_ggv_billing(
 
         sammel_netto += result.netto_eur;
         sammel_brutto += result.brutto_eur;
-        if let Some(serde_json::Value::Array(pos)) = result.rechnung_json.get("rechnungspositionen")
+        if let Some(serde_json::Value::Array(pos)) =
+            result.to_rechnung_json().get("rechnungspositionen")
         {
             sammel_positions.extend(pos.clone());
         }
@@ -1535,7 +1479,8 @@ pub async fn post_sammelrechnung(
         total_brutto += result.brutto_eur;
 
         // Collect positions with MaLo annotation.
-        if let Some(serde_json::Value::Array(pos)) = result.rechnung_json.get("rechnungspositionen")
+        if let Some(serde_json::Value::Array(pos)) =
+            result.to_rechnung_json().get("rechnungspositionen")
         {
             for p in pos {
                 let mut annotated = p.clone();
@@ -1558,7 +1503,7 @@ pub async fn post_sammelrechnung(
             &tariff.category,
             period_from,
             period_to,
-            &result.rechnung_json,
+            &result.to_rechnung_json(),
             result.netto_eur,
             result.brutto_eur,
         )

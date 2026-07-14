@@ -13,9 +13,10 @@ use sqlx::PgPool;
 use crate::{
     config::EinsdConfig,
     pg::{
-        AnlageUpsertRequest, AnlagenQuery, SettleInput, decommission_anlage, fetch_anlage,
-        fetch_epex_price, list_anlagen, list_expiring, list_settlement_receipts, list_unsettled,
-        lookup_verguetungssatz, run_settlement, upsert_anlage, upsert_epex_price, zusammenlegen,
+        AnlageUpsertRequest, AnlagenQuery, SettleOverrides, build_settle_input,
+        decommission_anlage, fetch_anlage, fetch_epex_price, list_anlagen, list_expiring,
+        list_settlement_receipts, list_unsettled, lookup_verguetungssatz, run_settlement,
+        upsert_anlage, upsert_epex_price, zusammenlegen,
     },
 };
 
@@ -291,6 +292,21 @@ pub struct SettleTriggerRequest {
     /// Defaults to 0.4 ct/kWh (0.2 ct/kWh for plants >100 MW).
     /// Only applies to DIREKTVERMARKTUNG and AUSSCHREIBUNG settlement models.
     pub managementpraemie_ct_override: Option<Decimal>,
+    /// §19 EEG 2023 — kWh curtailed by NB this billing month.
+    ///
+    /// The NB must compensate the operator at the AW rate for these kWh
+    /// (§19 Abs. 2 EEG 2023: §51 Negativpreisregel does NOT apply to EInsMan kWh).
+    /// Pass the total curtailed kWh from MSCONS IFTSTA messages in this period.
+    #[serde(default)]
+    pub einspeisemanagement_kwh: Option<Decimal>,
+    /// §51a EEG 2023 — quarter-hours during which the EPEX price was negative
+    /// AND the plant's §51 threshold was met.
+    ///
+    /// Used to compute the Verlängerungsanspruch (Förderzeitraum extension):
+    /// Solar PV: `ceil(qh / 2)` · Others: `qh` (1:1 factor).
+    /// Pass the total QH count from hourly EPEX data for the billing month.
+    #[serde(default)]
+    pub negative_price_quarter_hours: Option<u64>,
 }
 
 /// `POST /api/v1/anlagen/{tr_id}/settle/{year}/{month}`
@@ -327,66 +343,21 @@ pub async fn post_settle(
         },
     };
 
-    let input = SettleInput {
-        tr_id: tr_id.clone(),
-        tenant: cfg.tenant.clone(),
-        billing_year: year,
-        billing_month: month,
-        einspeisemenge_kwh,
-        epex_avg_ct_kwh,
-        settlement_model: anlage.settlement_model.clone(),
-        verguetungssatz_ct: anlage.verguetungssatz_ct,
-        direktverm_aw_ct: anlage.direktverm_aw_ct,
-        mieter_zuschlag_ct: anlage.mieter_zuschlag_ct,
-        flex_praemie_ct_kwh: anlage.flex_praemie_ct_kwh,
-        // §20 Abs. 3 EEG 2023 Managementprämie: 0.4 ct/kWh statutory default for
-        // Direktvermarktung plants. Callers may override via SettleTriggerRequest.
-        // Reduced to 0.2 ct/kWh for plants >100 MW (§20 Abs. 3 Nr. 1).
-        managementpraemie_ct: if matches!(
-            anlage.settlement_model.as_str(),
-            "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG"
-        ) {
-            Some(req.managementpraemie_ct_override.unwrap_or_else(|| {
-                use rust_decimal_macros::dec;
-                if anlage.leistung_kwp > dec!(100_000) {
-                    dec!(0.2)
-                } else {
-                    dec!(0.4)
-                }
-            }))
-        } else {
-            None
+    let input = build_settle_input(
+        &cfg.tenant,
+        &anlage,
+        year,
+        month,
+        SettleOverrides {
+            einspeisemenge_kwh,
+            epex_avg_ct_kwh,
+            managementpraemie_ct_override: req.managementpraemie_ct_override,
+            einspeisemanagement_kwh: req.einspeisemanagement_kwh,
+            negative_price_quarter_hours: req.negative_price_quarter_hours,
+            correction_of: None,
+            jahresmarktwert_ct_kwh: None, // auto-fetched by run_settlement
         },
-        // KWKG: pass accumulated kWh and max limit for hour-limit enforcement.
-        kwk_strom_kwh_gesamt: if anlage.settlement_model == "KWKG_ZUSCHLAG" {
-            anlage.kwk_strom_kwh_gesamt
-        } else {
-            None
-        },
-        // KWKG §8 KWKG 2023: max total kWh = rated_kW × full_load_hours.
-        // E.g. 2.5 MW × 30 000 h = 75 000 000 kWh cap.
-        kwk_max_kwh: anlage
-            .kwk_foerderdauer_h
-            .map(|h| rust_decimal::Decimal::from(h) * anlage.leistung_kwp),
-        // sanktion is computed in run_settlement from mastr_registriert + EegGesetz.
-        sanktion: None, // derived from mastr_registriert in run_settlement
-        mastr_registriert: anlage.mastr_registriert,
-        kwh_during_negative_epex: None,
-        inbetriebnahme: Some(anlage.inbetriebnahme),
-        // Installed capacity — used for §27 threshold (≥100 kWp) and auto Managementprämie.
-        leistung_kwp: Some(anlage.leistung_kwp),
-        // Förderdauer end date — triggers FoerderungBeendet when billing_date > foerderendedatum.
-        foerderendedatum: Some(anlage.foerderendedatum),
-        // First day of the billing month for auto FoerderungBeendet detection.
-        billing_date: time::Date::from_calendar_date(
-            year as i32,
-            time::Month::try_from(month as u8).unwrap_or(time::Month::January),
-            1,
-        )
-        .ok(),
-        eeg_gesetz: anlage.eeg_gesetz,
-        erzeugungsart: anlage.erzeugungsart.clone(),
-    };
+    );
 
     match run_settlement(&pool, input).await {
         Ok(result) => {
@@ -536,8 +507,10 @@ pub async fn post_repowering(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    // §22 EEG 2023: foerderendedatum = repowering_datum + 20 years.
-    let foerderendedatum_neu = match repowering_datum.replace_year(repowering_datum.year() + 20) {
+    // §25 Abs. 1 Satz 2 EEG 2023: statutory plants extend to Dec 31 of the 20th year.
+    // foerderendedatum_repowering() uses the correct formula (Dec 31 of year+20),
+    // NOT the Ausschreibung rule (exact +20y anniversary).
+    let foerderendedatum_neu = match eeg_billing::foerderendedatum_repowering(repowering_datum) {
         Ok(d) => d,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
@@ -655,11 +628,12 @@ pub async fn post_mastr_registrierung(
 
     let rows = sqlx::query(
         "UPDATE eeg_anlagen SET \
-            mastr_registriert = true, \
-            mastr_nummer      = $3, \
-            mastr_datum       = $4, \
-            status            = CASE WHEN status = 'angemeldet' THEN 'aktiv' ELSE status END, \
-            updated_at        = now() \
+            mastr_registriert    = true, \
+            mastr_nummer         = $3, \
+            mastr_datum          = $4, \
+            mastr_violation_start = NULL, \
+            status               = CASE WHEN status = 'angemeldet' THEN 'aktiv' ELSE status END, \
+            updated_at           = now() \
          WHERE tr_id = $1 AND tenant = $2 \
            AND status IN ('angemeldet', 'aktiv')",
     )
@@ -786,102 +760,85 @@ pub async fn post_batch_settle(
     let mut total_settlement_eur = rust_decimal::Decimal::ZERO;
     let mut results: Vec<serde_json::Value> = Vec::with_capacity(plants.len().min(100));
 
-    for anlage in &plants {
-        // Auto-fetch Einspeisemenge from edmd.
-        let einspeisemenge_kwh =
-            fetch_einspeisemenge_from_edmd(&cfg, &anlage.malo_id, year, month).await;
-
-        let mgmt_ct = if matches!(
-            anlage.settlement_model.as_str(),
-            "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG"
-        ) {
-            use rust_decimal_macros::dec;
-            Some(if anlage.leistung_kwp > dec!(100_000) {
-                dec!(0.2)
+    if req.dry_run {
+        // Dry-run: count without persisting (no DB writes needed).
+        for anlage in &plants {
+            let has_data = fetch_einspeisemenge_from_edmd(&cfg, &anlage.malo_id, year, month)
+                .await
+                .is_some();
+            if has_data {
+                settled += 1;
             } else {
-                dec!(0.4)
-            })
-        } else {
-            None
-        };
-
-        let input = SettleInput {
-            tr_id: anlage.tr_id.clone(),
-            tenant: cfg.tenant.clone(),
-            billing_year: year,
-            billing_month: month,
-            einspeisemenge_kwh,
-            epex_avg_ct_kwh,
-            settlement_model: anlage.settlement_model.clone(),
-            verguetungssatz_ct: anlage.verguetungssatz_ct,
-            direktverm_aw_ct: anlage.direktverm_aw_ct,
-            mieter_zuschlag_ct: anlage.mieter_zuschlag_ct,
-            flex_praemie_ct_kwh: anlage.flex_praemie_ct_kwh,
-            managementpraemie_ct: mgmt_ct,
-            kwk_strom_kwh_gesamt: if anlage.settlement_model == "KWKG_ZUSCHLAG" {
-                anlage.kwk_strom_kwh_gesamt
-            } else {
-                None
-            },
-            // §8 KWKG 2023: max total kWh = rated_kW × full_load_hours
-            kwk_max_kwh: anlage
-                .kwk_foerderdauer_h
-                .map(|h| rust_decimal::Decimal::from(h) * anlage.leistung_kwp),
-            sanktion: None, // derived from mastr_registriert in run_settlement
-            mastr_registriert: anlage.mastr_registriert,
-            kwh_during_negative_epex: None,
-            inbetriebnahme: Some(anlage.inbetriebnahme),
-            leistung_kwp: Some(anlage.leistung_kwp),
-            foerderendedatum: Some(anlage.foerderendedatum),
-            billing_date: time::Date::from_calendar_date(
-                year as i32,
-                time::Month::try_from(month as u8).unwrap_or(time::Month::January),
-                1,
-            )
-            .ok(),
-            eeg_gesetz: anlage.eeg_gesetz,
-            erzeugungsart: anlage.erzeugungsart.clone(),
-        };
-
-        if req.dry_run {
-            // Dry-run: just count, don't persist.
-            match einspeisemenge_kwh {
-                None => skipped_no_data += 1,
-                Some(_) => settled += 1,
+                skipped_no_data += 1;
             }
-            continue;
+        }
+    } else {
+        // ── Parallel batch settlement with bounded concurrency ────────────────
+        // Use JoinSet + Semaphore (20 concurrent) to parallelize DB + edmd I/O.
+        // Each task has its own pool handle (PgPool is Arc-backed, clone is cheap).
+        use std::sync::Arc;
+        use tokio::sync::Semaphore;
+        use tokio::task::JoinSet;
+
+        const MAX_CONCURRENT: usize = 20;
+        let sem = Arc::new(Semaphore::new(MAX_CONCURRENT));
+        let mut join_set: JoinSet<(String, String, anyhow::Result<crate::pg::SettleResult>)> =
+            JoinSet::new();
+
+        for anlage in plants {
+            let cfg = Arc::clone(&cfg);
+            let pool = pool.clone();
+            let sem = Arc::clone(&sem);
+            let malo_id = anlage.malo_id.clone();
+            let tr_id = anlage.tr_id.clone();
+            let settlement_model = anlage.settlement_model.clone();
+            join_set.spawn(async move {
+                let _permit = sem.acquire().await.expect("semaphore closed");
+                let einspeisemenge_kwh =
+                    fetch_einspeisemenge_from_edmd(&cfg, &malo_id, year, month).await;
+                let input = build_settle_input(
+                    &cfg.tenant,
+                    &anlage,
+                    year,
+                    month,
+                    SettleOverrides {
+                        einspeisemenge_kwh,
+                        epex_avg_ct_kwh,
+                        managementpraemie_ct_override: None,
+                        einspeisemanagement_kwh: None,
+                        negative_price_quarter_hours: None,
+                        correction_of: None,
+                        jahresmarktwert_ct_kwh: None,
+                    },
+                );
+                let res = run_settlement(&pool, input).await;
+                // Best-effort CE emission for calculated results
+                if let Ok(ref result) = res
+                    && result.status == "calculated"
+                {
+                    let ce_type = match settlement_model.as_str() {
+                        "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" | "MARKET_PREMIUM" => {
+                            "de.eeg.marktpraemie.berechnet"
+                        }
+                        _ => "de.eeg.verguetung.berechnet",
+                    };
+                    emit_settlement_ce(&cfg, ce_type, &tr_id, &malo_id, result, year, month).await;
+                }
+                (tr_id, settlement_model, res)
+            });
         }
 
-        match run_settlement(&pool, input).await {
-            Ok(result) => {
-                match result.status.as_str() {
+        while let Some(join_result) = join_set.join_next().await {
+            match join_result {
+                Ok((_tr_id, _model, Ok(result))) => match result.status.as_str() {
                     "calculated" | "foerderung_beendet" => {
                         settled += 1;
                         if let Some(eur) = result.settlement_eur {
                             total_settlement_eur += eur;
                         }
-                        // Emit CloudEvent (best-effort).
-                        if result.status == "calculated" {
-                            let ce_type = match anlage.settlement_model.as_str() {
-                                "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" => {
-                                    "de.eeg.marktpraemie.berechnet"
-                                }
-                                _ => "de.eeg.verguetung.berechnet",
-                            };
-                            emit_settlement_ce(
-                                &cfg,
-                                ce_type,
-                                &anlage.tr_id,
-                                &anlage.malo_id,
-                                &result,
-                                year,
-                                month,
-                            )
-                            .await;
-                        }
                         if results.len() < 100 {
                             results.push(serde_json::json!({
-                                "tr_id": anlage.tr_id,
+                                "tr_id": result.tr_id,
                                 "status": result.status,
                                 "settlement_eur": result.settlement_eur,
                                 "einspeisemenge_kwh": result.einspeisemenge_kwh,
@@ -891,11 +848,15 @@ pub async fn post_batch_settle(
                     "no_data" => skipped_no_data += 1,
                     "price_missing" => skipped_price_missing += 1,
                     _ => errors += 1,
+                },
+                Ok((tr_id, _, Err(e))) => {
+                    tracing::warn!(tr_id, error = %e, "batch_settle: settlement error");
+                    errors += 1;
                 }
-            }
-            Err(e) => {
-                tracing::warn!(tr_id = %anlage.tr_id, error = %e, "batch_settle: settlement error");
-                errors += 1;
+                Err(e) => {
+                    tracing::warn!(error = %e, "batch_settle: task join error");
+                    errors += 1;
+                }
             }
         }
     }
@@ -976,5 +937,330 @@ pub async fn post_zusammenlegen(
             .into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, format!("plant {child_tr_id} not found or not aktiv")).into_response(),
         Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    }
+}
+
+// ── §21b EEG 2023 — Veräußerungsform Wechsel ─────────────────────────────────
+
+/// Request body for `POST /api/v1/anlagen/{tr_id}/switch-veraeusserungsform`.
+#[derive(Debug, serde::Deserialize)]
+pub struct VeraeusserungsformWechselRequest {
+    /// The new settlement model to switch to.
+    /// Must be either `"FEED_IN_TARIFF"` / `"VERGUETUNG"` (switch to Einspeisevergütung)
+    /// or `"MARKET_PREMIUM"` / `"DIREKTVERMARKTUNG"` (switch to Direktvermarktung).
+    pub new_model: String,
+    /// Effective date for the switch (must be the 1st of a calendar month).
+    pub effective_date: String,
+    /// For Direktvermarktung switches: the Direktvermarkter's MP-ID.
+    pub direktvermarkter_mp_id: Option<String>,
+    /// For Direktvermarktung switches: the agreed Anzulegender Wert ct/kWh.
+    pub direktverm_aw_ct: Option<rust_decimal::Decimal>,
+}
+
+/// `POST /api/v1/anlagen/{tr_id}/switch-veraeusserungsform`
+///
+/// **§21b EEG 2023 — Veräußerungsform Wechsel.**
+///
+/// Switches the plant between Einspeisevergütung (§21) and Direktvermarktung (§20).
+///
+/// Rules enforced by `eeg_billing::direktverm::validate_switch_to_vergütung`:
+/// - Plants > 100 kW (mandatory Direktvermarktung) cannot switch back to Einspeisevergütung.
+/// - Plants can only switch once per calendar month (§21b / §21c EEG 2023).
+/// - The effective date must be the 1st of a calendar month.
+///
+/// On success: updates `settlement_model`, `direktverm_mp_id`, `direktverm_aw_ct`,
+/// and `last_veraeusserungsform_switch` on the plant record.
+pub async fn post_switch_veraeusserungsform(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path(tr_id): Path<String>,
+    Json(req): Json<VeraeusserungsformWechselRequest>,
+) -> impl IntoResponse {
+    use eeg_billing::EegGesetz;
+    use eeg_billing::direktverm::{SwitchBlockedReason, validate_switch_to_vergütung};
+    use time::format_description::well_known::Iso8601;
+
+    let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    let effective_date = match time::Date::parse(&req.effective_date, &Iso8601::DEFAULT) {
+        Ok(d) => d,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "invalid effective_date — use ISO 8601 format (YYYY-MM-DD)",
+            )
+                .into_response();
+        }
+    };
+
+    if effective_date.day() != 1 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "effective_date must be the 1st of a calendar month (§21c EEG 2023)",
+        )
+            .into_response();
+    }
+
+    let eeg_gesetz = EegGesetz::from_db_year(anlage.eeg_gesetz).unwrap_or(EegGesetz::Eeg2023);
+
+    // Only validate the switch-to-Vergütung direction (mandatory plants cannot switch back).
+    // Switching to Direktvermarktung is always allowed.
+    let is_switching_to_verguetung =
+        matches!(req.new_model.as_str(), "FEED_IN_TARIFF" | "VERGUETUNG");
+
+    if is_switching_to_verguetung
+        && let Err(reason) = validate_switch_to_vergütung(
+            anlage.leistung_kwp,
+            eeg_gesetz,
+            effective_date,
+            anlage.last_veraeusserungsform_switch,
+        )
+    {
+        let msg = match reason {
+            SwitchBlockedReason::PflichtgemasseDirektvermarktung => {
+                "plant is subject to mandatory Direktvermarktung (§20 EEG 2023 — >100 kW) and cannot switch back to Einspeisevergütung"
+            }
+            SwitchBlockedReason::AlreadySwitchedThisMonth { last_switch } => &format!(
+                "already switched this calendar month (last switch: {last_switch}) — §21b EEG 2023 allows only one switch per month"
+            ),
+        };
+        return (StatusCode::UNPROCESSABLE_ENTITY, msg.to_owned()).into_response();
+    }
+
+    let new_model = match req.new_model.as_str() {
+        "FEED_IN_TARIFF" | "VERGUETUNG" => "FEED_IN_TARIFF",
+        "MARKET_PREMIUM" | "DIREKTVERMARKTUNG" => "MARKET_PREMIUM",
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("unsupported model: {other}"),
+            )
+                .into_response();
+        }
+    };
+
+    match sqlx::query(
+        r"UPDATE eeg_anlagen
+          SET settlement_model               = $3,
+              direktverm_mp_id               = $4,
+              direktverm_aw_ct               = $5,
+              last_veraeusserungsform_switch  = $6,
+              updated_at                     = now()
+          WHERE tr_id = $1 AND tenant = $2",
+    )
+    .bind(&tr_id)
+    .bind(&cfg.tenant)
+    .bind(new_model)
+    .bind(&req.direktvermarkter_mp_id)
+    .bind(req.direktverm_aw_ct)
+    .bind(effective_date)
+    .execute(&pool)
+    .await
+    {
+        Ok(r) if r.rows_affected() > 0 => {
+            // ── §21c EEG 2023: emit notification CloudEvent to NB ─────────────
+            // §21c: operator must notify the NB of the switch by end of the calendar month.
+            // We emit de.eeg.veraeusserungsform.gewechselt to the ERP webhook which is
+            // expected to forward it to the GPKE process handler (makod PID 55022/55023).
+            let ce_id =
+                emit_veraeusserungsform_ce(&cfg, &tr_id, new_model, &req.effective_date).await;
+            // Record the notification timestamp (best-effort — failure does not block the switch).
+            if ce_id.is_some() {
+                let _ = sqlx::query(
+                    "UPDATE eeg_anlagen
+                     SET veraeusserungsform_notification_sent_at = now()
+                     WHERE tr_id = $1 AND tenant = $2",
+                )
+                .bind(&tr_id)
+                .bind(&cfg.tenant)
+                .execute(&pool)
+                .await;
+            }
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "tr_id": tr_id,
+                    "new_model": new_model,
+                    "effective_date": req.effective_date,
+                    "notification_sent": ce_id.is_some(),
+                    "note": format!(
+                        "§21b EEG 2023 Veräußerungsform Wechsel to {} recorded. \
+                         §21c notification {}.",
+                        new_model,
+                        if ce_id.is_some() { "dispatched" } else { "pending — configure erp_webhook_url" }
+                    )
+                })),
+            )
+                .into_response()
+        }
+        Ok(_) => (StatusCode::NOT_FOUND, format!("plant {tr_id} not found")).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Emit `de.eeg.veraeusserungsform.gewechselt` CloudEvent for §21c EEG 2023.
+///
+/// The ERP webhook is expected to forward this to the GPKE process handler
+/// (makod, PID 55022 Wechsel Marktrollen / PID 55023 Wechselbestätigung).
+async fn emit_veraeusserungsform_ce(
+    cfg: &EinsdConfig,
+    tr_id: &str,
+    new_model: &str,
+    effective_date: &str,
+) -> Option<uuid::Uuid> {
+    let webhook_url = cfg.erp_webhook_url.as_deref()?;
+    let ce_id = uuid::Uuid::new_v4();
+    let now = time::OffsetDateTime::now_utc();
+    let payload = serde_json::json!({
+        "specversion": "1.0",
+        "type": "de.eeg.veraeusserungsform.gewechselt",
+        "source": format!("urn:einsd:tenant:{}", cfg.tenant),
+        "id": ce_id.to_string(),
+        "time": now.to_string(),
+        "subject": tr_id,
+        "datacontenttype": "application/json",
+        "data": {
+            "tr_id": tr_id,
+            "new_model": new_model,
+            "effective_date": effective_date,
+            "legal_basis": "§21c EEG 2023",
+            "deadline": "End of calendar month of effective_date"
+        }
+    });
+    let client = reqwest::Client::new();
+    let body = serde_json::to_string(&payload).unwrap_or_default();
+    let mut req = client
+        .post(webhook_url)
+        .header("Content-Type", "application/cloudevents+json")
+        .body(body.clone());
+    if let Some(secret) = cfg.erp_hmac_secret.as_deref() {
+        let sig = mako_service::webhook::hmac_hex(secret.as_bytes(), body.as_bytes());
+        req = req.header("X-Mako-Signature", format!("sha256={sig}"));
+    }
+    match req.send().await {
+        Ok(resp) if resp.status().is_success() => Some(ce_id),
+        Ok(resp) => {
+            tracing::warn!(tr_id, status = %resp.status(), "§21c CE delivery failed");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(tr_id, error = %e, "§21c CE error");
+            None
+        }
+    }
+}
+
+// ── §22 MessZV — Correction Settlement ───────────────────────────────────────
+
+/// Request body for `POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction`.
+#[derive(Debug, serde::Deserialize)]
+pub struct CorrectionSettleRequest {
+    /// Corrected Einspeisemenge kWh.
+    pub einspeisemenge_kwh: Option<rust_decimal::Decimal>,
+    /// Corrected EPEX average ct/kWh (for Direktvermarktung / Post-EEG).
+    pub epex_avg_ct_kwh: Option<rust_decimal::Decimal>,
+    /// Reason for the correction.
+    pub reason: eeg_billing::scheme::CorrectionReason,
+    /// Free-text explanation for audit trail.
+    pub reason_detail: Option<String>,
+}
+
+/// `POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction`
+///
+/// **§22 MessZV — Correction Settlement.**
+///
+/// Creates a correction receipt that supersedes the original settlement for the
+/// given billing period. The original receipt is preserved for audit trail.
+///
+/// Use cases:
+/// - Corrected meter reading arrives (§22 MessZV).
+/// - Tariff error discovered.
+/// - MaStR registration retroactively confirmed (retroactive §52 sanction removal).
+/// - Capacity correction.
+///
+/// The correction stores `SettlementType::Correction { original_id, reason }` for
+/// traceability per §22 MessZV.
+pub async fn post_correction_settle(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path((tr_id, year, month)): Path<(String, i16, i16)>,
+    Json(req): Json<CorrectionSettleRequest>,
+) -> impl IntoResponse {
+    use crate::pg::{fetch_anlage, fetch_epex_price, run_settlement};
+
+    let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    // Fetch the original receipt to get its ID for the traceability link.
+    let original_id: Option<String> = sqlx::query_scalar(
+        r"SELECT id::text FROM settlement_receipts
+          WHERE tr_id = $1 AND tenant = $2 AND billing_year = $3 AND billing_month = $4
+          ORDER BY settled_at DESC LIMIT 1",
+    )
+    .bind(&tr_id)
+    .bind(&cfg.tenant)
+    .bind(year)
+    .bind(month)
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten();
+
+    let original_id_str = original_id
+        .clone()
+        .unwrap_or_else(|| format!("{tr_id}/{year}/{month}"));
+
+    let epex_avg_ct_kwh = match req.epex_avg_ct_kwh {
+        Some(p) => Some(p),
+        None => match fetch_epex_price(&pool, year, month).await {
+            Ok(p) => p,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        },
+    };
+
+    let einspeisemenge_kwh = req.einspeisemenge_kwh;
+
+    let input = build_settle_input(
+        &cfg.tenant,
+        &anlage,
+        year,
+        month,
+        SettleOverrides {
+            einspeisemenge_kwh,
+            epex_avg_ct_kwh,
+            managementpraemie_ct_override: None,
+            einspeisemanagement_kwh: None,
+            negative_price_quarter_hours: None,
+            // §22 MessZV: correction receipt linked to original
+            correction_of: original_id
+                .as_deref()
+                .and_then(|s| uuid::Uuid::parse_str(s).ok()),
+            jahresmarktwert_ct_kwh: None,
+        },
+    );
+
+    match run_settlement(&pool, input).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "id": result.id,
+                "original_id": original_id_str,
+                "correction_reason": format!("{:?}", req.reason),
+                "reason_detail": req.reason_detail,
+                "billing_year": year,
+                "billing_month": month,
+                "settlement_eur": result.settlement_eur,
+                "status": result.status,
+                "note": "§22 MessZV correction receipt created. Original receipt preserved for audit trail.",
+            })),
+        ).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

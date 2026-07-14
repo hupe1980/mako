@@ -30,9 +30,8 @@
 //! use rust_decimal_macros::dec;
 //!
 //! let output = calculate_settlement(&SettleInput {
-//!     scheme: eeg_billing::SettlementScheme::FeedInTariff,
+//!     scheme: eeg_billing::SettlementScheme::FeedInTariff { verguetungssatz_ct: dec!(8.11) },
 //!     einspeisemenge_kwh: Some(dec!(500)),
-//!     verguetungssatz_ct: dec!(8.11),
 //!     ..SettleInput::default()
 //! });
 //!

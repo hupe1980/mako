@@ -22,9 +22,10 @@ fn d(s: &str) -> Decimal {
 #[test]
 fn verguetung_solar_100kwh_eeg_2023_rate() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.11"),
+        },
         einspeisemenge_kwh: Some(d("100")),
-        verguetungssatz_ct: d("8.11"),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
@@ -37,9 +38,10 @@ fn verguetung_solar_100kwh_eeg_2023_rate() {
 #[test]
 fn verguetung_eeg_2017_rate_12_35_ct() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(12.35),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(12.35),
         inbetriebnahme: Some(date!(2017 - 04 - 01)),
         leistung_kwp: Some(dec!(8)),
         ..SettleInput::default()
@@ -51,9 +53,10 @@ fn verguetung_eeg_2017_rate_12_35_ct() {
 #[test]
 fn verguetung_eeg_2004_legacy_rate_57_4_ct() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(57.4),
+        },
         einspeisemenge_kwh: Some(dec!(200)),
-        verguetungssatz_ct: dec!(57.4),
         inbetriebnahme: Some(date!(2004 - 07 - 15)),
         leistung_kwp: Some(dec!(5)),
         ..SettleInput::default()
@@ -65,9 +68,10 @@ fn verguetung_eeg_2004_legacy_rate_57_4_ct() {
 #[test]
 fn verguetung_no_data_returns_no_data_status() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.11),
+        },
         einspeisemenge_kwh: None,
-        verguetungssatz_ct: dec!(8.11),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::NoData);
@@ -83,9 +87,10 @@ fn negativpreis_applied_to_post_2016_large_plant() {
     // EEG 2017 kW exemption threshold is 500 kW; 150 kW < 500 kW → §51 does NOT apply.
     // Caller would only pass kwh_during_negative_epex for ≥500 kW EEG 2017 plants.
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(9.25),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(9.25),
         kwh_during_negative_epex: Some(dec!(200)),
         inbetriebnahme: Some(date!(2020 - 06 - 01)),
         leistung_kwp: Some(dec!(150)),
@@ -103,9 +108,10 @@ fn negativpreis_applied_to_eeg2017_above_500kw_plant() {
     // Plant commissioned 2019 → EEG 2017 rules. 600 kW ≥ 500 kW → §51 applies.
     // Caller has already verified ≥6 consecutive negative-price hours.
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(9.25),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(9.25),
         kwh_during_negative_epex: Some(dec!(200)),
         inbetriebnahme: Some(date!(2019 - 03 - 01)),
         leistung_kwp: Some(dec!(600)),
@@ -122,9 +128,10 @@ fn negativpreis_applied_to_eeg2017_above_500kw_plant() {
 fn negativpreis_exempt_pre_2016_plant() {
     // §51 EEG 2017 is NOT retroactive — pre-2016 plants exempt
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(29.37),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(29.37),
         kwh_during_negative_epex: Some(dec!(200)),
         inbetriebnahme: Some(date!(2010 - 06 - 01)), // pre-2016
         leistung_kwp: Some(dec!(150)),
@@ -140,9 +147,10 @@ fn negativpreis_exempt_pre_2016_plant() {
 #[test]
 fn negativpreis_exempt_small_plant_below_100kwp() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.11),
+        },
         einspeisemenge_kwh: Some(dec!(500)),
-        verguetungssatz_ct: dec!(8.11),
         kwh_during_negative_epex: Some(dec!(100)),
         inbetriebnahme: Some(date!(2023 - 03 - 15)),
         leistung_kwp: Some(dec!(9.5)), // <100 kWp → exempt
@@ -159,9 +167,10 @@ fn negativpreis_exempt_small_plant_below_100kwp() {
 #[test]
 fn foerderendedatum_triggers_foerderung_beendet() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(57.4),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(57.4),
         foerderendedatum: Some(date!(2024 - 07 - 15)),
         billing_date: Some(date!(2024 - 08 - 01)), // billing after end
         ..SettleInput::default()
@@ -173,16 +182,20 @@ fn foerderendedatum_triggers_foerderung_beendet() {
 
 #[test]
 fn foerderendedatum_still_active_within_end_month() {
+    // billing_date (July 1) ≤ foerderendedatum (July 15) → status = Calculated, not FoerderungBeendet.
+    // §25 Abs. 1 Satz 3 EEG: pro-rata for expiry mid-month: 15/31 days.
+    // 100 kWh × 8.11 ct × (15/31) = 8.11 × 0.483871 = 3.92419 EUR
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.11),
+        },
         einspeisemenge_kwh: Some(dec!(100)),
-        verguetungssatz_ct: dec!(8.11),
         foerderendedatum: Some(date!(2024 - 07 - 15)),
         billing_date: Some(date!(2024 - 07 - 01)), // billing_date ≤ foerderendedatum
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
-    assert_eq!(out.settlement_eur, Some(dec!(8.11)));
+    assert_eq!(out.settlement_eur, Some(dec!(3.92419))); // §25 pro-rata: 15/31 days
 }
 
 // ── §25 EEG — MaStR-Sanktionen ───────────────────────────────────────────────
@@ -190,9 +203,10 @@ fn foerderendedatum_still_active_within_end_month() {
 #[test]
 fn mastr_not_registered_forces_zero_settlement() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.11),
+        },
         einspeisemenge_kwh: Some(dec!(500)),
-        verguetungssatz_ct: dec!(8.11),
         sanktion: Some(eeg_billing::SanktionAlt::VerguetungAufNull),
         ..SettleInput::default()
     });
@@ -205,9 +219,14 @@ fn mastr_not_registered_forces_zero_settlement() {
 fn sanction_takes_priority_over_all_other_conditions() {
     // Even when EPEX missing (PriceMissing), §25 fires first
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::MarketPremium,
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: dec!(0),
+            managementpraemie_ct: None,
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
         einspeisemenge_kwh: Some(dec!(500)),
-        epex_avg_ct_kwh: None,
+        marktwert_ct_kwh: None,
         sanktion: Some(eeg_billing::SanktionAlt::VerguetungAufNull),
         ..SettleInput::default()
     });
@@ -219,10 +238,11 @@ fn sanction_takes_priority_over_all_other_conditions() {
 #[test]
 fn mieterstrom_base_plus_zuschlag() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::TenantElectricity,
+        scheme: SettlementScheme::TenantElectricity {
+            verguetungssatz_ct: dec!(8.11),
+            mieter_zuschlag_ct: Some(dec!(2.5)),
+        },
         einspeisemenge_kwh: Some(dec!(400)),
-        verguetungssatz_ct: dec!(8.11),
-        mieter_zuschlag_ct: Some(dec!(2.5)),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
@@ -235,10 +255,11 @@ fn mieterstrom_base_plus_zuschlag() {
 #[test]
 fn mieterstrom_without_zuschlag_produces_one_position() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::TenantElectricity,
+        scheme: SettlementScheme::TenantElectricity {
+            verguetungssatz_ct: dec!(8.11),
+            mieter_zuschlag_ct: None,
+        },
         einspeisemenge_kwh: Some(dec!(500)),
-        verguetungssatz_ct: dec!(8.11),
-        mieter_zuschlag_ct: None,
         ..SettleInput::default()
     });
     assert_eq!(out.positions.len(), 1);
@@ -250,11 +271,14 @@ fn mieterstrom_without_zuschlag_produces_one_position() {
 #[test]
 fn direktvermarktung_positive_spread_plus_mgmt() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::MarketPremium,
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: dec!(6.5),
+            managementpraemie_ct: Some(dec!(0.4)),
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
         einspeisemenge_kwh: Some(dec!(10000)),
-        direktverm_aw_ct: Some(dec!(6.5)),
-        epex_avg_ct_kwh: Some(dec!(4.1)),
-        managementpraemie_ct: Some(dec!(0.4)),
+        marktwert_ct_kwh: Some(dec!(4.1)),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
@@ -270,11 +294,14 @@ fn direktvermarktung_zero_spread_only_mgmt() {
     // The Managementprämie is NOT a guaranteed floor — it is incorporated into the AW.
     // When EPEX > eff_AW, the plant receives nothing from the NB.
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::MarketPremium,
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: dec!(6.5),
+            managementpraemie_ct: Some(dec!(0.4)),
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
         einspeisemenge_kwh: Some(dec!(50000)),
-        direktverm_aw_ct: Some(dec!(6.5)),
-        epex_avg_ct_kwh: Some(dec!(30.0)), // EPEX >> eff_AW (6.9 ct) → zero
-        managementpraemie_ct: Some(dec!(0.4)),
+        marktwert_ct_kwh: Some(dec!(30.0)), // EPEX >> eff_AW (6.9 ct) → zero
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
@@ -285,10 +312,14 @@ fn direktvermarktung_zero_spread_only_mgmt() {
 #[test]
 fn direktvermarktung_price_missing() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::MarketPremium,
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: dec!(6.5),
+            managementpraemie_ct: None,
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        direktverm_aw_ct: Some(dec!(6.5)),
-        epex_avg_ct_kwh: None,
+        marktwert_ct_kwh: None,
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::PriceMissing);
@@ -299,11 +330,14 @@ fn direktvermarktung_price_missing() {
 fn direktvermarktung_auto_managementpraemie_standard_plant() {
     // ≤100 MW → 0.4 ct/kWh auto
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::MarketPremium,
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: dec!(6.5),
+            managementpraemie_ct: None,
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        direktverm_aw_ct: Some(dec!(6.5)),
-        epex_avg_ct_kwh: Some(dec!(4.1)),
-        managementpraemie_ct: None, // auto
+        marktwert_ct_kwh: Some(dec!(4.1)),
         leistung_kwp: Some(dec!(5000)),
         ..SettleInput::default()
     });
@@ -314,11 +348,14 @@ fn direktvermarktung_auto_managementpraemie_standard_plant() {
 fn direktvermarktung_auto_managementpraemie_large_plant() {
     // >100 MW → 0.2 ct/kWh auto (§20 Abs. 3 Nr. 1 EEG 2023)
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::MarketPremium,
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: dec!(6.5),
+            managementpraemie_ct: None,
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        direktverm_aw_ct: Some(dec!(6.5)),
-        epex_avg_ct_kwh: Some(dec!(4.1)),
-        managementpraemie_ct: None,
+        marktwert_ct_kwh: Some(dec!(4.1)),
         leistung_kwp: Some(dec!(110_000)), // >100 MW
         ..SettleInput::default()
     });
@@ -331,12 +368,15 @@ fn direktvermarktung_auto_managementpraemie_large_plant() {
 #[test]
 fn ausschreibung_large_solar_park() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::MarketPremium,
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: dec!(5.82),
+            managementpraemie_ct: Some(dec!(0.4)),
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
         tariff_source: TariffSource::Auction(AusschreibungMetadata::default()),
         einspeisemenge_kwh: Some(dec!(2_500_000)),
-        direktverm_aw_ct: Some(dec!(5.82)),
-        epex_avg_ct_kwh: Some(dec!(4.1)),
-        managementpraemie_ct: Some(dec!(0.4)),
+        marktwert_ct_kwh: Some(dec!(4.1)),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
@@ -349,9 +389,9 @@ fn ausschreibung_large_solar_park() {
 #[test]
 fn post_eeg_spot_positive_epex() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::PostEeg,
+        scheme: SettlementScheme::PostEeg { price_floor: None },
         einspeisemenge_kwh: Some(dec!(1000)),
-        epex_avg_ct_kwh: Some(dec!(8.5)),
+        marktwert_ct_kwh: Some(dec!(8.5)),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
@@ -361,9 +401,9 @@ fn post_eeg_spot_positive_epex() {
 #[test]
 fn post_eeg_spot_negative_epex_no_floor() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::PostEeg,
+        scheme: SettlementScheme::PostEeg { price_floor: None },
         einspeisemenge_kwh: Some(dec!(1000)),
-        epex_avg_ct_kwh: Some(dec!(-0.5)),
+        marktwert_ct_kwh: Some(dec!(-0.5)),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
@@ -377,7 +417,6 @@ fn eigenverbrauch_always_zero_eur() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::Eigenverbrauch,
         einspeisemenge_kwh: Some(dec!(999)),
-        verguetungssatz_ct: dec!(99.99),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
@@ -390,9 +429,12 @@ fn eigenverbrauch_always_zero_eur() {
 #[test]
 fn kwkg_full_period_no_hour_limit() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::KwkSurcharge,
+        scheme: SettlementScheme::KwkSurcharge {
+            verguetungssatz_ct: dec!(6.0),
+            kwh_paid_gesamt: None,
+            max_kwh: None,
+        },
         einspeisemenge_kwh: Some(dec!(5000)),
-        verguetungssatz_ct: dec!(6.0),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
@@ -402,11 +444,12 @@ fn kwkg_full_period_no_hour_limit() {
 #[test]
 fn kwkg_hour_limit_prorated_last_period() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::KwkSurcharge,
+        scheme: SettlementScheme::KwkSurcharge {
+            verguetungssatz_ct: dec!(3.1),
+            kwh_paid_gesamt: Some(dec!(29_900)),
+            max_kwh: Some(dec!(30_000)),
+        },
         einspeisemenge_kwh: Some(dec!(400)),
-        verguetungssatz_ct: dec!(3.1),
-        kwk_strom_kwh_gesamt: Some(dec!(29_900)),
-        kwk_max_kwh: Some(dec!(30_000)),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::FoerderungBeendet);
@@ -418,11 +461,12 @@ fn kwkg_hour_limit_prorated_last_period() {
 #[test]
 fn kwkg_limit_exhausted_returns_zero() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::KwkSurcharge,
+        scheme: SettlementScheme::KwkSurcharge {
+            verguetungssatz_ct: dec!(6.0),
+            kwh_paid_gesamt: Some(dec!(30_000)),
+            max_kwh: Some(dec!(30_000)),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(6.0),
-        kwk_strom_kwh_gesamt: Some(dec!(30_000)),
-        kwk_max_kwh: Some(dec!(30_000)),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::FoerderungBeendet);
@@ -434,10 +478,11 @@ fn kwkg_limit_exhausted_returns_zero() {
 #[test]
 fn flexibilitaet_base_plus_praemie() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FlexibilityPremium,
+        scheme: SettlementScheme::FlexibilityPremium {
+            verguetungssatz_ct: dec!(14.67),
+            flex_praemie_ct_kwh: Some(dec!(0.5)),
+        },
         einspeisemenge_kwh: Some(dec!(2000)),
-        verguetungssatz_ct: dec!(14.67),
-        flex_praemie_ct_kwh: Some(dec!(0.5)),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
@@ -453,9 +498,10 @@ fn flexibilitaet_base_plus_praemie() {
 fn anlagenerweiterung_two_blocks_proportional() {
     // 10 kWp at 9.25 ct + 5 kWp at 8.11 ct, total 1500 kWh
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(9.25),
+        },
         einspeisemenge_kwh: Some(dec!(1500)),
-        verguetungssatz_ct: dec!(9.25),
         leistung_kwp: Some(dec!(10)),
         inbetriebnahme: Some(date!(2020 - 03 - 15)),
         foerderendedatum: Some(date!(2040 - 03 - 15)),
@@ -478,9 +524,10 @@ fn anlagenerweiterung_two_blocks_proportional() {
 fn anlagenerweiterung_expired_primary_block_excluded() {
     // Primary block expired, only extension contributes
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(57.4),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(57.4),
         leistung_kwp: Some(dec!(5)),
         foerderendedatum: Some(date!(2024 - 06 - 01)), // expired
         billing_date: Some(date!(2024 - 07 - 01)),
@@ -500,9 +547,10 @@ fn anlagenerweiterung_expired_primary_block_excluded() {
 #[test]
 fn anlagenerweiterung_all_expired_foerderung_beendet() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(9.25),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(9.25),
         leistung_kwp: Some(dec!(10)),
         foerderendedatum: Some(date!(2020 - 01 - 01)),
         billing_date: Some(date!(2025 - 01 - 01)),
@@ -601,9 +649,10 @@ fn eeg_settle_tariff_produces_billing_document() {
     use eeg_billing::tariff::EegSettleTariff;
 
     let output = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.11),
+        },
         einspeisemenge_kwh: Some(dec!(500)),
-        verguetungssatz_ct: dec!(8.11),
         ..SettleInput::default()
     });
     let tariff = EegSettleTariff::new(&output);
@@ -619,9 +668,10 @@ fn eeg_settle_tariff_mit_mwst_19_percent() {
     use eeg_billing::tariff::EegSettleTariffMitMwSt;
 
     let output = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.11),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(8.11),
         ..SettleInput::default()
     });
     let tariff = EegSettleTariffMitMwSt::new(&output);
@@ -638,9 +688,10 @@ fn eeg_settle_tariff_mit_mwst_19_percent() {
 fn settlement_5dp_no_float_rounding() {
     // 333.333 × 8.1 / 100 = 26.999973 — exact in Decimal
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.1"),
+        },
         einspeisemenge_kwh: Some(d("333.333")),
-        verguetungssatz_ct: d("8.1"),
         ..SettleInput::default()
     });
     assert_eq!(out.settlement_eur, Some(d("26.99997")));
@@ -649,9 +700,10 @@ fn settlement_5dp_no_float_rounding() {
 #[test]
 fn settlement_gigawatt_scale_no_overflow() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(30.0),
+        },
         einspeisemenge_kwh: Some(dec!(1_000_000)),
-        verguetungssatz_ct: dec!(30.0),
         ..SettleInput::default()
     });
     assert_eq!(out.settlement_eur, Some(dec!(300_000)));
@@ -726,9 +778,10 @@ fn negativpreis_threshold_at_boundary() {
 fn flexibilitaet_zuschlag_monthly_payment() {
     // §50a: 500 kW additional flexible capacity × 100 EUR/kW/year ÷ 12 months = 4166.67 EUR/month
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FlexibilitySurcharge,
+        scheme: SettlementScheme::FlexibilitySurcharge {
+            rate_eur_per_kw_year: dec!(100),
+        },
         einspeisemenge_kwh: None,      // not energy-based
-        verguetungssatz_ct: dec!(100), // 100 EUR/kW/year
         leistung_kwp: Some(dec!(500)), // 500 kW flexible capacity
         ..SettleInput::default()
     });
@@ -746,8 +799,9 @@ fn flexibilitaet_zuschlag_monthly_payment() {
 #[test]
 fn flexibilitaet_zuschlag_zero_capacity_returns_zero() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FlexibilitySurcharge,
-        verguetungssatz_ct: dec!(100),
+        scheme: SettlementScheme::FlexibilitySurcharge {
+            rate_eur_per_kw_year: dec!(100),
+        },
         leistung_kwp: None, // no capacity → zero payment
         ..SettleInput::default()
     });
@@ -761,9 +815,9 @@ fn flexibilitaet_zuschlag_zero_capacity_returns_zero() {
 fn post_eeg_spot_capped_at_10ct() {
     // §23b: When EPEX > 10 ct/kWh, the payment is capped at 10 ct/kWh
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::PostEeg,
+        scheme: SettlementScheme::PostEeg { price_floor: None },
         einspeisemenge_kwh: Some(dec!(1000)),
-        epex_avg_ct_kwh: Some(dec!(25.0)), // EPEX = 25 ct → cap to 10 ct
+        marktwert_ct_kwh: Some(dec!(25.0)), // EPEX = 25 ct → cap to 10 ct
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
@@ -778,9 +832,9 @@ fn post_eeg_spot_capped_at_10ct() {
 #[test]
 fn post_eeg_spot_below_10ct_not_capped() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::PostEeg,
+        scheme: SettlementScheme::PostEeg { price_floor: None },
         einspeisemenge_kwh: Some(dec!(1000)),
-        epex_avg_ct_kwh: Some(dec!(8.5)), // below 10 ct → no cap
+        marktwert_ct_kwh: Some(dec!(8.5)), // below 10 ct → no cap
         ..SettleInput::default()
     });
     assert_eq!(out.settlement_eur, Some(dec!(85.00)));
@@ -790,9 +844,9 @@ fn post_eeg_spot_below_10ct_not_capped() {
 fn post_eeg_spot_negative_epex_not_capped() {
     // §23b cap does NOT apply to negative prices — plant owes NB
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::PostEeg,
+        scheme: SettlementScheme::PostEeg { price_floor: None },
         einspeisemenge_kwh: Some(dec!(1000)),
-        epex_avg_ct_kwh: Some(dec!(-0.5)),
+        marktwert_ct_kwh: Some(dec!(-0.5)),
         ..SettleInput::default()
     });
     assert_eq!(out.settlement_eur, Some(dec!(-5.00)));
@@ -804,9 +858,10 @@ fn post_eeg_spot_negative_epex_not_capped() {
 fn negativpreis_eeg2023_no_threshold() {
     // EEG 2023 §51: any single negative-price hour suffices (no 6h threshold)
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.51),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(8.51),
         kwh_during_negative_epex: Some(dec!(50)), // 50 kWh during negative hours
         inbetriebnahme: Some(date!(2024 - 06 - 01)),
         leistung_kwp: Some(dec!(200)),
@@ -1023,9 +1078,10 @@ fn ust_par12_abs3_billing_document_no_vat() {
     use eeg_billing::ust::{VatStatus, ust_tax_layers};
 
     let output = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.51),
+        },
         einspeisemenge_kwh: Some(dec!(500)),
-        verguetungssatz_ct: dec!(8.51),
         leistung_kwp: Some(dec!(9.5)),
         inbetriebnahme: Some(date!(2024 - 06 - 01)),
         ..SettleInput::default()
@@ -1060,10 +1116,11 @@ fn ust_regelbesteuerung_19pct_billing_document() {
     use eeg_billing::ust::{VatStatus, ust_tax_layers};
 
     let output = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(5.56),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(5.56), // >30 kWp rate (EEG 2023 initial)
-        leistung_kwp: Some(dec!(100)),  // 100 kWp → Regelbesteuerung
+        leistung_kwp: Some(dec!(100)), // 100 kWp → Regelbesteuerung
         ..SettleInput::default()
     });
 
@@ -1097,9 +1154,10 @@ fn uebergangsregelung_pre_2023_plant_uses_historical_rate() {
     // The caller (einsd) looks up the historical rate via lookup_verguetungssatz()
     // The formula is identical — only the rate differs
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(12.31),
+        },
         einspeisemenge_kwh: Some(dec!(400)),
-        verguetungssatz_ct: dec!(12.31), // Historical EEG 2012 rate (example)
         inbetriebnahme: Some(date!(2015 - 03 - 15)),
         leistung_kwp: Some(dec!(9.5)),
         ..SettleInput::default()
@@ -1114,9 +1172,10 @@ fn uebergangsregelung_pre_2023_plant_uses_historical_rate() {
     // For this plant (2015): even if kwh_during_negative_epex were supplied, it would not
     // apply because pre-2016 plants are exempt.
     let out_neg = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(12.31),
+        },
         einspeisemenge_kwh: Some(dec!(400)),
-        verguetungssatz_ct: dec!(12.31),
         inbetriebnahme: Some(date!(2015 - 03 - 15)),
         leistung_kwp: Some(dec!(9.5)),
         kwh_during_negative_epex: Some(dec!(50)), // supplied but should be ignored
@@ -1143,9 +1202,10 @@ fn pflichtzahlung_mastr_not_registered_eeg_2023_plant_still_receives_verguetung(
     use eeg_billing::{Pflichtverstoss, SanktionsTyp};
 
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.51),
+        },
         einspeisemenge_kwh: Some(dec!(500)),
-        verguetungssatz_ct: dec!(8.51),
         inbetriebnahme: Some(date!(2024 - 01 - 15)), // EEG 2023 plant
         leistung_kwp: Some(dec!(50)),
         sanktion: None, // EEG 2023: use pflichtverstoss, not sanktion
@@ -1154,6 +1214,7 @@ fn pflichtzahlung_mastr_not_registered_eeg_2023_plant_still_receives_verguetung(
             leistung_kw: dec!(50),
             monate_des_verstosses: 2,
             nachtraeglich_erfuellt: false,
+            technischer_defekt: false,
         }],
         ..SettleInput::default()
     });
@@ -1171,14 +1232,16 @@ fn pflichtzahlung_fernsteuerbarkeit_10_eur_per_kw_per_month() {
     use eeg_billing::{Pflichtverstoss, SanktionsTyp};
 
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.51),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(8.51),
         pflichtverstoss: vec![Pflichtverstoss {
             typ: SanktionsTyp::FernsteuerbarkeitmFehlend,
             leistung_kw: dec!(200),   // 200 kW plant
             monate_des_verstosses: 3, // 3 months of violation
             nachtraeglich_erfuellt: false,
+            technischer_defekt: false,
         }],
         ..SettleInput::default()
     });
@@ -1193,14 +1256,16 @@ fn pflichtzahlung_retroactively_reduced_to_2_eur_when_fulfilled() {
     use eeg_billing::{Pflichtverstoss, SanktionsTyp};
     // §52 Abs. 3: once obligation fulfilled, penalty reduces to €2/kW/month retroactively
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.51),
+        },
         einspeisemenge_kwh: Some(dec!(100)),
-        verguetungssatz_ct: dec!(8.51),
         pflichtverstoss: vec![Pflichtverstoss {
             typ: SanktionsTyp::FernsteuerbarkeitmFehlend,
             leistung_kw: dec!(100),
             monate_des_verstosses: 4,
-            nachtraeglich_erfuellt: true, // obligation since fulfilled
+            nachtraeglich_erfuellt: true,
+            technischer_defekt: false, // obligation since fulfilled
         }],
         ..SettleInput::default()
     });
@@ -1211,9 +1276,10 @@ fn pflichtzahlung_retroactively_reduced_to_2_eur_when_fulfilled() {
 #[test]
 fn no_pflichtverstoss_means_none_pflichtzahlung() {
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.51),
+        },
         einspeisemenge_kwh: Some(dec!(200)),
-        verguetungssatz_ct: dec!(8.51),
         ..SettleInput::default()
     });
     // No violation → pflichtzahlung_eur is None (not zero)
@@ -1226,9 +1292,10 @@ fn old_plant_is_sanctioned_eur_0_correct_via_par100_uebergangsregelung() {
     // §47 EEG 2021 (now deleted) reduced Vergütung to EUR 0 for MaStR non-registration.
     // Model this with is_sanctioned = true (correct for old plants).
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(29.37),
+        },
         einspeisemenge_kwh: Some(dec!(500)),
-        verguetungssatz_ct: dec!(29.37),             // EEG 2010 rate
         inbetriebnahme: Some(date!(2010 - 05 - 15)), // OLD plant
         leistung_kwp: Some(dec!(9.5)),
         sanktion: Some(eeg_billing::SanktionAlt::VerguetungAufNull), // §47 EEG 2021 via §100: Vergütung = 0
@@ -1250,11 +1317,13 @@ fn pflichtzahlung_via_calculate_pflichtzahlung_function() {
         leistung_kw: dec!(500),
         monate_des_verstosses: 3,
         nachtraeglich_erfuellt: false,
+        technischer_defekt: false,
     };
     assert_eq!(calculate_pflichtzahlung(&v), dec!(15000)); // 500 × 10 × 3
 
     let v_reduced = Pflichtverstoss {
         nachtraeglich_erfuellt: true,
+        technischer_defekt: false,
         ..v
     };
     assert_eq!(calculate_pflichtzahlung(&v_reduced), dec!(3000)); // 500 × 2 × 3
@@ -1379,9 +1448,10 @@ fn negativpreis_eeg2023_settlement_triggers_with_1h() {
     // §51 reduces eligible kWh by the negative-price kWh (not to zero).
     // 100 total kWh - 10 negative kWh = 90 effective kWh × 8.11ct = 7.299 EUR
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.11),
+        },
         einspeisemenge_kwh: Some(dec!(100)),
-        verguetungssatz_ct: dec!(8.11),
         inbetriebnahme: Some(date!(2023 - 07 - 01)),
         leistung_kwp: Some(dec!(200)),
         kwh_during_negative_epex: Some(dec!(10)),
@@ -1395,9 +1465,10 @@ fn negativpreis_eeg2023_settlement_triggers_with_1h() {
     assert!(out.settlement_eur.is_some_and(|e| e < dec!(8.11)));
     // Full EUR 0 when all kWh are during negative prices:
     let out_zero = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.11),
+        },
         einspeisemenge_kwh: Some(dec!(100)),
-        verguetungssatz_ct: dec!(8.11),
         inbetriebnahme: Some(date!(2023 - 07 - 01)),
         leistung_kwp: Some(dec!(200)),
         kwh_during_negative_epex: Some(dec!(100)), // all kWh during negative EPEX
@@ -1414,9 +1485,10 @@ fn negativpreis_eeg2017_plant_below_500kw_not_affected() {
     // many negative-price hours, because of the 500 kW exemption.
     // The formula uses leistung_kwp < 500 → skip §51 regardless of hours.
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(12.35),
+        },
         einspeisemenge_kwh: Some(dec!(100)),
-        verguetungssatz_ct: dec!(12.35),
         inbetriebnahme: Some(date!(2018 - 03 - 01)),
         leistung_kwp: Some(dec!(499)), // below 500 kW exemption
         kwh_during_negative_epex: Some(dec!(50)), // many negative-price kWh
@@ -1432,9 +1504,10 @@ fn negativpreis_eeg2023_plant_below_100kw_not_affected() {
     // An EEG 2023 plant below 100 kW must NOT lose Vergütung — §51 EEG 2023
     // exempts plants <100 kW (§51 Abs. 1 S. 2 EEG 2023).
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.11),
+        },
         einspeisemenge_kwh: Some(dec!(100)),
-        verguetungssatz_ct: dec!(8.11),
         inbetriebnahme: Some(date!(2024 - 01 - 01)),
         leistung_kwp: Some(dec!(99)), // below 100 kW exemption
         kwh_during_negative_epex: Some(dec!(20)),
@@ -1444,9 +1517,9 @@ fn negativpreis_eeg2023_plant_below_100kw_not_affected() {
     assert_eq!(out.status, SettlementStatus::Calculated);
 }
 
-// ── §66 EEG 2017 Satz 4 — Bestandsschutz boundary (01.01.2016) ──────────────
+// ── §100 Abs. 1 Satz 4 EEG 2017 — Bestandsschutz boundary (01.01.2016) ──────────────
 //
-// §66 EEG 2017 Satz 4: "Für Strom aus Anlagen, die vor dem 1. Januar 2016
+// §100 Abs. 1 Satz 4 EEG 2017: "Für Strom aus Anlagen, die vor dem 1. Januar 2016
 // in Betrieb genommen worden sind, ist §51 nicht anzuwenden."
 //
 // ▸ Commissioned 31.12.2015 (= before 2016): §51 NEVER applies (Bestandsschutz)
@@ -1457,16 +1530,17 @@ fn negativpreis_2015_plant_has_bestandsschutz_para51_never_applies() {
     // Plant commissioned 2015 → EEG 2012 era → §51 does NOT apply at all.
     // Even with large kW and negative-price kWh, settlement is full.
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(12.35),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(12.35),
         inbetriebnahme: Some(date!(2015 - 12 - 31)), // before 2016-01-01
         leistung_kwp: Some(dec!(2000)),              // large plant
         kwh_during_negative_epex: Some(dec!(500)),
-        eeg_gesetz: EegGesetz::Eeg2012, // §66 EEG 2017: §51 not applicable
+        eeg_gesetz: EegGesetz::Eeg2012, // §100 Abs. 1 Satz 4 EEG 2017: §51 not applicable
         ..Default::default()
     });
-    // §66 EEG 2017: §51 not applicable → full 1000 kWh
+    // §100 Abs. 1 Satz 4 EEG 2017: §51 not applicable → full 1000 kWh
     assert_eq!(out.status, SettlementStatus::Calculated);
     assert_eq!(out.eligible_kwh, Some(dec!(1000)));
 }
@@ -1476,9 +1550,10 @@ fn negativpreis_2016_plant_subject_to_eeg2017_para51() {
     // Plant commissioned 01.01.2016 → EEG 2017 §51 applies (6h threshold, 500kW).
     // 600 kW ≥ 500 kW (non-wind) → caller has verified ≥6h → §51 applies.
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(12.35),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(12.35),
         inbetriebnahme: Some(date!(2016 - 01 - 01)), // from 2016-01-01: EEG 2017
         leistung_kwp: Some(dec!(600)),               // ≥ 500 kW → §51 applies
         kwh_during_negative_epex: Some(dec!(200)),   // caller verified ≥6h
@@ -1494,9 +1569,10 @@ fn negativpreis_2016_plant_subject_to_eeg2017_para51() {
 fn negativpreis_2016_plant_below_500kw_exempt() {
     // Plant from 2016, 300 kW non-wind → below 500 kW exemption (EEG 2017) → §51 not applied.
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(12.35),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(12.35),
         inbetriebnahme: Some(date!(2016 - 06 - 01)),
         leistung_kwp: Some(dec!(300)), // < 500 kW → exempt
         kwh_during_negative_epex: Some(dec!(200)),
@@ -1517,9 +1593,10 @@ fn negativpreis_eeg2017_wind_below_3mw_exempt() {
     // Wind turbine 1500 kW commissioned 2018 (EEG 2017 applies).
     // 1500 kW < 3000 kW wind exemption → §51 does NOT apply.
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(9.25),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(9.25),
         inbetriebnahme: Some(date!(2018 - 05 - 01)),
         leistung_kwp: Some(dec!(1500)), // 1.5 MW wind → < 3 MW exemption
         kwh_during_negative_epex: Some(dec!(300)),
@@ -1536,9 +1613,10 @@ fn negativpreis_eeg2017_wind_above_3mw_not_exempt() {
     // Wind turbine 3500 kW commissioned 2019 (EEG 2017 applies).
     // 3500 kW ≥ 3000 kW → §51 applies. Caller verified ≥6h consecutive hours.
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(5.8),
+        },
         einspeisemenge_kwh: Some(dec!(10000)),
-        verguetungssatz_ct: dec!(5.8),
         inbetriebnahme: Some(date!(2019 - 04 - 01)),
         leistung_kwp: Some(dec!(3500)), // 3.5 MW wind → ≥ 3 MW → §51 applies
         kwh_during_negative_epex: Some(dec!(1000)), // caller verified ≥6h
@@ -1555,9 +1633,10 @@ fn negativpreis_eeg2017_solar_1mw_not_exempt() {
     // Solar plant 1000 kW (1 MW) commissioned 2017.
     // 1000 kW ≥ 500 kW non-wind threshold → §51 applies.
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(9.25),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(9.25),
         inbetriebnahme: Some(date!(2017 - 09 - 01)),
         leistung_kwp: Some(dec!(1000)), // 1 MW solar → ≥ 500 kW → §51 applies
         kwh_during_negative_epex: Some(dec!(200)), // caller verified ≥6h
@@ -1574,9 +1653,10 @@ fn negativpreis_eeg2021_wind_above_500kw_not_exempt() {
     // EEG 2021 removed the wind 3 MW exception — ALL plants < 500 kW exempt.
     // Wind turbine 1500 kW commissioned 2021 → NOT exempt under EEG 2021.
     let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::FeedInTariff,
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(7.5),
+        },
         einspeisemenge_kwh: Some(dec!(1000)),
-        verguetungssatz_ct: dec!(7.5),
         inbetriebnahme: Some(date!(2021 - 06 - 01)),
         leistung_kwp: Some(dec!(1500)), // 1.5 MW wind — EEG 2021: ≥ 500 kW → §51
         kwh_during_negative_epex: Some(dec!(200)), // caller verified ≥4h
@@ -1609,6 +1689,7 @@ fn pflichtzahlung_nr9a_always_two_eur_not_ten() {
         leistung_kw: dec!(500),
         monate_des_verstosses: 3,
         nachtraeglich_erfuellt: false,
+        technischer_defekt: false,
     };
     // 500 kW × €2 × 3 months = €3 000 (NOT €15 000)
     assert_eq!(calculate_pflichtzahlung(&violation), dec!(3000));
@@ -1621,7 +1702,8 @@ fn pflichtzahlung_nr9a_nachtraeglich_erfuellt_has_no_effect() {
         typ: SanktionsTyp::InbetriebnahmeVorgabeVerletzt,
         leistung_kw: dec!(500),
         monate_des_verstosses: 3,
-        nachtraeglich_erfuellt: true, // has NO effect for Nr. 9a
+        nachtraeglich_erfuellt: true,
+        technischer_defekt: false, // has NO effect for Nr. 9a
     };
     // Still €2/kW, not €1 or anything else
     assert_eq!(calculate_pflichtzahlung(&fulfilled), dec!(3000));
@@ -1636,6 +1718,7 @@ fn pflichtzahlung_nr10_volleinspeisung_always_two_eur() {
         leistung_kw: dec!(300),
         monate_des_verstosses: 12, // full calendar year per §52 Abs. 4 Nr. 3
         nachtraeglich_erfuellt: false,
+        technischer_defekt: false,
     };
     // 300 kW × €2 × 12 months = €7 200
     assert_eq!(calculate_pflichtzahlung(&violation), dec!(7200));
@@ -1649,11 +1732,13 @@ fn pflichtzahlung_nr11_mastr_retroactive_reduction_still_works() {
         leistung_kw: dec!(200),
         monate_des_verstosses: 2,
         nachtraeglich_erfuellt: false,
+        technischer_defekt: false,
     };
     assert_eq!(calculate_pflichtzahlung(&v), dec!(4000)); // 200 × €10 × 2
 
     let v_fulfilled = Pflichtverstoss {
         nachtraeglich_erfuellt: true,
+        technischer_defekt: false,
         ..v
     };
     assert_eq!(calculate_pflichtzahlung(&v_fulfilled), dec!(800)); // 200 × €2 × 2
@@ -1667,7 +1752,8 @@ fn pflichtzahlung_nr2_speicher_not_reducible() {
         typ: SanktionsTyp::SpeicherAnforderungNichtErfuellt,
         leistung_kw: dec!(100),
         monate_des_verstosses: 1,
-        nachtraeglich_erfuellt: true, // has no effect for Nr. 2
+        nachtraeglich_erfuellt: true,
+        technischer_defekt: false, // has no effect for Nr. 2
     };
     assert_eq!(calculate_pflichtzahlung(&v_fulfilled), dec!(1000)); // 100 × €10 × 1
 }

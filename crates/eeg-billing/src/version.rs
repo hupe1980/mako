@@ -2,7 +2,7 @@
 //!
 //! Every plant that receives EEG/KWKG payments is governed by exactly one law version,
 //! determined at commissioning and frozen for the plant's entire Förderdauer
-//! (§100 EEG 2023 Übergangsbestimmungen, §66 EEG 2017 Übergangsregelungen).
+//! (§100 EEG 2023 Übergangsbestimmungen, §100 EEG 2017 Übergangsbestimmungen).
 //!
 //! ## Bestandsschutz (grandfather clause)
 //!
@@ -10,13 +10,13 @@
 //!
 //! | Commissioned | Governing law | §51 threshold | §51 kW exemption |
 //! |---|---|---|---|
-//! | before 2016-01-01 | EEG 2012 (or earlier) | **none** (§66 EEG 2017 Satz 4) | — |
+//! | before 2016-01-01 | EEG 2012 (or earlier) | **none** (§100 Abs. 1 Satz 4 EEG 2017) | — |
 //! | 2016-01-01 – 2020-12-31 | EEG 2017 | ≥ **6h** | Wind <3 MW; other <500 kW |
 //! | 2021-01-01 – 2022-12-31 | EEG 2021 | ≥ **4h** | <500 kW (all types) |
 //! | 2023-01-01 + | EEG 2023 | **any** period | <100 kW (until iMSys, §51 Abs. 2) |
 //!
 //! ### Sources
-//! - §66 EEG 2017 Satz 4 (Bestandsschutz for pre-2016 plants: §51 never applies)
+//! - §100 Abs. 1 Satz 4 EEG 2017 (Bestandsschutz for pre-2016 plants: §51 never applies)
 //! - §100 Abs. 2 Nr. 13 EEG 2021 (EEG 2017 plants keep 6h threshold under EEG 2021)
 //! - §100 Abs. 1 EEG 2023 (old plants → EEG as of 31.12.2022 = EEG 2021 rules)
 //! - §51 Abs. 3 Nr. 1 EEG 2017 (wind <3 MW), Nr. 2 (sonstige <500 kW)
@@ -52,6 +52,7 @@ use crate::technology::ErzeugungsArt;
 /// | `Eeg2021` | `2021` |
 /// | `Eeg2023` | `2023` |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum EegGesetz {
@@ -64,12 +65,12 @@ pub enum EegGesetz {
     /// EEG 2009 (BGBl I 2009 S. 2633). No §51.
     Eeg2009,
     /// EEG 2012 + 2014 amendment (BGBl I 2012 S. 1754; BGBl I 2014 S. 1066).
-    /// No §51 Negativpreisregel (§66 EEG 2017: §51 only for plants from 2016-01-01).
+    /// No §51 Negativpreisregel (§100 Abs. 1 Satz 4 EEG 2017: §51 only for plants from 2016-01-01).
     Eeg2012,
     /// EEG 2017 (BGBl I 2017 S. 2532).
     ///
     /// Applies to plants commissioned 2016-01-01 through 2020-12-31
-    /// (§66 EEG 2017 Satz 4, §100 EEG 2021 Abs. 2 Nr. 13, §100 EEG 2023 Abs. 1).
+    /// (§100 Abs. 1 Satz 4 EEG 2017, §100 EEG 2021 Abs. 2 Nr. 13, §100 EEG 2023 Abs. 1).
     ///
     /// §51: ≥6 consecutive hours; Wind <3 MW exempt, other <500 kW exempt.
     Eeg2017,
@@ -103,7 +104,7 @@ impl EegGesetz {
     ///
     /// | `EegGesetz` | Threshold | Legal basis |
     /// |---|---|---|
-    /// | KWKG / EEG ≤2012 | `None` | §66 EEG 2017 Satz 4 |
+    /// | KWKG / EEG ≤2012 | `None` | §100 Abs. 1 Satz 4 EEG 2017 |
     /// | EEG 2017 | `Some(6)` | §51 Abs. 1 EEG 2017 |
     /// | EEG 2021 | `Some(4)` | §51 Abs. 1 EEG 2021 |
     /// | EEG 2023 | `Some(1)` | §51 Abs. 1 EEG 2023 |
@@ -187,7 +188,7 @@ impl EegGesetz {
     /// `eeg_gesetz` in the plant registry. Operators should set `eeg_gesetz`
     /// explicitly to `EegGesetz::from_db_year(anlage.eeg_gesetz)`.
     ///
-    /// ## Key boundary: §66 EEG 2017 Satz 4
+    /// ## Key boundary: §100 Abs. 1 Satz 4 EEG 2017
     ///
     /// Plants commissioned **before 2016-01-01** → `Eeg2012` (§51 NOT applicable).
     /// Plants commissioned from **2016-01-01** → `Eeg2017` (§51 ≥6h threshold applies).
@@ -196,7 +197,7 @@ impl EegGesetz {
             ..=2004 => Self::Eeg2000,
             2005..=2008 => Self::Eeg2004,
             2009..=2011 => Self::Eeg2009,
-            2012..=2015 => Self::Eeg2012, // before 2016: §66 EEG 2017 → §51 never applies
+            2012..=2015 => Self::Eeg2012, // before 2016: §100 Abs. 1 Satz 4 EEG 2017 → §51 never applies
             2016..=2020 => Self::Eeg2017, // from 2016-01-01: §51 EEG 2017
             2021..=2022 => Self::Eeg2021,
             _ => Self::Eeg2023,
@@ -217,7 +218,7 @@ impl EegGesetz {
     /// | 2004–2008 | `Eeg2004` | EEG 2004 era |
     /// | 2009–2011 | `Eeg2009` | EEG 2009 era |
     /// | 2012–2015 | `Eeg2012` | EEG 2012+2014 amendment; before 2016: §51 not applicable |
-    /// | 2016–2020 | `Eeg2017` | §66 EEG 2017: §51 applies from 01.01.2016 |
+    /// | 2016–2020 | `Eeg2017` | §100 Abs. 1 Satz 4 EEG 2017: §51 applies from 01.01.2016 |
     /// | 2021–2022 | `Eeg2021` | §100 EEG 2023: old plants use EEG 2021 |
     /// | 2023 + | `Eeg2023` | Current law |
     ///
@@ -241,7 +242,7 @@ impl EegGesetz {
     ///
     /// // Critical Bestandsschutz boundary: 2016 → EEG 2017 (§51 applies!)
     /// assert_eq!(EegGesetz::from_db_year(2016).unwrap(), EegGesetz::Eeg2017);
-    /// // 2015 → EEG 2012 (§51 NOT applicable — §66 EEG 2017 Satz 4)
+    /// // 2015 → EEG 2012 (§51 NOT applicable — §100 Abs. 1 Satz 4 EEG 2017)
     /// assert_eq!(EegGesetz::from_db_year(2015).unwrap(), EegGesetz::Eeg2012);
     ///
     /// // 2014 = EEG 2014 amendment to EEG 2012 base law
@@ -253,7 +254,7 @@ impl EegGesetz {
             1..=2003 => Ok(Self::Eeg2000),
             2004..=2008 => Ok(Self::Eeg2004),
             2009..=2011 => Ok(Self::Eeg2009),
-            2012..=2015 => Ok(Self::Eeg2012), // 2013–2015: §66 EEG 2017 → §51 not applicable
+            2012..=2015 => Ok(Self::Eeg2012), // 2013–2015: §100 Abs. 1 Satz 4 EEG 2017 → §51 not applicable
             2016..=2020 => Ok(Self::Eeg2017), // from 2016-01-01: §51 EEG 2017 (6h/3MW/500kW)
             2021..=2022 => Ok(Self::Eeg2021),
             2023.. => Ok(Self::Eeg2023),

@@ -25,7 +25,7 @@ use rust_decimal_macros::dec;
 ///
 /// ## Bestandsschutz
 ///
-/// Plants commissioned before 01.01.2017 (EEG ≤2012, §66 EEG 2017) do not
+/// Plants commissioned before 01.01.2017 (EEG ≤2012, §100 Abs. 1 Satz 4 EEG 2017) do not
 /// have a §36k Korrekturfaktor. Do not populate this struct for those plants.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

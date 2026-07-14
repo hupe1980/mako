@@ -66,6 +66,7 @@ pub mod conversion;
 pub mod imbalance;
 pub mod interval;
 pub mod quality;
+pub mod substitute;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
@@ -77,3 +78,4 @@ pub use interval::{MeterInterval, QualityFlag, Sparte};
 pub use quality::{
     QualityConfig, QualityGrade, QualityReport, hampel_filter, score_intervals, score_intervals_raw,
 };
+pub use substitute::{SubstituteMethod, fill_gaps, linear_interpolation};

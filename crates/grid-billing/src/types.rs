@@ -1,9 +1,88 @@
 //! Input/output types for the billing calculation functions.
 
-use rubo4e::current::Rechnung;
 use rust_decimal::Decimal;
 
-// ── NneInput ──────────────────────────────────────────────────────────────────
+// ── QuantityUnit ──────────────────────────────────────────────────────────────────────────────
+
+/// Unit of measure for an invoice position quantity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuantityUnit {
+    /// Kilowatt-hours (energy).
+    Kwh,
+    /// Kilowatts (demand / peak load).
+    Kw,
+    /// Calendar months.
+    Monat,
+}
+
+// ── InvoicePosition ───────────────────────────────────────────────────────────────────
+
+/// One line item in a grid invoice.
+///
+/// Carries raw numbers for the service layer to map into the required format
+/// (BO4E `Rechnungsposition`, EN16931 UBL, etc.).
+/// Invariant: `net_eur == (quantity × unit_price_eur).round_dp(5)`.
+#[derive(Debug, Clone)]
+pub struct InvoicePosition {
+    /// 1-based sequence number.
+    pub number: u32,
+    /// Human-readable position description.
+    pub text: String,
+    /// Metered or contracted quantity.
+    pub quantity: Decimal,
+    /// Unit of measure.
+    pub unit: QuantityUnit,
+    /// Unit price in EUR (already converted from ct where applicable).
+    pub unit_price_eur: Decimal,
+    /// Net amount in EUR, rounded to 5 decimal places.
+    /// May be negative for credit positions (Mindermengen, Gutschriften).
+    pub net_eur: Decimal,
+}
+
+// ── GridInvoice ──────────────────────────────────────────────────────────────────────────
+
+/// Result of a grid invoice calculation — pure domain type, no BO4E coupling.
+///
+/// Call a local `into_rechnung()` helper in the service layer (netzbilanzd /
+/// invoicd) to produce the `rubo4e::current::Rechnung` required for EDIFACT
+/// serialization and `invoic-checker` validation.
+///
+/// # PID override
+///
+/// `pid` defaults to the primary PID for each function:
+/// - `calculate_nne_invoice` → `31001` (caller sets `31005` for Gas, `31006` for selbstausstellt)
+/// - `calculate_mmm_invoice` → `31002`
+/// - `calculate_msb_invoice` → `31009`
+/// - GeLi Gas AWH: caller overrides to `31011`
+#[derive(Debug, Clone)]
+pub struct GridInvoice {
+    /// BDEW Prüfidentifikator — caller may override after construction.
+    pub pid: u32,
+    /// Unique invoice reference number.
+    pub rechnungsnummer: String,
+    /// Invoice issue date.
+    pub invoice_date: time::Date,
+    /// Payment due date (Zahlungsziel, §271 BGB).
+    pub due_date: time::Date,
+    /// Start of billing period (inclusive).
+    pub period_from: time::Date,
+    /// End of billing period (inclusive).
+    pub period_to: time::Date,
+    /// Sender MP-ID — Netzbetreiber (or MSB for PID 31009).
+    pub nb_mp_id: String,
+    /// Ordered billing positions.
+    pub positions: Vec<InvoicePosition>,
+    /// Net total in EUR, rounded to 2 decimal places.
+    pub total_eur: Decimal,
+}
+
+impl GridInvoice {
+    /// Number of billing positions.
+    #[must_use]
+    pub fn positions_count(&self) -> usize {
+        self.positions.len()
+    }
+}
 
 /// Input for NNE (Netznutzungsentgelt) invoice calculation.
 ///
@@ -129,29 +208,6 @@ pub struct MmmInput {
     pub mehr_preis_ct_per_kwh: Decimal,
     /// Mindermengen price in **ct/kWh** (from `PreisblattNetznutzung` MMM position).
     pub minder_preis_ct_per_kwh: Decimal,
-}
-
-// ── BillingResult ─────────────────────────────────────────────────────────────
-
-/// Result of a billing calculation.
-#[derive(Debug, Clone)]
-pub struct BillingResult {
-    /// Generated BO4E `Rechnung` — ready for INVOIC serialization and
-    /// `invoic-checker` validation.
-    pub rechnung: Rechnung,
-    /// BDEW Prüfidentifikator for this invoice type.
-    ///
-    /// - `31001` — NNE Strom
-    /// - `31002` — Mehr-/Mindermengen Strom
-    /// - `31005` — NNE Gas
-    /// - `31009` — MSB-Rechnung (NB → MSB metering service settlement)
-    pub pid: u32,
-    /// Total net amount in EUR (sum of all billing positions, rounded to 5 decimal places).
-    pub total_eur: Decimal,
-    /// Sender MP-ID (for `invoic-checker` tariff lookups).
-    pub nb_mp_id: String,
-    /// Number of billing positions generated.
-    pub positions_count: usize,
 }
 
 // ── MsbInput ──────────────────────────────────────────────────────────────────

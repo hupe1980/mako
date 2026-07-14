@@ -66,9 +66,8 @@
 //!
 //! // §21 EEG 2023 — 100 kWh × 8.51 ct/kWh (Solarpaket I, ≤10 kWp Überschuss) = 8.51 EUR
 //! let out = calculate_settlement(&SettleInput {
-//!     scheme: eeg_billing::SettlementScheme::FeedInTariff,
+//!     scheme: eeg_billing::SettlementScheme::FeedInTariff { verguetungssatz_ct: d("8.51") },
 //!     einspeisemenge_kwh: Some(d("100")),
-//!     verguetungssatz_ct: d("8.51"),
 //!     ..SettleInput::default()
 //! });
 //! assert_eq!(out.status, SettlementStatus::Calculated);
@@ -100,10 +99,11 @@ pub mod wind;
 
 pub use error::SettlementError;
 pub use foerderdauer::{
-    calculate_pflichtzahlung, foerderendedatum_eeg, foerderendedatum_eeg_ausschreibung,
-    foerderendedatum_kwkg_years, foerderendedatum_repowering, kwk_eligible_kwh,
-    kwk_foerderend_calendar, kwk_max_kwh, managementpraemie_ct, negativpreis_kw_exemption,
-    negativpreis_rule_applies, negativpreis_rule_applies_for_version,
+    calculate_pflichtzahlung, compute_billing_days_fraction, foerderendedatum_eeg,
+    foerderendedatum_eeg_ausschreibung, foerderendedatum_kwkg_years, foerderendedatum_repowering,
+    kwk_eligible_kwh, kwk_foerderend_calendar, kwk_max_kwh, managementpraemie_ct,
+    negativpreis_kw_exemption, negativpreis_rule_applies, negativpreis_rule_applies_for_version,
+    pflichtzahlung_verjaehrt_am, sect52a_netztrennung_erforderlich,
     verguetungszeitraum_verlaengerung_qh, wind_onshore_korrekturfaktor_corrected_aw,
     zusammenlegung_within_12_months,
 };

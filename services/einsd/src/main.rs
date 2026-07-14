@@ -156,55 +156,21 @@ async fn main() -> anyhow::Result<()> {
                         prev_month,
                     )
                     .await;
-                    use rust_decimal_macros::dec;
-                    let mgmt_ct = if matches!(
-                        anlage.settlement_model.as_str(),
-                        "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG"
-                    ) {
-                        Some(if anlage.leistung_kwp > dec!(100_000) {
-                            dec!(0.2)
-                        } else {
-                            dec!(0.4)
-                        })
-                    } else {
-                        None
-                    };
-                    let input = einsd::pg::SettleInput {
-                        tr_id: anlage.tr_id.clone(),
-                        tenant: auto_cfg.tenant.clone(),
-                        billing_year: prev_month_year as i16,
-                        billing_month: prev_month,
-                        einspeisemenge_kwh: kwh,
-                        epex_avg_ct_kwh: epex,
-                        settlement_model: anlage.settlement_model.clone(),
-                        verguetungssatz_ct: anlage.verguetungssatz_ct,
-                        direktverm_aw_ct: anlage.direktverm_aw_ct,
-                        mieter_zuschlag_ct: anlage.mieter_zuschlag_ct,
-                        flex_praemie_ct_kwh: anlage.flex_praemie_ct_kwh,
-                        managementpraemie_ct: mgmt_ct,
-                        kwk_strom_kwh_gesamt: if anlage.settlement_model == "KWKG_ZUSCHLAG" {
-                            anlage.kwk_strom_kwh_gesamt
-                        } else {
-                            None
+                    let input = einsd::pg::build_settle_input(
+                        &auto_cfg.tenant,
+                        anlage,
+                        prev_month_year as i16,
+                        prev_month,
+                        einsd::pg::SettleOverrides {
+                            einspeisemenge_kwh: kwh,
+                            epex_avg_ct_kwh: epex,
+                            managementpraemie_ct_override: None,
+                            einspeisemanagement_kwh: None,
+                            negative_price_quarter_hours: None,
+                            correction_of: None,
+                            jahresmarktwert_ct_kwh: None,
                         },
-                        kwk_max_kwh: anlage
-                            .kwk_foerderdauer_h
-                            .map(|h| rust_decimal::Decimal::from(h) * anlage.leistung_kwp),
-                        sanktion: None, // derived from mastr_registriert in run_settlement
-                        mastr_registriert: anlage.mastr_registriert,
-                        kwh_during_negative_epex: None,
-                        inbetriebnahme: Some(anlage.inbetriebnahme),
-                        leistung_kwp: Some(anlage.leistung_kwp),
-                        foerderendedatum: Some(anlage.foerderendedatum),
-                        billing_date: time::Date::from_calendar_date(
-                            prev_month_year,
-                            time::Month::try_from(prev_month as u8).unwrap_or(time::Month::January),
-                            1,
-                        )
-                        .ok(),
-                        eeg_gesetz: anlage.eeg_gesetz,
-                        erzeugungsart: anlage.erzeugungsart.clone(),
-                    };
+                    );
                     if let Ok(result) = pg::run_settlement(&auto_pool, input).await
                         && (result.status == "calculated" || result.status == "foerderung_beendet")
                     {
@@ -274,6 +240,16 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/anlagen/:tr_id/zusammenlegen",
             post(handlers::post_zusammenlegen),
+        )
+        // ── §21b EEG 2023 — Veräußerungsform switch ───────────────────────────
+        .route(
+            "/api/v1/anlagen/:tr_id/switch-veraeusserungsform",
+            post(handlers::post_switch_veraeusserungsform),
+        )
+        // ── §22 MessZV — Correction settlement ────────────────────────────────
+        .route(
+            "/api/v1/anlagen/:tr_id/settlements/:year/:month/correction",
+            post(handlers::post_correction_settle),
         )
         // ── Batch settlement ───────────────────────────────────────────────────
         .route(

@@ -45,7 +45,7 @@ sequenceDiagram
 
     ERP->>nd: POST /api/v1/billing/run<br/>{positions: [{malo_id, billing_type, kwh, tariff…}]}
     nd->>marktd: GET mmm-preise (auto-fetch, optional)
-    nd->>nd: mako_nne::calculate_*_invoice()
+    nd->>nd: grid_billing::calculate_*_invoice()
     nd->>chk: InvoicCheckEngine::check()<br/>(period · arithmetic · total)
     chk-->>nd: CheckReport { outcome }
     nd->>nd: INSERT invoice_drafts (status=draft)
@@ -108,8 +108,10 @@ graph LR
    | `minder_preis_ct_per_kwh` | Same as above | Same as above |
    | `lastprofil` | `marktd GET /api/v1/malo/{id}` → `bilanzierungsmethode` | `billing_type = "mmm_*"`, field absent |
 
-2. **Invoice generation** — pure `mako-nne` library, no I/O, all amounts in
+2. **Invoice generation** — pure `grid-billing` library, no I/O, all amounts in
    `EuroAmount` = `i64 × 10⁻⁵ EUR` (no `f64` in billing path).
+   Returns `GridInvoice` (domain type, no BO4E dep);
+   `netzbilanzd` calls `into_rechnung()` locally before validation and serialization.
 
 3. **Self-validation** — `invoic-checker` checks 1–3 run immediately.
    Check outcomes: `Ok` → safe to dispatch; `Warn` → operator review; `Dispute` → **blocks dispatch**.

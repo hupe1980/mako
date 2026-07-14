@@ -159,13 +159,21 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       <strong>9 settlement schemes</strong> — FeedInTariff (§21 EEG), TenantElectricity (§38a),
       MarketPremium (§20 EEG; §§22a/28 Ausschreibung via <code>TariffSource::Auction</code>),
       PostEeg Spot (configurable price floor), Eigenverbrauch, KwkSurcharge (§7 KWKG 2023),
-      FlexibilityPremium (§50b EEG), FlexibilitySurcharge (§50a EEG), FailsafeTariff (§21 Abs. 1 Nr. 2).
+      FlexibilityPremium (§50b EEG), FlexibilitySurcharge (§50a EEG), TemporaryFeedInTariff (§21 Abs. 1 Nr. 2).
       <strong>§20 Abs. 3 Managementprämie</strong> incorporated into AW before spread (EEG 2023 correct formula).
       <strong>§51 version-aware Negativpreisregel</strong> — EEG 2017/2021/2023 thresholds + Bestandsschutz.
-      <strong>§51a Verlängerungsanspruch</strong>, <strong>§52 Pflichtzahlungen</strong> (€10/kW),
-      <strong>§52 Abs. 6 Netting</strong>, quarterly degression (§23a), §36k Korrekturfaktor,
+      <strong>§51a Verlängerungsanspruch</strong>, <strong>§51b biogas Ausschreibung</strong> (AW=0 when EPEX≤2ct/kWh),
+      <strong>§52 Pflichtzahlungen</strong> (€10/kW, cumulative from violation start date), <strong>§52 Abs. 6 Netting</strong>,
+      <strong>§53b regional reduction</strong> (BNetzA grid-area Grünstromkennzeichnung), <strong>§54 Ausschreibungsreduzierung</strong>,
+      <strong>§19 EInsMan compensation</strong> (§51 exemption for curtailed kWh per §19 Abs. 2 EEG 2023),
+      <strong>§21b Veräußerungsform Wechsel</strong> (monthly switch guard + mandatory threshold enforcement),
+      <strong>§22 MessZV correction receipts</strong> (correction_of traceability, original preserved in history),
+      <strong>§25 Abs. 1 Satz 3 anteilige Zahlung</strong> (billing_days_fraction for mid-month commissioning),
+      <strong>§26 Abs. 1 Fälligkeitsdatum</strong> (15th of following month, computed automatically),
+      <strong>§100 Bestandsschutz auto-override</strong> via <code>TariffSource::Transitional(Paragraph100Rule)</code>,
+      quarterly degression (§23a), §36k Korrekturfaktor,
       multi-meter Messkonzept (§42b GGV, §14a HT/NT). Repowering §22, Zusammenlegung §24.
-      284 regulatory tests in <code>eeg-billing</code>.
+      <strong>301 regulatory tests</strong> in <code>eeg-billing</code>.
     </p>
     <a href="{{ '/einsd' | relative_url }}">einsd guide →</a>
   </div>
@@ -276,7 +284,7 @@ graph TB
     subgraph energy ["Energy Data"]
         direction LR
         edmd["edmd :8380\nMSCONS meter reads\nIceberg/S3 OLAP archive"]
-        einsd["einsd :9180\nEEG/KWKG settlement\n9 schemes · eeg-billing crate\n§52 sanctions · §51 neg-price\n§23a degression · §36k wind\nbatch auto-settle worker"]
+        einsd["einsd :9180\nEEG/KWKG settlement\n9 schemes · eeg-billing crate\n§52 sanctions · §51 neg-price\n§51b biogas · §53b/54 reductions\n§21b Wechsel · §19 EInsMan\n§22 MessZV corrections\nderive_settlement_state\n8 migrations · 301 tests"]
     end
 
     subgraph retail ["Retail Billing (LF)"]
@@ -407,7 +415,7 @@ mako consists of 16 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/einsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">einsd</span>
     <span class="mako-service-card__port">:9180</span>
-    <span class="mako-service-card__desc">Einspeiser registry. 9 EEG/KWKG settlement models. Repowering §22. Foerderendedatum alerts. Built-in rate table EEG 2000–2023 + KWKG 2023.</span>
+    <span class="mako-service-card__desc">Einspeiser registry. 9 EEG/KWKG settlement schemes. §51/§51a/§51b Negativpreisregel. §100 Bestandsschutz auto-override. §25 Abs. 1 Satz 3 anteilige Zahlung. §26 Fälligkeitsdatum. §19 EInsMan compensation. §21b Veräußerungsform Wechsel. §53b/§54 regional+auction reductions. §22 MessZV correction receipts. derive_settlement_state auto-update. Repowering §22. 301 eeg-billing tests. 12-tool MCP.</span>
   </a>
   <a href="{{ '/obsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">obsd</span>
@@ -455,7 +463,7 @@ mako consists of 16 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/agentd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">agentd</span>
     <span class="mako-service-card__port">:9580</span>
-    <span class="mako-service-card__desc">Multi-agent LLM orchestration. 8 specialist agents. LanceDB RAG. Grid anomaly detection. Billing anomaly AI. OpenAI/Anthropic/Bedrock.</span>
+    <span class="mako-service-card__desc">Multi-agent LLM orchestration. 20 specialist agents. LanceDB RAG. Grid anomaly detection. Billing anomaly AI. Compliance (§20 EnWG). OpenAI/Anthropic/Bedrock.</span>
   </a>
 </div>
 
@@ -565,7 +573,7 @@ Beyond the production services, mako exposes reusable Rust libraries:
 | `mako-mabis` | workspace | MABIS — PID 13003 Bilanzkreisabrechnung Strom (BKV↔ÜNB) |
 | `dvgw-edi` | workspace | DVGW EDIFACT gas transport — ALOCAT, NOMINT, NOMRES, SCHEDL, … |
 | `redispatch-xml` | workspace | Redispatch 2.0 XML/XSD — all 9 CIM/IEC 62325 document types |
-| `mako-nne` | workspace | Pure NNE/KA/MMM invoice generation — zero floating-point money |
+| `grid-billing` | workspace | Role-neutral grid invoice generation — `GridInvoice` domain type, zero BO4E dep, no float money |
 | `invoic-checker` | workspace | INVOIC plausibility — 6 checks, ToU-aware tariff match |
 | `netz-checker` | workspace | NB Anmeldung validation — 6 deterministic checks, ERC A02–A99 |
 | `mako-plugin` | workspace | WASM plugin system — Extism/Wasmtime sandbox for custom extensions |

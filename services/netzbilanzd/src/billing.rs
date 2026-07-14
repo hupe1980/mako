@@ -1,4 +1,7 @@
-//! Billing orchestration — bridges HTTP requests to `mako-nne` pure library.
+//! Billing orchestration — bridges HTTP requests to `grid-billing` pure library.
+//!
+//! `grid-billing` returns [`grid_billing::GridInvoice`] (pure domain types, no BO4E).
+//! This module owns the conversion to `rubo4e::current::Rechnung` via `into_rechnung()`.
 
 use anyhow::{Context as _, bail};
 use invoic_checker::{InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore};
@@ -9,12 +12,72 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use mako_nne::{
-    MmmInput, MsbInput, NneInput, calculate_mmm_invoice, calculate_msb_invoice,
-    calculate_nne_invoice,
+use grid_billing::{
+    GridInvoice, MmmInput, MsbInput, NneInput, QuantityUnit, calculate_mmm_invoice,
+    calculate_msb_invoice, calculate_nne_invoice,
 };
 
 use crate::pg::upsert_draft;
+
+// ── BO4E conversion (service-layer concern) ────────────────────────────────────────────────────
+
+/// Convert a `GridInvoice` domain result into a BO4E `Rechnung`.
+///
+/// This is the only place in netzbilanzd that imports `rubo4e` invoice types.
+/// grid-billing itself has no BO4E dependency.
+fn into_rechnung(invoice: &GridInvoice) -> rubo4e::current::Rechnung {
+    use rubo4e::current::{Betrag, Menge, Mengeneinheit, Preis, Rechnungsposition, Zeitraum};
+
+    let lz = Zeitraum {
+        startdatum: Some(invoice.period_from),
+        enddatum: Some(invoice.period_to),
+        ..Default::default()
+    };
+
+    let positions: Vec<Rechnungsposition> = invoice
+        .positions
+        .iter()
+        .map(|p| {
+            let einheit = match p.unit {
+                QuantityUnit::Kwh => Some(Mengeneinheit::Kwh),
+                QuantityUnit::Kw => Some(Mengeneinheit::Kw),
+                QuantityUnit::Monat => Some(Mengeneinheit::Monat),
+            };
+            Rechnungsposition {
+                positionsnummer: Some(p.number as i64),
+                positionstext: Some(p.text.clone()),
+                lieferungszeitraum: Some(lz.clone()),
+                positions_menge: Some(Menge {
+                    wert: Some(p.quantity),
+                    einheit,
+                    ..Default::default()
+                }),
+                einzelpreis: Some(Preis {
+                    wert: Some(p.unit_price_eur.round_dp(6)),
+                    ..Default::default()
+                }),
+                gesamtpreis: Some(Betrag {
+                    wert: Some(p.net_eur.round_dp(5)),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        })
+        .collect();
+
+    rubo4e::current::Rechnung {
+        rechnungsnummer: Some(invoice.rechnungsnummer.clone()),
+        rechnungsdatum: Some(invoice.invoice_date),
+        faelligkeitsdatum: Some(invoice.due_date),
+        rechnungsperiode: Some(lz),
+        gesamtnetto: Some(Betrag {
+            wert: Some(invoice.total_eur),
+            ..Default::default()
+        }),
+        rechnungspositionen: Some(positions),
+        ..Default::default()
+    }
+}
 
 // ── BillingRunRequest ─────────────────────────────────────────────────────────
 
@@ -113,7 +176,7 @@ fn parse_date(s: &str) -> anyhow::Result<time::Date> {
 /// For each position:
 /// 1. For MMM: auto-fetch `mehr_preis` / `minder_preis` from `marktd` when not
 ///    supplied in the request (eliminates the monthly manual ERP lookup — C18).
-/// 2. Calculate invoice via `mako-nne`
+/// 2. Calculate invoice via `grid-billing`
 /// 3. Self-validate via `invoic-checker`
 /// 4. Store as draft in PostgreSQL
 ///
@@ -137,6 +200,7 @@ pub async fn run_billing_internal(
         let period_to = parse_date(&pos.period_to)?;
         let rechnungsnummer = format!("{}-{:04}", req.rechnungsnummer_prefix, i + 1);
 
+        let mut extra_zusatz: Vec<rubo4e::current::ZusatzAttribut> = Vec::new();
         let result = match pos.billing_type.as_str() {
             "nne_strom" | "nne_gas" => {
                 let arbeit = pos
@@ -267,7 +331,7 @@ pub async fn run_billing_internal(
                     mehr_preis_ct_per_kwh: mp,
                     minder_preis_ct_per_kwh: mnp,
                 };
-                let mut result = calculate_mmm_invoice(&input)
+                let result = calculate_mmm_invoice(&input)
                     .map_err(|e| anyhow::anyhow!("billing calc failed for {}: {e}", pos.malo_id))?;
 
                 // Auto-embed lastprofil in Rechnung.zusatz_attribute for audit trail.
@@ -284,15 +348,10 @@ pub async fn run_billing_internal(
                         .and_then(|f| f.bilanzierungsmethode)
                         .unwrap_or_else(|| "SLP".to_owned())
                 };
-                let attr = rubo4e::current::ZusatzAttribut {
+                extra_zusatz.push(rubo4e::current::ZusatzAttribut {
                     name: Some("lastprofil".to_owned()),
                     wert: Some(serde_json::Value::String(lastprofil)),
                     ..Default::default()
-                };
-                result.rechnung.zusatz_attribute = Some({
-                    let mut attrs = result.rechnung.zusatz_attribute.take().unwrap_or_default();
-                    attrs.push(attr);
-                    attrs
                 });
                 result
             }
@@ -366,15 +425,19 @@ pub async fn run_billing_internal(
 
         // Self-validate via invoic-checker (checks 1–3 pass by construction;
         // check 4–5 may warn if tariff store is empty, but won't dispute).
+        let mut rechnung = into_rechnung(&result);
+        if !extra_zusatz.is_empty() {
+            rechnung.zusatz_attribute = Some(extra_zusatz);
+        }
         let report = InvoicCheckEngine::check(
             result.pid,
             &result.nb_mp_id,
-            &result.rechnung,
+            &rechnung,
             &empty_store,
             &config,
         );
 
-        let rechnung_json = serde_json::to_value(&result.rechnung).context("serialize Rechnung")?;
+        let rechnung_json = serde_json::to_value(&rechnung).context("serialize Rechnung")?;
 
         // For msb_31009 the invoice recipient is the MSB, not the LF.
         let counterparty = pos
@@ -447,7 +510,7 @@ mod tests {
     /// NNE Strom: 1 000 kWh × 28.50 ct/kWh = 285.00 EUR
     #[test]
     fn nne_strom_arbeit_basic() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -482,7 +545,7 @@ mod tests {
     /// §14a Modul 2 ToU: HT + NT positions must sum to correct total.
     #[test]
     fn nne_strom_tou_ht_nt() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -512,11 +575,7 @@ mod tests {
             total = result.total_eur
         );
         // Two energy positions (HT + NT) must appear in the Rechnung.
-        let pos_count = result
-            .rechnung
-            .rechnungspositionen
-            .as_ref()
-            .map_or(0, |p| p.len());
+        let pos_count = result.positions.len();
         assert!(
             pos_count >= 2,
             "ToU billing must produce at least 2 positions (HT + NT), got {pos_count}"
@@ -526,7 +585,7 @@ mod tests {
     /// MMM Strom: actual > profil → Mehrmenge credit to NB.
     #[test]
     fn mmm_strom_mehrmengen() {
-        use mako_nne::{MmmInput, calculate_mmm_invoice};
+        use grid_billing::{MmmInput, calculate_mmm_invoice};
         let input = MmmInput {
             malo_id: "51238696780".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -555,7 +614,7 @@ mod tests {
     /// MMM Strom: profil > actual → Mindermenge (negative = credit to LF).
     #[test]
     fn mmm_strom_mindermengen() {
-        use mako_nne::{MmmInput, calculate_mmm_invoice};
+        use grid_billing::{MmmInput, calculate_mmm_invoice};
         let input = MmmInput {
             malo_id: "51238696780".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -583,7 +642,7 @@ mod tests {
     /// KA: when ka_satz_ct_per_kwh is provided, a KA position appears.
     #[test]
     fn nne_strom_with_konzessionsabgabe() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -612,11 +671,7 @@ mod tests {
             "NNE+KA total {total} expected 298.20 EUR",
             total = result.total_eur
         );
-        let pos_count = result
-            .rechnung
-            .rechnungspositionen
-            .as_ref()
-            .map_or(0, |p| p.len());
+        let pos_count = result.positions.len();
         assert!(
             pos_count >= 2,
             "NNE+KA must produce at least 2 positions (Arbeit + KA), got {pos_count}"
@@ -626,7 +681,7 @@ mod tests {
     /// MSB-Rechnung: 12 months × grundgebühr + optional messdienstleistung.
     #[test]
     fn msb_rechnung_grundgebuehr() {
-        use mako_nne::{MsbInput, calculate_msb_invoice};
+        use grid_billing::{MsbInput, calculate_msb_invoice};
         let input = MsbInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -665,7 +720,7 @@ mod tests {
     /// MMM Strom: actual > profil → Mehrmenge → positive claim (NB bills LF).
     #[test]
     fn mmm_strom_mehrmenge() {
-        use mako_nne::{MmmInput, calculate_mmm_invoice};
+        use grid_billing::{MmmInput, calculate_mmm_invoice};
         let input = MmmInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -694,7 +749,7 @@ mod tests {
     /// MMM Strom: actual < profil → Mindermenge → negative claim (NB credits LF).
     #[test]
     fn mmm_strom_mindermenge() {
-        use mako_nne::{MmmInput, calculate_mmm_invoice};
+        use grid_billing::{MmmInput, calculate_mmm_invoice};
         let input = MmmInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -721,7 +776,7 @@ mod tests {
     /// MMM balanced: actual == profil → zero settlement.
     #[test]
     fn mmm_strom_balanced_zero() {
-        use mako_nne::{MmmInput, calculate_mmm_invoice};
+        use grid_billing::{MmmInput, calculate_mmm_invoice};
         let input = MmmInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -750,7 +805,7 @@ mod tests {
     /// §14a Modul 2 ToU: separate HT + NT positions; total must match manual calc.
     #[test]
     fn nne_tou_position_count_and_total() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         // 600 kWh HT × 4.00 ct = 24.00 EUR; 400 kWh NT × 1.50 ct = 6.00 EUR; total 30.00 EUR
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
@@ -782,11 +837,7 @@ mod tests {
         );
 
         // HT + NT → 2 Rechnungspositionen minimum (no single blended Arbeit)
-        let pos_count = result
-            .rechnung
-            .rechnungspositionen
-            .as_ref()
-            .map_or(0, |p| p.len());
+        let pos_count = result.positions.len();
         assert!(
             pos_count >= 2,
             "§14a ToU needs ≥2 positions, got {pos_count}"
@@ -796,7 +847,7 @@ mod tests {
     /// §14a ToU + KA: 4 positions expected (HT, NT, KA, total).
     #[test]
     fn nne_tou_with_ka_position_count() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -825,11 +876,7 @@ mod tests {
             "§14a ToU+KA total {total} expected 43.20 EUR",
             total = result.total_eur
         );
-        let pos_count = result
-            .rechnung
-            .rechnungspositionen
-            .as_ref()
-            .map_or(0, |p| p.len());
+        let pos_count = result.positions.len();
         assert!(
             pos_count >= 3,
             "§14a ToU+KA needs ≥3 positions (HT+NT+KA), got {pos_count}"
@@ -841,7 +888,7 @@ mod tests {
     /// NNE RLM: Arbeit + Leistung billing — large C&I customer.
     #[test]
     fn nne_rlm_arbeit_leistung() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         // 50 000 kWh × 3.80ct + 120 kW × 8.50 EUR/kW
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
@@ -871,11 +918,7 @@ mod tests {
             "RLM total {total} expected 2920.00 EUR",
             total = result.total_eur
         );
-        let pos_count = result
-            .rechnung
-            .rechnungspositionen
-            .as_ref()
-            .map_or(0, |p| p.len());
+        let pos_count = result.positions.len();
         assert!(
             pos_count >= 2,
             "RLM needs ≥2 positions (Arbeit+Leistung), got {pos_count}"
@@ -887,7 +930,7 @@ mod tests {
     /// NNE Gas (PID 31005): billing formula same as Strom, PID must be 31005.
     #[test]
     fn nne_gas_pid_31005() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -927,7 +970,7 @@ mod tests {
     /// PID 31011 (GeLi Gas AWH): billing_type nne_gas_awh_31011 must set PID 31011.
     #[test]
     fn awh_31011_pid_override() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         // Simulate the billing.rs path: calculate NNE then override PID to 31011
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
@@ -967,7 +1010,7 @@ mod tests {
     /// Regression guard: 1 234.567 kWh × 12.345 ct/kWh = 152.395_eur exact.
     #[test]
     fn decimal_precision_no_float_error() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -1001,7 +1044,7 @@ mod tests {
     /// MSB Rechnung: billing_months = 1 (monthly MSB settlement).
     #[test]
     fn msb_rechnung_single_month() {
-        use mako_nne::{MsbInput, calculate_msb_invoice};
+        use grid_billing::{MsbInput, calculate_msb_invoice};
         let input = MsbInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -1029,10 +1072,10 @@ mod tests {
     /// invoic-checker check 1–3 must not return Dispute for generated NNE invoice.
     #[test]
     fn invoic_checker_accepts_generated_nne() {
+        use grid_billing::{NneInput, calculate_nne_invoice};
         use invoic_checker::{
             InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore,
         };
-        use mako_nne::{NneInput, calculate_nne_invoice};
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -1055,13 +1098,9 @@ mod tests {
         let result = calculate_nne_invoice(&input).expect("calc must succeed");
         let store = InMemoryPreisblattStore::new();
         let config = CheckConfig::default();
-        let report = InvoicCheckEngine::check(
-            result.pid,
-            &result.nb_mp_id,
-            &result.rechnung,
-            &store,
-            &config,
-        );
+        let rechnung = into_rechnung(&result);
+        let report =
+            InvoicCheckEngine::check(result.pid, &result.nb_mp_id, &rechnung, &store, &config);
         use invoic_checker::check::CheckOutcome;
         assert_ne!(
             report.outcome,
@@ -1074,10 +1113,10 @@ mod tests {
     /// invoic-checker must not return Dispute for generated MMM invoice.
     #[test]
     fn invoic_checker_accepts_generated_mmm() {
+        use grid_billing::{MmmInput, calculate_mmm_invoice};
         use invoic_checker::{
             InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore,
         };
-        use mako_nne::{MmmInput, calculate_mmm_invoice};
         let input = MmmInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -1095,13 +1134,9 @@ mod tests {
         let result = calculate_mmm_invoice(&input).expect("mmm calc must succeed");
         let store = InMemoryPreisblattStore::new();
         let config = CheckConfig::default();
-        let report = InvoicCheckEngine::check(
-            result.pid,
-            &result.nb_mp_id,
-            &result.rechnung,
-            &store,
-            &config,
-        );
+        let rechnung = into_rechnung(&result);
+        let report =
+            InvoicCheckEngine::check(result.pid, &result.nb_mp_id, &rechnung, &store, &config);
         use invoic_checker::check::CheckOutcome;
         assert_ne!(
             report.outcome,
@@ -1134,7 +1169,7 @@ mod tests {
     /// §21 MessZV Zahlungsziel: invoice must carry a valid due_date > invoice_date.
     #[test]
     fn nne_due_date_after_invoice_date() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -1156,18 +1191,16 @@ mod tests {
         };
         let result = calculate_nne_invoice(&input).expect("must succeed");
         // due_date must be after invoice_date (§21 MessZV Zahlungsziel)
-        let invoice_d = result
-            .rechnung
-            .faelligkeitsdatum
-            .as_ref()
-            .or(result.rechnung.rechnungsdatum.as_ref());
-        assert!(invoice_d.is_some(), "Rechnung must have a date");
+        assert!(
+            result.due_date > result.invoice_date,
+            "due_date must be after invoice_date"
+        );
     }
 
     /// PID correctness: each billing_type maps to exactly one PID.
     #[test]
     fn pid_mapping_correctness() {
-        use mako_nne::{
+        use grid_billing::{
             MmmInput, MsbInput, NneInput, calculate_mmm_invoice, calculate_msb_invoice,
             calculate_nne_invoice,
         };
@@ -1246,7 +1279,7 @@ mod tests {
     /// (one may have zero amount) — no silent omission of a rate band.
     #[test]
     fn tou_zero_nt_still_produces_positions() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -1281,7 +1314,7 @@ mod tests {
     /// Both rates must be accepted by the billing engine.
     #[test]
     fn ka_rates_residential_and_commercial() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         // Residential: 1000 kWh × 28.50 ct + 1000 × 1.32 ct KA = 285.00 + 13.20 = 298.20
         let residential = NneInput {
             malo_id: "10001234567".to_owned(),
@@ -1330,7 +1363,7 @@ mod tests {
     /// the same formula as "mmm_strom". Regression guard for billing_type alias.
     #[test]
     fn mmm_billing_type_alias_consistent() {
-        use mako_nne::{MmmInput, calculate_mmm_invoice};
+        use grid_billing::{MmmInput, calculate_mmm_invoice};
         let base = MmmInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -1345,7 +1378,7 @@ mod tests {
             mehr_preis_ct_per_kwh: dec!(3.00),
             minder_preis_ct_per_kwh: dec!(2.50),
         };
-        // Both "mmm" and "mmm_strom" map to the same mako_nne::MmmInput path.
+        // Both "mmm" and "mmm_strom" map to the same grid_billing::MmmInput path.
         // Verify the formula produces the same result for any label.
         let r1 = calculate_mmm_invoice(&base).unwrap();
         let r2 = calculate_mmm_invoice(&MmmInput {
@@ -1364,7 +1397,7 @@ mod tests {
     /// RLM spitzenleistung: zero kW must be handled gracefully (no Leistung position).
     #[test]
     fn rlm_zero_spitzenleistung_no_leistung_position() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -1401,7 +1434,7 @@ mod tests {
     /// Guards that a short 2-day period (e.g. partial month on supply start) works.
     #[test]
     fn period_ordering_validity() {
-        use mako_nne::{NneInput, calculate_nne_invoice};
+        use grid_billing::{NneInput, calculate_nne_invoice};
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -1433,7 +1466,7 @@ mod tests {
     /// MSB-Rechnung: Messdienstleistung is optional; without it only Grundgebühr.
     #[test]
     fn msb_without_messdienstleistung() {
-        use mako_nne::{MsbInput, calculate_msb_invoice};
+        use grid_billing::{MsbInput, calculate_msb_invoice};
         let input = MsbInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -1460,10 +1493,10 @@ mod tests {
     /// Invoic-checker accepts generated MSB invoice (PID 31009).
     #[test]
     fn invoic_checker_accepts_generated_msb() {
+        use grid_billing::{MsbInput, calculate_msb_invoice};
         use invoic_checker::{
             InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore,
         };
-        use mako_nne::{MsbInput, calculate_msb_invoice};
         let input = MsbInput {
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
@@ -1480,13 +1513,9 @@ mod tests {
         let result = calculate_msb_invoice(&input).expect("MSB calc must succeed");
         let store = InMemoryPreisblattStore::new();
         let config = CheckConfig::default();
-        let report = InvoicCheckEngine::check(
-            result.pid,
-            &result.nb_mp_id,
-            &result.rechnung,
-            &store,
-            &config,
-        );
+        let rechnung = into_rechnung(&result);
+        let report =
+            InvoicCheckEngine::check(result.pid, &result.nb_mp_id, &rechnung, &store, &config);
         use invoic_checker::check::CheckOutcome;
         assert_ne!(
             report.outcome,

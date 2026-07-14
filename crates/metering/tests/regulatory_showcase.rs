@@ -525,14 +525,48 @@ fn demand_kw_zero_duration_is_none() {
     assert_eq!(iv.demand_kw(), None);
 }
 
-/// QualityFlag billability rules.
+/// QualityFlag billability rules per §17 MessZV.
+///
+/// CRITICAL REGULATORY REQUIREMENT: `Estimated` (Prognosewert) IS billable.
+/// §17 MessZV requires substitute values including estimates for advance billing.
+/// Excluding estimated values would produce zero arbeitsmenge for SLP customers.
 #[test]
 fn quality_flag_billability() {
-    assert!(QualityFlag::Measured.is_billable());
-    assert!(QualityFlag::Substituted.is_billable());
-    assert!(QualityFlag::Calculated.is_billable());
-    assert!(!QualityFlag::Estimated.is_billable());
-    assert!(!QualityFlag::Unknown.is_billable());
+    // All of these are valid billing bases per §17 MessZV
+    assert!(
+        QualityFlag::Measured.is_billable(),
+        "Measured must be billable"
+    );
+    assert!(
+        QualityFlag::Substituted.is_billable(),
+        "Substituted (Ersatzwert) must be billable per §17 MessZV"
+    );
+    assert!(
+        QualityFlag::Calculated.is_billable(),
+        "Calculated must be billable"
+    );
+    assert!(
+        QualityFlag::Corrected.is_billable(),
+        "Corrected must be billable"
+    );
+    assert!(
+        QualityFlag::Preliminary.is_billable(),
+        "Preliminary must be billable"
+    );
+    // §17 MessZV FIX: Estimated (Prognosewert) IS billable — used in Abschlagsrechnung
+    assert!(
+        QualityFlag::Estimated.is_billable(),
+        "Estimated (Prognosewert) must be billable per §17 MessZV advance billing"
+    );
+    // Only Faulty and Unknown block billing
+    assert!(
+        !QualityFlag::Faulty.is_billable(),
+        "Faulty must NOT be billable"
+    );
+    assert!(
+        !QualityFlag::Unknown.is_billable(),
+        "Unknown must NOT be billable"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

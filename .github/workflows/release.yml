@@ -163,6 +163,14 @@ jobs:
           if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
 
       # Pure calculation libraries with no internal workspace lib deps — publish early.
+      - name: Publish grid-billing
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish -p grid-billing 2>&1) && rc=0 || rc=$?
+          echo "$out"
+          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+
       - name: Publish eeg-billing
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -216,15 +224,6 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           out=$(cargo publish -p invoic-checker 2>&1) && rc=0 || rc=$?
-          echo "$out"
-          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
-
-      # mako-nne depends on invoic-checker — publish after it.
-      - name: Publish mako-nne
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          out=$(cargo publish -p mako-nne 2>&1) && rc=0 || rc=$?
           echo "$out"
           if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
 

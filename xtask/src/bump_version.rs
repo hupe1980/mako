@@ -3,11 +3,12 @@
 /// Updates the following fields atomically:
 ///
 /// 1. `[workspace.package].version = "X.Y.Z"`
-/// 2. `[workspace.dependencies].mako-engine` version → `"X.Y"` (major.minor)
+/// 2. Every internal workspace crate in `[workspace.dependencies]` → `"X.Y"` (major.minor)
 ///
-/// `dvgw-edi` and `redispatch-xml` are **not** in `[workspace.dependencies]`
-/// because their consumers reference them with direct `path` entries (no
-/// `workspace = true`), so no workspace-level version entry is needed.
+/// All workspace-member crates share a single `version.workspace = true` declaration,
+/// so bumping `[workspace.package].version` propagates to every crate automatically.
+/// The `[workspace.dependencies]` version entries (used for crates.io publishing) are
+/// updated here so `cargo publish` resolves them correctly.
 ///
 /// Usage:
 /// ```text
@@ -51,8 +52,24 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         }
     };
 
-    // Step 2: replace version inside `mako-engine` workspace dep.
-    let internal_deps = ["mako-engine"];
+    // Step 2: replace version inside every internal workspace dep.
+    // All workspace-member crates share the same X.Y.Z version; the deps use X.Y.
+    let internal_deps = [
+        "edi-energy",
+        "mako-engine",
+        "mako-markt",
+        "mako-edm",
+        "grid-billing",
+        "eeg-billing",
+        "metering",
+        "mako-obs",
+        "mako-service",
+        "mako-plugin",
+        "invoic-checker",
+        "netz-checker",
+        "energy-billing",
+        "dvgw-edi",
+    ];
     let mut updated = updated;
     for dep in &internal_deps {
         match replace_dep_version(&updated, dep, &major_minor) {
@@ -74,9 +91,10 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
 
     println!("bumped workspace version -> {new_version}");
     println!("  [workspace.package] version = \"{new_version}\"");
-    for dep in &internal_deps {
-        println!("  [workspace.dependencies] {dep} version = \"{major_minor}\"");
-    }
+    println!(
+        "  [workspace.dependencies] {} internal crate(s) version = \"{major_minor}\"",
+        internal_deps.len()
+    );
     true
 }
 
@@ -167,39 +185,55 @@ mod tests {
 
     const SAMPLE: &str = "
 [workspace.package]
-version     = \"0.1.0\"
+version     = \"0.9.0\"
 authors     = [\"hupe1980\"]
 
 [workspace.dependencies]
-mako-engine      = { path = \"crates/mako-engine\", version = \"0.1\" }
-serde       = { version = \"1\", features = [\"derive\"] }
+edi-energy       = { path = \"crates/edi-energy\", version = \"0.9\" }
+mako-engine      = { path = \"crates/mako-engine\", version = \"0.9\" }
+mako-markt       = { path = \"crates/mako-markt\", version = \"0.9\" }
+mako-edm         = { path = \"crates/mako-edm\", version = \"0.9\" }
+grid-billing     = { path = \"crates/grid-billing\", version = \"0.9\" }
+eeg-billing      = { path = \"crates/eeg-billing\", version = \"0.9\" }
+mako-obs         = { path = \"crates/mako-obs\", version = \"0.9\" }
+mako-service     = { path = \"crates/mako-service\", version = \"0.9\" }
+mako-plugin      = { path = \"crates/mako-plugin\", version = \"0.9\" }
+invoic-checker   = { path = \"crates/invoic-checker\", version = \"0.9\" }
+netz-checker     = { path = \"crates/netz-checker\", version = \"0.9\" }
+energy-billing   = { path = \"crates/energy-billing\", version = \"0.9\" }
+serde            = { version = \"1\", features = [\"derive\"] }
 ";
 
     #[test]
     fn bumps_package_version() {
-        let out = replace_first_version_field(SAMPLE, "0.2.0").unwrap();
-        assert!(out.contains("version     = \"0.2.0\""), "{out}");
-        assert!(!out.contains("0.1.0"));
+        let out = replace_first_version_field(SAMPLE, "0.10.0").unwrap();
+        assert!(out.contains("version     = \"0.10.0\""), "{out}");
+        assert!(!out.contains("0.9.0"));
     }
 
     #[test]
     fn bumps_dep_version_aligned() {
-        // mako-engine has alignment padding in the real Cargo.toml
-        let out = replace_dep_version(SAMPLE, "mako-engine", "0.2").unwrap();
-        assert!(out.contains("version = \"0.2\""), "{out}");
-        assert!(out.contains("serde       = { version = \"1\""));
+        let out = replace_dep_version(SAMPLE, "mako-engine", "0.10").unwrap();
+        assert!(out.contains("version = \"0.10\""), "{out}");
+        assert!(out.contains("serde            = { version = \"1\""));
     }
 
     #[test]
     fn full_bump() {
-        let v1 = replace_first_version_field(SAMPLE, "0.2.0").unwrap();
-        let v2 = replace_dep_version(&v1, "mako-engine", "0.2").unwrap();
-        assert!(v2.contains("version     = \"0.2.0\""), "{v2}");
+        let v1 = replace_first_version_field(SAMPLE, "0.10.0").unwrap();
+        let v2 = replace_dep_version(&v1, "mako-engine", "0.10").unwrap();
+        let v3 = replace_dep_version(&v2, "grid-billing", "0.10").unwrap();
+        let v4 = replace_dep_version(&v3, "energy-billing", "0.10").unwrap();
+        assert!(v4.contains("version     = \"0.10.0\""), "{v4}");
         assert!(
-            v2.contains("mako-engine      = { path = \"crates/mako-engine\", version = \"0.2\""),
-            "{v2}"
+            v4.contains("mako-engine      = { path = \"crates/mako-engine\", version = \"0.10\""),
+            "{v4}"
         );
-        assert!(v2.contains("serde       = { version = \"1\""));
+        assert!(
+            v4.contains("grid-billing     = { path = \"crates/grid-billing\", version = \"0.10\""),
+            "{v4}"
+        );
+        assert!(v4.contains("serde            = { version = \"1\""));
     }
 
     #[test]

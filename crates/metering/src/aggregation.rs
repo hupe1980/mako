@@ -30,6 +30,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::interval::MeterInterval;
 
+/// Convert a UTC `OffsetDateTime` to the hour in German local time (CET/CEST).
+///
+/// German energy markets use CET (UTC+1) in winter and CEST (UTC+2) in summer.
+/// HT/NT split windows in Germany are always defined in local time, never UTC.
+/// Using UTC hours directly introduces a systematic 1-hour error for half the year.
+///
+/// The transition follows the EU DST schedule:
+/// - Spring forward: last Sunday of March, 02:00 CET → 03:00 CEST
+/// - Fall back:      last Sunday of October, 03:00 CEST → 02:00 CET
+fn to_german_local_hour(ts: OffsetDateTime) -> u8 {
+    use time_tz::{OffsetDateTimeExt, timezones};
+    // Convert UTC OffsetDateTime to Europe/Berlin local time using DST-aware rules.
+    let berlin = timezones::db::europe::BERLIN;
+    let local = ts.to_timezone(berlin);
+    local.hour()
+}
+
 /// Configuration for billing period aggregation.
 #[derive(Debug, Clone)]
 pub struct AggregationConfig {
@@ -109,7 +126,16 @@ impl Default for HtHours {
 }
 
 impl HtHours {
-    /// `true` when `ts` falls in the HT window.
+    /// `true` when `ts` falls in the HT window, using **German local time** (CET/CEST).
+    ///
+    /// German HT/NT windows are defined in local time (CET = UTC+1 in winter,
+    /// CEST = UTC+2 in summer). Using UTC hours directly causes a 1-hour offset
+    /// error for half the year, resulting in incorrect HT/NT attribution at
+    /// DST transition boundaries.
+    ///
+    /// Example: on a summer day, 22:00 German time = 20:00 UTC. If the HT window
+    /// is 06:00–22:00, a reading at 20:01 UTC (= 22:01 CEST) is NT — but a UTC-
+    /// based implementation would classify it as HT (since 20:01 < 22:00).
     #[must_use]
     pub fn is_ht(&self, ts: OffsetDateTime) -> bool {
         use time::Weekday;
@@ -117,7 +143,7 @@ impl HtHours {
         if !self.include_weekends && matches!(weekday, Weekday::Saturday | Weekday::Sunday) {
             return false;
         }
-        let h = ts.hour();
+        let h = to_german_local_hour(ts);
         h >= self.start && h < self.end
     }
 }
@@ -302,12 +328,22 @@ mod tests {
             iv(base, dec!(2.0)),
             iv(base + time::Duration::minutes(15), dec!(3.0)),
         ];
-        // Mark second interval as estimated — should NOT contribute
+        // Mark second interval as Estimated — §17 MessZV: Estimated IS billable
+        // (Prognosewert is the statutory mechanism for advance billing).
         intervals[1].quality = QualityFlag::Estimated;
-
         let period = aggregate(&intervals, AggregationConfig::rlm_strom());
-        // Only first interval (2.0 kWh) contributes
-        assert_eq!(period.arbeitsmenge_kwh, dec!(2.0));
+        // Both intervals contribute: 2.0 + 3.0 = 5.0 kWh
+        assert_eq!(period.arbeitsmenge_kwh, dec!(5.0));
+
+        // Only Faulty and Unknown are excluded
+        let mut faulty_intervals = vec![
+            iv(base, dec!(2.0)),
+            iv(base + time::Duration::minutes(15), dec!(3.0)),
+        ];
+        faulty_intervals[1].quality = QualityFlag::Faulty;
+        let faulty_period = aggregate(&faulty_intervals, AggregationConfig::rlm_strom());
+        // Faulty interval excluded: only 2.0 kWh
+        assert_eq!(faulty_period.arbeitsmenge_kwh, dec!(2.0));
     }
 
     #[test]
@@ -355,5 +391,62 @@ mod tests {
         ];
         let period = aggregate(&intervals, AggregationConfig::rlm_strom());
         assert_eq!(period.spitzenleistung_kw, Some(dec!(14)));
+    }
+
+    #[test]
+    fn ht_hours_uses_german_local_time_not_utc() {
+        // German HT windows are defined in local time (CET/CEST), not UTC.
+        //
+        // 2026-06-01 (summer): CET offset = UTC+2 (CEST)
+        // German HT default: 06:00–22:00 local = 04:00–20:00 UTC
+        //
+        // If is_ht() used UTC hours instead of local time:
+        //   20:01 UTC → incorrectly classified as HT (hour=20, which is < 22)
+        //   But 20:01 UTC = 22:01 CEST (summer) → should be NT
+        //
+        // This test catches DST boundary regressions where UTC-based HT/NT
+        // attribution would cause systematic billing errors.
+        let ht_hours = HtHours::default(); // 06:00–22:00 local, no weekends
+
+        // Summer day (CEST = UTC+2): 20:01 UTC = 22:01 CEST → NT
+        let summer_20h_utc = time::OffsetDateTime::new_utc(
+            time::macros::date!(2026 - 06 - 01),
+            time::Time::from_hms(20, 1, 0).unwrap(),
+        );
+        assert!(
+            !ht_hours.is_ht(summer_20h_utc),
+            "20:01 UTC in summer = 22:01 CEST → must be NT, not HT"
+        );
+
+        // Summer day: 10:00 UTC = 12:00 CEST → HT
+        let summer_10h_utc = time::OffsetDateTime::new_utc(
+            time::macros::date!(2026 - 06 - 01),
+            time::Time::from_hms(10, 0, 0).unwrap(),
+        );
+        assert!(
+            ht_hours.is_ht(summer_10h_utc),
+            "10:00 UTC in summer = 12:00 CEST → must be HT"
+        );
+
+        // Winter day (CET = UTC+1): 21:00 UTC = 22:00 CET → border of NT
+        // 22:00 CET is NOT < 22:00 (end exclusive) → NT
+        let winter_21h_utc = time::OffsetDateTime::new_utc(
+            time::macros::date!(2026 - 01 - 15),
+            time::Time::from_hms(21, 0, 0).unwrap(),
+        );
+        assert!(
+            !ht_hours.is_ht(winter_21h_utc),
+            "21:00 UTC in winter = 22:00 CET → end boundary, must be NT"
+        );
+
+        // Winter day: 20:59 UTC = 21:59 CET → still HT
+        let winter_20_59_utc = time::OffsetDateTime::new_utc(
+            time::macros::date!(2026 - 01 - 15),
+            time::Time::from_hms(20, 59, 0).unwrap(),
+        );
+        assert!(
+            ht_hours.is_ht(winter_20_59_utc),
+            "20:59 UTC in winter = 21:59 CET → must be HT"
+        );
     }
 }
