@@ -62,6 +62,10 @@ pub struct Config {
     pub oidc: Option<OidcConfig>,
     #[serde(default)]
     pub otel: OtelConfig,
+    /// MCP server authentication. Supports OIDC + API-key fallback, or dev mode.
+    /// See `[mcp]` in TOML — e.g. `api_key = "env:EDMD_MCP_API_KEY"`.
+    #[serde(default)]
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
     /// Iceberg/S3 archival configuration.  Disabled by default.
     #[serde(default)]
     pub archive: ArchiveConfig,
@@ -86,18 +90,8 @@ impl Default for HttpConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DatabaseConfig {
-    /// PostgreSQL URL.  Use `"env:DATABASE_URL"` to defer to the environment.
-    pub url: String,
-    #[serde(default = "default_pool_size")]
-    pub pool_size: u32,
-}
-
-fn default_pool_size() -> u32 {
-    10
-}
+/// PostgreSQL config — shared struct from `mako-service`.
+pub use mako_service::config::DatabaseConfig;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,24 +153,11 @@ impl Default for SubscriptionConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OidcConfig {
-    pub issuer: String,
-    pub audience: String,
-    #[serde(default = "default_jwks_refresh_secs")]
-    pub jwks_refresh_secs: u64,
-}
+/// OIDC configuration — re-exported from `mako-service` (shared across all daemons).
+pub use mako_service::oidc::OidcConfig;
 
-fn default_jwks_refresh_secs() -> u64 {
-    300
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct OtelConfig {
-    pub endpoint: Option<String>,
-}
+/// OpenTelemetry config — shared struct from `mako-service`.
+pub use mako_service::telemetry::OtelConfig;
 
 pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
     let text = std::fs::read_to_string(path)

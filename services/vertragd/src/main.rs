@@ -65,7 +65,7 @@ use vertragd::{config, handlers, mcp_server, pg};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    let _guard = mako_service::init_tracing_from_env("vertragd");
     let cfg: config::VertragdConfig = load_config("vertragd").context("load config")?;
     let cfg = Arc::new(cfg);
 
@@ -73,22 +73,34 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connect PostgreSQL")?;
 
+    // Run migrations automatically on startup.
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .context("run migrations")?;
+
+    // Shared HTTP client — avoids TCP handshake overhead per request.
+    let http_client: Arc<reqwest::Client> = Arc::new(
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .context("build HTTP client")?,
+    );
+
+    let ct = mako_service::shutdown::token();
     let mcp_state = Arc::new(mcp_server::VertragdMcpState {
         pool: pool.clone(),
         tenant: cfg.tenant.clone(),
-        oidc: mako_service::oidc::OidcVerifier::disabled(&cfg.tenant),
-        cedar: Arc::new(
-            mako_service::cedar::CedarEnforcer::from_policy_str(
-                "permit(principal, action, resource);",
-            )
-            .unwrap(),
-        ),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
     });
 
     let app = Router::new()
         .merge(health_routes(|| async { true }))
         // Customer management
-        .route("/api/v1/kunden", post(handlers::post_create_kunde))
+        .route(
+            "/api/v1/kunden",
+            get(handlers::list_kunden_handler).post(handlers::post_create_kunde),
+        )
         .route(
             "/api/v1/kunden/:id",
             get(handlers::get_kunde).put(handlers::put_update_kunde),
@@ -105,6 +117,15 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/kunden/:id/identitaeten",
             post(handlers::post_upsert_identitaet).get(handlers::list_kunde_identitaeten),
+        )
+        .route(
+            "/api/v1/kunden/:id/identitaeten/:sub",
+            axum::routing::delete(handlers::delete_identitaet),
+        )
+        // GDPR Art. 15 full data export
+        .route(
+            "/api/v1/kunden/:id/export",
+            get(handlers::get_kunde_gdpr_export),
         )
         // Person sub-object — B2C natural person details (L13 — GDPR Art. 15)
         .route(
@@ -133,10 +154,20 @@ async fn main() -> anyhow::Result<()> {
         )
         // Supply contracts (B2C + B2B)
         .route("/api/v1/vertraege", get(handlers::list_vertraege))
+        // Expiring contracts monitor (§13 GasGVV / §14 StromGVV / §41 EnWG)
+        .route(
+            "/api/v1/vertraege/expiring",
+            get(handlers::list_expiring_vertraege),
+        )
         .route("/api/v1/vertraege/:id", get(handlers::get_vertrag))
         .route(
             "/api/v1/vertraege/:id/kuendigen",
             post(handlers::kuendige_vertrag),
+        )
+        // Stornieren (cancel before AKTIV — ANGELEGT/IN_BEARBEITUNG only)
+        .route(
+            "/api/v1/vertraege/:id/stornieren",
+            post(handlers::stornieren_vertrag),
         )
         .route(
             "/api/v1/vertraege/:id/tarifwechsel",
@@ -147,20 +178,81 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/vertraege/:id/preisgarantie",
             get(handlers::get_preisgarantie).put(handlers::put_preisgarantie),
         )
+        // B2B portfolio summary (all active MaLo/Sparte per Kunde)
+        .route(
+            "/api/v1/kunden/:id/portfolio",
+            get(handlers::get_kunde_portfolio),
+        )
         // CloudEvent webhook
         .route("/api/v1/events", post(handlers::post_cloud_event))
-        .merge(mcp_server::router(
-            mcp_state,
-            tokio_util::sync::CancellationToken::new(),
-        ))
+        .merge(mcp_server::router(mcp_state, ct.clone()))
         .layer(Extension(Arc::clone(&cfg)))
+        .layer(Extension(Arc::clone(&http_client)))
         .layer(Extension(pool.clone()));
 
     let port = cfg.port.unwrap_or(9780);
     let addr = format!("0.0.0.0:{port}");
     info!(%addr, "vertragd starting");
 
-    // \u2500\u2500 Preisanpassungsbenachrichtigung background worker (B13) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // \u2500\u2500 Auto-renewal background worker (§13 GasGVV / §14 StromGVV) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // Runs daily. Finds AKTIV vertr\u00e4ge with auto_renewal=true whose vertragsende
+    // is within the next 30 days, emits a 30-day advance notification CloudEvent
+    // (`de.vertrag.autoerneuerung.ankuendigung`), and extends vertragsende
+    // by renewal_monate on the vertragsende date itself.
+    {
+        let pool_ar = pool.clone();
+        let cfg_ar = Arc::clone(&cfg);
+        let client_ar = Arc::clone(&http_client);
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+            loop {
+                let today = time::OffsetDateTime::now_utc().date();
+                // Phase 1: 30-day advance notification
+                if let Ok(due) = pg::find_auto_renewal_due(&pool_ar, &cfg_ar.tenant, 30).await {
+                    for row in &due {
+                        if let Some(ref url) = cfg_ar.erp_webhook_url {
+                            let ce = serde_json::json!({
+                                "specversion": "1.0",
+                                "type": "de.vertrag.autoerneuerung.ankuendigung",
+                                "source": format!("urn:vertragd:lf:{}", cfg_ar.lf_mp_id),
+                                "id": uuid::Uuid::new_v4().to_string(),
+                                "time": time::OffsetDateTime::now_utc().to_string(),
+                                "data": {
+                                    "vertrag_id": row.id.to_string(),
+                                    "vertrags_nr": row.vertrags_nr,
+                                    "kunden_id": row.kunden_id.to_string(),
+                                    "vertragsende": row.vertragsende.to_string(),
+                                    "renewal_monate": row.renewal_monate,
+                                    "regulatory_basis": "§13 GasGVV / §14 StromGVV"
+                                }
+                            });
+                            let _ = client_ar.post(url).json(&ce).send().await;
+                        }
+                    }
+                }
+                // Phase 2: Apply renewals due today
+                if let Ok(due) = pg::find_auto_renewal_due(&pool_ar, &cfg_ar.tenant, 0).await {
+                    for row in &due {
+                        if row.vertragsende == today
+                            && let Ok(new_end) = time::Date::from_calendar_date(
+                                today.year() + row.renewal_monate / 12,
+                                today.month(),
+                                today.day().clamp(1, 28),
+                            )
+                        {
+                            if let Err(e) = pg::apply_auto_renewal(&pool_ar, row.id, new_end).await
+                            {
+                                tracing::error!(vertrag_id = %row.id, error = %e, "vertragd: auto-renewal failed");
+                            } else {
+                                tracing::info!(vertrag_id = %row.id, new_end = %new_end, "vertragd: auto-renewal applied");
+                            }
+                        }
+                    }
+                }
+                tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
+            }
+        });
+    }
     // Runs daily and:
     //   1. Applies pending Tarifwechsel whose wirksamkeit date has arrived.
     //   2. Emits `de.vertrag.preisaenderung.ankuendigung` CE for Tarifwechsel
@@ -168,6 +260,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let pool_bg = pool.clone();
         let cfg_bg = Arc::clone(&cfg);
+        let client_bg = Arc::clone(&http_client);
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
             loop {
@@ -209,7 +302,7 @@ async fn main() -> anyhow::Result<()> {
                                         "wirksamkeit": row.pending_wirksamkeit.to_string(),
                                     }
                                 });
-                                let client = reqwest::Client::new();
+                                let client = client_bg.clone();
                                 let _ = client
                                     .post(url)
                                     .header("Content-Type", "application/cloudevents+json")
@@ -252,7 +345,7 @@ async fn main() -> anyhow::Result<()> {
                                         "regulatory_basis": "\u{00a7}41 Abs. 3 EnWG",
                                     }
                                 });
-                                let client = reqwest::Client::new();
+                                let client = client_bg.clone();
                                 match client
                                     .post(url)
                                     .header("Content-Type", "application/cloudevents+json")
@@ -300,5 +393,5 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .context("bind TCP")?;
-    axum::serve(listener, app).await.context("serve")
+    mako_service::shutdown::serve(listener, app, ct).await
 }

@@ -33,14 +33,11 @@ async fn main() -> anyhow::Result<()> {
     let cfg: Config = config::load_from_file(&cli.config)
         .with_context(|| format!("loading config from {}", cli.config.display()))?;
 
-    let otel_cfg = cfg
-        .otel
-        .endpoint
-        .as_deref()
-        .map(|ep| mako_service::OtelConfig {
-            endpoint: ep.to_owned(),
-            service_name: "invoicd".to_owned(),
-        });
+    let otel_cfg = if cfg.otel.is_enabled() {
+        Some(cfg.otel.clone())
+    } else {
+        None
+    };
     let _otel_guard = mako_service::init_tracing("invoicd", &cli.log_level, otel_cfg.as_ref());
 
     let shutdown = CancellationToken::new();
@@ -54,23 +51,13 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let http = mako_service::http::default_client();
-    let oidc = if let Some(ref oidc_cfg) = cfg.oidc {
-        let verifier =
-            mako_service::oidc::OidcVerifier::new(&oidc_cfg.issuer, &oidc_cfg.audience, &http)
-                .await
-                .context("OIDC discovery")?;
-        verifier.clone().spawn_refresh_task(
-            http.clone(),
-            oidc_cfg.jwks_refresh_secs,
-            shutdown.clone(),
-        );
-        verifier
-    } else {
-        tracing::warn!(
-            "invoicd: OIDC disabled — all requests accepted without authentication (not for production)"
-        );
-        mako_service::oidc::OidcVerifier::disabled(&cfg.identity.tenant)
-    };
+    let oidc = mako_service::oidc::OidcConfig::build_verifier(
+        cfg.oidc.as_ref(),
+        &http,
+        &cfg.identity.tenant,
+        shutdown.clone(),
+    )
+    .await?;
 
     let cedar = Arc::new(
         mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
@@ -126,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
     let subscriber_id = cfg.subscription.subscriber_id.clone();
     let webhook_url = cfg.subscription.webhook_url.clone();
     let tenant = cfg.identity.tenant.clone();
-    let db_max_connections = cfg.database.max_connections;
+    let db_max_connections = cfg.database.pool_size;
 
     invoicd::server::run(invoicd::server::RunConfig {
         listen,
@@ -159,6 +146,7 @@ async fn main() -> anyhow::Result<()> {
             .transpose()?,
         oidc,
         cedar,
+        mcp: cfg.mcp,
         shutdown,
     })
     .await

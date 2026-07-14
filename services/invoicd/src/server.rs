@@ -1289,6 +1289,8 @@ pub struct RunConfig {
     pub oidc: OidcVerifier,
     /// Cedar ABAC enforcer loaded from `policies/invoicd.cedar`.
     pub cedar: Arc<CedarEnforcer>,
+    /// MCP server auth config (API-key fallback + optional per-named-key identity).
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
     /// Graceful-shutdown token.
     pub shutdown: CancellationToken,
 }
@@ -1331,7 +1333,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         tenant: cfg.tenant.clone(),
         erp_webhook_url: cfg.erp_webhook_url.clone(),
         erp_hmac_secret: cfg.erp_hmac_secret.clone(),
-        http_client: reqwest::Client::new(),
+        http_client: mako_service::http::default_client(),
         edmd_url: cfg.edmd_url.clone(),
         edmd_api_key: cfg.edmd_api_key.clone(),
     };
@@ -1341,8 +1343,12 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         Arc::new(crate::mcp_server::InvoicdMcpState {
             pool: p.clone(),
             tenant: cfg.tenant.clone(),
-            oidc: cfg.oidc.clone(),
-            cedar: cfg.cedar.clone(),
+            auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+                &cfg.mcp,
+                cfg.oidc.clone(),
+                Some(cfg.cedar.clone()),
+                &cfg.tenant,
+            ),
         })
     });
 

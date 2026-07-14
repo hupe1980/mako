@@ -225,7 +225,7 @@ Each is independently testable and suitable for crates.io publication.
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A97/A99 |
 | `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
-| `mako-service` | Shared service infrastructure | `ServiceBuilder`, `load_config`, HMAC verification |
+| `mako-service` | **Service SDK** — cross-cutting infrastructure for all 16 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `EventBus`, `ServiceBuilder` |
 | `mako-plugin` | WASM plugin extension system | `PluginRegistry`, 5 extension-point traits, Extism sandbox |
 
 ### External crates.io dependencies
@@ -459,13 +459,47 @@ Key facts:
 
 See [`nis-syncd` Operator Guide](./nis-syncd.md).
 
-### `mako-service` — Shared service infrastructure (library)
+### `mako-service` — Service SDK (library)
 
-`mako-service` is a library crate that all mako daemons build on. It provides:
-- `ServiceBuilder` — composable Axum router builder with health and metrics routes
-- `load_config` — type-safe TOML configuration loader with `env:VAR_NAME` interpolation
-- `health_routes` — `/health/live` (liveness) and `/health/ready` (readiness) endpoints
-- `verify_hmac` / `hmac_hex` — constant-time HMAC-SHA256 webhook signature helpers
+`mako-service` is the **shared SDK** that every mako daemon builds on. It eliminates
+cross-cutting boilerplate so service code focuses exclusively on domain logic.
+
+```mermaid
+graph TD
+    A["makod :8080"] & B["marktd :8180"] & C["processd :8580"] & D["invoicd :8280"]
+    E["edmd :8380"] & F["netzbilanzd :8680"] & G["einsd :9180"] & H["…12 more"]
+
+    subgraph sdk ["mako-service SDK"]
+        direction LR
+        CFG["config\nload_config\nDatabaseConfig\nHttpConfig"]
+        SD["shutdown\ntoken()\nserve()"]
+        AUTH["oidc + cedar\nOidcConfig\nCedarEnforcer"]
+        MCP["mcp_auth\nMcpAuth\nMcpAuthConfig\nMcpApiKey"]
+        TEL["telemetry\ninit_tracing_from_env\nOtelConfig"]
+        WEB["webhook\nverify_signature"]
+        HTTP["http\ndefault_client()"]
+        EB["event_bus\nEventBus\nWebhookBus"]
+    end
+
+    A & B & C & D & E & F & G & H --> sdk
+```
+
+| Module | Key exports |
+|---|---|
+| `config` | `load_config`, `DatabaseConfig`, `HttpConfig` — layered TOML + env-var + `_FILE` secrets |
+| `shutdown` | `token()` (SIGINT + SIGTERM), `serve()` — graceful connection drain |
+| `oidc` | `OidcConfig`, `OidcVerifier`, `OidcConfig::build_verifier()` — JWKS refresh, dev bypass |
+| `mcp_auth` | `McpAuth`, `McpAuthConfig`, `McpApiKey` (SecretString), `McpIdentity` — JWT routing + Cedar + API key |
+| `telemetry` | `init_tracing_from_env`, `init_tracing`, `OtelConfig` — structured JSON + OTel OTLP |
+| `cedar` | `CedarEnforcer` — Cedar ABAC policy evaluation |
+| `health` | `health_routes` — `/health/live` + `/health/ready` |
+| `http` | `default_client()` — `reqwest::Client` with 5 s connect + 30 s request timeout |
+| `webhook` | `verify_signature` — constant-time HMAC-SHA256 |
+| `builder` | `ServiceBuilder` — composable Axum router with health, metrics, trace layer |
+| `event_bus` | `EventBus`, `WebhookBus` — CloudEvent fan-out (webhook or Kafka) |
+
+See the [`mako-service` README](https://github.com/hupe1980/mako/tree/main/crates/mako-service)
+for code examples covering every module.
 
 ---
 

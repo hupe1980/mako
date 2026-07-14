@@ -35,13 +35,7 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    http::StatusCode,
     middleware::{self, Next},
-    response::IntoResponse,
-};
-use mako_service::{
-    cedar::CedarEnforcer,
-    oidc::{Claims, OidcVerifier},
 };
 use rmcp::{
     ErrorData as McpError, ServerHandler,
@@ -67,8 +61,7 @@ use tokio_util::sync::CancellationToken;
 pub struct MdmdMcpState {
     pub pool: PgPool,
     pub tenant: String,
-    pub oidc: OidcVerifier,
-    pub cedar: Arc<CedarEnforcer>,
+    pub auth: mako_service::mcp_auth::McpAuth,
 }
 
 // ── Tool parameters ───────────────────────────────────────────────────────────
@@ -1348,37 +1341,7 @@ async fn mcp_auth_middleware(
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
-    let token = match request
-        .headers()
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-    {
-        Some(t) => t.to_owned(),
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                "Authorization: Bearer <token> required for /mcp",
-            )
-                .into_response();
-        }
-    };
-
-    let claims = match state.oidc.verify(&token) {
-        Ok(c) => Claims(c),
-        Err(_) => {
-            return (StatusCode::UNAUTHORIZED, "401 Unauthorized: invalid token").into_response();
-        }
-    };
-
-    if let Err(e) = state
-        .cedar
-        .check(&claims.principal(), "use-mcp", &state.tenant)
-    {
-        return (StatusCode::FORBIDDEN, format!("403 Forbidden: {e}")).into_response();
-    }
-
-    next.run(request).await
+    state.auth.authenticate(request, next).await
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────

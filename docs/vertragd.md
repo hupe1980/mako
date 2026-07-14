@@ -344,7 +344,7 @@ Returns `HTTP 404` for B2B `Geschaeftspartner` records that have no Person store
 # vertragd.toml
 database_url  = "postgresql://..."
 port          = 9780
-tenant        = "9900357000004"   # LF BDEW-Codenummer (mp_id prefix 99)
+tenant        = "9900357000004"   # data-isolation key (operator tenant; value = BDEW-Codenummer in this example)
 lf_mp_id      = "9900357000004"
 
 processd_url    = "http://processd:8580"

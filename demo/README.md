@@ -49,8 +49,8 @@ docker build --target nis-syncd-runtime   -t nis-syncd:dev   .
 Or pull published images:
 
 ```bash
-docker pull ghcr.io/hupe1980/makod:0.8.0 && docker tag ghcr.io/hupe1980/makod:0.8.0 makod:dev
-docker pull ghcr.io/hupe1980/marktd:0.8.0  && docker tag ghcr.io/hupe1980/marktd:0.8.0  marktd:dev
+docker pull ghcr.io/hupe1980/makod:0.9.0 && docker tag ghcr.io/hupe1980/makod:0.9.0 makod:dev
+docker pull ghcr.io/hupe1980/marktd:0.9.0  && docker tag ghcr.io/hupe1980/marktd:0.9.0  marktd:dev
 ```
 
 ---

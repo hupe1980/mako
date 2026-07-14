@@ -83,9 +83,10 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = Arc::new(cfg);
 
-    let shutdown = CancellationToken::new();
+    let shutdown = mako_service::shutdown::token();
     let mcp_state = std::sync::Arc::new(mcp_server::PortaldMcpState {
         clients: Arc::clone(&clients),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
     });
 
     let app = Router::new()

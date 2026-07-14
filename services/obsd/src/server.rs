@@ -322,6 +322,8 @@ pub struct RunConfig {
     pub oidc: OidcVerifier,
     /// Cedar ABAC enforcer.
     pub cedar: Arc<CedarEnforcer>,
+    /// MCP server auth config (API-key fallback + optional per-named-key identity).
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
     /// Graceful-shutdown token.
     pub shutdown: CancellationToken,
 }
@@ -339,8 +341,12 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     let mcp_state = Arc::new(crate::mcp_server::ObsdMcpState {
         pool: pool.clone(),
         tenant: cfg.tenant.clone(),
-        oidc: cfg.oidc.clone(),
-        cedar: cfg.cedar.clone(),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+            &cfg.mcp,
+            cfg.oidc.clone(),
+            Some(cfg.cedar.clone()),
+            &cfg.tenant,
+        ),
     });
 
     let repo = PgProcessProjectionRepository::new(pool);

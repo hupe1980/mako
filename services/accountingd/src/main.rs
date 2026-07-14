@@ -23,7 +23,7 @@
 //!
 //! Port: `:9380`
 
-use accountingd::{config, handlers};
+use accountingd::{config, handlers, mcp_server};
 use anyhow::Context as _;
 use axum::{
     Extension, Router,
@@ -36,7 +36,7 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    let _guard = mako_service::init_tracing_from_env("accountingd");
 
     let cfg: config::AccountingdConfig = load_config("accountingd").context("load config")?;
     let cfg = Arc::new(cfg);
@@ -111,6 +111,15 @@ async fn main() -> anyhow::Result<()> {
         )
         .layer(Extension(Arc::clone(&cfg)))
         .layer(Extension(pool.clone()));
+
+    // ── MCP server ────────────────────────────────────────────────────────────
+    let mcp_state = std::sync::Arc::new(mcp_server::AccountingdMcpState {
+        pool: pool.clone(),
+        tenant: cfg.tenant.clone(),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
+    });
+    let ct = mako_service::shutdown::token();
+    let app = app.merge(mcp_server::router(mcp_state, ct.clone()));
 
     let port = cfg.port.unwrap_or(9380);
     let addr = format!("0.0.0.0:{port}");
@@ -238,7 +247,7 @@ async fn main() -> anyhow::Result<()> {
                                     "pain008_xml": pain_xml,
                                 }
                             });
-                            let client = reqwest::Client::new();
+                            let client = mako_service::http::default_client();
                             match client
                                 .post(url)
                                 .header("Content-Type", "application/cloudevents+json")
@@ -293,5 +302,5 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .context("bind TCP")?;
-    axum::serve(listener, app).await.context("serve")
+    mako_service::shutdown::serve(listener, app, ct).await
 }

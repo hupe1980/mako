@@ -194,6 +194,12 @@ async fn main() -> anyhow::Result<()> {
     let mmma_gas_repo = std::sync::Arc::new(PgMmmaPreisGasRepository::new(pool.clone()));
     let mmm_strom_repo = std::sync::Arc::new(PgMmmPreisStromRepository::new(pool.clone()));
 
+    // ── Graceful shutdown token ───────────────────────────────────────────────
+    let shutdown = CancellationToken::new();
+
+    // ── Background tasks ──────────────────────────────────────────────────────
+    // OIDC JWKS refresh is handled by OidcConfig::build_verifier above.
+
     // ── OIDC verifier ─────────────────────────────────────────────────────────
     let http = reqwest::Client::builder()
         .user_agent("marktd/0.1 (+https://github.com/hupe1980/edi-energy-rs)")
@@ -201,16 +207,13 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .context("building HTTP client")?;
 
-    let verifier = if let Some(oidc) = &cfg.oidc {
-        OidcVerifier::new(&oidc.issuer, &oidc.audience, &http)
-            .await
-            .context("OIDC discovery")?
-    } else {
-        tracing::warn!(
-            "OIDC is disabled — all requests are accepted without authentication (dev mode only)"
-        );
-        OidcVerifier::disabled(&cfg.makod.tenant_id)
-    };
+    let verifier = mako_service::oidc::OidcConfig::build_verifier(
+        cfg.oidc.as_ref(),
+        &http,
+        &cfg.makod.tenant_id,
+        shutdown.clone(),
+    )
+    .await?;
 
     // ── MaKod client ──────────────────────────────────────────────────────────
     let makod_client = Arc::new(mako_markt::makod_client::MakodClient::new(
@@ -251,16 +254,6 @@ async fn main() -> anyhow::Result<()> {
         event_tx,
         tenant_gln: cfg.makod.tenant_id.clone(),
     });
-
-    // ── Graceful shutdown token ───────────────────────────────────────────────
-    let shutdown = CancellationToken::new();
-
-    // ── Background tasks ──────────────────────────────────────────────────────
-    if let Some(oidc) = &cfg.oidc {
-        verifier
-            .clone()
-            .spawn_refresh_task(http.clone(), oidc.jwks_refresh_secs, shutdown.clone());
-    }
 
     spawn_fanout(
         event_rx,
@@ -343,8 +336,12 @@ async fn main() -> anyhow::Result<()> {
     let mcp_state = Arc::new(marktd::mcp_server::MdmdMcpState {
         pool: pool.clone(),
         tenant: cfg.makod.tenant_id.clone(),
-        oidc: verifier.clone(),
-        cedar: cedar.clone(),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+            &cfg.mcp,
+            verifier.clone(),
+            Some(cedar.clone()),
+            &cfg.makod.tenant_id,
+        ),
     });
     let inbound_path = cfg.webhook.inbound_path.clone();
     let app =

@@ -237,13 +237,16 @@ pub struct UpsertIdentitaetInput {
 
 pub async fn upsert_kunde(pool: &PgPool, tenant: &str, input: &CreateKundeInput) -> Result<Uuid> {
     let id = Uuid::new_v4();
-    sqlx::query(
+    // Use RETURNING id so ON CONFLICT returns the *existing* row's id,
+    // not the freshly generated UUID that was never inserted.
+    let row = sqlx::query(
         "INSERT INTO kunden
          (id,tenant,kunden_nr,kundentyp,geschaeftspartner,
           organisations_id,umsatzsteuer_id,zahlungsziel_tage,sepa_erlaubt,erp_kunde_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
          ON CONFLICT (tenant, erp_kunde_id) DO UPDATE
-           SET geschaeftspartner=EXCLUDED.geschaeftspartner, updated_at=now()",
+           SET geschaeftspartner=EXCLUDED.geschaeftspartner, updated_at=now()
+         RETURNING id",
     )
     .bind(id)
     .bind(tenant)
@@ -255,8 +258,9 @@ pub async fn upsert_kunde(pool: &PgPool, tenant: &str, input: &CreateKundeInput)
     .bind(input.zahlungsziel_tage.unwrap_or(14))
     .bind(input.sepa_erlaubt.unwrap_or(true))
     .bind(&input.erp_kunde_id)
-    .execute(pool)
+    .fetch_one(pool)
     .await?;
+    let actual_id: Uuid = row.try_get("id")?;
 
     // If a primary identity (oidc_sub) was provided at create time, upsert it too.
     if let Some(ref sub) = input.oidc_sub {
@@ -267,10 +271,10 @@ pub async fn upsert_kunde(pool: &PgPool, tenant: &str, input: &CreateKundeInput)
             rolle: None,
             standort_filter: None,
         };
-        upsert_identitaet(pool, id, tenant, &identity).await?;
+        upsert_identitaet(pool, actual_id, tenant, &identity).await?;
     }
 
-    Ok(id)
+    Ok(actual_id)
 }
 
 /// Upsert a KundenIdentitaet (portal user) for a Kunde.
@@ -283,7 +287,8 @@ pub async fn upsert_identitaet(
 ) -> Result<Uuid> {
     let id = Uuid::new_v4();
     let rolle = input.rolle.as_deref().unwrap_or("VOLLZUGRIFF");
-    sqlx::query(
+    // RETURNING id resolves ON CONFLICT to the existing row's id.
+    let row = sqlx::query(
         "INSERT INTO kunden_identitaeten
          (id, kunden_id, tenant, oidc_sub, email, display_name, rolle, standort_filter)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -292,7 +297,8 @@ pub async fn upsert_identitaet(
                display_name    = COALESCE(EXCLUDED.display_name, kunden_identitaeten.display_name),
                rolle           = EXCLUDED.rolle,
                standort_filter = EXCLUDED.standort_filter,
-               updated_at      = now()",
+               updated_at      = now()
+         RETURNING id",
     )
     .bind(id)
     .bind(kunden_id)
@@ -302,9 +308,9 @@ pub async fn upsert_identitaet(
     .bind(&input.display_name)
     .bind(rolle)
     .bind(&input.standort_filter)
-    .execute(pool)
+    .fetch_one(pool)
     .await?;
-    Ok(id)
+    Ok(row.try_get("id")?)
 }
 
 pub async fn list_identitaeten(
@@ -453,6 +459,45 @@ pub async fn insert_rahmenvertrag(
     Ok(id)
 }
 
+/// Compute the earliest legally valid Kündigung date given a contract start and
+/// notice period.
+///
+/// Per §14 StromGVV / §13 GasGVV: the notice period (Kündigungsfrist) runs
+/// from the date the notice is received. We return `vertragsbeginn + monate`.
+/// The actual end-of-month rounding is the customer's responsibility in practice;
+/// we store the strict calendar minimum here.
+pub fn earliest_kuendigungsdatum(vertragsbeginn: Date, kuendigungsfrist_monate: i32) -> Date {
+    // Add kuendigungsfrist_monate months: year carries over when month > 12.
+    let total_months = vertragsbeginn.month() as i32 + kuendigungsfrist_monate;
+    let extra_years = (total_months - 1) / 12;
+    let new_month = ((total_months - 1) % 12 + 1) as u8;
+    let new_year = vertragsbeginn.year() + extra_years;
+    // Clamp day to last day of target month (e.g. Jan 31 + 1M = Feb 28).
+    let days_in_month = days_in_month(new_year, new_month);
+    let day = vertragsbeginn.day().min(days_in_month);
+    time::Date::from_calendar_date(
+        new_year,
+        time::Month::try_from(new_month).unwrap_or(time::Month::January),
+        day,
+    )
+    .unwrap_or(vertragsbeginn)
+}
+
+fn days_in_month(year: i32, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}
+
 pub async fn insert_versorgungsvertrag(
     pool: &PgPool,
     kunden_id: Uuid,
@@ -465,8 +510,9 @@ pub async fn insert_versorgungsvertrag(
         "INSERT INTO versorgungsvertraege
          (id,kunden_id,rahmenvertrag_id,tenant,kundentyp,bundle_code,
           vertragsbeginn,vertragsende,kuendigungsfrist_monate,
-          preisgarantie_bis,auto_renewal,standort_bezeichnung,erp_contract_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          preisgarantie_bis,auto_renewal,standort_bezeichnung,erp_contract_id,
+          naechste_moegliche_kuendigung)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
          ON CONFLICT (tenant,erp_contract_id) DO UPDATE SET updated_at=now()",
     )
     .bind(id)
@@ -482,6 +528,10 @@ pub async fn insert_versorgungsvertrag(
     .bind(input.auto_renewal.unwrap_or(false))
     .bind(&input.standort_bezeichnung)
     .bind(&input.erp_contract_id)
+    .bind(earliest_kuendigungsdatum(
+        input.vertragsbeginn,
+        input.kuendigungsfrist_monate.unwrap_or(1),
+    ))
     .execute(pool)
     .await?;
     // Insert components
@@ -715,6 +765,10 @@ pub fn derive_vertrag_status(komponenten: &[VertragskomponenteRow]) -> &'static 
     if all_terminal && any_active {
         return "AKTIV";
     }
+    // All components ended (BEENDET), none active → supply fully concluded.
+    if all_terminal && !any_active && !any_rejected {
+        return "ABGELAUFEN";
+    }
     if any_active && any_pending {
         return "TEILERFUELLUNG";
     }
@@ -847,7 +901,7 @@ fn decode_base64(s: &str) -> Option<Vec<u8>> {
 // \u2500\u2500 Pending Tarifwechsel (B13 \u2014 \u00a741 Abs. 3 EnWG Preisanpassungsbenachrichtigung) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 /// A component with a scheduled future Tarifwechsel.
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, sqlx::FromRow, serde::Serialize)]
 #[allow(dead_code)]
 pub struct PendingTarifwechselRow {
     pub komp_id: Uuid,
@@ -1025,4 +1079,347 @@ pub async fn fetch_preisgarantie(
             .fetch_optional(pool)
             .await?;
     Ok(row.and_then(|r| r.try_get::<serde_json::Value, _>("preisgarantie").ok()))
+}
+
+// ── Operator / CRM helpers ────────────────────────────────────────────────────
+
+/// Row returned by list_kunden (lightweight — no JSONB blobs).
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct KundeListRow {
+    pub id: Uuid,
+    pub tenant: String,
+    pub kunden_nr: Option<String>,
+    pub kundentyp: String,
+    pub organisations_id: Option<String>,
+    pub erp_kunde_id: Option<String>,
+    pub zahlungsziel_tage: i32,
+    pub created_at: time::OffsetDateTime,
+}
+
+/// List all Kunden for a tenant (operator / CRM endpoint).
+pub async fn list_kunden(
+    pool: &PgPool,
+    tenant: &str,
+    kundentyp: Option<&str>,
+    limit: i64,
+) -> anyhow::Result<Vec<KundeListRow>> {
+    Ok(sqlx::query_as::<_, KundeListRow>(
+        r"SELECT id, tenant, kunden_nr, kundentyp, organisations_id,
+                 erp_kunde_id, zahlungsziel_tage, created_at
+          FROM kunden
+          WHERE tenant = $1
+            AND ($2::TEXT IS NULL OR kundentyp = $2)
+          ORDER BY created_at DESC
+          LIMIT $3",
+    )
+    .bind(tenant)
+    .bind(kundentyp)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Storniere a contract that is still ANGELEGT or IN_BEARBEITUNG (no supply active yet).
+///
+/// Sets all non-terminal components to STORNIERT and the contract itself to STORNIERT.
+/// For IN_BEARBEITUNG contracts the caller must separately cancel the in-flight MaKo
+/// process via `processd` (there is no automated MaKo rollback yet — this is a known
+/// limitation: processd processes are idempotent and will be rejected by the NB if
+/// Lieferbeginn was already confirmed).
+pub async fn storniere_vertrag(pool: &PgPool, id: Uuid, tenant: &str) -> anyhow::Result<()> {
+    // Mark all non-terminal components STORNIERT.
+    sqlx::query(
+        r"UPDATE vertragskomponenten
+          SET status = 'STORNIERT', updated_at = now()
+          WHERE vertrag_id = $1
+            AND status NOT IN ('AKTIV','BEENDET','BESTAETIGT','STORNIERT')",
+    )
+    .bind(id)
+    .execute(pool)
+    .await?;
+    // Mark the contract STORNIERT.
+    sqlx::query(
+        "UPDATE versorgungsvertraege SET status = 'STORNIERT', updated_at = now()
+         WHERE id = $1 AND tenant = $2",
+    )
+    .bind(id)
+    .bind(tenant)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Deactivate a KundenIdentitaet (portal user) by OIDC sub.
+pub async fn deactivate_identitaet_by_sub(
+    pool: &PgPool,
+    kunden_id: Uuid,
+    tenant: &str,
+    oidc_sub: &str,
+) -> anyhow::Result<bool> {
+    let n = sqlx::query(
+        "UPDATE kunden_identitaeten
+         SET aktiv = false, updated_at = now()
+         WHERE kunden_id = $1 AND tenant = $2 AND oidc_sub = $3 AND aktiv = true",
+    )
+    .bind(kunden_id)
+    .bind(tenant)
+    .bind(oidc_sub)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(n > 0)
+}
+
+/// GDPR Art. 15 — full customer data export (all tables, no JSONB truncation).
+#[derive(Debug, serde::Serialize)]
+pub struct GdprExportRow {
+    pub kunde: KundeRow,
+    pub person: Option<serde_json::Value>,
+    pub zahlungsinformation: Option<serde_json::Value>,
+    pub identitaeten: Vec<KundenIdentitaetRow>,
+    pub vertraege: Vec<VersorgungsvertragRow>,
+    pub komponenten: Vec<VertragskomponenteRow>,
+}
+
+pub async fn gdpr_export(
+    pool: &PgPool,
+    kunden_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Option<GdprExportRow>> {
+    let Some(kunde) = fetch_kunde(pool, kunden_id, tenant).await? else {
+        return Ok(None);
+    };
+    let person = fetch_person(pool, kunden_id, tenant).await.ok().flatten();
+    let zahlungsinformation = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT zahlungsinformation FROM kunden WHERE id = $1 AND tenant = $2",
+    )
+    .bind(kunden_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let identitaeten = list_identitaeten(pool, kunden_id, tenant)
+        .await
+        .unwrap_or_default();
+    let vertraege = list_vertraege_by_kunde(pool, kunden_id, tenant)
+        .await
+        .unwrap_or_default();
+    let mut all_komponenten = Vec::new();
+    for v in &vertraege {
+        if let Ok(komps) = list_komponenten(pool, v.id).await {
+            all_komponenten.extend(komps);
+        }
+    }
+    Ok(Some(GdprExportRow {
+        kunde,
+        person,
+        zahlungsinformation,
+        identitaeten,
+        vertraege,
+        komponenten: all_komponenten,
+    }))
+}
+
+// ── Expiring contracts (contract lifecycle monitoring) ─────────────────────────
+
+/// Summary row for the expiring-contracts endpoint and MCP tool.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct ExpiringVertragRow {
+    pub id: Uuid,
+    pub kunden_id: Uuid,
+    pub vertrags_nr: Option<String>,
+    pub status: String,
+    pub kundentyp: String,
+    pub vertragsbeginn: Date,
+    pub vertragsende: Option<Date>,
+    pub preisgarantie_bis: Option<Date>,
+    pub bundle_code: Option<String>,
+    pub standort_bezeichnung: Option<String>,
+    pub auto_renewal: bool,
+}
+
+/// List Versorgungsverträge where `vertragsende` OR `preisgarantie_bis` falls
+/// within the next `within_days` calendar days.
+///
+/// Used for proactive customer contact (renewal offers, price-lock warnings).
+pub async fn find_expiring_vertraege(
+    pool: &PgPool,
+    tenant: &str,
+    within_days: i64,
+) -> anyhow::Result<Vec<ExpiringVertragRow>> {
+    let today = time::OffsetDateTime::now_utc().date();
+    let cutoff = today + time::Duration::days(within_days);
+    Ok(sqlx::query_as::<_, ExpiringVertragRow>(
+        r"SELECT id, kunden_id, vertrags_nr, status, kundentyp,
+                 vertragsbeginn, vertragsende, preisgarantie_bis,
+                 bundle_code, standort_bezeichnung, auto_renewal
+          FROM versorgungsvertraege
+          WHERE tenant = $1
+            AND status IN ('AKTIV', 'GEKÜNDIGT')
+            AND (
+                  (vertragsende IS NOT NULL AND vertragsende BETWEEN $2 AND $3)
+               OR (preisgarantie_bis IS NOT NULL AND preisgarantie_bis BETWEEN $2 AND $3)
+            )
+          ORDER BY LEAST(
+              COALESCE(vertragsende, 'infinity'::DATE),
+              COALESCE(preisgarantie_bis, 'infinity'::DATE)
+          )",
+    )
+    .bind(tenant)
+    .bind(today)
+    .bind(cutoff)
+    .fetch_all(pool)
+    .await?)
+}
+
+// ── Stuck MaKo workflows ───────────────────────────────────────────────────────
+
+/// A component stuck in ANGEMELDET status beyond the expected deadline.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct StuckKomponenteRow {
+    pub komp_id: Uuid,
+    pub vertrag_id: Uuid,
+    pub sparte: String,
+    pub malo_id: Option<String>,
+    pub lf_mp_id: String,
+    pub nb_mp_id: Option<String>,
+    pub status: String,
+    pub mako_process_id: Option<String>,
+    pub angemeldet_since: time::OffsetDateTime,
+    pub days_stuck: i64,
+}
+
+/// Find Vertragskomponenten stuck in `ANGEMELDET` status beyond a threshold.
+///
+/// Regulatory deadlines: GPKE §20 EnWG — Strom 5 WT, GeLi Gas 10 WT.
+/// The `threshold_days` parameter should be set to `5` (Strom) or `10` (Gas)
+/// depending on the consumer's intended filtering.
+pub async fn find_stuck_komponents(
+    pool: &PgPool,
+    tenant: &str,
+    threshold_days: i64,
+) -> anyhow::Result<Vec<StuckKomponenteRow>> {
+    let cutoff = time::OffsetDateTime::now_utc() - time::Duration::days(threshold_days);
+    Ok(sqlx::query_as::<_, StuckKomponenteRow>(
+        r"SELECT k.id AS komp_id,
+                 k.vertrag_id,
+                 k.sparte,
+                 k.malo_id,
+                 k.lf_mp_id,
+                 k.nb_mp_id,
+                 k.status,
+                 k.mako_process_id,
+                 k.updated_at AS angemeldet_since,
+                 EXTRACT(DAY FROM now() - k.updated_at)::BIGINT AS days_stuck
+          FROM vertragskomponenten k
+          JOIN versorgungsvertraege v ON v.id = k.vertrag_id
+          WHERE k.tenant = $1
+            AND k.status = 'ANGEMELDET'
+            AND k.updated_at < $2
+          ORDER BY k.updated_at ASC",
+    )
+    .bind(tenant)
+    .bind(cutoff)
+    .fetch_all(pool)
+    .await?)
+}
+
+// ── B2B portfolio summary ─────────────────────────────────────────────────────
+
+/// Per-MaLo summary for a B2B portfolio overview.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct PortfolioItemRow {
+    pub vertrag_id: Uuid,
+    pub vertrags_nr: Option<String>,
+    pub standort_bezeichnung: Option<String>,
+    pub sparte: String,
+    pub malo_id: Option<String>,
+    pub product_code: String,
+    pub lieferbeginn: Date,
+    pub lieferende: Option<Date>,
+    pub status: String,
+    pub vertrag_status: String,
+}
+
+/// Return all active Vertragskomponenten for a Kunde (B2B portfolio view).
+pub async fn list_portfolio_by_kunde(
+    pool: &PgPool,
+    kunden_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Vec<PortfolioItemRow>> {
+    Ok(sqlx::query_as::<_, PortfolioItemRow>(
+        r"SELECT k.vertrag_id,
+                 v.vertrags_nr,
+                 v.standort_bezeichnung,
+                 k.sparte,
+                 k.malo_id,
+                 k.product_code,
+                 k.lieferbeginn,
+                 k.lieferende,
+                 k.status,
+                 v.status AS vertrag_status
+          FROM vertragskomponenten k
+          JOIN versorgungsvertraege v ON v.id = k.vertrag_id
+          WHERE v.kunden_id = $1 AND v.tenant = $2
+            AND k.status IN ('AKTIV','BESTAETIGT','ANGEMELDET')
+          ORDER BY v.standort_bezeichnung, k.sparte",
+    )
+    .bind(kunden_id)
+    .bind(tenant)
+    .fetch_all(pool)
+    .await?)
+}
+
+// ── Auto-renewal (§13 GasGVV / §14 StromGVV) ─────────────────────────────────
+
+/// Verträge due for auto-renewal within the given look-ahead window.
+/// These need a 30-day customer notification before the new term starts.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct AutoRenewalRow {
+    pub id: Uuid,
+    pub kunden_id: Uuid,
+    pub vertrags_nr: Option<String>,
+    pub vertragsende: Date,
+    pub renewal_monate: i32,
+    pub bundle_code: Option<String>,
+}
+
+/// Find AKTIV vertraege with `auto_renewal = TRUE` whose `vertragsende` falls
+/// within the next `look_ahead_days` days (for 30-day advance customer notice).
+pub async fn find_auto_renewal_due(
+    pool: &PgPool,
+    tenant: &str,
+    look_ahead_days: i64,
+) -> anyhow::Result<Vec<AutoRenewalRow>> {
+    let today = time::OffsetDateTime::now_utc().date();
+    let cutoff = today + time::Duration::days(look_ahead_days);
+    Ok(sqlx::query_as::<_, AutoRenewalRow>(
+        r"SELECT id, kunden_id, vertrags_nr, vertragsende, renewal_monate, bundle_code
+          FROM versorgungsvertraege
+          WHERE tenant = $1
+            AND status = 'AKTIV'
+            AND auto_renewal = TRUE
+            AND vertragsende IS NOT NULL
+            AND vertragsende BETWEEN $2 AND $3",
+    )
+    .bind(tenant)
+    .bind(today)
+    .bind(cutoff)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Apply auto-renewal: extend vertragsende by renewal_monate months.
+pub async fn apply_auto_renewal(pool: &PgPool, id: Uuid, new_end: Date) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE versorgungsvertraege \
+         SET vertragsende = $2, updated_at = now() \
+         WHERE id = $1 AND auto_renewal = TRUE AND status = 'AKTIV'",
+    )
+    .bind(id)
+    .bind(new_end)
+    .execute(pool)
+    .await?;
+    Ok(())
 }

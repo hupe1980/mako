@@ -16,14 +16,16 @@ use crate::{
     events::{build_cloud_event, parse_mako_outcome},
     pg::{
         CreateKundeInput, CreateRahmenvertragInput, CreateVersorgungsvertragInput, KuendigungInput,
-        TarifwechselInput, UpdateKundeInput, UpsertIdentitaetInput, derive_vertrag_status,
-        extract_sub_from_bearer, fetch_identitaet_by_sub, fetch_komponente, fetch_kunde,
-        fetch_kunde_by_sub, fetch_person, fetch_preisgarantie, fetch_vertrag, idempotent_event,
+        TarifwechselInput, UpdateKundeInput, UpsertIdentitaetInput, deactivate_identitaet_by_sub,
+        derive_vertrag_status, earliest_kuendigungsdatum, extract_sub_from_bearer,
+        fetch_identitaet_by_sub, fetch_komponente, fetch_kunde, fetch_kunde_by_sub, fetch_person,
+        fetch_preisgarantie, fetch_vertrag, find_expiring_vertraege, gdpr_export, idempotent_event,
         insert_rahmenvertrag, insert_versorgungsvertrag, list_aktive_malo_ids, list_identitaeten,
-        list_komponenten, list_offene_vertraege, list_rahmenvertraege_by_kunde,
-        list_rahmenvertrag_malos, list_vertraege_by_kunde, store_pending_tarifwechsel,
-        update_komponente_product, update_komponente_status, update_kunde, update_vertrag_status,
-        upsert_identitaet, upsert_kunde, upsert_person, upsert_preisgarantie,
+        list_komponenten, list_kunden, list_offene_vertraege, list_portfolio_by_kunde,
+        list_rahmenvertraege_by_kunde, list_rahmenvertrag_malos, list_vertraege_by_kunde,
+        store_pending_tarifwechsel, storniere_vertrag, update_komponente_product,
+        update_komponente_status, update_kunde, update_vertrag_status, upsert_identitaet,
+        upsert_kunde, upsert_person, upsert_preisgarantie,
     },
 };
 
@@ -259,6 +261,10 @@ pub struct ListQuery {
 }
 
 /// `POST /api/v1/vertraege/{id}/kuendigen` — initiate Lieferende for all commodity components.
+///
+/// **Regulatory validation (§14 StromGVV / §13 GasGVV):**
+/// - `lieferende` must be ≥ today (cannot cancel retroactively)
+/// - `lieferende` must respect the contract's `kuendigungsfrist_monate`
 pub async fn kuendige_vertrag(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
@@ -277,6 +283,33 @@ pub async fn kuendige_vertrag(
                 "Vertrag status '{}' cannot be cancelled — must be AKTIV",
                 vertrag.status
             ),
+        )
+            .into_response();
+    }
+    // Notice period validation — §14 StromGVV / §13 GasGVV.
+    let today = time::OffsetDateTime::now_utc().date();
+    if input.lieferende < today {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "lieferende cannot be in the past",
+                "lieferende": input.lieferende.to_string(),
+                "today": today.to_string(),
+            })),
+        )
+            .into_response();
+    }
+    let earliest = earliest_kuendigungsdatum(today, vertrag.kuendigungsfrist_monate);
+    if input.lieferende < earliest {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "lieferende too early — Kündigungsfrist not respected",
+                "lieferende": input.lieferende.to_string(),
+                "earliest_valid": earliest.to_string(),
+                "kuendigungsfrist_monate": vertrag.kuendigungsfrist_monate,
+                "regulatory_basis": "§14 StromGVV / §13 GasGVV",
+            })),
         )
             .into_response();
     }
@@ -1237,3 +1270,222 @@ pub async fn get_zahlungsinformation_kunde(
 
 // IBAN validation is provided by the `sepa` workspace crate (ISO 13616 mod-97).
 // The old inline `validate_iban_mod97` has been removed — use `sepa::validate_iban` instead.
+
+// ── Expiring contracts ─────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ExpiringQuery {
+    /// Calendar days to look ahead. Default: 30.
+    pub days: Option<i64>,
+}
+
+/// `GET /api/v1/vertraege/expiring`
+///
+/// **Proactive contract-lifecycle monitoring.**
+///
+/// Returns all `AKTIV` or `GEKÜNDIGT` Versorgungsverträge whose `vertragsende`
+/// OR `preisgarantie_bis` falls within `?days` (default 30) calendar days.
+///
+/// Regulatory basis:
+/// - §13 GasGVV / §14 StromGVV: 30-day advance notice for auto-renewal
+/// - §41 EnWG: customer notification before expiry / tariff change
+pub async fn list_expiring_vertraege(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Query(q): Query<ExpiringQuery>,
+) -> impl IntoResponse {
+    let days = q.days.unwrap_or(30).clamp(1, 365);
+    match find_expiring_vertraege(&pool, &cfg.tenant, days).await {
+        Ok(rows) => Json(serde_json::json!({
+            "count": rows.len(),
+            "look_ahead_days": days,
+            "vertraege": rows,
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── B2B portfolio summary ─────────────────────────────────────────────────────
+
+/// `GET /api/v1/kunden/{id}/portfolio`
+///
+/// **B2B portfolio view.**
+///
+/// Returns all active Vertragskomponenten across all Versorgungsverträge
+/// for a B2B customer — one row per MaLo/Sparte combination.
+///
+/// Useful for B2B portal dashboards, Sammelrechnung enumeration, and
+/// Rahmenvertrag portfolio analytics.
+pub async fn get_kunde_portfolio(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(kunden_id): Path<Uuid>,
+) -> impl IntoResponse {
+    // Verify customer exists.
+    match fetch_kunde(&pool, kunden_id, &cfg.tenant).await {
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(Some(_)) => {}
+    }
+    match list_portfolio_by_kunde(&pool, kunden_id, &cfg.tenant).await {
+        Ok(rows) => {
+            let total_malos = rows.iter().filter(|r| r.malo_id.is_some()).count();
+            Json(serde_json::json!({
+                "kunden_id": kunden_id,
+                "total_active_komponenten": rows.len(),
+                "total_malos": total_malos,
+                "komponenten": rows,
+            }))
+            .into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── List Kunden (operator / CRM) ───────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct KundenListQuery {
+    pub kundentyp: Option<String>,
+    pub limit: Option<i64>,
+}
+
+/// `GET /api/v1/kunden` — list all customers for a tenant.
+///
+/// Operator / CRM endpoint — not exposed to portal users.
+/// `?kundentyp=B2C|B2B_SLP|B2B_RLM|B2B_HV` for filtering.
+pub async fn list_kunden_handler(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Query(q): Query<KundenListQuery>,
+) -> impl IntoResponse {
+    match list_kunden(
+        &pool,
+        &cfg.tenant,
+        q.kundentyp.as_deref(),
+        q.limit.unwrap_or(100).clamp(1, 1000),
+    )
+    .await
+    {
+        Ok(rows) => Json(serde_json::json!({
+            "count": rows.len(),
+            "kunden": rows,
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── Stornieren (cancel ANGELEGT/IN_BEARBEITUNG contract) ──────────────────────
+
+/// `POST /api/v1/vertraege/{id}/stornieren`
+///
+/// Cancel a contract that has not yet reached `AKTIV` status.
+/// Valid states: `ANGELEGT`, `IN_BEARBEITUNG` (MaKo dispatched but not confirmed).
+///
+/// For `IN_BEARBEITUNG`: sets components to `STORNIERT` but does NOT automatically
+/// cancel in-flight MaKo processes — the operator must cancel them via `processd`.
+pub async fn stornieren_vertrag(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let vertrag = match fetch_vertrag(&pool, id, &cfg.tenant).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    if !matches!(vertrag.status.as_str(), "ANGELEGT" | "IN_BEARBEITUNG") {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!(
+                    "Vertrag status '{}' cannot be storniert — only ANGELEGT or IN_BEARBEITUNG",
+                    vertrag.status
+                ),
+                "hint": if vertrag.status == "AKTIV" {
+                    "Use POST /api/v1/vertraege/{id}/kuendigen for AKTIV contracts"
+                } else {
+                    "Only pre-activation contracts can be storniert"
+                },
+            })),
+        )
+            .into_response();
+    }
+    match storniere_vertrag(&pool, id, &cfg.tenant).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "vertrag_id": id,
+                "status": "STORNIERT",
+                "warning": if vertrag.status == "IN_BEARBEITUNG" {
+                    Some("In-flight MaKo processes not cancelled automatically. Cancel via processd.")
+                } else { None },
+            })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── Deactivate portal user ─────────────────────────────────────────────────────
+
+/// `DELETE /api/v1/kunden/{id}/identitaeten/{sub}`
+///
+/// Deactivate a portal user (OIDC identity) for a Kunde.
+/// Idempotent — calling again for an already-deactivated sub returns 404.
+///
+/// Regulatory basis: GDPR Art. 17 (right to erasure / access revocation).
+pub async fn delete_identitaet(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path((kunden_id, oidc_sub)): Path<(Uuid, String)>,
+) -> impl IntoResponse {
+    // Verify customer belongs to tenant.
+    match fetch_kunde(&pool, kunden_id, &cfg.tenant).await {
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(Some(_)) => {}
+    }
+    match deactivate_identitaet_by_sub(&pool, kunden_id, &cfg.tenant, &oidc_sub).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            format!("No active identity with sub={oidc_sub} for this customer"),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── GDPR Art. 15 Data Export ──────────────────────────────────────────────────
+
+/// `GET /api/v1/kunden/{id}/export`
+///
+/// **GDPR Art. 15 (Recht auf Auskunft) / Art. 20 (Recht auf Datenübertragbarkeit).**
+///
+/// Returns a complete structured JSON export of all personal data stored for
+/// a customer: Kunde, Person, Zahlungsinformation, KundenIdentitaeten,
+/// Versorgungsverträge, and all Vertragskomponenten.
+///
+/// The response is suitable for:
+/// - Handing to the customer as their Art. 15 data disclosure
+/// - ERP import on customer request
+/// - Audit trails
+pub async fn get_kunde_gdpr_export(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(kunden_id): Path<Uuid>,
+) -> impl IntoResponse {
+    match gdpr_export(&pool, kunden_id, &cfg.tenant).await {
+        Ok(Some(export)) => Json(serde_json::json!({
+            "regulatory_basis": "DSGVO Art. 15 — Recht auf Auskunft / Art. 20 — Datenübertragbarkeit",
+            "exported_at": time::OffsetDateTime::now_utc().to_string(),
+            "export": export,
+        }))
+        .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}

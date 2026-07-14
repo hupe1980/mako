@@ -52,7 +52,7 @@ pub use config::NetzbilanzConfig;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    let _guard = mako_service::init_tracing_from_env("netzbilanzd");
 
     let cfg: NetzbilanzConfig = load_config("netzbilanzd").context("load config")?;
     let cfg = Arc::new(cfg);
@@ -88,11 +88,11 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // MCP server setup.
-    let shutdown = CancellationToken::new();
+    let shutdown = mako_service::shutdown::token();
     let mcp_state = Arc::new(mcp_server::NetzbilanzMcpState {
         pool: pool.clone(),
         tenant: cfg.tenant.clone(),
-        mcp_api_key: cfg.mcp_api_key.clone(),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
     });
 
     // ── Background workers ────────────────────────────────────────────────────
@@ -180,7 +180,7 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::post_remadv_webhook),
         )
         // MCP server at /mcp — NB billing AI tooling
-        .merge(mcp_server::router(mcp_state, shutdown))
+        .merge(mcp_server::router(mcp_state, shutdown.clone()))
         .layer(Extension(Arc::clone(&cfg)))
         .layer(Extension(makod))
         .layer(Extension(marktd))
@@ -193,7 +193,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .context("bind TCP")?;
-    axum::serve(listener, app).await.context("serve")
+    mako_service::shutdown::serve(listener, app, shutdown).await
 }
 
 fn billing_routes() -> Router {

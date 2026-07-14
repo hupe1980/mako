@@ -54,6 +54,10 @@ pub struct PortaldConfig {
     /// LF MP-ID (BDEW-Codenummer) — used in self-service SEPA mandate registration.
     /// Must match the `lf_mp_id` configured in `accountingd`.
     pub lf_mp_id: Option<String>,
+
+    /// MCP server authentication. Supports API-key or dev mode (open).
+    #[serde(default)]
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
 }
 
 fn default_port() -> u16 {

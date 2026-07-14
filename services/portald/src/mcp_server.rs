@@ -42,6 +42,10 @@ use crate::handlers::PortalClients;
 #[derive(Clone)]
 pub struct PortaldMcpState {
     pub clients: Arc<PortalClients>,
+    /// MCP authentication. In typical portald deployments MCP is customer-facing
+    /// and read-only — set to `McpAuth::dev()` for open access or configure an
+    /// API key for token-gated access.
+    pub auth: mako_service::mcp_auth::McpAuth,
 }
 
 // ── Tool parameters ───────────────────────────────────────────────────────────
@@ -360,12 +364,11 @@ impl ServerHandler for PortaldMcpHandler {
 // configured. In production, place this behind an API gateway or OIDC proxy.
 
 async fn mcp_auth_middleware(
+    axum::extract::State(state): axum::extract::State<Arc<PortaldMcpState>>,
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
-    // Forward all requests — portald MCP is read-only and scoped per MaLo.
-    // Add Bearer-token enforcement here if portald gets an oidc_issuer config.
-    next.run(request).await
+    state.auth.authenticate(request, next).await
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -387,5 +390,8 @@ pub fn router(state: Arc<PortaldMcpState>, shutdown: CancellationToken) -> Route
 
     Router::new()
         .route_service("/mcp", mcp_service)
-        .layer(middleware::from_fn(mcp_auth_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            mcp_auth_middleware,
+        ))
 }

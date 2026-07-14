@@ -51,15 +51,15 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("loading config from {}", cli.config.display()))?;
 
     // ── Logging + OpenTelemetry ───────────────────────────────────────────────
-    let otel_cfg = cfg
-        .otel
-        .endpoint
-        .as_deref()
-        .map(|ep| mako_service::OtelConfig {
-            endpoint: ep.to_owned(),
-            service_name: "processd".to_owned(),
-        });
-    let _otel_guard = mako_service::init_tracing("processd", &cli.log_level, otel_cfg.as_ref());
+    let _otel_guard = mako_service::init_tracing(
+        "processd",
+        &cli.log_level,
+        if cfg.otel.is_enabled() {
+            Some(&cfg.otel)
+        } else {
+            None
+        },
+    );
 
     // ── Graceful shutdown ─────────────────────────────────────────────────────
     let shutdown = CancellationToken::new();
@@ -87,28 +87,17 @@ async fn main() -> anyhow::Result<()> {
 
     // ── OIDC ─────────────────────────────────────────────────────────────────
     let http = mako_service::http::default_client();
-    let oidc = if let Some(ref oidc_cfg) = cfg.oidc {
-        let verifier =
-            mako_service::oidc::OidcVerifier::new(&oidc_cfg.issuer, &oidc_cfg.audience, &http)
-                .await
-                .context("OIDC discovery")?;
-        verifier.clone().spawn_refresh_task(
-            http.clone(),
-            oidc_cfg.jwks_refresh_secs,
-            shutdown.clone(),
-        );
-        verifier
-    } else {
-        tracing::warn!(
-            "processd: OIDC disabled — all requests accepted without authentication (not for production)"
-        );
-        let tenant = if cfg.identity.tenant.is_empty() {
+    let oidc = mako_service::oidc::OidcConfig::build_verifier(
+        cfg.oidc.as_ref(),
+        &http,
+        if cfg.identity.tenant.is_empty() {
             &cfg.identity.own_mp_id
         } else {
             &cfg.identity.tenant
-        };
-        mako_service::oidc::OidcVerifier::disabled(tenant)
-    };
+        },
+        shutdown.clone(),
+    )
+    .await?;
 
     // ── Cedar ABAC ───────────────────────────────────────────────────────────
     let cedar = Arc::new(
@@ -164,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
         subscriber_event_types: cfg.subscription.event_types,
         oidc,
         cedar,
+        mcp: cfg.mcp,
         shutdown,
     })
     .await

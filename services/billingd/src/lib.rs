@@ -20,3 +20,5 @@ pub mod config;
 pub mod handlers;
 pub mod pg;
 pub mod xrechnung;
+
+pub mod mcp_server;

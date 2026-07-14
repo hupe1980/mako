@@ -26,7 +26,8 @@ pub struct BillingdConfig {
     /// HTTP listen port.  Defaults to `9280`.
     pub port: Option<u16>,
 
-    /// Operator BDEW-Codenummer.
+    /// Tenant identifier — data-isolation key written to every database row.
+    /// Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     pub tenant: String,
 
     /// `tarifbd` base URL — product catalog and EPEX prices.
@@ -53,13 +54,20 @@ pub struct BillingdConfig {
     /// HMAC-SHA256 secret for signing outbound webhooks.
     pub erp_hmac_secret: Option<String>,
 
+    /// Seller name for XRechnung generation (BG-4, BT-27). Defaults to tenant ID.
+    pub seller_name: Option<String>,
+
     /// Seller VAT registration number (Umsatzsteuer-ID) for XRechnung output.
     pub seller_vat_id: Option<String>,
 
     /// Statutory rate defaults.  Override here instead of per-product.
     pub rates: Option<RatesConfig>,
-}
 
+    /// MCP server authentication. Supports API-key, OIDC, or dev mode.
+    /// See `[mcp]` section in TOML — e.g. `api_key = "env:BILLINGD_MCP_API_KEY"`.
+    #[serde(default)]
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
+}
 impl BillingdConfig {
     /// Build `RegulatoryRates` from config, falling back to statutory defaults.
     pub fn regulatory_rates(&self) -> crate::calculator::RegulatoryRates {

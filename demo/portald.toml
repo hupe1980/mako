@@ -5,7 +5,7 @@
 # DO NOT use in production — auth disabled.
 
 port   = 9480
-tenant = "9910000000002"   # operator LF BDEW-Codenummer
+tenant = "9910000000002"   # data-isolation key (any stable string; typically the operator’s BDEW- or DVGW-Codenummer)
 
 # Upstream service URLs (use local demo docker network hostnames)
 edmd_url        = "http://edmd:8380"

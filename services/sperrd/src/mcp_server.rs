@@ -13,12 +13,16 @@
 //! |---|---|
 //! | `execute-sperrung` | Step-by-step: execute a Sperrung order and confirm IFTSTA 21039 |
 
-use std::sync::Arc;
-use axum::{Router, http::StatusCode, middleware::{self, Next}, response::IntoResponse};
-use mako_service::{cedar::CedarEnforcer, oidc::OidcVerifier};
+use axum::{
+    Router,
+    middleware::{self, Next},
+};
 use rmcp::{
     ErrorData as McpError, ServerHandler,
-    handler::server::{router::{prompt::PromptRouter, tool::ToolRouter}, wrapper::Parameters},
+    handler::server::{
+        router::{prompt::PromptRouter, tool::ToolRouter},
+        wrapper::Parameters,
+    },
     model::*,
     prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
     transport::streamable_http_server::{
@@ -28,14 +32,14 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 use sqlx::PgPool;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct SperrdMcpState {
     pub pool: PgPool,
     pub tenant: String,
-    pub oidc: OidcVerifier,
-    pub cedar: Arc<CedarEnforcer>,
+    pub auth: mako_service::mcp_auth::McpAuth,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -53,50 +57,68 @@ pub struct GetSperrParams {
 #[derive(Clone)]
 pub struct SperrdMcpHandler {
     state: Arc<SperrdMcpState>,
-    #[allow(dead_code)] tool_router: ToolRouter<SperrdMcpHandler>,
-    #[allow(dead_code)] prompt_router: PromptRouter<SperrdMcpHandler>,
+    #[allow(dead_code)]
+    tool_router: ToolRouter<SperrdMcpHandler>,
+    #[allow(dead_code)]
+    prompt_router: PromptRouter<SperrdMcpHandler>,
 }
 
 #[tool_router]
 impl SperrdMcpHandler {
     fn new(state: Arc<SperrdMcpState>) -> Self {
-        Self { state, tool_router: Self::tool_router(), prompt_router: Self::prompt_router() }
+        Self {
+            state,
+            tool_router: Self::tool_router(),
+            prompt_router: Self::prompt_router(),
+        }
     }
 
-    #[tool(description = "List Sperrung execution orders. Filter by status: pending (awaiting field confirmation), executed, failed, or cancelled. GPKE BK6-22-024 compliance requires IFTSTA 21039 dispatch within execution window.",
-        annotations(read_only_hint = true, open_world_hint = false))]
+    #[tool(
+        description = "List Sperrung execution orders. Filter by status: pending (awaiting field confirmation), executed, failed, or cancelled. GPKE BK6-22-024 compliance requires IFTSTA 21039 dispatch within execution window.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn list_sperr_orders(
         &self,
         Parameters(p): Parameters<ListSperrParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::{PgSperrRepo, SperrStatus};
-        let repo = PgSperrRepo::new(self.state.pool.clone());
-        let status = p.status.as_deref().and_then(|s| s.parse::<SperrStatus>().ok());
-        match repo.list(&self.state.tenant, status, p.limit.unwrap_or(50)).await {
-            Ok(orders) => ContentBlock::json(serde_json::json!({
-                "count": orders.len(),
-                "orders": orders,
-                "pending_count": orders.iter().filter(|o| o.status.as_deref() == Some("pending")).count(),
-            })).map(|b| CallToolResult::success(vec![b])).map_err(|e| McpError::internal_error(e.message, None)),
+        use crate::pg::list_orders_pg;
+        let status = p.status.as_deref();
+        match list_orders_pg(&self.state.pool, status, None, p.limit.unwrap_or(50)).await {
+            Ok(orders) => {
+                let pending = orders.iter().filter(|o| o.status == "pending").count();
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    serde_json::json!({
+                        "count": orders.len(),
+                        "orders": orders,
+                        "pending_count": pending,
+                    })
+                    .to_string(),
+                )]))
+            }
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
 
-    #[tool(description = "Get a single Sperrung order by UUID. Returns execution timestamps, IFTSTA dispatch status, and associated ORDERS process reference.",
-        annotations(read_only_hint = true, open_world_hint = false))]
+    #[tool(
+        description = "Get a single Sperrung order by UUID. Returns execution timestamps, IFTSTA dispatch status, and associated ORDERS process reference.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn get_sperr_order(
         &self,
         Parameters(p): Parameters<GetSperrParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::PgSperrRepo;
+        use crate::pg::fetch_order_pg;
         let Ok(id) = p.id.parse::<uuid::Uuid>() else {
             return Err(McpError::invalid_params("id must be a valid UUID", None));
         };
-        let repo = PgSperrRepo::new(self.state.pool.clone());
-        match repo.find_by_id(id, &self.state.tenant).await {
-            Ok(Some(order)) => ContentBlock::json(serde_json::to_value(order).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b])).map_err(|e| McpError::internal_error(e.message, None)),
-            Ok(None) => Err(McpError::invalid_params(format!("order {id} not found"), None)),
+        match fetch_order_pg(&self.state.pool, id).await {
+            Ok(Some(order)) => Ok(CallToolResult::success(vec![ContentBlock::text(
+                serde_json::to_value(order).unwrap_or_default().to_string(),
+            )])),
+            Ok(None) => Err(McpError::invalid_params(
+                format!("order {id} not found"),
+                None,
+            )),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
@@ -110,10 +132,12 @@ impl SperrdMcpHandler {
     )]
     async fn execute_sperrung_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(Role::User, 
+            PromptMessage::new_text(
+                Role::User,
                 "The field team has executed a Sperrung. How do I confirm it?",
             ),
-            PromptMessage::new_text(Role::Assistant, 
+            PromptMessage::new_text(
+                Role::Assistant,
                 "1. Use `list_sperr_orders` with status=pending to find the order.\n                 2. Confirm the malo_id and orders_process_id match the field report.\n                 3. PUT /api/v1/sperr-orders/{id}/execute with executed_at timestamp.\n                 4. sperrd auto-dispatches IFTSTA 21039 to the LF via makod.\n                 5. Verify the order moves to status=executed with iftsta_dispatched_at set.\n\n                 GPKE BK6-22-024: The IFTSTA 21039 must be sent within the ORDERS execution window.\n                 A missed dispatch can only be corrected by a new IFTSTA — contact the LF immediately.",
             ),
         ]
@@ -137,22 +161,14 @@ impl ServerHandler for SperrdMcpHandler {
              Confirm execution via PUT /api/v1/sperr-orders/{id}/execute (triggers IFTSTA 21039 auto-dispatch).",
         )
     }
-
-
-
 }
 
 async fn mcp_auth_middleware(
     axum::extract::State(state): axum::extract::State<Arc<SperrdMcpState>>,
-    request: axum::extract::Request, next: Next,
+    request: axum::extract::Request,
+    next: Next,
 ) -> axum::response::Response {
-    match request.headers().get("Authorization")
-        .and_then(|v| v.to_str().ok()).and_then(|s| s.strip_prefix("Bearer "))
-    {
-        Some(t) if state.oidc.verify(t).is_ok() => next.run(request).await,
-        Some(_) => (StatusCode::UNAUTHORIZED, "invalid token").into_response(),
-        None => (StatusCode::UNAUTHORIZED, "Authorization: Bearer required").into_response(),
-    }
+    state.auth.authenticate(request, next).await
 }
 
 pub fn router(state: Arc<SperrdMcpState>, _shutdown: CancellationToken) -> Router {
@@ -162,6 +178,7 @@ pub fn router(state: Arc<SperrdMcpState>, _shutdown: CancellationToken) -> Route
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default(),
     );
-    Router::new().route_service("/mcp", service)
+    Router::new()
+        .route_service("/mcp", service)
         .layer(middleware::from_fn_with_state(state, mcp_auth_middleware))
 }

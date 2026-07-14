@@ -16,8 +16,10 @@ mako consists of **16 independently deployable services**, each built as a self-
 - Cedar ABAC authorization
 - OIDC/JWT + API-key authentication  
 - OpenTelemetry traces and metrics
-- Built-in MCP server at `/mcp` (Streamable HTTP 2025-11-05)
+- Built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25)
 - Structured health endpoints (`/health`, `/health/ready`)
+
+All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, `EventBus`, and more. This means zero copy-pasted infrastructure code across the 16 daemons.
 
 ---
 

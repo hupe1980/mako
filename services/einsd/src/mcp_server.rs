@@ -24,9 +24,7 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    http::StatusCode,
     middleware::{self, Next},
-    response::IntoResponse,
 };
 use rmcp::{
     ErrorData as McpError, ServerHandler,
@@ -49,9 +47,7 @@ use tokio_util::sync::CancellationToken;
 pub struct EinsdMcpState {
     pub pool: PgPool,
     pub tenant: String,
-    /// Bearer token required on `Authorization: Bearer <key>` for /mcp requests.
-    /// When `None` the endpoint is unauthenticated (development only).
-    pub mcp_api_key: Option<String>,
+    pub auth: mako_service::mcp_auth::McpAuth,
 }
 
 // ── Parameter types ───────────────────────────────────────────────────────────
@@ -800,22 +796,7 @@ async fn mcp_auth_middleware(
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
-    if let Some(key) = &state.mcp_api_key {
-        let token = request
-            .headers()
-            .get("Authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.strip_prefix("Bearer "))
-            .map(str::to_owned);
-        match token {
-            Some(t) if t == *key => {}
-            _ => {
-                return (StatusCode::UNAUTHORIZED, "invalid or missing Bearer token")
-                    .into_response();
-            }
-        }
-    }
-    next.run(request).await
+    state.auth.authenticate(request, next).await
 }
 
 /// Build the MCP `Router`. Merge into the main axum app at `/mcp`.

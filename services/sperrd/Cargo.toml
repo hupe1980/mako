@@ -32,5 +32,6 @@ uuid         = { workspace = true, features = ["v4", "serde"] }
 tracing      = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower-http   = { version = "0.6" }
+tokio-util   = { workspace = true }
 anyhow       = "1"
 secrecy      = { version = "0.10" }

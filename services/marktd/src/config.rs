@@ -112,22 +112,8 @@ fn default_http_addr() -> String {
 
 // ── OIDC ──────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OidcConfig {
-    /// OIDC issuer URL (without trailing slash).
-    /// Example: `https://login.microsoftonline.com/{tenant-id}/v2.0`
-    pub issuer: String,
-    /// JWT `aud` claim expected value.
-    /// Example: `api://mako-markt`
-    pub audience: String,
-    #[serde(default = "default_jwks_refresh_secs")]
-    pub jwks_refresh_secs: u64,
-}
-
-fn default_jwks_refresh_secs() -> u64 {
-    300
-}
+/// OIDC configuration — re-exported from `mako-service` (shared across all daemons).
+pub use mako_service::oidc::OidcConfig;
 
 // ── MaKod client ──────────────────────────────────────────────────────────────
 
@@ -188,27 +174,9 @@ pub use mako_service::telemetry::OtelConfig;
 
 // ── MCP server ────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct McpConfig {
-    #[serde(default = "default_mcp_path")]
-    pub path: String,
-    #[serde(default)]
-    pub enabled: bool,
-}
-
-impl Default for McpConfig {
-    fn default() -> Self {
-        Self {
-            path: default_mcp_path(),
-            enabled: false,
-        }
-    }
-}
-
-fn default_mcp_path() -> String {
-    "/mcp".to_owned()
-}
+/// Re-export so that `[mcp]` in `marktd.toml` maps to the shared `McpAuthConfig`.
+/// Supports `api_key` (Bearer token for agentd) and optional named keys.
+pub use mako_service::mcp_auth::McpAuthConfig as McpConfig;
 
 // ── Loader + env resolution ───────────────────────────────────────────────────
 

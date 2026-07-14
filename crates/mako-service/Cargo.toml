@@ -54,6 +54,7 @@ wasm-plugins = ["plugins", "mako-plugin/wasm"]
 
 [dependencies]
 thiserror  = { workspace = true }
+anyhow     = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 tracing    = "0.1"

@@ -67,7 +67,54 @@ use serde::de::DeserializeOwned;
 /// Configuration loading error — wraps [`figment::Error`].
 pub type ConfigError = figment::Error;
 
-/// Load a typed configuration `C` from a TOML file with an env-var layer on top.
+// ── Shared config structs ─────────────────────────────────────────────────────
+
+/// Standard PostgreSQL database configuration block.
+///
+/// All mako services that use a database embed this under `[database]`:
+///
+/// ```toml
+/// [database]
+/// url      = "env:DATABASE_URL"      # or literal postgres://...
+/// pool_size = 10                      # optional, default 10
+/// ```
+///
+/// Services re-export it as `pub use mako_service::config::DatabaseConfig;`
+/// rather than defining an identical struct.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DatabaseConfig {
+    /// PostgreSQL connection URL.
+    ///
+    /// Use `"env:DATABASE_URL"` to defer to the environment at runtime — this
+    /// avoids storing secrets in TOML files checked into version control.
+    pub url: String,
+
+    /// Maximum number of connections in the pool.  Default: 10.
+    #[serde(default = "DatabaseConfig::default_pool_size")]
+    pub pool_size: u32,
+}
+
+impl DatabaseConfig {
+    fn default_pool_size() -> u32 {
+        10
+    }
+}
+
+/// Standard HTTP listen-address configuration block.
+///
+/// Services that take `[http]` embed this struct rather than defining their own:
+///
+/// ```toml
+/// [http]
+/// addr = "0.0.0.0:8580"
+/// ```
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct HttpConfig {
+    /// Socket address to bind.  Defaults to `"0.0.0.0:<default-port>"`.
+    pub addr: String,
+}
+
+// ── Loader ────────────────────────────────────────────────────────────────────
 ///
 /// See [module docs](self) for file-discovery rules and override conventions.
 ///

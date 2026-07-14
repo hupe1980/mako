@@ -48,7 +48,7 @@ curl -X POST http://vertragd:9780/api/v1/vertraege/{id}/tarifwechsel \
 # vertragd.toml
 database_url   = "postgresql://vertragd:secret@db:5432/vertragd"
 port           = 9780
-tenant         = "9900357000004"   # LF BDEW-Codenummer
+tenant         = "9900357000004"   # data-isolation key (operator tenant; value = BDEW-Codenummer in this example)
 lf_mp_id       = "9900357000004"
 processd_url   = "http://processd:8580"
 tarifbd_url    = "http://tarifbd:9080"

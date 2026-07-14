@@ -216,3 +216,59 @@ fn build_otel_provider(
 
     Ok(provider)
 }
+
+// ── init_tracing_from_env ─────────────────────────────────────────────────────
+
+/// Initialize structured logging from environment variables — the standard
+/// one-liner for **all** mako services.
+///
+/// Replaces the weaker `tracing_subscriber::fmt::init()` call:
+///
+/// ```rust,no_run
+/// // Old (no OTel, ignores LOG_LEVEL env var):
+/// tracing_subscriber::fmt::init();
+///
+/// // New — structured JSON, env-configurable level, optional OTel:
+/// # use mako_service::telemetry::init_tracing_from_env;
+/// let _guard = init_tracing_from_env("my-service");
+/// ```
+///
+/// ## Environment variables
+///
+/// | Variable | Effect |
+/// |---|---|
+/// | `LOG_LEVEL` or `RUST_LOG` | Log level filter (default: `"info"`) |
+/// | `OTEL_EXPORTER_OTLP_ENDPOINT` | Enables OTLP trace export when set |
+/// | `OTEL_SERVICE_NAME` | Overrides `service_name` in trace metadata |
+///
+/// ## Important — keep the guard alive
+///
+/// The returned [`OtelGuard`] **must** be bound to `_guard` (not `_`) so it
+/// lives until the end of `main`:
+///
+/// ```rust,no_run
+/// # use mako_service::telemetry::init_tracing_from_env;
+/// let _guard = init_tracing_from_env("accountingd");
+/// //  ^^^^^^ not `_` — that would drop immediately!
+/// ```
+///
+/// # Panics
+///
+/// Panics if called more than once per process.
+#[must_use]
+pub fn init_tracing_from_env(service_name: &str) -> OtelGuard {
+    let level = std::env::var("LOG_LEVEL")
+        .or_else(|_| std::env::var("RUST_LOG"))
+        .unwrap_or_else(|_| "info".to_owned());
+
+    let otel_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
+    let otel_svc = std::env::var("OTEL_SERVICE_NAME")
+        .ok()
+        .unwrap_or_else(|| service_name.to_owned());
+    let otel = otel_endpoint.map(|ep| OtelConfig {
+        endpoint: ep,
+        service_name: otel_svc,
+    });
+
+    init_tracing(service_name, &level, otel.as_ref())
+}

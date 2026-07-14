@@ -24,8 +24,10 @@ pub struct NetzbilanzConfig {
     pub edmd_url: Option<String>,
     /// `edmd` bearer token.
     pub edmd_api_key: Option<String>,
-    /// MCP server Bearer token. Omit to disable auth (dev only).
-    pub mcp_api_key: Option<String>,
+    /// MCP server authentication. Supports API-key, OIDC, or dev mode.
+    /// See `[mcp]` section in TOML — e.g. `api_key = "env:NETZBILANZD_MCP_API_KEY"`.
+    #[serde(default)]
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
     /// Optional ERP webhook URL — receives CloudEvents
     /// `de.netzbilanz.invoic.drafted` and `de.netzbilanz.invoic.dispatched`.
     pub erp_webhook_url: Option<String>,

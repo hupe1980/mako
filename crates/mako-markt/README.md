@@ -101,7 +101,7 @@ All traits use AFIT and return `Result<_, MdmError>`. Every trait has two implem
 
 | Implementation | Use |
 |---|---|
-| `Pg*Repository` in `services/marktd/src/pg/` | Production — PostgreSQL via sqlx 0.8 |
+| `Pg*Repository` in `services/marktd/src/pg/` | Production — PostgreSQL via sqlx 0.8+ |
 ### `VersorgungsStatusRepository`
 
 Persists the current supply state for each MaLo.  Records are automatically derived
@@ -329,7 +329,7 @@ operator's NB GLN is automatically re-queued for dispatch to the new partner.
 ```
 ┌─────────────────────────────────────────────────┐
 │  services/marktd  (binary)                        │
-│  axum 0.8 · sqlx 0.8 · utoipa 5 · jiff 0.2     │
+│  axum 0.8+ · sqlx 0.8+ · utoipa 5 · jiff 0.2     │
 │  Pg*Repository  ←─── implements traits ─────┐  │
 │  fanout worker  ←─── mpsc events channel    │  │
 │  OIDC/JWT auth  ←─── Cedar not used here    │  │

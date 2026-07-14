@@ -477,7 +477,7 @@ See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachtheme
 |---|---|---|---|
 | `database_url` | yes | — | PostgreSQL connection string |
 | `port` | no | `9180` | HTTP listen port |
-| `tenant` | yes | — | Operator BDEW-Codenummer |
+| `tenant` | yes | — | Tenant identifier — data-isolation key (any stable string; typically the operator’s BDEW- or DVGW-Codenummer) |
 | `erp_webhook_url` | no | — | ERP webhook for CloudEvents |
 | `erp_hmac_secret` | no | — | HMAC-SHA256 signing secret |
 | `edmd_url` | no | — | `edmd` URL for auto-fetching Einspeisemenge |
@@ -505,7 +505,7 @@ One row per Technische Ressource. PK: `(tr_id, tenant)`.
 | Column | Type | Notes |
 |---|---|---|
 | `tr_id` | TEXT | Technische Ressource ID |
-| `tenant` | TEXT | Operator BDEW-Codenummer |
+| `tenant` | TEXT | Data-isolation key (any stable string; typically the operator’s BDEW- or DVGW-Codenummer) |
 | `malo_id` | TEXT | 11-digit MaLo-ID |
 | `eeg_gesetz` | SMALLINT | EEG law year (0, 2000, 2004, 2009, 2012, 2017, 2021, 2023) |
 | `inbetriebnahme` | DATE | Commissioning date |

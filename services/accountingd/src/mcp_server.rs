@@ -9,12 +9,16 @@
 //! | `list_overdue` | All accounts with overdue invoices |
 //! | `suggest_payment_match` | AI payment reconciliation: match CAMT.054 to open Rechnungen |
 
-use std::sync::Arc;
-use axum::{Router, http::StatusCode, middleware::{self, Next}, response::IntoResponse};
-use mako_service::{cedar::CedarEnforcer, oidc::OidcVerifier};
+use axum::{
+    Router,
+    middleware::{self, Next},
+};
 use rmcp::{
     ErrorData as McpError, ServerHandler,
-    handler::server::{router::{prompt::PromptRouter, tool::ToolRouter}, wrapper::Parameters},
+    handler::server::{
+        router::{prompt::PromptRouter, tool::ToolRouter},
+        wrapper::Parameters,
+    },
     model::*,
     prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
     transport::streamable_http_server::{
@@ -24,18 +28,20 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 use sqlx::PgPool;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct AccountingdMcpState {
     pub pool: PgPool,
     pub tenant: String,
-    pub oidc: OidcVerifier,
-    pub cedar: Arc<CedarEnforcer>,
+    pub auth: mako_service::mcp_auth::McpAuth,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct MaloParams { pub malo_id: String }
+pub struct MaloParams {
+    pub malo_id: String,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct LedgerParams {
@@ -44,8 +50,6 @@ pub struct LedgerParams {
     pub limit: Option<i64>,
 }
 
-
-
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct JahresabschlussParams {
     /// 11-digit MaLo-ID for which to run the annual settlement.
@@ -53,16 +57,6 @@ pub struct JahresabschlussParams {
     /// Billing year (YYYY) — defaults to previous calendar year.
     pub year: Option<i32>,
 }
-
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct JahresabschlussParams {
-    /// 11-digit MaLo-ID.
-    pub malo_id: String,
-    /// Calendar year to analyse (defaults to previous year if omitted).
-    pub year: Option<i32>,
-}
-
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AbschlagCycleParams {
@@ -132,19 +126,30 @@ pub struct ManualBuchungParams {
 #[derive(Clone)]
 pub struct AccountingdMcpHandler {
     state: Arc<AccountingdMcpState>,
-    #[allow(dead_code)] tool_router: ToolRouter<AccountingdMcpHandler>,
-    #[allow(dead_code)] prompt_router: PromptRouter<AccountingdMcpHandler>,
+    #[allow(dead_code)]
+    tool_router: ToolRouter<AccountingdMcpHandler>,
+    #[allow(dead_code)]
+    prompt_router: PromptRouter<AccountingdMcpHandler>,
 }
 
 #[tool_router]
 impl AccountingdMcpHandler {
     fn new(state: Arc<AccountingdMcpState>) -> Self {
-        Self { state, tool_router: Self::tool_router(), prompt_router: Self::prompt_router() }
+        Self {
+            state,
+            tool_router: Self::tool_router(),
+            prompt_router: Self::prompt_router(),
+        }
     }
 
-    #[tool(description = "Get the current open-items balance (in 1/100 EUR cents) for a customer MaLo. Negative = credit; positive = amount owed.",
-        annotations(read_only_hint = true, open_world_hint = false))]
-    async fn get_balance(&self, Parameters(p): Parameters<MaloParams>) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "Get the current open-items balance (in 1/100 EUR cents) for a customer MaLo. Negative = credit; positive = amount owed.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_balance(
+        &self,
+        Parameters(p): Parameters<MaloParams>,
+    ) -> Result<CallToolResult, McpError> {
         use crate::pg::fetch_account;
         match fetch_account(&self.state.pool, &p.malo_id, &self.state.tenant).await {
             Ok(Some(a)) => ContentBlock::json(serde_json::json!({
@@ -152,48 +157,84 @@ impl AccountingdMcpHandler {
                 "balance_ct": a.balance_ct,
                 "balance_eur": format!("{:.2}", a.balance_ct as f64 / 100.0),
                 "abschlag_ct": a.abschlag_ct,
-            })).map(|b| CallToolResult::success(vec![b])).map_err(|e| McpError::internal_error(e.message, None)),
-            Ok(None) => Err(McpError::invalid_params(format!("account for {} not found", p.malo_id), None)),
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            Ok(None) => Err(McpError::invalid_params(
+                format!("account for {} not found", p.malo_id),
+                None,
+            )),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
 
-    #[tool(description = "List ledger entries (RECHNUNG, ZAHLUNG, GUTSCHRIFT, ABSCHLAG, etc.) for a MaLo. Returns entries ordered by booking_date descending.",
-        annotations(read_only_hint = true, open_world_hint = false))]
-    async fn list_ledger(&self, Parameters(p): Parameters<LedgerParams>) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "List ledger entries (RECHNUNG, ZAHLUNG, GUTSCHRIFT, ABSCHLAG, etc.) for a MaLo. Returns entries ordered by booking_date descending.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_ledger(
+        &self,
+        Parameters(p): Parameters<LedgerParams>,
+    ) -> Result<CallToolResult, McpError> {
         use crate::pg::{fetch_account, list_ledger};
         let acct = match fetch_account(&self.state.pool, &p.malo_id, &self.state.tenant).await {
             Ok(Some(a)) => a,
-            Ok(None) => return Err(McpError::invalid_params(format!("account for {} not found", p.malo_id), None)),
+            Ok(None) => {
+                return Err(McpError::invalid_params(
+                    format!("account for {} not found", p.malo_id),
+                    None,
+                ));
+            }
             Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
         };
-        match list_ledger(&self.state.pool, acct.account_id, &self.state.tenant, p.limit.unwrap_or(50)).await {
+        match list_ledger(&self.state.pool, acct.account_id, p.limit.unwrap_or(50)).await {
             Ok(entries) => ContentBlock::json(serde_json::to_value(entries).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b])).map_err(|e| McpError::internal_error(e.message, None)),
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
 
-    #[tool(description = "List active dunning cases (Mahnstufe 1-3). Returns cases with amount_due_ct, due_date, and stufe.",
-        annotations(read_only_hint = true, open_world_hint = false))]
-    async fn list_dunning(&self, Parameters(_): Parameters<serde_json::Value>) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "List active dunning cases (Mahnstufe 1-3). Returns cases with amount_due_ct, due_date, and stufe.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_dunning(
+        &self,
+        Parameters(_): Parameters<serde_json::Value>,
+    ) -> Result<CallToolResult, McpError> {
         use crate::pg::list_open_dunning;
         match list_open_dunning(&self.state.pool, &self.state.tenant, 100).await {
             Ok(cases) => ContentBlock::json(serde_json::to_value(cases).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b])).map_err(|e| McpError::internal_error(e.message, None)),
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
 
-    #[tool(description = "List all accounts with overdue invoices. Returns accounts with balance_ct > 0 and the oldest unpaid entry date.",
-        annotations(read_only_hint = true, open_world_hint = false))]
-    async fn list_overdue(&self, Parameters(p): Parameters<OverdueParams>) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "List all accounts with overdue invoices. Returns accounts with balance_ct > 0 and the oldest unpaid entry date.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_overdue(
+        &self,
+        Parameters(p): Parameters<OverdueParams>,
+    ) -> Result<CallToolResult, McpError> {
         use crate::pg::list_overdue_accounts;
-        match list_overdue_accounts(&self.state.pool, &self.state.tenant, p.days_overdue.unwrap_or(1)).await {
+        match list_overdue_accounts(
+            &self.state.pool,
+            &self.state.tenant,
+            1_i64,
+            p.days_overdue.unwrap_or(100),
+        )
+        .await
+        {
             Ok(accounts) => ContentBlock::json(serde_json::json!({
                 "count": accounts.len(),
                 "accounts": accounts,
-            })).map(|b| CallToolResult::success(vec![b])).map_err(|e| McpError::internal_error(e.message, None)),
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
@@ -207,18 +248,33 @@ Also sets the SEPA billing_day (day of month for direct debit).",
         &self,
         Parameters(p): Parameters<UpdateAbschlagParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::upsert_account;
-        match upsert_account(
+        use crate::pg::UpdateAccountRequest;
+        use crate::pg::{fetch_account, update_account};
+        // Fetch to get lf_mp_id (required for update_account's composite key).
+        let acct = match fetch_account(&self.state.pool, &p.malo_id, &self.state.tenant).await {
+            Ok(Some(a)) => a,
+            Ok(None) => {
+                return Err(McpError::invalid_params(
+                    format!("account for {} not found", p.malo_id),
+                    None,
+                ));
+            }
+            Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
+        };
+        match update_account(
             &self.state.pool,
             &p.malo_id,
-            &self.state.tenant,
-            None,
-            Some(p.abschlag_ct),
-            p.billing_day,
+            &acct.lf_mp_id,
+            UpdateAccountRequest {
+                iban: None,
+                mandatsref: None,
+                abschlag_ct: Some(p.abschlag_ct),
+                billing_day: p.billing_day,
+            },
         )
         .await
         {
-            Ok(_) => ContentBlock::json(serde_json::json!({
+            Ok(()) => ContentBlock::json(serde_json::json!({
                 "malo_id": p.malo_id,
                 "abschlag_ct": p.abschlag_ct,
                 "billing_day": p.billing_day,
@@ -250,15 +306,22 @@ Returns count of matched and unmatched entries.",
                 .and_then(|v| v.as_str())
                 .unwrap_or("CAMT.054 import");
             if let (Some(malo), Some(amt)) = (malo_id, amount_ct) {
-                use crate::pg::{fetch_account, post_ledger_entry};
-                if let Ok(Some(acct)) = fetch_account(&self.state.pool, malo, &self.state.tenant).await {
-                    let _ = post_ledger_entry(
+                use crate::pg::{fetch_account, write_entry};
+                if let Ok(Some(acct)) =
+                    fetch_account(&self.state.pool, malo, &self.state.tenant).await
+                {
+                    let today = time::OffsetDateTime::now_utc().date();
+                    let _ = write_entry(
                         &self.state.pool,
                         acct.account_id,
                         &self.state.tenant,
                         "ZAHLUNG",
                         -amt,
                         Some(reference),
+                        Some("de.accounting.payment.imported"),
+                        None,
+                        today,
+                        Some("CAMT.054 Zahlungseingang"),
                     )
                     .await;
                     matched += 1;
@@ -287,7 +350,11 @@ Returns count of matched and unmatched entries.",
         description = "Generate a SEPA pain.008 XML for all active mandates with a positive account balance. \
 Returns the XML as a string ready for submission to the bank / payment service provider. \
 Only generates for MaLo accounts that have an IBAN + signed mandate (sequence_type = FRST or RCUR).",
-        annotations(read_only_hint = false, idempotent_hint = true, open_world_hint = false)
+        annotations(
+            read_only_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn run_sepa_collection(&self) -> Result<CallToolResult, McpError> {
         use crate::pg::list_accounts_with_mandates;
@@ -329,21 +396,27 @@ Regulatory: §40 Abs. 1 EnWG — Abschlag must reflect actual estimated consumpt
         use crate::pg::{fetch_account, list_ledger};
         let acct = match fetch_account(&self.state.pool, &p.malo_id, &self.state.tenant).await {
             Ok(Some(a)) => a,
-            Ok(None) => return Err(McpError::invalid_params(
-                format!("account for {} not found", p.malo_id), None)),
+            Ok(None) => {
+                return Err(McpError::invalid_params(
+                    format!("account for {} not found", p.malo_id),
+                    None,
+                ));
+            }
             Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
         };
-        let entries = match list_ledger(&self.state.pool, acct.account_id, &self.state.tenant, 500).await {
+        let entries = match list_ledger(&self.state.pool, acct.account_id, 500).await {
             Ok(e) => e,
             Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
         };
         // Sum monthly Abschläge (credits, negative) and Rechnungen (debits, positive)
         // LedgerRow: entry_type: String, amount_ct: i64
-        let abschlag_sum: i64 = entries.iter()
+        let abschlag_sum: i64 = entries
+            .iter()
             .filter(|e| e.entry_type == "ABSCHLAG")
             .map(|e| e.amount_ct)
             .sum();
-        let rechnung_sum: i64 = entries.iter()
+        let rechnung_sum: i64 = entries
+            .iter()
             .filter(|e| e.entry_type == "RECHNUNG")
             .map(|e| e.amount_ct)
             .sum();
@@ -376,7 +449,11 @@ affected account and emits de.accounting.payment.due CloudEvent. \
 Without automation, operators must trigger this manually each month — missed runs cause \
 SEPA pre-notification failures. \
 ⚠ dry_run=true returns affected account count without posting entries.",
-        annotations(read_only_hint = false, idempotent_hint = false, open_world_hint = false)
+        annotations(
+            read_only_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn run_abschlag_cycle(
         &self,
@@ -395,13 +472,18 @@ SEPA pre-notification failures. \
         let mut errors: Vec<String> = Vec::new();
         if !dry_run {
             for acct in &accounts {
-                let ref_id = format!("ABSCHLAG-{}-{:04}-{:02}", acct.malo_id, today.year(), today.month() as u8);
+                let ref_id = format!(
+                    "ABSCHLAG-{}-{:04}-{:02}",
+                    acct.malo_id,
+                    today.year(),
+                    today.month() as u8
+                );
                 match write_entry(
                     &self.state.pool,
                     acct.account_id,
                     &self.state.tenant,
                     "ABSCHLAG",
-                    acct.abschlag_ct,   // positive = debit (charge to customer)
+                    acct.abschlag_ct, // positive = debit (charge to customer)
                     Some(&ref_id),
                     Some("de.accounting.abschlag.posted"),
                     None,
@@ -443,10 +525,7 @@ aRAP (unbilled) cannot be computed here — requires GET edmd /api/v1/billing-pe
         Parameters(p): Parameters<AbgrenzungParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::compute_abgrenzung;
-        let cutoff = p.cutoff_date
-            .as_deref()
-            .unwrap_or("today")
-            .to_owned();
+        let cutoff = p.cutoff_date.as_deref().unwrap_or("today").to_owned();
         let today = time::OffsetDateTime::now_utc().date();
         let (prap_ct, abschlag_total_ct, accounts_with_advance) =
             match compute_abgrenzung(&self.state.pool, &self.state.tenant).await {
@@ -508,8 +587,6 @@ Use import_payments to confirm the match.",
         Parameters(p): Parameters<SuggestPaymentMatchParams>,
     ) -> Result<CallToolResult, McpError> {
         use sqlx::Row;
-        use rust_decimal::Decimal;
-        use std::str::FromStr;
 
         let tol_pct = p.tolerance_pct.unwrap_or(2.0);
         let tol_factor = 1.0 + tol_pct / 100.0;
@@ -609,7 +686,11 @@ Use import_payments to confirm the match.",
             b.get("similarity_score")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0)
-                .cmp(&a.get("similarity_score").and_then(|v| v.as_u64()).unwrap_or(0))
+                .cmp(
+                    &a.get("similarity_score")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0),
+                )
         });
 
         ContentBlock::json(serde_json::json!({
@@ -643,9 +724,14 @@ amount_ct: positive = debit (increases balance); negative = credit (reduces bala
         use crate::pg::{upsert_account, write_entry_with_value_date};
         use time::OffsetDateTime;
 
-        let account_id = upsert_account(&self.state.pool, &p.malo_id, &self.state.tenant, &self.state.tenant)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let account_id = upsert_account(
+            &self.state.pool,
+            &p.malo_id,
+            &self.state.tenant,
+            &self.state.tenant,
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let today = OffsetDateTime::now_utc().date();
         let entry_id = write_entry_with_value_date(
@@ -678,23 +764,25 @@ amount_ct: positive = debit (increases balance); negative = credit (reduces bala
     }
 }
 
-
 #[prompt_router]
 impl AccountingdMcpHandler {
     #[prompt(
         name = "check-customer-account",
         description = "Step-by-step: review a customer account and plan collection action"
     )]
-        async fn check_customer_account_prompt(&self) -> Vec<PromptMessage> {
+    async fn check_customer_account_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(Role::User, "Review customer account status and determine collection action."),
-            PromptMessage::new_text(Role::Assistant,
+            PromptMessage::new_text(
+                Role::User,
+                "Review customer account status and determine collection action.",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
                 "1. Use `get_balance` to check current open-items balance.\n                 2. Use `list_ledger` to see recent RECHNUNG/ZAHLUNG/GUTSCHRIFT/ABSCHLAG history.\n                 3. If balance > 0 (overdue): check `list_dunning` for active dunning cases.\n                 4. For missing payments: `import_payments` with CAMT.054 bank entries to match.\n                 5. Monthly Abschlagslauf: `run_abschlag_cycle` posts ABSCHLAG entries (day=billing_day).\n                 6. Monthly SEPA: `run_sepa_collection` → pain.008 XML (send N-5 bank days before due).\n                 7. After Jahresabschluss: `trigger_jahresabschluss` → review → `update_abschlag`.\n                 8. Period-end HGB accruals: `compute_bilanzielle_abgrenzung` → ERP pRAP/aRAP booking.\n                 9. Mahnstufe 3: de.accounting.sperrauftrag → sperrd → IFTSTA 21039 to NB.",
             ),
         ]
     }
 }
-
 
 #[tool_handler]
 #[prompt_handler]
@@ -719,27 +807,24 @@ impl ServerHandler for AccountingdMcpHandler {
                  Use `update_abschlag` after Jahresabschluss to recalibrate monthly advance.",
             )
     }
-
 }
 
 async fn mcp_auth_middleware(
     axum::extract::State(state): axum::extract::State<Arc<AccountingdMcpState>>,
-    request: axum::extract::Request, next: Next,
+    request: axum::extract::Request,
+    next: Next,
 ) -> axum::response::Response {
-    match request.headers().get("Authorization")
-        .and_then(|v| v.to_str().ok()).and_then(|s| s.strip_prefix("Bearer "))
-    {
-        Some(t) if state.oidc.verify(t).is_ok() => next.run(request).await,
-        Some(_) => (StatusCode::UNAUTHORIZED, "invalid token").into_response(),
-        None => (StatusCode::UNAUTHORIZED, "Authorization: Bearer required").into_response(),
-    }
+    state.auth.authenticate(request, next).await
 }
 
 pub fn router(state: Arc<AccountingdMcpState>, _shutdown: CancellationToken) -> Router {
     let handler = AccountingdMcpHandler::new(Arc::clone(&state));
     let service = StreamableHttpService::new(
-        move || Ok(handler.clone()), LocalSessionManager::default().into(), StreamableHttpServerConfig::default(),
+        move || Ok(handler.clone()),
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig::default(),
     );
-    Router::new().route_service("/mcp", service)
+    Router::new()
+        .route_service("/mcp", service)
         .layer(middleware::from_fn_with_state(state, mcp_auth_middleware))
 }

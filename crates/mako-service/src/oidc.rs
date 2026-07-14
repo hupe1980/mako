@@ -167,6 +167,23 @@ impl OidcVerifier {
         self.inner.disabled
     }
 
+    /// Returns `true` if `token` looks like a JWT (three non-empty dot-separated parts).
+    ///
+    /// Used by [`crate::mcp_auth::McpAuth`] to route incoming Bearer tokens without
+    /// attempting to parse opaque API keys as JWTs.  A JWT always has exactly three
+    /// base64url-encoded parts: `header.payload.signature`.  API keys are typically
+    /// random hex or base64 strings without dots.
+    ///
+    /// This is a cheap structural check — it does NOT verify the token.
+    #[must_use]
+    pub fn looks_like_jwt(token: &str) -> bool {
+        let mut parts = token.splitn(4, '.');
+        parts.next().is_some_and(|p| !p.is_empty())
+            && parts.next().is_some_and(|p| !p.is_empty())
+            && parts.next().is_some_and(|p| !p.is_empty())
+            && parts.next().is_none() // exactly 3 parts, not 4
+    }
+
     /// Returns synthetic dev-admin claims for use when auth is disabled.
     #[must_use]
     pub fn disabled_claims(&self) -> JwtClaims {
@@ -434,5 +451,95 @@ where
 
         let claims = verifier.verify(token).map_err(AuthError)?;
         Ok(Claims(claims))
+    }
+}
+
+// ── OidcConfig ────────────────────────────────────────────────────────────────
+
+/// Standard OIDC configuration block, shared across **all** mako services.
+///
+/// Add to your service config struct as an optional field:
+///
+/// ```rust
+/// # use mako_service::oidc::OidcConfig;
+/// #[derive(serde::Deserialize)]
+/// struct MyConfig {
+///     pub tenant: String,
+///     pub oidc: Option<OidcConfig>,
+/// }
+/// ```
+///
+/// The corresponding TOML section is optional — when absent,
+/// [`OidcConfig::build_verifier`] returns a disabled verifier (dev mode):
+///
+/// ```toml
+/// # Production:
+/// [oidc]
+/// issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+/// audience = "api://mako-myservice"
+///
+/// # Dev mode: omit the [oidc] section entirely.
+/// ```
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct OidcConfig {
+    /// OIDC issuer URL (without trailing slash).
+    pub issuer: String,
+    /// JWT `aud` claim expected value.
+    pub audience: String,
+    /// JWKS background refresh interval in seconds.  Default: 300 (5 min).
+    #[serde(default = "OidcConfig::default_jwks_refresh_secs")]
+    pub jwks_refresh_secs: u64,
+}
+
+impl OidcConfig {
+    fn default_jwks_refresh_secs() -> u64 {
+        300
+    }
+
+    /// Build an [`OidcVerifier`] from this config.
+    ///
+    /// - **Present config** → performs OIDC discovery, loads JWKS, spawns a
+    ///   background refresh task that cancels with `shutdown`.
+    /// - **`None` config** → returns [`OidcVerifier::disabled`] scoped to
+    ///   `tenant_id` (dev mode — all requests accepted without a token).
+    ///
+    /// This replaces the identical 8-line boilerplate that every OIDC service
+    /// copied into its startup code:
+    ///
+    /// ```rust,no_run
+    /// # use mako_service::oidc::{OidcConfig, OidcVerifier};
+    /// # use tokio_util::sync::CancellationToken;
+    /// # use reqwest::Client;
+    /// # async fn run(oidc: Option<OidcConfig>, http: Client, ct: CancellationToken) -> anyhow::Result<()> {
+    /// let verifier = OidcConfig::build_verifier(oidc.as_ref(), &http, "my-tenant", ct).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when OIDC discovery fails (network unreachable, TLS error,
+    /// issuer mismatch).
+    pub async fn build_verifier(
+        cfg: Option<&OidcConfig>,
+        http: &Client,
+        tenant_id: &str,
+        shutdown: tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<OidcVerifier> {
+        use anyhow::Context as _;
+        if let Some(c) = cfg {
+            let v = OidcVerifier::new(&c.issuer, &c.audience, http)
+                .await
+                .context("OIDC discovery")?;
+            v.clone()
+                .spawn_refresh_task(http.clone(), c.jwks_refresh_secs, shutdown);
+            Ok(v)
+        } else {
+            tracing::warn!(
+                "OIDC disabled — all requests accepted without authentication. \
+                 Configure [oidc] in production."
+            );
+            Ok(OidcVerifier::disabled(tenant_id))
+        }
     }
 }

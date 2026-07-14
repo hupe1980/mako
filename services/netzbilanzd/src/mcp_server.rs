@@ -23,9 +23,7 @@
 
 use axum::{
     Router,
-    http::StatusCode,
     middleware::{self, Next},
-    response::IntoResponse,
 };
 use rmcp::{
     ErrorData as McpError, ServerHandler,
@@ -50,8 +48,7 @@ use uuid::Uuid;
 pub struct NetzbilanzMcpState {
     pub pool: PgPool,
     pub tenant: String,
-    /// Optional static Bearer token for MCP auth. `None` = dev mode (no auth).
-    pub mcp_api_key: Option<String>,
+    pub auth: mako_service::mcp_auth::McpAuth,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -949,23 +946,7 @@ async fn mcp_auth_middleware(
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
-    // When no mcp_api_key is configured, allow all (dev mode).
-    if let Some(key) = &state.mcp_api_key {
-        let token = request
-            .headers()
-            .get("Authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.strip_prefix("Bearer "))
-            .map(str::to_owned);
-        match token {
-            Some(t) if t == *key => {}
-            _ => {
-                return (StatusCode::UNAUTHORIZED, "invalid or missing Bearer token")
-                    .into_response();
-            }
-        }
-    }
-    next.run(request).await
+    state.auth.authenticate(request, next).await
 }
 
 pub fn router(state: Arc<NetzbilanzMcpState>, _shutdown: CancellationToken) -> Router {

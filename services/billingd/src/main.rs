@@ -54,7 +54,7 @@ use axum::{
     Extension, Router,
     routing::{get, post},
 };
-use billingd::{clients, config, handlers};
+use billingd::{clients, config, handlers, mcp_server};
 use mako_markt::marktd_client::MarktdClient;
 use mako_service::{health::health_routes, load_config};
 use secrecy::SecretString;
@@ -64,7 +64,7 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    let _guard = mako_service::init_tracing_from_env("billingd");
 
     let cfg: config::BillingdConfig = load_config("billingd").context("load config")?;
     let cfg = Arc::new(cfg);
@@ -81,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
     let marktd = Arc::new(MarktdClient::new(
         &cfg.marktd_url,
         SecretString::from(cfg.marktd_api_key.clone().unwrap_or_default()),
-        reqwest::Client::new(),
+        mako_service::http::default_client(),
     ));
     let vertragd = Arc::new(clients::VertragdClient::new(
         cfg.vertragd_url
@@ -140,14 +140,29 @@ async fn main() -> anyhow::Result<()> {
         .layer(Extension(edmd))
         .layer(Extension(marktd))
         .layer(Extension(vertragd))
-        .layer(Extension(pool));
+        .layer(Extension(pool.clone()));
 
     let port = cfg.port.unwrap_or(9280);
     let addr = format!("0.0.0.0:{port}");
     info!(%addr, "billingd starting");
 
+    // ── MCP server ────────────────────────────────────────────────────────────
+    let mcp_state = std::sync::Arc::new(mcp_server::BillingdMcpState {
+        pool: pool.clone(),
+        tenant: cfg.tenant.clone(),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
+        self_url: format!("http://localhost:{port}"),
+        seller_name: cfg
+            .seller_name
+            .clone()
+            .unwrap_or_else(|| cfg.tenant.clone()),
+        seller_vat_id: cfg.seller_vat_id.clone(),
+    });
+    let ct = mako_service::shutdown::token();
+    let app = app.merge(mcp_server::router(mcp_state, ct.clone()));
+
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .context("bind TCP")?;
-    axum::serve(listener, app).await.context("serve")
+    mako_service::shutdown::serve(listener, app, ct).await
 }

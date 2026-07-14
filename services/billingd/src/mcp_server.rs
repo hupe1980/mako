@@ -28,11 +28,16 @@
 
 use std::sync::Arc;
 
-use axum::{Router, http::StatusCode, middleware::{self, Next}, response::IntoResponse};
-use mako_service::{cedar::CedarEnforcer, oidc::OidcVerifier};
+use axum::{
+    Router,
+    middleware::{self, Next},
+};
 use rmcp::{
     ErrorData as McpError, ServerHandler,
-    handler::server::{router::{prompt::PromptRouter, tool::ToolRouter}, wrapper::Parameters},
+    handler::server::{
+        router::{prompt::PromptRouter, tool::ToolRouter},
+        wrapper::Parameters,
+    },
     model::*,
     prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
     transport::streamable_http_server::{
@@ -49,10 +54,13 @@ use uuid::Uuid;
 pub struct BillingdMcpState {
     pub pool: PgPool,
     pub tenant: String,
-    pub oidc: OidcVerifier,
-    pub cedar: Arc<CedarEnforcer>,
+    pub auth: mako_service::mcp_auth::McpAuth,
     /// Self base URL (e.g. `"http://localhost:9280"`) — used by MCP tools to call the HTTP API.
     pub self_url: String,
+    /// Seller name for XRechnung generation (BG-4).
+    pub seller_name: String,
+    /// Seller VAT-ID for XRechnung (BT-31, e.g. `DE123456789`).
+    pub seller_vat_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -109,11 +117,17 @@ pub struct BillingdMcpHandler {
 #[tool_router]
 impl BillingdMcpHandler {
     fn new(state: Arc<BillingdMcpState>) -> Self {
-        Self { state, tool_router: Self::tool_router(), prompt_router: Self::prompt_router() }
+        Self {
+            state,
+            tool_router: Self::tool_router(),
+            prompt_router: Self::prompt_router(),
+        }
     }
 
-    #[tool(description = "List billing records. Filter by malo_id, lf_mp_id, or outcome (generated/dispatched/paid/disputed). Returns summary without full Rechnung BO4E.",
-        annotations(read_only_hint = true, open_world_hint = false))]
+    #[tool(
+        description = "List billing records. Filter by malo_id, lf_mp_id, or outcome (generated/dispatched/paid/disputed). Returns summary without full Rechnung BO4E.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn list_billing_records(
         &self,
         Parameters(params): Parameters<ListRecordsParams>,
@@ -135,8 +149,10 @@ impl BillingdMcpHandler {
         }
     }
 
-    #[tool(description = "Get a single billing record by UUID, including the full BO4E Rechnung JSON payload. Use this to inspect line items, totals, and invoice status.",
-        annotations(read_only_hint = true, open_world_hint = false))]
+    #[tool(
+        description = "Get a single billing record by UUID, including the full BO4E Rechnung JSON payload. Use this to inspect line items, totals, and invoice status.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn get_billing_record(
         &self,
         Parameters(params): Parameters<GetRecordParams>,
@@ -149,7 +165,10 @@ impl BillingdMcpHandler {
             Ok(Some(row)) => ContentBlock::json(serde_json::to_value(row).unwrap_or_default())
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None)),
-            Ok(None) => Err(McpError::invalid_params(format!("record {id} not found"), None)),
+            Ok(None) => Err(McpError::invalid_params(
+                format!("record {id} not found"),
+                None,
+            )),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
@@ -163,21 +182,21 @@ impl BillingdMcpHandler {
         Parameters(params): Parameters<PreviewParams>,
     ) -> Result<CallToolResult, McpError> {
         // Call the billingd preview endpoint via HTTP (carries tarifbd/edmd/marktd context)
-        let url = format!("{}/api/v1/billing/{}/preview", self.state.self_url, params.malo_id);
+        let url = format!(
+            "{}/api/v1/billing/{}/preview",
+            self.state.self_url, params.malo_id
+        );
         let body = serde_json::json!({
             "lf_mp_id": params.lf_mp_id,
             "nb_mp_id": params.nb_mp_id,
             "period_from": params.period_from,
             "period_to": params.period_to,
         });
-        match reqwest::Client::new()
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-        {
+        match reqwest::Client::new().post(&url).json(&body).send().await {
             Ok(resp) if resp.status().is_success() => {
-                let json: serde_json::Value = resp.json().await
+                let json: serde_json::Value = resp
+                    .json()
+                    .await
                     .map_err(|e| McpError::internal_error(e.to_string(), None))?;
                 ContentBlock::json(json)
                     .map(|b| CallToolResult::success(vec![b]))
@@ -187,7 +206,8 @@ impl BillingdMcpHandler {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
                 Err(McpError::internal_error(
-                    format!("Preview failed ({status}): {text}"), None
+                    format!("Preview failed ({status}): {text}"),
+                    None,
                 ))
             }
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
@@ -209,28 +229,49 @@ The XML is BASE64-free — returns the raw XML string.",
         use crate::pg::fetch_billing_record;
         match fetch_billing_record(&self.state.pool, id).await {
             Ok(Some(row)) => {
-                use crate::xrechnung::{build_zugferd_cii_xml, info_from_rechnung_json};
-                let rechnung_json = row.get("invoic_json")
-                    .cloned()
-                    .unwrap_or_default();
-                if let Some(info) = info_from_rechnung_json(&rechnung_json) {
-                    let xml = build_zugferd_cii_xml(&info);
-                    ContentBlock::json(serde_json::json!({
-                        "billing_record_id": id,
-                        "xrechnung_xml": xml,
-                        "standard": "ZUGFeRD 2.3 / XRechnung 3.0 (EN 16931)",
-                        "note": "Submit to ZRE (Zentraler Rechnungseingang) for B2G invoices."
-                    }))
-                    .map(|b| CallToolResult::success(vec![b]))
-                    .map_err(|e| McpError::internal_error(e.message, None))
-                } else {
-                    Err(McpError::invalid_params(
-                        "billing record has no valid Rechnung JSON for XRechnung export",
-                        None,
-                    ))
-                }
+                use crate::xrechnung::{XRechnungInfo, build_zugferd_cii_xml};
+                use rust_decimal_macros::dec;
+                let info = XRechnungInfo {
+                    invoice_number: row
+                        .rechnung_json
+                        .get("rechnungsnummer")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("UNKNOWN")
+                        .to_owned(),
+                    issue_date: row.period_to,
+                    due_date: None,
+                    period_from: row.period_from,
+                    period_to: row.period_to,
+                    seller_mp_id: self.state.tenant.clone(),
+                    seller_name: self.state.seller_name.clone(),
+                    seller_vat_id: self.state.seller_vat_id.clone(),
+                    seller_address: None,
+                    buyer_id: row.malo_id.clone(),
+                    buyer_name: row.malo_id.clone(),
+                    malo_id: row.malo_id.clone(),
+                    positions: Vec::new(),
+                    netto_eur: row.total_netto_eur.unwrap_or(dec!(0)),
+                    mwst_eur: row
+                        .total_brutto_eur
+                        .and_then(|b| row.total_netto_eur.map(|n| b - n))
+                        .unwrap_or(dec!(0)),
+                    brutto_eur: row.total_brutto_eur.unwrap_or(dec!(0)),
+                    vat_rate_pct: dec!(19),
+                };
+                let xml = build_zugferd_cii_xml(&info);
+                ContentBlock::json(serde_json::json!({
+                    "billing_record_id": id,
+                    "xrechnung_xml": xml,
+                    "standard": "ZUGFeRD 2.3 / XRechnung 3.0 (EN 16931)",
+                    "note": "Submit to ZRE (Zentraler Rechnungseingang) for B2G invoices."
+                }))
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None))
             }
-            Ok(None) => Err(McpError::invalid_params(format!("record {id} not found"), None)),
+            Ok(None) => Err(McpError::invalid_params(
+                format!("record {id} not found"),
+                None,
+            )),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
@@ -287,31 +328,30 @@ agentd billing-anomaly-agent calls this on every de.billing.rechnung.erstellt ev
 
     // ── VPP Aggregation Settlement (B12 — RED III Article 17) ────────────────
 
-    #[tool(description = "List VPP (Virtual Power Plant) aggregation settlement records for a VPP portfolio. \
+    #[tool(
+        description = "List VPP (Virtual Power Plant) aggregation settlement records for a VPP portfolio. \
 Returns billing records with category=VPP showing dispatch events, total flexibility kWh, and Einsatzkosten. \
 CloudEvent de.vpp.settlement.berechnet is emitted per settlement. RED III Article 17 / §41b EnWG (expected 2026).",
-        annotations(read_only_hint = true, open_world_hint = false))]
-    async fn list_vpp_settlements(&self, Parameters(p): Parameters<serde_json::Value>) -> Result<CallToolResult, McpError> {
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_vpp_settlements(
+        &self,
+        Parameters(p): Parameters<serde_json::Value>,
+    ) -> Result<CallToolResult, McpError> {
         use crate::pg::list_billing_records;
         let lf_mp_id = p.get("lf_mp_id").and_then(|v| v.as_str());
-        let limit = p.get("limit").and_then(|v| v.as_i64()).unwrap_or(20).min(100);
+        let limit = p
+            .get("limit")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(20)
+            .min(100);
         // VPP records use category=VPP stored under the vpp_id as malo_id.
         let vpp_malo = p.get("vpp_id").and_then(|v| v.as_str());
-        match list_billing_records(
-            &self.state.pool,
-            vpp_malo,
-            lf_mp_id,
-            None,
-            limit,
-        ).await {
+        match list_billing_records(&self.state.pool, vpp_malo, lf_mp_id, None, limit).await {
             Ok(rows) => {
-                let vpp_rows: Vec<_> = rows.iter()
-                    .filter(|r| {
-                        r.get("category")
-                            .and_then(|v| v.as_str())
-                            .map(|c| c.starts_with("VPP"))
-                            .unwrap_or(false)
-                    })
+                let vpp_rows: Vec<_> = rows
+                    .iter()
+                    .filter(|r| r.category.starts_with("VPP"))
                     .collect();
                 ContentBlock::json(serde_json::json!({
                     "count": vpp_rows.len(),
@@ -348,9 +388,7 @@ Each record includes original_record_id, correction_reason, and whether it negat
         .await
         {
             Ok(rows) => {
-                let corrections: Vec<_> = rows.iter()
-                    .filter(|r| r.get("is_correction").and_then(|v| v.as_bool()).unwrap_or(false))
-                    .collect();
+                let corrections: Vec<_> = rows.iter().filter(|r| r.is_correction).collect();
                 ContentBlock::json(serde_json::json!({
                     "count": corrections.len(),
                     "records": corrections,
@@ -367,13 +405,21 @@ Each record includes original_record_id, correction_reason, and whether it negat
         description = "Trigger a billing calculation run for a MaLo. \
 Calls POST /api/v1/billing/{malo_id}/calculate, persists the Rechnung, and emits de.billing.rechnung.erstellt. \
 Use preview_billing first to verify the result without side effects.",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn calculate_billing(
         &self,
         Parameters(params): Parameters<PreviewParams>,
     ) -> Result<CallToolResult, McpError> {
-        let url = format!("{}/api/v1/billing/{}/calculate", self.state.self_url, params.malo_id);
+        let url = format!(
+            "{}/api/v1/billing/{}/calculate",
+            self.state.self_url, params.malo_id
+        );
         let body = serde_json::json!({
             "lf_mp_id": params.lf_mp_id,
             "nb_mp_id": params.nb_mp_id,
@@ -382,7 +428,9 @@ Use preview_billing first to verify the result without side effects.",
         });
         match reqwest::Client::new().post(&url).json(&body).send().await {
             Ok(resp) if resp.status().is_success() => {
-                let json: serde_json::Value = resp.json().await
+                let json: serde_json::Value = resp
+                    .json()
+                    .await
                     .map_err(|e| McpError::internal_error(e.to_string(), None))?;
                 ContentBlock::json(json)
                     .map(|b| CallToolResult::success(vec![b]))
@@ -391,7 +439,10 @@ Use preview_billing first to verify the result without side effects.",
             Ok(resp) => {
                 let st = resp.status();
                 let txt = resp.text().await.unwrap_or_default();
-                Err(McpError::internal_error(format!("Billing run failed ({st}): {txt}"), None))
+                Err(McpError::internal_error(
+                    format!("Billing run failed ({st}): {txt}"),
+                    None,
+                ))
             }
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
@@ -445,22 +496,23 @@ Use to spot billing trends, detect anomalies, and verify consistent tariff appli
             Ok(rows) => {
                 let mut total_brutto = Decimal::ZERO;
                 let mut count = 0usize;
-                let mut by_category: std::collections::HashMap<String, (usize, Decimal)> = std::collections::HashMap::new();
+                let mut by_category: std::collections::HashMap<String, (usize, Decimal)> =
+                    std::collections::HashMap::new();
                 for row in &rows {
-                    if let Some(brutto) = row.get("total_brutto_eur").and_then(|v| {
-                        v.as_str().and_then(|s| s.parse::<Decimal>().ok())
-                            .or_else(|| v.as_f64().and_then(|f| Decimal::try_from(f).ok()))
-                    }) {
+                    if let Some(brutto) = row.total_brutto_eur {
                         total_brutto += brutto;
                         count += 1;
-                        if let Some(cat) = row.get("category").and_then(|v| v.as_str()) {
-                            let e = by_category.entry(cat.to_owned()).or_insert((0, Decimal::ZERO));
-                            e.0 += 1;
-                            e.1 += brutto;
-                        }
+                        let cat = row.category.clone();
+                        let e = by_category.entry(cat).or_insert((0, Decimal::ZERO));
+                        e.0 += 1;
+                        e.1 += brutto;
                     }
                 }
-                let avg_monthly = if count > 0 { total_brutto / Decimal::from(count) } else { Decimal::ZERO };
+                let avg_monthly = if count > 0 {
+                    total_brutto / Decimal::from(count)
+                } else {
+                    Decimal::ZERO
+                };
                 let category_summary: Vec<_> = by_category.iter()
                     .map(|(cat, (cnt, total))| serde_json::json!({ "category": cat, "count": cnt, "total_brutto_eur": total.to_string() }))
                     .collect();
@@ -480,10 +532,8 @@ Use to spot billing trends, detect anomalies, and verify consistent tariff appli
     }
 }
 
-
 #[prompt_router]
 impl BillingdMcpHandler {
-
     #[prompt(
         name = "order-to-cash",
         description = "Full Order-to-Cash workflow: from GPKE Lieferbeginn to annual Jahresabschluss"
@@ -503,15 +553,18 @@ impl BillingdMcpHandler {
         ]
     }
 
-
     #[prompt(
         name = "preview-invoice",
         description = "Step-by-step: preview a customer invoice before billing run"
     )]
     async fn preview_invoice_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(Role::User, "Preview the next billing invoice for a customer."),
-            PromptMessage::new_text(Role::Assistant, 
+            PromptMessage::new_text(
+                Role::User,
+                "Preview the next billing invoice for a customer.",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
                 "To preview a billing invoice, use POST /api/v1/billing/{malo_id}/preview.\n                 Required: lf_mp_id, nb_mp_id, period_from, period_to.\n                 Optional: tariff (override from tarifbd), meter (override from edmd), grid (override from marktd).\n\n                 The preview is a full dry-run — same calculation as /calculate but nothing is stored.\n                 The response includes all Rechnungspositionen and netto/brutto totals.",
             ),
         ]
@@ -523,8 +576,12 @@ impl BillingdMcpHandler {
     )]
     async fn check_dynamic_tariff_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(Role::User, "Verify the §41a dynamic EPEX tariff is correctly configured."),
-            PromptMessage::new_text(Role::Assistant, 
+            PromptMessage::new_text(
+                Role::User,
+                "Verify the §41a dynamic EPEX tariff is correctly configured.",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
                 "For §41a dynamic tariff (mandatory for iMSys customers since Jan 2025):\n                 1. Verify the product in tarifbd has dynamic_epex: true\n                 2. Verify EPEX day-ahead prices are imported for the billing period:\n                    PUT /api/v1/epex-prices/{date} in tarifbd\n                 3. Verify the customer has 15-min Lastgang data in edmd:\n                    GET /api/v1/lastgang/{malo_id}?from=...&to=...\n                 4. Run a preview: POST /api/v1/billing/{malo_id}/preview with dynamic product\n\n                 If Lastgang is unavailable, billingd falls back to static arbeitsmenge_kwh billing.",
             ),
         ]
@@ -536,8 +593,12 @@ impl BillingdMcpHandler {
     )]
     async fn steuerungsrabatt_14a_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(Role::User, "How do I set up §14a billing for a heat pump customer?"),
-            PromptMessage::new_text(Role::Assistant,
+            PromptMessage::new_text(
+                Role::User,
+                "How do I set up §14a billing for a heat pump customer?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
                 "§14a EnWG (Steuerbarkeitsrabatt) has 3 implementation models:\n\n\
                 **Modul 1 — Capacity-based NNE reduction (kW/year)**\n\
                 In tarifbd: set `steuerungsrabatt_modul1_eur_per_kw_year` in the WAERMEPUMPE/WALLBOX product.\n\
@@ -569,8 +630,12 @@ impl BillingdMcpHandler {
     )]
     async fn eeg_billing_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(Role::User, "How do I set up billing for a solar feed-in customer?"),
-            PromptMessage::new_text(Role::Assistant,
+            PromptMessage::new_text(
+                Role::User,
+                "How do I set up billing for a solar feed-in customer?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
                 "EEG billing in billingd covers two categories:\n\n\
                 **Category `EEG` — Vergütung (statutory feed-in tariff, §21 EEG)**\n\
                 Used when the plant receives a fixed kWh rate for 20 years.\n\
@@ -607,8 +672,12 @@ impl BillingdMcpHandler {
     )]
     async fn gas_billing_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(Role::User, "How do I set up Gas billing with BEHG and Brennwertkorrektur?"),
-            PromptMessage::new_text(Role::Assistant,
+            PromptMessage::new_text(
+                Role::User,
+                "How do I set up Gas billing with BEHG and Brennwertkorrektur?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
                 "Gas billing in billingd has three input paths:\n\n\
                 **Path 1 — Direct kWh_Hs (preferred for iMSys / MSCONS data)**\n\
                 Supply `kwh_hs` directly in `gas_meter`. The Brennwertkorrektur position\n\
@@ -644,7 +713,6 @@ impl BillingdMcpHandler {
     }
 }
 
-
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for BillingdMcpHandler {
@@ -662,7 +730,6 @@ impl ServerHandler for BillingdMcpHandler {
              Use `preview_billing` hint to understand the dry-run endpoint.",
         )
     }
-
 }
 
 async fn mcp_auth_middleware(
@@ -670,17 +737,7 @@ async fn mcp_auth_middleware(
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
-    let token = match request.headers().get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-    {
-        Some(t) => t.to_owned(),
-        None => return (StatusCode::UNAUTHORIZED, "Authorization: Bearer required").into_response(),
-    };
-    if state.oidc.verify(&token).is_err() {
-        return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
-    }
-    next.run(request).await
+    state.auth.authenticate(request, next).await
 }
 
 pub fn router(state: Arc<BillingdMcpState>, _shutdown: CancellationToken) -> Router {

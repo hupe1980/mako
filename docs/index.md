@@ -28,7 +28,7 @@ permalink: /
     </a>
     <img src="https://img.shields.io/badge/BDEW-FV2026--10--01-green" alt="BDEW format version FV2026-10-01">
     <img src="https://img.shields.io/badge/unsafe-0_blocks-red?logo=rust" alt="Zero unsafe blocks">
-    <img src="https://img.shields.io/badge/mako--service-shared_infra-f59e0b?logo=rust" alt="mako-service shared service infrastructure">
+    <img src="https://img.shields.io/badge/mako--service-service_sdk-f59e0b?logo=rust" alt="mako-service shared SDK for all 16 daemons">
   </div>
 
   <h1 class="mako-hero__title">mako ⚡</h1>
@@ -83,6 +83,10 @@ permalink: /
   <div class="mako-kpi">
     <span class="mako-kpi__value">0</span>
     <span class="mako-kpi__label">unsafe blocks</span>
+  </div>
+  <div class="mako-kpi">
+    <span class="mako-kpi__value">124</span>
+    <span class="mako-kpi__label">MCP tools (AI-ready)</span>
   </div>
   <div class="mako-kpi">
     <span class="mako-kpi__value">1.94</span>
@@ -207,7 +211,21 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
   </div>
 
   <div class="mako-feature">
-    <div class="mako-feature__icon">🤖</div>
+    <div class="mako-feature__icon">�</div>
+    <h3>Service SDK</h3>
+    <p>
+      <code>mako-service</code> is the shared SDK that all 16 daemons build on. It eliminates
+      boilerplate: <code>shutdown::token()</code> wires SIGINT + SIGTERM in one call;
+      <code>OidcConfig::build_verifier()</code> replaces 8-line copy-paste OIDC startup code;
+      <code>McpAuth</code> + <code>McpAuthConfig</code> unify MCP authentication across all services;
+      <code>init_tracing_from_env</code> sets up structured JSON logging with optional OTel.
+      Services focus on domain logic, not infrastructure.
+    </p>
+    <a href="https://github.com/hupe1980/mako/tree/main/crates/mako-service">mako-service SDK →</a>
+  </div>
+
+  <div class="mako-feature">
+    <div class="mako-feature__icon">�🤖</div>
     <h3>AI / LLM Integration</h3>
     <p>
       Every service ships an MCP server at <code>/mcp</code>.
@@ -293,9 +311,9 @@ Install the EDIFACT parsing and process engine libraries:
 
 ```toml
 [dependencies]
-edi-energy  = { version = "0.8", features = ["utilmd", "mscons", "aperak"] }
-mako-engine = { version = "0.8", features = ["testing"] }
-mako-gpke   = "0.8"
+edi-energy  = { version = "0.9", features = ["utilmd", "mscons", "aperak"] }
+mako-engine = { version = "0.9", features = ["testing"] }
+mako-gpke   = "0.9"
 ```
 
 **Parse and validate a UTILMD Lieferbeginn:**

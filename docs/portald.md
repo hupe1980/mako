@@ -139,7 +139,7 @@ This enables real-time portal updates without polling.
 ```toml
 # portald.toml
 port   = 9480
-tenant = "9910000000002"   # operator LF BDEW-Codenummer
+tenant = "9910000000002"   # data-isolation key (operator tenant; value = BDEW-Codenummer in this example)
 
 # Upstream service URLs
 edmd_url        = "http://edmd:8380"

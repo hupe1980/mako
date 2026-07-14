@@ -505,6 +505,18 @@ fn parse_date_opt(s: &Option<String>) -> anyhow::Result<Option<Date>> {
     }
 }
 
+/// Returns the most recent date for which EPEX Day-Ahead prices have been imported.
+///
+/// `None` = no prices at all in the database.  Used by `check_41a_epex_status` MCP
+/// tool to alert operators when tomorrow's D-1 prices are missing after 13:00 CET.
+pub async fn fetch_epex_latest_date(pool: &PgPool) -> anyhow::Result<Option<Date>> {
+    let row: Option<(time::Date,)> = sqlx::query_as("SELECT MAX(price_date) FROM epex_prices")
+        .fetch_optional(pool)
+        .await
+        .context("fetch_epex_latest_date")?;
+    Ok(row.map(|(d,)| d))
+}
+
 /// Returns customer product assignments (Lieferverträge) ending within `days_ahead` days.
 /// Used by `list_expiring_contracts` MCP tool for churn prevention / renewal campaigns.
 #[allow(dead_code)]

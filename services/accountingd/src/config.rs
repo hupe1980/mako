@@ -38,4 +38,9 @@ pub struct AccountingdConfig {
     /// Required for pain.008 generation; the N-5 scheduler logs a warning
     /// and uses a placeholder when not set.
     pub creditor_iban: Option<String>,
+
+    /// MCP server authentication. Supports API-key, OIDC, or dev mode.
+    /// See `[mcp]` section in TOML — e.g. `api_key = "env:ACCOUNTINGD_MCP_API_KEY"`.
+    #[serde(default)]
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
 }

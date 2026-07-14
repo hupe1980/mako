@@ -28,15 +28,15 @@ async fn main() -> anyhow::Result<()> {
     let cfg: Config = config::load_from_file(&cli.config)
         .with_context(|| format!("loading config from {}", cli.config.display()))?;
 
-    let otel_cfg = cfg
-        .otel
-        .endpoint
-        .as_deref()
-        .map(|ep| mako_service::OtelConfig {
-            endpoint: ep.to_owned(),
-            service_name: "obsd".to_owned(),
-        });
-    let _otel_guard = mako_service::init_tracing("obsd", &cli.log_level, otel_cfg.as_ref());
+    let _otel_guard = mako_service::init_tracing(
+        "obsd",
+        &cli.log_level,
+        if cfg.otel.is_enabled() {
+            Some(&cfg.otel)
+        } else {
+            None
+        },
+    );
 
     let shutdown = CancellationToken::new();
     {
@@ -49,21 +49,13 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let http = mako_service::http::default_client();
-    let oidc = if let Some(ref oidc_cfg) = cfg.oidc {
-        let verifier =
-            mako_service::oidc::OidcVerifier::new(&oidc_cfg.issuer, &oidc_cfg.audience, &http)
-                .await
-                .context("OIDC discovery")?;
-        verifier.clone().spawn_refresh_task(
-            http.clone(),
-            oidc_cfg.jwks_refresh_secs,
-            shutdown.clone(),
-        );
-        verifier
-    } else {
-        tracing::warn!("obsd: OIDC disabled — all requests accepted without authentication");
-        mako_service::oidc::OidcVerifier::disabled(&cfg.identity.tenant)
-    };
+    let oidc = mako_service::oidc::OidcConfig::build_verifier(
+        cfg.oidc.as_ref(),
+        &http,
+        &cfg.identity.tenant,
+        shutdown.clone(),
+    )
+    .await?;
 
     let cedar = Arc::new(
         mako_service::cedar::CedarEnforcer::from_policy_str(include_str!("../policies/obsd.cedar"))
@@ -116,6 +108,7 @@ async fn main() -> anyhow::Result<()> {
         own_mp_ids: cfg.identity.own_mp_ids,
         oidc,
         cedar,
+        mcp: cfg.mcp,
         shutdown,
     })
     .await

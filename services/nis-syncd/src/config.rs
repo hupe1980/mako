@@ -11,6 +11,12 @@ pub struct NisSyncdConfig {
     pub marktd_url: String,
     /// `marktd` API key (secret — use `env:VAR_NAME` syntax in config file).
     pub marktd_api_key: String,
+
+    /// MCP server authentication. Supports API-key or dev mode.
+    /// See `[mcp]` in TOML — e.g. `api_key = "env:NIS_SYNCD_MCP_API_KEY"`.
+    /// Separate from `marktd_api_key` (outgoing calls to marktd).
+    #[serde(default)]
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
     /// Netzbetreiber MP-ID that owns the imported MaLo grid records.
     /// All synced records will be associated with this NB.
     pub nb_mp_id: String,

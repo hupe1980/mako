@@ -21,6 +21,7 @@ dependencies = [
  "sqlx",
  "time",
  "tokio",
+ "tokio-util",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -1168,6 +1169,7 @@ dependencies = [
  "sqlx",
  "time",
  "tokio",
+ "tokio-util",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -7631,6 +7633,7 @@ dependencies = [
 name = "mako-service"
 version = "0.9.0"
 dependencies = [
+ "anyhow",
  "axum",
  "cedar-policy",
  "figment",
@@ -11445,6 +11448,7 @@ dependencies = [
  "sqlx",
  "time",
  "tokio",
+ "tokio-util",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -12072,6 +12076,7 @@ dependencies = [
  "sqlx",
  "time",
  "tokio",
+ "tokio-util",
  "tower-http",
  "tracing",
  "tracing-subscriber",

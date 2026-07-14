@@ -77,6 +77,10 @@ pub struct Config {
     pub oidc: Option<OidcConfig>,
     #[serde(default)]
     pub otel: OtelConfig,
+    /// MCP server authentication. Supports OIDC + API-key fallback, or dev mode.
+    /// See `[mcp]` in TOML — e.g. `api_key = "env:PROCESSD_MCP_API_KEY"`.
+    #[serde(default)]
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
 }
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────
@@ -102,18 +106,8 @@ impl Default for HttpConfig {
 
 // ── Database ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DatabaseConfig {
-    /// PostgreSQL URL.  Use `"env:DATABASE_URL"` to defer to the environment.
-    pub url: String,
-    #[serde(default = "default_pool_size")]
-    pub pool_size: u32,
-}
-
-fn default_pool_size() -> u32 {
-    10
-}
+/// PostgreSQL config — shared struct from `mako-service`.
+pub use mako_service::config::DatabaseConfig;
 
 // ── Identity ──────────────────────────────────────────────────────────────────
 
@@ -283,33 +277,13 @@ impl Default for MsbConfig {
 
 // ── OIDC ──────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OidcConfig {
-    /// OIDC issuer URL (without trailing slash).
-    /// Example: `https://login.microsoftonline.com/{tenant-id}/v2.0`
-    pub issuer: String,
-    /// JWT `aud` claim expected value.
-    /// Example: `api://mako-processd`
-    pub audience: String,
-    /// JWKS background refresh interval in seconds.
-    #[serde(default = "default_jwks_refresh_secs")]
-    pub jwks_refresh_secs: u64,
-}
-
-fn default_jwks_refresh_secs() -> u64 {
-    300
-}
+/// OIDC configuration — re-exported from `mako-service` (shared across all daemons).
+pub use mako_service::oidc::OidcConfig;
 
 // ── OpenTelemetry ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct OtelConfig {
-    /// OTLP gRPC endpoint.  Example: `http://otel-collector:4317`.
-    /// Omit to disable distributed tracing.
-    pub endpoint: Option<String>,
-}
+/// OpenTelemetry config — shared struct from `mako-service`.
+pub use mako_service::telemetry::OtelConfig;
 
 // ── Loader + env resolution ───────────────────────────────────────────────────
 

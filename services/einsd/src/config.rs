@@ -11,7 +11,8 @@ pub struct EinsdConfig {
     /// HTTP port.  Defaults to `9180` (billing extension range).
     pub port: Option<u16>,
 
-    /// Tenant identifier (the operator's primary MP-ID).
+    /// Tenant identifier — data-isolation key written to every database row.
+    /// Typically the operator’s BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     pub tenant: String,
 
     /// ERP webhook URL.  When set, `de.eeg.*` CloudEvents are POSTed here.
@@ -41,7 +42,8 @@ pub struct EinsdConfig {
     /// How often (in seconds) the background alert worker checks for plants
     /// whose `foerderendedatum` is within 180 days.  Defaults to 21600 (6 h).
     pub alert_interval_secs: Option<u64>,
-    /// Bearer token required on `Authorization: Bearer <key>` for `/mcp` requests.
-    /// When absent, the MCP endpoint is unauthenticated (development only).
-    pub mcp_api_key: Option<String>,
+    /// MCP server authentication. Supports API-key, OIDC, or dev mode.
+    /// See `[mcp]` section in TOML — e.g. `api_key = "env:EINSD_MCP_API_KEY"`.
+    #[serde(default)]
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
 }

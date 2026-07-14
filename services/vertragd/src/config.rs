@@ -7,7 +7,8 @@ use serde::Deserialize;
 pub struct VertragdConfig {
     pub database_url: String,
     pub port: Option<u16>,
-    /// Operator BDEW-Codenummer (LF/Lieferant).
+    /// Tenant identifier — data-isolation key written to every database row.
+    /// Typically the operator’s BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     pub tenant: String,
     pub lf_mp_id: String,
     /// `processd` — triggers Lieferbeginn/Lieferende per Vertragskomponente.
@@ -25,6 +26,10 @@ pub struct VertragdConfig {
     /// ERP webhook — receives `de.vertrag.*` CloudEvents.
     pub erp_webhook_url: Option<String>,
     pub erp_hmac_secret: Option<String>,
+    /// MCP server authentication. Supports API-key, OIDC, or dev mode.
+    /// See `[mcp]` section in TOML — e.g. `api_key = "env:VERTRAGD_MCP_API_KEY"`.
+    #[serde(default)]
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
     /// Operator escalation after N Werktage without MaKo response.
     pub mako_timeout_werktage: Option<u32>,
 }

@@ -45,21 +45,22 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    let _guard = mako_service::init_tracing_from_env("nis-syncd");
 
     let cfg: config::NisSyncdConfig = load_config("nis-syncd").context("load config")?;
 
     let marktd = std::sync::Arc::new(mako_markt::marktd_client::MarktdClient::new(
         &cfg.marktd_url,
         secrecy::SecretString::from(cfg.marktd_api_key.clone()),
-        reqwest::Client::new(),
+        mako_service::http::default_client(),
     ));
 
-    let shutdown = tokio_util::sync::CancellationToken::new();
+    let shutdown = mako_service::shutdown::token();
     let mcp_state = std::sync::Arc::new(mcp_server::NisSyncdMcpState {
-        marktd_api_key: cfg.marktd_api_key.clone(),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.nb_mp_id),
         nb_mp_id: cfg.nb_mp_id.clone(),
         service_base_url: format!("http://0.0.0.0:{}", cfg.port.unwrap_or(9680)),
+        marktd_api_key: cfg.marktd_api_key.clone(),
     });
 
     let app = Router::new()
@@ -82,5 +83,5 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .context("bind TCP")?;
-    axum::serve(listener, app).await.context("serve")
+    mako_service::shutdown::serve(listener, app, shutdown).await
 }

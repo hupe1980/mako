@@ -311,3 +311,4 @@ docker compose down -v   # destroy all volumes (full reset)
 | Process observability, §20 parity | [obsd guide](./obsd.md) |
 | Full system architecture | [Architecture](./architecture.md) |
 | Process catalogue (GPKE, WiM, …) | [Processes](./processes.md) |
+| mako-service SDK | [mako-service README](https://github.com/hupe1980/mako/tree/main/crates/mako-service) |

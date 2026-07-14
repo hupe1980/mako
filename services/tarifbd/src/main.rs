@@ -49,12 +49,12 @@ use axum::{
 use mako_service::{health::health_routes, load_config};
 use sqlx::PgPool;
 use std::sync::Arc;
-use tarifbd::{config, handlers};
+use tarifbd::{config, handlers, mcp_server};
 use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    let _guard = mako_service::init_tracing_from_env("tarifbd");
 
     let cfg: config::TarifbdConfig = load_config("tarifbd").context("load config")?;
     let cfg = Arc::new(cfg);
@@ -63,8 +63,22 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connect PostgreSQL")?;
 
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .context("run migrations")?;
+
+    // ── MCP server state ──────────────────────────────────────────────────────
+    let mcp_state = Arc::new(mcp_server::TarifbdMcpState {
+        pool: pool.clone(),
+        tenant: cfg.tenant.clone(),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
+    });
+    let ct = mako_service::shutdown::token();
+
     let app = Router::new()
         .merge(health_routes(|| async { true }))
+        .merge(mcp_server::router(mcp_state, ct.clone()))
         // ── Product CRUD ──────────────────────────────────────────────────────
         .route(
             "/api/v1/products/:lf_mp_id/:product_code",
@@ -158,5 +172,5 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .context("bind TCP")?;
-    axum::serve(listener, app).await.context("serve")
+    mako_service::shutdown::serve(listener, app, ct).await
 }

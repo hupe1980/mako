@@ -14,3 +14,6 @@ makod_api_key = ""
 # [oidc]  — omit to disable auth (dev mode only)
 # [otel]
 # endpoint = "http://otel-collector:4317"
+
+# MCP server Bearer token — set a strong secret in production.
+# mcp_api_key = ""  # set via SPERRD_MCP_API_KEY env var

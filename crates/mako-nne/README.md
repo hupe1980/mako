@@ -50,7 +50,7 @@ the LF runs the identical formula independently. The calculation is symmetric.
 
 ```toml
 [dependencies]
-mako-nne     = { version = "0.8" }
+mako-nne     = { version = "0.9" }
 rust_decimal = "1"
 time         = "0.3"
 ```

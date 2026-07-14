@@ -13,6 +13,8 @@ tenant       = "9910000000002"   # operator LF BDEW-Codenummer
 # erp_webhook_url = "http://erp:8000/webhooks/tarifbd"
 # erp_hmac_secret = ""  # set via TARIFBD_ERP_HMAC_SECRET env var
 
-# [oidc]  — omit to disable auth (dev mode only)
+# MCP server Bearer token — set a strong secret in production.
+# mcp_api_key = ""  # set via TARIFBD_MCP_API_KEY env var
+
 # [otel]
 # endpoint = "http://otel-collector:4317"

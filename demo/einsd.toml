@@ -7,7 +7,7 @@
 # database_url is injected via EINSD_DATABASE_URL env var
 database_url = "postgres://demo:demo-secret@postgres/einsd"
 port         = 9180
-tenant       = "9910000000002"   # operator BDEW-Codenummer
+tenant       = "9910000000002"   # data-isolation key (any stable string; typically the operator’s BDEW- or DVGW-Codenummer)
 
 # Optional: ERP webhook for CloudEvent delivery
 # erp_webhook_url = "http://erp:8000/webhooks/eeg"
@@ -22,3 +22,6 @@ alert_interval_secs = 21600
 # [oidc]  — omit to disable auth (dev mode only)
 # [otel]
 # endpoint = "http://otel-collector:4317"
+
+# MCP server Bearer token — set a strong secret in production.
+# mcp_api_key = ""  # set via EINSD_MCP_API_KEY env var

@@ -72,6 +72,10 @@ pub struct Config {
     pub oidc: Option<OidcConfig>,
     #[serde(default)]
     pub otel: OtelConfig,
+    /// MCP server authentication. Supports OIDC + API-key fallback, or dev mode.
+    /// See `[mcp]` in TOML — e.g. `api_key = "env:INVOICD_MCP_API_KEY"`.
+    #[serde(default)]
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
 }
 
 impl Config {
@@ -113,18 +117,8 @@ impl Default for HttpConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DatabaseConfig {
-    /// PostgreSQL URL.  Use `"env:DATABASE_URL"` to defer to the environment.
-    pub url: String,
-    #[serde(default = "default_max_connections")]
-    pub max_connections: u32,
-}
-
-fn default_max_connections() -> u32 {
-    5
-}
+/// PostgreSQL config — shared struct from `mako-service`.
+pub use mako_service::config::DatabaseConfig;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -258,24 +252,11 @@ impl Default for CheckSectionConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OidcConfig {
-    pub issuer: String,
-    pub audience: String,
-    #[serde(default = "default_jwks_refresh_secs")]
-    pub jwks_refresh_secs: u64,
-}
+/// OIDC configuration — re-exported from `mako-service` (shared across all daemons).
+pub use mako_service::oidc::OidcConfig;
 
-fn default_jwks_refresh_secs() -> u64 {
-    300
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct OtelConfig {
-    pub endpoint: Option<String>,
-}
+/// OpenTelemetry config — shared struct from `mako-service`.
+pub use mako_service::telemetry::OtelConfig;
 
 /// ERP integration config — outbound payment CloudEvents.
 ///

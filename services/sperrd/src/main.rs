@@ -26,14 +26,14 @@ use axum::{Extension, Router, routing::get};
 use mako_markt::makod_client::MakodClient;
 use mako_service::{health::health_routes, load_config};
 use secrecy::SecretString;
-use sperrd::{config, handlers};
+use sperrd::{config, handlers, mcp_server};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    let _guard = mako_service::init_tracing_from_env("sperrd");
 
     let cfg: config::SperrdConfig = load_config("sperrd").context("load config")?;
 
@@ -64,7 +64,16 @@ async fn main() -> anyhow::Result<()> {
             axum::routing::put(handlers::fail_order),
         )
         .layer(Extension(makod))
-        .layer(Extension(pool));
+        .layer(Extension(pool.clone()));
+
+    // ── MCP server ────────────────────────────────────────────────────────────
+    let mcp_state = std::sync::Arc::new(mcp_server::SperrdMcpState {
+        pool: pool.clone(),
+        tenant: cfg.tenant.clone(),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
+    });
+    let ct = mako_service::shutdown::token();
+    let app = app.merge(mcp_server::router(mcp_state, ct.clone()));
 
     let addr = format!("0.0.0.0:{}", cfg.port.unwrap_or(8780));
     info!(%addr, "sperrd starting");
@@ -72,5 +81,5 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .context("bind TCP")?;
-    axum::serve(listener, app).await.context("serve")
+    mako_service::shutdown::serve(listener, app, ct).await
 }

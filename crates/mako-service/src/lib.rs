@@ -18,8 +18,14 @@ pub mod config;
 pub mod event_bus;
 pub mod health;
 pub mod http;
+pub mod shutdown;
 pub mod telemetry;
 pub mod webhook;
+
+/// Unified MCP server authentication (OIDC+Cedar, API-key, dev mode).
+/// Feature-gated: requires both `cedar` and `oidc` features.
+#[cfg(all(feature = "cedar", feature = "oidc"))]
+pub mod mcp_auth;
 
 #[cfg(feature = "cedar")]
 pub mod cedar;
@@ -36,8 +42,8 @@ pub mod rate_limit;
 pub use mako_plugin::{PluginContext, PluginError, PluginManifest, PluginRegistry};
 
 pub use builder::ServiceBuilder;
-pub use config::{ConfigError, load_config};
-pub use telemetry::{OtelConfig, OtelGuard, init_tracing};
+pub use config::{ConfigError, DatabaseConfig, HttpConfig, load_config};
+pub use telemetry::{OtelConfig, OtelGuard, init_tracing, init_tracing_from_env};
 
 #[cfg(feature = "metrics")]
 pub use metrics::init_metrics;

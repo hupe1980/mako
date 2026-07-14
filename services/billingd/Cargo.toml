@@ -40,6 +40,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower-http   = { version = "0.6" }
 anyhow       = "1"
 secrecy      = { version = "0.10" }
+tokio-util   = { workspace = true }
 
 [dev-dependencies]
 rust_decimal_macros = "1"

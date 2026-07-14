@@ -90,6 +90,8 @@ pub struct RunConfig {
     pub subscriber_event_types: String,
     pub oidc: OidcVerifier,
     pub cedar: Arc<CedarEnforcer>,
+    /// MCP server auth config (API-key fallback + optional per-named-key identity).
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
     pub shutdown: CancellationToken,
 }
 
@@ -319,8 +321,12 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     let mcp_state = Arc::new(ProcessdMcpState {
         pool: pool.clone(),
         tenant: cfg.tenant.clone(),
-        oidc: cfg.oidc.clone(),
-        cedar: cfg.cedar.clone(),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+            &cfg.mcp,
+            cfg.oidc.clone(),
+            Some(cfg.cedar.clone()),
+            &cfg.tenant,
+        ),
         makod_url: cfg.makod_url.clone(),
         makod_api_key: cfg.makod_api_key.clone(),
     });

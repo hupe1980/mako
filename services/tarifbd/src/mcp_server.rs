@@ -12,6 +12,8 @@
 //! | `list_angebote` | List B2B quotations (Angebote) — filter by status |
 //! | `get_angebot` | Fetch a single Angebot with enriched positions and variants |
 //! | `get_angebot_summary` | Summarise an Angebot in plain text for sales staff |
+//! | `check_41a_epex_status` | Check if EPEX D-1 prices are current (§41a compliance) |
+//! | `get_product_energiemix` | Get §42 EnWG Energiemix disclosure for a product |
 //!
 //! ## Prompts
 //!
@@ -21,12 +23,16 @@
 //! | `assign-product` | Step-by-step: assign a tariff product to a MaLo |
 //! | `create-b2b-quotation` | Step-by-step: create a formal B2B Angebot for a C&I customer |
 
-use std::sync::Arc;
-use axum::{Router, http::StatusCode, middleware::{self, Next}, response::IntoResponse};
-use mako_service::{cedar::CedarEnforcer, oidc::OidcVerifier};
+use axum::{
+    Router,
+    middleware::{self, Next},
+};
 use rmcp::{
     ErrorData as McpError, ServerHandler,
-    handler::server::{router::{prompt::PromptRouter, tool::ToolRouter}, wrapper::Parameters},
+    handler::server::{
+        router::{prompt::PromptRouter, tool::ToolRouter},
+        wrapper::Parameters,
+    },
     model::*,
     prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
     transport::streamable_http_server::{
@@ -36,14 +42,15 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 use sqlx::PgPool;
+use std::sync::Arc;
+use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct TarifbdMcpState {
     pub pool: PgPool,
     pub tenant: String,
-    pub oidc: OidcVerifier,
-    pub cedar: Arc<CedarEnforcer>,
+    pub auth: mako_service::mcp_auth::McpAuth,
 }
 
 // ── Parameter types ───────────────────────────────────────────────────────────
@@ -102,20 +109,28 @@ pub struct GetAngebotParams {
 #[derive(Clone)]
 pub struct TarifbdMcpHandler {
     state: Arc<TarifbdMcpState>,
-    #[allow(dead_code)] tool_router: ToolRouter<TarifbdMcpHandler>,
-    #[allow(dead_code)] prompt_router: PromptRouter<TarifbdMcpHandler>,
+    #[allow(dead_code)]
+    tool_router: ToolRouter<TarifbdMcpHandler>,
+    #[allow(dead_code)]
+    prompt_router: PromptRouter<TarifbdMcpHandler>,
 }
 
 #[tool_router]
 impl TarifbdMcpHandler {
     fn new(state: Arc<TarifbdMcpState>) -> Self {
-        Self { state, tool_router: Self::tool_router(), prompt_router: Self::prompt_router() }
+        Self {
+            state,
+            tool_router: Self::tool_router(),
+            prompt_router: Self::prompt_router(),
+        }
     }
 
     // ── Product catalog ───────────────────────────────────────────────────────
 
-    #[tool(description = "List products for an LF MP-ID. Filter by category (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE). Returns product summaries including name, category, and validity.",
-        annotations(read_only_hint = true, open_world_hint = false))]
+    #[tool(
+        description = "List products for an LF MP-ID. Filter by category (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE). Returns product summaries including name, category, and validity.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn list_products(
         &self,
         Parameters(p): Parameters<ListProductsParams>,
@@ -139,26 +154,33 @@ impl TarifbdMcpHandler {
         }
     }
 
-    #[tool(description = "Get a single product by LF MP-ID and product code. Returns the full Tarifpreisblatt or Preisblatt JSONB including all Preisstaffeln, ZusatzAttribute, and Energiemix if set.",
-        annotations(read_only_hint = true, open_world_hint = false))]
+    #[tool(
+        description = "Get a single product by LF MP-ID and product code. Returns the full Tarifpreisblatt or Preisblatt JSONB including all Preisstaffeln, ZusatzAttribute, and Energiemix if set.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn get_product(
         &self,
         Parameters(p): Parameters<GetProductParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::fetch_product;
         match fetch_product(&self.state.pool, &p.lf_mp_id, &p.product_code).await {
-            Ok(Some(product)) => ContentBlock::json(serde_json::to_value(product).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None)),
+            Ok(Some(product)) => {
+                ContentBlock::json(serde_json::to_value(product).unwrap_or_default())
+                    .map(|b| CallToolResult::success(vec![b]))
+                    .map_err(|e| McpError::internal_error(e.message, None))
+            }
             Ok(None) => Err(McpError::invalid_params(
-                format!("product {}/{} not found", p.lf_mp_id, p.product_code), None,
+                format!("product {}/{} not found", p.lf_mp_id, p.product_code),
+                None,
             )),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
 
-    #[tool(description = "Look up the currently active product assignment for a MaLo (delivery point). Returns product code, category, and supply period. Use this to verify a MaLo is billed under the correct tariff.",
-        annotations(read_only_hint = true, open_world_hint = false))]
+    #[tool(
+        description = "Look up the currently active product assignment for a MaLo (delivery point). Returns product code, category, and supply period. Use this to verify a MaLo is billed under the correct tariff.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn get_customer_product(
         &self,
         Parameters(p): Parameters<CustomerProductParams>,
@@ -180,14 +202,19 @@ impl TarifbdMcpHandler {
         }
     }
 
-    #[tool(description = "Get EPEX Spot day-ahead hourly prices for a specific date. Returns up to 24 hourly entries in ct/kWh. Used for §41a dynamic tariff billing verification.",
-        annotations(read_only_hint = true, open_world_hint = false))]
+    #[tool(
+        description = "Get EPEX Spot day-ahead hourly prices for a specific date. Returns up to 24 hourly entries in ct/kWh. Used for §41a dynamic tariff billing verification.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn get_epex_price(
         &self,
         Parameters(p): Parameters<EpexPriceParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::fetch_epex_day;
-        let Ok(date) = time::Date::parse(&p.date, &time::format_description::well_known::Iso8601::DEFAULT) else {
+        let Ok(date) = time::Date::parse(
+            &p.date,
+            &time::format_description::well_known::Iso8601::DEFAULT,
+        ) else {
             return Err(McpError::invalid_params("date must be YYYY-MM-DD", None));
         };
         match fetch_epex_day(&self.state.pool, date).await {
@@ -277,12 +304,17 @@ Essential for reviewing a quotation before sending to a C&I customer.",
         Parameters(p): Parameters<GetAngebotParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::fetch_angebot;
-        let id: uuid::Uuid = p.id.parse().map_err(|_| McpError::invalid_params("id must be a valid UUID", None))?;
+        let id: uuid::Uuid =
+            p.id.parse()
+                .map_err(|_| McpError::invalid_params("id must be a valid UUID", None))?;
         match fetch_angebot(&self.state.pool, id, &self.state.tenant).await {
             Ok(Some(a)) => ContentBlock::json(serde_json::to_value(a).unwrap_or_default())
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None)),
-            Ok(None) => Err(McpError::invalid_params(format!("Angebot {id} not found"), None)),
+            Ok(None) => Err(McpError::invalid_params(
+                format!("Angebot {id} not found"),
+                None,
+            )),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
@@ -299,16 +331,25 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
         Parameters(p): Parameters<GetAngebotParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::fetch_angebot;
-        let id: uuid::Uuid = p.id.parse().map_err(|_| McpError::invalid_params("id must be a valid UUID", None))?;
+        let id: uuid::Uuid =
+            p.id.parse()
+                .map_err(|_| McpError::invalid_params("id must be a valid UUID", None))?;
         let a = match fetch_angebot(&self.state.pool, id, &self.state.tenant).await {
             Ok(Some(a)) => a,
-            Ok(None) => return Err(McpError::invalid_params(format!("Angebot {id} not found"), None)),
+            Ok(None) => {
+                return Err(McpError::invalid_params(
+                    format!("Angebot {id} not found"),
+                    None,
+                ));
+            }
             Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
         };
 
-        let customer = a.interessent_name
-            .as_deref()
-            .unwrap_or_else(|| a.kunden_id.map(|_| "existing customer").unwrap_or("unknown"));
+        let customer = a.interessent_name.as_deref().unwrap_or_else(|| {
+            a.kunden_id
+                .map(|_| "existing customer")
+                .unwrap_or("unknown")
+        });
 
         let pos_count = a.positionen.as_array().map(|v| v.len()).unwrap_or(0);
         let var_count = a.varianten.as_array().map(|v| v.len()).unwrap_or(0);
@@ -331,17 +372,107 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
              - Decline: POST /api/v1/angebote/{id}/ablehnen",
             nr = a.angebotsnummer,
             status = a.status,
-            netto = a.jahreskosten_netto_eur.map(|d| d.to_string()).unwrap_or_else(|| "—".to_owned()),
-            brutto = a.jahreskosten_brutto_eur.map(|d| d.to_string()).unwrap_or_else(|| "—".to_owned()),
+            netto = a
+                .jahreskosten_netto_eur
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| "—".to_owned()),
+            brutto = a
+                .jahreskosten_brutto_eur
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| "—".to_owned()),
             gueltig = a.gueltig_bis,
-            lb = a.lieferbeginn.map(|d| d.to_string()).unwrap_or_else(|| "TBD".to_owned()),
+            lb = a
+                .lieferbeginn
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| "TBD".to_owned()),
             laufzeit = a.laufzeit_monate,
             id = a.id,
         );
 
-        ContentBlock::text(summary)
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None))
+        Ok(CallToolResult::success(vec![ContentBlock::text(summary)]))
+    }
+
+    #[tool(
+        description = "Check §41a EnWG EPEX Day-Ahead import status. Returns the latest date for \
+                       which EPEX prices are imported and whether tomorrow's prices are already \
+                       available. Critical for §41a compliance: D-1 prices must be imported before \
+                       billing can proceed for dynamic tariff customers."
+    )]
+    async fn check_41a_epex_status(
+        &self,
+        Parameters(_): Parameters<serde_json::Value>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::fetch_epex_latest_date;
+        use time::UtcOffset;
+
+        let latest = fetch_epex_latest_date(&self.state.pool)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        // Today in German local time (CET/CEST) — approximated via UTC+1 for CET.
+        // In production, proper timezone handling is done in billingd.
+        let now_utc = OffsetDateTime::now_utc();
+        let cet = UtcOffset::from_hms(1, 0, 0).unwrap();
+        let today_de = now_utc.to_offset(cet).date();
+        let tomorrow_de = today_de.next_day().unwrap_or(today_de);
+
+        let status = match latest {
+            None => "CRITICAL: No EPEX prices in database. §41a dynamic tariff billing is \
+                 impossible. Import prices via PUT /api/v1/epex-prices/{date}."
+                .to_owned(),
+            Some(d) if d >= tomorrow_de => {
+                format!(
+                    "OK: EPEX prices are current. Latest date: {d}. \
+                     Tomorrow ({tomorrow_de}) is covered. §41a billing can proceed.",
+                )
+            }
+            Some(d) if d == today_de => {
+                format!(
+                    "WARNING: EPEX prices available through today ({d}) but tomorrow \
+                     ({tomorrow_de}) is missing. Day-Ahead prices for tomorrow are \
+                     typically published by EPEX SPOT at ~13:00 CET. If it is after \
+                     14:00 CET, trigger import immediately.",
+                )
+            }
+            Some(d) => {
+                let gap = (today_de - d).whole_days();
+                format!(
+                    "CRITICAL: EPEX prices are {gap} day(s) stale! Latest: {d}, \
+                     today: {today_de}. §41a dynamic tariff customers cannot be \
+                     billed. Immediate action required.",
+                )
+            }
+        };
+
+        Ok(CallToolResult::success(vec![ContentBlock::text(status)]))
+    }
+
+    #[tool(
+        description = "Get the §42 EnWG Energiemix disclosure data for a product. Returns the \
+                       BO4E Energiemix COM including fuel mix percentages, CO2 emissions (g/kWh), \
+                       radioactive waste (mg/kWh), and Oekolabel certification. Mandatory on \
+                       annual invoices for electricity products."
+    )]
+    async fn get_product_energiemix(
+        &self,
+        Parameters(p): Parameters<GetProductParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::fetch_energiemix;
+        match fetch_energiemix(&self.state.pool, &p.lf_mp_id, &p.product_code).await {
+            Ok(Some(mix)) => {
+                let val = serde_json::to_value(mix).unwrap_or_default();
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    val.to_string(),
+                )]))
+            }
+            Ok(None) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "No Energiemix set for product {}/{}. \
+                 §42 EnWG requires Energiemix disclosure on annual electricity bills. \
+                 Set via PUT /api/v1/products/{}/{}/energiemix",
+                p.lf_mp_id, p.product_code, p.lf_mp_id, p.product_code,
+            ))])),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
     }
 }
 
@@ -355,8 +486,12 @@ impl TarifbdMcpHandler {
     )]
     async fn configure_41a_tariff_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(Role::User, "How do I configure a §41a EPEX dynamic tariff for iMSys customers?"),
-            PromptMessage::new_text(Role::Assistant,
+            PromptMessage::new_text(
+                Role::User,
+                "How do I configure a §41a EPEX dynamic tariff for iMSys customers?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
                 "§41a EnWG requires all LFs to offer dynamic tariffs to iMSys customers (mandatory since Jan 2025).\n\n\
                  Steps:\n\n\
                  1. Create the product in tarifbd:\n\
@@ -392,7 +527,8 @@ impl TarifbdMcpHandler {
     async fn assign_product_prompt(&self) -> Vec<PromptMessage> {
         vec![
             PromptMessage::new_text(Role::User, "How do I assign a tariff product to a MaLo?"),
-            PromptMessage::new_text(Role::Assistant,
+            PromptMessage::new_text(
+                Role::Assistant,
                 "To assign or change the tariff product for a delivery point:\n\n\
                  PUT /api/v1/customer/{malo_id}/product\n\
                  {\n\
@@ -413,8 +549,12 @@ impl TarifbdMcpHandler {
     )]
     async fn create_b2b_quotation_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(Role::User, "How do I create a formal B2B price quotation for a C&I customer?"),
-            PromptMessage::new_text(Role::Assistant,
+            PromptMessage::new_text(
+                Role::User,
+                "How do I create a formal B2B price quotation for a C&I customer?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
                 "The B2B Angebot workflow (B4) — step by step:\n\n\
                  ## 1. Create the Angebot (draft)\n\
                  POST /api/v1/angebote\n\
@@ -498,16 +638,7 @@ async fn mcp_auth_middleware(
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
-    match request
-        .headers()
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-    {
-        Some(t) if state.oidc.verify(t).is_ok() => next.run(request).await,
-        Some(_) => (StatusCode::UNAUTHORIZED, "invalid token").into_response(),
-        None => (StatusCode::UNAUTHORIZED, "Authorization: Bearer required").into_response(),
-    }
+    state.auth.authenticate(request, next).await
 }
 
 pub fn router(state: Arc<TarifbdMcpState>, _shutdown: CancellationToken) -> Router {
@@ -521,4 +652,3 @@ pub fn router(state: Arc<TarifbdMcpState>, _shutdown: CancellationToken) -> Rout
         .route_service("/mcp", service)
         .layer(middleware::from_fn_with_state(state, mcp_auth_middleware))
 }
-

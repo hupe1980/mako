@@ -49,7 +49,7 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    let _guard = mako_service::init_tracing_from_env("einsd");
 
     let cfg: config::EinsdConfig = load_config("einsd").context("load config")?;
     let cfg = Arc::new(cfg);
@@ -58,10 +58,11 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connect PostgreSQL")?;
 
+    let ct = mako_service::shutdown::token();
     let mcp_state = std::sync::Arc::new(mcp_server::EinsdMcpState {
         pool: pool.clone(),
         tenant: cfg.tenant.clone(),
-        mcp_api_key: cfg.mcp_api_key.clone(),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
     });
 
     // Schema must be applied manually — see migrations/0001_initial.sql for DDL.
@@ -234,7 +235,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let app = Router::new()
-        .merge(mcp_server::router(mcp_state, CancellationToken::new()))
+        .merge(mcp_server::router(mcp_state, ct.clone()))
         .merge(health_routes(|| async { true }))
         // ── Anlage CRUD ────────────────────────────────────────────────────────
         .route(
@@ -300,5 +301,5 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .context("bind TCP")?;
-    axum::serve(listener, app).await.context("serve")
+    mako_service::shutdown::serve(listener, app, ct).await
 }

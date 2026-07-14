@@ -28,9 +28,7 @@ Five distinct layers live here:
   `GET /api/v1/archive/olap/{malo_id}` for ≥10× faster MMM aggregation.
 - **`obsd`** — Business-process observability daemon: `ProcessProjection`, BNetzA KPI
   reports, overdue-process detection, §20 EnWG parity (`initiator_is_affiliate`).
-- **`mako-service`** — Shared service infrastructure library: `ServiceBuilder`
-  (composable Axum router), `load_config` (typed TOML + env-var interpolation),
-  health routes, and HMAC-SHA256 webhook verification. All mako daemons build on this.
+- **`mako-service`** — **Service SDK** shared by all 16 daemons: `load_config` (typed TOML + env-var + `_FILE` secrets), `shutdown::token/serve` (SIGINT + SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth` + `McpAuthConfig` (unified MCP auth across all services), `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, `EventBus`, `ServiceBuilder`, health routes, `default_client`, HMAC-SHA256 webhook verification.
 
 [![CI](https://github.com/hupe1980/mako/actions/workflows/ci.yml/badge.svg)](https://github.com/hupe1980/mako/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](./LICENSE-MIT)
@@ -66,7 +64,7 @@ Five distinct layers live here:
 | `netz-checker` | Pure NB Anmeldung validation library — 6 checks, ERC A02/A05/A06/A97/A99, used by `processd` NB module for Anmeldung STP \u226595% |
 | `invoic-checker` | INVOIC plausibility library \u2014 period validity, position arithmetic, document total, tariff match, tariff found |
 | `mako-obs` | Observability library — `ProcessProjection`, `KpiReport`, `DeadlineRisk`, `ProcessProjectionRepository` |
-| `mako-service` | Shared service infrastructure — `ServiceBuilder`, `load_config`, health routes, HMAC-SHA256 webhook verification |
+| `mako-service` | **Service SDK** — cross-cutting infrastructure for all 16 daemons: `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `EventBus`, `ServiceBuilder`, `default_client`, HMAC-SHA256 webhook |
 | `mako-plugin` | WASM plugin extension system — `CloudEventPlugin`, `McpToolPlugin`, `BillingPlugin`, `ValidatorPlugin`, `WebhookPlugin`; Tier 1 native Rust + Tier 2 WASM via Extism (Wasmtime sandbox); loaded at runtime from `[[plugin]]` TOML manifests |
 | **`makod`** | Protocol daemon — all 45+ workflows, AS4 (`:4080`), REST (`:8080`), iMS (`:8090`), SlateDB, MCP server, OTLP, Cedar ABAC |
 | **`marktd`** | Market Data Hub — MaLo/MeLo/NeLo/TR/SR with **typed `rubo4e::current` API responses** (Marktlokation, Messlokation, Zaehler, Geraet), `fallgruppe`, `standorteigenschaften JSONB`, `konfigurationsprodukte`, `Vec<Zaehlwerk>` register access, Lokationszuordnung graph, preisblaetter, VersorgungsStatus, `event_log` replay; EventBus fan-out; PostgreSQL, OIDC/JWT; `:8180` |
@@ -172,7 +170,7 @@ Five distinct layers live here:
 
 ```toml
 [dependencies]
-edi-energy = "0.8"
+edi-energy = "0.9"
 ```
 
 ```rust
@@ -190,8 +188,8 @@ println!("Valid: {}", report.is_valid());
 
 ```toml
 [dependencies]
-mako-engine = { version = "0.8", features = ["testing"] }
-mako-gpke   = "0.8"
+mako-engine = { version = "0.9", features = ["testing"] }
+mako-gpke   = "0.9"
 ```
 
 ```rust
@@ -221,7 +219,7 @@ let state = process.state().await?;
 
 ```toml
 [dependencies]
-dvgw-edi = "0.8"
+dvgw-edi = "0.9"
 ```
 
 ```rust
@@ -248,7 +246,7 @@ let pid = msg.detect_pid(Some("Z01"));
 
 ```toml
 [dependencies]
-redispatch-xml = "0.8"
+redispatch-xml = "0.9"
 ```
 
 ```rust
@@ -275,7 +273,7 @@ let out = serialize(&doc)?;
 
 ```toml
 [dependencies]
-mako-markt = { version = "0.8", features = ["testing"] }
+mako-markt = { version = "0.9", features = ["testing"] }
 ```
 
 ```rust
@@ -499,7 +497,7 @@ mako/
 │   ├── energy-api/          # BDEW REST/WebSocket API client + Axum server (iMS)
 │   ├── mako-redispatch/     # Redispatch 2.0 process engine — 8 XML-document-driven workflows
 │   ├── redispatch-xml/      # Redispatch 2.0 XML/XSD parsing — all 9 document types
-│   └── mako-service/        # Shared service infrastructure — ServiceBuilder · load_config · health_routes · verify_hmac
+│   └── mako-service/        # Service SDK — load_config · DatabaseConfig · shutdown · OidcConfig · McpAuth · init_tracing_from_env · ServiceBuilder · CedarEnforcer · EventBus
 │
 ├── services/
 │   ├── makod/               # Protocol daemon
@@ -578,7 +576,7 @@ By default UTILMD, MSCONS, APERAK, and CONTRL are compiled in:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.8", features = ["invoic", "remadv", "orders"] }
+edi-energy = { version = "0.9", features = ["invoic", "remadv", "orders"] }
 ```
 
 | Flag | Default | Enables |
@@ -610,7 +608,7 @@ edi-energy = { version = "0.8", features = ["invoic", "remadv", "orders"] }
 All 8 format parsers are compiled in by default. Disable unused formats to reduce binary size:
 
 ```toml
-dvgw-edi = { version = "0.8", default-features = false, features = ["nomint", "nomres"] }
+dvgw-edi = { version = "0.9", default-features = false, features = ["nomint", "nomres"] }
 ```
 
 | Flag | Default | Enables |

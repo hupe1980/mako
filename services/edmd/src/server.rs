@@ -722,6 +722,8 @@ pub struct RunConfig {
     pub oidc: OidcVerifier,
     /// Cedar ABAC enforcer.
     pub cedar: Arc<CedarEnforcer>,
+    /// MCP server auth config (API-key fallback + optional per-named-key identity).
+    pub mcp: mako_service::mcp_auth::McpAuthConfig,
     /// Graceful-shutdown token.
     pub shutdown: CancellationToken,
     /// Resolved archive config (env vars already substituted, disabled when absent).
@@ -800,8 +802,12 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     let mcp_state = Arc::new(crate::mcp_server::EdmdMcpState {
         pool: pool.clone(),
         tenant: cfg.tenant.clone(),
-        oidc: cfg.oidc.clone(),
-        cedar: cfg.cedar.clone(),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+            &cfg.mcp,
+            cfg.oidc.clone(),
+            Some(cfg.cedar.clone()),
+            &cfg.tenant,
+        ),
     });
 
     let repo = PgTimeSeriesRepository::new(pool.clone());
@@ -1374,7 +1380,7 @@ async fn jahresablesung_campaign(
     let max_malos = req.max_malos.unwrap_or(5_000).min(50_000);
     let marktd_base = state.marktd_url.trim_end_matches('/').to_owned();
     let api_key = state.marktd_api_key.expose_secret().to_owned();
-    let client = reqwest::Client::new();
+    let client = mako_service::http::default_client();
 
     // Enumerate SLP MaLos from marktd (paginated, max 500 per page).
     let mut malos: Vec<String> = Vec::new();
@@ -2078,7 +2084,7 @@ async fn post_direct_reads_inner(
 
     // \u2500\u2500 CloudEvent notifications \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     if let Some(ref webhook_url) = state.erp_webhook_url {
-        let client = reqwest::Client::new();
+        let client = mako_service::http::default_client();
 
         // Always emit de.edmd.reading.direct.stored so billingd knows to recompute.
         let stored_ce = serde_json::json!({
@@ -2360,7 +2366,7 @@ pub async fn post_quality_rescore(
                     "trigger": "retroactive_rescore",
                 }
             });
-            let client = reqwest::Client::new();
+            let client = mako_service::http::default_client();
             let _ = client
                 .post(url)
                 .header("Content-Type", "application/cloudevents+json")
