@@ -85,7 +85,7 @@ permalink: /
     <span class="mako-kpi__label">unsafe blocks</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">124</span>
+    <span class="mako-kpi__value">135+</span>
     <span class="mako-kpi__label">MCP tools (AI-ready)</span>
   </div>
   <div class="mako-kpi">
@@ -156,13 +156,16 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">🌱</div>
     <h3>EEG/KWKG Settlement</h3>
     <p>
-      <strong>9 settlement models</strong> — Vergütung (§21 EEG), Mieterstrom (§38a),
-      Direktvermarktung Gleitende Marktprämie (§20 + §20 Abs. 3 Managementprämie),
-      Ausschreibung (§§22a,28), Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag (§7 KWKG 2023),
-      Flexibilitätsprämie (§50 EEG), Flexibilitätszuschlag (§50b EEG). §25 MaStR sanctions enforcement and §27
-      negative-price deduction built in. Each settlement returns
-      <strong>auditable billing positions</strong> per component.
-      Repowering §22, Zusammenlegung §24, auto-settle worker, batch API.
+      <strong>9 settlement schemes</strong> — FeedInTariff (§21 EEG), TenantElectricity (§38a),
+      MarketPremium (§20 EEG; §§22a/28 Ausschreibung via <code>TariffSource::Auction</code>),
+      PostEeg Spot (configurable price floor), Eigenverbrauch, KwkSurcharge (§7 KWKG 2023),
+      FlexibilityPremium (§50b EEG), FlexibilitySurcharge (§50a EEG), FailsafeTariff (§21 Abs. 1 Nr. 2).
+      <strong>§20 Abs. 3 Managementprämie</strong> incorporated into AW before spread (EEG 2023 correct formula).
+      <strong>§51 version-aware Negativpreisregel</strong> — EEG 2017/2021/2023 thresholds + Bestandsschutz.
+      <strong>§51a Verlängerungsanspruch</strong>, <strong>§52 Pflichtzahlungen</strong> (€10/kW),
+      <strong>§52 Abs. 6 Netting</strong>, quarterly degression (§23a), §36k Korrekturfaktor,
+      multi-meter Messkonzept (§42b GGV, §14a HT/NT). Repowering §22, Zusammenlegung §24.
+      284 regulatory tests in <code>eeg-billing</code>.
     </p>
     <a href="{{ '/einsd' | relative_url }}">einsd guide →</a>
   </div>
@@ -231,9 +234,12 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       Every service ships an MCP server at <code>/mcp</code>.
       <code>agentd</code> runs an Orchestrator + Specialist Mesh with LanceDB RAG
       (ANN vector search, S3/GCS/local). OpenAI, Anthropic, AWS Bedrock SigV4 providers.
-      WASM plugins via <code>mako-plugin</code> (Extism sandbox). Specialists include
-      <strong>tariff-optimization-agent</strong> (§41a switch recommendations),
-      grid anomaly detection, billing anomaly AI, MSB device history RAG, and payment reconciliation.
+      WASM plugins via <code>mako-plugin</code> (Extism sandbox). <strong>20 bundled specialists</strong> cover
+      billing anomaly detection, compliance (§20 EnWG parity), EEG lifecycle,
+      Sperrung compliance (BK6-22-024), grid anomaly detection, processd STP monitoring,
+      customer portal automation, and BNetzA annual reporting.
+      Glob-pattern <code>trigger_event_types</code> route all <code>de.mako.*</code>,
+      <code>de.eeg.*</code>, <code>de.sperr.*</code> etc. events to the right specialist automatically.
     </p>
     <a href="{{ '/agentd' | relative_url }}">agentd guide →</a>
   </div>
@@ -270,7 +276,7 @@ graph TB
     subgraph energy ["Energy Data"]
         direction LR
         edmd["edmd :8380\nMSCONS meter reads\nIceberg/S3 OLAP archive"]
-        einsd["einsd :9180\nEEG/KWKG settlement\n8 models · eeg-billing crate\n§25 sanctions · §27 neg-price\nbatch auto-settle worker"]
+        einsd["einsd :9180\nEEG/KWKG settlement\n9 schemes · eeg-billing crate\n§52 sanctions · §51 neg-price\n§23a degression · §36k wind\nbatch auto-settle worker"]
     end
 
     subgraph retail ["Retail Billing (LF)"]

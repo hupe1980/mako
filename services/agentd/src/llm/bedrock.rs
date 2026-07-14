@@ -25,7 +25,7 @@ impl BedrockProvider {
             region: cfg.aws_region.clone().unwrap_or_else(|| "us-east-1".into()),
             access_key: cfg.aws_access_key_id.clone().unwrap_or_default(),
             secret_key: cfg.aws_secret_access_key.clone().unwrap_or_default(),
-            client: reqwest::Client::new(),
+            client: mako_service::http::default_client(),
         }
     }
 

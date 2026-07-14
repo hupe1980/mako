@@ -176,3 +176,194 @@ impl ErzeugungsArt {
 #[derive(Debug, thiserror::Error)]
 #[error("unknown erzeugungsart: {0:?}")]
 pub struct InvalidErzeugungsArt(pub String);
+
+// ── InbetriebnahmeTyp ─────────────────────────────────────────────────────────
+
+/// Type of commissioning event that started (or restarted) the EEG Förderdauer.
+///
+/// The commissioning type determines which regulatory rules apply and whether
+/// the 20-year Förderdauer clock is reset or continues from the original date.
+///
+/// ## Legal basis
+///
+/// §3 Nr. 30 EEG 2023 defines "Inbetriebnahme" as the first feed-in of
+/// electricity after all necessary installations are complete.
+///
+/// §22 EEG 2023 (Repowering): replacing components with higher capacity resets
+/// the Förderdauer clock.
+///
+/// §24 EEG 2023 (Zusammenlegung): merging physically separate plants does NOT
+/// reset the clock — the oldest plant's Förderdauer continues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
+pub enum InbetriebnahmeTyp {
+    /// §3 Nr. 30 EEG 2023: first time the plant generates electricity.
+    ///
+    /// Starts the 20-year Förderdauer. All EEG rules apply from commissioning date.
+    Erstinbetriebnahme,
+
+    /// §3 Nr. 30 EEG 2023: temporary shutdown + restart (same plant, same capacity).
+    ///
+    /// Does NOT reset the Förderdauer. The original commissioning date continues
+    /// to govern tariff and duration. Typical: plant moved, repaired, or temporarily
+    /// decommissioned and returned to operation.
+    Wiederinbetriebnahme,
+
+    /// §3 Nr. 30a EEG 2023: technical modernization without capacity increase.
+    ///
+    /// Replaces equipment (inverter, cables) but not generators. Förderdauer continues.
+    /// May affect technical compliance status (e.g. Fernsteuerbarkeit).
+    Modernisierung,
+
+    /// §22 EEG 2023: repowering — complete replacement of generating components.
+    ///
+    /// **Resets the Förderdauer clock** to the repowering date. The plant receives a
+    /// new 20-year subsidy period at the tariff valid at the repowering commissioning.
+    /// Use `foerderendedatum_repowering(repowering_datum)` to compute the new end date.
+    Repowering,
+
+    /// §24 EEG 2023: plant created by Zusammenlegung of multiple existing plants.
+    ///
+    /// Does NOT reset the Förderdauer. The oldest component plant's commissioning date
+    /// governs the subsidy duration for the merged entity.
+    /// Individual component plants continue under their original `foerderendedatum`.
+    Zusammenlegung,
+
+    /// §24 EEG 2023: capacity extension block (Erweiterung).
+    ///
+    /// The extension block starts its own 20-year Förderdauer at the extension date,
+    /// at the tariff valid at that date (typically lower due to degression).
+    /// Model via `CapacityBlock` in `SettleInput`.
+    Erweiterung,
+}
+
+impl InbetriebnahmeTyp {
+    /// Returns `true` when this commissioning type resets the 20-year Förderdauer.
+    ///
+    /// Only `Repowering` resets the clock. All other types continue from the
+    /// original commissioning date (or start a new parallel block for `Erweiterung`).
+    #[must_use]
+    pub fn resets_foerderdauer(self) -> bool {
+        self == Self::Repowering
+    }
+
+    /// Returns `true` for the initial commissioning (first electricity generation).
+    #[must_use]
+    pub fn is_erstinbetriebnahme(self) -> bool {
+        self == Self::Erstinbetriebnahme
+    }
+
+    /// Parse from the DB `inbetriebnahme_typ` TEXT column.
+    pub fn from_db_str(s: &str) -> Result<Self, InvalidInbetriebnahmeTyp> {
+        match s {
+            "ERSTINBETRIEBNAHME" => Ok(Self::Erstinbetriebnahme),
+            "WIEDERINBETRIEBNAHME" => Ok(Self::Wiederinbetriebnahme),
+            "MODERNISIERUNG" => Ok(Self::Modernisierung),
+            "REPOWERING" => Ok(Self::Repowering),
+            "ZUSAMMENLEGUNG" => Ok(Self::Zusammenlegung),
+            "ERWEITERUNG" => Ok(Self::Erweiterung),
+            _ => Err(InvalidInbetriebnahmeTyp(s.to_owned())),
+        }
+    }
+
+    /// Canonical DB column value.
+    #[must_use]
+    pub fn to_db_str(self) -> &'static str {
+        match self {
+            Self::Erstinbetriebnahme => "ERSTINBETRIEBNAHME",
+            Self::Wiederinbetriebnahme => "WIEDERINBETRIEBNAHME",
+            Self::Modernisierung => "MODERNISIERUNG",
+            Self::Repowering => "REPOWERING",
+            Self::Zusammenlegung => "ZUSAMMENLEGUNG",
+            Self::Erweiterung => "ERWEITERUNG",
+        }
+    }
+}
+
+/// Returned by [`InbetriebnahmeTyp::from_db_str`] for unknown values.
+#[derive(Debug, thiserror::Error)]
+#[error("unknown inbetriebnahme_typ: {0:?}")]
+pub struct InvalidInbetriebnahmeTyp(pub String);
+
+// ── RepoweringScope ───────────────────────────────────────────────────────────
+
+/// Scope of a repowering event — determines whether the 20-year Förderdauer resets.
+///
+/// Repowering is one of the most legally complex topics in the EEG. Whether the
+/// Förderdauer resets depends on what exactly was replaced.
+///
+/// ## §22 EEG 2023 — Key rule
+///
+/// The Förderdauer resets only for **Vollrepowering** (complete new plant at the
+/// same site). Partial component replacements do NOT reset the clock — the original
+/// commissioning date continues to govern.
+///
+/// ## Practical guidance
+///
+/// When in doubt, consult BNetzA guidance or a specialized EEG attorney.
+/// The distinction between `RotorBlade`, `WholeNacelle`, and `TurbineUnit` is
+/// fact-specific and the BNetzA has issued conflicting guidance in edge cases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
+pub enum RepoweringScope {
+    /// **Vollrepowering**: Complete replacement of all generating components
+    /// (generator, nacelle, rotor, tower, foundation).
+    ///
+    /// **Resets Förderdauer** to the new commissioning date.
+    /// Equivalent to a new plant at the same grid connection point.
+    /// Uses `foerderendedatum_repowering(new_commissioning_date)`.
+    Full,
+
+    /// **Teilrepowering — Rotor only**: rotor blades and hub replaced,
+    /// nacelle and generator unchanged.
+    ///
+    /// **Does NOT reset Förderdauer.** Old commissioning date continues.
+    /// Rotor replacement alone does not constitute "Inbetriebnahme" under §3 Nr. 30 EEG 2023.
+    RotorOnly,
+
+    /// **Teilrepowering — Nacelle and rotor replaced**, tower and foundation unchanged.
+    ///
+    /// **Legal status is contested** (BNetzA has not issued definitive guidance).
+    /// Conservative interpretation: Förderdauer does NOT reset (original date governs).
+    /// Aggressive interpretation: may reset if generator output increases substantially.
+    NacelleAndRotor,
+
+    /// **Teilrepowering — Complete turbine unit replaced** (generator + nacelle + rotor),
+    /// but tower and foundation unchanged.
+    ///
+    /// **Legal status is contested.** Most EEG specialists consider this a
+    /// Vollrepowering (Förderdauer resets) when capacity increases significantly.
+    /// BNetzA position: resets if the turbine is "technisch and wirtschaftlich neu."
+    TurbineUnit,
+
+    /// **Repowering with capacity increase** — same classification as `Full` but
+    /// explicitly tracks that the new plant has higher rated power than the original.
+    ///
+    /// Relevant for Ausschreibungspflicht threshold check (§22 EEG 2023):
+    /// the new capacity may push the plant above the 750 kW wind tender threshold.
+    FullWithCapacityIncrease,
+}
+
+impl RepoweringScope {
+    /// Returns `true` when this repowering scope **definitely resets** the Förderdauer.
+    ///
+    /// Returns `false` for contested cases — the caller must resolve the legal question
+    /// before computing the new Förderdauer.
+    #[must_use]
+    pub fn resets_foerderdauer_definitely(self) -> bool {
+        matches!(self, Self::Full | Self::FullWithCapacityIncrease)
+    }
+
+    /// Returns `true` when this scope involves replacing the nacelle or generating unit.
+    ///
+    /// Rotor-only replacement never replaces the generating unit.
+    #[must_use]
+    pub fn replaces_generating_unit(self) -> bool {
+        matches!(
+            self,
+            Self::Full | Self::FullWithCapacityIncrease | Self::NacelleAndRotor | Self::TurbineUnit
+        )
+    }
+}

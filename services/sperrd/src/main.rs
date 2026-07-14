@@ -50,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .merge(health_routes(|| async { true }))
+        .route("/api/v1/sperr-orders/stats", get(handlers::get_stats))
         .route(
             "/api/v1/sperr-orders",
             get(handlers::list_orders).post(handlers::create_order),
@@ -63,7 +64,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/sperr-orders/:id/fail",
             axum::routing::put(handlers::fail_order),
         )
+        .route(
+            "/api/v1/sperr-orders/:id/cancel",
+            axum::routing::put(handlers::cancel_order),
+        )
         .layer(Extension(makod))
+        .layer(Extension(config::Tenant(cfg.tenant.clone())))
         .layer(Extension(pool.clone()));
 
     // ── MCP server ────────────────────────────────────────────────────────────

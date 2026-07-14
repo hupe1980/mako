@@ -24,13 +24,13 @@
 //! ## Example
 //!
 //! ```rust
-//! use eeg_billing::{SettleInput, SettlementModel, SettlementStatus, calculate_settlement};
+//! use eeg_billing::{SettleInput, SettlementScheme, SettlementStatus, calculate_settlement};
 //! use eeg_billing::tariff::EegSettleTariff;
 //! use billing::{DocumentMeta, Period};
 //! use rust_decimal_macros::dec;
 //!
 //! let output = calculate_settlement(&SettleInput {
-//!     model: SettlementModel::Verguetung,
+//!     scheme: eeg_billing::SettlementScheme::FeedInTariff,
 //!     einspeisemenge_kwh: Some(dec!(500)),
 //!     verguetungssatz_ct: dec!(8.11),
 //!     ..SettleInput::default()

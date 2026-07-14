@@ -465,25 +465,37 @@ pub struct SettleResult {
 /// KWKG hour-limit enforcement details.
 pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result<SettleResult> {
     use eeg_billing::{
-        SettleInput as EegInput, SettlementModel, SettlementStatus, calculate_settlement,
+        AusschreibungMetadata, SettleInput as EegInput, SettlementScheme, SettlementStatus,
+        TariffSource, calculate_settlement,
     };
 
-    // Map DB string → eeg-billing enum variant.
-    let model = match input.settlement_model.as_str() {
-        "VERGUETUNG" => SettlementModel::Verguetung,
-        "MIETERSTROM" => SettlementModel::Mieterstrom,
-        "DIREKTVERMARKTUNG" => SettlementModel::Direktvermarktung,
-        "AUSSCHREIBUNG" => SettlementModel::Ausschreibung,
-        "POST_EEG_SPOT" => SettlementModel::PostEegSpot,
-        "EIGENVERBRAUCH" => SettlementModel::Eigenverbrauch,
-        "KWKG_ZUSCHLAG" => SettlementModel::KwkgZuschlag,
-        "FLEXIBILITAET" => SettlementModel::Flexibilitaet,
-        "FLEXIBILITAET_ZUSCHLAG" => SettlementModel::FlexibilitaetZuschlag,
+    // Map DB string → new SettlementScheme + TariffSource.
+    // Ausschreibung → MarketPremium with Auction tariff source (same formula, different label/AW source).
+    let (scheme, tariff_source) = match input.settlement_model.as_str() {
+        "VERGUETUNG" => (SettlementScheme::FeedInTariff, TariffSource::Statutory),
+        "MIETERSTROM" => (SettlementScheme::TenantElectricity, TariffSource::Statutory),
+        "DIREKTVERMARKTUNG" => (SettlementScheme::MarketPremium, TariffSource::Statutory),
+        "AUSSCHREIBUNG" => (
+            SettlementScheme::MarketPremium,
+            TariffSource::Auction(AusschreibungMetadata::default()),
+        ),
+        "POST_EEG_SPOT" => (SettlementScheme::PostEeg, TariffSource::Statutory),
+        "EIGENVERBRAUCH" => (SettlementScheme::Eigenverbrauch, TariffSource::Statutory),
+        "KWKG_ZUSCHLAG" => (SettlementScheme::KwkSurcharge, TariffSource::Statutory),
+        "FLEXIBILITAET" => (
+            SettlementScheme::FlexibilityPremium,
+            TariffSource::Statutory,
+        ),
+        "FLEXIBILITAET_ZUSCHLAG" => (
+            SettlementScheme::FlexibilitySurcharge,
+            TariffSource::Statutory,
+        ),
         other => anyhow::bail!("unknown settlement_model: {other}"),
     };
 
     let output = calculate_settlement(&EegInput {
-        model,
+        scheme,
+        tariff_source,
         einspeisemenge_kwh: input.einspeisemenge_kwh,
         epex_avg_ct_kwh: input.epex_avg_ct_kwh,
         verguetungssatz_ct: input.verguetungssatz_ct,
@@ -511,10 +523,19 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
         billing_date: input.billing_date,
         capacity_blocks: vec![],
         messkonzept: None,
-        pflichtverstoss: None,
+        pflichtverstoss: vec![], // §52: violations added when mastr_registriert=false for EEG 2023 plants
         eeg_gesetz: eeg_billing::EegGesetz::from_db_year(input.eeg_gesetz)
             .unwrap_or(eeg_billing::EegGesetz::Eeg2023),
         erzeugungsart: eeg_billing::ErzeugungsArt::from_db_str(&input.erzeugungsart).ok(),
+        // §19 EinsMan and §36k Korrekturfaktor: not yet surfaced in einsd SettleInput.
+        einspeisemanagement_kwh: None,
+        wind_korrekturfaktor: None,
+        wind_standort: None,
+        // Post-EEG negative price floor: None = full market exposure (contract-dependent).
+        post_eeg_price_floor: None,
+        sect53b_regional_reduction_ct: None,
+        negative_price_quarter_hours: None,
+        settlement_type: eeg_billing::SettlementType::default(),
     });
 
     let status = match output.status {

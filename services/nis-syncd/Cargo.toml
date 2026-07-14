@@ -30,6 +30,5 @@ rmcp         = { workspace = true }
 reqwest      = { workspace = true }
 tokio-util   = { workspace = true }
 tracing      = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow       = "1"
 secrecy      = { version = "0.10" }

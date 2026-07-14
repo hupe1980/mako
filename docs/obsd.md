@@ -45,14 +45,15 @@ graph TB
 ┌─────────────────────────────────────────────────────────────────┐
 │  obsd  :8480                                                     │
 │                                                                 │
-│  POST /webhook              ← marktd CloudEvents (HMAC-auth)   │
-│  GET  /obs/processes        ← list / filter process projections │
-│  GET  /obs/processes/{id}   ← single process by UUID           │
-│  GET  /obs/kpis             ← BNetzA KPI report                │
-│  GET  /obs/overdue          ← processes near or past deadline   │
-│  GET  /metrics              ← Prometheus metrics               │
+│  POST /webhook                  ← marktd CloudEvents (HMAC)    │
+│  GET  /obs/processes            ← list / filter projections     │
+│  GET  /obs/processes/{id}       ← single process by UUID        │
+│  GET  /obs/kpis                 ← BNetzA KPI report (per PID)   │
+│  GET  /obs/overdue              ← processes past deadline        │
+│  GET  /api/v1/audit/bnetza-report ← §20 Abs.1 EnWG annual audit │
+│  GET  /metrics                  ← Prometheus metrics            │
 │  GET  /health/live  /health/ready                               │
-│  POST|GET /mcp      ← MCP Streamable HTTP (LLM tooling)         │
+│  POST|GET /mcp                  ← MCP Streamable HTTP           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -66,16 +67,46 @@ Each `ProcessProjection` record is a read-model built from the event stream:
 |-------|-------------|
 | `process_id` | UUID from `de.mako.process.initiated` |
 | `pid` | BDEW Prüfidentifikator (e.g. 55001) |
-| `workflow` | Workflow family name (e.g. `gpke-supplier-change`) |
-| `state` | `Open` \| `Accepted` \| `Rejected` \| `Completed` \| `Escalated` |
-| `initiator_mp_id` | Requesting party MP-ID |
-| `partner_mp_id` | Responding party MP-ID |
+| `family` | Process family: `gpke`, `geli-gas`, `wim`, `wim-gas`, `gabi-gas`, `mabis`, `unknown` |
+| `workflow_name` | Workflow name from `makoworkflow` CE extension |
+| `state` | `initiated` \| `running` \| `completed` \| `rejected` \| `cancelled` \| `aperak_timeout` |
 | `malo_id` | 11-digit Marktlokations-ID |
-| `initiated_at` | Process start (from `ProcessInitiated`) |
-| `deadline_at` | Regulatory deadline (computed from PID + regulatory source) |
-| `completed_at` | When `ProcessCompleted` was received |
-| `initiator_is_affiliate` | `true` if initiating party == operator (§20 parity flag) |
-| `deadline_risk` | `None` \| `Warning` \| `Breach` |
+| `partner_mp_id` | GLN of the counterparty (NB/GNB/MSB) |
+| `mdm_role` | Canonical Marktrolle (`LF`, `NB`, …) |
+| `started_at` | UTC timestamp of the first `process.initiated` event |
+| `last_event_at` | UTC timestamp of the most recently received event |
+| `completed_at` | Set when state transitions to `completed`, `rejected`, or `cancelled`; used for cycle-time KPIs |
+| `deadline_at` | Regulatory deadline, computed from PID on `Initiated` event (see below) |
+| `deadline_risk` | `green` \| `amber` (< 24 h) \| `red` (past deadline) |
+| `erc_code` | BDEW ERC error code when `state == rejected` |
+| `initiator_is_affiliate` | `true` if initiating LF MP-ID ∈ operator's `own_mp_ids` (§20 parity flag) |
+
+---
+
+## Deadline computation
+
+`obsd` computes `deadline_at` **automatically** when processing `de.mako.process.initiated` events.
+Deadlines are derived from the PID using conservative calendar-day approximations:
+
+| Process family | Deadline | Regulatory source |
+|---|---|---|
+| GPKE (PIDs 55001–55609) | **24 wall-clock hours** | BK6-22-024 §5 |
+| WiM Strom (PIDs 55039, 55042, 55051, 55168) | **7 calendar days** (≥ 5 Werktage) | BK6-24-174 |
+| GeLi Gas (PIDs 44001–44024) | **14 calendar days** (≥ 10 Werktage) | BK7-24-01-009 §5 |
+| WiM Gas (PIDs 44039–44053, 44168–44170) | **14 calendar days** (≥ 10 Werktage) | BK7-24-01-009 §5 |
+| MABIS (PID 13003) | **2 calendar days** (≥ 1 Werktag) | BK6-24-174 §13.8 |
+| Billing / PARTIN / INSRPT PIDs | `null` (no per-process deadline) | — |
+
+> **Conservative approximations:** 7 calendar days ≥ 5 Werktage in all cases
+> (Saturday counts as a Werktag; only Sundays and public holidays do not).
+> `obsd` therefore never marks a process as overdue before its true BNetzA deadline.
+> Exact Werktage arithmetic lives in `processd`/`mako-engine`; `obsd` uses the coarser
+> approximation for alerting.
+
+`deadline_risk` is re-classified on every event:
+- `green` — more than 24 h before deadline
+- `amber` — less than 24 h before deadline
+- `red` — deadline has passed and process is still open
 
 ---
 
@@ -272,3 +303,37 @@ Alert labels include `pid`, `workflow`, `malo_id`, and `deadline_risk`.
 
 The `obsd` `GET /obs/kpis` endpoint is also the input for BNetzA audit submissions
 under §20 EnWG — export as JSON or CSV before each annual report.
+
+---
+
+## MCP server
+
+`obsd` exposes an MCP server at `/mcp` for LLM-based compliance automation.
+
+### Tools (6)
+
+| Tool | Description |
+|---|---|
+| `get_process(process_id)` | Full process projection by UUID — state, PIDs, deadlines, ERC code |
+| `list_overdue_processes` | All MaKo processes past their regulatory deadline, ordered by urgency |
+| `get_kpi_report(pid, period)` | BNetzA KPI for a single PID and billing month (`YYYY-MM`) |
+| `get_parity_report(days)` | §20 EnWG compliance: affiliate vs. non-affiliate completion rates; target gap < 2 pp |
+| `get_stp_rate(days)` | Rolling STP rate across all process families; target ≥ 95% |
+| `list_processes_by_family(family, state, limit)` | Drill into a process family (`gpke`, `wim`, `geli-gas`, …) |
+
+### Prompts (2)
+
+| Prompt | Description |
+|---|---|
+| `audit-kpi` | Generate a BNetzA KPI report for a reporting period |
+| `investigate-aperak-violation` | Root-cause an APERAK deadline violation |
+
+### Example: rolling STP rate check
+
+```bash
+curl -X POST http://obsd:8480/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_stp_rate","arguments":{"days":30}}}'
+```
+
+Returns `{ "stp_rate": 0.9720, "stp_pct": 97.2, "target_stp": 0.95, "compliant": true, ... }`.

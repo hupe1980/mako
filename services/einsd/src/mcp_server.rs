@@ -1,6 +1,6 @@
 //! MCP server for `einsd` — Einspeiser Registry + EEG/KWKG Settlement.
 //!
-//! ## Tools (10)
+//! ## Tools (12)
 //!
 //! | Tool | Description |
 //! |---|---|
@@ -14,6 +14,8 @@
 //! | `list_unsettled_plants` | Plants not yet settled for a given month |
 //! | `get_epex_monthly_price` | Look up stored EPEX Spot monthly average |
 //! | `import_epex_monthly_price` | Store/update EPEX Spot monthly average price |
+//! | `get_compliance_status` | Check §52 EEG compliance status for a plant (MaStR, Fernsteuerbarkeit) |
+//! | `list_plants_without_mastr` | Find plants not registered in MaStR (§52 §11 EEG 2023 violation) |
 //!
 //! ## Prompts (6)
 //!
@@ -553,6 +555,135 @@ impl EinsdMcpHandler {
             Err(e) => Err(McpError::invalid_params(e.to_string(), None)),
         }
     }
+
+    #[tool(
+        description = "Check §52 EEG compliance status for a plant: MaStR registration, Fernsteuerbarkeit, KWKG hour-limit proximity. Returns compliance_ok, missing_mastr, penalty_risk_eur_per_month, and recommended action per §52 EEG 2023.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_compliance_status(
+        &self,
+        Parameters(p): Parameters<GetPlantParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use sqlx::Row;
+        let row = sqlx::query(
+            r"SELECT tr_id, erzeugungsart, leistung_kwp, eeg_gesetz,
+                     mastr_registriert, mastr_nummer, mastr_datum, status,
+                     inbetriebnahme, foerderendedatum,
+                     kwk_strom_kwh_gesamt, kwk_max_kwh
+              FROM eeg_anlagen WHERE tr_id = $1 AND tenant = $2",
+        )
+        .bind(&p.tr_id)
+        .bind(&self.state.tenant)
+        .fetch_optional(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let Some(r) = row else {
+            return Err(McpError::invalid_params(
+                format!("plant {} not found", p.tr_id),
+                None,
+            ));
+        };
+
+        let mastr_ok: bool = r.try_get("mastr_registriert").unwrap_or(false);
+        let leistung_kwp: f64 = r
+            .try_get::<rust_decimal::Decimal, _>("leistung_kwp")
+            .ok()
+            .and_then(|d| d.try_into().ok())
+            .unwrap_or(0.0);
+        let eeg_gesetz: i16 = r.try_get("eeg_gesetz").unwrap_or(2023);
+        let foerderendedatum: Option<time::Date> = r.try_get("foerderendedatum").unwrap_or(None);
+
+        let today = time::OffsetDateTime::now_utc().date();
+        let foerderung_aktiv = foerderendedatum.is_none_or(|d| d >= today);
+
+        // §52 Abs. 1 Nr. 11 EEG 2023: MaStR not registered
+        let penalty_per_month = if !mastr_ok && foerderung_aktiv {
+            leistung_kwp * 10.0 // €10/kW/month (EEG 2023) or Vergütung=0 (EEG ≤2021)
+        } else {
+            0.0
+        };
+
+        ContentBlock::json(serde_json::json!({
+            "tr_id": p.tr_id,
+            "compliance_ok": mastr_ok || !foerderung_aktiv,
+            "foerderung_aktiv": foerderung_aktiv,
+            "mastr": {
+                "registriert": mastr_ok,
+                "nummer": r.try_get::<Option<String>, _>("mastr_nummer").unwrap_or(None),
+                "datum": r.try_get::<Option<time::Date>, _>("mastr_datum").unwrap_or(None),
+            },
+            "penalty_risk": {
+                "monthly_eur": penalty_per_month,
+                "regime": if eeg_gesetz >= 2023 { "§52 EEG 2023: €10/kW/month" } else { "§47 EEG ≤2021: Vergütung = 0" },
+                "note": if !mastr_ok { "URGENT: Register in MaStR at https://www.marktstammdatenregister.de" } else { "No penalty risk" },
+            },
+            "recommended_action": if !mastr_ok && foerderung_aktiv {
+                "Register plant in MaStR immediately. POST /api/v1/anlagen/{tr_id}/mastr-registrierung after registration."
+            } else {
+                "No action required"
+            },
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    #[tool(
+        description = "List plants not registered in MaStR (Marktstammdatenregister). §52 Abs. 1 Nr. 11 EEG 2023: unregistered plants incur €10/kW/month penalty (EEG 2023) or Vergütung=0 (EEG ≤2021). Returns tr_id, malo_id, leistung_kwp, eeg_gesetz, and monthly penalty risk.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_plants_without_mastr(&self) -> Result<CallToolResult, McpError> {
+        use sqlx::Row;
+        let rows = sqlx::query(
+            r"SELECT tr_id, malo_id, erzeugungsart, leistung_kwp, eeg_gesetz, foerderendedatum
+              FROM eeg_anlagen
+              WHERE tenant = $1
+                AND mastr_registriert = false
+                AND status = 'aktiv'
+                AND (foerderendedatum IS NULL OR foerderendedatum >= CURRENT_DATE)
+              ORDER BY leistung_kwp DESC",
+        )
+        .bind(&self.state.tenant)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let plants: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                let leistung: f64 = r
+                    .try_get::<rust_decimal::Decimal, _>("leistung_kwp")
+                    .ok()
+                    .and_then(|d| d.try_into().ok())
+                    .unwrap_or(0.0);
+                let eeg_gesetz: i16 = r.try_get("eeg_gesetz").unwrap_or(2023);
+                let penalty_per_month = leistung * 10.0;
+                serde_json::json!({
+                    "tr_id": r.try_get::<String, _>("tr_id").unwrap_or_default(),
+                    "malo_id": r.try_get::<String, _>("malo_id").unwrap_or_default(),
+                    "erzeugungsart": r.try_get::<String, _>("erzeugungsart").unwrap_or_default(),
+                    "leistung_kwp": leistung,
+                    "eeg_gesetz": eeg_gesetz,
+                    "monthly_penalty_eur": penalty_per_month,
+                    "regime": if eeg_gesetz >= 2023 { "§52 EEG 2023: €10/kW/month" } else { "§47 EEG ≤2021: Vergütung = 0" },
+                })
+            })
+            .collect();
+
+        let total_penalty: f64 = plants
+            .iter()
+            .filter_map(|p| p["monthly_penalty_eur"].as_f64())
+            .sum();
+
+        ContentBlock::json(serde_json::json!({
+            "count": plants.len(),
+            "total_monthly_penalty_eur": total_penalty,
+            "plants": plants,
+            "regulatory_note": "Register all plants at https://www.marktstammdatenregister.de. POST /api/v1/anlagen/{tr_id}/mastr-registrierung after successful registration.",
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
 }
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
@@ -778,12 +909,19 @@ impl ServerHandler for EinsdMcpHandler {
              DIREKTVERMARKTUNG (§20 Marktprämie) | AUSSCHREIBUNG (§§22a/28) |\n\
              POST_EEG_SPOT (§23b: 10ct cap) | EIGENVERBRAUCH | KWKG_ZUSCHLAG (§7 KWKG 2023) |\n\
              FLEXIBILITAET (§50b, bestehende Anlagen) | FLEXIBILITAET_ZUSCHLAG (§50a, neue Anlagen)\n\n\
+             ## Tools (12)\n\
+             Core: list_plants, get_plant, list_expiring, list_settlements, list_unsettled_plants\n\
+             Rates: lookup_verguetungssatz, lookup_statutory_rate\n\
+             Settlement: trigger_settle, get_epex_monthly_price, import_epex_monthly_price\n\
+             Compliance: get_compliance_status, list_plants_without_mastr\n\n\
              Rate tables: lookup_statutory_rate (Solarpaket I 2024 rates for SOLAR/WIND/BIOMASSE/KWKG)\n\
              Workflow: lookup_statutory_rate -> POST /api/v1/anlagen -> import_epex_monthly_price ->\n\
              trigger_settle (one) or POST /api/v1/settle/{y}/{m} (batch) -> list_settlements\n\n\
              §51 EEG 2023 Negativpreisregel: any negative-price period reduces Vergütung to 0.\n\
              §51a: Vergütungszeitraum extended by lost quarter-hours (solar: ×0.5 factor).\n\
-             §25 EEG sanctions: plants not in MaStR receive Vergütung=0 until registration.\n\
+             §52 EEG 2023: MaStR non-registration → €10/kW/month (not Vergütung=0).\n\
+             §19 EEG: EinsMan curtailment compensation (separate position, same rate).\n\
+             §36k EEG: Wind onshore Korrekturfaktor for below-reference-yield sites.\n\
              §24 Anlagenerweiterung: use CapacityBlock for multi-block proportional settlement.",
         )
     }

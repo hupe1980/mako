@@ -497,7 +497,7 @@ mod energiemix_tests {
     /// 3. Radioactive waste in mg/kWh
     #[test]
     fn energiemix_fuel_mix_must_sum_to_100() {
-        let fuel_mix = vec![
+        let fuel_mix = [
             ("Erneuerbare Energien", 65.0_f64),
             ("Erdgas", 20.0_f64),
             ("Kernenergie", 5.0_f64),

@@ -137,4 +137,67 @@ impl PgAnmeldungRepository {
             Ok(Some(accepts as f64 / decidable as f64))
         }
     }
+
+    /// Find a single decision by `process_id`.
+    pub async fn find_by_process_id(
+        &self,
+        process_id: Uuid,
+        tenant: &str,
+    ) -> Result<Option<AnmeldungDecisionRecord>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, erc_code, detail, \
+             initiator_is_affiliate, decided_at, tenant \
+             FROM anmeldung_decisions WHERE process_id = $1 AND tenant = $2 LIMIT 1",
+        )
+        .bind(process_id)
+        .bind(tenant)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(map_decision).transpose()
+    }
+
+    /// List decisions where `initiator_is_affiliate = true` — §20 EnWG parity audit.
+    pub async fn list_affiliate_decisions(
+        &self,
+        tenant: &str,
+        days: u32,
+        limit: u32,
+    ) -> Result<Vec<AnmeldungDecisionRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, erc_code, detail, \
+             initiator_is_affiliate, decided_at, tenant \
+             FROM anmeldung_decisions \
+             WHERE tenant = $1 AND initiator_is_affiliate = true \
+               AND decided_at >= now() - ($2::int * INTERVAL '1 day') \
+             ORDER BY decided_at DESC LIMIT $3",
+        )
+        .bind(tenant)
+        .bind(days as i32)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(map_decision).collect()
+    }
+
+    /// STP breakdown by ERC code — for root-cause analysis when STP drops.
+    ///
+    /// Returns rows: `(erc_code, count)` ordered by count descending.
+    pub async fn stp_breakdown_by_erc(
+        &self,
+        tenant: &str,
+        days: u32,
+    ) -> Result<Vec<(Option<String>, i64)>, sqlx::Error> {
+        let rows: Vec<(Option<String>, i64)> = sqlx::query_as(
+            "SELECT erc_code, COUNT(*)::bigint AS cnt \
+             FROM anmeldung_decisions \
+             WHERE tenant = $1 AND decision = 'Reject' \
+               AND decided_at >= now() - ($2::int * INTERVAL '1 day') \
+             GROUP BY erc_code ORDER BY cnt DESC",
+        )
+        .bind(tenant)
+        .bind(days as i32)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
 }

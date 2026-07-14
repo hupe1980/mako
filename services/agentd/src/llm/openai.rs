@@ -24,7 +24,7 @@ impl OpenAiProvider {
                 .clone()
                 .unwrap_or_else(|| "https://api.openai.com/v1".into()),
             api_key: cfg.api_key.clone(),
-            client: reqwest::Client::new(),
+            client: mako_service::http::default_client(),
         }
     }
 }
@@ -68,12 +68,16 @@ impl LlmProvider for OpenAiProvider {
             "function": { "name": t.name, "description": t.description, "parameters": t.input_schema }
         })).collect();
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": cfg.model,
             "max_tokens": cfg.max_tokens,
             "messages": msgs,
-            "tools": oai_tools,
         });
+        // Omit `tools` entirely when empty — some OpenAI-compatible servers reject `"tools": []`.
+        if !oai_tools.is_empty() {
+            body["tools"] = Value::Array(oai_tools);
+            body["tool_choice"] = Value::String("auto".into());
+        }
 
         let url = format!("{}/chat/completions", self.base);
         let req = self

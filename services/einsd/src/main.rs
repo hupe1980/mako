@@ -44,7 +44,6 @@ use einsd::{config, handlers, mcp_server, pg};
 use mako_service::{health::health_routes, load_config};
 use sqlx::PgPool;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 #[tokio::main]

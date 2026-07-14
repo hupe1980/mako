@@ -4,13 +4,14 @@
 //!
 //! ## Event routing
 //!
-//! | `ce_type`                   | Module       | PIDs handled |
-//! |-----------------------------|--------------|--------------|
-//! | `de.mako.process.initiated` | NB module    | 55001, 55016, 44001 |
-//! | `de.mako.process.initiated` | LF module    | 55008 |
-//! | `de.mako.process.initiated` | MSB M3 module | 35001–35005 (REQOTE → auto QUOTES) |
-//! | `wim-steuerungsauftrag`     | N5 auto-ORDRSP | §14a Steuerungsauftrag |
-//! | *(all other types)*         | *(ignored)*  | — |
+//! | `ce_type`                   | Module            | PIDs handled |
+//! |-----------------------------|-------------------|--------------|
+//! | `de.mako.process.initiated` | NB module         | 55001, 55016, 44001 |
+//! | `de.mako.process.initiated` | LF module         | 55008 |
+//! | `de.mako.process.initiated` | MSB-Wechsel (NB)  | 55039, 55042 |
+//! | `de.mako.process.initiated` | MSB M3 (REQOTE)   | 35001–35005 (REQOTE → auto QUOTES) |
+//! | `wim-steuerungsauftrag`     | N5 auto-ORDRSP    | §14a Steuerungsauftrag |
+//! | *(all other types)*         | *(ignored)*       | — |
 
 use axum::{
     body::Bytes,
@@ -96,7 +97,34 @@ pub async fn handle_webhook(
             }
         }
     }
-
+    // ── 6. MSB-Wechsel STP (NB role) ────────────────────────────────────────────────
+    //
+    // PIDs 55039 (Kündigung MSB) and 55042 (Anmeldung MSB) from WiM Strom.
+    // The NB evaluates whether the nMSB is eligible and dispatches
+    // bestaetigen/ablehnen via MakodClient.
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    {
+        use crate::msb_module;
+        let pid = event
+            .get("makopid")
+            .and_then(|v| v.as_u64())
+            .or_else(|| event["data"].get("pid").and_then(|v| v.as_u64()))
+            .unwrap_or(0) as u32;
+        if matches!(pid, 55039 | 55042)
+            && let Some(payload) = msb_module::MsbWechselPayload::parse(&event)
+                .filter(|p| p.nb_mp_id.is_empty() || p.nb_mp_id == state.own_mp_id)
+        {
+            let msb_cfg = msb_module::MsbModuleConfig {
+                marktd_url: String::new(), // unused — using pre-built client
+                marktd_api_key: secrecy::SecretString::from(""),
+                own_mp_id: state.own_mp_id.clone(),
+                tenant: state.tenant.clone(),
+                auto_accept: true,
+            };
+            msb_module::handle_msb_wechsel(&msb_cfg, payload, &state.marktd, &state.makod).await;
+            return StatusCode::OK.into_response();
+        }
+    }
     // ── 6. §14a Steuerungsauftrag auto-ORDRSP (N5) ────────────────────────
     //
     // When mako acts as MSB and receives a wim-steuerungsauftrag initiation,

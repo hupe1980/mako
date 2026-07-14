@@ -45,7 +45,7 @@ use netzbilanzd::{config, handlers, mcp_server, pg};
 use secrecy::SecretString;
 use sqlx::PgPool;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
+// CancellationToken is used via mako_service::shutdown
 use tracing::info;
 
 pub use config::NetzbilanzConfig;

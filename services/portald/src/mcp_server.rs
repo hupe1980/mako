@@ -3,15 +3,17 @@
 //! Aggregates customer data from all upstream services into a single LLM-accessible
 //! read-model. All tools are read-only (`readOnlyHint = true`).
 //!
-//! ## Tools
+//! ## Tools (8)
 //! | Tool | Description |
-//! |---|---|
-//! | `get_dashboard`    | Aggregated customer snapshot (MaLo, invoices, balance, supply status) |
-//! | `get_lastgang`     | Energy consumption time-series (Lastgang) for a MaLo |
-//! | `get_invoices`     | Billing history (last N invoices) for a MaLo |
-//! | `get_balance`      | Open-items account balance from accountingd |
-//! | `get_eeg_status`   | EEG/KWKG feed-in plant status and settlement history |
-//! | `get_versorgung`   | Supply status (Beliefert/Unbeliefert/Gesperrt) for a MaLo |
+//! |------|-------------|
+//! | `get_dashboard`       | Aggregated customer snapshot (MaLo, invoices, balance, supply status) |
+//! | `get_lastgang`        | Energy consumption time-series (Lastgang) for a MaLo |
+//! | `get_invoices`        | Billing history (last N invoices) for a MaLo |
+//! | `get_balance`         | Open-items account balance from accountingd |
+//! | `get_kontoauszug`     | Full account statement (ledger entries) from accountingd |
+//! | `get_vorauszahlung`   | Advance payment schedule (Abschlag) from accountingd |
+//! | `get_eeg_status`      | EEG/KWKG feed-in plant status and settlement history |
+//! | `get_versorgung`      | Supply status (Beliefert/Unbeliefert/Gesperrt) for a MaLo |
 
 use std::sync::Arc;
 
@@ -76,8 +78,8 @@ pub struct InvoiceListParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct EegParams {
-    /// TechnischeRessource ID of the EEG/KWKG plant.
-    pub tr_id: String,
+    /// 11-digit Marktlokations-ID of the feed-in point.
+    pub malo_id: String,
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -112,10 +114,10 @@ impl PortaldMcpHandler {
         let malo_id = &p.malo_id;
         let mut result = serde_json::json!({ "malo_id": malo_id });
 
-        // Supply status from marktd
+        // Supply status from marktd — use direct marktd path, NOT portald's own route
         if let Some(ref client) = self.state.clients.marktd
             && let Ok(Some(v)) = client
-                .get_json(&format!("/api/v1/portal/{malo_id}/versorgung"))
+                .get_json(&format!("/api/v1/versorgung/{malo_id}"))
                 .await
         {
             result["versorgung"] = v;
@@ -237,7 +239,65 @@ impl PortaldMcpHandler {
     }
 
     #[tool(
-        description = "EEG/KWKG feed-in plant status and latest settlement data. Returns Förderungsende, settlement model, installed capacity, and last monthly settlement.",
+        description = "Full account statement (Kontoauszug) for a MaLo — all ledger entries: invoices, payments, credits. Use for billing dispute investigation or §666 BGB account transparency. Complements get_balance which returns only the net total.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_kontoauszug(
+        &self,
+        Parameters(p): Parameters<MaloParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let client = self
+            .state
+            .clients
+            .accountingd
+            .as_ref()
+            .ok_or_else(|| McpError::invalid_params("accountingd not configured", None))?;
+        let path = format!("/api/v1/accounts/{}/kontoauszug", p.malo_id);
+        match client.get_json(&path).await {
+            Ok(Some(v)) => ContentBlock::json(v)
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None)),
+            Ok(None) => ContentBlock::json(serde_json::json!({
+                "malo_id": p.malo_id, "entries": [],
+                "note": "No ledger entries found. Account may not yet have invoices.",
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Advance payment schedule (Vorauszahlung / Abschlag) for a MaLo. Returns the current monthly Abschlag amount, billing cycle, next due date. §40 Abs. 1 EnWG requires LFs to offer monthly advance payment with 3-week adjustment window.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_vorauszahlung(
+        &self,
+        Parameters(p): Parameters<MaloParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let client = self
+            .state
+            .clients
+            .accountingd
+            .as_ref()
+            .ok_or_else(|| McpError::invalid_params("accountingd not configured", None))?;
+        let path = format!("/api/v1/accounts/{}/vorauszahlung", p.malo_id);
+        match client.get_json(&path).await {
+            Ok(Some(v)) => ContentBlock::json(v)
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None)),
+            Ok(None) => ContentBlock::json(serde_json::json!({
+                "malo_id": p.malo_id,
+                "note": "No Vorauszahlung schedule found. Customer may be billed annually.",
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "EEG/KWKG feed-in plant list and latest settlement data for a MaLo. Returns Förderungsende, settlement model, installed capacity, and last monthly settlement. Use malo_id (not tr_id).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_eeg_status(
@@ -250,15 +310,17 @@ impl PortaldMcpHandler {
             .einsd
             .as_ref()
             .ok_or_else(|| McpError::invalid_params("einsd not configured", None))?;
-        let path = format!("/api/v1/anlagen/{}", p.tr_id);
+        let path = format!("/api/v1/anlagen?malo_id={}", p.malo_id);
         match client.get_json(&path).await {
             Ok(Some(v)) => ContentBlock::json(v)
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None)),
-            Ok(None) => Err(McpError::invalid_params(
-                format!("EEG plant {} not found", p.tr_id),
-                None,
-            )),
+            Ok(None) => ContentBlock::json(serde_json::json!({
+                "malo_id": p.malo_id, "plants": [],
+                "note": "No EEG/KWKG plants found for this MaLo.",
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
@@ -325,7 +387,53 @@ impl PortaldMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "1. Use `get_invoices` to list recent invoices and identify the disputed one.\n                 2. Use `get_lastgang` for the billing period to verify the consumption data.\n                 3. Compare the invoice arbeitsmenge_kwh against the Lastgang total.\n                 4. Use `get_balance` to check if the invoice is already overdue (positive balance).\n                 5. If the consumption data is wrong: contact the NB to re-send MSCONS readings.\n                 6. If the tariff is wrong: check tarifbd `GET /api/v1/customer/{malo_id}/product`.\n                 7. For a REMADV dispute: processd will auto-send REMADV 33002 if invoic-checker fails.",
+                "1. Use `get_invoices` to list recent invoices and identify the disputed one.\n\
+                 2. Use `get_lastgang` for the billing period to verify the consumption data.\n\
+                 3. Compare the invoice arbeitsmenge_kwh against the Lastgang total.\n\
+                 4. Use `get_kontoauszug` to check for any unmatched credits or prior payments.\n\
+                 5. Use `get_balance` to check if the invoice is already overdue (positive balance).\n\
+                 6. If the consumption data is wrong: contact the NB to re-send MSCONS readings.\n\
+                 7. If the tariff is wrong: check tarifbd `GET /api/v1/customer/{malo_id}/product`.\n\
+                 8. For a REMADV dispute: processd will auto-send REMADV 33002 if invoic-checker fails.",
+            ),
+        ]
+    }
+
+    #[prompt(
+        name = "eeg-foerderung-check",
+        description = "Diagnose EEG/KWKG Förderungsende: what to do when a plant's 20-year support period is ending"
+    )]
+    async fn eeg_foerderung_check_prompt(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "A customer's EEG plant is approaching the end of its Förderungsdauer. What are the options?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "**EEG Förderungsende workflow (einsd + portald)**\n\n\
+                 1. Call `get_eeg_status(malo_id)` to get the plant details.\n\
+                    Key fields: `foerderendedatum`, `eeg_gesetz`, `kw_peak`, `erzeugungsart`.\n\
+                 2. Calculate `days_remaining = foerderendedatum - today`.\n\
+                 3. Options by plant size:\n\
+                    - **<= 100 kWp (small plants)**: POST_EEG_SPOT is typical. \n\
+                      Customer receives hourly EPEX spot price. No paperwork required.\n\
+                    - **> 100 kWp**: DIREKTVERMARKTUNG (direct marketing) via a DV-partner is \n\
+                      often more valuable than spot price.\n\
+                    - **REPOWERING (§22 EEG)**: if plant age < 15 years, modernisation extends \n\
+                      Förderberechtigung. Requires MaStR re-registration.\n\
+                    - **ZUSAMMENLEGUNG (§24 EEG)**: multiple plants at same Netzverknüpfungspunkt \n\
+                      can merge for a combined 20-year period.\n\n\
+                 4. Regulatory timeline:\n\
+                    - 12 months before: send customer notification (§5 Abs. 4 EEG 2023).\n\
+                    - 3 months before: new contract must be signed.\n\
+                    - 0 days: Förderung ends. Plant switches to POST_EEG automatically.\n\n\
+                 5. §51 EEG Negativpreis-Regel: if EPEX spot price is negative for >4h (EEG 2023),\n\
+                    POST_EEG_SPOT plants receive €0 for those hours.\n\
+                    Inform customers with batteries or flexible loads to shift consumption.\n\n\
+                 6. MaStR compliance (§25 EEG 2023): plant must be registered in\n\
+                    https://www.marktstammdatenregister.de — check `mastr_registriert` field.\n\
+                    Unregistered plants receive 0% of entitled Vergütung (§25 Abs. 1 EEG 2023).",
             ),
         ]
     }
@@ -346,15 +454,22 @@ impl ServerHandler for PortaldMcpHandler {
             "portald MCP — Customer Portal Read-Model Gateway (LF role).\n\
              Aggregates data from edmd, billingd, accountingd, einsd, and marktd.\n\
              All tools are read-only — no writes are performed.\n\n\
+             ## Tools (8)\n\
+             - `get_dashboard` — instant aggregated customer snapshot\n\
+             - `get_lastgang` — energy consumption time-series (MSCONS 15-min/hourly)\n\
+             - `get_invoices` — billing history, newest first\n\
+             - `get_balance` — open-items net balance (positive = owed, negative = credit)\n\
+             - `get_kontoauszug` — full account statement (all ledger entries)\n\
+             - `get_vorauszahlung` — advance payment schedule (Abschlag, §40 Abs. 1 EnWG)\n\
+             - `get_eeg_status` — EEG/KWKG feed-in plants + latest settlements\n\
+             - `get_versorgung` — supply status (Beliefert/Unbeliefert/Gesperrt)\n\n\
+             ## Prompts (3)\n\
+             - `customer-overview` — complete account overview workflow\n\
+             - `billing-dispute` — investigate a disputed invoice\n\
+             - `eeg-foerderung-check` — EEG Förderungsende options workflow\n\n\
              **Informatorisches Unbundling (§9 EnWG):**\n\
-             portald is an LF-role service. It accesses `marktd` for VersorgungsStatus\n\
-             (LF's own supply records) — not for NB grid topology or NB billing data.\n\
-             Unbundled NB services (netzbilanzd, sperrd, nis-syncd) are NOT accessible here.\n\n\
-             Use `get_dashboard` for an instant customer-service overview.\n\
-             Use `get_lastgang` + `get_invoices` for billing investigation.\n\
-             Use `get_versorgung` for supply status (Beliefert/Unbeliefert/Gesperrt).\n\
-             Use `get_balance` for open-items (routes to accountingd).\n\
-             For full O2C cycle including payments: use `billingd` MCP `order-to-cash` prompt.",
+             portald is an LF-role service. Unbundled NB services (netzbilanzd, sperrd, nis-syncd)\n\
+             are NOT accessible here. For full O2C cycle: use `billingd` MCP `order-to-cash` prompt.",
         )
     }
 }

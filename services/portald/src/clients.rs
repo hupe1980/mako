@@ -20,7 +20,7 @@ impl UpstreamClient {
         Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
             api_key,
-            client: reqwest::Client::new(),
+            client: mako_service::http::default_client(),
             service_name,
         }
     }

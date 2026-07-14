@@ -37,16 +37,16 @@ All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tr
 |---|---|---|---|
 | [invoicd](./invoicd) | `:8280` | LF | INVOIC plausibility-check — 6 checks (incl. ToU band routing via `zaehlzeitregister`), auto-settle/dispute, §22 MessZV receipts |
 | [netzbilanzd](./netzbilanzd) | `:8680` | NB | NNE/KA/MMM/MSB/AWH billing — generates INVOIC 31001/31002/31005/31009/31011, full REMADV lifecycle, §14a Modul 2 ToU, §42a GGV, Redispatch 2.0 Kostenblatt, 13-tool MCP server |
-| [sperrd](./sperrd) | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch on field confirmation |
+| [sperrd](./sperrd) | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch on field confirmation; `GET /stats` compliance snapshot; tenant isolation; 5-tool MCP server |
 
 ## Energy Data & Observability
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [edmd](./edmd) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Hampel quality scoring, Ablesesteuerung (INSRPT auto-order), Iceberg/S3 OLAP |
-| [einsd](./einsd) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 9 settlement models |
-| [obsd](./obsd) | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, BNetzA audit export, Alertmanager |
-| [nis-syncd](./nis-syncd) | `:9680` | NB | NIS/GIS grid topology import — lifts Anmeldung STP ~80% → ≥95% (stateless) |
+| [einsd](./einsd) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 9 settlement schemes |
+| [obsd](./obsd) | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation (GPKE 24h/WiM 5WT/GeLi Gas 10WT), `completed_at` cycle-time tracking, `GET /api/v1/audit/bnetza-report`, 6-tool MCP server |
+| [nis-syncd](./nis-syncd) | `:9680` | NB | NIS/GIS grid topology import — concurrent `tokio::task::JoinSet` sync, drift CloudEvents, `check_malo_grid` MCP tool, lifts Anmeldung STP ~80% → ≥95% (stateless) |
 
 ## Retail Billing (LF)
 
@@ -61,8 +61,8 @@ All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tr
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [vertragd](./vertragd) | `:9780` | LF | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, kunden_identitaeten (N portal users per company), Tarifwechsel, Kündigung, OIDC→MaLo auth gateway for portald |
-| [portald](./portald) | `:9480` | LF | Customer Portal gateway — aggregates all LF services, REST + SSE, OIDC-gated |
-| [agentd](./agentd) | `:9580` | All | Multi-agent LLM orchestration — Orchestrator + Specialist Mesh, LanceDB RAG, MCP tools |
+| [portald](./portald) | `:9480` | LF | Customer Portal gateway — aggregates all LF services, REST + SSE, §41 EnWG self-service write API (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16), 8-tool MCP server |
+| [agentd](./agentd) | `:9580` | All | Multi-agent LLM orchestration — Orchestrator + Specialist Mesh, **20 bundled specialists**, LanceDB RAG, MCP tools across all 16 services, glob `trigger_event_types`, `GET /api/v1/sessions`, `POST /api/v1/rag/search` |
 
 ---
 

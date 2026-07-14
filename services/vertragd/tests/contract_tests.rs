@@ -247,7 +247,7 @@ fn preisanpassung_notification_window_is_42_days() {
 /// Minimal base64url encoding (no padding, URL-safe) for JWT test fixtures.
 fn base64_encode(data: &[u8]) -> String {
     let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     let mut i = 0;
     while i < data.len() {
         let b0 = data[i] as u32;

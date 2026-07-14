@@ -34,8 +34,10 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
             r"INSERT INTO process_projections
                   (process_id, pid, family, workflow_name, state, malo_id, partner_mp_id,
                    mdm_role, deadline_at, deadline_risk, started_at, last_event_at,
-                   erc_code, initiator_is_affiliate, tenant, updated_at)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())
+                   erc_code, initiator_is_affiliate, tenant, completed_at, updated_at)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+                      CASE WHEN $5 IN ('completed','rejected','cancelled') THEN now() ELSE NULL END,
+                      now())
               ON CONFLICT (process_id) DO UPDATE SET
                   state                  = EXCLUDED.state,
                   deadline_risk          = EXCLUDED.deadline_risk,
@@ -48,6 +50,13 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
                   workflow_name  = CASE WHEN EXCLUDED.workflow_name <> ''
                                         THEN EXCLUDED.workflow_name
                                         ELSE process_projections.workflow_name END,
+                  -- Set completed_at once when state first becomes terminal; never overwrite.
+                  completed_at   = CASE
+                                       WHEN EXCLUDED.state IN ('completed','rejected','cancelled')
+                                            AND process_projections.completed_at IS NULL
+                                       THEN now()
+                                       ELSE process_projections.completed_at
+                                   END,
                   updated_at     = now()",
         )
         .bind(p.process_id)
@@ -131,7 +140,12 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
                   COUNT(*) FILTER (WHERE state = 'completed')        AS total_completed,
                   COUNT(*) FILTER (WHERE state = 'rejected')         AS total_rejected,
                   COUNT(*) FILTER (WHERE state = 'aperak_timeout')   AS total_timeout,
-                  COUNT(*) FILTER (WHERE state = 'cancelled')        AS total_cancelled
+                  COUNT(*) FILTER (WHERE state = 'cancelled')        AS total_cancelled,
+                  AVG(EXTRACT(EPOCH FROM (completed_at - started_at)) / 3600.0)
+                      FILTER (WHERE completed_at IS NOT NULL)        AS avg_cycle_time_hours,
+                  PERCENTILE_CONT(0.95) WITHIN GROUP (
+                      ORDER BY EXTRACT(EPOCH FROM (completed_at - started_at)) / 3600.0
+                  ) FILTER (WHERE completed_at IS NOT NULL)          AS p95_cycle_time_hours
               FROM process_projections
               WHERE pid = $1
                 AND started_at::date >= $2
@@ -163,6 +177,8 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
         let rejected: i64 = row.try_get("total_rejected").unwrap_or(0);
         let timeout: i64 = row.try_get("total_timeout").unwrap_or(0);
         let cancelled: i64 = row.try_get("total_cancelled").unwrap_or(0);
+        let avg_cycle_time_hours: f64 = row.try_get("avg_cycle_time_hours").unwrap_or(0.0);
+        let p95_cycle_time_hours: f64 = row.try_get("p95_cycle_time_hours").unwrap_or(0.0);
 
         let compliance = (total - timeout) as f64 / total as f64;
 
@@ -176,8 +192,8 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
             total_aperak_timeout: timeout as u64,
             total_cancelled: cancelled as u64,
             aperak_compliance_rate: compliance,
-            avg_cycle_time_hours: 0.0,
-            p95_cycle_time_hours: 0.0,
+            avg_cycle_time_hours,
+            p95_cycle_time_hours,
         })
     }
 

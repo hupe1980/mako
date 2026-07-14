@@ -153,3 +153,85 @@ pub fn parse_handoff(call: &ToolCall, agent_names: &[String]) -> Option<(String,
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handoff_tools_generates_correct_tool_names() {
+        let names = vec!["billing-agent".to_owned(), "eeg_agent".to_owned()];
+        let tools = handoff_tools(&names);
+        assert_eq!(tools.len(), 2);
+        // Hyphens replaced with underscores in tool name
+        assert_eq!(tools[0].name, "transfer_to_billing_agent");
+        // Underscores kept
+        assert_eq!(tools[1].name, "transfer_to_eeg_agent");
+    }
+
+    #[test]
+    fn handoff_tools_schema_requires_reason() {
+        let tools = handoff_tools(&["some-agent".to_owned()]);
+        let required = tools[0].input_schema["required"]
+            .as_array()
+            .expect("required must be array");
+        assert!(
+            required.iter().any(|v| v.as_str() == Some("reason")),
+            "\"reason\" must be required"
+        );
+    }
+
+    #[test]
+    fn handoff_tools_empty_list_produces_empty_vec() {
+        assert!(handoff_tools(&[]).is_empty());
+    }
+
+    #[test]
+    fn parse_handoff_matches_known_agent() {
+        let agents = vec!["billing-agent".to_owned()];
+        let call = ToolCall {
+            id: "call-1".into(),
+            name: "transfer_to_billing_agent".into(),
+            arguments: serde_json::json!({ "reason": "billing question", "context": {} }),
+        };
+        let result = parse_handoff(&call, &agents);
+        assert!(result.is_some());
+        let (to, reason, _ctx) = result.unwrap();
+        assert_eq!(to, "billing-agent");
+        assert_eq!(reason, "billing question");
+    }
+
+    #[test]
+    fn parse_handoff_returns_none_for_non_handoff_tool() {
+        let agents = vec!["billing-agent".to_owned()];
+        let call = ToolCall {
+            id: "call-2".into(),
+            name: "get_malo".into(),
+            arguments: serde_json::json!({}),
+        };
+        assert!(parse_handoff(&call, &agents).is_none());
+    }
+
+    #[test]
+    fn parse_handoff_returns_none_for_unknown_agent() {
+        let agents = vec!["billing-agent".to_owned()];
+        let call = ToolCall {
+            id: "call-3".into(),
+            name: "transfer_to_ghost_agent".into(),
+            arguments: serde_json::json!({ "reason": "test" }),
+        };
+        assert!(parse_handoff(&call, &agents).is_none());
+    }
+
+    #[test]
+    fn parse_handoff_default_reason_when_missing() {
+        let agents = vec!["eeg-agent".to_owned()];
+        let call = ToolCall {
+            id: "call-4".into(),
+            name: "transfer_to_eeg_agent".into(),
+            arguments: serde_json::json!({}), // no "reason" field
+        };
+        let (_, reason, _) = parse_handoff(&call, &agents).unwrap();
+        assert_eq!(reason, "delegating");
+    }
+}

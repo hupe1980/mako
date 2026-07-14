@@ -1,16 +1,59 @@
 //! HTTP handlers — CloudEvent webhook + manual run.
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde_json::Value;
 
 use crate::{
-    agent::{AgentRegistry, OrchestratorAgent},
+    agent::registry::glob_match,
+    agent::{AgentDecision, AgentRegistry, OrchestratorAgent},
     config::AgentdConfig,
     mcp::McpPool,
     rag::RagEngine,
 };
+
+// ── Session ring buffer ────────────────────────────────────────────────────
+
+/// In-memory ring buffer of the last `capacity` `AgentDecision` results.
+///
+/// Thread-safe via `std::sync::Mutex` — the lock is held only for the
+/// duration of a `VecDeque` push or clone, making `parking_lot` unnecessary.
+pub struct SessionStore {
+    inner: Mutex<VecDeque<AgentDecision>>,
+    capacity: usize,
+}
+
+impl SessionStore {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: Mutex::new(VecDeque::with_capacity(capacity)),
+            capacity,
+        }
+    }
+
+    /// Append a decision; silently evicts the oldest entry when at capacity.
+    pub fn push(&self, decision: AgentDecision) {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.len() >= self.capacity {
+            guard.pop_front();
+        }
+        guard.push_back(decision);
+    }
+
+    /// Snapshot of all stored decisions, oldest first.
+    pub fn list(&self) -> Vec<AgentDecision> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .cloned()
+            .collect()
+    }
+}
+
+// ── AppState ──────────────────────────────────────────────────────────────────
 
 /// Shared application state injected into all handlers via `axum::extract::State`.
 pub struct AppState {
@@ -19,6 +62,8 @@ pub struct AppState {
     pub registry: AgentRegistry,
     pub mcp: McpPool,
     pub rag: Option<RagEngine>,
+    /// In-memory ring buffer of the last 100 agent decisions (best-effort; not persisted).
+    pub sessions: SessionStore,
 }
 
 pub async fn webhook(
@@ -33,7 +78,7 @@ pub async fn webhook(
         .cfg
         .trigger_event_types
         .iter()
-        .any(|t| t == &event_type)
+        .any(|t| glob_match(t, &event_type))
     {
         tracing::debug!(event_type, "agentd: ignoring non-trigger event");
         return StatusCode::NO_CONTENT.into_response();
@@ -83,11 +128,14 @@ pub async fn manual_run(
 }
 
 async fn emit_audit(state: &AppState, decision: &crate::agent::AgentDecision) {
+    // Always push to the in-memory ring buffer (best-effort, never fails).
+    state.sessions.push(decision.clone());
+
     let Some(ref url) = state.cfg.audit_webhook_url else {
         return;
     };
     let ce = decision.to_cloud_event(&state.cfg.tenant);
-    let mut req = reqwest::Client::new()
+    let mut req = mako_service::http::default_client()
         .post(url)
         .header("Content-Type", "application/cloudevents+json")
         .json(&ce);
@@ -181,4 +229,56 @@ pub async fn rag_ingest(
             (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
         }
     }
+}
+
+// ── GET /api/v1/sessions ──────────────────────────────────────────────────────
+
+/// `GET /api/v1/sessions` — list the last 100 agent decisions (in-memory ring buffer).
+///
+/// Returns decisions oldest-first. Useful for inspecting recent automated actions
+/// and debugging agent routing.
+pub async fn get_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(state.sessions.list()).into_response()
+}
+
+// ── POST /api/v1/rag/search ───────────────────────────────────────────────────
+
+/// Request body for `POST /api/v1/rag/search`.
+#[derive(Debug, serde::Deserialize)]
+pub struct RagSearchRequest {
+    /// Natural-language query.
+    pub query: String,
+}
+
+/// `POST /api/v1/rag/search`
+///
+/// Query the LanceDB RAG knowledge base directly and return the raw retrieved context
+/// string (the same text that gets injected into agent system prompts).
+///
+/// Useful for operators who want to verify what background knowledge an agent has
+/// access to for a given topic, or for debugging RAG quality.
+pub async fn rag_search(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RagSearchRequest>,
+) -> impl IntoResponse {
+    let Some(ref rag) = state.rag else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "RAG is disabled — enable [rag] in agentd.toml",
+        )
+            .into_response();
+    };
+    if req.query.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "query must not be empty").into_response();
+    }
+    let context = rag.search(&req.query).await;
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "query": req.query,
+            "context": context,
+            "note": "This is the exact context injected into agent system prompts for this query.",
+        })),
+    )
+        .into_response()
 }

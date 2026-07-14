@@ -25,26 +25,24 @@ use agentd::{handlers, llm};
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use axum::{Router, routing::post};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use mako_service::{health::health_routes, load_config};
 use tracing::info;
 
 use agentd::{
     agent::{AgentRegistry, OrchestratorAgent},
     config::AgentdConfig,
-    handlers::AppState,
+    handlers::{AppState, SessionStore},
     mcp::McpPool,
     rag::RagEngine,
 };
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "agentd=info".into()),
-        )
-        .init();
+    let _guard = mako_service::init_tracing_from_env("agentd");
 
     let cfg: AgentdConfig = load_config("agentd").context("load config")?;
     let port = cfg.port;
@@ -93,23 +91,23 @@ async fn main() -> anyhow::Result<()> {
         registry,
         mcp,
         rag,
+        sessions: SessionStore::new(100),
     });
 
     let health = health_routes(|| async { true });
     let app = Router::new()
         .route("/webhook", post(handlers::webhook))
         .route("/api/v1/run", post(handlers::manual_run))
+        .route("/api/v1/sessions", get(handlers::get_sessions))
         // M9: Live RAG ingestion for MSB device history
         .route("/api/v1/rag/ingest", post(handlers::rag_ingest))
+        .route("/api/v1/rag/search", post(handlers::rag_search))
         .with_state(Arc::clone(&state))
         .merge(health);
 
     let addr = format!("0.0.0.0:{port}");
     info!(%addr, "agentd listening");
-    axum::serve(
-        tokio::net::TcpListener::bind(&addr).await.context("bind")?,
-        app,
-    )
-    .await
-    .context("serve")
+    let ct = mako_service::shutdown::token();
+    let listener = tokio::net::TcpListener::bind(&addr).await.context("bind")?;
+    mako_service::shutdown::serve(listener, app, ct).await
 }

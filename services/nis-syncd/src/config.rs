@@ -26,4 +26,21 @@ pub struct NisSyncdConfig {
     /// to this URL after each sync pass so downstream consumers (e.g. `obsd`
     /// alerting, ERP systems) can react to topology changes.
     pub drift_webhook_url: Option<String>,
+    /// Maximum concurrent marktd PUT requests per sync pass.
+    ///
+    /// Defaults to 20. Increase for large NIS exports; reduce if marktd rate-limits.
+    #[serde(default = "default_sync_concurrency")]
+    pub sync_concurrency: usize,
+    /// Maximum NIS entries accepted per single sync request body.
+    ///
+    /// Defaults to 50 000. Prevents accidental overload of marktd.
+    #[serde(default = "default_max_batch_size")]
+    pub max_batch_size: usize,
+}
+
+fn default_sync_concurrency() -> usize {
+    20
+}
+fn default_max_batch_size() -> usize {
+    50_000
 }

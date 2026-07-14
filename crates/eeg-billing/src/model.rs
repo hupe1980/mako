@@ -2,6 +2,7 @@
 //!
 //! [`calculate_settlement`]: crate::calculate_settlement
 
+use crate::scheme::{SettlementScheme, SettlementType, TariffSource};
 use crate::technology::ErzeugungsArt;
 use crate::version::EegGesetz;
 use rust_decimal::Decimal;
@@ -181,103 +182,6 @@ pub struct Pflichtverstoss {
     pub nachtraeglich_erfuellt: bool,
 }
 
-/// EEG/KWKG settlement model.
-///
-/// Determines which regulatory formula is applied during settlement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
-pub enum SettlementModel {
-    /// §21 EEG — fixed Einspeisevergütung paid by NB to Anlagenbetreiber.
-    ///
-    /// Formula: `kwh × verguetungssatz_ct / 100`
-    ///
-    /// Rate fixed at commissioning for the full 20-year Förderdauer.
-    /// Historical rates differ significantly by EEG year and technology:
-    /// - EEG 2000 solar PV ≤30 kWp: 50.62 ct/kWh
-    /// - EEG 2012 solar PV ≤10 kWp: 24.43 ct/kWh
-    /// - EEG 2023 solar PV ≤10 kWp: 8.11 ct/kWh (initial) / 8.51 ct/kWh (after Solarpaket I 2024)
-    ///
-    /// Use `eeg_billing::rates::solar_pv_lookup()` or `einsd`'s rate table for
-    /// the correct historical rate.
-    Verguetung,
-
-    /// §38a EEG — community solar Mieterstrom surcharge on top of Vergütung.
-    ///
-    /// Formula: `kwh × (verguetungssatz_ct + mieter_zuschlag_ct) / 100`
-    ///
-    /// Available only for plants commissioned under EEG 2017 or later.
-    /// Maximum plant size: 100 kWp (§38a Abs. 3 EEG 2023).
-    Mieterstrom,
-
-    /// §20 EEG — Gleitende Marktprämie: NB pays the spread between
-    /// Anzulegender Wert and EPEX monthly average, plus Managementprämie.
-    ///
-    /// Formula: `max(0, AW − EPEX) × kwh / 100 + managementpraemie_ct × kwh / 100`
-    ///
-    /// Mandatory for plants >100 kW commissioned after 01.01.2016.
-    Direktvermarktung,
-
-    /// §§22a, 28 EEG — BNetzA tender plants. Same formula as
-    /// `Direktvermarktung`; the `direktverm_aw_ct` is the tender-awarded value.
-    ///
-    /// The Ausschreibungswert is set by BNetzA tender and does NOT automatically
-    /// change with the statutory reference value degression.
-    Ausschreibung,
-
-    /// Post-20-year-Förderung: plant feeds in at EPEX monthly spot average.
-    ///
-    /// Formula: `kwh × epex_avg_ct_kwh / 100`
-    ///
-    /// No price floor — negative EPEX produces negative settlement (plant owes NB).
-    /// Triggered automatically when `billing_date > foerderendedatum` if the
-    /// original model was `Verguetung` or `Mieterstrom`.
-    PostEegSpot,
-
-    /// §38a EEG — self-consumption. No Einspeisevergütung is paid.
-    ///
-    /// Formula: EUR 0
-    ///
-    /// Used for plants with `Überschusseinspeisung` metering where the owner
-    /// consumes the majority of generation on-site.
-    Eigenverbrauch,
-
-    /// §7 KWKG 2023 — KWK-Zuschlag for combined heat-and-power plants.
-    ///
-    /// Formula: `eligible_kwh × verguetungssatz_ct / 100`
-    ///
-    /// Subject to Förderdauer hour-limit enforcement (§8 KWKG 2023 for plants >2 MW):
-    /// eligible kWh is prorated when `kwk_strom_kwh_gesamt + kwh > kwk_max_kwh`.
-    KwkgZuschlag,
-
-    /// §50b EEG — Flexibilitätsprämie for **existing** biomass plants (bestehende Anlagen).
-    ///
-    /// Formula: `kwh × (verguetungssatz_ct + flex_praemie_ct_kwh) / 100`
-    ///
-    /// Applies only to biomass and biogas plants already receiving Vergütung that
-    /// install additional flexible peak capacity (§50b EEG 2023 + Anlage 3).
-    Flexibilitaet,
-
-    /// §50a EEG 2023 — Flexibilitätszuschlag for **new** biomass plants (neue Anlagen).
-    ///
-    /// A capacity-based payment of €100/kW/year for new biomass plants that are
-    /// commissioned with additional flexible installed capacity (>50% of
-    /// Bemessungsleistung as additional peak capacity).
-    ///
-    /// Distinct from §50b `Flexibilitaet`: §50a is for NEW plants, §50b for EXISTING.
-    ///
-    /// ## Input fields for this model
-    ///
-    /// - `leistung_kwp` = additional flexible capacity in kW (installed peak above base)
-    /// - `verguetungssatz_ct` = annual rate in EUR/kW (statutory: 100 EUR/kW/year)
-    /// - `einspeisemenge_kwh` = irrelevant — set to `Some(Decimal::ZERO)` or `None`
-    ///
-    /// ## Output
-    ///
-    /// One position with `eur = leistung_kwp × rate / 12` (monthly payment).
-    FlexibilitaetZuschlag,
-}
-
 /// The metering concept (§2 Nr. 20 EEG 2023 / §3 MessZV).
 ///
 /// Documents how Einspeisemenge is measured. Affects which tariff rules apply
@@ -393,8 +297,29 @@ pub struct CapacityBlock {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct SettleInput {
+    // ── Settlement scheme — HOW remuneration is determined ────────────────
     /// Which regulatory formula to apply.
-    pub model: SettlementModel,
+    ///
+    /// - `FeedInTariff` → §21 EEG Einspeisevergütung
+    /// - `MarketPremium` → §20 EEG Gleitende Marktprämie (incl. Ausschreibung via `tariff_source`)
+    /// - `TenantElectricity` → §38a Mieterstrom
+    /// - `PostEeg` → post-Förderung spot (configurable `post_eeg_price_floor`)
+    /// - `KwkSurcharge` → §7 KWKG
+    /// - `FailsafeTariff` → §21 Abs. 1 Nr. 2 Ausfallvergütung
+    /// - `Eigenverbrauch` → no payment
+    /// - `FlexibilityPremium` → §50b bestehende Biomasseanlagen
+    /// - `FlexibilitySurcharge` → §50a neue Biomasseanlagen (capacity payment)
+    pub scheme: SettlementScheme,
+
+    /// Where the Anzulegender Wert (AW) comes from.
+    ///
+    /// - `Statutory` → §48 EEG statutory tables (default)
+    /// - `Auction(meta)` → BNetzA tender award (Ausschreibung: same formula as MarketPremium)
+    /// - `Transitional(rule)` → §100 EEG Übergangsregelung
+    pub tariff_source: TariffSource,
+
+    /// Settlement type: initial, correction, or reversal.
+    pub settlement_type: SettlementType,
 
     /// Einspeisemenge kWh for the billing period.
     /// `None` → output status = [`SettlementStatus::NoData`].
@@ -405,9 +330,6 @@ pub struct SettleInput {
     /// Required for [`Direktvermarktung`], [`Ausschreibung`], [`PostEegSpot`].
     /// `None` → output status = [`SettlementStatus::PriceMissing`] for those models.
     ///
-    /// [`Direktvermarktung`]: SettlementModel::Direktvermarktung
-    /// [`Ausschreibung`]: SettlementModel::Ausschreibung
-    /// [`PostEegSpot`]: SettlementModel::PostEegSpot
     pub epex_avg_ct_kwh: Option<Decimal>,
 
     /// Fixed feed-in tariff rate in ct/kWh — **NET amount after §53 EEG deduction**.
@@ -457,8 +379,6 @@ pub struct SettleInput {
     /// Alternatively, when `leistung_kwp` is set, the engine computes this
     /// automatically from the statutory thresholds.
     ///
-    /// [`Direktvermarktung`]: SettlementModel::Direktvermarktung
-    /// [`Ausschreibung`]: SettlementModel::Ausschreibung
     pub managementpraemie_ct: Option<Decimal>,
 
     /// KWKG only: accumulated kWh already paid out in previous periods.
@@ -518,8 +438,44 @@ pub struct SettleInput {
     /// **full Vergütung** — the penalty is returned separately in the output's
     /// `pflichtzahlung_eur` field.
     ///
-    /// Default: `None` (no violation).
-    pub pflichtverstoss: Option<Pflichtverstoss>,
+    /// Default: empty Vec (no violations).
+    pub pflichtverstoss: Vec<Pflichtverstoss>,
+
+    /// §53b EEG 2023 — Regionale Grünstromkennzeichnung reduction in ct/kWh.
+    ///
+    /// BNetzA-certified area reduction applied as: `kWh × ct / 100`.
+    /// Only applies to `FeedInTariff`, `TenantElectricity`, `FlexibilityPremium`.
+    pub sect53b_regional_reduction_ct: Option<Decimal>,
+
+    /// §51a EEG 2023 — quarter-hours during which §51 reduced Vergütung to zero.
+    ///
+    /// When provided, the engine computes `SettleOutput.verlaengerungsanspruch_qh`:
+    /// Solar PV: `ceil(qh / 2)` · Others: 1:1 factor.
+    pub negative_price_quarter_hours: Option<u64>,
+
+    /// §19 EEG — kWh curtailed by the NB (Einspeisemanagement compensation).
+    ///
+    /// §51 Negativpreisregel does NOT apply to these kWh (§19 Abs. 2 EEG 2023).
+    pub einspeisemanagement_kwh: Option<Decimal>,
+
+    /// §36k EEG — certified wind onshore Korrekturfaktor.
+    ///
+    /// `effective_aw = direktverm_aw_ct × korrekturfaktor`.
+    /// Takes precedence over `wind_standort` when both are set.
+    pub wind_korrekturfaktor: Option<Decimal>,
+
+    /// §36k EEG 2023 — wind onshore site quality model.
+    ///
+    /// Auto-derives Korrekturfaktor from `wind_standort.korrekturfaktor`
+    /// when `wind_korrekturfaktor` is `None`.
+    pub wind_standort: Option<crate::wind::WindStandort>,
+
+    /// Post-EEG spot — optional price floor in ct/kWh.
+    ///
+    /// `None` = full market exposure; `Some(ZERO)` = floor at 0 ct.
+    /// Whether negative EPEX passes through depends on the post-EEG contract.
+    /// Only applies to `PostEeg`.
+    pub post_eeg_price_floor: Option<Decimal>,
 
     /// §27 EEG — kWh produced during negative EPEX hours (to be excluded).
     ///
@@ -636,7 +592,9 @@ pub struct SettleInput {
 impl Default for SettleInput {
     fn default() -> Self {
         Self {
-            model: SettlementModel::Verguetung,
+            scheme: SettlementScheme::default(),
+            tariff_source: TariffSource::default(),
+            settlement_type: SettlementType::default(),
             einspeisemenge_kwh: None,
             epex_avg_ct_kwh: None,
             verguetungssatz_ct: Decimal::ZERO,
@@ -654,8 +612,14 @@ impl Default for SettleInput {
             billing_date: None,
             capacity_blocks: vec![],
             messkonzept: None,
-            pflichtverstoss: None,
-            eeg_gesetz: EegGesetz::default(), // EEG 2023 — safe default for new plants
+            pflichtverstoss: vec![],
+            sect53b_regional_reduction_ct: None,
+            negative_price_quarter_hours: None,
+            einspeisemanagement_kwh: None,
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+            post_eeg_price_floor: None,
+            eeg_gesetz: EegGesetz::default(),
             erzeugungsart: None,
         }
     }
@@ -706,9 +670,15 @@ pub struct SettleOutput {
     /// `Some(Decimal::ZERO)` when there is no violation.
     /// Positive = operator owes NB (the NB may net this against Vergütung per §52 Abs. 6).
     ///
-    /// This amount is NOT deducted from `settlement_eur` — the Vergütung is computed
-    /// independently. The caller is responsible for netting if desired.
+    /// This amount is NOT deducted from `settlement_eur`.
     pub pflichtzahlung_eur: Option<Decimal>,
+
+    /// §51a EEG 2023 — quarter-hours by which the Vergütungszeitraum is extended.
+    ///
+    /// Non-zero only when `input.negative_price_quarter_hours` was provided AND
+    /// §51 actually reduced the Vergütung in this period.
+    /// Solar PV: `ceil(lost_qh / 2)` · Others: `lost_qh` (1:1 factor).
+    pub verlaengerungsanspruch_qh: u64,
 }
 
 // ── SettlePosition ────────────────────────────────────────────────────────────

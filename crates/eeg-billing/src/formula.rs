@@ -4,7 +4,8 @@ use billing::EuroAmount;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
-use crate::model::{SettleInput, SettleOutput, SettlePosition, SettlementModel, SettlementStatus};
+use crate::model::{SettleInput, SettleOutput, SettlePosition, SettlementStatus};
+use crate::scheme::SettlementScheme;
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -67,6 +68,18 @@ fn should_apply_negativpreis_versioned(
 /// Only called after `should_apply_negativpreis` returns `true`.
 fn apply_negativpreis(kwh: Decimal, negative_kwh: Decimal) -> Decimal {
     (kwh - negative_kwh).max(Decimal::ZERO)
+}
+
+/// Resolve the effective §36k wind onshore Korrekturfaktor.
+///
+/// Priority:
+/// 1. `input.wind_korrekturfaktor` (explicit override — always wins)
+/// 2. `input.wind_standort.korrekturfaktor` (struct-based)
+/// 3. `None` — no correction applied
+fn resolve_wind_korrekturfaktor(input: &SettleInput) -> Option<Decimal> {
+    input
+        .wind_korrekturfaktor
+        .or_else(|| input.wind_standort.as_ref().map(|ws| ws.korrekturfaktor))
 }
 
 /// Resolve the effective Managementprämie for Direktvermarktung/Ausschreibung.
@@ -199,6 +212,7 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
             SettlementStatus::Calculated
         },
         pflichtzahlung_eur: None,
+        verlaengerungsanspruch_qh: 0,
     }
 }
 
@@ -225,7 +239,7 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
 /// # Examples
 ///
 /// ```rust
-/// use eeg_billing::{SettleInput, SettlementModel, calculate_settlement, SettlementStatus};
+/// use eeg_billing::{SettleInput, SettlementScheme, calculate_settlement, SettlementStatus};
 /// use rust_decimal::Decimal;
 /// use std::str::FromStr;
 ///
@@ -233,7 +247,7 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
 ///
 /// // §21 EEG 2023 — 100 kWh × 8.11 ct/kWh = 8.11 EUR
 /// let out = calculate_settlement(&SettleInput {
-///     model: SettlementModel::Verguetung,
+///     scheme: eeg_billing::SettlementScheme::FeedInTariff,
 ///     einspeisemenge_kwh: Some(d("100")),
 ///     verguetungssatz_ct: d("8.11"),
 ///     ..SettleInput::default()
@@ -242,17 +256,118 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
 /// assert_eq!(out.settlement_eur, Some(d("8.11")));
 /// ```
 pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
-    // ── §52 EEG 2023 Pflichtzahlung (computed independently of Vergütung) ─────
-    // For EEG 2023 plants: penalty ≠ Vergütung reduction. Computed separately.
-    // For old plants (§100 regime): use `sanktion` instead.
-    let pflichtzahlung_eur = input
-        .pflichtverstoss
-        .as_ref()
-        .map(crate::foerderdauer::calculate_pflichtzahlung);
+    // ── §52 EEG 2023 Pflichtzahlungen (multiple violations, §52 Abs. 5 cap) ────
+    // All violations are summed. The §52 Abs. 5 monthly cap (€10/kW/month max) is
+    // applied based on the largest leistung_kw across violations.
+    let pflichtzahlung_eur = if input.pflichtverstoss.is_empty() {
+        None
+    } else {
+        let raw_sum: rust_decimal::Decimal = input
+            .pflichtverstoss
+            .iter()
+            .map(crate::foerderdauer::calculate_pflichtzahlung)
+            .sum();
+        // §52 Abs. 5 cap: total ≤ €10/kW × monate (using largest leistung_kw + months).
+        // We use the violation with the most months as the cap basis.
+        let cap = input
+            .pflichtverstoss
+            .iter()
+            .map(|v| {
+                use rust_decimal_macros::dec;
+                v.leistung_kw * dec!(10) * rust_decimal::Decimal::from(v.monate_des_verstosses)
+            })
+            .fold(
+                rust_decimal::Decimal::ZERO,
+                |a, b| if b > a { b } else { a },
+            );
+        Some(raw_sum.min(cap))
+    };
 
-    // Delegate to inner function, then inject pflichtzahlung_eur.
+    // Delegate to inner function.
     let mut result = calculate_settlement_inner(input);
     result.pflichtzahlung_eur = pflichtzahlung_eur;
+
+    // ── §51a EEG 2023 — Verlängerungsanspruch (payment period extension) ─────
+    // When §51 reduced Vergütung to zero for some intervals AND the caller
+    // provided the quarter-hour count, compute the period extension.
+    if let Some(lost_qh) = input.negative_price_quarter_hours.filter(|&q| q > 0) {
+        let was_applied = input
+            .kwh_during_negative_epex
+            .is_some_and(|k| k > rust_decimal::Decimal::ZERO);
+        if was_applied {
+            let is_solar = input.erzeugungsart.is_some_and(|a| a.is_solar());
+            result.verlaengerungsanspruch_qh =
+                crate::foerderdauer::verguetungszeitraum_verlaengerung_qh(lost_qh, is_solar);
+        }
+    }
+
+    // ── §19 EEG — Einspeisemanagement (curtailment) compensation ─────────────
+    // §19 Abs. 2 EEG 2023: §51 Negativpreisregel does NOT apply to EInsMan kWh.
+    if let Some(einsman_kwh) = input.einspeisemanagement_kwh.filter(|k| *k > Decimal::ZERO)
+        && !matches!(
+            result.status,
+            SettlementStatus::NoData | SettlementStatus::PriceMissing
+        )
+        && input.scheme != crate::scheme::SettlementScheme::Eigenverbrauch
+    {
+        let comp_rate_ct = match input.scheme {
+            crate::scheme::SettlementScheme::MarketPremium => {
+                let raw_aw = input.direktverm_aw_ct.unwrap_or_default();
+                if let Some(k) = resolve_wind_korrekturfaktor(input) {
+                    (raw_aw * k).round_dp(5)
+                } else {
+                    raw_aw
+                }
+            }
+            _ => input.verguetungssatz_ct,
+        };
+        let comp_eur = validated_eur(einsman_kwh * comp_rate_ct / Decimal::from(100));
+        result.positions.push(crate::model::SettlePosition {
+            description: format!("Einspeisemanagement-Ausfall §19 EEG ({einsman_kwh} kWh)"),
+            legal_basis: "§19 EEG 2023".to_owned(),
+            kwh: einsman_kwh,
+            rate_ct_kwh: comp_rate_ct,
+            eur: comp_eur,
+        });
+        result.settlement_eur = Some(result.settlement_eur.unwrap_or(Decimal::ZERO) + comp_eur);
+        result.eligible_kwh = Some(result.eligible_kwh.unwrap_or(Decimal::ZERO) + einsman_kwh);
+        if result.status == SettlementStatus::Sanctioned {
+            result.status = SettlementStatus::Calculated;
+        }
+    }
+
+    // ── §53b EEG 2023 — Regionale Grünstromkennzeichnung reduction ───────────
+    // BNetzA-certified reduction for plants in renewable-saturated grid areas.
+    // Applies only to Verguetung / Mieterstrom / Flexibilitaet.
+    if let Some(r53b_ct) = input
+        .sect53b_regional_reduction_ct
+        .filter(|r| *r > Decimal::ZERO)
+        && !matches!(
+            result.status,
+            SettlementStatus::NoData | SettlementStatus::PriceMissing
+        )
+        && matches!(
+            input.scheme,
+            crate::scheme::SettlementScheme::FeedInTariff
+                | crate::scheme::SettlementScheme::TenantElectricity
+                | crate::scheme::SettlementScheme::FlexibilityPremium
+        )
+        && let Some(elig_kwh) = result.eligible_kwh.filter(|k| *k > Decimal::ZERO)
+    {
+        let reduction_eur = -validated_eur(elig_kwh * r53b_ct / Decimal::from(100));
+        result.positions.push(crate::model::SettlePosition {
+            description: format!(
+                "\u{00a7}53b EEG 2023 Regionale Reduzierung ({r53b_ct}\u{202f}ct/kWh)"
+            ),
+            legal_basis: "\u{00a7}53b EEG 2023".to_owned(),
+            kwh: elig_kwh,
+            rate_ct_kwh: -r53b_ct,
+            eur: reduction_eur,
+        });
+        result.settlement_eur =
+            Some(result.settlement_eur.unwrap_or(Decimal::ZERO) + reduction_eur);
+    }
+
     result
 }
 
@@ -275,6 +390,7 @@ fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
                 positions: vec![],
                 status: SettlementStatus::Sanctioned,
                 pflichtzahlung_eur: None,
+                verlaengerungsanspruch_qh: 0,
             };
         }
         Some(SanktionAlt::VerguetungAufMarktwert) => {
@@ -287,6 +403,7 @@ fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
                     positions: vec![],
                     status: SettlementStatus::PriceMissing,
                     pflichtzahlung_eur: None,
+                    verlaengerungsanspruch_qh: 0,
                 };
             };
             let Some(kwh) = input.einspeisemenge_kwh else {
@@ -296,6 +413,7 @@ fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
                     positions: vec![],
                     status: SettlementStatus::NoData,
                     pflichtzahlung_eur: None,
+                    verlaengerungsanspruch_qh: 0,
                 };
             };
             // No §23b cap here (only for PostEegSpot ausgeförderte Anlagen).
@@ -311,6 +429,7 @@ fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
                 positions,
                 status: SettlementStatus::Sanctioned,
                 pflichtzahlung_eur: None,
+                verlaengerungsanspruch_qh: 0,
             };
         }
         Some(SanktionAlt::VerguetungReduziert20Prozent) => {
@@ -325,6 +444,7 @@ fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
                 positions: base.positions,
                 status: SettlementStatus::Sanctioned,
                 pflichtzahlung_eur: None,
+                verlaengerungsanspruch_qh: 0,
             };
         }
         None => {} // no sanction → normal settlement
@@ -348,13 +468,14 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             positions: vec![],
             status: SettlementStatus::FoerderungBeendet,
             pflichtzahlung_eur: None,
+            verlaengerungsanspruch_qh: 0,
         };
     }
 
     // ── No meter data ─────────────────────────────────────────────────────────
     // §50a FlexibilitaetZuschlag is capacity-based (not kWh-based) — bypass this check.
     let Some(kwh) = input.einspeisemenge_kwh else {
-        if input.model == SettlementModel::FlexibilitaetZuschlag {
+        if input.scheme == SettlementScheme::FlexibilitySurcharge {
             // Route to model dispatch with kwh = ZERO (unused for capacity payments)
             let kwh_dummy = Decimal::ZERO;
             let kw = input.leistung_kwp.unwrap_or(Decimal::ZERO);
@@ -377,6 +498,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 positions,
                 status: SettlementStatus::Calculated,
                 pflichtzahlung_eur: None,
+                verlaengerungsanspruch_qh: 0,
             };
         }
         return SettleOutput {
@@ -385,6 +507,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             positions: vec![],
             status: SettlementStatus::NoData,
             pflichtzahlung_eur: None,
+            verlaengerungsanspruch_qh: 0,
         };
     };
 
@@ -406,24 +529,35 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
         None
     };
 
-    match input.model {
+    // ══ SETTLEMENT PIPELINE ══════════════════════════════════════════════
+    // 1. §52 sanction check (short-circuits to EUR 0 or EPEX Marktwert)
+    // 2. FoerderungBeendet detection (billing_date > foerderendedatum)
+    // 3. Scheme dispatch → gross settlement positions
+    // 4. §51a verlängerungsanspruch (output field, informational)
+    // 5. §19 EInsMan compensation (separate position)
+    // 6. §53b regional reduction (separate position)
+    // Output: SettleOutput with all positions summed
+    match input.scheme {
         // ── EUR 0 — Eigenverbrauch ────────────────────────────────────────────
-        SettlementModel::Eigenverbrauch => SettleOutput {
+        SettlementScheme::Eigenverbrauch => SettleOutput {
             settlement_eur: Some(Decimal::ZERO),
             eligible_kwh: Some(kwh),
             positions: vec![],
             status: SettlementStatus::Calculated,
             pflichtzahlung_eur: None,
+            verlaengerungsanspruch_qh: 0,
         },
 
         // ── §21 EEG — Feste Einspeisevergütung ───────────────────────────────
-        SettlementModel::Verguetung => {
+        // §21 Abs. 1 Nr. 2 EEG — Ausfallvergütung uses same formula as FeedInTariff
+        // but at 80% of the statutory rate. Caller must supply the reduced rate.
+        SettlementScheme::FailsafeTariff | SettlementScheme::FeedInTariff => {
             let effective = match neg_kwh {
                 Some(n) => apply_negativpreis(kwh, n),
                 None => kwh,
             };
             let desc = if neg_kwh.is_some() {
-                "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG (\u{00a7}27 Negativpreisregel angewendet)"
+                "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG (\u{00a7}51 Negativpreisregel angewendet)"
             } else {
                 "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG"
             };
@@ -439,18 +573,19 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 positions,
                 status: SettlementStatus::Calculated,
                 pflichtzahlung_eur: None,
+                verlaengerungsanspruch_qh: 0,
             }
         }
 
         // ── §38a EEG — Mieterstrom ────────────────────────────────────────────
-        SettlementModel::Mieterstrom => {
+        SettlementScheme::TenantElectricity => {
             let effective = match neg_kwh {
                 Some(n) => apply_negativpreis(kwh, n),
                 None => kwh,
             };
             let zuschlag = input.mieter_zuschlag_ct.unwrap_or(Decimal::ZERO);
             let base_desc = if neg_kwh.is_some() {
-                "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG (\u{00a7}27 Negativpreisregel angewendet)"
+                "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG (\u{00a7}51 Negativpreisregel angewendet)"
             } else {
                 "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG"
             };
@@ -474,13 +609,14 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 positions,
                 status: SettlementStatus::Calculated,
                 pflichtzahlung_eur: None,
+                verlaengerungsanspruch_qh: 0,
             }
         }
 
         // ── §20 EEG — Gleitende Marktprämie ──────────────────────────────────
         // ── §§22a,28 EEG — Ausschreibungsanlagen ─────────────────────────────
-        SettlementModel::Direktvermarktung | SettlementModel::Ausschreibung => {
-            let (Some(aw_ct), Some(epex_ct)) = (input.direktverm_aw_ct, input.epex_avg_ct_kwh)
+        SettlementScheme::MarketPremium => {
+            let (Some(raw_aw_ct), Some(epex_ct)) = (input.direktverm_aw_ct, input.epex_avg_ct_kwh)
             else {
                 return SettleOutput {
                     settlement_eur: None,
@@ -488,12 +624,39 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                     positions: vec![],
                     status: SettlementStatus::PriceMissing,
                     pflichtzahlung_eur: None,
+                    verlaengerungsanspruch_qh: 0,
                 };
             };
-            let praemie_ct = (aw_ct - epex_ct).max(Decimal::ZERO);
+            // ── §36k EEG — Wind onshore Korrekturfaktor ───────────────────────
+            // When supplied (via wind_korrekturfaktor or wind_standort), multiply
+            // the base AW by the location correction factor.
+            // Applies only to wind onshore plants; §36k Abs. 4: no correction for ≤EEG2012.
+            let aw_ct = if let Some(k) = resolve_wind_korrekturfaktor(input) {
+                (raw_aw_ct * k).round_dp(5)
+            } else {
+                raw_aw_ct
+            };
             let mgmt_ct = resolve_managementpraemie(input.managementpraemie_ct, input.leistung_kwp);
 
-            let (praemie_desc, praemie_basis) = if input.model == SettlementModel::Ausschreibung {
+            // ── §20 Abs. 3 EEG 2023 — Managementprämie ────────────────────────
+            // The Managementprämie is NOT a separate guaranteed floor payment.
+            // §20 Abs. 3 EEG 2023: "der anzulegende Wert um 0,4 ct/kWh zu erhöhen"
+            // → AW_eff = AW + Managementprämie; Marktprämie = max(0, AW_eff − EPEX).
+            //
+            // When EPEX > AW + Managementprämie: total = 0 (no payment at all).
+            // The old EEG ≤2012 "separate floor" model (mgmt always paid) is gone.
+            //
+            // For billing positions we decompose into pure-spread and management components:
+            //   pure_praemie = max(0, AW − EPEX)        — the spread ignoring Managementprämie
+            //   effective_mgmt = total − pure_praemie   — the residual Managementprämie amount
+            // Both can be zero when EPEX ≥ AW + Managementprämie.
+            let eff_aw_ct = aw_ct + mgmt_ct;
+            let total_spread_ct = (eff_aw_ct - epex_ct).max(Decimal::ZERO);
+            let pure_praemie_ct = (aw_ct - epex_ct).max(Decimal::ZERO);
+            let effective_mgmt_ct = total_spread_ct - pure_praemie_ct;
+            // Invariant: pure_praemie_ct + effective_mgmt_ct == total_spread_ct
+
+            let (praemie_desc, praemie_basis) = if input.tariff_source.is_auction() {
                 (
                     "Gleitende Marktpr\u{00e4}mie \u{00a7}\u{00a7}22a,28 EEG 2023 (Ausschreibung)",
                     "\u{00a7}\u{00a7}22a,28 EEG 2023",
@@ -506,18 +669,19 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             };
 
             let mut positions = vec![];
-            if praemie_ct > Decimal::ZERO || mgmt_ct == Decimal::ZERO {
-                positions.push(pos(praemie_desc, praemie_basis, kwh, praemie_ct));
+            if pure_praemie_ct > Decimal::ZERO {
+                positions.push(pos(praemie_desc, praemie_basis, kwh, pure_praemie_ct));
             }
-            if mgmt_ct > Decimal::ZERO {
+            if effective_mgmt_ct > Decimal::ZERO {
                 positions.push(pos(
                     "Managementpr\u{00e4}mie \u{00a7}20 Abs.\u{202f}3 EEG 2023",
                     "\u{00a7}20 Abs. 3 EEG 2023",
                     kwh,
-                    mgmt_ct,
+                    effective_mgmt_ct,
                 ));
             }
             if positions.is_empty() {
+                // EPEX ≥ AW + Managementprämie: zero payment — show audit position.
                 positions.push(pos(praemie_desc, praemie_basis, kwh, Decimal::ZERO));
             }
 
@@ -528,13 +692,14 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 positions,
                 status: SettlementStatus::Calculated,
                 pflichtzahlung_eur: None,
+                verlaengerungsanspruch_qh: 0,
             }
         }
 
         // ── Post-EEG Spot (§21 post-Förderung + §23b cap) ─────────────────────
         // Negative EPEX → negative EUR (plant pays). No floor.
         // §23b EEG 2023: Jahresmarktwert capped at 10 ct/kWh for ausgeförderte Anlagen.
-        SettlementModel::PostEegSpot => {
+        SettlementScheme::PostEeg => {
             let Some(epex_ct) = input.epex_avg_ct_kwh else {
                 return SettleOutput {
                     settlement_eur: None,
@@ -542,17 +707,28 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                     positions: vec![],
                     status: SettlementStatus::PriceMissing,
                     pflichtzahlung_eur: None,
+                    verlaengerungsanspruch_qh: 0,
                 };
             };
             // §23b EEG 2023: "ab dem Kalenderjahr 2023 höchstens jedoch 10 Cent pro kWh"
             // The cap only applies when EPEX is POSITIVE (the plant gets at most 10 ct).
-            // When EPEX is negative, the cap does NOT apply — plant owes the NB.
-            let effective_ct = if epex_ct > dec!(10) {
-                dec!(10)
+            //
+            // Negative EPEX: whether the plant pays depends on the post-EEG marketing
+            // contract — NOT a statutory rule. Use post_eeg_price_floor to configure:
+            //   None            = full market exposure (default, EPEX used as-is)
+            //   Some(ZERO)      = floor at 0 (no obligation for negative periods)
+            //   Some(custom)    = contract-defined floor
+            let epex_floored = if let Some(floor) = input.post_eeg_price_floor {
+                epex_ct.max(floor)
             } else {
                 epex_ct
             };
-            let was_capped = epex_ct > dec!(10);
+            let effective_ct = if epex_floored > dec!(10) {
+                dec!(10)
+            } else {
+                epex_floored
+            };
+            let was_capped = epex_floored > dec!(10);
             let desc = if was_capped {
                 format!(
                     "Einspeiseverg\u{00fc}tung Post-EEG Spot \
@@ -574,11 +750,12 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 positions,
                 status: SettlementStatus::Calculated,
                 pflichtzahlung_eur: None,
+                verlaengerungsanspruch_qh: 0,
             }
         }
 
         // ── §7 KWKG 2023 — KWK-Zuschlag ──────────────────────────────────────
-        SettlementModel::KwkgZuschlag => {
+        SettlementScheme::KwkSurcharge => {
             use crate::foerderdauer::kwk_eligible_kwh;
 
             let (eligible, limit_reached) = match (input.kwk_strom_kwh_gesamt, input.kwk_max_kwh) {
@@ -593,6 +770,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                     positions: vec![],
                     status: SettlementStatus::FoerderungBeendet,
                     pflichtzahlung_eur: None,
+                    verlaengerungsanspruch_qh: 0,
                 };
             }
 
@@ -620,11 +798,12 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 positions,
                 status,
                 pflichtzahlung_eur: None,
+                verlaengerungsanspruch_qh: 0,
             }
         }
 
         // ── §50b EEG — Flexibilitätsprämie (bestehende Anlagen) ──────────────
-        SettlementModel::Flexibilitaet => {
+        SettlementScheme::FlexibilityPremium => {
             let effective = match neg_kwh {
                 Some(n) => apply_negativpreis(kwh, n),
                 None => kwh,
@@ -655,6 +834,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 positions,
                 status: SettlementStatus::Calculated,
                 pflichtzahlung_eur: None,
+                verlaengerungsanspruch_qh: 0,
             }
         }
 
@@ -663,7 +843,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
         // leistung_kwp = additional flexible capacity in kW.
         // verguetungssatz_ct = annual rate per kW in EUR (100 EUR/kW/year).
         // Monthly = leistung_kwp × rate / 12.
-        SettlementModel::FlexibilitaetZuschlag => {
+        SettlementScheme::FlexibilitySurcharge => {
             let kw = input.leistung_kwp.unwrap_or(Decimal::ZERO);
             let rate_eur_per_kw_year = input.verguetungssatz_ct; // typically 100 EUR/kW/year
             let monthly_eur = validated_eur(kw * rate_eur_per_kw_year / dec!(12));
@@ -683,6 +863,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 positions,
                 status: SettlementStatus::Calculated,
                 pflichtzahlung_eur: None,
+                verlaengerungsanspruch_qh: 0,
             }
         }
     }

@@ -63,6 +63,54 @@ pub struct MsbWechselPayload {
     pub received_at: time::OffsetDateTime,
 }
 
+impl MsbWechselPayload {
+    /// Parse from a `de.mako.process.initiated` CloudEvent for PIDs 55039/55042.
+    pub fn parse(event: &serde_json::Value) -> Option<Self> {
+        let data = &event["data"];
+        let pid = event
+            .get("makopid")
+            .and_then(|v| v.as_u64())
+            .or_else(|| data.get("pid")?.as_u64())? as u32;
+        if !matches!(pid, 55039 | 55042) {
+            return None;
+        }
+        let subject = event["subject"].as_str()?;
+        let process_id: uuid::Uuid = subject.parse().ok()?;
+        let malo_id = data.get("malo_id")?.as_str()?.to_owned();
+        let melo_id = data
+            .get("melo_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let nmsb_mp_id = data
+            .get("new_msb")
+            .or_else(|| data.get("nmsb_mp_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let nb_mp_id = data
+            .get("grid_operator")
+            .or_else(|| data.get("nb_mp_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let sr_id = data
+            .get("sr_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        Some(Self {
+            process_id,
+            pid,
+            malo_id,
+            melo_id,
+            nmsb_mp_id,
+            nb_mp_id,
+            sr_id,
+            received_at: time::OffsetDateTime::now_utc(),
+        })
+    }
+}
+
 /// Outcome of an MSB-Wechsel STP evaluation.
 #[derive(Debug, Clone)]
 pub enum MsbDecisionOutcome {
@@ -206,6 +254,7 @@ pub async fn handle_msb_wechsel(
     cfg: &MsbModuleConfig,
     payload: MsbWechselPayload,
     marktd: &mako_markt::marktd_client::MarktdClient,
+    makod: &mako_markt::makod_client::MakodClient,
 ) {
     // ── Query marktd in parallel ──────────────────────────────────────────────
     // Use get_versorgung to check if MaLo/MeLo exists; check Zaehler via partner
@@ -265,13 +314,30 @@ pub async fn handle_msb_wechsel(
                 } else {
                     "wim.msb-wechsel.kuendigung.bestaetigen"
                 };
-                // TODO: wire MakodClient::post_command once WiM MSB workflow
-                // commands are registered in makod.
-                info!(
-                    process_id = %payload.process_id,
-                    command = command_name,
-                    "processd MSB STP: would dispatch Accept command"
-                );
+                let cmd = mako_markt::makod_client::ForwardCommand {
+                    marktrolle: Some("NB".to_owned()),
+                    command: command_name.to_owned(),
+                    malo_id: Some(payload.malo_id.clone()),
+                    melo_id: Some(payload.melo_id.clone()),
+                    payload: serde_json::json!({
+                        "process_id": payload.process_id,
+                        "nmsb_mp_id": payload.nmsb_mp_id,
+                        "auto_stp": true,
+                    }),
+                };
+                let idem = format!("msb-wechsel-accept-{}", payload.process_id);
+                match makod.post_command(&idem, &cmd).await {
+                    Ok(_) => info!(
+                        process_id = %payload.process_id,
+                        command = command_name,
+                        "processd MSB STP: dispatched Accept command"
+                    ),
+                    Err(e) => warn!(
+                        process_id = %payload.process_id,
+                        error = %e,
+                        "processd MSB STP: Accept dispatch failed"
+                    ),
+                }
             }
         }
         MsbDecisionOutcome::Reject { erc_code, reason } => {
@@ -287,12 +353,31 @@ pub async fn handle_msb_wechsel(
             } else {
                 "wim.msb-wechsel.kuendigung.ablehnen"
             };
-            info!(
-                process_id = %payload.process_id,
-                command = command_name,
-                erc_code,
-                "processd MSB STP: would dispatch Reject command"
-            );
+            let cmd = mako_markt::makod_client::ForwardCommand {
+                marktrolle: Some("NB".to_owned()),
+                command: command_name.to_owned(),
+                malo_id: Some(payload.malo_id.clone()),
+                melo_id: Some(payload.melo_id.clone()),
+                payload: serde_json::json!({
+                    "process_id": payload.process_id,
+                    "erc_code": erc_code,
+                    "reason": reason,
+                }),
+            };
+            let idem = format!("msb-wechsel-reject-{}", payload.process_id);
+            match makod.post_command(&idem, &cmd).await {
+                Ok(_) => info!(
+                    process_id = %payload.process_id,
+                    command = command_name,
+                    erc_code,
+                    "processd MSB STP: dispatched Reject command"
+                ),
+                Err(e) => warn!(
+                    process_id = %payload.process_id,
+                    error = %e,
+                    "processd MSB STP: Reject dispatch failed"
+                ),
+            }
         }
         MsbDecisionOutcome::Escalate { reason } => {
             warn!(

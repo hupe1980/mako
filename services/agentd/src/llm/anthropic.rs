@@ -23,7 +23,7 @@ impl AnthropicProvider {
                 .clone()
                 .unwrap_or_else(|| "https://api.anthropic.com".into()),
             api_key: cfg.api_key.clone(),
-            client: reqwest::Client::new(),
+            client: mako_service::http::default_client(),
         }
     }
 }
@@ -82,10 +82,14 @@ impl LlmProvider for AnthropicProvider {
             })
             .collect();
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": cfg.model, "max_tokens": cfg.max_tokens,
-            "system": system, "messages": ant_msgs, "tools": ant_tools,
+            "system": system, "messages": ant_msgs,
         });
+        // Omit `tools` when empty — Anthropic returns 400 on `"tools": []`.
+        if !ant_tools.is_empty() {
+            body["tools"] = Value::Array(ant_tools);
+        }
 
         let url = format!("{}/v1/messages", self.base);
         let req = self

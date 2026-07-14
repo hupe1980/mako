@@ -60,7 +60,6 @@ use marktd::{
         subscription::{get_subscription, list_subscriptions, put_subscription, test_subscription},
         versorgung::{get_versorgungsstatus, get_versorgungsstatus_history, put_versorgungsstatus},
     },
-    oidc::OidcVerifier,
     openapi::swagger_ui,
     pg::{
         PgContractRepository, PgCorrelationIndex, PgDeviceRepository,

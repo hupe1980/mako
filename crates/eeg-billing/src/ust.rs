@@ -45,13 +45,13 @@
 //! ```rust
 //! use eeg_billing::ust::{VatStatus, ust_tax_layers};
 //! use billing::{DocumentMeta, Tariff};
-//! use eeg_billing::{SettleInput, SettlementModel, calculate_settlement};
+//! use eeg_billing::{SettleInput, SettlementScheme, calculate_settlement};
 //! use eeg_billing::tariff::EegSettleTariff;
 //! use rust_decimal_macros::dec;
 //! use time::macros::date;
 //!
 //! let output = calculate_settlement(&SettleInput {
-//!     model: SettlementModel::Verguetung,
+//!     scheme: eeg_billing::SettlementScheme::FeedInTariff,
 //!     einspeisemenge_kwh: Some(dec!(500)),
 //!     verguetungssatz_ct: dec!(8.51),
 //!     leistung_kwp: Some(dec!(9.5)),

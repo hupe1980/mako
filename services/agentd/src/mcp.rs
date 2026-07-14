@@ -24,7 +24,7 @@ impl McpEndpoint {
             name,
             base_url: base_url.trim_end_matches('/').to_owned(),
             api_key,
-            client: Client::new(),
+            client: mako_service::http::default_client(),
         }
     }
 

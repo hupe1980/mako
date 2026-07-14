@@ -126,6 +126,7 @@ curl -s -X POST http://nis-syncd:9680/api/v1/grid/sync?dry_run=true \
 | `skipped` | `usize` | Records already matching — no write needed (or dry-run) |
 | `errors` | `Vec<String>` | Per-entry errors (network failures, `marktd` rejections) |
 | `drift_detected` | `bool` | `true` if at least one record differed from `marktd` state |
+| `drift_count` | `usize` | Number of MaLo entries that differed (detail of `drift_detected`) |
 
 ---
 
@@ -138,6 +139,10 @@ marktd_url    = "http://marktd:8180"
 marktd_api_key = "env:MARKTD_API_KEY"
 # NB MP-ID that owns the imported grid records
 nb_mp_id      = "9900357000004"
+# Max concurrent marktd PUT calls per sync pass (default: 20)
+sync_concurrency = 20
+# Max entries per sync request body (default: 50_000)
+max_batch_size   = 50000
 ```
 
 ---
@@ -221,3 +226,56 @@ drift_webhook_url = "https://alertmanager:9093/api/v2/alerts"
 - [`marktd` Operator Guide](./marktd.md) — `malo_grid` table details
 - [`processd` Operator Guide](./processd.md) — NB STP and netz-checker
 - [Getting Started](./getting-started.md)
+
+---
+
+## Concurrent sync
+
+`nis-syncd` processes NIS entries in parallel using `tokio::task::JoinSet` with
+a semaphore-bounded concurrency limit. This reduces wall-clock time for large NIS
+exports from minutes (sequential) to seconds.
+
+| Config field | Default | Description |
+|---|---|---|
+| `sync_concurrency` | `20` | Max concurrent marktd `PUT /api/v1/malo/{id}/grid` calls |
+| `max_batch_size` | `50000` | Max NIS entries per request body |
+
+```toml
+# nis-syncd.toml
+sync_concurrency = 20     # increase if marktd handles higher rate
+max_batch_size   = 50000  # raises 413 Payload Too Large above this limit
+```
+
+---
+
+## MCP server
+
+`nis-syncd` exposes an MCP server at `/mcp` for LLM-based grid health automation.
+
+### Tools (4)
+
+| Tool | Description |
+|---|---|
+| `sync_grid(entries?)` | Trigger a full NIS export sync to marktd (idempotent, concurrent) |
+| `dry_run_sync(entries?)` | Preview drift without writing — returns changed MaLo count |
+| `check_malo_grid(malo_id)` | Look up a specific MaLo's grid record in marktd; diagnose STP rejections |
+| `get_last_sync_report` | Read the cached result of the most recent sync without triggering a new one |
+
+### Prompts (2)
+
+| Prompt | Description |
+|---|---|
+| `run-grid-sync` | Step-by-step: sync NIS/GIS data to marktd and verify STP improvement |
+| `check-stp-readiness` | Diagnose processd STP drops from missing `bilanzierungsgebiet` data |
+
+### Example: check a specific MaLo after STP rejection
+
+```bash
+# ERC A02 = MaLo not in NB grid — diagnose via MCP
+curl -X POST http://nis-syncd:9680/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_malo_grid","arguments":{"malo_id":"51238696780"}}}'
+```
+
+Returns `{"found": false, "note": "No grid record. Run sync_grid to import from NIS."}` 
+or `{"found": true, "bilanzierungsgebiet": "10YDE-VE-------2", ...}`.

@@ -2,6 +2,12 @@
 
 use serde::Deserialize;
 
+/// Newtype for the tenant string injected as an Axum `Extension`.
+///
+/// Using a newtype avoids accidental collisions with other `Extension<String>` values.
+#[derive(Clone, Debug)]
+pub struct Tenant(pub String);
+
 #[derive(Debug, Deserialize)]
 pub struct SperrdConfig {
     pub database_url: String,

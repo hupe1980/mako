@@ -5,19 +5,19 @@
 //! and synchronous. No floating-point money: all monetary arithmetic uses
 //! [`billing::EuroAmount`] (`i64 × 10⁻⁵ EUR`) internally.
 //!
-//! # Settlement models (9)
+//! # Settlement schemes (9)
 //!
-//! | Variant | Formula | Legal basis |
+//! | `SettlementScheme` | Formula | Legal basis |
 //! |---|---|---|
-//! | [`SettlementModel::Verguetung`] | `kwh × rate_ct / 100` | §21 EEG |
-//! | [`SettlementModel::Mieterstrom`] | Vergütung + `kwh × zuschlag_ct / 100` | §38a EEG 2023 |
-//! | [`SettlementModel::Direktvermarktung`] | `max(0, AW−EPEX) × kwh / 100 + Mgmt.prämie` | §20 EEG |
-//! | [`SettlementModel::Ausschreibung`] | same as Direktvermarktung (BNetzA tender AW) | §§22a,28 EEG 2023 |
-//! | [`SettlementModel::PostEegSpot`] | `kwh × EPEX / 100` (§23b cap: 10 ct) | §21 EEG (post-Förderung) |
-//! | [`SettlementModel::Eigenverbrauch`] | EUR 0 | §38a EEG (self-consumption) |
-//! | [`SettlementModel::KwkgZuschlag`] | `eligible_kwh × kwk_ct / 100` (hour-limit capped) | §7 KWKG 2023 |
-//! | [`SettlementModel::Flexibilitaet`] | Vergütung + `kwh × flex_ct / 100` | §50b EEG 2023 (bestehende Anlagen) |
-//! | [`SettlementModel::FlexibilitaetZuschlag`] | `kw × rate / 12` (monthly capacity payment) | §50a EEG 2023 (neue Anlagen) |
+//! | `FeedInTariff` | `kwh × verguetungssatz_ct / 100` | §21 EEG |
+//! | `TenantElectricity` | Vergütung + `kwh × mieter_zuschlag_ct / 100` | §38a EEG 2023 |
+//! | `MarketPremium` | `max(0, (AW+Mgmt) − EPEX) × kwh / 100` (§20 Abs. 3) | §20 EEG |
+//! | `MarketPremium` + `TariffSource::Auction` | same formula, AW from BNetzA tender | §§22a,28 EEG 2023 |
+//! | `PostEeg` | `kwh × EPEX / 100` (§23b cap: 10 ct; configurable floor) | §21 EEG (post-Förderung) |
+//! | `Eigenverbrauch` | EUR 0 (no feed-in remuneration) | §38a EEG |
+//! | `KwkSurcharge` | `eligible_kwh × rate / 100` (hour-limit cap) | §7 KWKG 2023 |
+//! | `FlexibilityPremium` | Vergütung + `kwh × flex_praemie_ct / 100` | §50b EEG 2023 (bestehende Anlagen) |
+//! | `FlexibilitySurcharge` | `kw × rate / 12` (monthly capacity payment) | §50a EEG 2023 (neue Anlagen) |
 //!
 //! # One formula — all EEG versions (2000–2024)
 //!
@@ -58,7 +58,7 @@
 //! # Quick start
 //!
 //! ```rust
-//! use eeg_billing::{SettleInput, SettlementModel, calculate_settlement, SettlementStatus};
+//! use eeg_billing::{SettleInput, SettlementScheme, calculate_settlement, SettlementStatus};
 //! use rust_decimal::Decimal;
 //! use std::str::FromStr;
 //!
@@ -66,7 +66,7 @@
 //!
 //! // §21 EEG 2023 — 100 kWh × 8.51 ct/kWh (Solarpaket I, ≤10 kWp Überschuss) = 8.51 EUR
 //! let out = calculate_settlement(&SettleInput {
-//!     model: SettlementModel::Verguetung,
+//!     scheme: eeg_billing::SettlementScheme::FeedInTariff,
 //!     einspeisemenge_kwh: Some(d("100")),
 //!     verguetungssatz_ct: d("8.51"),
 //!     ..SettleInput::default()
@@ -77,16 +77,26 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod biomasse;
 pub mod bridge;
+pub mod degression;
+pub mod direktverm;
 mod error;
 pub mod foerderdauer;
+pub mod foerderungsende;
 mod formula;
+pub mod metering;
 mod model;
 pub mod rates;
+pub mod reductions;
+pub mod scheme;
+pub mod settlement_state;
+pub mod solar;
 pub mod tariff;
 pub mod technology;
 pub mod ust;
 pub mod version;
+pub mod wind;
 
 pub use error::SettlementError;
 pub use foerderdauer::{
@@ -94,12 +104,32 @@ pub use foerderdauer::{
     foerderendedatum_kwkg_years, foerderendedatum_repowering, kwk_eligible_kwh,
     kwk_foerderend_calendar, kwk_max_kwh, managementpraemie_ct, negativpreis_kw_exemption,
     negativpreis_rule_applies, negativpreis_rule_applies_for_version,
-    verguetungszeitraum_verlaengerung_qh, zusammenlegung_within_12_months,
+    verguetungszeitraum_verlaengerung_qh, wind_onshore_korrekturfaktor_corrected_aw,
+    zusammenlegung_within_12_months,
 };
 pub use formula::calculate_settlement;
 pub use model::{
     CapacityBlock, Messkonzept, Pflichtverstoss, SanktionAlt, SanktionsTyp, SettleInput,
-    SettleOutput, SettlePosition, SettlementModel, SettlementStatus,
+    SettleOutput, SettlePosition, SettlementStatus,
 };
-pub use technology::{ErzeugungsArt, InvalidErzeugungsArt};
+pub use scheme::{
+    AusschreibungMetadata, CorrectionReason, MarktpreisKategorie, Paragraph100Rule,
+    SettlementScheme, SettlementType, TariffSource,
+};
+pub use technology::{
+    ErzeugungsArt, InbetriebnahmeTyp, InvalidErzeugungsArt, InvalidInbetriebnahmeTyp,
+    RepoweringScope,
+};
 pub use version::{EegGesetz, InvalidEegGesetz};
+
+// Domain module guide:
+// degression: §23a quarterly solar PV tariff degression — Quarter, DegressionTier, apply_degression
+// direktverm: §§20–22 Direktvermarktung — mandatory threshold, Ausschreibungspflicht, period model
+// metering:   Multi-meter Messkonzept — MeterConfiguration, compute_einspeisemenge, §42b GGV, §14a
+// reductions: §§52–54 reduction pipeline — Sect52Netting, Sect53c, Sect54, ReductionPipeline
+// settlement_state: Monthly lifecycle state machine — SettlementPeriodState, derive_settlement_state
+// solar: §48 EEG PV subtypes, Volleinspeisung/Überschuss, §12 Abs. 3 UStG, Agri-PV
+// wind:  §36k Korrekturfaktor, Standortklasse, reference yield model
+// biomasse: §43/§44 fuel classes, Güllekleinanlage (≤75 kW, ≥80% Gülle)
+// foerderungsende: FoerderendeGrund enum, SanktionStatus lifecycle
+// scheme: SettlementScheme, TariffSource, Paragraph100Rule, SettlementType

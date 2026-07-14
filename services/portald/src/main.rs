@@ -28,17 +28,12 @@ use axum::{
 use handlers::PortalClients;
 use mako_service::health::health_routes;
 use mako_service::load_config;
-use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 use crate::{clients::UpstreamClient, config::PortaldConfig};
-use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    let _guard = mako_service::init_tracing_from_env("portald");
 
     let cfg: PortaldConfig = load_config("portald")?;
     let port = cfg.port;
@@ -79,6 +74,8 @@ async fn main() -> anyhow::Result<()> {
                 cfg.vertragd_api_key.clone(),
             ))
         }),
+        // Shared HTTP client for auth calls — avoids creating a new client per request.
+        auth_client: mako_service::http::default_client(),
     });
 
     let cfg = Arc::new(cfg);
@@ -169,6 +166,5 @@ async fn main() -> anyhow::Result<()> {
     let addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
     tracing::info!(port, "portald listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-    Ok(())
+    mako_service::shutdown::serve(listener, app, shutdown).await
 }

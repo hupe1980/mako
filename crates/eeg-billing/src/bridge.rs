@@ -15,12 +15,12 @@
 //! # Example
 //!
 //! ```rust
-//! use eeg_billing::{SettleInput, SettlementModel, calculate_settlement};
+//! use eeg_billing::{SettleInput, SettlementScheme, calculate_settlement};
 //! use eeg_billing::bridge::settlement_to_line_items;
 //! use rust_decimal::Decimal;
 //!
 //! let output = calculate_settlement(&SettleInput {
-//!     model: SettlementModel::Verguetung,
+//!     scheme: eeg_billing::SettlementScheme::FeedInTariff,
 //!     einspeisemenge_kwh: Some(Decimal::from(500u32)),
 //!     verguetungssatz_ct: Decimal::from_str_exact("8.11").unwrap(),
 //!     ..SettleInput::default()

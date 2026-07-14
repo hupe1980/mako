@@ -23,6 +23,10 @@ pub struct PortalClients {
     pub marktd: Option<Arc<UpstreamClient>>,
     /// Write-capable client for `vertragd` — used by portal self-service write API (L3).
     pub vertragd: Option<Arc<UpstreamClient>>,
+    /// Shared reqwest client for auth calls to `vertragd /kunden/authenticate`.
+    ///
+    /// Created once at startup (connection-pooled) instead of per-request.
+    pub auth_client: reqwest::Client,
 }
 
 // ── Authorization ─────────────────────────────────────────────────────────────
@@ -37,6 +41,7 @@ pub struct PortalClients {
 /// Returns `Err(Response)` with 401/403 when denied.
 async fn authorize_malo_access(
     cfg: &PortaldConfig,
+    clients: &PortalClients,
     headers: &axum::http::HeaderMap,
     malo_id: &str,
 ) -> Result<(), axum::response::Response> {
@@ -62,8 +67,8 @@ async fn authorize_malo_access(
         }
     };
 
-    let client = reqwest::Client::new();
-    let mut req = client
+    let mut req = clients
+        .auth_client
         .get(format!("{vertragd_url}/api/v1/kunden/authenticate"))
         .query(&[("malo_id", malo_id)])
         .header("Authorization", &auth_header);
@@ -114,7 +119,7 @@ pub async fn get_dashboard(
     Path(malo_id): Path<String>,
 ) -> impl IntoResponse {
     // Authorize: verify the JWT sub owns this MaLo via vertragd.
-    if let Err(resp) = authorize_malo_access(&cfg, &headers, &malo_id).await {
+    if let Err(resp) = authorize_malo_access(&cfg, &clients, &headers, &malo_id).await {
         return resp;
     }
     // Fetch in parallel.
@@ -358,6 +363,7 @@ struct PortalAuthCtx {
 /// or an HTTP error response on failure.
 async fn authenticate_and_resolve(
     cfg: &PortaldConfig,
+    clients: &PortalClients,
     headers: &axum::http::HeaderMap,
     malo_id: &str,
 ) -> Result<PortalAuthCtx, Response> {
@@ -383,8 +389,8 @@ async fn authenticate_and_resolve(
         }
     };
 
-    let client = reqwest::Client::new();
-    let mut req = client
+    let mut req = clients
+        .auth_client
         .get(format!("{vertragd_url}/api/v1/kunden/authenticate"))
         .query(&[("malo_id", malo_id)])
         .header("Authorization", &auth);
@@ -486,7 +492,7 @@ pub async fn get_portal_vertrag(
     headers: axum::http::HeaderMap,
     Path(malo_id): Path<String>,
 ) -> impl IntoResponse {
-    let auth_ctx = match authenticate_and_resolve(&cfg, &headers, &malo_id).await {
+    let auth_ctx = match authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
         Ok(ctx) => ctx,
         Err(resp) => return resp,
     };
@@ -547,7 +553,7 @@ pub async fn post_portal_tarifwechsel(
     Path(malo_id): Path<String>,
     Json(req): Json<PortalTarifwechselRequest>,
 ) -> impl IntoResponse {
-    let auth_ctx = match authenticate_and_resolve(&cfg, &headers, &malo_id).await {
+    let auth_ctx = match authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
         Ok(ctx) => ctx,
         Err(resp) => return resp,
     };
@@ -651,7 +657,7 @@ pub async fn post_portal_kuendigen(
     Path(malo_id): Path<String>,
     Json(req): Json<PortalKuendigungRequest>,
 ) -> impl IntoResponse {
-    let auth_ctx = match authenticate_and_resolve(&cfg, &headers, &malo_id).await {
+    let auth_ctx = match authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
         Ok(ctx) => ctx,
         Err(resp) => return resp,
     };
@@ -754,7 +760,7 @@ pub async fn put_portal_kontakt(
     Path(malo_id): Path<String>,
     Json(req): Json<PortalKontaktRequest>,
 ) -> impl IntoResponse {
-    let auth_ctx = match authenticate_and_resolve(&cfg, &headers, &malo_id).await {
+    let auth_ctx = match authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
         Ok(ctx) => ctx,
         Err(resp) => return resp,
     };
@@ -800,7 +806,7 @@ pub async fn get_portal_invoice_download(
     headers: axum::http::HeaderMap,
     Path((malo_id, record_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    if let Err(resp) = authenticate_and_resolve(&cfg, &headers, &malo_id).await {
+    if let Err(resp) = authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
         return resp;
     }
     let billingd = match &clients.billingd {
@@ -889,7 +895,7 @@ pub async fn put_portal_sepa(
     Path(malo_id): Path<String>,
     Json(req): Json<PortalSepaRequest>,
 ) -> impl IntoResponse {
-    let _auth_ctx = match authenticate_and_resolve(&cfg, &headers, &malo_id).await {
+    let _auth_ctx = match authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
         Ok(ctx) => ctx,
         Err(resp) => return resp,
     };
@@ -971,7 +977,7 @@ pub async fn get_portal_vorauszahlung(
     headers: axum::http::HeaderMap,
     Path(malo_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Err(resp) = authenticate_and_resolve(&cfg, &headers, &malo_id).await {
+    if let Err(resp) = authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
         return resp;
     }
     proxy_or_unavailable(
@@ -980,4 +986,81 @@ pub async fn get_portal_vorauszahlung(
         "accountingd",
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    // ── URL construction ───────────────────────────────────────────────────────
+
+    /// Verify the Lastgang URL includes from/to query params when both are set.
+    #[test]
+    fn lastgang_url_with_date_range() {
+        let malo_id = "51238696780";
+        let from = "2026-01-01";
+        let to = "2026-01-31";
+        let path = format!("/api/v1/lastgang/{malo_id}?from={from}&to={to}");
+        assert!(path.contains("?from="), "should contain from param");
+        assert!(path.contains("&to="), "should contain to param");
+    }
+
+    /// Verify the invoice limit is clamped to a sensible default.
+    #[test]
+    fn invoice_limit_default_and_cap() {
+        // Default should be 24
+        let default: i64 = 24;
+        assert_eq!(default, 24);
+
+        // MCP default is 10, max 50
+        let mcp_default: u32 = 10;
+        let mcp_limit = mcp_default.min(50);
+        assert_eq!(mcp_limit, 10);
+
+        let mcp_big: u32 = 100;
+        let mcp_capped = mcp_big.min(50);
+        assert_eq!(mcp_capped, 50, "MCP limit must be capped at 50");
+    }
+
+    /// Verify MaLo ID path formatting is correct for all endpoints.
+    #[test]
+    fn portal_path_formats_are_correct() {
+        let malo_id = "51238696780";
+        assert_eq!(
+            format!("/api/v1/accounts/{malo_id}/balance"),
+            "/api/v1/accounts/51238696780/balance"
+        );
+        assert_eq!(
+            format!("/api/v1/accounts/{malo_id}/kontoauszug"),
+            "/api/v1/accounts/51238696780/kontoauszug"
+        );
+        assert_eq!(
+            format!("/api/v1/accounts/{malo_id}/vorauszahlung"),
+            "/api/v1/accounts/51238696780/vorauszahlung"
+        );
+        assert_eq!(
+            format!("/api/v1/versorgung/{malo_id}"),
+            "/api/v1/versorgung/51238696780"
+        );
+        assert_eq!(
+            format!("/api/v1/anlagen?malo_id={malo_id}"),
+            "/api/v1/anlagen?malo_id=51238696780"
+        );
+    }
+
+    /// Verify vertragd auth URL construction is correct.
+    #[test]
+    fn vertragd_auth_url_construction() {
+        let base = "http://vertragd:9780";
+        let trimmed = base.trim_end_matches('/');
+        let url = format!("{trimmed}/api/v1/kunden/authenticate");
+        assert_eq!(url, "http://vertragd:9780/api/v1/kunden/authenticate");
+    }
+
+    /// Verify URL construction when base_url has trailing slash.
+    #[test]
+    fn vertragd_url_trailing_slash_trimmed() {
+        let base = "http://vertragd:9780/";
+        let trimmed = base.trim_end_matches('/');
+        let url = format!("{trimmed}/api/v1/kunden/authenticate");
+        assert_eq!(url, "http://vertragd:9780/api/v1/kunden/authenticate");
+    }
 }

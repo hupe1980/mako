@@ -40,7 +40,7 @@
 use anyhow::Context as _;
 use axum::{Extension, Router};
 use mako_service::{health::health_routes, load_config};
-use nis_syncd::{config, handlers, mcp_server};
+use nis_syncd::{config, handlers, mcp_server, sync};
 use tracing::info;
 
 #[tokio::main]
@@ -55,13 +55,24 @@ async fn main() -> anyhow::Result<()> {
         mako_service::http::default_client(),
     ));
 
+    // Shared cache of the most recent sync report (HTTP handler + MCP).
+    let last_report: sync::LastSyncReport = std::sync::Arc::new(tokio::sync::RwLock::new(None));
+
     let shutdown = mako_service::shutdown::token();
     let mcp_state = std::sync::Arc::new(mcp_server::NisSyncdMcpState {
         auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.nb_mp_id),
         nb_mp_id: cfg.nb_mp_id.clone(),
         service_base_url: format!("http://0.0.0.0:{}", cfg.port.unwrap_or(9680)),
+        http_client: mako_service::http::default_client(),
         marktd_api_key: cfg.marktd_api_key.clone(),
+        marktd: std::sync::Arc::clone(&marktd),
+        last_report: std::sync::Arc::clone(&last_report),
     });
+
+    let hcfg = handlers::HandlerConfig {
+        sync_concurrency: cfg.sync_concurrency,
+        max_batch_size: cfg.max_batch_size,
+    };
 
     let app = Router::new()
         .merge(mcp_server::router(
@@ -75,7 +86,9 @@ async fn main() -> anyhow::Result<()> {
         )
         .layer(Extension(marktd))
         .layer(Extension(cfg.nb_mp_id.clone()))
-        .layer(Extension(cfg.drift_webhook_url.clone()));
+        .layer(Extension(cfg.drift_webhook_url.clone()))
+        .layer(Extension(hcfg))
+        .layer(Extension(last_report));
 
     let addr = format!("0.0.0.0:{}", cfg.port.unwrap_or(9680));
     info!(%addr, "nis-syncd starting");

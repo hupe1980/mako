@@ -26,7 +26,6 @@ serde_json   = { workspace = true }
 time         = { workspace = true }
 uuid         = { workspace = true, features = ["v4", "serde"] }
 tracing      = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow       = "1"
 reqwest      = { workspace = true }
 tokio-util   = { workspace = true }

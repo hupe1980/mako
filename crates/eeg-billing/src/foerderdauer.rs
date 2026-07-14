@@ -103,6 +103,15 @@ pub fn foerderendedatum_eeg_ausschreibung(inbetriebnahme: Date) -> Result<Date, 
 /// 20-year Förderdauer clock.  The new `foerderendedatum` =
 /// `repowering_datum + 20 years` (statutory: extends to Dec 31).
 ///
+/// **Important**: This function is only correct for **Vollrepowering**
+/// (complete replacement of the turbine unit, `RepoweringScope::Full` or
+/// `RepoweringScope::FullWithCapacityIncrease`).
+///
+/// For partial repowering (rotor-only, nacelle replacement), the original
+/// commissioning date continues to govern — use `foerderendedatum_eeg`
+/// with the **original** commissioning date instead.
+/// See [`crate::technology::RepoweringScope`] for the legal distinctions.
+///
 /// The original commissioning date must be preserved in `ursprungs_inbetriebnahme`
 /// for audit-trail purposes.
 ///
@@ -110,14 +119,14 @@ pub fn foerderendedatum_eeg_ausschreibung(inbetriebnahme: Date) -> Result<Date, 
 /// ```rust
 /// use eeg_billing::foerderendedatum_repowering;
 /// use time::macros::date;
-/// // Repowering in 2025 resets to 2045-12-31:
+/// // Full repowering in 2025 resets to 2045-12-31:
 /// assert_eq!(
 ///     foerderendedatum_repowering(date!(2025-03-01)).unwrap(),
 ///     date!(2045-12-31)
 /// );
 /// ```
 pub fn foerderendedatum_repowering(repowering_datum: Date) -> Result<Date, ComponentRange> {
-    // Repowering resets the clock; use the statutory rule (extend to Dec 31).
+    // Full repowering resets the clock; use the statutory rule (extend to Dec 31).
     Date::from_calendar_date(repowering_datum.year() + 20, time::Month::December, 31)
 }
 
@@ -526,4 +535,52 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
     };
 
     rate * violation.leistung_kw * Decimal::from(violation.monate_des_verstosses)
+}
+
+/// §36k EEG 2023 — Corrected Anzulegender Wert for wind onshore plants.
+///
+/// Multiplies the statutory base AW by the certified Korrekturfaktor to obtain
+/// the effective AW for the current settlement period.
+///
+/// ## Legal basis
+/// §36k EEG 2023: the AW for wind onshore is adjusted by a location-specific
+/// Korrekturfaktor that reflects the ratio of local to reference yield.
+/// Factors are certified by a BNetzA-accredited Gutachter.
+///
+/// ## Korrekturfaktor interpretation
+///
+/// | Gütegrad (local/reference yield) | Korrekturfaktor | Effect |
+/// |---|---|---|
+/// | ≥ 150 % | 0.70–0.84 | Lower AW (excellent wind site) |
+/// | 100 % | 1.00 | No change (reference site) |
+/// | 80 % | 1.10–1.15 | Higher AW (poor wind site) |
+///
+/// ## When to use
+///
+/// Supply the certified Korrekturfaktor for `SettleInput.wind_korrekturfaktor`
+/// and the uncorrected statutory AW for `direktverm_aw_ct`. The engine applies
+/// this function automatically.
+///
+/// OR: apply this function when storing the initial plant record in `einsd`
+/// to pre-compute the corrected AW for the `direktverm_aw_ct` column.
+///
+/// ## Pre-2017 Bestandsschutz
+/// §36k does not apply to EEG ≤2012 plants (§100 Abs. 1 EEG 2023). Do not
+/// supply a Korrekturfaktor for these plants.
+///
+/// # Example
+/// ```rust
+/// use eeg_billing::foerderdauer::wind_onshore_korrekturfaktor_corrected_aw;
+/// use rust_decimal_macros::dec;
+///
+/// // Statutory base AW = 7.35 ct/kWh, Korrekturfaktor = 1.08 (low-wind site)
+/// let corrected = wind_onshore_korrekturfaktor_corrected_aw(dec!(7.35), dec!(1.08));
+/// // 7.35 × 1.08 = 7.938 (rounded to 5 decimal places)
+/// assert_eq!(corrected, dec!(7.938));
+/// ```
+pub fn wind_onshore_korrekturfaktor_corrected_aw(
+    base_aw_ct_kwh: Decimal,
+    korrekturfaktor: Decimal,
+) -> Decimal {
+    (base_aw_ct_kwh * korrekturfaktor).round_dp(5)
 }

@@ -18,6 +18,15 @@ decision support, and workflow orchestration.
 
 Port: **`:9580`**
 
+| Endpoint | Description |
+|---|---|
+| `POST /webhook` | Inbound CloudEvent trigger |
+| `POST /api/v1/run` | Manual agent invocation |
+| `GET /api/v1/sessions` | Last 100 agent decisions (in-memory ring buffer) |
+| `POST /api/v1/rag/ingest` | Index a live text document into LanceDB (M9: MSB device history) |
+| `POST /api/v1/rag/search` | Query the RAG knowledge base directly |
+| `GET /health` · `GET /health/ready` | Liveness / readiness |
+
 ---
 
 ## Architecture
@@ -98,16 +107,25 @@ graph TB
 | `mako-agent` | Anthropic Claude | `de.mako.process.*`, `de.mako.aperak.*` | makod, marktd, processd, obsd |
 | `deadline-alert-agent` | Anthropic Claude | `de.mako.process.escalated`, `de.mako.process.timedout`, `de.obs.stp.parity.alert` | makod, obsd, marktd |
 | `billing-agent` | OpenAI GPT | `de.invoic.receipt.disputed`, `de.accounting.*` | invoicd, billingd, accountingd, netzbilanzd |
-| `invoice-reconciliation-agent` | Anthropic Claude | `de.invoic.payment.overdue`, `de.invoic.receipt.disputed` | invoicd, marktd, netzbilanzd |
+| `netzbilanz-agent` | Anthropic Claude | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched` | netzbilanzd, marktd, edmd |
+| `invoice-reconciliation-agent` | Anthropic Claude Opus | `de.invoic.payment.overdue`, `de.invoic.receipt.disputed` | invoicd, marktd, netzbilanzd |
 | `billing-anomaly-agent` | OpenAI GPT | `de.billing.rechnung.erstellt` | billingd, tarifbd, edmd |
 | `eeg-agent` | Anthropic Claude | `de.eeg.*` | einsd, edmd, marktd |
-| `compliance-agent` | Anthropic Claude | `de.mako.process.escalated` | obsd, makod, marktd |
+| `compliance-agent` | Anthropic Claude | (manual / scheduled) | obsd, processd, marktd, invoicd |
 | `payment-reconciliation-agent` | OpenAI GPT | `de.accounting.payment.due`, `de.accounting.bankruecklast` | accountingd |
 | `msb-history-agent` | Anthropic Claude | `de.edmd.reading.quality.warning`, `de.edmd.reading.direct.stored` | edmd, makod, marktd |
+| `meter-data-agent` | Anthropic Claude | `de.edmd.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd |
 | `grid-anomaly-agent` | Anthropic Claude | `de.markt.grid.drift.detected`, `de.markt.nb-contract.updated` | marktd, obsd |
 | `tariff-optimization-agent` | OpenAI GPT | `de.billing.rechnung.erstellt`, `de.mako.process.completed` | billingd, tarifbd, edmd, marktd |
+| `vertragd-agent` | Anthropic Claude | `de.vertrag.*`, `de.mako.process.abgelehnt` | vertragd, processd, marktd |
+| `tarifbd-agent` | Anthropic Claude | `de.tarifd.product.updated`, `de.tarifd.angebot.*` | tarifbd, marktd |
+| `processd-agent` | Anthropic Claude | `de.mako.process.initiated`, `de.mako.process.rejected` | processd, marktd, obsd |
+| `sperrd-agent` | Anthropic Claude | `de.sperr.*`, `de.mako.process.completed` | sperrd, makod, marktd |
+| `nis-syncd-agent` | Anthropic Claude | `de.markt.grid.drift.detected`, `de.markt.malo.updated` | nis-syncd, processd, marktd, obsd |
+| `portald-agent` | Anthropic Claude | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung_auslaufend`, `de.accounting.mahnung.issued` | portald, billingd, einsd, accountingd |
+| `regulatory-reporting-agent` | Anthropic Claude Opus | (manual / scheduled) | obsd, processd, invoicd, marktd |
 
-All specialists are configured in `agentd.toml` — see `demo/agentd.toml` for a fully working example.
+All 20 specialists are configured in `agentd.toml` — see `demo/agentd.toml` for a fully working example.
 
 ---
 
@@ -288,5 +306,8 @@ EDIFACT rules), `WebhookPlugin` (sign/enrich outbound webhooks).
 |---|---|---|
 | `POST` | `/webhook` | Inbound CloudEvent trigger |
 | `POST` | `/api/v1/run` | Manual agent invocation |
-| `GET` | `/health` | Liveness |
-| `GET` | `/health/ready` | Readiness |
+| `GET`  | `/api/v1/sessions` | Last 100 agent decisions (in-memory ring buffer) |
+| `POST` | `/api/v1/rag/ingest` | Index a live text document into LanceDB |
+| `POST` | `/api/v1/rag/search` | Query the RAG knowledge base directly |
+| `GET`  | `/health` | Liveness |
+| `GET`  | `/health/ready` | Readiness |

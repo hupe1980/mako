@@ -139,3 +139,111 @@ pub fn glob_match(pattern: &str, value: &str) -> bool {
     }
     pi == p.len()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glob_exact_match() {
+        assert!(glob_match(
+            "de.mako.process.initiated",
+            "de.mako.process.initiated"
+        ));
+        assert!(!glob_match(
+            "de.mako.process.initiated",
+            "de.mako.process.completed"
+        ));
+    }
+
+    #[test]
+    fn glob_trailing_wildcard() {
+        assert!(glob_match("de.mako.process.*", "de.mako.process.initiated"));
+        assert!(glob_match("de.mako.process.*", "de.mako.process.completed"));
+        assert!(!glob_match(
+            "de.mako.process.*",
+            "de.invoic.receipt.disputed"
+        ));
+    }
+
+    #[test]
+    fn glob_mid_wildcard() {
+        assert!(glob_match("de.mako.*", "de.mako.process.initiated"));
+        assert!(glob_match("de.mako.*", "de.mako.aperak.sent"));
+        assert!(!glob_match("de.mako.*", "de.invoic.receipt.disputed"));
+    }
+
+    #[test]
+    fn glob_star_matches_everything() {
+        assert!(glob_match("*", "de.mako.process.initiated"));
+        assert!(glob_match("*", ""));
+    }
+
+    #[test]
+    fn glob_empty_pattern_matches_only_empty() {
+        assert!(glob_match("", ""));
+        assert!(!glob_match("", "de.mako.something"));
+    }
+
+    #[test]
+    fn agent_matches_trigger_empty_patterns() {
+        // An agent with no trigger_patterns should never match
+        let agent = Agent {
+            name: "test".into(),
+            specialty: "test".into(),
+            system_prompt: "test".into(),
+            provider: crate::llm::build_provider(
+                "openai",
+                &crate::config::ProviderConfig {
+                    backend: "openai".into(),
+                    api_base: None,
+                    api_key: String::new(),
+                    aws_region: None,
+                    aws_access_key_id: None,
+                    aws_secret_access_key: None,
+                },
+            ),
+            completion_cfg: crate::llm::CompletionConfig {
+                model: "gpt-4o".into(),
+                max_tokens: 100,
+            },
+            mcp_servers: vec![],
+            trigger_patterns: vec![],
+            max_turns: 5,
+            use_rag: false,
+        };
+        assert!(!agent.matches_trigger("de.mako.process.initiated"));
+        assert!(!agent.matches_trigger("de.invoic.receipt.disputed"));
+    }
+
+    #[test]
+    fn agent_matches_trigger_with_glob() {
+        let agent = Agent {
+            name: "eeg-agent".into(),
+            specialty: "EEG".into(),
+            system_prompt: "test".into(),
+            provider: crate::llm::build_provider(
+                "openai",
+                &crate::config::ProviderConfig {
+                    backend: "openai".into(),
+                    api_base: None,
+                    api_key: String::new(),
+                    aws_region: None,
+                    aws_access_key_id: None,
+                    aws_secret_access_key: None,
+                },
+            ),
+            completion_cfg: crate::llm::CompletionConfig {
+                model: "gpt-4o".into(),
+                max_tokens: 100,
+            },
+            mcp_servers: vec![],
+            trigger_patterns: vec!["de.eeg.*".into(), "de.mako.process.initiated".into()],
+            max_turns: 10,
+            use_rag: false,
+        };
+        assert!(agent.matches_trigger("de.eeg.anlage.foerderung_auslaufend"));
+        assert!(agent.matches_trigger("de.mako.process.initiated"));
+        assert!(!agent.matches_trigger("de.invoic.receipt.disputed"));
+    }
+}

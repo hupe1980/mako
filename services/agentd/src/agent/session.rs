@@ -11,7 +11,7 @@ use crate::mcp::McpPool;
 use crate::rag::RagEngine;
 
 /// Result of an agent session.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentDecision {
     pub agent_name: String,
     pub event_id: String,
@@ -224,5 +224,54 @@ impl AgentSession {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_decision(agent_name: &str, outcome: &str) -> AgentDecision {
+        AgentDecision {
+            agent_name: agent_name.to_owned(),
+            event_id: uuid::Uuid::new_v4().to_string(),
+            event_type: "de.test.event".into(),
+            outcome: outcome.to_owned(),
+            summary: "test summary".into(),
+            tool_calls: 3,
+            turns: 2,
+            handoff_to: None,
+        }
+    }
+
+    #[test]
+    fn to_cloud_event_required_fields() {
+        let d = make_decision("mako-agent", "completed");
+        let ce = d.to_cloud_event("9910000000002");
+        assert_eq!(ce["specversion"], "1.0");
+        assert_eq!(ce["type"], "de.agent.decision.made");
+        assert!(ce["id"].as_str().is_some_and(|s| !s.is_empty()));
+        assert!(ce["time"].as_str().is_some_and(|s| s.contains('T')));
+        let src = ce["source"].as_str().unwrap();
+        assert!(src.contains("9910000000002"), "source must contain tenant");
+        assert!(src.contains("mako-agent"), "source must contain agent name");
+    }
+
+    #[test]
+    fn to_cloud_event_data_contains_outcome() {
+        let d = make_decision("eeg-agent", "handoff:billing-agent");
+        let ce = d.to_cloud_event("tenant-x");
+        assert_eq!(ce["data"]["agent_name"], "eeg-agent");
+        assert_eq!(ce["data"]["outcome"], "handoff:billing-agent");
+        assert_eq!(ce["data"]["tool_calls"], 3);
+        assert_eq!(ce["data"]["turns"], 2);
+    }
+
+    #[test]
+    fn decision_is_clone() {
+        let d = make_decision("mako-agent", "completed");
+        let d2 = d.clone();
+        assert_eq!(d.agent_name, d2.agent_name);
+        assert_eq!(d.event_id, d2.event_id);
     }
 }
