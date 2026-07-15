@@ -99,7 +99,7 @@ pub struct InvoicePosition {
 
 ```toml
 [dependencies]
-grid-billing = { version = "0.9" }
+grid-billing = { version = "0.10" }
 rust_decimal = "1"
 time         = "0.3"
 ```

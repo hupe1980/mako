@@ -78,4 +78,6 @@ pub use interval::{MeterInterval, QualityFlag, Sparte};
 pub use quality::{
     QualityConfig, QualityGrade, QualityReport, hampel_filter, score_intervals, score_intervals_raw,
 };
-pub use substitute::{SubstituteMethod, fill_gaps, linear_interpolation};
+pub use substitute::{
+    FillGapsConfig, SubstituteMethod, fill_gaps, fill_gaps_with_config, linear_interpolation,
+};

@@ -10,8 +10,10 @@
 //! (`invoicd`) to self-issue invoices under §20 MessZV.  The formula is identical
 //! for both roles — only who initiates differs.
 //!
-//! Generates BO4E [`rubo4e::current::Rechnung`] objects from meter readings and
-//! tariff data.  The generated invoices are:
+//! Generates [`GridInvoice`] domain objects from meter readings and
+//! tariff data.  The service layer (`netzbilanzd`, `invoicd`) converts
+//! `GridInvoice` to `rubo4e::current::Rechnung` via a local `into_rechnung()`
+//! helper — keeping BO4E as a service-layer concern.  The generated invoices are:
 //! - **PID 31001** — `MMM-Rechnung NNE Strom` (NB → LF, monthly network usage)
 //! - **PID 31002** — `MMM-Stornorechnung NNE Strom` (NB → LF, correction/reversal)
 //! - **PID 31005** — `MMM-Rechnung NNE Gas` (NB → LF, monthly gas NNE)

@@ -13,19 +13,19 @@
 //!
 //! ## Methods implemented
 //!
-//! | Method | When to use |
-//! |---|---|
-//! | `linear_interpolation` | Short gaps (≤ 3 intervals) between valid readings |
-//! | `prior_period_average` | Longer gaps — use average from same period prior week |
-//! | `zero_fill` | Confirmed zero delivery (e.g. plant shutdown, documented) |
-//! | `fill_gaps` | Automatic: applies the best method per gap |
+//! | Method | When to use | BDEW recommendation |
+//! |---|---|---|
+//! | `LinearInterpolation` | Short gaps (≤ 3 intervals) between valid readings | Primary for RLM/iMSys |
+//! | `PriorPeriodAverage` | Longer gaps using prior week same-slot average | Biomass, industrial |
+//! | `ZeroFill` | Confirmed zero delivery (documented shutdown) | Plant outage only |
+//! | `LastValueCarryForward` | Conservative fallback when no context | SLP, default for long gaps |
 //!
-//! ## Important note on Prognose vs. Ersatz
+//! ## Gap filling
 //!
-//! - **Prognosewert** (Estimated): projected value, used for advance billing
-//!   before the measurement period ends. Billable. May be revised later.
-//! - **Ersatzwert** (Substituted): replacement value after the fact, used when
-//!   a measurement was missing or faulty. Billable. Final (no revision expected).
+//! [`fill_gaps`] uses automatic method selection (linear for short gaps, carry-forward
+//! for longer ones). Use [`fill_gaps_with_config`] with [`FillGapsConfig`] to specify
+//! a preferred method — in particular [`SubstituteMethod::PriorPeriodAverage`] per
+//! §17 Abs. 2 MessZV requires providing `prior_period_intervals`.
 
 use crate::interval::{MeterInterval, QualityFlag};
 use rust_decimal::Decimal;
@@ -36,25 +36,198 @@ use rust_decimal_macros::dec;
 
 // ── SubstituteMethod ──────────────────────────────────────────────────────────
 
-/// Method used to generate a substitute value.
+/// Method used to generate a substitute value per §17 MessZV.
 ///
 /// Stored in the generated `MeterInterval.quality` as `Substituted` but
 /// the method can be tracked separately for audit purposes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum SubstituteMethod {
     /// Linear interpolation between surrounding measured values.
+    ///
+    /// Best for short gaps (≤ 3 intervals) when readings before and after are available.
+    #[default]
     LinearInterpolation,
-    /// Average of the same interval from the prior period (e.g. prior week).
+
+    /// Average of the same time slot from a prior reference period.
+    ///
+    /// Per §17 Abs. 2 MessZV: use the same quarter-hour from the prior week.
+    /// Requires [`FillGapsConfig::prior_period_intervals`] to be populated.
+    /// Falls back to `LastValueCarryForward` when no matching slot is found.
     PriorPeriodAverage,
-    /// Zero — confirmed absence of delivery (documented shutdown).
+
+    /// Zero — confirmed absence of delivery (documented plant shutdown).
     ZeroFill,
-    /// Carried forward from the last known good value.
+
+    /// Carry forward the last known good value (conservative fallback).
     LastValueCarryForward,
 }
 
+// ── FillGapsConfig ────────────────────────────────────────────────────────────
+
+/// Configuration for [`fill_gaps_with_config`].
+///
+/// Controls which [`SubstituteMethod`] is applied and provides prior-period
+/// reference data for [`SubstituteMethod::PriorPeriodAverage`].
+///
+/// ## Example — prior-period averaging per §17 Abs. 2 MessZV
+///
+/// ```rust,ignore
+/// use metering::{fill_gaps_with_config, FillGapsConfig, SubstituteMethod};
+///
+/// // Reference readings from 7 days prior (from edmd)
+/// let prior: Vec<_> = fetch_prior_week_intervals(&malo_id).await;
+///
+/// let config = FillGapsConfig::prior_period(prior);
+/// let filled = fill_gaps_with_config(&current, 900, period_from, period_to, &config);
+/// ```
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FillGapsConfig {
+    /// Which method to apply when synthesising missing values.
+    ///
+    /// Default: `LinearInterpolation` (auto-falls back to `LastValueCarryForward`
+    /// when surrounding data is absent).
+    pub method: SubstituteMethod,
+
+    /// Reference period intervals used by [`SubstituteMethod::PriorPeriodAverage`].
+    ///
+    /// Typically the same calendar week from 7 days prior.
+    /// For each gap at time `t`, the algorithm finds all intervals in this slice
+    /// whose time-of-day matches `t` (hour, minute, second) and averages their
+    /// `value_kwh`. Falls back to `LastValueCarryForward` when none is found.
+    pub prior_period_intervals: Vec<MeterInterval>,
+
+    /// Maximum consecutive missing intervals for which linear interpolation is used.
+    ///
+    /// Default: `3`. Gaps of ≤ this length always use linear interpolation.
+    /// Gaps longer than this threshold use the `method` field.
+    pub short_gap_threshold: usize,
+}
+
+impl FillGapsConfig {
+    /// Config for `PriorPeriodAverage` with the given reference data.
+    #[must_use]
+    pub fn prior_period(prior_period_intervals: Vec<MeterInterval>) -> Self {
+        Self {
+            method: SubstituteMethod::PriorPeriodAverage,
+            prior_period_intervals,
+            short_gap_threshold: 3,
+        }
+    }
+
+    /// Config for `ZeroFill` (affirmatively documented zero delivery).
+    #[must_use]
+    pub fn zero_fill() -> Self {
+        Self {
+            method: SubstituteMethod::ZeroFill,
+            prior_period_intervals: Vec::new(),
+            short_gap_threshold: 0,
+        }
+    }
+}
+
 // ── fill_gaps ─────────────────────────────────────────────────────────────────
+
+/// §17 MessZV — Fill gaps with a [`FillGapsConfig`] specifying the substitute method.
+///
+/// Provides full control over gap-filling strategy — use this when the MSB
+/// has determined the appropriate method:
+/// - [`SubstituteMethod::PriorPeriodAverage`] — prior-week same-slot values (set `prior_period_intervals`)
+/// - [`SubstituteMethod::ZeroFill`] — documented plant shutdown
+/// - [`SubstituteMethod::LastValueCarryForward`] — explicit carry-forward
+///
+/// Short gaps (≤ `config.short_gap_threshold` intervals) always use linear
+/// interpolation regardless of `config.method`, as this produces the most
+/// accurate substitute for brief data outages.
+#[must_use]
+pub fn fill_gaps_with_config(
+    intervals: &[MeterInterval],
+    expected_interval_secs: i64,
+    from: OffsetDateTime,
+    to: OffsetDateTime,
+    config: &FillGapsConfig,
+) -> Vec<MeterInterval> {
+    use time::Duration;
+
+    if expected_interval_secs <= 0 {
+        return intervals.to_vec();
+    }
+
+    let mut sorted = intervals.to_vec();
+    sorted.sort_by_key(|iv| iv.from);
+
+    use std::collections::HashMap;
+    let existing: HashMap<i64, &MeterInterval> = sorted
+        .iter()
+        .map(|iv| (iv.from.unix_timestamp(), iv))
+        .collect();
+
+    // Pre-sort prior_period for quick lookup
+    let mut prior_sorted = config.prior_period_intervals.clone();
+    prior_sorted.sort_by_key(|iv| iv.from);
+
+    let mut result: Vec<MeterInterval> = Vec::new();
+    let mut cursor = from;
+
+    while cursor < to {
+        let next = cursor + Duration::seconds(expected_interval_secs);
+        let ts = cursor.unix_timestamp();
+
+        if let Some(&iv) = existing.get(&ts) {
+            result.push(iv.clone());
+        } else {
+            // Measure gap length to decide between linear and configured method.
+            let gap_len = count_consecutive_gaps(&sorted, cursor, expected_interval_secs);
+            let effective_method = if gap_len <= config.short_gap_threshold && gap_len > 0 {
+                SubstituteMethod::LinearInterpolation
+            } else {
+                config.method
+            };
+
+            let sub_value = synthesise_value(
+                &sorted,
+                cursor,
+                next,
+                &result,
+                effective_method,
+                &prior_sorted,
+            );
+            result.push(MeterInterval {
+                from: cursor,
+                to: next,
+                value_kwh: sub_value,
+                quality: QualityFlag::Substituted,
+                obis_code: sorted.first().and_then(|iv| iv.obis_code.clone()),
+            });
+        }
+        cursor = next;
+    }
+
+    result
+}
+
+/// Count how many consecutive intervals starting at `gap_start` are missing.
+fn count_consecutive_gaps(
+    sorted: &[MeterInterval],
+    gap_start: OffsetDateTime,
+    interval_secs: i64,
+) -> usize {
+    use time::Duration;
+    let existing_starts: std::collections::HashSet<i64> =
+        sorted.iter().map(|iv| iv.from.unix_timestamp()).collect();
+    let mut count = 0;
+    let mut cursor = gap_start;
+    while !existing_starts.contains(&cursor.unix_timestamp()) {
+        count += 1;
+        cursor += Duration::seconds(interval_secs);
+        if count > 100 {
+            break; // safety cap
+        }
+    }
+    count
+}
 
 /// §17 MessZV — Fill gaps in a meter interval series with substitute values.
 ///
@@ -64,18 +237,18 @@ pub enum SubstituteMethod {
 /// 1. **Short gaps** (1–3 intervals): linear interpolation
 /// 2. **Longer gaps**: last-value carry-forward (conservative; MSB may override)
 ///
-/// Only gaps that fall within `[from, to)` are filled; leading and trailing
-/// gaps are not synthesised (they may indicate metering system issues that
-/// require manual resolution).
+/// Use [`fill_gaps_with_config`] to specify an explicit method such as
+/// [`SubstituteMethod::PriorPeriodAverage`] per §17 Abs. 2 MessZV.
 ///
-/// Returns a new `Vec<MeterInterval>` with gaps filled. Filled intervals
-/// have `quality = QualityFlag::Substituted` (billable per §17 MessZV Abs. 1).
-/// The original intervals are preserved unchanged.
+/// Only gaps within `[from, to)` are filled. Leading and trailing gaps are
+/// not synthesised — they indicate metering system issues requiring manual review.
+///
+/// Filled intervals carry `quality = QualityFlag::Substituted` (billable per §17 MessZV Abs. 1).
 ///
 /// ## Parameters
 ///
 /// - `intervals` — meter readings, need not be sorted
-/// - `expected_interval_secs` — the regular interval duration (e.g. 900 for 15-min)
+/// - `expected_interval_secs` — the regular interval duration (e.g. `900` for 15-min)
 /// - `from` / `to` — the metering period boundaries
 ///
 /// ## Example
@@ -120,85 +293,89 @@ pub fn fill_gaps(
     from: OffsetDateTime,
     to: OffsetDateTime,
 ) -> Vec<MeterInterval> {
-    use time::Duration;
-
-    if intervals.is_empty() || expected_interval_secs <= 0 {
-        return intervals.to_vec();
-    }
-
-    // Sort by start time.
-    let mut sorted = intervals.to_vec();
-    sorted.sort_by_key(|iv| iv.from);
-
-    // Build a lookup of existing intervals by their start time (truncated to interval boundary).
-    use std::collections::HashMap;
-    let existing: HashMap<i64, &MeterInterval> = sorted
-        .iter()
-        .map(|iv| (iv.from.unix_timestamp(), iv))
-        .collect();
-
-    let mut result: Vec<MeterInterval> = Vec::new();
-    let mut cursor = from;
-
-    while cursor < to {
-        let next = cursor + Duration::seconds(expected_interval_secs);
-        let ts = cursor.unix_timestamp();
-
-        if let Some(&iv) = existing.get(&ts) {
-            result.push(iv.clone());
-        } else {
-            // Gap detected — synthesise a substitute value.
-            let sub_value = synthesise_value(&sorted, cursor, next, &result);
-            result.push(MeterInterval {
-                from: cursor,
-                to: next,
-                value_kwh: sub_value,
-                quality: QualityFlag::Substituted,
-                obis_code: sorted.first().and_then(|iv| iv.obis_code.clone()),
-            });
-        }
-        cursor = next;
-    }
-
-    result
+    fill_gaps_with_config(
+        intervals,
+        expected_interval_secs,
+        from,
+        to,
+        &FillGapsConfig::default(),
+    )
 }
 
 /// Synthesise a substitute value for a missing interval.
-///
-/// Strategy:
-/// 1. If surrounding measured values exist within 3 intervals, use linear interpolation.
-/// 2. Otherwise, carry forward the last known good value (conservative).
 fn synthesise_value(
     all_sorted: &[MeterInterval],
     from: OffsetDateTime,
     _to: OffsetDateTime,
     prior_filled: &[MeterInterval],
+    method: SubstituteMethod,
+    prior_period: &[MeterInterval],
 ) -> Decimal {
-    // Look for the nearest preceding and following measured values (within ±3 intervals)
-    let preceding = prior_filled
-        .iter()
-        .rev()
-        .find(|iv| iv.quality.is_billable());
+    match method {
+        SubstituteMethod::ZeroFill => Decimal::ZERO,
 
-    let following = all_sorted
-        .iter()
-        .find(|iv| iv.from > from && iv.quality.is_billable());
+        SubstituteMethod::PriorPeriodAverage => {
+            // §17 Abs. 2 MessZV: use the same time slot from the prior reference period.
+            // Match by time-of-day (hour, minute, second) — period-independent.
+            let target_time = (from.hour(), from.minute(), from.second());
+            let matches: Vec<Decimal> = prior_period
+                .iter()
+                .filter(|iv| {
+                    iv.quality.is_billable()
+                        && (iv.from.hour(), iv.from.minute(), iv.from.second()) == target_time
+                })
+                .map(|iv| iv.value_kwh)
+                .collect();
 
-    match (preceding, following) {
-        (Some(p), Some(f)) => {
-            // Linear interpolation between p and f
-            let total_secs = (f.from - p.from).whole_seconds();
-            let elapsed_secs = (from - p.from).whole_seconds();
-            if total_secs > 0 {
-                let t = Decimal::from(elapsed_secs) / Decimal::from(total_secs);
-                p.value_kwh + t * (f.value_kwh - p.value_kwh)
-            } else {
-                p.value_kwh
+            if !matches.is_empty() {
+                let sum: Decimal = matches.iter().sum();
+                return sum / Decimal::from(matches.len() as u32);
+            }
+            // Fallback: carry forward last known value
+            prior_filled
+                .iter()
+                .rev()
+                .find(|iv| iv.quality.is_billable())
+                .map_or(Decimal::ZERO, |iv| iv.value_kwh)
+        }
+
+        SubstituteMethod::LastValueCarryForward => prior_filled
+            .iter()
+            .rev()
+            .find(|iv| iv.quality.is_billable())
+            .or_else(|| {
+                // carry back (gap at start)
+                all_sorted
+                    .iter()
+                    .find(|iv| iv.from > from && iv.quality.is_billable())
+            })
+            .map_or(Decimal::ZERO, |iv| iv.value_kwh),
+
+        SubstituteMethod::LinearInterpolation => {
+            let preceding = prior_filled
+                .iter()
+                .rev()
+                .find(|iv| iv.quality.is_billable());
+            let following = all_sorted
+                .iter()
+                .find(|iv| iv.from > from && iv.quality.is_billable());
+
+            match (preceding, following) {
+                (Some(p), Some(f)) => {
+                    let total_secs = (f.from - p.from).whole_seconds();
+                    let elapsed_secs = (from - p.from).whole_seconds();
+                    if total_secs > 0 {
+                        let t = Decimal::from(elapsed_secs) / Decimal::from(total_secs);
+                        p.value_kwh + t * (f.value_kwh - p.value_kwh)
+                    } else {
+                        p.value_kwh
+                    }
+                }
+                (Some(p), None) => p.value_kwh,
+                (None, Some(f)) => f.value_kwh,
+                (None, None) => Decimal::ZERO,
             }
         }
-        (Some(p), None) => p.value_kwh, // carry forward
-        (None, Some(f)) => f.value_kwh, // carry back (rare: gap at start)
-        (None, None) => Decimal::ZERO,  // no reference — zero fill
     }
 }
 
@@ -328,5 +505,109 @@ mod tests {
         assert_eq!(filled.len(), 4);
         assert_eq!(filled[1].quality, QualityFlag::Substituted);
         assert_eq!(filled[2].quality, QualityFlag::Substituted);
+    }
+
+    // ── fill_gaps_with_config tests ────────────────────────────────────────────
+
+    /// §17 Abs. 2 MessZV — PriorPeriodAverage uses the same time slot from prior week.
+    #[test]
+    fn fill_gaps_prior_period_average_uses_matching_slot() {
+        // Prior period: 00:15 slot had 3.0 kWh last week
+        let prior_week_base = datetime!(2025-12-25 0:00 UTC); // 7 days earlier
+        let prior_reading = MeterInterval {
+            from: prior_week_base + time::Duration::minutes(15),
+            to: prior_week_base + time::Duration::minutes(30),
+            value_kwh: dec!(3.0),
+            quality: QualityFlag::Measured,
+            obis_code: None,
+        };
+
+        // Current week: 00:00 ✓, 00:15 MISSING, 00:30 ✓
+        let intervals = vec![iv(0, 0, 2.0), iv(0, 30, 4.0)];
+        let from = datetime!(2026-01-01 0:00 UTC);
+        let to = datetime!(2026-01-01 0:45 UTC);
+
+        let config = FillGapsConfig::prior_period(vec![prior_reading]);
+        let filled = fill_gaps_with_config(&intervals, 900, from, to, &config);
+
+        assert_eq!(filled.len(), 3);
+        assert_eq!(filled[1].quality, QualityFlag::Substituted);
+        // Gap at 00:15 should use prior-period 00:15 value = 3.0
+        assert_eq!(
+            filled[1].value_kwh,
+            dec!(3.0),
+            "PriorPeriodAverage must use prior-week same-slot value"
+        );
+    }
+
+    /// PriorPeriodAverage falls back to carry-forward when no prior slot matches.
+    #[test]
+    fn fill_gaps_prior_period_average_fallback_to_carry_forward() {
+        // Prior period has no data at 00:15 (different time slots only)
+        let prior_reading = MeterInterval {
+            from: datetime!(2025-12-25 1:00 UTC), // 01:00 slot, not 00:15
+            to: datetime!(2025-12-25 1:15 UTC),
+            value_kwh: dec!(5.0),
+            quality: QualityFlag::Measured,
+            obis_code: None,
+        };
+
+        let intervals = vec![iv(0, 0, 2.5), iv(0, 30, 4.0)];
+        let from = datetime!(2026-01-01 0:00 UTC);
+        let to = datetime!(2026-01-01 0:45 UTC);
+
+        // short_gap_threshold=0 disables the short-gap linear override so
+        // PriorPeriodAverage (and its carry-forward fallback) applies to all gaps.
+        let config = FillGapsConfig {
+            method: SubstituteMethod::PriorPeriodAverage,
+            prior_period_intervals: vec![prior_reading],
+            short_gap_threshold: 0,
+        };
+        let filled = fill_gaps_with_config(&intervals, 900, from, to, &config);
+
+        assert_eq!(filled.len(), 3);
+        assert_eq!(filled[1].quality, QualityFlag::Substituted);
+        // No prior-period match → carry forward from 00:00 value = 2.5
+        assert_eq!(
+            filled[1].value_kwh,
+            dec!(2.5),
+            "fallback must carry forward last known value"
+        );
+    }
+
+    /// ZeroFill produces confirmed-zero substitute values.
+    #[test]
+    fn fill_gaps_zero_fill_config() {
+        let intervals = vec![iv(0, 0, 2.0), iv(0, 30, 2.0)];
+        let from = datetime!(2026-01-01 0:00 UTC);
+        let to = datetime!(2026-01-01 0:45 UTC);
+
+        let filled = fill_gaps_with_config(&intervals, 900, from, to, &FillGapsConfig::zero_fill());
+        assert_eq!(filled.len(), 3);
+        assert_eq!(filled[1].quality, QualityFlag::Substituted);
+        assert_eq!(filled[1].value_kwh, dec!(0), "ZeroFill must produce 0");
+    }
+
+    /// Short gaps always use linear interpolation regardless of configured method.
+    #[test]
+    fn fill_gaps_short_gap_always_linear_even_with_zero_fill_method() {
+        // short_gap_threshold = 3 by default; gap of 1 = always linear
+        let intervals = vec![iv(0, 0, 2.0), iv(0, 30, 4.0)];
+        let from = datetime!(2026-01-01 0:00 UTC);
+        let to = datetime!(2026-01-01 0:45 UTC);
+
+        // Despite ZeroFill method, a gap of 1 interval ≤ threshold → linear
+        let config = FillGapsConfig {
+            method: SubstituteMethod::ZeroFill,
+            prior_period_intervals: vec![],
+            short_gap_threshold: 3,
+        };
+        let filled = fill_gaps_with_config(&intervals, 900, from, to, &config);
+        assert_eq!(filled.len(), 3);
+        // Linear interpolation: (2.0 + 4.0) / 2 ≈ 3.0 (not 0)
+        assert!(
+            filled[1].value_kwh > dec!(1.0),
+            "short gap must use linear interpolation, not ZeroFill"
+        );
     }
 }

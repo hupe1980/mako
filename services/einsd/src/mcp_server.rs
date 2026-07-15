@@ -1,6 +1,6 @@
 //! MCP server for `einsd` — Einspeiser Registry + EEG/KWKG Settlement.
 //!
-//! ## Tools (12)
+//! ## Tools (14)
 //!
 //! | Tool | Description |
 //! |---|---|
@@ -649,6 +649,192 @@ impl EinsdMcpHandler {
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
     }
+
+    /// List plants where mandatory Direktvermarktung (§3 Nr. 1 + §20 EEG 2023) is required
+    /// but the plant is settled under a non-Direktvermarktung scheme.
+    ///
+    /// Mandatory when: leistung_kwp > 100 AND eeg_gesetz >= 2012 AND status = aktiv.
+    /// Settling such plants under VERGUETUNG/FEED_IN_TARIFF violates §52 Abs. 2 Nr. 4 EEG 2023.
+    #[tool(
+        name = "check_direktvermarktung_compliance",
+        description = "§3 Nr. 1 + §20 EEG 2023: list active plants that MUST be in Direktvermarktung (>100 kW, EEG ≥ 2012) but are settled under a non-market scheme. §52 Abs. 2 Nr. 4 violation risk.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn check_direktvermarktung_compliance(&self) -> Result<CallToolResult, McpError> {
+        use sqlx::Row;
+        let rows = sqlx::query(
+            r"SELECT tr_id, malo_id, erzeugungsart, leistung_kwp, eeg_gesetz,
+                     settlement_model, foerderendedatum
+              FROM eeg_anlagen
+              WHERE tenant = $1
+                AND status = 'aktiv'
+                AND eeg_gesetz >= 2012
+                AND leistung_kwp > 100
+                AND settlement_model NOT IN (
+                    'DIREKTVERMARKTUNG', 'AUSSCHREIBUNG', 'SONSTIGE_DIREKTVERMARKTUNG',
+                    'MARKET_PREMIUM', 'POST_EEG', 'POST_EEG_SPOT',
+                    'EIGENVERBRAUCH', 'KWKG_ZUSCHLAG', 'GGV'
+                )
+                AND (foerderendedatum IS NULL OR foerderendedatum >= CURRENT_DATE)
+              ORDER BY leistung_kwp DESC",
+        )
+        .bind(&self.state.tenant)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let violations: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                let leistung: f64 = r
+                    .try_get::<rust_decimal::Decimal, _>("leistung_kwp")
+                    .ok()
+                    .and_then(|d| d.try_into().ok())
+                    .unwrap_or(0.0);
+                serde_json::json!({
+                    "tr_id": r.try_get::<String, _>("tr_id").unwrap_or_default(),
+                    "malo_id": r.try_get::<String, _>("malo_id").unwrap_or_default(),
+                    "erzeugungsart": r.try_get::<String, _>("erzeugungsart").unwrap_or_default(),
+                    "leistung_kwp": leistung,
+                    "eeg_gesetz": r.try_get::<i16, _>("eeg_gesetz").unwrap_or(0),
+                    "current_settlement_model": r.try_get::<String, _>("settlement_model").unwrap_or_default(),
+                    "foerderendedatum": r.try_get::<Option<time::Date>, _>("foerderendedatum")
+                        .ok().flatten().map(|d| d.to_string()),
+                    "required_action": "Switch to DIREKTVERMARKTUNG. Use PUT /api/v1/anlagen/{tr_id} with settlement_model=DIREKTVERMARKTUNG + direktverm_aw_ct + direktverm_mp_id.",
+                    "legal_basis": "§3 Nr. 1 + §20 EEG 2023: Direktvermarktungspflicht ab 100 kW (EEG 2012: ab 10 kW Pflicht). §52 Abs. 2 Nr. 4: Pflichtzahlung bei Verletzung.",
+                })
+            })
+            .collect();
+
+        ContentBlock::json(serde_json::json!({
+            "violations_count": violations.len(),
+            "compliant": violations.is_empty(),
+            "violations": violations,
+            "note": "Plants in EIGENVERBRAUCH, KWKG_ZUSCHLAG, or GGV are exempt from Direktvermarktungspflicht regardless of capacity.",
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    /// Check §44b EEG 2023 annual biogas production quota for a specific plant.
+    ///
+    /// §44b Abs. 1 EEG 2023: Biogas plants >100 kW may not receive EEG payment
+    /// for more than 45% of rated capacity × 8760 h/year.
+    #[tool(
+        name = "check_sect44b_quota",
+        description = "§44b EEG 2023: show remaining annual biogas quota for a plant. Annual cap = leistung_kw × 0.45 × 8760 kWh. Only applies to BIOGAS plants >100 kW not in §51b Ausschreibung.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn check_sect44b_quota(
+        &self,
+        Parameters(p): Parameters<GetPlantParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use sqlx::Row;
+        let row = sqlx::query(
+            r"SELECT tr_id, malo_id, erzeugungsart, leistung_kwp, is_biogas_sect51b,
+                     biogas_quota_kwh_ytd, biogas_quota_ytd_year, eeg_gesetz
+              FROM eeg_anlagen
+              WHERE tr_id = $1 AND tenant = $2",
+        )
+        .bind(&p.tr_id)
+        .bind(&self.state.tenant)
+        .fetch_optional(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let Some(row) = row else {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "Plant '{}' not found",
+                p.tr_id
+            ))]));
+        };
+
+        let erzeugungsart: String = row.try_get("erzeugungsart").unwrap_or_default();
+        let leistung: f64 = row
+            .try_get::<rust_decimal::Decimal, _>("leistung_kwp")
+            .ok()
+            .and_then(|d| d.try_into().ok())
+            .unwrap_or(0.0);
+        let is_sect51b: bool = row.try_get("is_biogas_sect51b").unwrap_or(false);
+        let ytd_kwh: f64 = row
+            .try_get::<rust_decimal::Decimal, _>("biogas_quota_kwh_ytd")
+            .ok()
+            .and_then(|d| d.try_into().ok())
+            .unwrap_or(0.0);
+        let ytd_year: Option<i16> = row.try_get("biogas_quota_ytd_year").ok().flatten();
+        let eeg_gesetz: i16 = row.try_get("eeg_gesetz").unwrap_or(0);
+
+        if erzeugungsart != "BIOGAS" {
+            return ContentBlock::json(serde_json::json!({
+                "tr_id": p.tr_id,
+                "applicable": false,
+                "reason": "§44b only applies to BIOGAS plants",
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None));
+        }
+
+        if eeg_gesetz < 2023 {
+            return ContentBlock::json(serde_json::json!({
+                "tr_id": p.tr_id,
+                "applicable": false,
+                "reason": "§44b EEG 2023 — only applies to plants under EEG 2023 or later",
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None));
+        }
+
+        if is_sect51b {
+            return ContentBlock::json(serde_json::json!({
+                "tr_id": p.tr_id,
+                "applicable": false,
+                "reason": "§44b does not apply: plant is in §51b Ausschreibung (AW=0 when EPEX ≤2ct)",
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None));
+        }
+
+        if leistung <= 100.0 {
+            return ContentBlock::json(serde_json::json!({
+                "tr_id": p.tr_id,
+                "applicable": false,
+                "reason": format!("§44b only applies to plants >100 kW; this plant is {leistung:.1} kW"),
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None));
+        }
+
+        let current_year = time::OffsetDateTime::now_utc().year() as i16;
+        let ytd_this_year = if ytd_year == Some(current_year) {
+            ytd_kwh
+        } else {
+            0.0
+        };
+        let annual_quota_kwh = leistung * 0.45 * 8760.0;
+        let remaining_kwh = (annual_quota_kwh - ytd_this_year).max(0.0);
+        let exhaustion_pct = if annual_quota_kwh > 0.0 {
+            (ytd_this_year / annual_quota_kwh * 100.0).min(100.0)
+        } else {
+            0.0
+        };
+
+        ContentBlock::json(serde_json::json!({
+            "tr_id": p.tr_id,
+            "applicable": true,
+            "leistung_kwp": leistung,
+            "annual_quota_kwh": annual_quota_kwh,
+            "ytd_fed_in_kwh": ytd_this_year,
+            "remaining_quota_kwh": remaining_kwh,
+            "exhaustion_pct": exhaustion_pct,
+            "quota_year": current_year,
+            "alert": if exhaustion_pct >= 90.0 { "CRITICAL: quota >90% exhausted — remaining settlements will be €0" }
+                     else if exhaustion_pct >= 75.0 { "WARNING: quota >75% exhausted" }
+                     else { "OK" },
+            "legal_basis": "§44b Abs. 1 EEG 2023: annual cap = leistung_kw × 0.45 × 8760 kWh for BIOGAS >100 kW (excl. §51b Ausschreibung).",
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
 }
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
@@ -874,11 +1060,12 @@ impl ServerHandler for EinsdMcpHandler {
              DIREKTVERMARKTUNG (§20 Marktprämie) | AUSSCHREIBUNG (§§22a/28) |\n\
              POST_EEG_SPOT (§23b: 10ct cap) | EIGENVERBRAUCH | KWKG_ZUSCHLAG (§7 KWKG 2023) |\n\
              FLEXIBILITAET (§50b, bestehende Anlagen) | FLEXIBILITAET_ZUSCHLAG (§50a, neue Anlagen)\n\n\
-             ## Tools (12)\n\
+             ## Tools (14)\n\
              Core: list_plants, get_plant, list_expiring, list_settlements, list_unsettled_plants\n\
              Rates: lookup_verguetungssatz, lookup_statutory_rate\n\
              Settlement: trigger_settle, get_epex_monthly_price, import_epex_monthly_price\n\
-             Compliance: get_compliance_status, list_plants_without_mastr\n\n\
+             Compliance: get_compliance_status, list_plants_without_mastr,\n\
+             check_direktvermarktung_compliance, check_sect44b_quota\n\n\
              Rate tables: lookup_statutory_rate (Solarpaket I 2024 rates for SOLAR/WIND/BIOMASSE/KWKG)\n\
              Workflow: lookup_statutory_rate -> POST /api/v1/anlagen -> import_epex_monthly_price ->\n\
              trigger_settle (one) or POST /api/v1/settle/{y}/{m} (batch) -> list_settlements\n\n\

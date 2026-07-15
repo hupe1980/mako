@@ -116,7 +116,7 @@ services:
     ports: ["5432:5432"]
 
   marktd:
-    image: ghcr.io/hupe1980/marktd:0.9.0
+    image: ghcr.io/hupe1980/marktd:0.10.0
     depends_on: [postgres]
     environment:
       DATABASE_URL: postgres://marktd:secret@postgres/marktd

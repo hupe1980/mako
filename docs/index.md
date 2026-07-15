@@ -325,9 +325,9 @@ Install the EDIFACT parsing and process engine libraries:
 
 ```toml
 [dependencies]
-edi-energy  = { version = "0.9", features = ["utilmd", "mscons", "aperak"] }
-mako-engine = { version = "0.9", features = ["testing"] }
-mako-gpke   = "0.9"
+edi-energy  = { version = "0.10", features = ["utilmd", "mscons", "aperak"] }
+mako-engine = { version = "0.10", features = ["testing"] }
+mako-gpke   = "0.10"
 ```
 
 **Parse and validate a UTILMD Lieferbeginn:**
@@ -415,7 +415,7 @@ mako consists of 16 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/einsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">einsd</span>
     <span class="mako-service-card__port">:9180</span>
-    <span class="mako-service-card__desc">Einspeiser registry. 9 EEG/KWKG settlement schemes. §51/§51a/§51b Negativpreisregel. §100 Bestandsschutz auto-override. §25 Abs. 1 Satz 3 anteilige Zahlung. §26 Fälligkeitsdatum. §19 EInsMan compensation. §21b Veräußerungsform Wechsel. §53b/§54 regional+auction reductions. §22 MessZV correction receipts. derive_settlement_state auto-update. Repowering §22. 301 eeg-billing tests. 12-tool MCP.</span>
+    <span class="mako-service-card__desc">Einspeiser registry. 9 EEG/KWKG settlement schemes. §51/§51a/§51b Negativpreisregel. §100 Bestandsschutz auto-override. §25 Abs. 1 Satz 3 anteilige Zahlung. §26 Fälligkeitsdatum. §19 EInsMan compensation. §21b Veräußerungsform Wechsel. §53b/§54 regional+auction reductions. §22 MessZV correction receipts. derive_settlement_state auto-update. Repowering §22. 301 eeg-billing tests. 14-tool MCP. §3 Nr. 1 Direktvermarktung compliance check. §44b Biogas quota monitoring.</span>
   </a>
   <a href="{{ '/obsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">obsd</span>

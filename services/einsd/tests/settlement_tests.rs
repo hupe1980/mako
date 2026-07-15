@@ -637,7 +637,8 @@ fn lookup_rate_solar_aufdach_2023() {
 
 #[test]
 fn lookup_rate_unknown_tech_returns_err() {
-    assert!(rates::lookup_rate("WASSERKRAFT", dec!(100), 2023).is_err());
+    // A completely non-existent technology string returns Err (no DB row).
+    assert!(rates::lookup_rate("NOT_A_REAL_TECHNOLOGY", dec!(100), 2023).is_err());
 }
 
 // ── billing::Tariff integration ───────────────────────────────────────────────

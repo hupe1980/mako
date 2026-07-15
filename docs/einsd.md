@@ -11,7 +11,7 @@ description: >
   §36k Wind Korrekturfaktor, §42b GGV multi-meter Messkonzept,
   §51 Negativpreisregel, §52 Pflichtzahlungen + §52 Abs. 6 Netting,
   SettlementPeriodState lifecycle, Repowering §22, Zusammenlegung §24,
-  KWKG Förderdauer, 301 eeg-billing tests, 12 MCP tools, eeg-agent.
+  KWKG Förderdauer, 301 eeg-billing tests, 14 MCP tools, eeg-agent.
 ---
 
 # `einsd` — Einspeiser Registry + EEG/KWKG Settlement
@@ -1015,17 +1015,23 @@ All events: `application/cloudevents+json` + `X-Mako-Signature` HMAC.
 
 At `/mcp` (Streamable HTTP 2025-11-25). Auth: `Authorization: Bearer <mcp_api_key>`.
 
-**12 tools:**
+**14 tools:**
 `list_plants` · `get_plant` · `list_expiring` · `list_settlements` ·
 `lookup_verguetungssatz` · `lookup_statutory_rate` · `trigger_settle` ·
 `list_unsettled_plants` · `get_epex_monthly_price` · `import_epex_monthly_price` ·
-`get_compliance_status` · `list_plants_without_mastr`
+`get_compliance_status` · `list_plants_without_mastr` ·
+`check_direktvermarktung_compliance` · `check_sect44b_quota`
+
+| Tool | Description |
+|---|---|
+| `check_direktvermarktung_compliance` | Lists active plants >100 kW settled under a non-Direktvermarktung scheme (§3 Nr. 1 + §20 EEG 2023). These are §52 Abs. 2 Nr. 4 violation candidates. |
+| `check_sect44b_quota` | Returns annual biogas production cap, YTD kWh, remaining quota, and alerts at 75 % (WARNING) and 90 % (CRITICAL) exhaustion (§44b EEG 2023, plants >100 kW). |
 
 **6 prompts:**
 `register-eeg-plant` · `settle-monthly` · `check-foerderung-expiry` ·
 `ausschreibung-workflow` · `post-eeg-transition` · `anlagenerweiterung`
 
-The `eeg-agent` specialist in `agentd` handles all `de.eeg.*` CloudEvents.
+The `eeg-agent` specialist in `agentd` handles `de.eeg.*` CloudEvents **and** `de.edmd.reading.direct.stored` (for iMSys rollout detection — lifts the <100 kW §51 Negativpreisregel exemption on first iMSys push).
 See [agentd operator guide](./agentd.md) for the full trigger→action mapping.
 
 ---

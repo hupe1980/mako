@@ -144,6 +144,55 @@ outlier indices.
 
 ---
 
+## §17 MessZV substitute value generation
+
+When meter readings are missing or faulty, the MSB must supply substitute values
+before billing. `metering` implements all four methods from §17 MessZV and BDEW
+practice.
+
+### Quick usage
+
+```rust
+use metering::{fill_gaps, fill_gaps_with_config, FillGapsConfig, SubstituteMethod};
+
+// Automatic method selection (linear for short gaps, carry-forward for long)
+let filled = fill_gaps(&intervals, 900, period_from, period_to);
+
+// Prior-period averaging per §17 Abs. 2 MessZV (same time-slot, prior week)
+let prior_week: Vec<MeterInterval> = fetch_prior_week(&malo_id);
+let filled = fill_gaps_with_config(
+    &intervals, 900, period_from, period_to,
+    &FillGapsConfig::prior_period(prior_week),
+);
+```
+
+### `SubstituteMethod` variants
+
+| Variant | When to use | BDEW recommendation |
+|---|---|---|
+| `LinearInterpolation` | Short gaps (≤ 3 intervals) with surrounding data | Primary for RLM/iMSys |
+| `PriorPeriodAverage` | Longer gaps; same time-slot from prior reference week | Biomass, industrial load |
+| `ZeroFill` | Documented plant shutdown — affirmative zero only | Outage with evidence |
+| `LastValueCarryForward` | Conservative fallback when no context available | SLP, default for longer gaps |
+
+### `FillGapsConfig`
+
+```rust
+pub struct FillGapsConfig {
+    pub method: SubstituteMethod,            // default: LinearInterpolation
+    pub prior_period_intervals: Vec<MeterInterval>, // for PriorPeriodAverage
+    pub short_gap_threshold: usize,          // default: 3 (auto-linear below this)
+}
+```
+
+`FillGapsConfig::prior_period(prior_week_intervals)` and
+`FillGapsConfig::zero_fill()` are convenience constructors.
+
+Filled intervals carry `quality = QualityFlag::Substituted`
+(billable per §17 MessZV Abs. 1).
+
+---
+
 ## Feature flags
 
 | Flag | Effect |
@@ -159,7 +208,8 @@ cargo test -p metering --all-features
 ```
 
 37 tests covering gas conversion, aggregation (RLM/SLP/Gas), Messtyp
-classification, imbalance arithmetic, and Hampel filter edge cases.
+classification, imbalance arithmetic, Hampel filter edge cases, and §17 MessZV
+substitute value generation (all four methods including `PriorPeriodAverage`).
 
 ---
 
@@ -167,6 +217,7 @@ classification, imbalance arithmetic, and Hampel filter edge cases.
 
 - **§3, §4 MessZV** — SLP/RLM classification thresholds
 - **§2 Nr. 17 MessZV** — Spitzenleistung definition for RLM
+- **§17 MessZV** — Ersatzwertbildung (substitute value generation)
 - **§27 MessZV** — Mehr-/Mindermengensaldo
 - **§24 GasGVV / DVGW G 685** — Gas Brennwertkorrektur
 - **§41a EnWG** — 15-Minuten-Lastgang and iMSys Pflichteinbau

@@ -221,7 +221,7 @@ Each is independently testable and suitable for crates.io publication.
 | `grid-billing` | NNE/KA/MMM/MSB grid invoice arithmetic | `calculate_nne_invoice`, `GridInvoice`; no rubo4e dep; `into_rechnung()` in service layer |
 | `energy-billing` | Pure multi-product retail energy billing (LF) | `BillingEngine`, `BillingProvider` trait; 12 categories; §41a EPEX dynamic; `GgvNutzungsplan` §42b; 44 tests; zero I/O |
 | `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 9 settlement schemes, §51/§52 rules, 301 tests |
-| `metering` | German energy metering domain | `MeterInterval`, `aggregate`, `fill_gaps` (§17 MessZV), `gas_m3_to_kwh_hs`, `score_intervals` (Hampel A/B/C/F) |
+| `metering` | German energy metering domain | `MeterInterval`, `aggregate`, `fill_gaps` / `fill_gaps_with_config` (§17 MessZV — `FillGapsConfig` supports `PriorPeriodAverage`), `gas_m3_to_kwh_hs`, `score_intervals` (Hampel A/B/C/F) |
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A97/A99 |
 | `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |

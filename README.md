@@ -155,7 +155,7 @@ Five distinct layers live here:
 
 ```toml
 [dependencies]
-edi-energy = "0.9"
+edi-energy = "0.10"
 ```
 
 ```rust
@@ -173,8 +173,8 @@ println!("Valid: {}", report.is_valid());
 
 ```toml
 [dependencies]
-mako-engine = { version = "0.9", features = ["testing"] }
-mako-gpke   = "0.9"
+mako-engine = { version = "0.10", features = ["testing"] }
+mako-gpke   = "0.10"
 ```
 
 ```rust
@@ -204,7 +204,7 @@ let state = process.state().await?;
 
 ```toml
 [dependencies]
-dvgw-edi = "0.9"
+dvgw-edi = "0.10"
 ```
 
 ```rust
@@ -231,7 +231,7 @@ let pid = msg.detect_pid(Some("Z01"));
 
 ```toml
 [dependencies]
-redispatch-xml = "0.9"
+redispatch-xml = "0.10"
 ```
 
 ```rust
@@ -258,7 +258,7 @@ let out = serialize(&doc)?;
 
 ```toml
 [dependencies]
-mako-markt = { version = "0.9", features = ["testing"] }
+mako-markt = { version = "0.10", features = ["testing"] }
 ```
 
 ```rust
@@ -561,7 +561,7 @@ By default UTILMD, MSCONS, APERAK, and CONTRL are compiled in:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.9", features = ["invoic", "remadv", "orders"] }
+edi-energy = { version = "0.10", features = ["invoic", "remadv", "orders"] }
 ```
 
 | Flag | Default | Enables |
@@ -593,7 +593,7 @@ edi-energy = { version = "0.9", features = ["invoic", "remadv", "orders"] }
 All 8 format parsers are compiled in by default. Disable unused formats to reduce binary size:
 
 ```toml
-dvgw-edi = { version = "0.9", default-features = false, features = ["nomint", "nomres"] }
+dvgw-edi = { version = "0.10", default-features = false, features = ["nomint", "nomres"] }
 ```
 
 | Flag | Default | Enables |
