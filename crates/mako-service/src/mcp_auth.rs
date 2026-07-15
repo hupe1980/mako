@@ -1,6 +1,6 @@
 //! Unified MCP server authentication for mako daemons.
 //!
-//! Provides [`McpAuth`] — a single configurable auth strategy that covers every
+//! Provides [`McpAuth`][crate::mcp_auth::McpAuth] — a single configurable auth strategy that covers every
 //! deployment scenario:
 //!
 //! | Mode | Configuration | Used by |
@@ -20,12 +20,12 @@
 //!   API-key requests are never fed to the JWT parser and OIDC verification is never
 //!   run unnecessarily.
 //! - Multiple named keys are supported — each key has an `identity` string written to
-//!   the [`McpIdentity`] extension injected into the request for downstream audit logging.
+//!   the [`McpIdentity`][crate::mcp_auth::McpIdentity] extension injected into the request for downstream audit logging.
 //!
 //! ## Identity propagation
 //!
-//! After a successful authentication, [`McpAuth::authenticate`] injects an
-//! [`McpIdentity`] as an Axum request extension:
+//! After a successful authentication, [`McpAuth::authenticate`][crate::mcp_auth::McpAuth::authenticate] injects an
+//! [`McpIdentity`][crate::mcp_auth::McpIdentity] as an Axum request extension:
 //!
 //! ```rust,no_run
 //! use mako_service::mcp_auth::McpIdentity;

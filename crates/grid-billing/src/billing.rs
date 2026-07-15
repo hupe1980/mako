@@ -84,17 +84,17 @@ fn decimal_to_euro_amount(d: Decimal) -> Result<EuroAmount, BillingError> {
 pub fn calculate_nne_invoice(input: &NneInput) -> Result<GridInvoice, BillingError> {
     if input.period_from >= input.period_to {
         return Err(BillingError::InvalidInput {
-            reason: "period_from must be strictly before period_to",
+            reason: "period_from must be strictly before period_to".to_owned(),
         });
     }
     if input.arbeitsmenge_kwh < Decimal::ZERO {
         return Err(BillingError::InvalidInput {
-            reason: "arbeitsmenge_kwh must be non-negative",
+            reason: "arbeitsmenge_kwh must be non-negative".to_owned(),
         });
     }
     if input.spitzenleistung_kw.is_some() != input.leistungspreis_eur_per_kw.is_some() {
         return Err(BillingError::InvalidInput {
-            reason: "spitzenleistung_kw and leistungspreis_eur_per_kw must both be set or both absent",
+            reason: "spitzenleistung_kw and leistungspreis_eur_per_kw must both be set or both absent".to_owned(),
         });
     }
 
@@ -179,7 +179,7 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<GridInvoice, BillingErr
 pub fn calculate_mmm_invoice(input: &MmmInput) -> Result<GridInvoice, BillingError> {
     if input.period_from >= input.period_to {
         return Err(BillingError::InvalidInput {
-            reason: "period_from must be strictly before period_to",
+            reason: "period_from must be strictly before period_to".to_owned(),
         });
     }
 
@@ -236,17 +236,17 @@ pub fn calculate_mmm_invoice(input: &MmmInput) -> Result<GridInvoice, BillingErr
 pub fn calculate_msb_invoice(input: &MsbInput) -> Result<GridInvoice, BillingError> {
     if input.period_from >= input.period_to {
         return Err(BillingError::InvalidInput {
-            reason: "period_from must be strictly before period_to",
+            reason: "period_from must be strictly before period_to".to_owned(),
         });
     }
     if input.grundgebuehr_eur_per_month < Decimal::ZERO {
         return Err(BillingError::InvalidInput {
-            reason: "grundgebuehr_eur_per_month must be non-negative",
+            reason: "grundgebuehr_eur_per_month must be non-negative".to_owned(),
         });
     }
     if input.billing_months == 0 {
         return Err(BillingError::InvalidInput {
-            reason: "billing_months must be at least 1",
+            reason: "billing_months must be at least 1".to_owned(),
         });
     }
 

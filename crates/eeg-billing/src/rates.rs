@@ -524,7 +524,7 @@ pub fn lookup_rate(
         _ => None,
     }
     .ok_or(BillingError::InvalidInput {
-        reason: "no static rate table for this erzeugungsart/eeg_year combination — use einsd DB lookup",
+        reason: "no static rate table for this erzeugungsart/eeg_year combination — use einsd DB lookup".to_owned(),
     })?;
 
     table.rate_for(leistung_kwp)

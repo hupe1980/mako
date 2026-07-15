@@ -5,7 +5,10 @@
 pub enum BillingError {
     /// The billing input contains an invalid or inconsistent value.
     #[error("invalid billing input: {reason}")]
-    InvalidInput { reason: &'static str },
+    InvalidInput {
+        /// Human-readable explanation. Dynamic `String` so callers can include runtime context.
+        reason: String,
+    },
 
     /// Monetary precision overflow — the calculated amount exceeds `i64` range.
     ///
