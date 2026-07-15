@@ -32,7 +32,7 @@ graph TB
     Operator["NB Operator / ERP"]
     edmd["edmd :8380\nMSCONS Einspeisemenge\nauto-fetch"]
     einsd["einsd :9180"]
-    eeg_billing["eeg-billing crate\n9 settlement schemes\n§20 Abs.3 Managementprämie\n§23a degression · §36k wind\n§51b biogas Ausschreibung\n§42b GGV Messkonzept\n§52 Abs.6 netting\nSettlementPeriodState\n301 tests · no I/O"]
+    eeg_billing["eeg-billing crate\n9 settlement schemes\n§20 Abs.3 Managementprämie\n§23a degression · §36k wind\n§51b biogas Ausschreibung\n§42b GGV Messkonzept\n§52 Abs.6 netting\nSettlementPeriodState · InbetriebnahmeTyp\n324 tests · no I/O"]
     db[("PostgreSQL\n8 migrations\neeg_anlagen · settlement_receipts\nsettlement_receipt_history\nsettlement_state_transitions\nsect53b_reductions · sect54_reductions\nepex_monthly_prices · eeg_verguetungssaetze")]
     erp["ERP webhook\nCloudEvents 1.0"]
     agentd["agentd :9580\neeg-agent\n(all de.eeg.* events)"]
@@ -1038,7 +1038,7 @@ See [agentd operator guide](./agentd.md) for the full trigger→action mapping.
 
 ## Testing
 
-**301 tests** (eeg-billing) across three suites:
+**324 tests** (eeg-billing) across four suites:
 
 ```bash
 cargo test -p eeg-billing -p einsd --all-features
@@ -1047,8 +1047,9 @@ cargo test -p eeg-billing -p einsd --all-features
 | Suite | Count | Coverage |
 |---|---|---|
 | `eeg-billing` lib tests | 82 | Settlement formulas, §52 cap, positions-sum invariant |
-| `regulatory_showcase` | 159 | §51/§51a/§51b, §52, §53b, §100 rules, all schemes, Bestandsschutz, Fälligkeitsdatum |
-| `eeg-billing` doctests | 60 | `EegGesetz::from_db_year`, rate helpers, foerderendedatum |
+| `prop_tests` (proptest) | 12 | INV-1–INV-10: FeedInTariff exactness, MarketPremium non-negativity, §51 bounds, API contract, PostEeg floor |
+| `regulatory_showcase` | 166 | §51/§51a/§51b, §52, §53b, §100 rules, all schemes, Bestandsschutz, `InbetriebnahmeTyp` lifecycle, §40–41 Wasserkraft, §37a Stecker-PV |
+| `eeg-billing` doctests | 64 | `EegGesetz::from_db_year`, rate helpers, foerderendedatum |
 
 ```bash
 cargo test -p eeg-billing -p einsd --all-features

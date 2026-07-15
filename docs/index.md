@@ -5,7 +5,7 @@ nav_order: 1
 description: >-
   Full-stack German energy market communication (BDEW MaKo / EDI@Energy) in Rust.
   EDIFACT parsing, AHB/MIG validation, event-sourced process runtime, AS4 transport,
-  automated APERAK deadline enforcement, 16 production microservices, BO4E ERP webhooks,
+  automated APERAK deadline enforcement, 17 production microservices, BO4E ERP webhooks,
   and LanceDB-powered AI orchestration.
 permalink: /
 ---
@@ -85,7 +85,7 @@ permalink: /
     <span class="mako-kpi__label">unsafe blocks</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">140+</span>
+    <span class="mako-kpi__value">150+</span>
     <span class="mako-kpi__label">MCP tools (AI-ready)</span>
   </div>
   <div class="mako-kpi">
@@ -173,7 +173,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       <strong>§100 Bestandsschutz auto-override</strong> via <code>TariffSource::Transitional(Paragraph100Rule)</code>,
       quarterly degression (§23a), §36k Korrekturfaktor,
       multi-meter Messkonzept (§42b GGV, §14a HT/NT). Repowering §22, Zusammenlegung §24.
-      <strong>301 regulatory tests</strong> in <code>eeg-billing</code>.
+      <strong>324 tests</strong> in <code>eeg-billing</code> (incl. 12 proptest invariants, 166 regulatory showcase, `InbetriebnahmeTyp` lifecycle).
     </p>
     <a href="{{ '/einsd' | relative_url }}">einsd guide →</a>
   </div>
@@ -317,7 +317,7 @@ graph TB
     subgraph energy ["Energy Data"]
         direction LR
         edmd["edmd :8380\nMSCONS meter reads\nIceberg/S3 OLAP archive"]
-        einsd["einsd :9180\nEEG/KWKG settlement\n9 schemes · eeg-billing crate\n§52 sanctions · §51 neg-price\n§51b biogas · §53b/54 reductions\n§21b Wechsel · §19 EInsMan\n§22 MessZV corrections\nderive_settlement_state\n8 migrations · 301 tests"]
+        einsd["einsd :9180\nEEG/KWKG settlement\n9 schemes · eeg-billing crate\n§52 sanctions · §51 neg-price\n§51b biogas · §53b/54 reductions\n§21b Wechsel · §19 EInsMan\n§22 MessZV corrections\nderive_settlement_state\n8 migrations · **324 tests**"]
     end
 
     subgraph retail ["Retail Billing (LF)"]
@@ -358,9 +358,9 @@ Install the EDIFACT parsing and process engine libraries:
 
 ```toml
 [dependencies]
-edi-energy  = { version = "0.10", features = ["utilmd", "mscons", "aperak"] }
-mako-engine = { version = "0.10", features = ["testing"] }
-mako-gpke   = "0.10"
+edi-energy  = { version = "0.11", features = ["utilmd", "mscons", "aperak"] }
+mako-engine = { version = "0.11", features = ["testing"] }
+mako-gpke   = "0.11"
 ```
 
 **Parse and validate a UTILMD Lieferbeginn:**
@@ -605,7 +605,7 @@ Beyond the production services, mako exposes reusable Rust libraries:
 | [`mako-engine`](https://crates.io/crates/mako-engine) | ✅ crates.io | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
 | `metering` | workspace | German metering domain — `MeterInterval`, validation V01–V10, substitution (§17 MessZV), Hampel scoring, resampling, virtual meters, SMGW/CLS (§14a), 177 tests |
 | `mako-edm` | workspace | Energy Data Management types — `MeterRead`, `QualityFlag` (8 variants), `BilanzzuordnungRecord`, `GasQualityData` (PID 13007), correction records (§22 MessZV) |
-| `eeg-billing` | workspace | Pure EEG/KWKG settlement — 9 schemes, §51 Negativpreisregel, §52 Pflichtzahlungen, §36k Wind Korrekturfaktor, 301 tests |
+| `eeg-billing` | workspace | Pure EEG/KWKG settlement — 9 schemes, §51 Negativpreisregel, §52 Pflichtzahlungen, §36k Wind Korrekturfaktor, `InbetriebnahmeTyp` lifecycle, proptest invariants, **324 tests** |
 | `energy-billing` | workspace | Retail energy billing engine — 12 categories, HT/NT ToU, RLM demand charge, §54 EnergieStG exemption, historic levy rates (`stromsteuer_for_year`, `energiesteuer_gas_for_year`), §14a Modul 1/3, XRechnung 3.0 |
 | `grid-billing` | workspace | Role-neutral grid **settlement** engine — `GridSettlement` (+ `CalculationTrace`, `LegalReference`, `TariffSource` per position), `Sparte` (Gas/Strom), `KaKlasse`, `calculate_reversal()`, `validate_*_input()`; zero BO4E dep, no float money |
 | `invoic-checker` | workspace | INVOIC plausibility — 6 checks, ToU-aware tariff match |

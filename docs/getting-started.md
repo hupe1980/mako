@@ -7,6 +7,7 @@ description: >
   Run the full mako NB STP demo stack — makod, marktd, processd, and a webhook
   receiver — in under 5 minutes. Submit a UTILMD 55001, watch processd
   auto-accept via netz-checker, and receive the UTILMD 55003 confirmation.
+  Version 0.11.0, BDEW FV2026-10-01 compliant.
 ---
 
 # Getting Started

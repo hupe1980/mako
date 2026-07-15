@@ -3,6 +3,7 @@ layout: default
 title: Services
 nav_order: 5
 has_children: true
+mermaid: true
 description: >-
   Operator guides for all 17 mako production services — makod, marktd, processd,
   invoicd, netzbilanzd, sperrd, edmd, mabis-syncd, einsd, obsd, nis-syncd, tarifbd, billingd,
@@ -20,6 +21,58 @@ mako consists of **17 independently deployable services**, each built as a self-
 - Structured health endpoints (`/health`, `/health/ready`)
 
 All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, `EventBus`, and more. This means zero copy-pasted infrastructure code across the 17 daemons.
+
+---
+
+## Service Map
+
+```mermaid
+graph TB
+    ext["BDEW Counterparty<br/>(NB · LF · MSB · BKV)"]
+
+    subgraph protocol ["Protocol & Market Data"]
+        makod[":8080 makod\nEDIFACT runtime · 45+ workflows\nAS4 · SlateDB · MCP"]
+        marktd[":8180 marktd\nMaLo/MeLo/NeLo · contracts\nVersorgungsStatus · EventBus"]
+        processd[":8580 processd\nAnmeldung STP ≥95%\nLF E_0624 auto · §14a"]
+    end
+
+    subgraph nb_billing ["Invoice & Grid Billing (NB)"]
+        invoicd[":8280 invoicd\nINVOIC 6-check plausibility\nauto-settle/dispute"]
+        netzbilanzd[":8680 netzbilanzd\nNNE/KA/MMM/MSB billing\nGridSettlement · CalculationTrace"]
+        sperrd[":8780 sperrd\nSperrung execution\nIFTSTA 21039 auto-dispatch"]
+    end
+
+    subgraph data ["Energy Data & Observability"]
+        edmd[":8380 edmd\nMSCONS · iMSys direct push\nHampel · V01–V10 · virtual meters"]
+        obsd[":8480 obsd\nprocess projections · KPI\n§20 EnWG parity report"]
+        nis[":9680 nis-syncd\nNIS/GIS grid topology sync\nstateless · lifts STP to ≥95%"]
+        mabis[":8880 mabis-syncd\nMaBiS UTILTS Summenzeitreihe\nday-3/day-8 schedule"]
+        einsd[":9180 einsd\nEEG/KWKG settlement\n9 schemes · 324 tests"]
+    end
+
+    subgraph lf_billing ["Retail Billing (LF)"]
+        tarifbd[":9080 tarifbd\nproduct catalog · EPEX §41a\nB2B Angebote"]
+        billingd[":9280 billingd\n12 categories · XRechnung 3.0\nRLM demand · §54 exemption"]
+        accountingd[":9380 accountingd\nMassenkontokorrent\nSEPA · auto-dunning · GDPR"]
+    end
+
+    subgraph b2c ["Contract & Customer (LF)"]
+        vertragd[":9780 vertragd\nKunden B2C+B2B\nRahmenverträge · OIDC→MaLo"]
+        portald[":9480 portald\ncustomer portal read-model\nSSE · §41 self-service"]
+    end
+
+    agentd[":9580 agentd\n24 AI specialists · LanceDB RAG\nMCP tools · OpenAI/Anthropic/Bedrock"]
+
+    ext -->|AS4 / REST| makod
+    makod <-->|CloudEvents| marktd
+    marktd -->|webhook fan-out| processd & invoicd & edmd & obsd & agentd
+    makod -->|commands| netzbilanzd & invoicd
+    nis -->|PUT malo_grid| marktd
+    mabis -->|UTILTS cmd| makod
+    billingd -->|de.billing.rechnung.erstellt| accountingd
+    vertragd -->|start-supply| processd
+    portald -->|aggregates| billingd & accountingd & edmd & einsd & marktd
+```
 
 ---
 
@@ -55,7 +108,7 @@ All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tr
 |---|---|---|---|
 | [tarifbd](./tarifbd) | `:9080` | LF | Product & Tariff Catalog — user-defined energy products, EPEX Spot for §41a, B2B Angebote/quotations |
 | [billingd](./billingd) | `:9280` | LF | Energy Billing Engine — 12 categories, §41a dynamic, §42a GGV community solar, XRechnung 3.0 / ZUGFeRD 2.3 |
-| [accountingd](./accountingd) | `:9380` | LF | Customer Account Ledger — Massenkontokorrent, SEPA pain.008 (N-5 scheduler), Mahnwesen |
+| [accountingd](./accountingd) | `:9380` | LF | Customer Account Ledger — Massenkontokorrent, SEPA pain.008+pain.001 (sepa 0.3.0, typed `SequenceType`, hard IBAN validation), N-5 pre-notification scheduler, FIFO open-item management (`/open-items`), auto-dunning rule engine (Mahnstufe 1–3), GDPR Art. 17 pseudonymization (`/anonymize`), balance reconciliation (`/reconcile`), **71 tests** |
 
 ## B2C & AI
 

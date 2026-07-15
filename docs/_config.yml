@@ -1,11 +1,10 @@
-title: mako
+title: mako — German Energy Market Platform in Rust
 description: >-
-  Rust library for German energy market communication —
-  EDIFACT parsing, AHB/MIG validation, event-sourced MaKo process runtime,
-  AS4 transport, APERAK deadline enforcement, BO4E ERP webhooks, Command API,
-  and OpenTelemetry observability. Covers GPKE, WiM, GeLi Gas, MABIS, and
-  BDEW API-Webdienste Strom in a single Rust workspace.
-tagline: "Full-stack German energy market communication in Rust — EDIFACT · MaKo workflows · AS4 · BDEW compliant"
+  Full-stack German energy market communication (BDEW MaKo / EDI@Energy) in Rust.
+  17 production microservices covering EDIFACT parsing (all 247 Prüfidentifikatoren),
+  event-sourced MaKo process runtime, NNE/EEG settlement, retail billing, SEPA payments,
+  AS4 transport, AI orchestration, and BO4E ERP webhooks. FV2026-10-01 compliant.
+tagline: "Full-stack German energy market communication in Rust — EDIFACT · 45+ MaKo workflows · NNE/EEG settlement · 17 microservices"
 url: "https://hupe1980.github.io"
 baseurl: "/mako"
 lang: en
@@ -17,7 +16,7 @@ github_username: hupe1980
 # ── Theme ─────────────────────────────────────────────────────────────────────
 # Just the Docs — the canonical documentation theme for technical Rust projects.
 # https://just-the-docs.com/
-remote_theme: just-the-docs/just-the-docs@v0.10.0
+remote_theme: just-the-docs/just-the-docs@v0.11.0
 
 # ── Appearance ────────────────────────────────────────────────────────────────
 color_scheme: light   # "light" | "dark" — users can toggle in sidebar

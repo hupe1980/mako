@@ -5,8 +5,8 @@ nav_order: 4
 has_children: true
 description: >-
   mako system architecture: event-sourced process runtime, AS4/REST transport,
-  ERP integration via CloudEvents 1.0, API-Webdienste Strom, and all nine
-  companion daemons (makod, marktd, processd, invoicd, netzbilanzd, sperrd, edmd, obsd, nis-syncd, einsd, tarifbd, billingd, accountingd, portald, vertragd, agentd).
+  ERP integration via CloudEvents 1.0, API-Webdienste Strom, and all seventeen
+  companion daemons (makod, marktd, processd, invoicd, netzbilanzd, sperrd, edmd, obsd, nis-syncd, einsd, tarifbd, billingd, accountingd, portald, vertragd, agentd, mabis-syncd).
 ---
 
 # Architecture
@@ -14,7 +14,7 @@ description: >-
 This document covers the design of `mako-engine` and the full service mesh:
 event-sourced process runtime, inbound/outbound transport channels, ERP
 integration via BO4E + CloudEvents 1.0, and the SlateDB persistence layer.
-It also describes all sixteen companion daemons and the `mako-service` shared
+It also describes all **seventeen** companion daemons and the `mako-service` shared
 infrastructure library they build on.
 
 ---
@@ -220,7 +220,7 @@ Each is independently testable and suitable for crates.io publication.
 | `mako-markt` | Market data domain types + repo traits | `MaloId`, `MeloId`, `MarktpartnerId`, `VersorgungsStatus` |
 | `grid-billing` | NNE/KA/MMM/MSB grid **settlement** engine | `calculate_nne_invoice`, `GridSettlement` (+ `CalculationTrace`, `LegalReference`); `Sparte` drives Gas/Strom refs; `calculate_reversal()`; no rubo4e dep; `into_rechnung()` in service layer |
 | `energy-billing` | Pure multi-product retail energy billing (LF) | `PricingModel` typed dispatch; `BillingEngine`/`BillingProvider` pipeline; 12 categories; `billing::TimeOfUsePricing` (HT/NT), `billing::TariffSchedule` (block); **RLM demand charge** (`leistungspreis_strom_ct_per_kw_month`); **gas §54 EnergieStG exemption** (`gas_energiesteuer_befreiung`); **historic levy rates** (`stromsteuer_for_year`, `energiesteuer_gas_for_year`, `behg_ct_per_kwh_for_year`); §41a EPEX; `Invoice::merge()` (Tarifwechsel); `Invoice::allocate_proportionally()` (B2B); `bo4e`/`eeg` optional features; **148 tests**; zero I/O |
-| `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 9 settlement schemes, §51/§52 rules, 301 tests |
+| `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 9 settlement schemes, §51/§52 rules, `InbetriebnahmeTyp`, proptest invariants, **324 tests** |
 | `metering` | German energy metering domain | `MeterInterval`, `aggregate`, `fill_gaps` / `fill_gaps_with_config` (§17 MessZV — `FillGapsConfig` supports `PriorPeriodAverage`), `gas_m3_to_kwh_hs`, `score_intervals` (Hampel A/B/C/F) |
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A97/A99 |
@@ -236,7 +236,7 @@ graph BT
 
     metering["metering\nMeterInterval · fill_gaps (§17)\nHampel quality A/B/C/F\ngas_m3_to_kwh_hs"]
 
-    eeg["eeg-billing\n9 EEG/KWKG settlement schemes\n§51/§52/§23a/§36k rules\n301 tests · zero I/O"]
+    eeg["eeg-billing\n9 EEG/KWKG settlement schemes\n§51/§52/§23a/§36k rules\n324 tests · zero I/O"]
 
     grid["grid-billing\nNNE · KA · MMM · MSB\nGridSettlement (CalculationTrace)\nSparte · KaKlasse · LegalReference\ninto_rechnung() in service"]
 
@@ -273,7 +273,7 @@ graph BT
 
 ## Companion daemons
 
-All sixteen daemons share a common operational model:
+All **seventeen** daemons share a common operational model:
 - **TOML configuration** — loaded from a file (`makod.toml`, `marktd.toml`, …) with `env:VAR_NAME` secret interpolation
 - **Cedar ABAC** — all HTTP endpoints gated by Cedar attribute-based access control
 - **OIDC/JWT** — asymmetric algorithm only; JWKS cached with background refresh; omit `[oidc]` for dev mode
