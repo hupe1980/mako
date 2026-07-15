@@ -1,0 +1,47 @@
+# dev/docker-compose.yml — infrastructure only for local development.
+#
+# Starts the dependencies that mako services need, but NOT the services themselves.
+# Run the Rust services directly with `cargo run` (or `just dev <service>`).
+#
+# Usage:
+#   docker compose -f dev/docker-compose.yml up -d
+#   just infra-up     # convenience alias
+#   just infra-down   # tear down
+#
+# One PostgreSQL instance with a separate database per service.
+# Connection strings (same credentials as demo/ for config parity):
+#
+#   marktd:      postgres://dev:dev@localhost:5432/marktd
+#   processd:    postgres://dev:dev@localhost:5432/processd
+#   invoicd:     postgres://dev:dev@localhost:5432/invoicd
+#   edmd:        postgres://dev:dev@localhost:5432/edmd
+#   obsd:        postgres://dev:dev@localhost:5432/obsd
+#   netzbilanzd: postgres://dev:dev@localhost:5432/netzbilanzd
+#   sperrd:      postgres://dev:dev@localhost:5432/sperrd
+#   einsd:       postgres://dev:dev@localhost:5432/einsd
+#   accountingd: postgres://dev:dev@localhost:5432/accountingd
+#   billingd:    postgres://dev:dev@localhost:5432/billingd
+#   tarifbd:     postgres://dev:dev@localhost:5432/tarifbd
+#   vertragd:    postgres://dev:dev@localhost:5432/vertragd
+#   agentd:      postgres://dev:dev@localhost:5432/agentd
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER:     dev
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB:       marktd       # first DB; the init script creates the rest
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dev:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_dev:

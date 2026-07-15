@@ -1,9 +1,6 @@
 #!/bin/bash
-# demo/init-db.sh — PostgreSQL init script for the mako demo stack.
-# Creates one database per service. Extra databases are harmless — they cost
-# nothing and allow additional services to be added to the compose stack without
-# needing to recreate the volume.
-# Each service owns its schema and _sqlx_migrations table in isolation.
+# dev/init-db.sh — PostgreSQL init for local development.
+# Identical schema to demo/init-db.sh; credentials use POSTGRES_USER (dev/dev).
 set -e
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL

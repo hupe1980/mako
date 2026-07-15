@@ -75,9 +75,53 @@ build:
 build-dev:
     cargo build -p makod
 
+# Build all six production daemons (release)
+build-all:
+    cargo build --profile release -p makod -p marktd -p invoicd -p edmd -p obsd \
+        && cargo build --profile release -p processd --features integrated
+
 # Build xtask (needed after changing xtask commands)
 build-xtask:
     cargo build -p xtask
+
+# ── Local development ─────────────────────────────────────────────────────────
+#
+# Run infrastructure dependencies in Docker, Rust services directly with cargo.
+# Requires: docker, cargo-watch  (`cargo install cargo-watch`)
+#
+# Typical workflow:
+#   just infra-up                 # start postgres
+#   just dev marktd               # hot-reload marktd (separate terminal)
+#   just dev processd             # hot-reload processd (separate terminal)
+#   just infra-down               # stop postgres
+
+# Start infrastructure (postgres only) — services run as cargo processes
+infra-up:
+    docker compose -f dev/docker-compose.yml up -d
+    @echo "Postgres ready on :5432 — connection strings in dev/docker-compose.yml"
+
+# Stop infrastructure and remove containers (volumes are preserved)
+infra-down:
+    docker compose -f dev/docker-compose.yml down
+
+# Stop infrastructure and delete all volumes (full reset)
+infra-reset:
+    docker compose -f dev/docker-compose.yml down -v
+
+# Run a single service with hot-reload (requires cargo-watch).
+# Example: just dev marktd
+dev service:
+    cargo watch -x "run -p {{ service }}"
+
+# Run a single service once (no watch).
+# Example: just run marktd
+run service:
+    cargo run -p {{ service }}
+
+# Tail logs for an infra container (postgres).
+# Example: just infra-logs postgres
+infra-logs container="postgres":
+    docker compose -f dev/docker-compose.yml logs -f {{ container }}
 
 # ── Versioning ────────────────────────────────────────────────────────────────
 

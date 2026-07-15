@@ -25,7 +25,6 @@ complete end-to-end flow: UTILMD 55001 → automatic NB decision → UTILMD 5500
 | `processd` | `8580` | NB STP auto-responder + LF E_0624 (45 min) + LFN bootstrap (Strom/Gas) |
 | `invoicd` | `8280` | INVOIC settlement (PIDs 31001/31002/31005/31006/31009) + payment CloudEvents |
 | `netzbilanzd` | `8680` | NNE/KA/MMM billing (NB role) — generates INVOIC 31001/31002/31005 |
-| `sperrd` | `8780` | Sperrung execution tracker (NB role) — IFTSTA 21039 auto-dispatch |
 | `edmd` | `8380` | Energy Data Management — MSCONS meter readings, `MeterBillingPeriod` |
 | `obsd` | `8480` | Business-process observability — ProcessProjection, BNetzA KPI reports |
 | `nis-syncd` | `9680` | NIS grid topology import (NB role, stateless) — lifts `processd` NB STP to ≥95% |
@@ -72,13 +71,18 @@ Total time: **~5 minutes**.
 git clone https://github.com/hupe1980/mako.git
 cd mako
 
-# Build all daemon images (~3–5 min first time, cached on rebuild)
-docker build --target runtime          -t makod:dev     .
-docker build --target marktd-runtime   -t marktd:dev    .
-docker build --target processd-runtime -t processd:dev  .
-docker build --target invoicd-runtime  -t invoicd:dev   .
-docker build --target edmd-runtime     -t edmd:dev      .
-docker build --target obsd-runtime     -t obsd:dev      .
+# Build all demo images at once with docker buildx bake (recommended)
+docker buildx bake makod marktd processd invoicd edmd obsd netzbilanzd nis-syncd
+
+# Or build individually:
+docker build --target runtime             -t makod:dev       .
+docker build --target marktd-runtime      -t marktd:dev      .
+docker build --target processd-runtime    -t processd:dev    .
+docker build --target invoicd-runtime     -t invoicd:dev     .
+docker build --target edmd-runtime        -t edmd:dev        .
+docker build --target obsd-runtime        -t obsd:dev        .
+docker build --target netzbilanzd-runtime -t netzbilanzd:dev .
+docker build --target nis-syncd-runtime   -t nis-syncd:dev   .
 ```
 
 > The `processd-runtime` stage builds with `--features integrated` (includes
@@ -103,8 +107,10 @@ demo-webhook-1     python:3.12-alpine Up             0.0.0.0:8000->8000/tcp
 demo-marktd-1      marktd:dev         Up             0.0.0.0:8180->8180/tcp
 demo-processd-1    processd:dev       Up             0.0.0.0:8580->8580/tcp
 demo-invoicd-1     invoicd:dev        Up             0.0.0.0:8280->8280/tcp
+demo-netzbilanzd-1 netzbilanzd:dev    Up             0.0.0.0:8680->8680/tcp
 demo-edmd-1        edmd:dev           Up             0.0.0.0:8380->8380/tcp
 demo-obsd-1        obsd:dev           Up             0.0.0.0:8480->8480/tcp
+demo-nis-syncd-1   nis-syncd:dev      Up             0.0.0.0:9680->9680/tcp
 demo-makod-1       makod:dev          Up             0.0.0.0:8080->8080/tcp
 ```
 

@@ -1,16 +1,20 @@
 # makod demo — full stack docker compose
 #
-# Runs the complete mako 8-service stack:
-#   • postgres     — PostgreSQL (one database per service: marktd, processd, invoicd, edmd, obsd, netzbilanzd, sperrd)
+# Core demo stack (10 services):
+#   • postgres     — PostgreSQL (one database per service)
 #   • webhook   :8000 — ERP CloudEvent receiver (Python, in-memory)
 #   • marktd    :8180 — Market Data Hub (MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, event_log replay)
 #   • processd  :8580 — NB STP auto-responder + LF E_0624 auto-response (netz-checker, §20 parity)
 #   • makod     :8080 — EDIFACT process engine (in-memory; use slatedb feature for persistent storage)
 #   • invoicd   :8280 — INVOIC plausibility-check daemon (LF role, §22 MessZV receipt retention)
 #   • netzbilanzd :8680 — NNE/KA/MMM billing daemon (NB role, INVOIC 31001/31002/31005 generation)
-#   • sperrd    :8780 — Sperrung execution tracker (NB role, IFTSTA 21039 auto-dispatch)
 #   • edmd      :8380 — Energy Data Management (MSCONS meter readings, MeterBillingPeriod)
 #   • obsd      :8480 — Business-process observability (ProcessProjection, BNetzA KPI, §20 parity)
+#   • nis-syncd :9680 — NIS/GIS grid topology import adapter (stateless, lifts NB STP to ≥95%)
+#
+# Excluded from demo (run separately when needed):
+#   sperrd   — Sperrung tracking (not needed for core NB STP flow)
+#   agentd   — LLM orchestration (requires external API key)
 #
 # End-to-end flow:
 #   ERP       → PUT MaLo + preisblatt into marktd        (master data pre-load)
@@ -23,12 +27,17 @@
 #   outbox    → delivers UTILMD 55003 to webhook          (ERP receives confirmation)
 #
 # Build images first:
-#   docker build --target runtime          -t makod:dev     .
-#   docker build --target marktd-runtime   -t marktd:dev    .
-#   docker build --target processd-runtime -t processd:dev  .
-#   docker build --target invoicd-runtime  -t invoicd:dev   .
-#   docker build --target edmd-runtime     -t edmd:dev      .
-#   docker build --target obsd-runtime     -t obsd:dev      .
+#   docker build --target runtime             -t makod:dev       .
+#   docker build --target marktd-runtime      -t marktd:dev      .
+#   docker build --target processd-runtime    -t processd:dev    .
+#   docker build --target invoicd-runtime     -t invoicd:dev     .
+#   docker build --target edmd-runtime        -t edmd:dev        .
+#   docker build --target obsd-runtime        -t obsd:dev        .
+#   docker build --target netzbilanzd-runtime -t netzbilanzd:dev .
+#   docker build --target nis-syncd-runtime   -t nis-syncd:dev   .
+#
+# Or build all at once with docker buildx bake:
+#   docker buildx bake makod marktd processd invoicd edmd obsd netzbilanzd nis-syncd
 #
 # Run:
 #   docker compose up -d
@@ -258,30 +267,6 @@ services:
       disable: true
     restart: unless-stopped
 
-  # ── sperrd — Sperrung Execution Tracking Daemon (NB role) ──────────────────
-  # Tracks physical Sperrung/Entsperrung execution (ORDERS 17115/17117).
-  # Auto-dispatches IFTSTA 21039 on PUT /execute — mandatory per GPKE BK6-22-024 §5.
-  sperrd:
-    image: sperrd:dev
-    depends_on:
-      postgres:
-        condition: service_healthy
-      makod:
-        condition: service_started
-    ports:
-      - "8780:8780"
-    volumes:
-      - ./sperrd.toml:/etc/sperrd/sperrd.toml:ro
-    environment:
-      SPERRD_DATABASE_URL:     postgres://demo:demo-secret@postgres/sperrd
-      SPERRD_MAKOD_API_KEY:    demo-secret-change-me
-    command:
-      - "--config=/etc/sperrd/sperrd.toml"
-    # distroless has no shell — use service_started dependency instead of healthcheck
-    healthcheck:
-      disable: true
-    restart: unless-stopped
-
   # ── nis-syncd — NIS/GIS Grid Topology Import Adapter (NB role, stateless) ──
   # Accepts NIS export batches and pushes malo_grid records to marktd.
   # Lifts processd NB STP from ~80% to ≥95% once grid topology is populated.
@@ -300,29 +285,6 @@ services:
     command:
       - "--config=/etc/nis-syncd/nis-syncd.toml"
     # Stateless — no database, no healthcheck needed
-    healthcheck:
-      disable: true
-    restart: unless-stopped
-
-  # ── agentd — Autonomous LLM Agent Daemon (LF role) ─────────────────────────
-  # ReAct agent that subscribes to CloudEvents and dispatches MCP tool calls.
-  # Triggered by process escalations, invoice disputes, and EEG lifecycle events.
-  agentd:
-    image: agentd:dev
-    depends_on:
-      makod:
-        condition: service_started
-      marktd:
-        condition: service_started
-    ports:
-      - "9580:9580"
-    volumes:
-      - ./agentd.toml:/etc/agentd/agentd.toml:ro
-    environment:
-      AGENTD_LLM__API_KEY:    ""  # set your Anthropic / OpenAI key here
-      AGENTD_MCP_API_KEY:     demo-secret-change-me
-    command:
-      - "--config=/etc/agentd/agentd.toml"
     healthcheck:
       disable: true
     restart: unless-stopped
