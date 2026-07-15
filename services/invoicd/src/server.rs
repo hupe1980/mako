@@ -1099,6 +1099,9 @@ async fn post_selbstausstellen(
             None
         },
         ka_satz_ct_per_kwh: None, // KA lookup not implemented; ERP can add via COMDIS
+        tariff_sheet_id: None,
+        sparte: grid_billing::Sparte::Strom,
+        ka_klasse: None,
     };
 
     let billing_result = match grid_billing::calculate_nne_invoice(&input) {

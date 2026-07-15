@@ -35,7 +35,7 @@ use axum::{
     response::IntoResponse,
 };
 use mako_edm::{
-    domain::{GAS_QUALITY_PIDS, MSCONS_PIDS, MeterDataReceipt},
+    domain::{ALL_MSCONS_PIDS, GAS_QUALITY_PIDS, MeterDataReceipt},
     repository::TimeSeriesRepository,
 };
 use mako_markt::cloudevents::verify_signature;
@@ -270,8 +270,14 @@ pub async fn handle_webhook(
         return StatusCode::NO_CONTENT.into_response();
     }
 
-    // 3. Route: only process.completed events for known MSCONS PIDs.
-    if ce_type == "de.mako.process.completed" && MSCONS_PIDS.contains(&pid) {
+    // 3. Route: only process.completed events for known MSCONS PIDs (Messwesen + Redispatch 2.0).
+    //
+    // `MSCONS_PIDS` = Messwesen PIDs (13005–13027, excl. 13003/13013).
+    // `ALL_MSCONS_PIDS` = MSCONS_PIDS + REDISPATCH_MSCONS_PIDS (13020–13026).
+    // Redispatch 2.0 Ausfallarbeit/meteorological data (PIDs 13020–13026) must also be stored
+    // in `edmd` for OLAP aggregation and archive, even though `mako-redispatch` handles the
+    // workflow routing (the two concerns are orthogonal).
+    if ce_type == "de.mako.process.completed" && ALL_MSCONS_PIDS.contains(&pid) {
         let subject = event["subject"].as_str().unwrap_or("").to_owned();
         let process_id: Uuid = match subject.parse() {
             Ok(id) => id,
@@ -352,6 +358,79 @@ pub async fn handle_webhook(
                     ),
                     Err(err) => warn!(%err, process_id = %process_id, pid,
                         "edmd: failed to update gas quality"),
+                }
+            }
+        }
+        // ── DST-aware validation of inbound MSCONS reads ───────────────────
+        // Run the metering validation engine (V01-V10) on interval reads
+        // in the ProcessCompleted payload. Emits quality warnings per §17 MessZV.
+        if let Some(reads_array) = data["reads"].as_array().filter(|a| !a.is_empty()) {
+            use metering::{MeterInterval, QualityFlag, ValidationConfig, validate_intervals};
+            let intervals: Vec<MeterInterval> = reads_array
+                .iter()
+                .filter_map(|r| {
+                    use time::format_description::well_known::Rfc3339;
+                    let from = r["dtm_from"]
+                        .as_str()
+                        .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok())?;
+                    let to = r["dtm_to"]
+                        .as_str()
+                        .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok())?;
+                    let kwh = r["quantity_kwh"]
+                        .as_str()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(rust_decimal::Decimal::ZERO);
+                    let quality = match r["quality"].as_str().unwrap_or("UNKNOWN") {
+                        "MEASURED" => QualityFlag::Measured,
+                        "ESTIMATED" => QualityFlag::Estimated,
+                        "SUBSTITUTED" => QualityFlag::Substituted,
+                        "CALCULATED" => QualityFlag::Calculated,
+                        "CORRECTED" => QualityFlag::Corrected,
+                        "PRELIMINARY" => QualityFlag::Preliminary,
+                        "FAULTY" => QualityFlag::Faulty,
+                        _ => QualityFlag::Unknown,
+                    };
+                    Some(MeterInterval {
+                        from,
+                        to,
+                        value_kwh: kwh,
+                        quality,
+                        obis_code: r["obis_code"].as_str().map(str::to_owned),
+                    })
+                })
+                .collect();
+            if !intervals.is_empty() {
+                let config = ValidationConfig {
+                    now: Some(time::OffsetDateTime::now_utc()),
+                    ..ValidationConfig::default()
+                };
+                let result = validate_intervals(&intervals, &config);
+                if !result.is_clean() {
+                    warn!(
+                        process_id = %process_id, pid, malo_id = %malo_id,
+                        issue_count = result.issues.len(),
+                        billing_block_count = result.billing_block_count(),
+                        "edmd: MSCONS ingest validation issues (§17 MessZV — substitute values may be required)"
+                    );
+                    if let Some(ref webhook_url) = state.erp_webhook_url {
+                        let payload = serde_json::json!({
+                            "specversion": "1.0", "type": "de.edmd.reading.quality.warning",
+                            "source": "edmd", "id": uuid::Uuid::new_v4().to_string(),
+                            "datacontenttype": "application/json",
+                            "data": {
+                                "malo_id": malo_id, "pid": pid,
+                                "process_id": process_id.to_string(),
+                                "issue_count": result.issues.len(),
+                                "billing_block_count": result.billing_block_count(),
+                                "has_errors": result.has_errors(),
+                            }
+                        });
+                        let _ = reqwest::Client::new()
+                            .post(webhook_url)
+                            .json(&payload)
+                            .send()
+                            .await;
+                    }
                 }
             }
         }

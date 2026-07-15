@@ -36,6 +36,8 @@ use mako_engine::{
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 
+use crate::domain::GasDay;
+
 // ── Synthetic PID ─────────────────────────────────────────────────────────────
 
 /// Synthetic PID for the SCHEDL transport schedule message.
@@ -59,8 +61,8 @@ pub struct SchedlData {
     pub sender_eic: String,
     /// EIC code of the receiver.
     pub receiver_eic: String,
-    /// Schedule period — gas day or time window (from DTM qualifier 137).
-    pub schedule_period: String,
+    /// Gas day for this transport schedule.
+    pub gas_day: GasDay,
     /// Document reference from the SCHEDL message (BGM element 1).
     pub document_ref: MessageRef,
 }
@@ -79,8 +81,8 @@ pub enum SchedlEvent {
         sender_eic: String,
         /// EIC code of the receiver.
         receiver_eic: String,
-        /// Schedule period (gas day or time window).
-        schedule_period: String,
+        /// Gas day for this transport schedule.
+        gas_day: GasDay,
         /// Document reference.
         document_ref: MessageRef,
     },
@@ -128,8 +130,8 @@ pub enum SchedlCommand {
         sender_eic: String,
         /// EIC code of the receiver.
         receiver_eic: String,
-        /// Schedule period (gas day or time window from DTM 137).
-        schedule_period: String,
+        /// Gas day for this transport schedule.
+        gas_day: GasDay,
         /// Document reference from BGM element 1.
         document_ref: MessageRef,
     },
@@ -156,13 +158,13 @@ impl Workflow for GaBiGasSchedlWorkflow {
                 synthetic_pid,
                 sender_eic,
                 receiver_eic,
-                schedule_period,
+                gas_day,
                 document_ref,
             } => SchedlState::Received(SchedlData {
                 synthetic_pid: *synthetic_pid,
                 sender_eic: sender_eic.clone(),
                 receiver_eic: receiver_eic.clone(),
-                schedule_period: schedule_period.clone(),
+                gas_day: *gas_day,
                 document_ref: document_ref.clone(),
             }),
         }
@@ -176,7 +178,7 @@ impl Workflow for GaBiGasSchedlWorkflow {
             synthetic_pid,
             sender_eic,
             receiver_eic,
-            schedule_period,
+            gas_day,
             document_ref,
         } = command;
 
@@ -193,7 +195,7 @@ impl Workflow for GaBiGasSchedlWorkflow {
             synthetic_pid,
             sender_eic,
             receiver_eic,
-            schedule_period,
+            gas_day,
             document_ref,
         }]
         .into())
@@ -230,7 +232,7 @@ mod tests {
             synthetic_pid: 90031,
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001369Q".to_owned(),
-            schedule_period: "2026-01-15".to_owned(),
+            gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             document_ref: make_ref(),
         };
         let output = GaBiGasSchedlWorkflow::handle(&state, cmd).unwrap();
@@ -249,7 +251,7 @@ mod tests {
             synthetic_pid: 90011, // wrong PID
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001369Q".to_owned(),
-            schedule_period: "2026-01-15".to_owned(),
+            gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             document_ref: make_ref(),
         };
         assert!(GaBiGasSchedlWorkflow::handle(&state, cmd).is_err());
@@ -261,14 +263,14 @@ mod tests {
             synthetic_pid: 90031,
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001369Q".to_owned(),
-            schedule_period: "2026-01-15".to_owned(),
+            gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             document_ref: make_ref(),
         });
         let cmd = SchedlCommand::ReceiveSchedule {
             synthetic_pid: 90031,
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001369Q".to_owned(),
-            schedule_period: "2026-01-15".to_owned(),
+            gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             document_ref: make_ref(),
         };
         assert!(GaBiGasSchedlWorkflow::handle(&state, cmd).is_err());

@@ -6,9 +6,10 @@ parent: Services
 mermaid: true
 description: >
   accountingd operator guide — Massenkontokorrent / Customer Account Ledger (LF role).
-  11 entry types, CAMT.054 payment import, SEPA pain.008 XML, Mahnwesen Mahnstufe 1–3,
-  EEG Gutschrift + Marktprämie ingest, Jahresabschluss §40 EnWG, manual buchen,
-  SEPA mandate revocation, 54+ unit tests.
+  11 entry types, FIFO open-item management, CAMT.054 import, SEPA pain.008 + pain.001 XML
+  (sepa 0.3.0), Mahnwesen automatic rule engine (Mahnstufe 1–3), GDPR Art. 17 pseudonymization,
+  balance reconciliation, EEG Gutschrift + Marktprämie ingest, Jahresabschluss §40 EnWG,
+  71 unit tests.
 ---
 
 # `accountingd` — Massenkontokorrent / Customer Account Ledger
@@ -83,21 +84,38 @@ generator uses integer arithmetic — no floating-point rounding errors.
 
 ## Mahnwesen (dunning) lifecycle
 
+The dunning engine operates in two modes: **automatic** (background worker) and **manual** (operator-triggered).
+
 ```mermaid
 graph LR
-    overdue["balance_ct > 0\n+ grace days elapsed"]
-    stufe1["Mahnstufe 1\n→ de.accounting.mahnung.issued\n→ ERP prints letter"]
-    stufe2["Mahnstufe 2\n+ MAHNGEBUEHR 5 EUR\n→ de.accounting.mahnung.issued"]
-    stufe3["Mahnstufe 3\n+ MAHNGEBUEHR 10 EUR\n→ de.accounting.sperrauftrag\n→ sperrd"]
-    resolved["resolved"]
+    subgraph auto ["Auto-dunning worker (daily, dunning_auto_enabled=true)"]
+        trigger["balance_ct > 0\n+ oldest RECHNUNG > grace_days\n+ no active dunning case"]
+        a1["Auto: Mahnstufe 1\ncreated + fee1 (\u20ac0)"]
+        a2["Auto: Mahnstufe 2\n+ fee2 (\u20ac5.00)"]
+        a3["Auto: Mahnstufe 3\n+ fee3 (\u20ac10.00)\n+ Sperrauftrag"]
+        trigger -->|"grade_days elapsed"| a1
+        a1 -->|"due_date passed"| a2
+        a2 -->|"due_date passed"| a3
+    end
 
-    overdue -->|"POST /dunning/{id}/escalate"| stufe1
-    stufe1 -->|"14 days unresolved"| stufe2
-    stufe2 -->|"14 days unresolved"| stufe3
-    stufe1 -->|"payment received"| resolved
-    stufe2 -->|"payment received"| resolved
-    stufe3 -->|"POST /dunning/{id}/resolve"| resolved
+    subgraph manual ["Manual operator path"]
+        m1["POST /dunning/{id}/escalate\
+stufe=1|2|3"]
+    end
+
+    resolved["POST /dunning/{id}/resolve"]
+    a1 -->|"payment received"| resolved
+    a2 -->|"payment received"| resolved
+    a3 -->|"payment received"| resolved
+    m1 -->|"payment received"| resolved
 ```
+
+**Automatic escalation** (P1-5 fix): set `dunning_auto_enabled = true` in config.
+The worker runs daily, is idempotent (`auto_dunning_runs` UNIQUE guard), and emits
+`de.accounting.sperrauftrag.batch` when Mahnstufe 3 cases are created.
+
+**Manual escalation**: `POST /api/v1/dunning/{account_id}/escalate` remains available
+for operator override (e.g. grace extensions, special B2B arrangements).
 
 ---
 
@@ -110,10 +128,13 @@ graph LR
 | `GET` | `/api/v1/accounts/{malo_id}/balance` | Current balance in ct; status: overdue/credit/settled |
 | `GET` | `/api/v1/accounts/{malo_id}/ledger` | Paged ledger entries |
 | `GET` | `/api/v1/accounts/{malo_id}/kontoauszug` | Account statement (portald-consumable) |
+| `GET` | `/api/v1/accounts/{malo_id}/open-items` | **FIFO open-item list** — individual unpaid/partial invoices |
 | `PUT` | `/api/v1/accounts/{malo_id}/abschlag` | Update monthly advance payment |
 | `GET/PUT` | `/api/v1/accounts/{malo_id}/vorauszahlung` | Typed `rubo4e::current::Vorauszahlung` (§40 EnWG) |
 | `GET/PUT` | `/api/v1/accounts/{malo_id}/zahlungsinformation` | Typed `rubo4e::current::Zahlungsinformation` |
 | `POST` | `/api/v1/accounts/{malo_id}/buchen` | **Manual booking** (operator-authorised ledger entry) |
+| `POST` | `/api/v1/accounts/{malo_id}/reconcile` | **Balance reconciliation** — detect/repair `balance_ct` cache drift |
+| `POST` | `/api/v1/accounts/{malo_id}/anonymize` | **GDPR Art. 17** pseudonymization (preserves ledger) |
 | `POST` | `/api/v1/payments/import` | Ingest CAMT.054 bank statement (JSON array) |
 | `GET` | `/api/v1/offene-posten` | Overdue accounts |
 | `GET` | `/api/v1/dunning` | Open dunning cases |
@@ -205,8 +226,81 @@ from `abschlag_ct` when no typed value has been stored.
 ## IBAN validation
 
 Every SEPA mandate PUT validates the IBAN using **ISO 13616 mod-97** via the
-[`sepa`](https://crates.io/crates/sepa) crate (`sepa::validate_iban`).
+[`sepa`](https://crates.io/crates/sepa) 0.3.0 crate (`sepa::validate_iban`).
 Covered by **21 tests** in `unit_tests.rs` (DE, GB, NL, AT, CH, checksum failures, length, lowercase).
+
+---
+
+## Open-item management (FIFO clearing)
+
+`GET /api/v1/accounts/{malo_id}/open-items` returns individual unpaid or partially-paid
+invoice debits using **FIFO clearing** against available credits:
+
+```json
+{
+  "malo_id": "51238696780",
+  "balance_ct": 15000,
+  "open_item_count": 2,
+  "open_items": [
+    { "entry_type": "RECHNUNG", "amount_ct": 8000, "outstanding_ct": 0,
+      "reference_id": "R2026-05", "booking_date": "2026-05-15" },
+    { "entry_type": "RECHNUNG", "amount_ct": 12000, "outstanding_ct": 15000,
+      "reference_id": "R2026-06", "booking_date": "2026-06-15" }
+  ]
+}
+```
+
+The oldest debits are cleared first. This matches SAP FI-CA “oldest-first” default and
+§252 HGB Abs. 1 Nr. 4 (Vorsichtsprinzip — individual receivables must be tracked separately).
+
+`balance_ct` remains the authoritative balance; open-items add invoice-level transparency.
+
+---
+
+## Balance integrity (`POST /reconcile`)
+
+`balance_ct` is a cached sum updated atomically with every ledger write (`SELECT FOR UPDATE`).
+A crash between the INSERT and the UPDATE could leave it inconsistent:
+
+```bash
+# Check only
+curl -X POST "http://accountingd:9380/api/v1/accounts/51238696780/reconcile"
+
+# Detect + repair
+curl -X POST "http://accountingd:9380/api/v1/accounts/51238696780/reconcile?repair=true"
+```
+
+Response:
+```json
+{
+  "is_consistent": true,
+  "cached_balance_ct": 5000,
+  "recomputed_balance_ct": 5000,
+  "drift_ct": 0
+}
+```
+
+When `drift_ct != 0`, the `repair=true` flag atomically resets `balance_ct` to `SUM(amount_ct)`.
+Schedule this as a weekly health check in your monitoring pipeline.
+
+---
+
+## GDPR Art. 17 — Pseudonymization
+
+```bash
+curl -X POST "http://accountingd:9380/api/v1/accounts/51238696780/anonymize" \
+  -H "Content-Type: application/json" \
+  -d '{ "requested_by": "operator-1", "legal_basis": "GDPR Art. 17 - customer request #42" }'
+```
+
+**What is anonymized**: `accounts.iban` → `ANONYMIZED`, `mandatsref`/`zahlungsinformation`/`vorauszahlung` → `NULL`; `sepa_mandates.iban` → `ANONYMIZED`, `kontoinhaber` → `ANONYMIZED`, `bic` → `NULL`.
+
+**What is preserved**: All `ledger_entries` (amounts, dates, types, references) — exempt from
+GDPR Art. 17 under Art. 17(3)(b) and §238 HGB / §147 AO retention requirements (10 years).
+
+**Audit trail**: An immutable record is written to `anonymization_log` (GDPR Art. 5(2)).
+
+The operation is idempotent — returns `409 Conflict` if already anonymized.
 
 ---
 
@@ -221,26 +315,69 @@ curl -X POST "http://accountingd:9380/api/v1/payments/import" \
 
 Matches by IBAN → writes `ZAHLUNG` credit (or `BANKRUECKLAST` for returned direct debits) → updates balance. Returns `{ "accepted": 1, "total": 1 }`.
 
-Amount parsing uses `sepa::camt054::parse_simple_json` — integer arithmetic only, **no f64**.
+Amount parsing uses `sepa::ct_from_eur_str` (sepa 0.3.0) — integer arithmetic only, **no f64**.
 
 ---
 
-## SEPA pain.008
+## SEPA payments (sepa 0.3.0)
+
+`accountingd` uses the [`sepa`](https://crates.io/crates/sepa) crate v0.3.0 which adds several capabilities beyond the 0.2 pain.008-only API:
+
+```mermaid
+graph LR
+    subgraph out ["Outgoing payments"]
+        pain008["pain.008 SDD\nDirect Debit\n(N-5 scheduler + /sepa/run)"]
+        pain001["pain.001 SCT\nCredit Transfer\n(EEG Vergütung refunds)"]
+    end
+    subgraph in ["Bank responses"]
+        pain002["pain.002 parser\nPayment Status Report\n(bank rejection handling)"]
+        camt053["camt.053 parser\nEnd-of-day statement\n(reconciliation)"]
+    end
+    creditor["Creditor Identifier\n(EPC AT-02)"]
+    creditor --> pain008
+    creditor --> pain001
+```
+
+### pain.008 Direct Debit
 
 ```bash
 curl -X POST "http://accountingd:9380/api/v1/sepa/run" -H "Accept: application/xml" > abschlag-2026-07.xml
 ```
 
-Generates ISO 20022 pain.008.003.02 via the [`sepa`](https://crates.io/crates/sepa) crate
-(`sepa::Pain008Builder`) for all active mandates with `abschlag_ct > 0`.
-**No f64** — all `InstdAmt` values use integer arithmetic (`ct ÷ 100`).
+Generates ISO 20022 pain.008.003.02 via `sepa::Pain008Builder` for all active mandates with `abschlag_ct > 0`.
 
-The N-5 scheduler (background worker) auto-generates pain.008 5 days before each `billing_day`.
+- **Typed `SequenceType`**: FRST/RCUR/FNAL/OOFF dispatch per mandate
+- **`with_description`**: Each entry carries `"Abschlag YYYY-MM"` as RemittanceInfo (`Ustrd`) — visible on debtor’s bank statement
+- **Hard error**: missing or invalid `creditor_iban` returns HTTP 503 (no silent placeholder IBAN)
+- **N-5 scheduler**: Background worker auto-generates and dispatches pain.008 5 days before each `billing_day`
 
 To revoke a mandate (§58 ZAG — customer right to revoke before cut-off):
 ```bash
 curl -X DELETE "http://accountingd:9380/api/v1/sepa/mandates/{mandate_id}"
 ```
+
+### pain.001 Credit Transfer (sepa 0.3.0 — new)
+
+For outgoing payments (EEG Vergütung payout to plant operators, Jahresabschluss Erstattung):
+
+```rust
+use accountingd::sepa::build_pain_001;
+// 200.00 EUR Erstattung to plant operator
+let xml = build_pain_001(
+    "DE89370400440532013000",  // LF's own IBAN (debit side)
+    &[("DE29100500005001065004", "Franz Huber", 20_000, "ERSTATTUNG-2025")],
+    false, // false = standard SCT; true = SCT Instant
+)?;
+```
+
+Supports **SCT Instant** (`LocalInstrument::Inst`, pain.001.001.09) for real-time payments.
+
+### pain.002 + camt.053 parsers (sepa 0.3.0 — new)
+
+| Parser | Use case |
+|---|---|
+| `sepa::parse_pain002` | Bank rejection report → auto-create `BANKRUECKLAST` entries |
+| `sepa::parse_camt053` | End-of-day bank statement → full automated reconciliation |
 
 ---
 
@@ -266,6 +403,9 @@ supply `reference_id` for audit trails.
 | `iban`, `mandatsref` | Active SEPA mandate link (fast lookup) |
 | `vorauszahlung` | `rubo4e::current::Vorauszahlung` JSONB |
 | `zahlungsinformation` | `rubo4e::current::Zahlungsinformation` JSONB |
+| `anonymized_at` | GDPR Art. 17 timestamp — set when account is pseudonymized |
+
+**Tenant isolation**: `(malo_id, lf_mp_id, tenant)` UNIQUE constraint (migration 0005).
 
 ### `ledger_entries` (immutable)
 
@@ -286,10 +426,23 @@ for backdated corrections (§238 HGB).
 
 Standard schema — see `migrations/0001_initial.sql`.
 
-### `migrations/0004_entry_types.sql`
+### `anonymization_log`
 
-Extended `entry_type` CHECK: added `STORNO` (billing reversals), `EEG_MARKTPRAEMIE`
-(Direktvermarktung EEG), `JAHRESABSCHLUSS` (annual settlement).
+Immutable audit trail for GDPR Art. 17 operations. Stores `requested_by`, `legal_basis`, `anonymized_fields` (JSON array), `anonymized_at`. Required by GDPR Art. 5(2) accountability principle.
+
+### `auto_dunning_runs`
+
+Idempotency guard for the auto-dunning background worker. One row per `(tenant, run_date)` — prevents double-escalation from crash+restart on the same calendar day.
+
+### Migrations summary
+
+| Migration | Content |
+|---|---|
+| `0001_initial.sql` | `accounts`, `ledger_entries`, `sepa_mandates`, `dunning_cases`, `processed_events` |
+| `0003_zahlungsinformation.sql` | `accounts.zahlungsinformation JSONB` (typed BO4E payment info) |
+| `0004_entry_types.sql` | Extended CHECK: `STORNO`, `EEG_MARKTPRAEMIE`, `JAHRESABSCHLUSS` |
+| `0005_tenant_unique.sql` | `(malo_id, lf_mp_id, tenant)` UNIQUE constraint (tenant isolation) |
+| `0006_open_items_gdpr.sql` | `accounts.anonymized_at`, `anonymization_log`, `auto_dunning_runs` |
 
 ---
 
@@ -301,12 +454,25 @@ port                  = 9380
 tenant                = "9910000000002"
 erp_webhook_url       = "http://erp:8000/webhooks/accounting"
 sperrd_url            = "http://sperrd:8780"
+
+# Dunning fees per Mahnstufe
 dunning_fee_stufe1_ct = 0     # no fee for first reminder
 dunning_fee_stufe2_ct = 500   # 5.00 EUR
 dunning_fee_stufe3_ct = 1000  # 10.00 EUR
 dunning_grace_days    = 30
+
+# Auto-dunning rule engine (opt-in, default false)
+dunning_auto_enabled  = true   # set to true to enable daily auto-escalation
+
+# SEPA creditor IBAN (required for pain.008 generation; hard error if missing/invalid)
 creditor_iban         = "DE89370400440532013000"
+
+# SEPA N-5 pre-notification window (default: 5 calendar days)
+sepa_pre_notification_days = 5
 ```
+
+> **`creditor_iban` is now required.** Missing or invalid `creditor_iban` causes `POST /sepa/run`
+> to return HTTP 503. The N-5 background worker also blocks (no silent placeholder IBAN fallback).
 
 ---
 
@@ -326,13 +492,16 @@ matching (powercloud-equivalent >98% match rate).
 
 ## Testing
 
-**54+ unit tests** (`cargo test -p accountingd --test unit_tests`):
+**71 unit tests** (`cargo test -p accountingd --test unit_tests`):
 
 - IBAN validation (21 tests): DE/GB/NL/AT/CH, checksum, length, lowercase
 - Entry type coverage: all 11 types, sign conventions, STORNO vs KORREKTUR semantics
 - Jahresabschluss: Nachzahlung/Erstattung/Ausgeglichen, STORNO inclusion in annual sum
+- **Decimal precision** (P0-1 fix): `f64` vs `Decimal` rounding correctness (`1.99 EUR = 199 ct`, not 198 ct)
+- **Open-item FIFO** (P1-3): formula verification for FIFO clearing across 4 scenarios
+- **GDPR anonymization** (P1-4): field list completeness, required-field validation
+- **Auto-dunning rules** (P1-5): grace period logic, default fee schedule
 - pain.008 formatting: integer arithmetic, no f64, CtrlSum validation
-- Dunning fee amounts, escalation sequence
 - SEPA sequence types (FRST/RCUR/FNAL/OOFF), mandate revocation
 
 ```bash

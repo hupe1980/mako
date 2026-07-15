@@ -34,6 +34,7 @@
 //!     invoice_type:      InvoiceType::Initial,
 //!     contract_id:       None,
 //!     regulatory_rates:  rates.clone(),
+//!     ..Default::default()
 //! };
 //! let quantities = Quantities {
 //!     electricity: Some(MeterInput {
@@ -85,9 +86,10 @@ impl BillingEngine {
 
     /// Run all providers and assemble an `Invoice`.
     ///
-    /// Two-pass execution:
+    /// Three-pass execution:
     /// 1. Commodity + levy providers (all `is_tax_pass() == false`)
     /// 2. Tax providers (all `is_tax_pass() == true`)
+    /// 3. Abschlag deductions from `ctx.abschlage` (for `InvoiceType::Final`)
     pub fn bill(
         self,
         ctx: BillingContext,
@@ -108,6 +110,119 @@ impl BillingEngine {
             positions.extend(new);
         }
 
+        // ── Pass 3: Abschlag deductions (Final invoices only) ──────────────────
+        // §41 EnWG: Jahresabrechnung must itemise each advance payment.
+        // These positions do NOT affect netto_eur / mwst_eur — they reduce
+        // zahlbetrag_eur only (already paid by customer, now being reconciled).
+        for abschlag in &ctx.abschlage {
+            let label = abschlag
+                .beschreibung
+                .clone()
+                .unwrap_or_else(|| format!("Abschlag {}", abschlag.datum));
+            positions.push(
+                crate::position::BillingPosition::debit(
+                    label,
+                    rust_decimal::Decimal::ONE,
+                    "EUR",
+                    -abschlag.betrag_eur, // negative unit_price → deduction
+                    crate::position::PositionCategory::Abschlag,
+                )
+                .with_legal_basis("§41 EnWG"),
+            );
+        }
+
+        // ── Pass 4: Minimum invoice top-up ──────────────────────────────────────
+        // When ctx.minimum_invoice_eur_brutto is set and the computed brutto_eur
+        // is below the minimum, add a Mindestbetrag position and re-run the tax pass.
+        if let Some(min_brutto) = ctx.minimum_invoice_eur_brutto {
+            let current_invoice = Invoice::from_positions(ctx.clone(), positions.clone());
+            let current_brutto = current_invoice.brutto_eur;
+            if current_brutto < min_brutto {
+                let gap_brutto = min_brutto - current_brutto;
+                // Infer MwSt rate from existing Tax positions (netto-based).
+                let netto_sum: rust_decimal::Decimal = positions
+                    .iter()
+                    .filter(|p| {
+                        !matches!(
+                            p.category,
+                            crate::position::PositionCategory::Tax
+                                | crate::position::PositionCategory::Abschlag
+                                | crate::position::PositionCategory::Info
+                        )
+                    })
+                    .map(|p| p.net_eur)
+                    .sum();
+                let tax_sum: rust_decimal::Decimal = positions
+                    .iter()
+                    .filter(|p| p.category == crate::position::PositionCategory::Tax)
+                    .map(|p| p.net_eur)
+                    .sum();
+                let mwst_rate = if netto_sum.is_zero() {
+                    ctx.regulatory_rates.mwst_rate
+                } else {
+                    (tax_sum / netto_sum).abs()
+                };
+                let divisor = rust_decimal::Decimal::ONE + mwst_rate;
+                let gap_netto = if divisor.is_zero() {
+                    gap_brutto
+                } else {
+                    (gap_brutto / divisor).round_dp(5)
+                };
+
+                // Strip old Tax positions and re-run tax pass with top-up included.
+                let mut positions2: Vec<BillingPosition> = positions
+                    .iter()
+                    .filter(|p| p.category != crate::position::PositionCategory::Tax)
+                    .cloned()
+                    .collect();
+                positions2.push(
+                    crate::position::BillingPosition::debit(
+                        format!("Mindestbetrag (Minimum {min_brutto:.2}\u{202f}EUR brutto)"),
+                        rust_decimal::Decimal::ONE,
+                        "EUR",
+                        gap_netto,
+                        crate::position::PositionCategory::Commodity,
+                    )
+                    .with_legal_basis("Vertraglich")
+                    .with_tag("mindestbetrag"),
+                );
+                let pre_tax2: Vec<BillingPosition> = positions2.clone();
+                for provider in self.providers.iter().filter(|p| p.is_tax_pass()) {
+                    let new = provider.bill(&ctx, quantities, &pre_tax2)?;
+                    positions2.extend(new);
+                }
+                // Re-add Abschlag (already correct, just copy them over).
+                for p in positions
+                    .iter()
+                    .filter(|p| p.category == crate::position::PositionCategory::Abschlag)
+                {
+                    positions2.push(p.clone());
+                }
+                return Ok(Invoice::from_positions(ctx, positions2));
+            }
+        }
+
+        // ── Pass 5: Cancellation (Storno) — negate all signs ──────────────────
+        // §41 EnWG: A Stornorechnung reverses the original invoice to EUR 0.
+        // All position signs are inverted so brutto_eur = -(original brutto_eur).
+        if ctx.invoice_type.is_reversal() {
+            negate_positions(&mut positions);
+        }
+
         Ok(Invoice::from_positions(ctx, positions))
+    }
+}
+
+// ── Cancellation helpers ──────────────────────────────────────────────────────
+
+/// Negate all position amounts for a Stornorechnung (Cancellation invoice).
+///
+/// Called internally by `BillingEngine::bill()` when `ctx.invoice_type.is_reversal()`.
+/// All `net_eur` and `unit_price_eur` are sign-inverted so the Invoice's
+/// `netto_eur`, `mwst_eur`, and `brutto_eur` equal `-(original)`.
+fn negate_positions(positions: &mut [crate::position::BillingPosition]) {
+    for p in positions.iter_mut() {
+        p.net_eur = -p.net_eur;
+        p.unit_price_eur = -p.unit_price_eur;
     }
 }

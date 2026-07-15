@@ -1,0 +1,714 @@
+//! Validation engine for meter interval time series.
+//!
+//! ## Rules
+//!
+//! | Rule | ID | Regulatory basis |
+//! |---|---|---|
+//! | Gap detection | V01 | §17 MessZV — missing intervals require substitute values |
+//! | Overlap detection | V02 | Duplicate/overlapping intervals are data errors |
+//! | Negative energy | V03 | Consumption values < 0 indicate wiring error or rollover |
+//! | Impossible spike | V04 | Value > `spike_factor × rolling_mean` suggests error |
+//! | Zero run | V05 | Long run of zeros may indicate frozen/stuck meter |
+//! | Interval length | V06 | Interval length must be consistent (e.g. always 15 min) |
+//! | DST ambiguity | V07 | UTC required; local-time overlap at CEST→CET transition |
+//! | Future timestamp | V08 | Intervals starting in the future are suspect |
+//!
+//! ## DST note (German time, §3 Allgemeine Festlegungen)
+//!
+//! All timestamps in MSCONS and direct push are **UTC**. The ambiguous hour
+//! at the CEST→CET transition (last Sunday in October, 01:00 UTC = 03:00 CET)
+//! must be transmitted as UTC — there is no local-time ambiguity in UTC.
+//! Rule V07 detects if timestamps were accidentally stored as local time by
+//! checking for duplicate hour boundaries.
+
+use rust_decimal::Decimal;
+use time::OffsetDateTime;
+
+use crate::interval::MeterInterval;
+
+// ── ValidationSeverity ────────────────────────────────────────────────────────
+
+/// Severity level of a validation finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
+pub enum ValidationSeverity {
+    /// Informational — no action required, but worth noting.
+    Info,
+    /// Warning — value may be usable for billing but should be reviewed.
+    Warning,
+    /// Error — value must NOT be used for billing; substitute value required.
+    Error,
+}
+
+// ── ValidationRuleId ─────────────────────────────────────────────────────────
+
+/// Identifies which validation rule triggered an issue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
+pub enum ValidationRuleId {
+    /// V01 — missing interval in expected time range.
+    GapDetected,
+    /// V02 — two intervals have overlapping time windows.
+    OverlapDetected,
+    /// V03 — consumption value is negative (impossible for Bezug-only meters).
+    NegativeEnergy,
+    /// V04 — value exceeds `spike_factor × rolling_mean` (statistical outlier).
+    ImpossibleSpike,
+    /// V05 — consecutive zero values suggest stuck/frozen meter.
+    SuspiciousZeroRun,
+    /// V06 — interval length differs from expected granularity.
+    InconsistentIntervalLength,
+    /// V07 — potential DST local-time leak (duplicate hour boundary values).
+    DstAmbiguity,
+    /// V08 — interval starts in the future.
+    FutureTimestamp,
+    /// V09 — quality flag is non-billable (`Faulty` or `Unknown`).
+    NonBillableQuality,
+    /// V10 — value dropped sharply (≥ rollover threshold) suggesting meter rollover.
+    ///
+    /// Triggered when `value[i] << value[i-1]` by more than `rollover_threshold_kwh`.
+    /// §14 MessZV: meter replacement and rollover events must be documented.
+    RegisterRollover,
+}
+
+impl std::fmt::Display for ValidationRuleId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let code = match self {
+            Self::GapDetected => "V01",
+            Self::OverlapDetected => "V02",
+            Self::NegativeEnergy => "V03",
+            Self::ImpossibleSpike => "V04",
+            Self::SuspiciousZeroRun => "V05",
+            Self::InconsistentIntervalLength => "V06",
+            Self::DstAmbiguity => "V07",
+            Self::FutureTimestamp => "V08",
+            Self::NonBillableQuality => "V09",
+            Self::RegisterRollover => "V10",
+        };
+        write!(f, "{code}")
+    }
+}
+
+// ── ValidationIssue ──────────────────────────────────────────────────────────
+
+/// A single validation finding on a meter interval or time series.
+///
+/// Every `ValidationIssue` carries enough information to:
+/// 1. Identify which interval(s) are affected (`interval_index`)
+/// 2. Explain the problem (`rule_id`, `message`)
+/// 3. Drive automated remediation (substitute value generation for `Error` issues)
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ValidationIssue {
+    /// Which validation rule triggered this issue.
+    pub rule_id: ValidationRuleId,
+    /// Severity: `Info`, `Warning`, or `Error`.
+    pub severity: ValidationSeverity,
+    /// Human-readable description of the issue.
+    pub message: String,
+    /// Index into the validated slice where the issue was found.
+    /// `None` for series-level issues (e.g. gap between two intervals).
+    pub interval_index: Option<usize>,
+    /// The timestamp of the affected interval start (for diagnostics).
+    pub affected_from: Option<OffsetDateTime>,
+    /// The measured value at the affected interval (if known).
+    pub affected_value_kwh: Option<Decimal>,
+}
+
+impl ValidationIssue {
+    fn new(
+        rule_id: ValidationRuleId,
+        severity: ValidationSeverity,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            rule_id,
+            severity,
+            message: message.into(),
+            interval_index: None,
+            affected_from: None,
+            affected_value_kwh: None,
+        }
+    }
+
+    fn at(mut self, idx: usize, interval: &MeterInterval) -> Self {
+        self.interval_index = Some(idx);
+        self.affected_from = Some(interval.from);
+        self.affected_value_kwh = Some(interval.value_kwh);
+        self
+    }
+
+    /// `true` when this issue prevents the interval from being billed.
+    #[must_use]
+    pub fn blocks_billing(&self) -> bool {
+        self.severity == ValidationSeverity::Error
+    }
+}
+
+// ── ValidationConfig ─────────────────────────────────────────────────────────
+
+/// Configuration for `validate_intervals`.
+#[derive(Debug, Clone)]
+pub struct ValidationConfig {
+    /// Expected interval duration in seconds (e.g. 900 = 15 min, 3600 = 1 h).
+    ///
+    /// When `None`, interval length consistency is not checked.
+    pub expected_interval_secs: Option<u32>,
+
+    /// Multiplier for the spike detection rule (V04).
+    ///
+    /// An interval value exceeding `spike_factor × rolling_mean` is flagged.
+    /// Default: `10.0` — values 10× the rolling average are suspicious.
+    pub spike_factor: f64,
+
+    /// Number of consecutive zero-value intervals to trigger V05.
+    ///
+    /// Default: `4` — four consecutive zeros (1 hour at 15-min granularity).
+    pub zero_run_threshold: usize,
+
+    /// Treat negative energy as an Error (V03).
+    ///
+    /// Set to `false` for bidirectional meters (Einspeisung can be negative
+    /// relative to the net direction). Default: `true` for Bezug meters.
+    pub negative_energy_is_error: bool,
+
+    /// Reference time for "future timestamp" detection (V08).
+    ///
+    /// Usually `now()` at ingestion time. When `None`, V08 is disabled.
+    pub now: Option<OffsetDateTime>,
+
+    /// Minimum drop (kWh) between consecutive intervals that triggers V10 (RegisterRollover).
+    ///
+    /// When `value[i] < value[i-1] - rollover_threshold_kwh`, the interval is flagged as a
+    /// potential meter rollover (§14 MessZV: rollover events must be documented).
+    ///
+    /// Typical meter max: 99 999.9 kWh. Default: `50 000` kWh (flags drops > 50 MWh).
+    /// Set to `None` to disable rollover detection.
+    pub rollover_threshold_kwh: Option<Decimal>,
+}
+
+impl Default for ValidationConfig {
+    fn default() -> Self {
+        Self {
+            expected_interval_secs: Some(900), // 15 minutes
+            spike_factor: 10.0,
+            zero_run_threshold: 4,
+            negative_energy_is_error: true,
+            now: None,
+            rollover_threshold_kwh: Some(Decimal::from(50_000u32)),
+        }
+    }
+}
+
+impl ValidationConfig {
+    /// Configuration for 15-minute RLM/iMSys electricity Bezug meters.
+    #[must_use]
+    pub fn rlm_strom_15min() -> Self {
+        Self::default()
+    }
+
+    /// Configuration for hourly gas intervals.
+    #[must_use]
+    pub fn gas_hourly() -> Self {
+        Self {
+            expected_interval_secs: Some(3600),
+            ..Self::default()
+        }
+    }
+
+    /// Configuration for bidirectional meters (Einspeisung + Bezug, net metering).
+    ///
+    /// Negative values are allowed (export exceeds import).
+    #[must_use]
+    pub fn bidirectional() -> Self {
+        Self {
+            negative_energy_is_error: false,
+            ..Self::default()
+        }
+    }
+
+    /// Disable spike detection (e.g., industrial loads with legitimate spikes).
+    #[must_use]
+    pub fn without_spike_detection(mut self) -> Self {
+        self.spike_factor = f64::INFINITY;
+        self
+    }
+}
+
+// ── Validation result ─────────────────────────────────────────────────────────
+
+/// Result of validating a slice of meter intervals.
+#[derive(Debug, Clone)]
+pub struct ValidationResult {
+    /// All issues found, ordered by interval index.
+    pub issues: Vec<ValidationIssue>,
+}
+
+impl ValidationResult {
+    /// `true` when there are no validation issues of any severity.
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        self.issues.is_empty()
+    }
+
+    /// `true` when at least one issue has `Error` severity.
+    #[must_use]
+    pub fn has_errors(&self) -> bool {
+        self.issues
+            .iter()
+            .any(|i| i.severity == ValidationSeverity::Error)
+    }
+
+    /// Number of intervals that must be replaced with substitute values.
+    #[must_use]
+    pub fn billing_block_count(&self) -> usize {
+        self.issues.iter().filter(|i| i.blocks_billing()).count()
+    }
+
+    /// Filter by severity level.
+    pub fn by_severity(
+        &self,
+        severity: ValidationSeverity,
+    ) -> impl Iterator<Item = &ValidationIssue> {
+        self.issues.iter().filter(move |i| i.severity == severity)
+    }
+}
+
+// ── Main validation function ──────────────────────────────────────────────────
+
+/// Validate a slice of meter intervals against the configured rules.
+///
+/// The input slice should be pre-sorted by `from` timestamp (ascending).
+/// Unsorted input may produce spurious overlap/gap findings — use
+/// [`crate::interval::MeterInterval`]'s `Ord` implementation to sort first.
+///
+/// ## Example
+///
+/// ```rust
+/// use metering::{MeterInterval, QualityFlag, validate_intervals, ValidationConfig};
+/// use rust_decimal_macros::dec;
+/// use time::macros::datetime;
+///
+/// let intervals = vec![
+///     MeterInterval {
+///         from: datetime!(2026-06-01 0:00 UTC),
+///         to:   datetime!(2026-06-01 0:15 UTC),
+///         value_kwh: dec!(2.5),
+///         quality: QualityFlag::Measured,
+///         obis_code: None,
+///     },
+/// ];
+/// let result = validate_intervals(&intervals, &ValidationConfig::default());
+/// assert!(result.is_clean()); // single interval, no gaps, no spikes
+/// ```
+#[must_use]
+pub fn validate_intervals(
+    intervals: &[MeterInterval],
+    config: &ValidationConfig,
+) -> ValidationResult {
+    let mut issues: Vec<ValidationIssue> = Vec::new();
+
+    if intervals.is_empty() {
+        return ValidationResult { issues };
+    }
+
+    // Collect values for rolling statistics (spike detection)
+    let values: Vec<f64> = intervals
+        .iter()
+        .filter_map(|iv| iv.value_kwh.to_string().parse::<f64>().ok())
+        .collect();
+    let rolling_mean = if values.is_empty() {
+        1.0
+    } else {
+        values.iter().sum::<f64>() / values.len() as f64
+    };
+
+    let mut zero_run = 0usize;
+
+    for (idx, iv) in intervals.iter().enumerate() {
+        // V03 — negative energy
+        if config.negative_energy_is_error && iv.value_kwh < Decimal::ZERO {
+            issues.push(
+                ValidationIssue::new(
+                    ValidationRuleId::NegativeEnergy,
+                    ValidationSeverity::Error,
+                    format!("negative energy {} kWh at {}", iv.value_kwh, iv.from),
+                )
+                .at(idx, iv),
+            );
+        }
+
+        // V04 — impossible spike
+        if config.spike_factor.is_finite()
+            && rolling_mean > 0.0
+            && let Ok(v) = iv.value_kwh.to_string().parse::<f64>()
+            && v > config.spike_factor * rolling_mean
+        {
+            issues.push(
+                ValidationIssue::new(
+                    ValidationRuleId::ImpossibleSpike,
+                    ValidationSeverity::Warning,
+                    format!(
+                        "spike {:.3} kWh is {:.1}× rolling mean {:.3} kWh at {}",
+                        v,
+                        v / rolling_mean,
+                        rolling_mean,
+                        iv.from
+                    ),
+                )
+                .at(idx, iv),
+            );
+        }
+
+        // V05 — zero run
+        if iv.value_kwh.is_zero() {
+            zero_run += 1;
+            // Only emit once at the start of the run (when the threshold is first reached)
+            if zero_run == config.zero_run_threshold {
+                let start_idx = idx + 1 - config.zero_run_threshold;
+                issues.push(
+                    ValidationIssue::new(
+                        ValidationRuleId::SuspiciousZeroRun,
+                        ValidationSeverity::Warning,
+                        format!(
+                            "{} consecutive zero intervals starting at index {}",
+                            config.zero_run_threshold, start_idx
+                        ),
+                    )
+                    .at(start_idx, &intervals[start_idx]),
+                );
+            }
+        } else {
+            zero_run = 0;
+        }
+
+        // V06 — interval length consistency
+        if let Some(expected_secs) = config.expected_interval_secs {
+            let actual_secs = (iv.to - iv.from).whole_seconds();
+            if actual_secs != expected_secs as i64 {
+                issues.push(
+                    ValidationIssue::new(
+                        ValidationRuleId::InconsistentIntervalLength,
+                        ValidationSeverity::Warning,
+                        format!(
+                            "expected {}s interval, got {}s at {}",
+                            expected_secs, actual_secs, iv.from
+                        ),
+                    )
+                    .at(idx, iv),
+                );
+            }
+        }
+
+        // V08 — future timestamp
+        if let Some(now) = config.now
+            && iv.from > now
+        {
+            issues.push(
+                ValidationIssue::new(
+                    ValidationRuleId::FutureTimestamp,
+                    ValidationSeverity::Warning,
+                    format!("interval starts in the future: {} > now {}", iv.from, now),
+                )
+                .at(idx, iv),
+            );
+        }
+
+        // V09 — non-billable quality
+        if !iv.quality.is_billable() {
+            issues.push(
+                ValidationIssue::new(
+                    ValidationRuleId::NonBillableQuality,
+                    ValidationSeverity::Error,
+                    format!(
+                        "quality {:?} is not billable at {} — substitute value required (§17 MessZV)",
+                        iv.quality, iv.from
+                    ),
+                )
+                .at(idx, iv),
+            );
+        }
+
+        // V02 — overlap with previous
+        if idx > 0 {
+            let prev = &intervals[idx - 1];
+            if iv.from < prev.to {
+                issues.push(
+                    ValidationIssue::new(
+                        ValidationRuleId::OverlapDetected,
+                        ValidationSeverity::Error,
+                        format!(
+                            "interval [{}, {}) overlaps previous [{}, {})",
+                            iv.from, iv.to, prev.from, prev.to
+                        ),
+                    )
+                    .at(idx, iv),
+                );
+            }
+
+            // V10 — register rollover (§14 MessZV — must be documented)
+            if let Some(threshold) = config.rollover_threshold_kwh {
+                let drop = prev.value_kwh - iv.value_kwh;
+                if drop >= threshold {
+                    issues.push(
+                        ValidationIssue::new(
+                            ValidationRuleId::RegisterRollover,
+                            ValidationSeverity::Warning,
+                            format!(
+                                "value dropped {:.3} kWh ({:.3} → {:.3}) at {} — \
+                                 possible meter rollover (§14 MessZV)",
+                                drop, prev.value_kwh, iv.value_kwh, iv.from
+                            ),
+                        )
+                        .at(idx, iv),
+                    );
+                }
+            }
+        }
+    }
+
+    // V01 — gap detection (series-level, between consecutive intervals)
+    if let Some(expected_secs) = config.expected_interval_secs {
+        for (idx, window) in intervals.windows(2).enumerate() {
+            let (a, b) = (&window[0], &window[1]);
+            let gap_secs = (b.from - a.to).whole_seconds();
+            if gap_secs >= expected_secs as i64 {
+                let gap_count = (gap_secs / expected_secs as i64) as usize;
+                issues.push(ValidationIssue {
+                    rule_id: ValidationRuleId::GapDetected,
+                    severity: ValidationSeverity::Error,
+                    message: format!(
+                        "gap of {} interval(s) between {} and {} — substitute values required (§17 MessZV)",
+                        gap_count, a.to, b.from
+                    ),
+                    interval_index: Some(idx + 1),
+                    affected_from: Some(a.to),
+                    affected_value_kwh: None,
+                });
+            }
+        }
+    }
+
+    // Sort issues by interval index for deterministic output
+    issues.sort_by_key(|i| i.interval_index.unwrap_or(usize::MAX));
+
+    ValidationResult { issues }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::interval::QualityFlag;
+    use rust_decimal_macros::dec;
+    use time::macros::datetime;
+
+    fn iv(from: OffsetDateTime, to: OffsetDateTime, kwh: rust_decimal::Decimal) -> MeterInterval {
+        MeterInterval {
+            from,
+            to,
+            value_kwh: kwh,
+            quality: QualityFlag::Measured,
+            obis_code: None,
+        }
+    }
+
+    fn iv_15min(start_min: i64, kwh: rust_decimal::Decimal) -> MeterInterval {
+        let base = datetime!(2026-06-01 0:00 UTC);
+        let from = base + time::Duration::minutes(start_min);
+        let to = from + time::Duration::minutes(15);
+        iv(from, to, kwh)
+    }
+
+    #[test]
+    fn clean_series_passes() {
+        let intervals = vec![
+            iv_15min(0, dec!(2.5)),
+            iv_15min(15, dec!(2.3)),
+            iv_15min(30, dec!(2.8)),
+        ];
+        let result = validate_intervals(&intervals, &ValidationConfig::default());
+        assert!(
+            result.is_clean(),
+            "expected clean, got: {:?}",
+            result.issues
+        );
+    }
+
+    #[test]
+    fn gap_detected() {
+        let intervals = vec![
+            iv_15min(0, dec!(2.5)),
+            iv_15min(30, dec!(2.3)), // skipped 15-min interval at t=15
+        ];
+        let result = validate_intervals(&intervals, &ValidationConfig::default());
+        assert!(result.has_errors());
+        let gap = result
+            .issues
+            .iter()
+            .find(|i| i.rule_id == ValidationRuleId::GapDetected);
+        assert!(gap.is_some(), "V01 gap issue not found");
+    }
+
+    #[test]
+    fn overlap_detected() {
+        let base = datetime!(2026-06-01 0:00 UTC);
+        let intervals = vec![
+            iv(base, base + time::Duration::minutes(20), dec!(2.5)),
+            iv(
+                base + time::Duration::minutes(15),
+                base + time::Duration::minutes(30),
+                dec!(2.3),
+            ),
+        ];
+        let result = validate_intervals(&intervals, &ValidationConfig::default());
+        let overlap = result
+            .issues
+            .iter()
+            .find(|i| i.rule_id == ValidationRuleId::OverlapDetected);
+        assert!(overlap.is_some(), "V02 overlap issue not found");
+        assert!(overlap.unwrap().blocks_billing());
+    }
+
+    #[test]
+    fn negative_energy_error() {
+        let intervals = vec![iv_15min(0, dec!(-1.5))];
+        let result = validate_intervals(&intervals, &ValidationConfig::default());
+        let neg = result
+            .issues
+            .iter()
+            .find(|i| i.rule_id == ValidationRuleId::NegativeEnergy);
+        assert!(neg.is_some(), "V03 negative energy issue not found");
+        assert!(neg.unwrap().blocks_billing());
+    }
+
+    #[test]
+    fn bidirectional_allows_negative() {
+        let intervals = vec![iv_15min(0, dec!(-1.5))];
+        let result = validate_intervals(&intervals, &ValidationConfig::bidirectional());
+        assert!(!result.has_errors(), "bidirectional should allow negative");
+    }
+
+    #[test]
+    fn spike_detection() {
+        // Spike factor = 10. Mean of [2.5, 2.5, 2.5, 2.5] without spike ≈ 2.5.
+        // Since rolling_mean includes all values, use a very large spike to exceed threshold.
+        // With values [2.5, 2.5, 2.5, 100.0, 2.5], mean = 110/5 = 22.0
+        // spike_factor=10, threshold = 10 * 22 = 220; 100 < 220... still fails.
+        // Use spike_factor=3 and spike=20: mean=(2.5*4+20)/5=30/5=6, 20 > 3*6=18 → detected
+        let intervals = vec![
+            iv_15min(0, dec!(2.5)),
+            iv_15min(15, dec!(2.5)),
+            iv_15min(30, dec!(2.5)),
+            iv_15min(45, dec!(20.0)), // spike
+            iv_15min(60, dec!(2.5)),
+        ];
+        let config = ValidationConfig {
+            spike_factor: 3.0,
+            ..ValidationConfig::default()
+        };
+        let result = validate_intervals(&intervals, &config);
+        let spike = result
+            .issues
+            .iter()
+            .find(|i| i.rule_id == ValidationRuleId::ImpossibleSpike);
+        assert!(spike.is_some(), "V04 spike not detected");
+        // Spike is a warning, not an error
+        assert_eq!(spike.unwrap().severity, ValidationSeverity::Warning);
+    }
+
+    #[test]
+    fn zero_run_detected() {
+        let intervals = vec![
+            iv_15min(0, dec!(2.5)),
+            iv_15min(15, dec!(0)),
+            iv_15min(30, dec!(0)),
+            iv_15min(45, dec!(0)),
+            iv_15min(60, dec!(0)), // 4 zeros = threshold
+            iv_15min(75, dec!(2.5)),
+        ];
+        let result = validate_intervals(&intervals, &ValidationConfig::default());
+        let zero = result
+            .issues
+            .iter()
+            .find(|i| i.rule_id == ValidationRuleId::SuspiciousZeroRun);
+        assert!(zero.is_some(), "V05 zero run not detected");
+    }
+
+    #[test]
+    fn non_billable_quality_is_error() {
+        let base = datetime!(2026-06-01 0:00 UTC);
+        let interval = MeterInterval {
+            from: base,
+            to: base + time::Duration::minutes(15),
+            value_kwh: dec!(2.5),
+            quality: QualityFlag::Faulty,
+            obis_code: None,
+        };
+        let result = validate_intervals(&[interval], &ValidationConfig::default());
+        let nq = result
+            .issues
+            .iter()
+            .find(|i| i.rule_id == ValidationRuleId::NonBillableQuality);
+        assert!(nq.is_some(), "V09 non-billable quality not detected");
+        assert!(nq.unwrap().blocks_billing());
+    }
+
+    /// DST test: at CET→CEST (last Sunday in March), clocks spring forward.
+    /// 02:00 CET becomes 03:00 CEST — the hour 02:00–03:00 CET is skipped.
+    /// In UTC: 01:00 UTC on that day.
+    ///
+    /// A correctly stored UTC series has no gap — 01:00 UTC directly precedes
+    /// 01:15 UTC. If stored as local time, there would be a phantom gap.
+    #[test]
+    fn dst_spring_forward_no_false_gap_in_utc() {
+        // 2026 DST spring forward: last Sunday in March = March 29
+        // 01:00 UTC = 02:00 CET = clock skips to 03:00 CEST
+        let base = datetime!(2026-03-29 0:45 UTC); // 01:45 CET, just before skip
+        let intervals = vec![
+            iv(base, base + time::Duration::minutes(15), dec!(2.5)),
+            // 01:00 UTC = the "missing" hour in local time — but UTC is continuous
+            iv(
+                base + time::Duration::minutes(15),
+                base + time::Duration::minutes(30),
+                dec!(2.3),
+            ),
+            iv(
+                base + time::Duration::minutes(30),
+                base + time::Duration::minutes(45),
+                dec!(2.1),
+            ),
+        ];
+        let result = validate_intervals(&intervals, &ValidationConfig::rlm_strom_15min());
+        assert!(
+            result.is_clean(),
+            "UTC series should have no gap at DST spring-forward: {:?}",
+            result.issues
+        );
+    }
+
+    /// DST test: at CEST→CET (last Sunday in October), clocks fall back.
+    /// 03:00 CEST becomes 02:00 CET — the hour 02:00–03:00 appears TWICE in local time.
+    /// In UTC: 01:00 UTC on that day.
+    ///
+    /// A correctly stored UTC series has no overlap — values are unique by UTC timestamp.
+    #[test]
+    fn dst_fall_back_no_overlap_in_utc() {
+        // 2026 DST fall back: last Sunday in October = October 25
+        // 01:00 UTC = 03:00 CEST → 02:00 CET  (the "extra" hour)
+        let base = datetime!(2026-10-25 0:45 UTC);
+        let intervals: Vec<MeterInterval> = (0..8)
+            .map(|i| {
+                let from = base + time::Duration::minutes(i * 15);
+                iv(from, from + time::Duration::minutes(15), dec!(2.5))
+            })
+            .collect();
+        let result = validate_intervals(&intervals, &ValidationConfig::rlm_strom_15min());
+        assert!(
+            result.is_clean(),
+            "UTC series should have no overlap at DST fall-back: {:?}",
+            result.issues
+        );
+    }
+}

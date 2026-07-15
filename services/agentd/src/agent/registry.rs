@@ -238,12 +238,20 @@ mod tests {
                 max_tokens: 100,
             },
             mcp_servers: vec![],
-            trigger_patterns: vec!["de.eeg.*".into(), "de.mako.process.initiated".into()],
+            trigger_patterns: vec![
+                "de.eeg.*".into(),
+                "de.mako.process.initiated".into(),
+                "de.edmd.reading.direct.stored".into(),
+            ],
             max_turns: 10,
             use_rag: false,
         };
         assert!(agent.matches_trigger("de.eeg.anlage.foerderung_auslaufend"));
         assert!(agent.matches_trigger("de.mako.process.initiated"));
+        assert!(
+            agent.matches_trigger("de.edmd.reading.direct.stored"),
+            "eeg-agent must trigger on iMSys direct push for rollout detection"
+        );
         assert!(!agent.matches_trigger("de.invoic.receipt.disputed"));
     }
 }

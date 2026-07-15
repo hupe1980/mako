@@ -29,7 +29,7 @@ tariff), the output is always the same `Rechnung`. This means:
 
 - BNetzA §22 MessZV compliance: auditors can re-run the calculation from stored inputs
 - No hidden state: all inputs are either stored in `tarifbd`, `edmd`, or `marktd`
-- Testable: `energy-billing` has **44 unit tests** with known in/out pairs, all pure Rust
+- Testable: `energy-billing` has **148 tests** (property-based, golden master, integration) — zero I/O, zero async, all pure Rust
 
 ---
 
@@ -44,24 +44,28 @@ billingd (HTTP service)
     │   HTTP endpoints · tarifbd/edmd/marktd clients
     │
     └── energy-billing (pure crate, crates.io)
-            │   TariffInput · MeterInput · GridInput · RegulatoryRates
-            │   BillingResult { positions, netto_eur, mwst_eur, brutto_eur, rechnung_json }
+            │   TariffInput · Quantities · BillingContext · RegulatoryRates
+            │   PricingModel (typed dispatch enum)
+            │   BillingEngine (provider pipeline)
+            │   Invoice { positions, netto_eur, mwst_eur, brutto_eur, zahlbetrag_eur }
             │
-            ├── calculate_strom()          §14a Modul 1/3, §41a EPEX, Zweitarif
-            ├── calculate_gas()            §10 GasGVV, §2 EnergieStG, BEHG CO₂
-            ├── calculate_waerme()         Fernwärme Grund/Leistungs/Arbeitspreis
-            ├── calculate_solar()          §42b Mieterstrom, §42a GGV
-            ├── calculate_eeg()            §21/§38 EEG Vergütung/Marktprämie, KWKG
-            ├── calculate_einspeisung()    Direktvermarktung Marktwert
-            ├── calculate_hems()           Platform fee + events
-            ├── calculate_emobility()      CPO/EMSP billing
-            ├── calculate_energiedienstleistung()
-            └── calculate_dynamic_strom()  §41a EPEX per-interval
+            ├── ElectricityProvider    §14a Modul 1/3; HT/NT via TimeOfUsePricing;
+            │                          block tariffs via TariffSchedule; §41a EPEX
+            ├── GasProvider            §10 GasGVV Brennwertkorrektur; BEHG CO₂
+            ├── HeatProvider           Fernwärme; auto-7% MwSt (renewable)
+            ├── SolarProvider          §42b Mieterstrom; §42a GGV
+            ├── EegProvider            LF-side Gutschrift; contractual §51
+            ├── EinspeisungProvider    Direktvermarktung Marktwert
+            ├── HemsProvider           Platform subscription + events
+            ├── EmobilityProvider      CPO/EMSP
+            ├── ServiceProvider        Energiedienstleistung
+            ├── DynamicElectricityProvider  §41a per-interval EPEX
+            └── MwStProvider           Multi-rate MwSt (7% / 19% / 0% per position)
 ```
 
-`energy-billing` is **zero I/O, zero async** — every function is a pure `Result<BillingResult, _>`.
-The `BillingResult` carries `positions: Vec<billing::LineItem>` and `rechnung_json` (BO4E-compatible JSONB).
-Helper methods: `.assert_valid()`, `.position_total_by_tag()`, `.levy_total_eur()`.
+`energy-billing` is **zero I/O, zero async** — `BillingEngine::bill()` is a pure function returning `Result<Invoice, BillingError>`.
+`Invoice` carries `positions: Vec<BillingPosition>` and exposes `to_rechnung_json()` (BO4E JSONB) and `to_bo4e_rechnung()` (`rubo4e::current::Rechnung` with `bo4e` feature).
+Helper methods: `.assert_valid()`, `.total_by_tag()`, `.positions_by_tag()`, `.kilowattstundenpreis_brutto_ct()`.
 
 Statutory rates (Stromsteuer, Energiesteuer Gas, BEHG CO₂) are injected via `RegulatoryRates`
 from `billingd.toml` — zero hardcoded values in the crate.
@@ -76,7 +80,7 @@ graph TB
     tarifbd["tarifbd :9080\nProductDefinition\n(Tarifpreisblatt JSONB)"]
     edmd["edmd :8380\nMeterBillingPeriod\n(arbeitsmenge, spitzenleistung)"]
     marktd["marktd :8180\nPreisblattNetznutzung\nPreisblattKonzessionsabgabe"]
-    calculator["billingd calculator\n(pure function, no I/O)"]
+    calculator["energy-billing crate\nPricingModel → BillingEngine → Invoice"]
     pg[("PostgreSQL\nbilling_records\n§22 MessZV")]
     erp_hook["ERP webhook\nde.billing.rechnung.erstellt"]
     accountingd["accountingd :9380\n→ debit entry"]
@@ -130,6 +134,7 @@ graph LR
 ```
 Grundpreis              [from tarifbd]     ct/day
 Arbeitspreis            [from tarifbd]     ct/kWh
+Leistungspreis          [from tarifbd]     ct/kW/month  RLM demand charge on spitzenleistung_kw
 NNE Grundpreis          [from marktd]      pass-through
 NNE Arbeitspreis        [from marktd]      pass-through
 NNE Leistungspreis      [from marktd]      RLM only (EUR/kW/month)
@@ -148,6 +153,12 @@ Variants: `Eintarif`, `Zweitarif` (HT/NT), `Mehrtarif` (multiple registers).
 **§41a EPEX dynamic**: when `dynamic_epex = true` in the product, `billingd` fetches
 15-min Lastgang and prices per hour from `tarifbd`. `arbeitspreis_ct_per_kwh` is ignored.
 
+**RLM demand charge**: For large commercial customers with measured peak demand (§4 MessZV,
+≥100 MWh/year), set `leistungspreis_strom_ct_per_kw_month` in the product definition.
+`billingd` bills `spitzenleistung_kw × rate` as a `Leistungspreis` position.
+Supply `spitzenleistung_kw` from `edmd` MeterBillingPeriod. Applies to `metering_mode: RLM`
+or `Imsys` metering points.
+
 ### GAS — Natural Gas
 
 ```
@@ -159,9 +170,17 @@ Gasnetzentgelt AP       [from marktd]      pass-through
 Konzessionsabgabe Gas   [from marktd]      pass-through
 Bilanzierungsumlage Gas [from marktd]      pass-through
 Energiesteuer Erdgas    [from billingd.toml] §2 EnergieStG  0.55 ct/kWh_Hs
-CO₂-Abgabe BEHG         [from billingd.toml] ~1.11 ct/kWh_Hs (55 EUR/t CO₂, 2025)
+                        OR Exemption notice when gas_energiesteuer_befreiung=true
+                           (§54 EnergieStG KWK/industrial) — requires customer certificate
+CO₂-Abgabe BEHG         [from billingd.toml] ~1.31 ct/kWh_Hs (65 EUR/t CO₂, 2026)
 MwSt                    [from billingd.toml] 19%
 ```
+
+**Historic statutory rates:** For retroactive correction invoices (e.g. billing period 2022),
+use `RegulatoryRates::effective_energiesteuer_gas_for_year(tariff, year)` to apply the correct
+rate. Germany had a **0 ct/kWh Energiesteuer** during 01.04.2022–31.03.2023 (Energiesteuersenkungsgesetz).
+Similarly, `effective_stromsteuer_for_year()` and `effective_behg_gas_for_year()` support
+historic billing corrections across all statutory levies.
 
 Supply `gas_meter.messung_qm3` + `brennwert_kwh_per_qm3` + `zustandszahl` in the request.
 `billingd` computes `kWh_Hs = m³ × Hs × Z` and uses it for all price positions.
@@ -237,7 +256,7 @@ MwSt
 
 Identical to `STROM` but §14a positions are **always included** when the product carries
 `steuerungsrabatt_modul1_eur_per_kw_year` and/or `steuerungsrabatt_modul3_eur_per_kw_year`.
-No separate calculation function — routes to `calculate_strom()`.
+No separate provider — `PricingModel::HeatPump` and `PricingModel::Wallbox` both use `ElectricityProvider` with §14a positions included.
 
 ### HEMS / EMOBILITY / ENERGIEDIENSTLEISTUNG / BUNDLE
 
@@ -249,6 +268,87 @@ BUNDLE: per-component recursion — ERP must submit individual calculate request
 ```
 
 ---
+
+
+---
+
+## New in this release
+
+### PricingModel — type-safe dispatch
+
+```rust
+// Before: string-based dispatch returning Option<BillingEngine>
+let engine = tariff.build_engine(&grid, &rates)?;
+
+// After: typed enum with explicit Err for unknown categories
+let engine = PricingModel::try_from(tariff)?
+    .build_engine(&grid, &rates)?;
+```
+
+`PricingModel` has 12 exhaustive variants: `Electricity`, `DynamicElectricity`, `HeatPump`,
+`Wallbox`, `Gas`, `Heat`, `Solar`, `Eeg`, `Einspeisung`, `Hems`, `Emobility`, `Service`.
+
+### Regulatory additions
+
+| Addition | Law |
+|---|---|
+| `anlage_kwp` on product → auto-0% MwSt | §12 Abs. 3 UStG (Solarpaket I 2023) |
+| `industrie_stromsteuer_befreiung` → exemption notice | §9 Abs. 1 Nr. 4 StromStG |
+| `preisgarantie_bis` → disclosure on invoice | §41 Abs. 1 Nr. 4 EnWG |
+| `MeteringMode` (SLP/RLM/iMSys) on MeterInput | §3/§4 MessZV, §31 MsbG |
+| `is_estimated` flag → §17 MessZV notice | §17 Abs. 1 MessZV |
+| `zaehler_replaced` flag → Zählerwechsel notice | §41 EnWG |
+| `Sect41aAnnualComparison` in Quantities | §41a Abs. 6 EnWG |
+| `InvoiceType::PartialInvoice` | §41 EnWG, StromGVV §17 |
+
+### Tarifwechsel endpoint
+
+Mid-period price changes (§41 EnWG transparency requirement) are supported natively:
+
+```http
+POST /api/v1/billing/{malo_id}/tarifwechsel
+Content-Type: application/json
+
+{
+  "lf_mp_id":    "9910000000002",
+  "period_from": "2026-01-01",
+  "period_to":   "2026-01-31",
+  "switch_date": "2026-01-15",
+  "old_tariff":  { "category": "STROM", "arbeitspreis_ct_per_kwh": 28.0 },
+  "new_tariff":  { "category": "STROM", "arbeitspreis_ct_per_kwh": 32.0 },
+  "old_meter":   { "arbeitsmenge_kwh": 140 },
+  "new_meter":   { "arbeitsmenge_kwh": 170 }
+}
+```
+
+Two sub-period invoices are calculated and merged via `Invoice::merge()`. Positions from
+both sub-periods appear on one combined invoice. Tax is applied independently per sub-period
+(correct per §41 EnWG for mid-month rate changes).
+
+### Pro-rata Grundpreis (move-in / move-out)
+
+`billingd` now correctly pro-rates Grundpreis when `vertragsbeginn` or `vertragsende`
+falls within the billing period. Pass these in the `BillingContext`:
+
+```json
+{
+  "vertragsbeginn": "2026-01-16"
+}
+```
+
+A customer joining on Jan 16 is billed 16 × rate instead of 31 × rate.
+Previously this required manual adjustment; it is now automatic.
+
+### Audit trail
+
+Every billing run now generates a unique `billing_run_id` (UUID v4). It is stored on
+`Invoice.billing_run_id` and propagated to:
+
+- `billing_records.billing_run_id` in PostgreSQL
+- `rechnung_json.zusatzAttribute["billingRunId"]`
+- `to_bo4e_rechnung().id` (with `bo4e` feature)
+
+This links each database record to the exact calculation output for §22 MessZV compliance.
 
 ## Triggering a billing run
 
@@ -363,6 +463,7 @@ Re-running the same billing request updates the existing record — safe to retr
 | `GET` | `/api/v1/billing/{id}/xrechnung` | XRechnung 3.0 / ZUGFeRD 2.3 CII XML |
 | `GET` | `/api/v1/billing/{id}/ubl` | PEPPOL BIS Billing 3.0 UBL 2.1 (EN16931) |
 | `POST` | `/api/v1/billing/{id}/correction` | Korrekturrechnung / Stornorechnung (§22 MessZV) |
+| `POST` | `/api/v1/billing/{malo_id}/tarifwechsel` | Combined invoice for mid-period price change (§41 EnWG) |
 | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G submission (§27 EGovG) |
 | `GET` | `/health` | Liveness |
 | `GET` | `/health/ready` | Readiness |
@@ -420,7 +521,7 @@ Both variants include `zusatzAttribute.originalRechnungsnummer` for §22 MessZV 
 
 ### ENERGIEDIENSTLEISTUNG products
 
-When `tariff.category == "ENERGIEDIENSTLEISTUNG"`, `billingd` routes to `calculate_energiedienstleistung()`:
+When `tariff.category == "ENERGIEDIENSTLEISTUNG"`, `billingd` builds a `ServiceProvider` via `PricingModel::try_from(tariff)?.build_engine()`:
 
 ```json
 {

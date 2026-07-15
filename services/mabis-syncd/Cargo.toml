@@ -1,0 +1,41 @@
+[package]
+name         = "mabis-syncd"
+version.workspace     = true
+description  = "MaBiS UTILTS synchronisation daemon — aggregates per-MaLo Lastgang from edmd and submits Summenzeitreihen to BIKO via makod."
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+publish      = false
+keywords     = ["mabis", "utilts", "bilanzkreis", "energy", "mako"]
+categories   = ["network-programming"]
+
+[lib]
+name = "mabis_syncd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mabis-syncd"
+path = "src/main.rs"
+
+[dependencies]
+anyhow           = { workspace = true }
+axum             = { version = "0.8" }
+mako-edm         = { workspace = true }
+mako-engine      = { workspace = true }
+mako-mabis       = { path = "../../crates/mako-mabis" }
+mako-service     = { workspace = true, features = ["otel", "oidc", "cedar"] }
+metering         = { path = "../../crates/metering", features = ["serde"] }
+reqwest          = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rust_decimal     = { workspace = true }
+serde            = { workspace = true }
+serde_json       = { workspace = true }
+sqlx             = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal"] }
+thiserror        = { workspace = true }
+time             = { workspace = true }
+tokio            = { version = "1", features = ["full"] }
+toml             = { version = "0.8", default-features = false, features = ["parse"] }
+tower-http       = { version = "0.6" }
+tracing          = "0.1"
+uuid             = { workspace = true }

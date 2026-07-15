@@ -154,6 +154,54 @@ impl MeterInterval {
             Some(self.value_kwh / h)
         }
     }
+
+    /// Parse the `obis_code` string into a typed [`crate::obis::ObisCode`].
+    ///
+    /// Returns `None` when `obis_code` is absent or cannot be parsed.
+    /// The raw `obis_code: Option<String>` is preserved for EDIFACT round-trips.
+    ///
+    /// ## Example
+    ///
+    /// ```rust
+    /// use metering::{MeterInterval, QualityFlag};
+    /// use metering::obis::ObisCode;
+    /// use rust_decimal_macros::dec;
+    /// use time::macros::datetime;
+    ///
+    /// let iv = MeterInterval {
+    ///     from: datetime!(2026-01-01 0:00 UTC),
+    ///     to:   datetime!(2026-01-01 0:15 UTC),
+    ///     value_kwh: dec!(2.5),
+    ///     quality: QualityFlag::Measured,
+    ///     obis_code: Some("1-0:1.8.0*255".to_owned()),
+    /// };
+    /// let code = iv.parsed_obis_code().unwrap();
+    /// assert_eq!(code, ObisCode::STROM_BEZUG_TOTAL);
+    /// ```
+    #[must_use]
+    pub fn parsed_obis_code(&self) -> Option<crate::obis::ObisCode> {
+        self.obis_code.as_deref()?.parse().ok()
+    }
+
+    /// `true` when this interval carries forward / import energy (D = 8 in the OBIS code).
+    ///
+    /// Returns `None` when no OBIS code is set or the code is unparseable.
+    #[must_use]
+    pub fn is_import_energy(&self) -> Option<bool> {
+        self.parsed_obis_code().map(|c| c.is_import())
+    }
+
+    /// `true` when this interval carries reverse / export (Einspeisung) energy (D = 9).
+    #[must_use]
+    pub fn is_export_energy(&self) -> Option<bool> {
+        self.parsed_obis_code().map(|c| c.is_export())
+    }
+
+    /// Tariff register number from the OBIS code (`None` = total, `Some(1)` = HT, `Some(2)` = NT).
+    #[must_use]
+    pub fn tariff_register(&self) -> Option<u8> {
+        self.parsed_obis_code()?.tariff_register()
+    }
 }
 
 #[cfg(test)]

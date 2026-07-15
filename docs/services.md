@@ -4,14 +4,14 @@ title: Services
 nav_order: 5
 has_children: true
 description: >-
-  Operator guides for all 16 mako production services — makod, marktd, processd,
-  invoicd, netzbilanzd, sperrd, edmd, einsd, obsd, nis-syncd, tarifbd, billingd,
+  Operator guides for all 17 mako production services — makod, marktd, processd,
+  invoicd, netzbilanzd, sperrd, edmd, mabis-syncd, einsd, obsd, nis-syncd, tarifbd, billingd,
   accountingd, vertragd, portald, and agentd.
 ---
 
 # Services
 
-mako consists of **16 independently deployable services**, each built as a self-contained Docker image with:
+mako consists of **17 independently deployable services**, each built as a self-contained Docker image with:
 - TOML configuration with `_FILE` suffix for Kubernetes secrets
 - Cedar ABAC authorization
 - OIDC/JWT + API-key authentication  
@@ -19,7 +19,7 @@ mako consists of **16 independently deployable services**, each built as a self-
 - Built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25)
 - Structured health endpoints (`/health`, `/health/ready`)
 
-All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, `EventBus`, and more. This means zero copy-pasted infrastructure code across the 16 daemons.
+All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, `EventBus`, and more. This means zero copy-pasted infrastructure code across the 17 daemons.
 
 ---
 
@@ -43,7 +43,8 @@ All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tr
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [edmd](./edmd) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Hampel quality scoring, Ablesesteuerung (INSRPT auto-order), Iceberg/S3 OLAP |
+| [edmd](./edmd) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Hampel quality scoring, V01–V10 validation, virtual meters (§42b GGV), §17 MessZV Jahresprognose forecasting, Resampling, Ablesesteuerung (INSRPT auto-order), Iceberg/S3 OLAP |
+| [mabis-syncd](./mabis-syncd) | `:8880` | ÜNB/NB | MaBiS UTILTS synchronisation — aggregates per-MaLo Lastgang via `SummenzeitreiheBuilder`, submits to BIKO; vorläufig day 3 + endgültig day 8 schedule; per-MaLo contribution log |
 | [einsd](./einsd) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 9 settlement schemes |
 | [obsd](./obsd) | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation (GPKE 24h/WiM 5WT/GeLi Gas 10WT), `completed_at` cycle-time tracking, `GET /api/v1/audit/bnetza-report`, 6-tool MCP server |
 | [nis-syncd](./nis-syncd) | `:9680` | NB | NIS/GIS grid topology import — concurrent `tokio::task::JoinSet` sync, drift CloudEvents, `check_malo_grid` MCP tool, lifts Anmeldung STP ~80% → ≥95% (stateless) |
@@ -62,7 +63,7 @@ All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tr
 |---|---|---|---|
 | [vertragd](./vertragd) | `:9780` | LF | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, kunden_identitaeten (N portal users per company), Tarifwechsel, Kündigung, OIDC→MaLo auth gateway for portald |
 | [portald](./portald) | `:9480` | LF | Customer Portal gateway — aggregates all LF services, REST + SSE, §41 EnWG self-service write API (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16), 8-tool MCP server |
-| [agentd](./agentd) | `:9580` | All | Multi-agent LLM orchestration — Orchestrator + Specialist Mesh, **20 bundled specialists**, LanceDB RAG, MCP tools across all 16 services, glob `trigger_event_types`, `GET /api/v1/sessions`, `POST /api/v1/rag/search` |
+| [agentd](./agentd) | `:9580` | All | Multi-agent LLM orchestration — Orchestrator + Specialist Mesh, **24 bundled specialists** (incl. replacement-value, mabis-syncd, smgw-diagnostics agents), LanceDB RAG, MCP tools across all 17 services, glob `trigger_event_types`, `GET /api/v1/sessions`, `POST /api/v1/rag/search` |
 
 ---
 

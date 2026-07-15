@@ -11,12 +11,18 @@ keywords     = ["gabi-gas", "gas", "balancing", "mako", "dvgw"]
 categories   = ["data-structures"]
 
 [dependencies]
-dvgw-edi    = { workspace = true }
-mako-engine = { workspace = true }
-serde       = { workspace = true }
-serde_json  = { workspace = true }
+dvgw-edi     = { workspace = true }
+mako-edm     = { workspace = true }
+mako-engine  = { workspace = true }
+metering     = { workspace = true, features = ["serde"] }
+rust_decimal = { workspace = true }
+serde        = { workspace = true, features = ["derive"] }
+serde_json   = { workspace = true }
+time         = { workspace = true }
+time-tz      = { version = "2", features = ["db"] }
 
 [dev-dependencies]
-mako-engine = { workspace = true, features = ["testing"] }
-serde_json  = { workspace = true }
-tokio       = { version = "1", features = ["full"] }
+mako-engine         = { workspace = true, features = ["testing"] }
+rust_decimal_macros = { workspace = true }
+serde_json          = { workspace = true }
+tokio               = { version = "1", features = ["full"] }

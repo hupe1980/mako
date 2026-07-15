@@ -16,9 +16,10 @@
 //! All monetary amounts in EUR. All rates in ct/kWh. No floating-point money.
 
 use eeg_billing::{
-    SettleInput, SettlementScheme, SettlementStatus, TariffSource, calculate_settlement,
-    foerderendedatum_eeg, foerderendedatum_kwkg_years, foerderendedatum_repowering,
-    kwk_foerderend_calendar, kwk_max_kwh, managementpraemie_ct, negativpreis_rule_applies,
+    CapacityBlock, EegGesetz, SettleInput, SettlementScheme, SettlementStatus, TariffSource,
+    calculate_settlement, foerderendedatum_eeg, foerderendedatum_kwkg_years,
+    foerderendedatum_repowering, kwk_foerderend_calendar, kwk_max_kwh, managementpraemie_ct,
+    negativpreis_rule_applies,
 };
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -3463,8 +3464,8 @@ fn sect52_abs6_full_netting_pipeline() {
 /// EEG 2000 / 2004 plant: no §51 Negativpreisregel, stays on Einspeisevergütung forever.
 #[test]
 fn eeg2000_grandfathering_no_negativpreis_no_direktverm() {
+    use eeg_billing::ErzeugungsArt;
     use eeg_billing::direktverm::is_direktvermarktung_mandatory;
-    use eeg_billing::{EegGesetz, ErzeugungsArt};
 
     // EEG 2000 plant: §51 does not apply (Bestandsschutz §66 EEG 2017)
     let out = calculate_settlement(&SettleInput {
@@ -3491,4 +3492,551 @@ fn eeg2000_grandfathering_no_negativpreis_no_direktverm() {
         d("500"),
         EegGesetz::Eeg2004
     ));
+}
+
+// ── §44b Abs. 1 EEG 2023 — Biogas quota January reset ────────────────────────
+
+#[test]
+fn sect44b_quota_january_reset_when_billing_year_differs() {
+    // Plant: 200 kW biogas, annual quota = 200 × 0.45 × 8760 = 788_400 kWh/year.
+    // Simulate: quota_ytd_year is last year → counter treated as 0.
+    // All 10_000 kWh should be eligible (fresh year).
+    let quota = d("10000"); // <<< eligible_this_month: full 10_000 because no prior YTD
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("14.10"),
+        },
+        einspeisemenge_kwh: Some(d("10000")),
+        biogas_sect44b_eligible_kwh: Some(quota), // caller passes full quota (reset)
+        leistung_kwp: Some(d("200")),
+        ..SettleInput::default()
+    });
+    // No cap applied (eligible_kwh == total_kwh)
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    assert_eq!(out.eligible_kwh, Some(d("10000")));
+    // Position: 10000 kWh × 14.10 ct = 1410.00 EUR
+    assert_eq!(out.settlement_eur, Some(d("1410.00000")));
+    // No excess position
+    assert_eq!(out.positions.len(), 1);
+}
+
+#[test]
+fn sect44b_quota_partial_cap_triggers_excess_position() {
+    // 200 kW biogas, only 6000 kWh eligible in quota (last 4000 are excess)
+    // Excess at EPEX 5.0 ct/kWh
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("14.10"),
+        },
+        einspeisemenge_kwh: Some(d("10000")),
+        biogas_sect44b_eligible_kwh: Some(d("6000")),
+        marktwert_ct_kwh: Some(d("5.00")),
+        leistung_kwp: Some(d("200")),
+        ..SettleInput::default()
+    });
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    // eligible fraction = 6000/10000 = 0.6 × 1410 EUR = 846 EUR
+    let main_eur = out.positions[0].eur;
+    assert!(
+        (main_eur - d("846.00000")).abs() < d("0.001"),
+        "main position expected ~846 EUR, got {main_eur}"
+    );
+    // excess: 4000 × 5.0 ct = 200 EUR
+    let excess = &out.positions[1];
+    assert!(excess.legal_basis.contains("§44b"));
+    assert_eq!(excess.kwh, d("4000"));
+    assert_eq!(excess.rate_ct_kwh, d("5.00"));
+}
+
+// ── §51b boundary — EPEX at exactly 2 ct/kWh ─────────────────────────────────
+
+#[test]
+fn sect51b_biogas_ausschreibung_epex_at_exactly_2ct_triggers_zero_aw() {
+    // §51b Satz 1: "wenn der Spotmarktpreis 2 Cent pro Kilowattstunde ODER WENIGER beträgt"
+    // At exactly 2.00 ct: AW = 0.
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: d("13.50"),
+            managementpraemie_ct: None,
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
+        tariff_source: eeg_billing::TariffSource::Auction(eeg_billing::AusschreibungMetadata {
+            award_ct: Some(d("13.50")),
+            is_biogas_sect51b: true,
+            ..Default::default()
+        }),
+        einspeisemenge_kwh: Some(d("5000")),
+        marktwert_ct_kwh: Some(d("2.00")), // boundary: exactly 2 ct
+        ..SettleInput::default()
+    });
+    // At exactly 2 ct, §51b applies → AW = 0
+    assert_eq!(out.settlement_eur, Some(d("0.00000")));
+    assert!(
+        out.positions[0].legal_basis.contains("§51b"),
+        "expected §51b legal basis"
+    );
+}
+
+#[test]
+fn sect51b_biogas_ausschreibung_epex_above_2ct_receives_market_premium() {
+    // At 2.01 ct: §51b does NOT apply → normal MarketPremium calculated
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: d("13.50"),
+            managementpraemie_ct: Some(d("0.40")),
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
+        tariff_source: eeg_billing::TariffSource::Auction(eeg_billing::AusschreibungMetadata {
+            award_ct: Some(d("13.50")),
+            is_biogas_sect51b: true,
+            ..Default::default()
+        }),
+        einspeisemenge_kwh: Some(d("5000")),
+        marktwert_ct_kwh: Some(d("2.01")), // just above 2 ct
+        ..SettleInput::default()
+    });
+    // MarketPremium = max(0, AW + Mgmt - EPEX) = 13.50 + 0.40 - 2.01 = 11.89 ct
+    // settlement = 5000 × 11.89 ct / 100 = 594.50 EUR
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    assert!(
+        out.settlement_eur.is_some_and(|e| e > d("0")),
+        "expected positive settlement above 2ct"
+    );
+}
+
+// ── §23b — Post-EEG 10 ct/kWh cap boundary ────────────────────────────────────
+
+#[test]
+fn post_eeg_exactly_10ct_is_not_capped() {
+    // At exactly 10 ct/kWh: no cap applied (condition is strictly > 10)
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::PostEeg { price_floor: None },
+        einspeisemenge_kwh: Some(d("1000")),
+        marktwert_ct_kwh: Some(d("10.00")),
+        ..SettleInput::default()
+    });
+    // 1000 × 10.00 / 100 = 100.00 EUR — no cap annotation
+    assert_eq!(out.settlement_eur, Some(d("100.00000")));
+    assert!(
+        !out.positions[0].description.contains("Deckel"),
+        "10 ct exactly should NOT trigger cap annotation"
+    );
+}
+
+#[test]
+fn post_eeg_above_10ct_is_capped_at_10ct() {
+    // At 15 ct/kWh: capped to 10 ct/kWh
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::PostEeg { price_floor: None },
+        einspeisemenge_kwh: Some(d("1000")),
+        marktwert_ct_kwh: Some(d("15.00")),
+        ..SettleInput::default()
+    });
+    // 1000 × 10.00 / 100 = 100.00 EUR
+    assert_eq!(out.settlement_eur, Some(d("100.00000")));
+    assert!(
+        out.positions[0].description.contains("Deckel"),
+        "15 ct should trigger §23b cap annotation"
+    );
+}
+
+// ── §24 multi-block with mixed EEG versions ───────────────────────────────────
+
+#[test]
+fn multi_block_sect24_mixed_eeg_versions_each_block_correct_negativpreis() {
+    use time::Date;
+
+    // Primary block: 30 kWp IBN 2015 (EEG 2012 → §51 NOT applicable, <100 kW threshold)
+    // Extension block: 120 kWp IBN 2024 (EEG 2023 → §51 applies, ≥100 kW threshold)
+    // Total: 150 kWp.
+    // Total kWh: 1500. Primary share: 30/150 = 0.2 → 300 kWh.
+    // Extension share: 120/150 = 0.8 → 1200 kWh.
+    // Negative EPEX kWh: 200 total.
+    //   Primary neg share: 200 × 0.2 = 40 kWh → EEG 2012 has no §51 → no deduction.
+    //   Extension neg share: 200 × 0.8 = 160 kWh → EEG 2023 ≥100 kW → deducted.
+    let ibn_primary = Date::from_calendar_date(2015, time::Month::June, 1).expect("valid date");
+    let ibn_ext = Date::from_calendar_date(2024, time::Month::March, 1).expect("valid date");
+    let fed_ext = Date::from_calendar_date(2044, time::Month::December, 31).expect("valid date");
+
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.11"),
+        },
+        einspeisemenge_kwh: Some(d("1500")),
+        leistung_kwp: Some(d("30")), // primary block
+        inbetriebnahme: Some(ibn_primary),
+        eeg_gesetz: EegGesetz::Eeg2012,
+        kwh_during_negative_epex: Some(d("200")),
+        capacity_blocks: vec![CapacityBlock {
+            leistung_kwp: d("120"),
+            inbetriebnahme: ibn_ext,
+            verguetungssatz_ct: d("8.11"),
+            foerderendedatum: fed_ext,
+        }],
+        ..SettleInput::default()
+    });
+
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    // Primary block (EEG 2012, 30 kW): no §51 → 300 kWh × 8.11 ct = 24.33 EUR
+    // Extension block (EEG 2023, 70 kW): §51 → (700 - 140) = 560 kWh × 8.11 ct = 45.416 EUR
+    let total = out.settlement_eur.expect("settlement must exist");
+    assert!(total > d("0"), "combined settlement must be positive");
+    assert!(
+        out.positions.len() >= 2,
+        "must have at least 2 positions (primary + extension)"
+    );
+    // Extension block should have fewer kWh due to §51 deduction
+    // Without deduction: 1500 × (120/150) = 1200 kWh
+    // With §51 deduction: 1200 - (200 × 0.8) = 1200 - 160 = 1040 kWh
+    let ext_pos = out.positions.last().unwrap();
+    assert!(
+        ext_pos.kwh < d("1200"),
+        "extension block kWh must be reduced by §51 deduction (expected <1200, got {})",
+        ext_pos.kwh
+    );
+    assert!(
+        ext_pos.kwh > d("0"),
+        "extension block should still have positive kWh after deduction"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// InbetriebnahmeTyp — plant lifecycle tracking (§3 EEG 2023)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// New field `inbetriebnahme_typ` on `SettleInput` defaults to `Erstinbetriebnahme`.
+/// For audit purposes the field is included even for normal plants.
+#[test]
+fn inbetriebnahme_typ_default_is_erstinbetriebnahme() {
+    use eeg_billing::InbetriebnahmeTyp;
+    let input = SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.11"),
+        },
+        einspeisemenge_kwh: Some(d("100")),
+        ..SettleInput::default()
+    };
+    assert_eq!(
+        input.inbetriebnahme_typ,
+        InbetriebnahmeTyp::Erstinbetriebnahme
+    );
+}
+
+/// §22 EEG 2023 Repowering: `InbetriebnahmeTyp::Repowering` must reset Förderdauer.
+#[test]
+fn inbetriebnahme_typ_repowering_resets_foerderdauer_flag() {
+    use eeg_billing::InbetriebnahmeTyp;
+    assert!(InbetriebnahmeTyp::Repowering.resets_foerderdauer());
+    assert!(!InbetriebnahmeTyp::Erstinbetriebnahme.resets_foerderdauer());
+    assert!(!InbetriebnahmeTyp::Wiederinbetriebnahme.resets_foerderdauer());
+    assert!(!InbetriebnahmeTyp::Modernisierung.resets_foerderdauer());
+    assert!(!InbetriebnahmeTyp::Zusammenlegung.resets_foerderdauer());
+    assert!(!InbetriebnahmeTyp::Erweiterung.resets_foerderdauer());
+}
+
+/// Wiederinbetriebnahme (restart after shutdown) must NOT reset the Förderdauer —
+/// the plant continues under its original commissioning date.
+#[test]
+fn inbetriebnahme_typ_wiederinbetriebnahme_keeps_foerderdauer() {
+    use eeg_billing::InbetriebnahmeTyp;
+    let original_inbetriebnahme = date!(2010 - 06 - 01);
+    let foerderendedatum = foerderendedatum_eeg(original_inbetriebnahme).unwrap();
+
+    // Restart in 2018 — still uses 2010 foerderendedatum
+    let input = SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("12.83"),
+        },
+        inbetriebnahme: Some(original_inbetriebnahme),
+        inbetriebnahme_typ: InbetriebnahmeTyp::Wiederinbetriebnahme,
+        foerderendedatum: Some(foerderendedatum),
+        billing_date: Some(date!(2025 - 01 - 01)),
+        einspeisemenge_kwh: Some(d("500")),
+        ..SettleInput::default()
+    };
+    let out = calculate_settlement(&input);
+    // Before foerderendedatum (2030-12-31): normal settlement
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    assert_eq!(out.settlement_eur, Some(d("64.15"))); // 500 × 12.83 / 100
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FoerderendeGrund — funding termination lifecycle (§25 + §8 KWKG)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// §25 EEG: `FoerderendeGrund::Expired20Years` transitions to PostEeg.
+#[test]
+fn foerderungsende_expired_20years_transitions_to_post_eeg() {
+    use eeg_billing::foerderungsende::FoerderendeGrund;
+    assert!(FoerderendeGrund::Expired20Years.transitions_to_post_eeg());
+    assert!(FoerderendeGrund::Expired20YearsPlusSect51aExtension.transitions_to_post_eeg());
+}
+
+/// Terminal reasons do NOT transition to PostEeg.
+#[test]
+fn foerderungsende_terminal_reasons_do_not_post_eeg() {
+    use eeg_billing::foerderungsende::FoerderendeGrund;
+    assert!(!FoerderendeGrund::AuctionAwardExpired.transitions_to_post_eeg());
+    assert!(!FoerderendeGrund::KwkHourLimitExhausted.transitions_to_post_eeg());
+    assert!(!FoerderendeGrund::KwkYearLimitReached.transitions_to_post_eeg());
+    assert!(!FoerderendeGrund::Revoked.transitions_to_post_eeg());
+    assert!(!FoerderendeGrund::VoluntaryTermination.transitions_to_post_eeg());
+    assert!(!FoerderendeGrund::PermanentLoss.transitions_to_post_eeg());
+    assert!(!FoerderendeGrund::MastrDeregistered.transitions_to_post_eeg());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// §§40–41 EEG 2023 — Wasserkraft (hydropower ecological compliance)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// §40 EEG 2023: Wasserkraft plant uses FeedInTariff with ErzeugungsArt::Wasserkraft.
+/// The calculation is formula-identical to solar — what differs is the tariff rate
+/// and the ecological compliance requirement stored in the plant registry.
+///
+/// This test documents that Wasserkraft plants can use the standard settlement path.
+#[test]
+fn s40_wasserkraft_slp_flat_rate() {
+    use eeg_billing::ErzeugungsArt;
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("7.33"), // §40 Abs. 2 EEG 2023 reference rate ≤500 kW
+        },
+        erzeugungsart: Some(ErzeugungsArt::Wasserkraft),
+        einspeisemenge_kwh: Some(d("12000")),
+        ..SettleInput::default()
+    });
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    // 12000 × 7.33 / 100 = 879.60 EUR
+    assert_eq!(out.settlement_eur, Some(d("879.60")));
+}
+
+/// §41 EEG 2023: Wasserkraft modernization — plant gets extended support for
+/// ecological improvements. The calculation path is the same; the extended
+/// foerderendedatum is computed by the plant registry (einsd), not the formula.
+///
+/// This test confirms that modernized hydro plants settle identically to new plants.
+#[test]
+fn s41_wasserkraft_modernisierung_settlement_path() {
+    use eeg_billing::ErzeugungsArt;
+    // Modernized 2023-05-01; foerderendedatum extended to 2043-12-31
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("12.50"),
+        },
+        erzeugungsart: Some(ErzeugungsArt::Wasserkraft),
+        einspeisemenge_kwh: Some(d("8500")),
+        foerderendedatum: Some(date!(2043 - 12 - 31)),
+        billing_date: Some(date!(2026 - 01 - 01)),
+        ..SettleInput::default()
+    });
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    // 8500 × 12.50 / 100 = 1062.50 EUR
+    assert_eq!(out.settlement_eur, Some(d("1062.50")));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// §48a EEG 2023 — Gemeinschaftliche Gebäudeversorgung (GGV) settlement
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// §48a EEG 2023 (Solarpaket I): Gemeinschaftliche Gebäudeversorgung.
+///
+/// A solar plant serves multiple building tenants. The plant operator receives
+/// payment for the total Einspeisemenge at the §48 Abs. 2 rate — the multi-tenant
+/// allocation is handled by the metering layer (`metering::MeterConfiguration::GGV`).
+/// The NB-to-plant-operator settlement uses `FeedInTariff` with the §48a Zuschlag
+/// incorporated into the rate by the plant registry.
+///
+/// Regulatory basis: §48a EEG 2023 i.d.F. Solarpaket I (2024).
+#[test]
+fn sect48a_ggv_settlement_uses_feed_in_tariff_scheme() {
+    use eeg_billing::{ErzeugungsArt, Messkonzept};
+    // GGV building plant: 25 kWp on a 5-party building, total feed-in = 350 kWh
+    // Rate: §48 Abs. 2a EEG 2023 (GGV Volleinspeisung) = 8.51 ct/kWh
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.51"),
+        },
+        erzeugungsart: Some(ErzeugungsArt::SolarAufdach),
+        messkonzept: Some(Messkonzept::Volleinspeisung),
+        einspeisemenge_kwh: Some(d("350")),
+        ..SettleInput::default()
+    });
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    // 350 × 8.51 / 100 = 29.785 EUR
+    assert_eq!(out.settlement_eur, Some(d("29.785")));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// §37a / Balkonkraftwerk (Stecker-PV) simplified path
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// §37a EEG 2023: Stecker-PV (Balkonkraftwerk) ≤800 W.
+///
+/// Balkonkraftwerke are registered in MaStR but use simplified registration.
+/// Settlement is same formula as FeedInTariff at the §48 Abs. 2 rate.
+/// The ErzeugungsArt::SolarStecker variant identifies these plants in the registry.
+///
+/// Regulatory basis: §37a EEG 2023 (Steckersolargeräte), MaStR §5a AnlRegV.
+#[test]
+fn sect37a_stecker_pv_settlement_is_standard_feed_in() {
+    use eeg_billing::ErzeugungsArt;
+    // 600 W Balkonkraftwerk, 25 kWh fed in during summer month
+    // Rate: §48 Abs. 2 EEG 2024 (Solarpaket I): 8.51 ct/kWh (≤10 kWp band)
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.51"),
+        },
+        erzeugungsart: Some(ErzeugungsArt::SolarStecker),
+        einspeisemenge_kwh: Some(d("25")),
+        leistung_kwp: Some(d("0.6")),
+        ..SettleInput::default()
+    });
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    // 25 × 8.51 / 100 = 2.1275 EUR
+    assert_eq!(out.settlement_eur, Some(d("2.1275")));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// §52 Abs. 4 — Extra penalty months for specific violations
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// §52 Abs. 4 Nr. 4: Doppelvermarktungsverbot violation → +6 extra penalty months.
+///
+/// When an operator violates §80 EEG (double marketing), the penalty applies for
+/// the violation period PLUS 6 additional calendar months.
+/// The caller must add these 6 months to `monate_des_verstosses`.
+///
+/// This test verifies that the formula correctly scales to the extended period.
+#[test]
+fn sect52_abs4_doppelvermarktung_6_extra_months() {
+    use eeg_billing::foerderdauer::calculate_pflichtzahlung;
+    use eeg_billing::{Pflichtverstoss, SanktionsTyp};
+    // 3-month violation + 6 extra = 9 months total; 200 kW plant
+    let violation = Pflichtverstoss {
+        typ: SanktionsTyp::DoppelvermarktungsverbotVerletzt,
+        leistung_kw: d("200"),
+        monate_des_verstosses: 9, // caller adds 6 extra months per §52 Abs. 4 Nr. 4
+        nachtraeglich_erfuellt: false,
+        technischer_defekt: false,
+    };
+    let penalty = calculate_pflichtzahlung(&violation);
+    // 200 kW × EUR 10 × 9 months = EUR 18 000
+    assert_eq!(penalty, d("18000"));
+}
+
+/// §52 Abs. 4 Nr. 1: AusfallverguetungHoechstdauer → +3 extra months.
+#[test]
+fn sect52_abs4_ausfallverguetung_3_extra_months() {
+    use eeg_billing::foerderdauer::calculate_pflichtzahlung;
+    use eeg_billing::{Pflichtverstoss, SanktionsTyp};
+    // 6-month violation + 3 extra = 9 months; 100 kW plant
+    let violation = Pflichtverstoss {
+        typ: SanktionsTyp::AusfallverguetungHoechstdauerUeberschritten,
+        leistung_kw: d("100"),
+        monate_des_verstosses: 9, // caller adds 3 extra months per §52 Abs. 4 Nr. 1
+        nachtraeglich_erfuellt: false,
+        technischer_defekt: false,
+    };
+    let penalty = calculate_pflichtzahlung(&violation);
+    // 100 kW × EUR 10 × 9 months = EUR 9 000
+    assert_eq!(penalty, d("9000"));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// foerderendedatum edge cases — leap year, year boundary
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// §25 EEG: foerderendedatum for plants commissioned on February 28 in a non-leap year.
+/// The 20-year end date is always December 31 of the 20th year (§25 Abs. 1 Satz 2).
+#[test]
+fn foerderendedatum_feb28_nonleap_year() {
+    let inbetriebnahme = date!(2005 - 02 - 28);
+    let end = foerderendedatum_eeg(inbetriebnahme).unwrap();
+    // 2025 is not a leap year; December 31, 2025
+    assert_eq!(end, date!(2025 - 12 - 31));
+}
+
+/// §25 EEG: a plant commissioned on December 31 ends on December 31 of year+20.
+/// The end date is in the SAME calendar year as the start year + 20.
+#[test]
+fn foerderendedatum_dec31_plant_ends_same_year() {
+    let inbetriebnahme = date!(2023 - 12 - 31);
+    let end = foerderendedatum_eeg(inbetriebnahme).unwrap();
+    assert_eq!(end, date!(2043 - 12 - 31));
+}
+
+/// §25 EEG: a plant commissioned on January 1 ends on December 31 of year+20.
+/// Not December 31 of year+19 — the end must be at least 20 full years.
+#[test]
+fn foerderendedatum_jan1_plant_ends_20_years_later() {
+    let inbetriebnahme = date!(2010 - 01 - 01);
+    let end = foerderendedatum_eeg(inbetriebnahme).unwrap();
+    assert_eq!(end, date!(2030 - 12 - 31));
+    // Not 2029-12-31 — the 20th year after 2010 is 2030
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EegGesetz — Bestandsschutz boundary tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// §100 Abs. 1 Satz 4 EEG 2017 boundary:
+/// Plants commissioned 2015-12-31 (last day before 2016-01-01) are EXEMPT from §51.
+/// Plants commissioned 2016-01-01 ARE subject to §51 EEG 2017 (6h threshold).
+#[test]
+fn eeg_gesetz_bestandsschutz_boundary_2015_to_2016() {
+    use eeg_billing::foerderdauer::negativpreis_kw_exemption;
+    use eeg_billing::{EegGesetz, ErzeugungsArt};
+
+    // Pre-2016 (Eeg2012): §51 never applies — negativpreis_kw_grenze returns None
+    let pre2016_threshold =
+        negativpreis_kw_exemption(EegGesetz::Eeg2012, Some(ErzeugungsArt::Solar));
+    assert_eq!(
+        pre2016_threshold, None,
+        "EEG 2012 plants exempt from §51 per §100 Abs. 1 Satz 4"
+    );
+
+    // EEG 2017: 500 kW exemption for non-wind
+    let eeg2017_threshold =
+        negativpreis_kw_exemption(EegGesetz::Eeg2017, Some(ErzeugungsArt::Solar));
+    assert_eq!(eeg2017_threshold, Some(500), "EEG 2017: <500 kW exempt");
+
+    // EEG 2017: 3 MW exemption for wind
+    let eeg2017_wind =
+        negativpreis_kw_exemption(EegGesetz::Eeg2017, Some(ErzeugungsArt::WindOnshore));
+    assert_eq!(eeg2017_wind, Some(3000), "EEG 2017: wind <3 MW exempt");
+
+    // EEG 2021: 500 kW exemption for all (no wind exception)
+    let eeg2021_threshold =
+        negativpreis_kw_exemption(EegGesetz::Eeg2021, Some(ErzeugungsArt::WindOnshore));
+    assert_eq!(eeg2021_threshold, Some(500), "EEG 2021: all <500 kW exempt");
+
+    // EEG 2023: 100 kW exemption (transitional, until iMSys)
+    let eeg2023_threshold = negativpreis_kw_exemption(EegGesetz::Eeg2023, None);
+    assert_eq!(
+        eeg2023_threshold,
+        Some(100),
+        "EEG 2023: <100 kW exempt until iMSys"
+    );
+}
+
+/// EEG 2023 §51 applies to ALL sizes once iMSys is installed.
+#[test]
+fn eeg2023_sect51_applies_to_all_once_imesys_installed() {
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.11"),
+        },
+        einspeisemenge_kwh: Some(d("100")),
+        kwh_during_negative_epex: Some(d("50")), // 50 kWh during negative hours
+        leistung_kwp: Some(d("50")),             // 50 kWp — would be exempt WITHOUT iMSys
+        has_imesys: true,                        // iMSys installed → exemption lifted
+        eeg_gesetz: eeg_billing::EegGesetz::Eeg2023,
+        ..SettleInput::default()
+    });
+    // §51 applied: eligible = 100 - 50 = 50 kWh
+    // 50 × 8.11 / 100 = 4.055 EUR
+    assert_eq!(out.eligible_kwh, Some(d("50")));
+    assert_eq!(out.settlement_eur, Some(d("4.055")));
 }

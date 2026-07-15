@@ -43,7 +43,7 @@
 //!     DocumentMeta {
 //!         invoice_number: "EEG-2026-07-001".into(),
 //!         period_label:   "Juli 2026".into(),
-//!         period: Some(Period::new("2026-07-01", "2026-07-31")),
+//!         period: Some(Period::from_display("2026-07-01", "2026-07-31")),
 //!         issuer_id: Some("9904234560001".into()),  // NB MP-ID
 //!         issue_date: Some("2026-07-13".into()),
 //!         ..Default::default()

@@ -36,6 +36,7 @@
 //!     invoice_type:     InvoiceType::Initial,
 //!     contract_id:      None,
 //!     regulatory_rates: RegulatoryRates::default(),
+//!     ..Default::default()
 //! };
 //! let quantities = Quantities {
 //!     electricity: Some(MeterInput {
@@ -98,18 +99,23 @@ pub mod tariff;
 // ── Primary API re-exports ────────────────────────────────────────────────────
 
 // Core types
-pub use context::{BillingContext, InvoiceType};
+pub use context::{AbschlagDeduction, BillingContext, InvoiceType, Verbrauchshistorie};
 pub use engine::BillingEngine;
-pub use invoice::Invoice;
+pub use invoice::{Invoice, negate_rechnung_json_for_correction};
 pub use position::{BillingPosition, PositionCategory};
 pub use provider::{BillingProvider, EpexSpotSource, SpotPriceSource};
 pub use quantities::{
-    DynamicInterval, EegMeterInput, EmobilityMeterInput, GasMeterInput, GgvNutzungsplan,
-    GgvNutzungsplanEntry, GridInput, HemsMeterInput, MeterInput, Quantities, ServiceMeterInput,
-    SolarMeterInput, WaermeMeterInput,
+    Abschlagsplan, AbschlagsplanEntry, DynamicInterval, EegMeterInput, EmobilityMeterInput,
+    GasMeterInput, GgvNutzungsplan, GgvNutzungsplanEntry, GgvSolarInput, GridInput, HemsMeterInput,
+    MeterInput, MeteringMode, ProsumerMeterInput, Quantities, Sect41aAnnualComparison,
+    ServiceMeterInput, SolarMeterInput, WaermeMeterInput,
 };
-pub use rates::RegulatoryRates;
-pub use tariff::TariffInput;
+pub use rates::{
+    RegulatoryRates, behg_ct_per_kwh_for_year, energiesteuer_gas_for_year, stromsteuer_for_year,
+};
+pub use tariff::{
+    BlockTierInput, IndexedPriceConfig, PricingModel, SeasonalPriceOverride, TariffInput,
+};
 
 // Concrete providers
 pub use providers::{

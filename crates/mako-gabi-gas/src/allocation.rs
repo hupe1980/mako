@@ -44,6 +44,8 @@ use mako_engine::{
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 
+use crate::domain::{GasDay, GasQuantity};
+
 // ── Synthetic PID set ─────────────────────────────────────────────────────────
 
 /// All synthetic PIDs for the ALOCAT allocation message.
@@ -92,6 +94,34 @@ impl AllocationType {
 
 // ── Domain data ───────────────────────────────────────────────────────────────
 
+/// Version / sequence of an ALOCAT message.
+///
+/// Per KoV, the FNB/MGV may send corrected allocations after the initial
+/// delivery. The `AllocationVersion` tracks which sequence this is:
+/// - `Initial` = first allocation for a gas day
+/// - `Correction(n)` = nth correction (n ≥ 1)
+/// - `Final` = confirmed final allocation (no further corrections expected)
+///
+/// Source: Kooperationsvereinbarung Gas (KoV) §6.4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AllocationVersion {
+    /// First allocation message for this gas day / period.
+    Initial,
+    /// Corrected allocation. `n` = correction sequence number (1-based).
+    Correction(u32),
+    /// Final confirmed allocation — no further corrections expected.
+    Final,
+}
+
+impl AllocationVersion {
+    /// `true` when this is not the initial allocation (corrected or final).
+    #[must_use]
+    pub fn is_revision(&self) -> bool {
+        !matches!(self, Self::Initial)
+    }
+}
+
 /// Data captured when an ALOCAT allocation message is received.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -104,8 +134,20 @@ pub struct AllocationData {
     pub sender_eic: String,
     /// EIC code of the receiving party (BKV / FNB).
     pub receiver_eic: String,
-    /// Gas day or allocation period (from ALOCAT DTM qualifier 137).
-    pub gas_day: String,
+    /// Gas day or allocation period.
+    pub gas_day: GasDay,
+    /// Version of this allocation (initial, correction, or final).
+    ///
+    /// Per KoV §6.4: the FNB/MGV sends an initial allocation and may send
+    /// corrections within the correction window. The final allocation is
+    /// binding for imbalance settlement.
+    pub version: AllocationVersion,
+    /// Allocated gas quantity for this gas day.
+    ///
+    /// `None` when the ALOCAT message does not include an explicit quantity
+    /// (e.g. a cancellation/withdrawal message). Stored as `GasQuantity`
+    /// to preserve m³ + Brennwert context alongside the kWh_Hs billing value.
+    pub allocated_quantity: Option<GasQuantity>,
     /// Clearing number from the leading RFF segment (if present).
     pub clearing_number: Option<String>,
     /// ALOCAT document message reference (from UNH).
@@ -129,7 +171,11 @@ pub enum AllocationEvent {
         /// EIC code of the receiving party (BKV / FNB).
         receiver_eic: String,
         /// Gas day or allocation period.
-        gas_day: String,
+        gas_day: GasDay,
+        /// Version of this allocation.
+        version: AllocationVersion,
+        /// Allocated quantity in kWh_Hs (with optional m³ volume).
+        allocated_quantity: Option<GasQuantity>,
         /// Clearing number from the leading RFF segment (if present).
         clearing_number: Option<String>,
         /// ALOCAT document message reference.
@@ -163,7 +209,7 @@ pub enum AllocationState {
     #[default]
     New,
     /// ALOCAT received and recorded (terminal).
-    AllocationReceived(AllocationData),
+    AllocationReceived(Box<AllocationData>),
 }
 
 impl AllocationState {
@@ -196,7 +242,14 @@ pub enum AllocationCommand {
         /// EIC code of the receiving party (BKV / FNB).
         receiver_eic: String,
         /// Gas day or allocation period.
-        gas_day: String,
+        gas_day: GasDay,
+        /// Version of this allocation (initial / correction / final).
+        ///
+        /// Callers should determine the version from the ALOCAT message
+        /// sequence number (UNH DE 0062) or explicit correction qualifier.
+        version: AllocationVersion,
+        /// Allocated quantity (if present in the ALOCAT).
+        allocated_quantity: Option<GasQuantity>,
         /// Clearing number from the leading RFF segment (if present).
         clearing_number: Option<String>,
         /// ALOCAT document message reference.
@@ -227,17 +280,21 @@ impl Workflow for GaBiGasAllocationWorkflow {
                 sender_eic,
                 receiver_eic,
                 gas_day,
+                version,
+                allocated_quantity,
                 clearing_number,
                 message_ref,
-            } => AllocationState::AllocationReceived(AllocationData {
+            } => AllocationState::AllocationReceived(Box::new(AllocationData {
                 synthetic_pid: *synthetic_pid,
                 allocation_type: *allocation_type,
                 sender_eic: sender_eic.clone(),
                 receiver_eic: receiver_eic.clone(),
-                gas_day: gas_day.clone(),
+                gas_day: *gas_day,
+                version: *version,
+                allocated_quantity: allocated_quantity.clone(),
                 clearing_number: clearing_number.clone(),
                 message_ref: message_ref.clone(),
-            }),
+            })),
         }
     }
 
@@ -251,6 +308,8 @@ impl Workflow for GaBiGasAllocationWorkflow {
                 sender_eic,
                 receiver_eic,
                 gas_day,
+                version,
+                allocated_quantity,
                 clearing_number,
                 message_ref,
             } => {
@@ -269,6 +328,8 @@ impl Workflow for GaBiGasAllocationWorkflow {
                     sender_eic,
                     receiver_eic,
                     gas_day,
+                    version,
+                    allocated_quantity,
                     clearing_number,
                     message_ref,
                 }]

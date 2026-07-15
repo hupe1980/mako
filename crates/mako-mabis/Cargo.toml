@@ -11,11 +11,14 @@ keywords     = ["mabis", "bilanzkreis", "edifact", "energy", "mako"]
 categories   = ["data-structures"]
 
 [dependencies]
-mako-engine = { workspace = true }
-serde       = { workspace = true }
-serde_json  = { workspace = true }
-thiserror   = { workspace = true }
-time        = { workspace = true }
+mako-edm     = { workspace = true }
+mako-engine  = { workspace = true }
+metering     = { workspace = true, features = ["serde"] }
+rust_decimal = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+thiserror    = { workspace = true }
+time         = { workspace = true }
 
 [dev-dependencies]
 # edi-energy is only needed for integration tests.
@@ -23,6 +26,7 @@ time        = { workspace = true }
 edi-energy  = { workspace = true, features = ["mscons"] }
 # testing feature enables InMemoryXxx stores and EngineBuilder::new().
 mako-engine = { workspace = true, features = ["testing"] }
+rust_decimal_macros = { workspace = true }
 serde_json  = { workspace = true }
 time        = { workspace = true }
 tokio       = { version = "1", features = ["full"] }

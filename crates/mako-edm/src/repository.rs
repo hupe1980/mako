@@ -86,4 +86,28 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
         brennwert_kwh_per_m3: Option<&str>,
         zustandszahl: Option<&str>,
     ) -> Result<u64, EdmError>;
+
+    /// Record a retroactive correction to one or more meter read intervals.
+    ///
+    /// ## Semantics
+    ///
+    /// 1. The original interval in `meter_reads` is **overwritten** with the
+    ///    corrected `quantity_kwh` and `quality`.
+    /// 2. An immutable `meter_read_corrections` row is inserted, preserving the
+    ///    original value, correction reason, and operator identity.
+    /// 3. `meter_reads.correction_count` is incremented.
+    ///
+    /// This gives the **query layer** the latest (corrected) value, while the
+    /// **audit layer** retains the full correction history per §22 MessZV.
+    ///
+    /// ## Atomicity
+    ///
+    /// All corrections in `records` are applied in a single database transaction.
+    /// If any correction fails, none are committed.
+    ///
+    /// Returns the UUIDs of the newly created `meter_read_corrections` rows.
+    async fn store_corrections(
+        &self,
+        records: &[crate::domain::CorrectionRecord],
+    ) -> Result<Vec<uuid::Uuid>, EdmError>;
 }

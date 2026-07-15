@@ -28,6 +28,7 @@ fn ctx(malo: &str) -> BillingContext {
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates(),
         contract_id: None,
+        ..Default::default()
     }
 }
 

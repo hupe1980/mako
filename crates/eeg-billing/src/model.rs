@@ -540,6 +540,25 @@ pub struct SettleInput {
     /// live on each `CapacityBlock` instead.
     pub inbetriebnahme: Option<Date>,
 
+    /// Type of commissioning event — for audit trail and Förderdauer rules.
+    ///
+    /// Determines whether the Förderdauer clock resets (only `Repowering` resets it)
+    /// and which lifecycle state the plant is in. Stored in `einsd`'s
+    /// `eeg_anlagen.inbetriebnahme_typ` column.
+    ///
+    /// | `InbetriebnahmeTyp` | F\u00f6rderdauer | Audit relevance |
+    /// |---|---|---|
+    /// | `Erstinbetriebnahme` (default) | starts at `inbetriebnahme` | Normal plant |
+    /// | `Wiederinbetriebnahme` | continues from original | Restart after shutdown |
+    /// | `Modernisierung` | continues from original | Equipment replacement |
+    /// | `Repowering` | **resets** to repowering date | New 20-year clock |
+    /// | `Zusammenlegung` | oldest component date | §24 merger |
+    /// | `Erweiterung` | new block from extension date | §24 capacity add |
+    ///
+    /// The engine records this in position descriptions for full audit traceability.
+    /// Default: `InbetriebnahmeTyp::Erstinbetriebnahme`.
+    pub inbetriebnahme_typ: crate::technology::InbetriebnahmeTyp,
+
     /// Installed peak power in kWp (or kW_el for KWKG).
     ///
     /// Used for:

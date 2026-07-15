@@ -151,7 +151,14 @@ impl AccountingdMcpHandler {
         Parameters(p): Parameters<MaloParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::fetch_account;
-        match fetch_account(&self.state.pool, &p.malo_id, &self.state.tenant).await {
+        match fetch_account(
+            &self.state.pool,
+            &p.malo_id,
+            &self.state.tenant,
+            &self.state.tenant,
+        )
+        .await
+        {
             Ok(Some(a)) => ContentBlock::json(serde_json::json!({
                 "malo_id": p.malo_id,
                 "balance_ct": a.balance_ct,
@@ -177,7 +184,14 @@ impl AccountingdMcpHandler {
         Parameters(p): Parameters<LedgerParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::{fetch_account, list_ledger};
-        let acct = match fetch_account(&self.state.pool, &p.malo_id, &self.state.tenant).await {
+        let acct = match fetch_account(
+            &self.state.pool,
+            &p.malo_id,
+            &self.state.tenant,
+            &self.state.tenant,
+        )
+        .await
+        {
             Ok(Some(a)) => a,
             Ok(None) => {
                 return Err(McpError::invalid_params(
@@ -251,7 +265,14 @@ Also sets the SEPA billing_day (day of month for direct debit).",
         use crate::pg::UpdateAccountRequest;
         use crate::pg::{fetch_account, update_account};
         // Fetch to get lf_mp_id (required for update_account's composite key).
-        let acct = match fetch_account(&self.state.pool, &p.malo_id, &self.state.tenant).await {
+        let acct = match fetch_account(
+            &self.state.pool,
+            &p.malo_id,
+            &self.state.tenant,
+            &self.state.tenant,
+        )
+        .await
+        {
             Ok(Some(a)) => a,
             Ok(None) => {
                 return Err(McpError::invalid_params(
@@ -307,8 +328,13 @@ Returns count of matched and unmatched entries.",
                 .unwrap_or("CAMT.054 import");
             if let (Some(malo), Some(amt)) = (malo_id, amount_ct) {
                 use crate::pg::{fetch_account, write_entry};
-                if let Ok(Some(acct)) =
-                    fetch_account(&self.state.pool, malo, &self.state.tenant).await
+                if let Ok(Some(acct)) = fetch_account(
+                    &self.state.pool,
+                    malo,
+                    &self.state.tenant,
+                    &self.state.tenant,
+                )
+                .await
                 {
                     let today = time::OffsetDateTime::now_utc().date();
                     let _ = write_entry(
@@ -361,19 +387,25 @@ Only generates for MaLo accounts that have an IBAN + signed mandate (sequence_ty
         use crate::sepa::build_pain_008;
         match list_accounts_with_mandates(&self.state.pool, &self.state.tenant).await {
             Ok(accounts) => {
-                // build_pain_008 expects &[(&SepaMandateRow, i64)]
                 let refs: Vec<(&crate::pg::SepaMandateRow, i64)> = accounts
                     .iter()
                     .map(|(mandate, acct)| (mandate, acct.abschlag_ct))
                     .collect();
-                let xml = build_pain_008(&self.state.tenant, &refs);
-                ContentBlock::json(serde_json::json!({
-                    "mandate_count": refs.len(),
-                    "pain_008_xml": xml,
-                    "hint": "Submit this XML to your bank / payment gateway for SEPA direct debit execution."
-                }))
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None))
+                // Use tenant as creditor name fallback; in production creditor_iban comes from config.
+                let creditor = &self.state.tenant;
+                match build_pain_008(creditor, &refs) {
+                    Ok(xml) => ContentBlock::json(serde_json::json!({
+                        "mandate_count": refs.len(),
+                        "pain_008_xml": xml,
+                        "hint": "Submit this XML to your bank / payment gateway for SEPA direct debit execution."
+                    }))
+                    .map(|b| CallToolResult::success(vec![b]))
+                    .map_err(|e| McpError::internal_error(e.message, None)),
+                    Err(e) => Err(McpError::internal_error(
+                        format!("pain.008 generation failed: {e}. Configure creditor_iban in accountingd.toml."),
+                        None,
+                    )),
+                }
             }
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
@@ -394,7 +426,14 @@ Regulatory: §40 Abs. 1 EnWG — Abschlag must reflect actual estimated consumpt
         Parameters(p): Parameters<JahresabschlussParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::{fetch_account, list_ledger};
-        let acct = match fetch_account(&self.state.pool, &p.malo_id, &self.state.tenant).await {
+        let acct = match fetch_account(
+            &self.state.pool,
+            &p.malo_id,
+            &self.state.tenant,
+            &self.state.tenant,
+        )
+        .await
+        {
             Ok(Some(a)) => a,
             Ok(None) => {
                 return Err(McpError::invalid_params(

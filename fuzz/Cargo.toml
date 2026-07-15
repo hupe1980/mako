@@ -59,3 +59,31 @@ path = "fuzz_targets/fuzz_as4_envelope.rs"
 test = false
 doc = false
 bench = false
+
+[dependencies.energy-billing]
+path = "../crates/energy-billing"
+features = ["eeg"]
+
+[[bin]]
+name = "fuzz_tariff_input"
+path = "fuzz_targets/fuzz_tariff_input.rs"
+test = false
+doc = false
+bench = false
+
+[dependencies.metering]
+path = "../crates/metering"
+
+[[bin]]
+name = "fuzz_obis_code"
+path = "fuzz_targets/fuzz_obis_code.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_validation_engine"
+path = "fuzz_targets/fuzz_validation_engine.rs"
+test = false
+doc = false
+bench = false

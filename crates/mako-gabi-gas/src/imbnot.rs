@@ -36,6 +36,9 @@ use mako_engine::{
     types::MessageRef,
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
+use rust_decimal::Decimal;
+
+use crate::domain::GasDay;
 
 // ── Synthetic PID ─────────────────────────────────────────────────────────────
 
@@ -74,12 +77,14 @@ pub struct ImbalanceData {
     pub sender_eic: String,
     /// EIC code of the receiving BKV.
     pub receiver_eic: String,
-    /// Gas day for which the imbalance is reported (from DTM qualifier 137).
-    pub gas_day: String,
+    /// Gas day for which the imbalance is reported.
+    pub gas_day: GasDay,
     /// Direction of the imbalance.
     pub direction: ImbalanceDirection,
-    /// Imbalance quantity in kWh (from QTY segment, if parseable).
-    pub quantity_kwh: Option<i64>,
+    /// Imbalance quantity in kWh_Hs (from QTY segment).
+    ///
+    /// Stored as `Decimal` per DVGW G 685 — sub-kWh precision required.
+    pub quantity_kwh: Option<Decimal>,
     /// Document reference from the IMBNOT message (BGM element 1).
     pub document_ref: MessageRef,
 }
@@ -99,11 +104,11 @@ pub enum ImbalanceEvent {
         /// EIC code of the receiving BKV.
         receiver_eic: String,
         /// Gas day.
-        gas_day: String,
+        gas_day: GasDay,
         /// Direction of the imbalance.
         direction: ImbalanceDirection,
-        /// Imbalance quantity in kWh (if available).
-        quantity_kwh: Option<i64>,
+        /// Imbalance quantity in kWh_Hs (Decimal — DVGW G 685 sub-kWh precision).
+        quantity_kwh: Option<Decimal>,
         /// Document reference.
         document_ref: MessageRef,
     },
@@ -152,11 +157,11 @@ pub enum ImbalanceCommand {
         /// EIC code of the receiving BKV.
         receiver_eic: String,
         /// Gas day (from DTM 137).
-        gas_day: String,
+        gas_day: GasDay,
         /// Direction of the imbalance.
         direction: ImbalanceDirection,
-        /// Imbalance quantity in kWh (from QTY segment).
-        quantity_kwh: Option<i64>,
+        /// Imbalance quantity in kWh_Hs (Decimal — DVGW G 685).
+        quantity_kwh: Option<Decimal>,
         /// Document reference from BGM element 1.
         document_ref: MessageRef,
     },
@@ -191,7 +196,7 @@ impl Workflow for GaBiGasImbalanceWorkflow {
                 synthetic_pid: *synthetic_pid,
                 sender_eic: sender_eic.clone(),
                 receiver_eic: receiver_eic.clone(),
-                gas_day: gas_day.clone(),
+                gas_day: *gas_day,
                 direction: *direction,
                 quantity_kwh: *quantity_kwh,
                 document_ref: document_ref.clone(),
@@ -265,9 +270,9 @@ mod tests {
             synthetic_pid: 90041,
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001369Q".to_owned(),
-            gas_day: "2026-01-15".to_owned(),
+            gas_day: GasDay::parse("2026-01-15").unwrap(),
             direction: ImbalanceDirection::Short,
-            quantity_kwh: Some(-15_000),
+            quantity_kwh: Some(rust_decimal_macros::dec!(-15000)),
             document_ref: make_ref(),
         };
         let output = GaBiGasImbalanceWorkflow::handle(&state, cmd).unwrap();
@@ -286,7 +291,7 @@ mod tests {
             synthetic_pid: 90031, // wrong PID
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001369Q".to_owned(),
-            gas_day: "2026-01-15".to_owned(),
+            gas_day: GasDay::parse("2026-01-15").unwrap(),
             direction: ImbalanceDirection::Long,
             quantity_kwh: None,
             document_ref: make_ref(),

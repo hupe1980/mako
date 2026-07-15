@@ -3959,7 +3959,7 @@ pub fn gabi_gas_nomination_registry() -> AdapterRegistry<GaBiGasNominationWorkfl
             match msg {
                 AnyDvgwMessage::Nomint(nomint) => {
                     // Outbound NOMINT — BKV sends nomination to FNB/MGV.
-                    let gas_day = nomint.reference_date.clone().unwrap_or_default();
+                    let gas_day = parse_dvgw_gas_day(nomint.reference_date.as_deref());
                     let nomination_ref = nomint
                         .nomination_ref
                         .as_deref()
@@ -3975,7 +3975,7 @@ pub fn gabi_gas_nomination_registry() -> AdapterRegistry<GaBiGasNominationWorkfl
                 }
                 AnyDvgwMessage::Nomres(nomres) => {
                     // Inbound NOMRES — FNB/MGV responds to BKV.
-                    let gas_day = nomres.reference_date.clone().unwrap_or_default();
+                    let gas_day = parse_dvgw_gas_day(nomres.reference_date.as_deref());
                     let acceptance = match &nomres.overall_status {
                         Some(dvgw_edi::messages::nomres::NomresStatus::Accepted) => {
                             NomresAcceptance::Accepted
@@ -4059,7 +4059,9 @@ pub fn gabi_gas_allocation_registry() -> AdapterRegistry<GaBiGasAllocationWorkfl
                 synthetic_pid: pid.as_u32(),
                 sender_eic: trait_msg.sender_eic().unwrap_or("").to_owned(),
                 receiver_eic: trait_msg.receiver_eic().unwrap_or("").to_owned(),
-                gas_day: alocat.reference_date.clone().unwrap_or_default(),
+                gas_day: parse_dvgw_gas_day(alocat.reference_date.as_deref()),
+                version: mako_gabi_gas::allocation::AllocationVersion::Initial,
+                allocated_quantity: None,
                 clearing_number: alocat.clearing_number.clone(),
                 message_ref: MessageRef::new(trait_msg.message_ref()),
             })
@@ -4395,4 +4397,33 @@ pub fn extract_fallgruppe(segs: &[OwnedSegment]) -> Option<String> {
         .find(|s| s.tag == "TM" && s.element_str(0).is_some_and(|q| q == "Z10"))
         .and_then(|s| s.element_str(1))
         .map(str::to_owned)
+}
+
+// ── DVGW gas-day conversion helper ───────────────────────────────────────────
+
+/// Parse a DVGW reference-date string (`YYYY-MM-DD` or `YYYYMMDD`) into a
+/// typed [`mako_gabi_gas::GasDay`].
+///
+/// DVGW messages encode the gas day in DTM qualifier 137.  The format is
+/// `YYYYMMDD` in older versions and `YYYY-MM-DD` in current NOMINT/ALOCAT.
+/// Both are accepted here; an invalid or absent date falls back to today.
+fn parse_dvgw_gas_day(raw: Option<&str>) -> mako_gabi_gas::GasDay {
+    let fallback = || mako_gabi_gas::GasDay::new(time::OffsetDateTime::now_utc().date());
+    let Some(s) = raw else { return fallback() };
+    // Try ISO 8601 first (`YYYY-MM-DD`), then compact form (`YYYYMMDD`).
+    if let Ok(d) = mako_gabi_gas::GasDay::parse(s) {
+        return d;
+    }
+    // Compact `YYYYMMDD` → insert dashes and retry.
+    if s.len() == 8 {
+        let iso = format!("{}-{}-{}", &s[..4], &s[4..6], &s[6..8]);
+        if let Ok(d) = mako_gabi_gas::GasDay::parse(&iso) {
+            return d;
+        }
+    }
+    tracing::warn!(
+        raw = s,
+        "adapters: could not parse DVGW gas day — using today as fallback"
+    );
+    fallback()
 }

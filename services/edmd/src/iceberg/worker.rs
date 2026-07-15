@@ -413,6 +413,10 @@ struct RawMeterRead {
     sparte: String,
     obis_code: Option<String>,
     tenant_id: Option<Uuid>,
+    #[sqlx(default)]
+    source: Option<String>,
+    #[sqlx(default)]
+    push_session: Option<String>,
 }
 
 fn raw_to_read(r: &RawMeterRead) -> MeterRead {
@@ -437,6 +441,12 @@ fn raw_to_read(r: &RawMeterRead) -> MeterRead {
         },
         obis_code: r.obis_code.clone(),
         tenant_id: r.tenant_id,
+        // Provenance fields: populate from raw data when available
+        source: mako_edm::domain::IngestionSource::from_db_str(
+            r.source.as_deref().unwrap_or("MSCONS"),
+        ),
+        push_session: r.push_session.clone(),
+        quality_warnings: None, // not stored in raw Iceberg rows
     }
 }
 

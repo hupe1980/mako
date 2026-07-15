@@ -35,9 +35,28 @@ pub struct AccountingdConfig {
     pub dunning_grace_days: Option<i64>,
 
     /// IBAN of the LF's bank account used as SEPA creditor.
-    /// Required for pain.008 generation; the N-5 scheduler logs a warning
-    /// and uses a placeholder when not set.
+    /// **Required** for pain.008 generation — the service will refuse to generate
+    /// pain.008 XML when this is absent or contains an invalid IBAN.
+    /// A missing creditor_iban is now a hard error (not a silent placeholder).
     pub creditor_iban: Option<String>,
+
+    /// Enable automatic Mahnwesen escalation (P1-5).
+    ///
+    /// When `true`, the background dunning worker runs daily and automatically:
+    /// - Creates Mahnstufe 1 for accounts overdue by > `dunning_grace_days`
+    /// - Escalates Mahnstufe 1 → 2 → 3 when prior Mahnungen are unresolved
+    ///
+    /// Default: `false` (opt-in, safe for new deployments).
+    /// Requires `dunning_grace_days` to be set for correct timing.
+    #[serde(default)]
+    pub dunning_auto_enabled: bool,
+
+    /// Days between SEPA N-5 pre-notification and collection day (default: 5).
+    ///
+    /// SEPA CORE SDD Rulebook: the debtor must be notified at least 5 calendar
+    /// days before the collection date (N-5). Set to 5 unless the mandate uses
+    /// a shorter notice period (requires bilateral agreement with the bank).
+    pub sepa_pre_notification_days: Option<i64>,
 
     /// MCP server authentication. Supports API-key, OIDC, or dev mode.
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:ACCOUNTINGD_MCP_API_KEY"`.

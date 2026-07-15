@@ -21,4 +21,13 @@ default = []
 serde   = ["dep:serde", "rust_decimal/serde"]
 
 [dev-dependencies]
+proptest = "1"
 time = { workspace = true, features = ["macros"] }
+
+[[test]]
+name = "prop_tests"
+path = "tests/prop_tests.rs"
+
+[[test]]
+name = "regulatory_showcase"
+path = "tests/regulatory_showcase.rs"

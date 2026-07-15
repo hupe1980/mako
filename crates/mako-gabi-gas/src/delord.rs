@@ -48,6 +48,9 @@ use mako_engine::{
     types::MessageRef,
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
+use rust_decimal::Decimal;
+
+use crate::domain::GasDay;
 
 // ── Synthetic PID set ─────────────────────────────────────────────────────────
 
@@ -117,10 +120,10 @@ pub struct DeliveryOrderData {
     pub sender_eic: String,
     /// EIC code of the receiving FNB / MGV.
     pub receiver_eic: String,
-    /// Gas day / delivery period (from DTM qualifier 137).
-    pub gas_day: String,
-    /// Requested delivery quantity in kWh (from QTY segment).
-    pub quantity_kwh: i64,
+    /// Gas day / delivery period.
+    pub gas_day: GasDay,
+    /// Requested delivery quantity in kWh_Hs (Decimal — DVGW G 685 precision).
+    pub quantity_kwh: Decimal,
     /// DELORD document reference (from BGM element 1 — used for DELRES correlation).
     pub order_ref: MessageRef,
 }
@@ -140,9 +143,9 @@ pub enum DeliveryOrderEvent {
         /// EIC code of the receiver (FNB / MGV).
         receiver_eic: String,
         /// Gas day / delivery period.
-        gas_day: String,
-        /// Requested quantity in kWh.
-        quantity_kwh: i64,
+        gas_day: GasDay,
+        /// Requested quantity in kWh_Hs (Decimal).
+        quantity_kwh: Decimal,
         /// DELORD document reference.
         order_ref: MessageRef,
     },
@@ -151,16 +154,16 @@ pub enum DeliveryOrderEvent {
         /// DELRES message reference.
         delres_ref: MessageRef,
         /// Gas day confirmed by FNB/MGV.
-        gas_day: String,
+        gas_day: GasDay,
     },
     /// FNB/MGV confirmed the delivery with modified quantity or terms.
     Modified {
         /// DELRES message reference.
         delres_ref: MessageRef,
         /// Gas day from DELRES.
-        gas_day: String,
-        /// Adjusted quantity in kWh (may differ from ordered quantity).
-        adjusted_quantity_kwh: Option<i64>,
+        gas_day: GasDay,
+        /// Adjusted quantity in kWh_Hs (may differ from ordered quantity).
+        adjusted_quantity_kwh: Option<Decimal>,
     },
     /// FNB/MGV rejected the delivery order.
     Rejected {
@@ -261,9 +264,9 @@ pub enum DeliveryOrderCommand {
         /// EIC code of the receiving FNB / MGV.
         receiver_eic: String,
         /// Gas day / delivery period.
-        gas_day: String,
-        /// Requested delivery quantity in kWh.
-        quantity_kwh: i64,
+        gas_day: GasDay,
+        /// Requested delivery quantity in kWh_Hs (Decimal — DVGW G 685).
+        quantity_kwh: Decimal,
         /// DELORD document reference.
         order_ref: MessageRef,
     },
@@ -279,9 +282,9 @@ pub enum DeliveryOrderCommand {
         /// Response status from FNB/MGV.
         status: DelresStatus,
         /// Gas day confirmed in DELRES.
-        gas_day: String,
-        /// Adjusted quantity (for `Modified` responses).
-        adjusted_quantity_kwh: Option<i64>,
+        gas_day: GasDay,
+        /// Adjusted quantity in kWh_Hs (for `Modified` responses).
+        adjusted_quantity_kwh: Option<Decimal>,
         /// Human-readable rejection reason (for `Rejected` responses).
         rejection_reason: Option<String>,
     },
@@ -323,7 +326,7 @@ impl Workflow for GaBiGasDeliveryOrderWorkflow {
                 synthetic_pid: *synthetic_pid,
                 sender_eic: sender_eic.clone(),
                 receiver_eic: receiver_eic.clone(),
-                gas_day: gas_day.clone(),
+                gas_day: *gas_day,
                 quantity_kwh: *quantity_kwh,
                 order_ref: order_ref.clone(),
             }),
@@ -447,8 +450,8 @@ mod tests {
             synthetic_pid: 90061,
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001370C".to_owned(),
-            gas_day: "2026-01-15".to_owned(),
-            quantity_kwh: 1_000_000,
+            gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
+            quantity_kwh: rust_decimal_macros::dec!(1000000),
             order_ref: make_order_ref(),
         })
     }
@@ -478,8 +481,8 @@ mod tests {
             synthetic_pid: 90061,
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001370C".to_owned(),
-            gas_day: "2026-01-15".to_owned(),
-            quantity_kwh: 1_000_000,
+            gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
+            quantity_kwh: rust_decimal_macros::dec!(1000000),
             order_ref: make_order_ref(),
         };
         let output = GaBiGasDeliveryOrderWorkflow::handle(&state, cmd).unwrap();
@@ -497,7 +500,7 @@ mod tests {
         let cmd = DeliveryOrderCommand::ReceiveDelres {
             delres_ref: make_res_ref(),
             status: DelresStatus::Accepted,
-            gas_day: "2026-01-15".to_owned(),
+            gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             adjusted_quantity_kwh: None,
             rejection_reason: None,
         };
@@ -516,8 +519,8 @@ mod tests {
         let cmd = DeliveryOrderCommand::ReceiveDelres {
             delres_ref: make_res_ref(),
             status: DelresStatus::Modified,
-            gas_day: "2026-01-15".to_owned(),
-            adjusted_quantity_kwh: Some(900_000),
+            gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
+            adjusted_quantity_kwh: Some(rust_decimal_macros::dec!(900000)),
             rejection_reason: None,
         };
         let output = GaBiGasDeliveryOrderWorkflow::handle(&state, cmd).unwrap();
@@ -534,7 +537,7 @@ mod tests {
         let cmd = DeliveryOrderCommand::ReceiveDelres {
             delres_ref: make_res_ref(),
             status: DelresStatus::Rejected,
-            gas_day: "2026-01-15".to_owned(),
+            gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             adjusted_quantity_kwh: None,
             rejection_reason: Some("Capacity unavailable".to_owned()),
         };
@@ -567,8 +570,8 @@ mod tests {
             synthetic_pid: 90061,
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001370C".to_owned(),
-            gas_day: "2026-01-15".to_owned(),
-            quantity_kwh: 1_000_000,
+            gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
+            quantity_kwh: rust_decimal_macros::dec!(1000000),
             order_ref: make_order_ref(),
         });
         let cmd = DeliveryOrderCommand::DelresDeadlineExpired {
@@ -586,8 +589,8 @@ mod tests {
             synthetic_pid: 90062, // wrong: DELRES PID used for send
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001370C".to_owned(),
-            gas_day: "2026-01-15".to_owned(),
-            quantity_kwh: 500_000,
+            gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
+            quantity_kwh: rust_decimal_macros::dec!(500000),
             order_ref: make_order_ref(),
         };
         assert!(GaBiGasDeliveryOrderWorkflow::handle(&state, cmd).is_err());
@@ -599,7 +602,7 @@ mod tests {
         let cmd = DeliveryOrderCommand::ReceiveDelres {
             delres_ref: make_res_ref(),
             status: DelresStatus::Accepted,
-            gas_day: "2026-01-15".to_owned(),
+            gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             adjusted_quantity_kwh: None,
             rejection_reason: None,
         };

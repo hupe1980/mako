@@ -3,7 +3,7 @@
 //! Exposes meter data time-series and billing-period summaries.
 //! Mounted at `/mcp` on the existing HTTP port.
 //!
-//! ## Tools (8)
+//! ## Tools (10)
 //!
 //! | Tool | Description |
 //! |---|---|
@@ -15,6 +15,8 @@
 //! | `list_reading_orders`        | List Ablesesteuerung reading orders for a MaLo |
 //! | `list_overdue_reading_orders`| Reading orders past `ausfuehrt_bis` (§40 EnWG compliance) |
 //! | `trigger_jahresablesung`     | Launch Jahresablesung campaign for a NB grid area |
+//! | `get_correction_history`     | §22 MessZV audit: list corrections for a MaLo |
+//! | `validate_timeseries`        | Run validation rules V01–V09 on meter reads (gaps, spikes, quality) |
 //!
 //! ## Prompts (5)
 //!
@@ -46,7 +48,7 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tokio_util::sync::CancellationToken;
 
 // ── Shared state ──────────────────────────────────────────────────────────────
@@ -145,6 +147,66 @@ pub struct TriggerJahresablesungParams {
     pub campaign_year: Option<i32>,
     /// Dry-run: count affected MaLos but do not create reading orders.
     pub dry_run: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetCorrectionHistoryParams {
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// ISO 8601 start of range (default: 90 days ago).
+    pub from: Option<String>,
+    /// ISO 8601 end of range (default: now).
+    pub to: Option<String>,
+    /// Maximum records to return (default: 100, max: 1000).
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ValidateTimeseriesParams {
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// ISO 8601 start of validation window.
+    pub from: String,
+    /// ISO 8601 end of validation window.
+    pub to: String,
+    /// Expected interval length in seconds (default: 900 = 15 min).
+    pub interval_secs: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetQualityAssessmentsParams {
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// ISO 8601 start (optional, defaults to epoch).
+    pub from: Option<String>,
+    /// ISO 8601 end (optional, defaults to now).
+    pub to: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetSummenzeitreiheParams {
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// ISO 8601 start (optional).
+    pub from: Option<String>,
+    /// ISO 8601 end (optional).
+    pub to: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetAnnualForecastParams {
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// ISO 8601 start of observation window (optional, defaults to epoch).
+    pub from: Option<String>,
+    /// ISO 8601 end of observation window (optional, defaults to now).
+    pub to: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetGasQualityParams {
+    /// 11-digit Marktlokations-ID (Gas MaLo).
+    pub malo_id: String,
 }
 
 // ── MCP handler ───────────────────────────────────────────────────────────────
@@ -1078,6 +1140,479 @@ impl EdmdMcpHandler {
             ),
         ]
     }
+
+    // ── New Phase-2 tools ─────────────────────────────────────────────────────
+
+    /// `get_correction_history` — list retroactive corrections for a MaLo (§22 MessZV).
+    ///
+    /// Returns all `meter_read_corrections` rows for the given MaLo in descending
+    /// chronological order. Each row shows the original value, corrected value, reason,
+    /// and operator — enabling full §22 MessZV audit trail reconstruction.
+    #[tool(
+        name = "get_correction_history",
+        description = "§22 MessZV audit: list all retroactive corrections applied to a MaLo's \
+                       meter reads. Each entry shows original value, corrected value, reason, \
+                       source (MSCONS_UPDATE/OPERATOR/AUTO_SUBSTITUTE), and timestamp."
+    )]
+    async fn get_correction_history(
+        &self,
+        Parameters(p): Parameters<GetCorrectionHistoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use time::format_description::well_known::Rfc3339;
+        let pool = &self.state.pool;
+        let now = time::OffsetDateTime::now_utc();
+        let limit_val = p.limit.unwrap_or(100).min(1000) as i64;
+        let malo_id = p.malo_id;
+
+        let from_ts = p
+            .from
+            .as_deref()
+            .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok())
+            .unwrap_or_else(|| now - time::Duration::days(90));
+        let to_ts =
+            p.to.as_deref()
+                .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok())
+                .unwrap_or(now);
+
+        let rows = sqlx::query(
+            r"SELECT correction_id, malo_id, dtm_from, dtm_to,
+                     original_kwh, original_quality, corrected_kwh, corrected_quality,
+                     reason, source, corrected_by, corrected_at
+              FROM meter_read_corrections
+              WHERE malo_id = $1
+                AND corrected_at >= $2
+                AND corrected_at <= $3
+              ORDER BY corrected_at DESC
+              LIMIT $4",
+        )
+        .bind(&malo_id)
+        .bind(from_ts)
+        .bind(to_ts)
+        .bind(limit_val)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let corrections: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "correction_id": r.try_get::<uuid::Uuid, _>("correction_id").ok(),
+                    "malo_id": r.try_get::<String, _>("malo_id").ok(),
+                    "dtm_from": r.try_get::<time::OffsetDateTime, _>("dtm_from").ok().map(|t| t.format(&Rfc3339).ok()),
+                    "dtm_to": r.try_get::<time::OffsetDateTime, _>("dtm_to").ok().map(|t| t.format(&Rfc3339).ok()),
+                    "original_kwh": r.try_get::<String, _>("original_kwh").ok(),
+                    "original_quality": r.try_get::<String, _>("original_quality").ok(),
+                    "corrected_kwh": r.try_get::<String, _>("corrected_kwh").ok(),
+                    "corrected_quality": r.try_get::<String, _>("corrected_quality").ok(),
+                    "reason": r.try_get::<String, _>("reason").ok(),
+                    "source": r.try_get::<String, _>("source").ok(),
+                    "corrected_by": r.try_get::<Option<String>, _>("corrected_by").ok().flatten(),
+                    "corrected_at": r.try_get::<time::OffsetDateTime, _>("corrected_at").ok().map(|t| t.format(&Rfc3339).ok()),
+                })
+            })
+            .collect();
+
+        let out = serde_json::json!({
+            "malo_id": malo_id,
+            "period": { "from": from_ts.format(&Rfc3339).ok(), "to": to_ts.format(&Rfc3339).ok() },
+            "correction_count": corrections.len(),
+            "corrections": corrections,
+            "_note": "Use POST /api/v1/corrections/{malo_id} to submit new corrections (§22 MessZV)"
+        });
+        serde_json::to_string_pretty(&out)
+            .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
+    }
+
+    /// `validate_timeseries` — run the metering validation engine on a MaLo's time-series.
+    ///
+    /// Applies all 9 validation rules (V01–V09) to the stored meter reads:
+    /// gap detection, overlap detection, negative energy, impossible spikes,
+    /// zero runs, interval length consistency, DST ambiguity, future timestamps,
+    /// and non-billable quality flags.
+    #[tool(
+        name = "validate_timeseries",
+        description = "Run the metering validation engine (rules V01–V09) on stored meter reads \
+                       for a MaLo. Identifies gaps, overlaps, spikes, zero-runs, non-billable \
+                       quality flags, and DST ambiguity. Use this before billing to detect \
+                       intervals requiring §17 MessZV substitute values."
+    )]
+    async fn validate_timeseries(
+        &self,
+        Parameters(p): Parameters<ValidateTimeseriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use metering::{MeterInterval, QualityFlag, ValidationConfig, validate_intervals};
+        use time::format_description::well_known::Rfc3339;
+
+        let from_ts = time::OffsetDateTime::parse(&p.from, &Rfc3339)
+            .map_err(|e| McpError::invalid_params(format!("invalid from: {e}"), None))?;
+        let to_ts = time::OffsetDateTime::parse(&p.to, &Rfc3339)
+            .map_err(|e| McpError::invalid_params(format!("invalid to: {e}"), None))?;
+        let malo_id = p.malo_id;
+
+        // Fetch reads from DB
+        let pool = &self.state.pool;
+        let rows = sqlx::query(
+            r"SELECT dtm_from, dtm_to, quantity_kwh, quality, obis_code
+              FROM meter_reads
+              WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
+              ORDER BY dtm_from ASC",
+        )
+        .bind(&malo_id)
+        .bind(from_ts)
+        .bind(to_ts)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let intervals: Vec<MeterInterval> = rows
+            .iter()
+            .filter_map(|r| {
+                let qty_str: String = r.try_get("quantity_kwh").ok()?;
+                let qty = qty_str.parse().ok()?;
+                let quality_str: &str = r.try_get("quality").ok()?;
+                let quality = match quality_str {
+                    "MEASURED" => QualityFlag::Measured,
+                    "ESTIMATED" => QualityFlag::Estimated,
+                    "SUBSTITUTED" => QualityFlag::Substituted,
+                    "CALCULATED" => QualityFlag::Calculated,
+                    "CORRECTED" => QualityFlag::Corrected,
+                    "PRELIMINARY" => QualityFlag::Preliminary,
+                    "FAULTY" => QualityFlag::Faulty,
+                    _ => QualityFlag::Unknown,
+                };
+                Some(MeterInterval {
+                    from: r.try_get("dtm_from").ok()?,
+                    to: r.try_get("dtm_to").ok()?,
+                    value_kwh: qty,
+                    quality,
+                    obis_code: r.try_get("obis_code").ok().flatten(),
+                })
+            })
+            .collect();
+
+        let config = ValidationConfig {
+            expected_interval_secs: Some(p.interval_secs.unwrap_or(900)),
+            now: Some(time::OffsetDateTime::now_utc()),
+            ..ValidationConfig::default()
+        };
+        let result = validate_intervals(&intervals, &config);
+
+        let issues_json: Vec<serde_json::Value> = result
+            .issues
+            .iter()
+            .map(|i| {
+                serde_json::json!({
+                    "rule": i.rule_id.to_string(),
+                    "severity": format!("{:?}", i.severity),
+                    "message": i.message,
+                    "interval_index": i.interval_index,
+                    "affected_from": i.affected_from.map(|t| t.format(&Rfc3339).ok()),
+                    "affected_value_kwh": i.affected_value_kwh,
+                    "blocks_billing": i.blocks_billing(),
+                })
+            })
+            .collect();
+
+        let out = serde_json::json!({
+            "malo_id": malo_id,
+            "period": { "from": &p.from, "to": &p.to },
+            "interval_count": intervals.len(),
+            "is_clean": result.is_clean(),
+            "has_errors": result.has_errors(),
+            "billing_block_count": result.billing_block_count(),
+            "issue_count": result.issues.len(),
+            "issues": issues_json,
+            "_note": if result.billing_block_count() > 0 {
+                format!("{} interval(s) require §17 MessZV substitute values before billing", result.billing_block_count())
+            } else {
+                "All intervals are billing-eligible".to_owned()
+            }
+        });
+        serde_json::to_string_pretty(&out)
+            .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
+    }
+
+    /// Get per-batch quality assessment history for a MaLo (§22 MessZV audit trail).
+    #[tool(
+        name = "get_quality_assessments",
+        description = "Retrieve quality assessment history for a MaLo — per-batch \
+                       grade (A/B/C/F), coverage %, gap count, billing_blocked flag. \
+                       Use to investigate recurring quality issues or §22 MessZV audit. \
+                       Params: malo_id (required), from / to (ISO 8601, optional).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_quality_assessments(
+        &self,
+        Parameters(p): Parameters<GetQualityAssessmentsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use time::format_description::well_known::Rfc3339;
+        let from = p
+            .from
+            .as_deref()
+            .map(|s| time::OffsetDateTime::parse(s, &Rfc3339))
+            .transpose()
+            .map_err(|e| McpError::invalid_params(format!("invalid from: {e}"), None))?
+            .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+        let to =
+            p.to.as_deref()
+                .map(|s| time::OffsetDateTime::parse(s, &Rfc3339))
+                .transpose()
+                .map_err(|e| McpError::invalid_params(format!("invalid to: {e}"), None))?
+                .unwrap_or_else(time::OffsetDateTime::now_utc);
+
+        let rows = sqlx::query(
+            r"SELECT assessed_at, source, grade, interval_count, expected_count,
+                     coverage_pct, gaps_detected, billing_blocked, pid
+              FROM quality_assessments
+              WHERE malo_id = $1 AND assessed_at BETWEEN $2 AND $3
+              ORDER BY assessed_at DESC LIMIT 100",
+        )
+        .bind(&p.malo_id)
+        .bind(from)
+        .bind(to)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        use sqlx::Row;
+        let assessments: Vec<serde_json::Value> = rows.iter().map(|r| {
+            serde_json::json!({
+                "assessed_at": r.try_get::<time::OffsetDateTime, _>("assessed_at").ok().map(|t| t.to_string()),
+                "source": r.try_get::<String, _>("source").unwrap_or_default(),
+                "grade": r.try_get::<String, _>("grade").unwrap_or_default(),
+                "interval_count": r.try_get::<i32, _>("interval_count").unwrap_or(0),
+                "coverage_pct": r.try_get::<Option<f64>, _>("coverage_pct").ok().flatten(),
+                "gaps_detected": r.try_get::<i32, _>("gaps_detected").unwrap_or(0),
+                "billing_blocked": r.try_get::<bool, _>("billing_blocked").unwrap_or(false),
+                "pid": r.try_get::<Option<i32>, _>("pid").ok().flatten(),
+            })
+        }).collect();
+
+        serde_json::to_string_pretty(&serde_json::json!({
+            "malo_id": p.malo_id,
+            "count": assessments.len(),
+            "assessments": assessments,
+        }))
+        .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
+        .map_err(|e| McpError::internal_error(e.to_string(), None))
+    }
+
+    /// Get Summenzeitreihe (monthly aggregated energy) for MaBiS and §27 MessZV.
+    #[tool(
+        name = "get_summenzeitreihe",
+        description = "Get monthly aggregated energy (Summenzeitreihe) for a MaLo. \
+                       Returns total_kwh per calendar month with coverage percentage. \
+                       Used for MaBiS UTILTS submissions (BK6-22-024 Anlage 3) and \
+                       Mehr-/Mindermengensaldo (§27 MessZV). \
+                       Params: malo_id (required), from / to (ISO 8601 UTC).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_summenzeitreihe(
+        &self,
+        Parameters(p): Parameters<GetSummenzeitreiheParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use time::format_description::well_known::Rfc3339;
+        let from = p
+            .from
+            .as_deref()
+            .map(|s| time::OffsetDateTime::parse(s, &Rfc3339))
+            .transpose()
+            .map_err(|e| McpError::invalid_params(format!("invalid from: {e}"), None))?
+            .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+        let to =
+            p.to.as_deref()
+                .map(|s| time::OffsetDateTime::parse(s, &Rfc3339))
+                .transpose()
+                .map_err(|e| McpError::invalid_params(format!("invalid to: {e}"), None))?
+                .unwrap_or_else(time::OffsetDateTime::now_utc);
+
+        // Use DATE_TRUNC to aggregate per calendar month
+        let rows = sqlx::query(
+            r"SELECT DATE_TRUNC('month', dtm_from) AS month_start,
+                     SUM(quantity_kwh::numeric) AS total_kwh,
+                     COUNT(*) AS interval_count,
+                     MIN(quality) AS worst_quality
+              FROM meter_reads
+              WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
+              GROUP BY month_start
+              ORDER BY month_start ASC",
+        )
+        .bind(&p.malo_id)
+        .bind(from)
+        .bind(to)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        use sqlx::Row;
+        let months: Vec<serde_json::Value> = rows.iter().map(|r| {
+            serde_json::json!({
+                "month": r.try_get::<time::OffsetDateTime, _>("month_start").ok().map(|t| t.date().to_string()),
+                "total_kwh": r.try_get::<String, _>("total_kwh").unwrap_or_default(),
+                "interval_count": r.try_get::<i64, _>("interval_count").unwrap_or(0),
+                "worst_quality": r.try_get::<String, _>("worst_quality").unwrap_or_default(),
+            })
+        }).collect();
+
+        let total_kwh: rust_decimal::Decimal = rows
+            .iter()
+            .filter_map(|r| r.try_get::<String, _>("total_kwh").ok())
+            .filter_map(|s| s.parse::<rust_decimal::Decimal>().ok())
+            .sum();
+
+        serde_json::to_string_pretty(&serde_json::json!({
+            "malo_id": p.malo_id,
+            "from": from,
+            "to": to,
+            "total_kwh": total_kwh.to_string(),
+            "month_count": months.len(),
+            "months": months,
+            "legal_basis": "MaBiS BK6-22-024 Anlage 3 / §27 MessZV Mehr-Mindermengensaldo",
+        }))
+        .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
+        .map_err(|e| McpError::internal_error(e.to_string(), None))
+    }
+
+    /// Get §17 MessZV annual energy forecast (Jahresprognose) for a MaLo.
+    #[tool(
+        name = "get_annual_forecast",
+        description = "Compute §17 MessZV annual energy consumption forecast (Jahresprognose) \
+                       for a MaLo from available meter reads. Returns projected_annual_kwh, \
+                       observed_kwh, observed_days, seasonal_correction_applied. \
+                       Minimum 7 days of data required. \
+                       Params: malo_id (required), from / to (ISO 8601 UTC, optional).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_annual_forecast(
+        &self,
+        Parameters(p): Parameters<GetAnnualForecastParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use time::format_description::well_known::Rfc3339;
+        let from = p
+            .from
+            .as_deref()
+            .map(|s| time::OffsetDateTime::parse(s, &Rfc3339))
+            .transpose()
+            .map_err(|e| McpError::invalid_params(format!("invalid from: {e}"), None))?
+            .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+        let to =
+            p.to.as_deref()
+                .map(|s| time::OffsetDateTime::parse(s, &Rfc3339))
+                .transpose()
+                .map_err(|e| McpError::invalid_params(format!("invalid to: {e}"), None))?
+                .unwrap_or_else(time::OffsetDateTime::now_utc);
+
+        let rows = sqlx::query(
+            r"SELECT dtm_from, dtm_to, quantity_kwh::numeric, quality
+              FROM meter_reads
+              WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
+              ORDER BY dtm_from ASC LIMIT 200000",
+        )
+        .bind(&p.malo_id)
+        .bind(from)
+        .bind(to)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        use metering::{MeterInterval, QualityFlag};
+        use sqlx::Row;
+        let intervals: Vec<MeterInterval> = rows
+            .iter()
+            .filter_map(|r| {
+                let qty_str: String = r.try_get::<String, _>("quantity_kwh").ok()?;
+                let qty: rust_decimal::Decimal = qty_str.parse().ok()?;
+                let quality_str: &str = r.try_get("quality").ok()?;
+                let quality = match quality_str {
+                    "MEASURED" => QualityFlag::Measured,
+                    "ESTIMATED" => QualityFlag::Estimated,
+                    "SUBSTITUTED" => QualityFlag::Substituted,
+                    _ => QualityFlag::Unknown,
+                };
+                Some(MeterInterval {
+                    from: r.try_get("dtm_from").ok()?,
+                    to: r.try_get("dtm_to").ok()?,
+                    value_kwh: qty,
+                    quality,
+                    obis_code: None,
+                })
+            })
+            .collect();
+
+        match metering::project_annual_consumption(&p.malo_id, &intervals, None) {
+            Some(forecast) => serde_json::to_string_pretty(&serde_json::json!({
+                "malo_id": forecast.malo_id,
+                "observation_from": forecast.observation_from,
+                "observation_to": forecast.observation_to,
+                "observed_kwh": forecast.observed_kwh.to_string(),
+                "observed_days": forecast.observed_days,
+                "projected_annual_kwh": forecast.projected_annual_kwh.to_string(),
+                "seasonal_correction_applied": forecast.seasonal_correction_applied,
+                "method": format!("{:?}", forecast.method),
+                "legal_basis": "§17 MessZV Jahresprognose",
+            }))
+            .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
+            .map_err(|e| McpError::internal_error(e.to_string(), None)),
+            None => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "Insufficient data for annual forecast of {}: minimum 7 days of readings required.",
+                p.malo_id
+            ))])),
+        }
+    }
+
+    /// Get Gas quality data (Brennwert + Zustandszahl) from PID 13007.
+    #[tool(
+        name = "get_gas_quality",
+        description = "Get Gasbeschaffenheitsdaten (Brennwert in kWh/m³ + Zustandszahl) \
+                       for a Gas MaLo from PID 13007 deliveries. Required for Gas m³ → kWh_Hs \
+                       conversion (§24 GasGVV / DVGW G 685). \
+                       Params: malo_id (required), from / to (date YYYY-MM-DD, optional).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_gas_quality_data(
+        &self,
+        Parameters(p): Parameters<GetGasQualityParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let rows = sqlx::query(
+            r"SELECT period_from, period_to, brennwert_kwh_per_m3, zustandszahl, pid, received_at
+              FROM gas_quality_data
+              WHERE malo_id = $1
+              ORDER BY period_from DESC LIMIT 20",
+        )
+        .bind(&p.malo_id)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        if rows.is_empty() {
+            return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "No Gasbeschaffenheitsdaten found for {}. Ensure PID 13007 has been delivered.",
+                p.malo_id
+            ))]));
+        }
+
+        use sqlx::Row;
+        let records: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
+            "period_from": r.try_get::<time::Date, _>("period_from").ok().map(|d| d.to_string()),
+            "period_to": r.try_get::<time::Date, _>("period_to").ok().map(|d| d.to_string()),
+            "brennwert_kwh_per_m3": r.try_get::<String, _>("brennwert_kwh_per_m3").unwrap_or_default(),
+            "zustandszahl": r.try_get::<String, _>("zustandszahl").unwrap_or_default(),
+            "pid": r.try_get::<i32, _>("pid").unwrap_or(13007),
+            "received_at": r.try_get::<time::OffsetDateTime, _>("received_at").ok().map(|t| t.to_string()),
+            "legal_basis": "§24 GasGVV / DVGW G 685 kWh_Hs = m³ × Brennwert × Zustandszahl",
+        })).collect();
+
+        serde_json::to_string_pretty(&serde_json::json!({
+            "malo_id": p.malo_id,
+            "count": records.len(),
+            "gas_quality": records,
+        }))
+        .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
+        .map_err(|e| McpError::internal_error(e.to_string(), None))
+    }
 }
 
 #[tool_handler]
@@ -1094,31 +1629,35 @@ impl ServerHandler for EdmdMcpHandler {
         .with_instructions(
             "# edmd — Energy Data Management\n\
              \n\
-             Stores MSCONS meter data, iMSys direct push (15-min RLM), and manages reading orders.\n\
-             M7 quality scoring uses the Hampel filter (window k=3, threshold t=3.0 robust σ).\n\
+             Stores MSCONS meter data, iMSys direct push (15-min RLM), virtual meters, \
+             quality assessments, Gas quality data, and manages reading orders.\n\
+             M7 quality scoring uses the Hampel filter + V01-V10 validation engine.\n\
              \n\
-             ## Tools (8)\n\
-             - `get_timeseries` — read meter reads (quantity_kwh) for a MaLo in a time range\n\
-             - `get_imbalance` — Mehr-/Mindermengen imbalance report for a billing month\n\
+             ## Tools (14)\n\
+             - `get_timeseries` — read meter reads for a MaLo in a time range\n\
+             - `get_imbalance` — Mehr-/Mindermengen imbalance report (§27 MessZV)\n\
              - `get_billing_period` — MeterBillingPeriod (arbeitsmenge_kwh, brennwert, spitzenleistung)\n\
              - `get_device_history` — M9 RAG: comprehensive device history for LanceDB indexing\n\
              - `get_quality_warnings` — M7: Hampel quality warnings (grade A/B/C/F)\n\
              - `list_reading_orders` — Ablesesteuerung reading orders for a MaLo\n\
              - `list_overdue_reading_orders` — overdue reading orders (§40 EnWG compliance)\n\
              - `trigger_jahresablesung` — launch annual SLP reading campaign\n\
+             - `get_correction_history` — §22 MessZV bitemporal correction audit trail\n\
+             - `validate_timeseries` — V01-V10 validation (gaps, spikes, DST, rollover)\n\
+             - `get_quality_assessments` — per-batch quality history (§22 MessZV)\n\
+             - `get_summenzeitreihe` — monthly aggregated kWh for MaBiS / §27 MessZV\n\
+             - `get_annual_forecast` — §17 MessZV Jahresprognose from available reads\n\
+             - `get_gas_quality_data` — PID 13007 Brennwert + Zustandszahl for Gas kWh_Hs conversion\n\
              \n\
              ## Prompts (5)\n\
-             - `analyze-consumption` — step-by-step consumption analysis\n\
-             - `submit-mscons` — step-by-step MSCONS ingestion\n\
-             - `quality-assessment` — step-by-step M7 Hampel quality assessment\n\
-             - `jahresablesung-workflow` — §40 Abs. 2 EnWG annual reading campaign\n\
-             - `reading-order-lifecycle` — reading order lifecycle OFFEN → AUSGEFUEHRT\n\
+             - `analyze-consumption`, `submit-mscons`, `quality-assessment`,\n\
+             - `jahresablesung-workflow`, `reading-order-lifecycle`\n\
              \n\
              ## Notes\n\
-             - `get_timeseries` queries `meter_reads` table (quantity_kwh column).\n\
-             - `get_quality_warnings` queries `quality_warnings JSONB` column; grade F blocks billing.\n\
-             - `list_overdue_reading_orders` returns §40 EnWG compliance gaps.\n\
-             - Direct push: POST /api/v1/meter-reads/rlm/{malo_id} for 15-min RLM (M4).",
+             - Grade F blocks billing; grade C/F emits de.edmd.reading.quality.warning.\n\
+             - Direct push: POST /api/v1/meter-reads/rlm/{malo_id} for 15-min RLM (M4).\n\
+             - Virtual meters: GET /api/v1/virtual/{id}/lastgang (§42b EEG GGV).\n\
+             - Substitute values: POST /api/v1/meter-reads/{malo_id}/substitute (§17 MessZV).",
         )
     }
 }

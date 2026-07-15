@@ -14,3 +14,7 @@ rust_decimal   = { workspace = true }
 thiserror      = { workspace = true }
 time           = { workspace = true }
 
+[dev-dependencies]
+proptest            = "1"
+rust_decimal_macros = { workspace = true }
+

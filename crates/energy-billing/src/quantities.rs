@@ -9,6 +9,31 @@ use time::OffsetDateTime;
 
 // ── Meter input types ─────────────────────────────────────────────────────────
 
+/// Metering mode of the delivery point (§3/§4 MessZV, §41a EnWG).
+///
+/// Determines billing granularity, permissible tariff types, and substitution
+/// rules for missing interval data.
+///
+/// | Mode | Annual consumption | Billing basis | §41a dynamic tariff |
+/// |---|---|---|---|
+/// | `Slp` | < 100 MWh/year | Standard load profile (estimated) | ✗ |
+/// | `Rlm` | ≥ 100 MWh/year | Registered 15-min values | ✗ |
+/// | `Imsys` | ≥ 6 MWh/year (§31 MsbG) | Smart Meter Gateway | ✓ |
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MeteringMode {
+    /// Standard load profile (SLP) — estimated annual consumption billing.
+    /// Typical for residential and small commercial customers (< 100 MWh/year).
+    #[default]
+    Slp,
+    /// Registrierende Leistungsmessung (RLM) — measured 15-minute interval billing.
+    /// Required for customers ≥ 100 MWh/year (§4 MessZV, §14 NAV).
+    Rlm,
+    /// Intelligentes Messsystem (iMSys) — Smart Meter Gateway.
+    /// Enables §41a EnWG dynamic tariffs. Required for > 6 MWh/year (§31 MsbG).
+    Imsys,
+}
+
 /// Electricity meter data for one billing period.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct MeterInput {
@@ -27,6 +52,43 @@ pub struct MeterInput {
     /// §14a EnWG: hours the controllable device was under NB management.
     #[serde(default)]
     pub steuerung_stunden: Option<Decimal>,
+    /// Zählernummer (§41 EnWG — mandatory on electricity invoices).
+    ///
+    /// When set, appears as an informational position on the invoice.
+    /// Overrides `BillingContext::zaehler_id` for this specific meter.
+    #[serde(default)]
+    pub zaehlernummer: Option<String>,
+    /// Zählerstand at the start of the billing period.
+    ///
+    /// §41 EnWG: billing invoices must show the meter reading at period start.
+    #[serde(default)]
+    pub zaehlerstand_von: Option<Decimal>,
+    /// Zählerstand at the end of the billing period.
+    ///
+    /// §41 EnWG: billing invoices must show the meter reading at period end.
+    #[serde(default)]
+    pub zaehlerstand_bis: Option<Decimal>,
+
+    /// Metering mode — SLP, RLM, or iMSys (Smart Meter).
+    ///
+    /// Used to validate tariff compatibility (§41a requires `Imsys`) and to
+    /// label estimated readings correctly on the invoice.
+    #[serde(default)]
+    pub metering_mode: MeteringMode,
+
+    /// `true` when the consumption figure is an estimate (§17 Abs. 1 MessZV Ersatzwert).
+    ///
+    /// Estimated readings must be labeled on the invoice. The meter operator must
+    /// confirm or replace the estimate within 8 weeks (§17 Abs. 1 MessZV).
+    #[serde(default)]
+    pub is_estimated: bool,
+
+    /// `true` when the meter was replaced during this billing period (Zählerwechsel).
+    ///
+    /// When set, `zaehlerstand_von` / `zaehlerstand_bis` may relate to different
+    /// meter serial numbers. The invoice must note the meter exchange.
+    #[serde(default)]
+    pub zaehler_replaced: bool,
 }
 
 /// Gas meter data for one billing period.
@@ -151,55 +213,23 @@ impl GgvNutzungsplan {
     ///
     /// Returns `(malo_id, allocated_kwh)` pairs.
     ///
-    /// ## Rounding algorithm — Largest Remainder Method (Hamilton method)
-    ///
-    /// Each tenant receives their floored 3-decimal-place share first.  Any
-    /// remaining 0.001 kWh units are distributed to the tenants with the
-    /// largest fractional parts, in descending order.  This guarantees:
-    ///
-    /// - `Σ(allocated_kwh) == total_kwh` exactly
-    /// - Every tenant is within ±0.001 kWh of their exact share
-    /// - No single tenant absorbs all rounding error (unlike the naive
-    ///   "add remainder to last entry" approach)
+    /// Uses `billing::proportional_split` (Largest-Remainder / Hamilton method) —
+    /// guarantees `Σ(allocated_kwh) == total_kwh` with each tenant within
+    /// ±0.001 kWh of their exact share. No single entry absorbs all rounding error.
     pub fn allocate(&self, total_kwh: Decimal) -> Vec<(String, Decimal)> {
-        let n = self.0.len();
-        if n == 0 || total_kwh <= Decimal::ZERO {
+        if self.0.is_empty() || total_kwh <= Decimal::ZERO {
             return vec![];
         }
-
-        let scale = Decimal::from(1_000u32); // 3dp = 0.001 kWh unit
-        let unit = Decimal::ONE / scale;
-
-        // Step 1: compute exact shares, floor each to 3dp, record fractional remainder.
-        let mut entries: Vec<(String, Decimal, Decimal)> = self
-            .0
+        let fractions: Vec<Decimal> = self.0.iter().map(|e| e.fraction).collect();
+        // billing::proportional_split uses Largest-Remainder (Hamilton) method:
+        // scale=3 → 0.001 kWh resolution; returns Err only for empty fractions.
+        let parts = billing::proportional_split(total_kwh, &fractions, 3)
+            .expect("fractions non-empty — checked above");
+        self.0
             .iter()
-            .map(|e| {
-                let exact = total_kwh * e.fraction;
-                // Floor to 3dp: multiply by 1000, truncate, divide back
-                let floored = (exact * scale).trunc() / scale;
-                let fractional = exact - floored;
-                (e.malo_id.clone(), floored, fractional)
-            })
-            .collect();
-
-        // Step 2: how many 0.001 units are still unallocated?
-        let sum_floor: Decimal = entries.iter().map(|(_, f, _)| *f).sum();
-        let leftover_units = ((total_kwh - sum_floor) * scale)
-            .round()
-            .try_into()
-            .unwrap_or(0u64) as usize;
-
-        // Step 3: give one extra unit to the tenants with the largest fractional parts.
-        // `sort_unstable_by` on indices so we never reorder entries (just pick winners).
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_unstable_by(|&a, &b| entries[b].2.cmp(&entries[a].2));
-
-        for i in order.iter().take(leftover_units) {
-            entries[*i].1 += unit;
-        }
-
-        entries.into_iter().map(|(id, kwh, _)| (id, kwh)).collect()
+            .zip(parts)
+            .map(|(e, kwh)| (e.malo_id.clone(), kwh))
+            .collect()
     }
 }
 
@@ -260,6 +290,63 @@ pub struct DynamicInterval {
     pub kwh: Decimal,
 }
 
+// ── §41a Abs. 6 — Annual savings comparison ───────────────────────────────────
+
+/// §41a Abs. 6 EnWG — Annual savings comparison for dynamic tariff customers.
+///
+/// Lieferanten must provide dynamic tariff customers with an annual statement
+/// of how much they saved (or paid more) compared to a reference fixed tariff.
+///
+/// ## Legal basis
+///
+/// §41a Abs. 6 EnWG: „Der Lieferant hat dem Letztverbraucher jährlich mitzuteilen,
+/// wie viel er durch die dynamische Preiskomponente im Vergleich zu einem
+/// Standardtarif eingespart oder mehr ausgegeben hat."
+///
+/// ## Usage
+///
+/// Compute via [`Sect41aAnnualComparison::compute`] and set in [`Quantities`].
+/// `DynamicElectricityProvider` renders it as an informational position on the
+/// annual invoice.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Sect41aAnnualComparison {
+    /// kWh consumed under the dynamic tariff in the comparison period.
+    pub actual_kwh: Decimal,
+    /// Total amount paid under the dynamic tariff (EUR brutto, inclusive of MwSt).
+    pub actual_eur_brutto: Decimal,
+    /// Reference fixed-price (ct/kWh, brutto) for the annual comparison.
+    ///
+    /// Typically the customer's previous fixed tariff or the operator's standard
+    /// product price at time of dynamic tariff contract start.
+    pub reference_price_ct_per_kwh: Decimal,
+    /// What the customer would have paid at the reference price (EUR brutto).
+    pub reference_eur_brutto: Decimal,
+    /// EUR difference: positive = saved money, negative = paid more.
+    pub savings_eur: Decimal,
+}
+
+impl Sect41aAnnualComparison {
+    /// Compute the annual comparison from actual totals and a reference price.
+    #[must_use]
+    pub fn compute(
+        actual_kwh: Decimal,
+        actual_eur_brutto: Decimal,
+        reference_price_ct_per_kwh: Decimal,
+    ) -> Self {
+        use rust_decimal_macros::dec;
+        let reference_eur_brutto =
+            (actual_kwh * reference_price_ct_per_kwh / dec!(100)).round_dp(2);
+        let savings_eur = (reference_eur_brutto - actual_eur_brutto).round_dp(2);
+        Self {
+            actual_kwh,
+            actual_eur_brutto,
+            reference_price_ct_per_kwh,
+            reference_eur_brutto,
+            savings_eur,
+        }
+    }
+}
+
 // ── Grid pass-through costs ───────────────────────────────────────────────────
 
 /// Grid infrastructure charges sourced from `marktd` or supplied directly.
@@ -313,14 +400,27 @@ pub struct Quantities {
     pub gas: Option<GasMeterInput>,
     /// District heat / Fernwärme (WAERME).
     pub heat: Option<WaermeMeterInput>,
-    /// Solar self-consumption / Mieterstrom / GGV (SOLAR).
+    /// Solar self-consumption / Mieterstrom / GGV (SOLAR) — simple single-rate path.
     pub solar: Option<SolarMeterInput>,
+    /// §42b EEG 2023 (Solarpaket I) — GGV community solar hybrid billing.
+    ///
+    /// Use instead of (or in addition to) `solar` when the plant’s generation must be
+    /// proportionally allocated among tenants. The `SolarProvider` will then generate
+    /// **two** positions per tenant:
+    /// - **PV portion**: `min(consumption, allocated_pv)` at the community solar rate
+    /// - **Grid portion**: `max(0, consumption − allocated_pv)` at the regular electricity rate
+    ///
+    /// Computed via `GgvNutzungsplan::allocate(plant_generation_kwh)` in `billingd`.
+    pub ggv_solar: Option<GgvSolarInput>,
     /// EEG feed-in meter data (simplified path — rates from TariffInput).
     pub eeg: Option<EegMeterInput>,
     /// Full EEG settlement via `eeg-billing` — set this for NB-side precision.
     ///
     /// When set, `EegProvider` calls `eeg_billing::calculate_settlement(eeg_full)`
     /// for version-aware §51/§52 rules. Supersedes `eeg` when both are present.
+    ///
+    /// Requires the `eeg` feature of this crate.
+    #[cfg(feature = "eeg")]
     pub eeg_full: Option<eeg_billing::SettleInput>,
     /// Non-EEG Direktvermarktung feed-in (EINSPEISUNG).
     pub einspeisung: Option<EegMeterInput>,
@@ -342,6 +442,169 @@ pub struct Quantities {
     pub dynamic_epex_prices: HashMap<(i32, u8, u8, u8), Decimal>,
     /// EEG Gutschrift credit passed through to electricity billing (e.g. from einsd).
     pub eeg_gutschrift_eur: Option<Decimal>,
+    /// Prosumer meter data (PV self-consumption + grid draw).
+    ///
+    /// When set, `ElectricityProvider` uses the prosumer billing path:
+    /// - Grid consumption is billed at full tariff (commodity + NNE + Stromsteuer)
+    /// - Self-consumption is Stromsteuer-exempt (§9a Nr. 1 StromStG for ≤30 kWp)
+    /// - NNE does NOT apply to self-consumed energy
+    pub prosumer: Option<ProsumerMeterInput>,
+
+    /// §41a Abs. 6 EnWG — annual savings comparison for dynamic tariff customers.
+    ///
+    /// When set, `DynamicElectricityProvider` renders a mandatory informational
+    /// position on the annual invoice comparing actual dynamic costs against a
+    /// reference fixed tariff (§41a Abs. 6 EnWG).
+    pub sect41a_annual_comparison: Option<Sect41aAnnualComparison>,
+}
+
+// ── ProsumerMeterInput ────────────────────────────────────────────────────────
+
+/// Prosumer meter data — combines grid consumption with PV self-consumption.
+///
+/// A prosumer simultaneously consumes electricity (partly from the grid,
+/// partly from their own PV plant) and may export surplus generation to the grid.
+///
+/// ## LF billing scope (energy-billing)
+///
+/// The Lieferant bills **grid consumption** only. Self-consumption billing and
+/// EEG feed-in remuneration (Einspeisevergütung) are handled by `eeg-billing`.
+///
+/// ## Stromsteuer exemption
+///
+/// §9a Nr. 1 StromStG exempts self-consumed electricity from plants ≤30 kWp
+/// from Stromsteuer. This is applied automatically when `self_consumption_kwh > 0`.
+///
+/// ## Network charge exemption
+///
+/// Self-consumed electricity does not transit the public grid; therefore no
+/// NNE (§14a StromNEV) applies to `self_consumption_kwh`.
+///
+/// ## Example
+///
+/// ```rust
+/// use energy_billing::ProsumerMeterInput;
+/// use rust_decimal_macros::dec;
+///
+/// let m = ProsumerMeterInput {
+///     grid_consumption_kwh: dec!(250),   // drawn from grid → full tariff
+///     self_consumption_kwh: dec!(150),   // from own PV → Stromsteuer-exempt, no NNE
+///     export_kwh: Some(dec!(100)),       // fed back to grid (via eeg-billing)
+/// };
+/// assert_eq!(m.total_consumption_kwh(), dec!(400));
+/// ```
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ProsumerMeterInput {
+    /// Electricity drawn from the public grid (kWh).
+    ///
+    /// Full tariff applies: Arbeitspreis + NNE + Stromsteuer.
+    pub grid_consumption_kwh: Decimal,
+
+    /// Electricity generated by the customer's PV plant and consumed on-site (kWh).
+    ///
+    /// - No NNE (does not transit the grid)
+    /// - No Stromsteuer for ≤30 kWp plants (§9a Nr. 1 StromStG)
+    /// - Appears as an informational invoice line showing the self-supply ratio
+    pub self_consumption_kwh: Decimal,
+
+    /// Electricity exported to the grid (kWh). Informational only.
+    ///
+    /// This quantity is handled by `eeg-billing` (EEG Einspeisevergütung),
+    /// not by `energy-billing`. Included here so the retail invoice can show
+    /// the complete energy balance to the customer (§41 EnWG transparency).
+    #[serde(default)]
+    pub export_kwh: Option<Decimal>,
+}
+
+impl ProsumerMeterInput {
+    /// Total electricity consumption (grid + self, kWh).
+    #[must_use]
+    pub fn total_consumption_kwh(&self) -> Decimal {
+        self.grid_consumption_kwh + self.self_consumption_kwh
+    }
+
+    /// Self-supply ratio (0.0–1.0): share of total consumption from own PV.
+    #[must_use]
+    pub fn self_supply_ratio(&self) -> Decimal {
+        let total = self.total_consumption_kwh();
+        if total.is_zero() {
+            Decimal::ZERO
+        } else {
+            (self.self_consumption_kwh / total).min(Decimal::ONE)
+        }
+    }
+}
+
+/// §42b EEG 2023 (Solarpaket I, BGBl I 2024 Nr. 107) — GGV allocation for one tenant.
+///
+/// Use this for **Gemeinschaftliche Gebäudeversorgung** billing where the plant’s
+/// generation is proportionally distributed among building participants.
+/// The `SolarProvider` splits the tenant’s invoice into:
+///
+/// - **PV portion** (community solar at discounted GGV rate)
+/// - **Grid portion** (residual demand from the public grid at standard electricity rate)
+///
+/// ## Computing allocations
+///
+/// ```rust
+/// use energy_billing::{GgvNutzungsplan, GgvNutzungsplanEntry, GgvSolarInput};
+/// use rust_decimal_macros::dec;
+///
+/// let plan = GgvNutzungsplan(vec![
+///     GgvNutzungsplanEntry { malo_id: "A".into(), fraction: dec!(0.60) },
+///     GgvNutzungsplanEntry { malo_id: "B".into(), fraction: dec!(0.40) },
+/// ]);
+/// let plant_kwh = dec!(100);
+/// let allocs = plan.allocate(plant_kwh); // [("A", 60), ("B", 40)]
+///
+/// let tenant_a = GgvSolarInput {
+///     pv_allocated_kwh: dec!(60),
+///     actual_consumption_kwh: dec!(80),   // needs 80, gets 60 PV + 20 grid
+/// };
+/// assert_eq!(tenant_a.pv_delivered_kwh(), dec!(60));
+/// assert_eq!(tenant_a.grid_kwh(), dec!(20));
+/// ```
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GgvSolarInput {
+    /// PV energy allocated to this tenant via the GGV Nutzungsplan.
+    ///
+    /// = `plant_generation_kwh × tenant_fraction` (from `GgvNutzungsplan::allocate`).
+    pub pv_allocated_kwh: Decimal,
+    /// Actual metered energy consumption at this tenant’s delivery point.
+    ///
+    /// Sourced from `edmd` for the billing period.
+    pub actual_consumption_kwh: Decimal,
+}
+
+impl GgvSolarInput {
+    /// PV energy actually delivered to this tenant.
+    ///
+    /// Capped at the tenant’s consumption: a tenant cannot receive more PV than they use.
+    #[must_use]
+    pub fn pv_delivered_kwh(&self) -> Decimal {
+        self.actual_consumption_kwh.min(self.pv_allocated_kwh)
+    }
+
+    /// Residual grid electricity needed beyond the PV allocation.
+    ///
+    /// This quantity is billed at the standard electricity (STROM) rate.
+    #[must_use]
+    pub fn grid_kwh(&self) -> Decimal {
+        (self.actual_consumption_kwh - self.pv_allocated_kwh).max(Decimal::ZERO)
+    }
+
+    /// Fraction of this tenant’s consumption covered by community PV (0.0–1.0).
+    ///
+    /// Useful for §40a kilowattstundenpreis reporting and sustainability KPIs.
+    #[must_use]
+    pub fn pv_coverage_ratio(&self) -> Decimal {
+        if self.actual_consumption_kwh <= Decimal::ZERO {
+            return Decimal::ZERO;
+        }
+        (self.pv_delivered_kwh() / self.actual_consumption_kwh)
+            .min(Decimal::ONE)
+            .round_dp(4)
+    }
 }
 
 #[cfg(test)]
@@ -430,5 +693,151 @@ mod tests {
 
         let sum: Decimal = allocs.iter().map(|(_, k)| k).sum();
         assert_eq!(sum, total);
+    }
+}
+
+// ── Abschlagsplan ─────────────────────────────────────────────────────────────
+
+/// One scheduled advance payment entry (Abschlag) in an Abschlagsplan.
+///
+/// Advance payments must be based on the estimated annual consumption.
+/// When the operator changes the Abschlag amount, customers must be notified
+/// with adequate lead time per §41 Abs. 1 Nr. 6 EnWG.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AbschlagsplanEntry {
+    /// Payment due date.
+    pub faellig_am: time::Date,
+    /// Amount to collect in EUR (brutto, i.e. inclusive of MwSt).
+    pub betrag_eur: Decimal,
+    /// Optional display label (e.g. `"Abschlag Januar 2026"`).
+    #[serde(default)]
+    pub beschreibung: Option<String>,
+}
+
+/// Complete advance payment schedule for a customer contract.
+///
+/// Provides the statutory context (estimated annual cost and consumption) to
+/// satisfy §41 Abs. 1 Nr. 6 EnWG requirements.
+///
+/// ## Legal basis
+///
+/// §41 Abs. 1 Nr. 6 EnWG: the invoice must show the current and planned
+/// advance payment amounts and collection dates.
+///
+/// ## Example — generate a 12-month uniform schedule
+///
+/// ```rust
+/// use energy_billing::Abschlagsplan;
+/// use rust_decimal_macros::dec;
+/// use time::macros::date;
+///
+/// let plan = Abschlagsplan::monthly_uniform(
+///     "51238696781",
+///     date!(2026-01-01),
+///     12,
+///     dec!(1440.00), // annual brutto estimate
+///     dec!(3600),    // annual kWh estimate
+/// );
+/// assert_eq!(plan.entries.len(), 12);
+/// assert_eq!(plan.entries[0].betrag_eur, dec!(120.00));
+/// ```
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Abschlagsplan {
+    /// Market location this plan belongs to.
+    pub malo_id: String,
+    /// Contract reference for ERP routing.
+    #[serde(default)]
+    pub contract_id: Option<String>,
+    /// Scheduled advance payment entries in chronological order.
+    pub entries: Vec<AbschlagsplanEntry>,
+    /// Annual consumption estimate used to derive the plan (kWh).
+    pub jahresverbrauch_schaetzung_kwh: Decimal,
+    /// Annual cost estimate used to derive the plan (EUR brutto).
+    pub jahreskosten_schaetzung_eur: Decimal,
+}
+
+impl Abschlagsplan {
+    /// Build a uniform monthly advance payment plan for `months` months.
+    ///
+    /// `monthly_eur = annual_brutto.round_dp(2) / 12`, applied each month.
+    #[must_use]
+    pub fn monthly_uniform(
+        malo_id: impl Into<String>,
+        start_date: time::Date,
+        months: u32,
+        annual_brutto_eur: Decimal,
+        jahresverbrauch_kwh: Decimal,
+    ) -> Self {
+        use rust_decimal_macros::dec;
+        let monthly = (annual_brutto_eur / dec!(12)).round_dp(2);
+        let entries = (0..months)
+            .filter_map(|i| {
+                let total_months = start_date.month() as u32 - 1 + i;
+                let year = start_date.year() + (total_months / 12) as i32;
+                let month_idx = (total_months % 12 + 1) as u8;
+                let month = time::Month::try_from(month_idx).ok()?;
+                let max_day = month.length(time::util::is_leap_year(year) as i32) as u8;
+                let day = start_date.day().min(max_day);
+                let date = time::Date::from_calendar_date(year, month, day).ok()?;
+                Some(AbschlagsplanEntry {
+                    faellig_am: date,
+                    betrag_eur: monthly,
+                    beschreibung: Some(format!("Abschlag {:02}/{}", month as u8, year)),
+                })
+            })
+            .collect();
+        Self {
+            malo_id: malo_id.into(),
+            contract_id: None,
+            entries,
+            jahresverbrauch_schaetzung_kwh: jahresverbrauch_kwh,
+            jahreskosten_schaetzung_eur: annual_brutto_eur,
+        }
+    }
+
+    /// Sum of all scheduled advance payment amounts.
+    #[must_use]
+    pub fn total_eur(&self) -> Decimal {
+        self.entries.iter().map(|e| e.betrag_eur).sum()
+    }
+}
+
+#[cfg(test)]
+mod abschlagsplan_tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+    use time::macros::date;
+
+    #[test]
+    fn monthly_uniform_12_months() {
+        let plan = Abschlagsplan::monthly_uniform(
+            "51238696781",
+            date!(2026 - 01 - 01),
+            12,
+            dec!(1440.00),
+            dec!(3600),
+        );
+        assert_eq!(plan.entries.len(), 12);
+        assert_eq!(plan.entries[0].betrag_eur, dec!(120.00));
+        assert_eq!(plan.entries[11].faellig_am.year(), 2026);
+        assert_eq!(plan.total_eur(), dec!(1440.00));
+    }
+
+    #[test]
+    fn monthly_uniform_crosses_year_boundary() {
+        let plan = Abschlagsplan::monthly_uniform(
+            "51238696782",
+            date!(2025 - 07 - 01),
+            12,
+            dec!(1200.00),
+            dec!(3000),
+        );
+        assert_eq!(plan.entries.len(), 12);
+        // July 2025 → June 2026
+        assert_eq!(plan.entries[0].faellig_am.month(), time::Month::July);
+        assert_eq!(plan.entries[0].faellig_am.year(), 2025);
+        assert_eq!(plan.entries[5].faellig_am.month(), time::Month::December);
+        assert_eq!(plan.entries[6].faellig_am.month(), time::Month::January);
+        assert_eq!(plan.entries[6].faellig_am.year(), 2026);
     }
 }

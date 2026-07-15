@@ -66,6 +66,14 @@
 #![allow(clippy::map_unwrap_or)]
 #![allow(clippy::items_after_statements)]
 
+/// Core GaBi Gas domain types — [`GasDay`], [`GasQuantity`], [`GasBeschaffenheit`],
+/// [`Bilanzkreis`], [`NominationQuantity`], [`GasImbalanceSaldo`], etc.
+pub mod domain;
+
+/// GaBi Gas portfolio balancing — [`GasMarketRole`], [`GasPortfolioBalance`],
+/// [`PortfolioPosition`]. BKV portfolio aggregation across Bilanzkreise.
+pub mod portfolio;
+
 /// GaBi Gas INVOIC billing workflow — PIDs 31010, 31007, 31008.
 pub mod invoic;
 
@@ -90,9 +98,19 @@ pub mod tranot;
 /// GaBi Gas DELORD/DELRES workflow — delivery order and response (PIDs 90061/90062).
 pub mod delord;
 
+// ── Domain re-exports ─────────────────────────────────────────────────────────
+
+pub use domain::{
+    Bilanzkreis, DeliveryPoint, DeliveryPointDirection, GasBeschaffenheit, GasDay,
+    GasImbalanceSaldo, GasQualityClass, GasQuantity, ImbalanceDirection as GasImbalanceDirection,
+    NominationQuantity,
+};
+pub use portfolio::{GasMarketRole, GasPortfolioBalance, PortfolioPosition};
+
 pub use allocation::{
     ALLOCATION_PIDS, AllocationCommand, AllocationData, AllocationEvent, AllocationState,
-    AllocationType, GaBiGasAllocationWorkflow, WORKFLOW_NAME as ALLOCATION_WORKFLOW_NAME,
+    AllocationType, AllocationVersion, GaBiGasAllocationWorkflow,
+    WORKFLOW_NAME as ALLOCATION_WORKFLOW_NAME,
 };
 pub use delord::{
     DELIVERY_ORDER_PIDS, DELORD_PID, DELRES_DEADLINE_LABEL, DELRES_PID, DeliveryOrderCommand,

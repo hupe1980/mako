@@ -35,12 +35,13 @@
 /// | `Geothermie` | `"GEOTHERMIE"` |
 /// | `Gezeiten` | `"GEZEITEN"` |
 /// | `Kwk` | `"KWKG"` |
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum ErzeugungsArt {
     /// Generic solar PV (backward compat; prefer `SolarAufdach`/`SolarFreiflaeche`).
+    #[default]
     Solar,
     /// Rooftop PV (Gebäudeanlage) — higher §48 rates.
     SolarAufdach,
@@ -195,13 +196,14 @@ pub struct InvalidErzeugungsArt(pub String);
 ///
 /// §24 EEG 2023 (Zusammenlegung): merging physically separate plants does NOT
 /// reset the clock — the oldest plant's Förderdauer continues.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum InbetriebnahmeTyp {
     /// §3 Nr. 30 EEG 2023: first time the plant generates electricity.
     ///
     /// Starts the 20-year Förderdauer. All EEG rules apply from commissioning date.
+    #[default]
     Erstinbetriebnahme,
 
     /// §3 Nr. 30 EEG 2023: temporary shutdown + restart (same plant, same capacity).

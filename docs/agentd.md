@@ -13,7 +13,7 @@ description: >
 # `agentd` — Multi-Agent LLM Orchestration
 
 `agentd` is the **AI automation layer** for the mako platform. It connects large
-language models to all 16 production services via MCP, enabling automated analysis,
+language models to all 17 production services via MCP, enabling automated analysis,
 decision support, and workflow orchestration.
 
 Port: **`:9580`**
@@ -57,11 +57,11 @@ graph TB
         CHUNKS --> LANCE
     end
 
-    subgraph tools [MCP Tools — all 16 services]
+    subgraph tools [MCP Tools — all 17 services]
         T1["makod: submit_command\nlist_workflows · get_status"]
         T2["marktd: get_malo · get_versorgungsstatus\nget_konfigurationsprodukte"]
         T3["billingd: calculate · check_billing_anomaly"]
-        T4["edmd: get_quality_warnings · get_device_history"]
+        T4["edmd: get_quality_warnings · get_device_history\nvalidate_timeseries · get_summenzeitreihe"]
         T5["accountingd: suggest_payment_match"]
         T6["obsd: list_overdue · kpi_report · get_bnetza_report"]
         T7["... 100+ more tools"]
@@ -124,8 +124,11 @@ graph TB
 | `nis-syncd-agent` | Anthropic Claude | `de.markt.grid.drift.detected`, `de.markt.malo.updated` | nis-syncd, processd, marktd, obsd |
 | `portald-agent` | Anthropic Claude | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung_auslaufend`, `de.accounting.mahnung.issued` | portald, billingd, einsd, accountingd |
 | `regulatory-reporting-agent` | Anthropic Claude Opus | (manual / scheduled) | obsd, processd, invoicd, marktd |
+| `replacement-value-agent` | Anthropic Claude | `de.edmd.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd, obsd |
+| `mabis-syncd-agent` | Anthropic Claude | `de.edmd.reading.quality.warning` | edmd, obsd, marktd |
+| `smgw-diagnostics-agent` | Anthropic Claude | `de.edmd.reading.quality.warning`, `de.edmd.reading.direct.stored`, `de.mako.process.initiated` | edmd, marktd, obsd, processd |
 
-All 20 specialists are configured in `agentd.toml` — see `demo/agentd.toml` for a fully working example.
+All 24 specialists are configured in `agentd.toml` — see `demo/agentd.toml` for a fully working example.
 
 ---
 
@@ -224,7 +227,7 @@ billingd    = "http://billingd:9280/mcp"
 accountingd = "http://accountingd:9380/mcp"
 vertragd    = "http://vertragd:9780/mcp"
 obsd        = "http://obsd:8480/mcp"
-# ... all 16 services
+# ... all 17 services
 
 [rag]
 storage_uri    = "./data/rag"

@@ -544,6 +544,9 @@ pub struct SettleInput {
     pub biogas_quota_ytd_year: Option<i16>,
     /// §51 Abs. 2 Nr. 1 EEG 2023: date iMSys was installed (None = not yet rolled out).
     pub imesys_rollout_datum: Option<Date>,
+    /// §3 EEG 2023: plant lifecycle type (Erstinbetriebnahme / Wiederinbetriebnahme / Repowering …).
+    /// Stored as TEXT in `eeg_anlagen.inbetriebnahme_typ`; `None` = Erstinbetriebnahme.
+    pub inbetriebnahme_typ: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -774,6 +777,7 @@ pub fn build_settle_input(
         biogas_quota_kwh_ytd: anlage.biogas_quota_kwh_ytd,
         biogas_quota_ytd_year: anlage.biogas_quota_ytd_year,
         imesys_rollout_datum: anlage.imesys_rollout_datum,
+        inbetriebnahme_typ: anlage.inbetriebnahme_typ.clone(),
     }
 }
 
@@ -1130,6 +1134,12 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
         has_imesys,
         marktwert_kategorie: None,
         settlement_type: eeg_billing::SettlementType::default(),
+        // §3 EEG 2023: plant lifecycle type — drives audit labels and Förderdauer semantics
+        inbetriebnahme_typ: input
+            .inbetriebnahme_typ
+            .as_deref()
+            .and_then(|s| eeg_billing::InbetriebnahmeTyp::from_db_str(s).ok())
+            .unwrap_or_default(),
     });
 
     let status = match output.status {
@@ -1529,6 +1539,60 @@ pub async fn lookup_verguetungssatz(
     .context("lookup_verguetungssatz")?;
 
     Ok(row.and_then(|r| r.try_get::<Decimal, _>("verguetungssatz_ct").ok()))
+}
+
+/// Upsert a technology-specific Jahresmarktwert price (§20 Abs. 2 + Anlage 1 EEG 2023).
+///
+/// `erzeugungsart` must match a value from `eeg_anlagen.erzeugungsart` (e.g. `WIND_ONSHORE`,
+/// `SOLAR_AUFDACH`) or the special value `DEFAULT` for the generic fallback row.
+/// Published by ÜNB at netztransparenz.de.
+pub async fn upsert_jahresmarktwert(
+    pool: &PgPool,
+    year: i16,
+    month: i16,
+    erzeugungsart: &str,
+    avg_ct_kwh: Decimal,
+    source: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r"INSERT INTO jahresmarktwert_preise
+            (billing_year, billing_month, erzeugungsart, avg_ct_kwh, source)
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (billing_year, billing_month, erzeugungsart) DO UPDATE
+          SET avg_ct_kwh   = EXCLUDED.avg_ct_kwh,
+              source       = EXCLUDED.source,
+              imported_at  = now()",
+    )
+    .bind(year)
+    .bind(month)
+    .bind(erzeugungsart)
+    .bind(avg_ct_kwh)
+    .bind(source)
+    .execute(pool)
+    .await
+    .context("upsert_jahresmarktwert")?;
+    Ok(())
+}
+
+/// Fetch a single Jahresmarktwert row (exact technology match only — no DEFAULT fallback).
+/// Returns `None` when no row exists for the given (year, month, erzeugungsart) triple.
+pub async fn fetch_jahresmarktwert_single(
+    pool: &PgPool,
+    year: i16,
+    month: i16,
+    erzeugungsart: &str,
+) -> anyhow::Result<Option<Decimal>> {
+    let row: Option<Decimal> = sqlx::query_scalar(
+        "SELECT avg_ct_kwh FROM jahresmarktwert_preise
+          WHERE billing_year = $1 AND billing_month = $2 AND erzeugungsart = $3",
+    )
+    .bind(year)
+    .bind(month)
+    .bind(erzeugungsart)
+    .fetch_optional(pool)
+    .await
+    .context("fetch_jahresmarktwert_single")?;
+    Ok(row)
 }
 
 pub async fn upsert_epex_price(

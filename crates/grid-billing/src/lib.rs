@@ -1,38 +1,33 @@
-//! Role-neutral **grid invoice calculation** for German energy market billing.
+//! Role-neutral **German grid settlement calculation** engine.
 //!
 //! Covers all DSO/TSO-side INVOIC documents:
-//! - **NNE** (Netznutzungsentgelt) — PIDs 31001, 31005, 31011
+//! - **NNE** (Netznutzungsentgelt) — PIDs 31001, 31005, 31006, 31011
 //! - **MMM** (Mehr-/Mindermengensaldo) — PID 31002
 //! - **MSB** (Messstellenbetrieb) — PID 31009
-//! - **Selbst ausgestellte Rechnung** — PID 31006 (LF acting as NB)
 //!
-//! Used by both the **NB** (`netzbilanzd`) to generate invoices and the **LF**
-//! (`invoicd`) to self-issue invoices under §20 MessZV.  The formula is identical
-//! for both roles — only who initiates differs.
+//! ## Calculation flow
 //!
-//! Generates [`GridInvoice`] domain objects from meter readings and
-//! tariff data.  The service layer (`netzbilanzd`, `invoicd`) converts
-//! `GridInvoice` to `rubo4e::current::Rechnung` via a local `into_rechnung()`
-//! helper — keeping BO4E as a service-layer concern.  The generated invoices are:
-//! - **PID 31001** — `MMM-Rechnung NNE Strom` (NB → LF, monthly network usage)
-//! - **PID 31002** — `MMM-Stornorechnung NNE Strom` (NB → LF, correction/reversal)
-//! - **PID 31005** — `MMM-Rechnung NNE Gas` (NB → LF, monthly gas NNE)
-//! - **PID 31006** — `MMM-selbst ausgestellte Rechnung` (LF selbstausstellt, same formula)
+//! ```text
+//! Input → validation → Settlement Engine → GridSettlement → into_rechnung() (service layer)
+//! ```
 //!
-//! # Design
+//! [`GridSettlement`] is the canonical output. The service layer (`netzbilanzd`,
+//! `invoicd`) converts it to BO4E `Rechnung`. This keeps `grid-billing`
+//! publishable to crates.io without pulling in the internal `rubo4e` crate.
 //!
-//! - **Pure library** — zero I/O, zero async.  All calculations are deterministic.
-//! - **No floating-point money** — uses `EuroAmount` (`i64 × 10⁻⁵ EUR`) for all
-//!   monetary arithmetic to avoid rounding errors.
-//! - **Self-validating** — all generated invoices satisfy `invoic-checker` checks 1–3
-//!   (period validity, position arithmetic, document total) by construction.
-//!   Check 4–5 (tariff deviation) depends on the `PreisblattStore` supplied by the caller.
-//! - **BO4E-free output** — returns [`GridInvoice`] (pure domain type).  The service
-//!   layer (netzbilanzd, invoicd) owns the `rubo4e::current::Rechnung` conversion via a
-//!   local `into_rechnung()` helper.  This keeps grid-billing publishable to crates.io
-//!   without pulling in the internal `rubo4e` crate.
+//! ## Explainability
 //!
-//! # Example
+//! Every [`InvoicePosition`] carries a [`CalculationTrace`] with:
+//! - input values (quantity, unit price)
+//! - gross intermediate result before rounding
+//! - applicable [`LegalReference`]s (e.g. `StromNEV §17`, `KAV §2`)
+//! - the [`TariffSource`] justifying each rate
+//!
+//! ## No float money
+//!
+//! All amounts use `rust_decimal::Decimal` and the `billing::EuroAmount` newtype.
+//!
+//! ## Example
 //!
 //! ```rust,no_run
 //! use grid_billing::{NneInput, calculate_nne_invoice};
@@ -59,14 +54,56 @@
 //!     spitzenleistung_kw: None,
 //!     leistungspreis_eur_per_kw: None,
 //!     ka_satz_ct_per_kwh: Some(d("0.11")),
+//!     tariff_sheet_id: Some("Preisblatt-NNE-2025-Q1".into()),
+//!     sparte: grid_billing::Sparte::Strom,
+//!     ka_klasse: Some(grid_billing::KaKlasse::TarifkundeLow),
 //! }).expect("valid billing input");
+//!
+//! // Every position explains itself:
+//! for pos in &result.positions {
+//!     println!("{}: {}", pos.text, pos.trace.explanation);
+//! }
+//!
+//! // Legal references used:
+//! for r in result.all_legal_refs() {
+//!     println!("  → {r}");
+//! }
 //! ```
 #![deny(unsafe_code)]
+#![warn(missing_docs)]
 
 pub mod billing;
 pub mod error;
 pub mod types;
 
-pub use billing::{calculate_mmm_invoice, calculate_msb_invoice, calculate_nne_invoice};
+pub use billing::{
+    calculate_mmm_invoice, calculate_msb_invoice, calculate_nne_invoice, calculate_reversal,
+};
 pub use error::BillingError;
-pub use types::{GridInvoice, InvoicePosition, MmmInput, MsbInput, NneInput, QuantityUnit};
+pub use types::{
+    // Domain types for explainability + audit
+    CalculationTrace,
+    // Backward-compatible alias for GridSettlement — same type, kept for call-site stability
+    GridInvoice,
+    // Core settlement output
+    GridSettlement,
+    InvoicePosition,
+    KaKlasse,
+    LegalReference,
+    // Input types
+    MmmInput,
+    MsbInput,
+    NneInput,
+    QuantityUnit,
+    SettlementStatus,
+    SettlementType,
+    SettlementWarning,
+    Sparte,
+    TariffSource,
+    ValidationResult,
+    WarningSeverity,
+    // Validation functions
+    validate_mmm_input,
+    validate_msb_input,
+    validate_nne_input,
+};

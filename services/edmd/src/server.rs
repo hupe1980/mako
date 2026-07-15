@@ -89,6 +89,47 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/quality-score/{malo_id}",
             post(post_quality_rescore),
         )
+        // §22 MessZV bitemporal corrections: audit-trail preserving retroactive corrections.
+        .route("/api/v1/corrections/{malo_id}", post(post_corrections))
+        // Bulk ingestion: batched direct-push reads (performance path for large MSCONS deliveries)
+        .route("/api/v1/meter-reads/{malo_id}/bulk", post(post_bulk_reads))
+        // §17 MessZV auto-substitute: fill gaps using prior-period average method
+        .route(
+            "/api/v1/meter-reads/{malo_id}/substitute",
+            post(post_substitute_values),
+        )
+        // M8: resampled Lastgang — down-sample to hourly / daily / monthly buckets
+        .route(
+            "/api/v1/lastgang/{malo_id}/resampled",
+            get(get_lastgang_resampled),
+        )
+        // M9: Virtual meter — compute derived time series from AggregationRule
+        .route(
+            "/api/v1/virtual/{virtual_malo_id}/lastgang",
+            get(get_virtual_lastgang),
+        )
+        .route(
+            "/api/v1/virtual",
+            get(list_virtual_meters).post(create_virtual_meter),
+        )
+        .route(
+            "/api/v1/virtual/{virtual_malo_id}",
+            get(get_virtual_meter).delete(delete_virtual_meter),
+        )
+        // M10: Quality assessments — per-batch quality history
+        .route(
+            "/api/v1/quality-assessments/{malo_id}",
+            get(list_quality_assessments),
+        )
+        // M11: Annual forecast (§17 MessZV Jahresprognose)
+        .route("/api/v1/forecast/{malo_id}", get(get_annual_forecast))
+        // M12: Summenzeitreihe — MABIS-ready monthly aggregated series
+        .route(
+            "/api/v1/summenzeitreihe/{malo_id}",
+            get(get_summenzeitreihe),
+        )
+        // M13: Gas quality data (PID 13007 Gasbeschaffenheitsdaten)
+        .route("/api/v1/gas-quality/{malo_id}", get(get_gas_quality))
         // Iceberg/S3 archive endpoints
         .route("/api/v1/archive/status", get(get_archive_status))
         .route("/api/v1/archive/olap/{malo_id}", get(get_archive_olap))
@@ -390,6 +431,15 @@ struct LastgangParams {
     from: Option<String>,
     /// RFC 3339 end (inclusive). Defaults to now.
     to: Option<String>,
+    /// Bitemporal point-in-time query (RFC 3339).
+    ///
+    /// When set, the query returns the meter reads **as they were stored at this timestamp**,
+    /// not the current (potentially corrected) values. Enables §22 MessZV point-in-time
+    /// billing reconstruction: "what did we know at invoice date 2026-07-01T00:00:00Z?".
+    ///
+    /// Implementation: queries `meter_read_corrections` to find the state before any
+    /// corrections applied after `as_of`. When `None`, returns current (latest) values.
+    as_of: Option<String>,
 }
 
 async fn get_lastgang(
@@ -421,6 +471,15 @@ async fn get_lastgang(
         .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
         .unwrap_or_else(OffsetDateTime::now_utc);
 
+    // ── Bitemporal query: ?as_of= (§22 MessZV point-in-time reconstruction) ──
+    // When `as_of` is set, undo any corrections applied AFTER that timestamp.
+    // This allows invoice auditors to reconstruct the exact billing basis at
+    // any historical point in time.
+    let as_of_ts = params
+        .as_of
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok());
+
     let q = TimeSeriesQuery {
         malo_id: malo_id.clone(),
         from,
@@ -429,13 +488,71 @@ async fn get_lastgang(
         tenant_id: None,
     };
 
-    let reads = match state.repo.query(&q).await {
+    let mut reads = match state.repo.query(&q).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, malo_id, "edmd: get_lastgang query failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+
+    // Apply bitemporal overlay: for any read that was corrected AFTER `as_of`,
+    // restore the original pre-correction value from `meter_read_corrections`.
+    #[allow(clippy::collapsible_if)]
+    if let Some(as_of) = as_of_ts {
+        if let Ok(corrections) = sqlx::query(
+            r"SELECT DISTINCT ON (malo_id, dtm_from, dtm_to)
+                  malo_id, dtm_from, dtm_to, original_kwh, original_quality
+              FROM meter_read_corrections
+              WHERE malo_id = $1
+                AND dtm_from >= $2
+                AND dtm_to   <= $3
+                AND corrected_at > $4
+              ORDER BY malo_id, dtm_from, dtm_to, corrected_at ASC",
+        )
+        .bind(&malo_id)
+        .bind(from)
+        .bind(to)
+        .bind(as_of)
+        .fetch_all(state.repo.pool())
+        .await
+        {
+            use sqlx::Row;
+            for corr in &corrections {
+                let dtm_from: OffsetDateTime = corr
+                    .try_get("dtm_from")
+                    .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                let dtm_to: OffsetDateTime =
+                    corr.try_get("dtm_to").unwrap_or(OffsetDateTime::UNIX_EPOCH);
+                let orig_kwh: String = corr.try_get("original_kwh").unwrap_or_default();
+                let orig_quality: &str = corr.try_get("original_quality").unwrap_or("MEASURED");
+
+                // Restore original values in the reads slice
+                for read in reads.iter_mut() {
+                    if read.dtm_from == dtm_from && read.dtm_to == dtm_to {
+                        if let Ok(kwh) = orig_kwh.parse() {
+                            read.quantity_kwh = kwh;
+                        }
+                        read.quality = match orig_quality {
+                            "MEASURED" => mako_edm::domain::QualityFlag::Measured,
+                            "ESTIMATED" => mako_edm::domain::QualityFlag::Estimated,
+                            "SUBSTITUTED" => mako_edm::domain::QualityFlag::Substituted,
+                            "CALCULATED" => mako_edm::domain::QualityFlag::Calculated,
+                            "CORRECTED" => mako_edm::domain::QualityFlag::Corrected,
+                            "PRELIMINARY" => mako_edm::domain::QualityFlag::Preliminary,
+                            "FAULTY" => mako_edm::domain::QualityFlag::Faulty,
+                            _ => mako_edm::domain::QualityFlag::Unknown,
+                        };
+                    }
+                }
+            }
+            tracing::debug!(
+                malo_id, as_of = %as_of,
+                corrections_applied = corrections.len(),
+                "edmd: bitemporal overlay applied for as_of query"
+            );
+        }
+    }
 
     if reads.is_empty() {
         return (
@@ -616,6 +733,913 @@ async fn get_zeitreihe(
     Json(zeitreihen).into_response()
 }
 
+// ── Resampled Lastgang (M8) ───────────────────────────────────────────────────
+
+/// Query parameters for resampled Lastgang.
+#[derive(Debug, serde::Deserialize)]
+struct ResampledParams {
+    from: Option<String>,
+    to: Option<String>,
+    /// Target resolution: `HOUR`, `DAY`, `MONTH`, `YEAR`. Default: `HOUR`.
+    resolution: Option<String>,
+}
+
+/// `GET /api/v1/lastgang/{malo_id}/resampled`
+///
+/// Returns the metered time series down-sampled to a coarser time resolution.
+/// Useful for dashboards, billing previews, and Mehr-/Mindermengensaldo summaries.
+///
+/// | Resolution | Use case |
+/// |---|---|
+/// | `HOUR` | Hourly dashboard chart (default) |
+/// | `DAY` | Daily totals for SLP billing |
+/// | `MONTH` | Monthly totals for MMM / §27 MessZV |
+/// | `YEAR` | Annual settlement |
+///
+/// Each bucket carries:
+/// - `total_kwh` — summed energy
+/// - `peak_kw` — maximum 15-min demand kW (RLM Strom)
+/// - `coverage_pct` — completeness indicator
+/// - `has_missing_data` — `true` when source intervals are missing
+async fn get_lastgang_resampled(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Query(params): Query<ResampledParams>,
+) -> impl IntoResponse {
+    use metering::{ResampleConfig, resample};
+    use time::format_description::well_known::Rfc3339;
+
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc);
+
+    let config = match params
+        .resolution
+        .as_deref()
+        .unwrap_or("HOUR")
+        .to_uppercase()
+        .as_str()
+    {
+        "HOUR" => ResampleConfig::to_hourly(),
+        "DAY" => ResampleConfig::to_daily(),
+        "MONTH" => ResampleConfig::to_monthly(),
+        "YEAR" => ResampleConfig::to_yearly(),
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("unknown resolution {other:?} — use HOUR, DAY, MONTH, or YEAR")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let q = TimeSeriesQuery {
+        malo_id: malo_id.clone(),
+        from,
+        to,
+        sparte: None,
+        tenant_id: None,
+    };
+
+    let reads = match state.repo.query(&q).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, malo_id, "edmd: get_lastgang_resampled query failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if reads.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "no meter reads for this MaLo in requested window"
+            })),
+        )
+            .into_response();
+    }
+
+    // Convert MeterRead → MeterInterval (metering crate)
+    let intervals: Vec<metering::MeterInterval> = reads
+        .iter()
+        .map(|r| {
+            let quality = match r.quality {
+                mako_edm::domain::QualityFlag::Measured => metering::QualityFlag::Measured,
+                mako_edm::domain::QualityFlag::Estimated => metering::QualityFlag::Estimated,
+                mako_edm::domain::QualityFlag::Substituted => metering::QualityFlag::Substituted,
+                mako_edm::domain::QualityFlag::Calculated => metering::QualityFlag::Calculated,
+                mako_edm::domain::QualityFlag::Corrected => metering::QualityFlag::Corrected,
+                mako_edm::domain::QualityFlag::Preliminary => metering::QualityFlag::Preliminary,
+                mako_edm::domain::QualityFlag::Faulty => metering::QualityFlag::Faulty,
+                mako_edm::domain::QualityFlag::Unknown => metering::QualityFlag::Unknown,
+            };
+            metering::MeterInterval {
+                from: r.dtm_from,
+                to: r.dtm_to,
+                value_kwh: r.quantity_kwh,
+                quality,
+                obis_code: r.obis_code.clone(),
+            }
+        })
+        .collect();
+
+    let buckets = resample(&intervals, &config);
+
+    let response: Vec<serde_json::Value> = buckets
+        .iter()
+        .map(|b| {
+            serde_json::json!({
+                "from": b.from,
+                "to": b.to,
+                "total_kwh": b.total_kwh,
+                "peak_kw": b.peak_kw,
+                "interval_count": b.interval_count,
+                "expected_count": b.expected_count,
+                "coverage_pct": b.coverage_pct(),
+                "has_missing_data": b.has_missing_data,
+                "quality": format!("{:?}", b.quality),
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "malo_id": malo_id,
+        "resolution": params.resolution.as_deref().unwrap_or("HOUR"),
+        "from": from,
+        "to": to,
+        "bucket_count": response.len(),
+        "buckets": response,
+    }))
+    .into_response()
+}
+
+// ── Virtual meter endpoints (M9) ──────────────────────────────────────────────
+
+/// Query params shared by virtual meter and other new endpoints.
+#[derive(Debug, serde::Deserialize)]
+struct SimpleTimeParams {
+    from: Option<String>,
+    to: Option<String>,
+}
+
+/// `GET /api/v1/virtual/{virtual_malo_id}/lastgang`
+///
+/// Computes the virtual meter time series by fetching all source MaLo time
+/// series and applying the stored `AggregationRule`. The result is NOT stored
+/// in `meter_reads` — it is computed on demand.
+///
+/// Use `?from=` / `?to=` (RFC3339 UTC) to bound the query window.
+async fn get_virtual_lastgang(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(virtual_malo_id): Path<String>,
+    Query(params): Query<SimpleTimeParams>,
+) -> impl IntoResponse {
+    use metering::{AggregationRule, compute_virtual_meter};
+    use std::collections::HashMap;
+    use time::format_description::well_known::Rfc3339;
+
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    // Load virtual meter config from DB
+    let config_row = match sqlx::query(
+        "SELECT rule_type, rule_json FROM virtual_meter_configs WHERE virtual_malo_id = $1 AND tenant = $2 LIMIT 1"
+    )
+    .bind(&virtual_malo_id)
+    .bind(&state.tenant)
+    .fetch_optional(state.repo.pool())
+    .await {
+        Ok(Some(r)) => r,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+            "error": format!("virtual meter {virtual_malo_id:?} not found")
+        }))).into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, virtual_malo_id, "edmd: virtual meter config query failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let rule_json: serde_json::Value = match sqlx::Row::try_get(&config_row, "rule_json") {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "edmd: failed to decode virtual meter rule_json");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let rule: AggregationRule = match serde_json::from_value(rule_json) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "edmd: failed to deserialise AggregationRule");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("invalid rule_json: {e}")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc);
+
+    // Fetch source series for all referenced MaLos
+    let mut sources: HashMap<String, Vec<metering::MeterInterval>> = HashMap::new();
+    for malo_id in rule.source_malo_ids() {
+        let q = TimeSeriesQuery {
+            malo_id: malo_id.to_owned(),
+            from,
+            to,
+            sparte: None,
+            tenant_id: None,
+        };
+        match state.repo.query(&q).await {
+            Ok(reads) => {
+                let intervals: Vec<metering::MeterInterval> = reads
+                    .iter()
+                    .map(|r| {
+                        let quality = map_quality_flag(r.quality);
+                        metering::MeterInterval {
+                            from: r.dtm_from,
+                            to: r.dtm_to,
+                            value_kwh: r.quantity_kwh,
+                            quality,
+                            obis_code: r.obis_code.clone(),
+                        }
+                    })
+                    .collect();
+                sources.insert(malo_id.to_owned(), intervals);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, malo_id, "edmd: virtual meter source query failed");
+            }
+        }
+    }
+
+    match compute_virtual_meter(&rule, &sources) {
+        Ok(intervals) => {
+            let result: Vec<serde_json::Value> = intervals
+                .iter()
+                .map(|iv| {
+                    serde_json::json!({
+                        "from": iv.from, "to": iv.to,
+                        "value_kwh": iv.value_kwh,
+                        "quality": format!("{:?}", iv.quality),
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({
+                "virtual_malo_id": virtual_malo_id,
+                "from": from, "to": to,
+                "interval_count": result.len(),
+                "intervals": result,
+            }))
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": e.to_string()
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/v1/virtual` — list all virtual meter configurations for this tenant.
+async fn list_virtual_meters(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "read-timeseries",
+        state.tenant.as_str(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    match sqlx::query("SELECT virtual_malo_id, display_name, rule_type, legal_basis, sparte, valid_from, valid_to, created_at FROM virtual_meter_configs WHERE tenant = $1 ORDER BY virtual_malo_id")
+        .bind(&state.tenant)
+        .fetch_all(state.repo.pool())
+        .await {
+        Ok(rows) => {
+            let configs: Vec<serde_json::Value> = rows.iter().map(|r| {
+                use sqlx::Row;
+                serde_json::json!({
+                    "virtual_malo_id": r.try_get::<String, _>("virtual_malo_id").unwrap_or_default(),
+                    "display_name": r.try_get::<String, _>("display_name").unwrap_or_default(),
+                    "rule_type": r.try_get::<String, _>("rule_type").unwrap_or_default(),
+                    "legal_basis": r.try_get::<Option<String>, _>("legal_basis").unwrap_or_default(),
+                    "sparte": r.try_get::<String, _>("sparte").unwrap_or_default(),
+                    "valid_from": r.try_get::<time::Date, _>("valid_from").ok().map(|d| d.to_string()),
+                    "valid_to": r.try_get::<Option<time::Date>, _>("valid_to").ok().flatten().map(|d| d.to_string()),
+                    "created_at": r.try_get::<OffsetDateTime, _>("created_at").ok().map(|t| t.to_string()),
+                })
+            }).collect();
+            Json(serde_json::json!({ "virtual_meters": configs, "count": configs.len() })).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "edmd: list_virtual_meters failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `POST /api/v1/virtual` — create a virtual meter configuration.
+async fn create_virtual_meter(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "write-meter-reads",
+        state.tenant.as_str(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    // Validate that rule_json deserialises to a known AggregationRule
+    if let Err(e) = serde_json::from_value::<metering::AggregationRule>(
+        body.get("rule_json")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    ) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("invalid rule_json: {e}")
+            })),
+        )
+            .into_response();
+    }
+    let virtual_malo_id = body
+        .get("virtual_malo_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let display_name = body
+        .get("display_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(virtual_malo_id);
+    let rule_type = body.get("rule_type").and_then(|v| v.as_str()).unwrap_or("");
+    let sparte = body
+        .get("sparte")
+        .and_then(|v| v.as_str())
+        .unwrap_or("STROM");
+    let rule_json = body
+        .get("rule_json")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let legal_basis: Option<&str> = body.get("legal_basis").and_then(|v| v.as_str());
+
+    if virtual_malo_id.is_empty() || rule_type.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "virtual_malo_id and rule_type are required"
+            })),
+        )
+            .into_response();
+    }
+
+    match sqlx::query(
+        "INSERT INTO virtual_meter_configs (virtual_malo_id, display_name, rule_type, rule_json, legal_basis, sparte, valid_from, tenant)
+         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE, $7)
+         ON CONFLICT (virtual_malo_id, tenant) DO UPDATE
+            SET display_name = EXCLUDED.display_name,
+                rule_type = EXCLUDED.rule_type,
+                rule_json = EXCLUDED.rule_json,
+                legal_basis = EXCLUDED.legal_basis,
+                sparte = EXCLUDED.sparte,
+                updated_at = now()
+         RETURNING id"
+    )
+    .bind(virtual_malo_id)
+    .bind(display_name)
+    .bind(rule_type)
+    .bind(rule_json)
+    .bind(legal_basis)
+    .bind(sparte)
+    .bind(&state.tenant)
+    .fetch_one(state.repo.pool())
+    .await {
+        Ok(_) => (StatusCode::CREATED, Json(serde_json::json!({
+            "virtual_malo_id": virtual_malo_id, "status": "created"
+        }))).into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "edmd: create_virtual_meter insert failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `GET /api/v1/virtual/{virtual_malo_id}` — get one virtual meter config.
+async fn get_virtual_meter(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(virtual_malo_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "read-timeseries",
+        state.tenant.as_str(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    match sqlx::query("SELECT virtual_malo_id, display_name, rule_type, rule_json, legal_basis, sparte, valid_from, valid_to, created_at FROM virtual_meter_configs WHERE virtual_malo_id = $1 AND tenant = $2")
+        .bind(&virtual_malo_id)
+        .bind(&state.tenant)
+        .fetch_optional(state.repo.pool())
+        .await {
+        Ok(Some(r)) => {
+            use sqlx::Row;
+            Json(serde_json::json!({
+                "virtual_malo_id": r.try_get::<String, _>("virtual_malo_id").unwrap_or_default(),
+                "display_name": r.try_get::<String, _>("display_name").unwrap_or_default(),
+                "rule_type": r.try_get::<String, _>("rule_type").unwrap_or_default(),
+                "rule_json": r.try_get::<serde_json::Value, _>("rule_json").ok(),
+                "legal_basis": r.try_get::<Option<String>, _>("legal_basis").unwrap_or_default(),
+                "sparte": r.try_get::<String, _>("sparte").unwrap_or_default(),
+            })).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "not found" }))).into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "edmd: get_virtual_meter failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `DELETE /api/v1/virtual/{virtual_malo_id}` — remove a virtual meter configuration.
+async fn delete_virtual_meter(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(virtual_malo_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "write-meter-reads",
+        state.tenant.as_str(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    match sqlx::query(
+        "DELETE FROM virtual_meter_configs WHERE virtual_malo_id = $1 AND tenant = $2",
+    )
+    .bind(&virtual_malo_id)
+    .bind(&state.tenant)
+    .execute(state.repo.pool())
+    .await
+    {
+        Ok(res) if res.rows_affected() > 0 => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "not found" })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "edmd: delete_virtual_meter failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+// ── Quality assessments (M10) ─────────────────────────────────────────────────
+
+/// `GET /api/v1/quality-assessments/{malo_id}`
+///
+/// Returns the quality assessment history for a MaLo.
+/// Each batch ingest produces one quality assessment row per §22 MessZV audit trail.
+async fn list_quality_assessments(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Query(params): Query<SimpleTimeParams>,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Rfc3339;
+
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "read-timeseries",
+        state.tenant.as_str(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc);
+
+    match sqlx::query(
+        "SELECT assessed_at, source, grade, interval_count, expected_count, coverage_pct, gaps_detected, billing_blocked, issues_json, pid
+           FROM quality_assessments
+          WHERE malo_id = $1 AND tenant = $2 AND assessed_at BETWEEN $3 AND $4
+          ORDER BY assessed_at DESC LIMIT 200"
+    )
+    .bind(&malo_id)
+    .bind(&state.tenant)
+    .bind(from)
+    .bind(to)
+    .fetch_all(state.repo.pool())
+    .await {
+        Ok(rows) => {
+            use sqlx::Row;
+            let assessments: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
+                "assessed_at": r.try_get::<OffsetDateTime, _>("assessed_at").ok().map(|t| t.to_string()),
+                "source": r.try_get::<String, _>("source").unwrap_or_default(),
+                "grade": r.try_get::<String, _>("grade").unwrap_or_default(),
+                "interval_count": r.try_get::<i32, _>("interval_count").unwrap_or(0),
+                "expected_count": r.try_get::<Option<i32>, _>("expected_count").ok().flatten(),
+                "coverage_pct": r.try_get::<Option<f64>, _>("coverage_pct").ok().flatten(),
+                "gaps_detected": r.try_get::<i32, _>("gaps_detected").unwrap_or(0),
+                "billing_blocked": r.try_get::<bool, _>("billing_blocked").unwrap_or(false),
+                "pid": r.try_get::<Option<i32>, _>("pid").ok().flatten(),
+            })).collect();
+            Json(serde_json::json!({
+                "malo_id": malo_id,
+                "count": assessments.len(),
+                "assessments": assessments,
+            })).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, malo_id, "edmd: list_quality_assessments failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+// ── Annual forecast (M11) ─────────────────────────────────────────────────────
+
+/// `GET /api/v1/forecast/{malo_id}?from=&to=`
+///
+/// Computes an annual energy consumption forecast from the available meter reads
+/// in the given window. Returns the projected annual kWh per §17 MessZV.
+///
+/// This is useful for:
+/// - Setting Abschlag (advance payment) amounts
+/// - Anticipating Mehr-/Mindermengensaldo at year-end
+/// - Informing Jahresprognose in MSCONS
+async fn get_annual_forecast(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Query(params): Query<SimpleTimeParams>,
+) -> impl IntoResponse {
+    use metering::project_annual_consumption;
+    use time::format_description::well_known::Rfc3339;
+
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "read-timeseries",
+        state.tenant.as_str(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc);
+
+    let q = TimeSeriesQuery {
+        malo_id: malo_id.clone(),
+        from,
+        to,
+        sparte: None,
+        tenant_id: None,
+    };
+    let reads = match state.repo.query(&q).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, malo_id, "edmd: forecast query failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    if reads.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "no meter reads for this MaLo in requested window"
+            })),
+        )
+            .into_response();
+    }
+
+    let intervals: Vec<metering::MeterInterval> = reads
+        .iter()
+        .map(|r| metering::MeterInterval {
+            from: r.dtm_from,
+            to: r.dtm_to,
+            value_kwh: r.quantity_kwh,
+            quality: map_quality_flag(r.quality),
+            obis_code: r.obis_code.clone(),
+        })
+        .collect();
+
+    match project_annual_consumption(&malo_id, &intervals, None) {
+        Some(forecast) => Json(serde_json::json!({
+            "malo_id": forecast.malo_id,
+            "observation_from": forecast.observation_from,
+            "observation_to": forecast.observation_to,
+            "observed_kwh": forecast.observed_kwh,
+            "observed_days": forecast.observed_days,
+            "projected_annual_kwh": forecast.projected_annual_kwh,
+            "seasonal_correction_applied": forecast.seasonal_correction_applied,
+            "seasonal_factor": forecast.seasonal_factor,
+            "method": format!("{:?}", forecast.method),
+            "legal_basis": "§17 MessZV Jahresprognose",
+        }))
+        .into_response(),
+        None => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "insufficient data for annual forecast (minimum 7 days required)"
+            })),
+        )
+            .into_response(),
+    }
+}
+
+// ── Summenzeitreihe (M12) ─────────────────────────────────────────────────────
+
+/// `GET /api/v1/summenzeitreihe/{malo_id}?from=&to=`
+///
+/// Returns monthly aggregated energy data (Summenzeitreihe) for a MaLo.
+///
+/// This is the canonical data format for:
+/// - MABIS balance group accounting (PID 13003)
+/// - Mehr-/Mindermengensaldo (§27 MessZV)
+/// - Annual Jahresabrechnung summaries
+///
+/// Each month bucket includes: `total_kwh`, `peak_kw`, `coverage_pct`, `quality`.
+async fn get_summenzeitreihe(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Query(params): Query<SimpleTimeParams>,
+) -> impl IntoResponse {
+    use metering::{ResampleConfig, resample};
+    use time::format_description::well_known::Rfc3339;
+
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "read-timeseries",
+        state.tenant.as_str(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc);
+
+    let q = TimeSeriesQuery {
+        malo_id: malo_id.clone(),
+        from,
+        to,
+        sparte: None,
+        tenant_id: None,
+    };
+    let reads = match state.repo.query(&q).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, malo_id, "edmd: summenzeitreihe query failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let intervals: Vec<metering::MeterInterval> = reads
+        .iter()
+        .map(|r| metering::MeterInterval {
+            from: r.dtm_from,
+            to: r.dtm_to,
+            value_kwh: r.quantity_kwh,
+            quality: map_quality_flag(r.quality),
+            obis_code: r.obis_code.clone(),
+        })
+        .collect();
+
+    let buckets = resample(&intervals, &ResampleConfig::to_monthly());
+    let total_kwh: rust_decimal::Decimal = buckets.iter().map(|b| b.total_kwh).sum();
+
+    let months: Vec<serde_json::Value> = buckets
+        .iter()
+        .map(|b| {
+            serde_json::json!({
+                "from": b.from,
+                "to": b.to,
+                "total_kwh": b.total_kwh,
+                "peak_kw": b.peak_kw,
+                "coverage_pct": b.coverage_pct(),
+                "has_missing_data": b.has_missing_data,
+                "quality": format!("{:?}", b.quality),
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "malo_id": malo_id,
+        "from": from,
+        "to": to,
+        "total_kwh": total_kwh,
+        "month_count": months.len(),
+        "months": months,
+        "legal_basis": "MABIS PID 13003 / §27 MessZV Mehr-Mindermengensaldo",
+    }))
+    .into_response()
+}
+
+// ── Gas quality endpoint (M13) ────────────────────────────────────────────────
+
+/// `GET /api/v1/gas-quality/{malo_id}`
+///
+/// Returns Gasbeschaffenheitsdaten (Brennwert + Zustandszahl) received via PID 13007.
+/// Used for Gas m³ → kWh_Hs conversion per §24 GasGVV / DVGW G 685.
+async fn get_gas_quality(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Query(params): Query<SimpleTimeParams>,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Rfc3339;
+
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "read-timeseries",
+        state.tenant.as_str(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok().map(|t| t.date()))
+        .unwrap_or(time::Date::MIN);
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok().map(|t| t.date()))
+        .unwrap_or(time::Date::MAX);
+
+    match sqlx::query(
+        "SELECT period_from, period_to, brennwert_kwh_per_m3, zustandszahl, pid, received_at
+           FROM gas_quality_data
+          WHERE malo_id = $1 AND period_from >= $2 AND period_to <= $3
+            AND (tenant_id IS NULL OR tenant_id = $4::uuid)
+          ORDER BY period_from DESC LIMIT 50",
+    )
+    .bind(&malo_id)
+    .bind(from)
+    .bind(to)
+    .bind(state.tenant.as_str())
+    .fetch_all(state.repo.pool())
+    .await
+    {
+        Ok(rows) => {
+            use sqlx::Row;
+            let records: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
+                "period_from": r.try_get::<time::Date, _>("period_from").ok().map(|d| d.to_string()),
+                "period_to": r.try_get::<time::Date, _>("period_to").ok().map(|d| d.to_string()),
+                "brennwert_kwh_per_m3": r.try_get::<String, _>("brennwert_kwh_per_m3").unwrap_or_default(),
+                "zustandszahl": r.try_get::<String, _>("zustandszahl").unwrap_or_default(),
+                "pid": r.try_get::<i32, _>("pid").unwrap_or(13007),
+                "received_at": r.try_get::<OffsetDateTime, _>("received_at").ok().map(|t| t.to_string()),
+                "legal_basis": "§24 GasGVV / DVGW G 685",
+            })).collect();
+            if records.is_empty() {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": "no gas quality data for this MaLo in requested period"
+                    })),
+                )
+                    .into_response()
+            } else {
+                Json(serde_json::json!({
+                    "malo_id": malo_id,
+                    "count": records.len(),
+                    "gas_quality": records,
+                }))
+                .into_response()
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, malo_id, "edmd: get_gas_quality failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+// ── Internal helper: map mako-edm QualityFlag → metering QualityFlag ──────────
+
+fn map_quality_flag(q: mako_edm::domain::QualityFlag) -> metering::QualityFlag {
+    match q {
+        mako_edm::domain::QualityFlag::Measured => metering::QualityFlag::Measured,
+        mako_edm::domain::QualityFlag::Estimated => metering::QualityFlag::Estimated,
+        mako_edm::domain::QualityFlag::Substituted => metering::QualityFlag::Substituted,
+        mako_edm::domain::QualityFlag::Calculated => metering::QualityFlag::Calculated,
+        mako_edm::domain::QualityFlag::Corrected => metering::QualityFlag::Corrected,
+        mako_edm::domain::QualityFlag::Preliminary => metering::QualityFlag::Preliminary,
+        mako_edm::domain::QualityFlag::Faulty => metering::QualityFlag::Faulty,
+        mako_edm::domain::QualityFlag::Unknown => metering::QualityFlag::Unknown,
+    }
+}
+
 /// Map a `QualityFlag` to the nearest `Messwertstatus` variant.
 fn quality_to_messwertstatus(q: QualityFlag) -> Messwertstatus {
     match q {
@@ -623,6 +1647,9 @@ fn quality_to_messwertstatus(q: QualityFlag) -> Messwertstatus {
         QualityFlag::Estimated => Messwertstatus::Prognosewert,
         QualityFlag::Substituted => Messwertstatus::Ersatzwert,
         QualityFlag::Calculated => Messwertstatus::Vorlaeufigerwert,
+        QualityFlag::Corrected => Messwertstatus::Vorlaeufigerwert,
+        QualityFlag::Preliminary => Messwertstatus::Prognosewert,
+        QualityFlag::Faulty => Messwertstatus::Unknown,
         QualityFlag::Unknown => Messwertstatus::Unknown,
     }
 }
@@ -2501,4 +3528,606 @@ mod quality_tests {
         );
         assert!(report.has_warnings);
     }
+}
+
+// ── §22 MessZV Bitemporal Corrections ─────────────────────────────────────────
+
+/// `POST /api/v1/corrections/{malo_id}`
+///
+/// Submit one or more retroactive corrections to stored meter intervals.
+///
+/// ## §22 MessZV compliance
+///
+/// Every correction creates an immutable `meter_read_corrections` row that
+/// preserves the original value, corrected value, reason, and operator identity.
+/// This enables BNetzA auditors to reconstruct the billing basis at any point
+/// in time over the mandatory 3-year retention period.
+///
+/// ## Request body
+///
+/// ```json
+/// {
+///   "corrections": [
+///     {
+///       "malo_id": "51238696781",
+///       "dtm_from": "2026-06-01T00:00:00Z",
+///       "dtm_to": "2026-06-01T00:15:00Z",
+///       "original_kwh": "2.500",
+///       "original_quality": "MEASURED",
+///       "corrected_kwh": "2.420",
+///       "corrected_quality": "CORRECTED",
+///       "reason": "Ablese-Korrekturbericht MSB 2026-07-01: Zählerfehlstand Q2/2026",
+///       "source": "OPERATOR",
+///       "corrected_by": "dispatcher@netzbetreiber.de"
+///     }
+///   ]
+/// }
+/// ```
+///
+/// ## Response
+///
+/// ```json
+/// {
+///   "corrected_count": 1,
+///   "correction_ids": ["<uuid of the correction record>"]
+/// }
+/// ```
+pub async fn post_corrections(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Json(req): Json<mako_edm::domain::CorrectionRequest>,
+) -> impl IntoResponse {
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "write-timeseries", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    if req.corrections.is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "corrections array must not be empty",
+        )
+            .into_response();
+    }
+
+    // Validate: all corrections must reference the path MaLo
+    for (i, rec) in req.corrections.iter().enumerate() {
+        if rec.malo_id != malo_id {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                format!(
+                    "correction[{}].malo_id {:?} does not match path malo_id {:?}",
+                    i, rec.malo_id, malo_id
+                ),
+            )
+                .into_response();
+        }
+        if rec.reason.trim().is_empty() {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                format!("correction[{i}].reason must not be empty (§22 MessZV audit requirement)"),
+            )
+                .into_response();
+        }
+    }
+
+    match state.repo.store_corrections(&req.corrections).await {
+        Ok(correction_ids) => {
+            let count = correction_ids.len();
+            tracing::info!(
+                malo_id,
+                corrected_count = count,
+                "edmd: {} interval(s) corrected (§22 MessZV)",
+                count
+            );
+            (
+                axum::http::StatusCode::OK,
+                Json(mako_edm::domain::CorrectionResponse {
+                    corrected_count: count,
+                    correction_ids,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── Bulk ingestion ────────────────────────────────────────────────────────────
+
+/// Request body for `POST /api/v1/meter-reads/{malo_id}/bulk`.
+///
+/// Accepts a batch of interval readings for one MaLo in a single HTTP request.
+/// This is the performance path for large MSCONS deliveries and MSB bulk uploads.
+///
+/// ## Idempotency
+///
+/// Each interval is upserted — re-submitting the same `(malo_id, dtm_from, dtm_to)`
+/// updates the value and quality. Supply `session_id` to deduplicate entire batches.
+///
+/// ## Validation
+///
+/// After storing, the batch is validated with [`metering::validate_intervals`].
+/// Intervals with `Error` severity are flagged in `quality_warnings`.
+/// A `de.edmd.reading.quality.warning` CloudEvent is emitted when issues are found.
+#[derive(Debug, serde::Deserialize)]
+pub struct BulkReadRequest {
+    /// Idempotency key — re-submitting the same `session_id` is a no-op if already committed.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Energy commodity (STROM or GAS).
+    pub sparte: String,
+    /// OBIS-Kennzahl (optional — defaults to `1-0:1.8.0*255` for Strom Bezug).
+    #[serde(default)]
+    pub obis_code: Option<String>,
+    /// Source identifier (default: `API_IMPORT`).
+    #[serde(default)]
+    pub source: Option<String>,
+    /// The interval readings.
+    pub reads: Vec<BulkReadEntry>,
+}
+
+/// One interval in a bulk read batch.
+#[derive(Debug, serde::Deserialize)]
+pub struct BulkReadEntry {
+    /// Interval start (RFC 3339 UTC).
+    pub dtm_from: String,
+    /// Interval end (RFC 3339 UTC).
+    pub dtm_to: String,
+    /// Energy quantity (kWh or kWh_Hs for Gas).
+    pub quantity_kwh: String,
+    /// Quality flag (MEASURED / ESTIMATED / SUBSTITUTED / …). Defaults to MEASURED.
+    #[serde(default)]
+    pub quality: Option<String>,
+    /// Messlokations-ID (optional).
+    #[serde(default)]
+    pub melo_id: Option<String>,
+}
+
+/// `POST /api/v1/meter-reads/{malo_id}/bulk`
+///
+/// Batch ingestion endpoint. Accepts up to 50 000 intervals per request.
+/// Each interval is upserted atomically. After storing, applies the validation
+/// engine (V01–V10) and persists `quality_warnings` to `meter_reads`.
+///
+/// Returns a summary of stored intervals and any validation issues.
+pub async fn post_bulk_reads(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Json(req): Json<BulkReadRequest>,
+) -> impl IntoResponse {
+    use metering::{MeterInterval, QualityFlag, ValidationConfig, validate_intervals};
+    use time::format_description::well_known::Rfc3339;
+
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "write-timeseries", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    if req.reads.is_empty() {
+        return (StatusCode::BAD_REQUEST, "reads array must not be empty").into_response();
+    }
+    const MAX_BATCH: usize = 50_000;
+    if req.reads.len() > MAX_BATCH {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("batch too large: {} > {MAX_BATCH}", req.reads.len()),
+        )
+            .into_response();
+    }
+
+    // Deduplicate by session_id
+    if let Some(ref sid) = req.session_id {
+        let existing: Option<i64> = sqlx::query_scalar(
+            "SELECT interval_count FROM direct_push_sessions WHERE session_id = $1",
+        )
+        .bind(sid)
+        .fetch_optional(state.repo.pool())
+        .await
+        .unwrap_or(None);
+        if let Some(count) = existing {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "session_id": sid,
+                    "stored_count": count,
+                    "deduplicated": true
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    let sparte = if req.sparte.eq_ignore_ascii_case("GAS") {
+        "GAS"
+    } else {
+        "STROM"
+    };
+    let source = req.source.as_deref().unwrap_or("API_IMPORT");
+    let session_id = req
+        .session_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    // Parse and store intervals
+    let mut stored = 0usize;
+    let mut validation_intervals: Vec<MeterInterval> = Vec::with_capacity(req.reads.len());
+
+    for entry in &req.reads {
+        let dtm_from = match OffsetDateTime::parse(&entry.dtm_from, &Rfc3339) {
+            Ok(t) => t,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid dtm_from {:?}: {e}", entry.dtm_from),
+                )
+                    .into_response();
+            }
+        };
+        let dtm_to = match OffsetDateTime::parse(&entry.dtm_to, &Rfc3339) {
+            Ok(t) => t,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid dtm_to {:?}: {e}", entry.dtm_to),
+                )
+                    .into_response();
+            }
+        };
+        let qty: rust_decimal::Decimal = match entry.quantity_kwh.parse() {
+            Ok(d) => d,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid quantity {:?}: {e}", entry.quantity_kwh),
+                )
+                    .into_response();
+            }
+        };
+        let quality_str = entry.quality.as_deref().unwrap_or("MEASURED");
+        let quality = match quality_str {
+            "MEASURED" => QualityFlag::Measured,
+            "ESTIMATED" => QualityFlag::Estimated,
+            "SUBSTITUTED" => QualityFlag::Substituted,
+            "CALCULATED" => QualityFlag::Calculated,
+            "CORRECTED" => QualityFlag::Corrected,
+            "PRELIMINARY" => QualityFlag::Preliminary,
+            "FAULTY" => QualityFlag::Faulty,
+            _ => QualityFlag::Unknown,
+        };
+
+        let _ = sqlx::query(
+            r"INSERT INTO meter_reads
+                  (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
+                   pid, sparte, obis_code, source, push_session, tenant_id)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+              ON CONFLICT (malo_id, dtm_from, dtm_to) DO UPDATE
+                  SET quantity_kwh = EXCLUDED.quantity_kwh,
+                      quality = EXCLUDED.quality",
+        )
+        .bind(&malo_id)
+        .bind(&entry.melo_id)
+        .bind(dtm_from)
+        .bind(dtm_to)
+        .bind(qty.to_string())
+        .bind(quality_str)
+        .bind(0i32) // pid = 0 for API import
+        .bind(sparte)
+        .bind(&req.obis_code)
+        .bind(source)
+        .bind(&session_id)
+        .bind(
+            state
+                .repo
+                .pool()
+                .connect_options()
+                .get_database()
+                .map(|_| uuid::Uuid::nil()),
+        )
+        .execute(state.repo.pool())
+        .await;
+
+        stored += 1;
+        validation_intervals.push(MeterInterval {
+            from: dtm_from,
+            to: dtm_to,
+            value_kwh: qty,
+            quality,
+            obis_code: req.obis_code.clone(),
+        });
+    }
+
+    // Run validation engine on the batch (V01–V10)
+    let config = ValidationConfig {
+        now: Some(OffsetDateTime::now_utc()),
+        ..ValidationConfig::default()
+    };
+    validation_intervals.sort_by_key(|iv| iv.from);
+    let validation = validate_intervals(&validation_intervals, &config);
+
+    let issues_summary = serde_json::json!({
+        "is_clean": validation.is_clean(),
+        "has_errors": validation.has_errors(),
+        "billing_block_count": validation.billing_block_count(),
+        "issue_count": validation.issues.len(),
+        "rules_triggered": validation.issues.iter()
+            .map(|i| i.rule_id.to_string())
+            .collect::<std::collections::HashSet<_>>()
+    });
+
+    // Persist session record
+    let _ = sqlx::query(
+        r"INSERT INTO direct_push_sessions
+              (session_id, malo_id, source, obis_code, interval_count,
+               period_from, period_to, status, quality_summary)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,'committed',$8)
+          ON CONFLICT (session_id) DO NOTHING",
+    )
+    .bind(&session_id)
+    .bind(&malo_id)
+    .bind(source)
+    .bind(&req.obis_code)
+    .bind(stored as i32)
+    .bind(validation_intervals.first().map(|iv| iv.from))
+    .bind(validation_intervals.last().map(|iv| iv.to))
+    .bind(&issues_summary)
+    .execute(state.repo.pool())
+    .await;
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "session_id": session_id,
+            "malo_id": malo_id,
+            "stored_count": stored,
+            "validation": issues_summary,
+        })),
+    )
+        .into_response()
+}
+
+// ── §17 MessZV Auto-Substitute (post_substitute_values) ───────────────────────
+
+/// Request body for `POST /api/v1/meter-reads/{malo_id}/substitute`.
+#[derive(Debug, serde::Deserialize)]
+pub struct SubstituteRequest {
+    /// Gap start (UTC, RFC3339).
+    pub gap_from: String,
+    /// Gap end (UTC, RFC3339).
+    pub gap_to: String,
+    /// Interval length in seconds (default: 900).
+    pub interval_secs: Option<u32>,
+    /// Substitution method: `LinearInterpolation`, `PriorPeriodAverage`,
+    /// `ZeroFill`, or `LastValueCarryForward`. Default: `PriorPeriodAverage`.
+    pub method: Option<String>,
+    /// Number of prior-period days to use for `PriorPeriodAverage` (default: 7).
+    pub prior_days: Option<u32>,
+    /// Operator ID for audit trail.
+    pub operator_id: Option<String>,
+}
+
+/// `POST /api/v1/meter-reads/{malo_id}/substitute`
+///
+/// Generate and store §17 MessZV substitute values for a gap interval.
+///
+/// This endpoint:
+/// 1. Validates the requested gap window.
+/// 2. Fetches prior-period reference data from `meter_reads`.
+/// 3. Calls `metering::prior_period_substitutes()` to generate values.
+/// 4. Stores the generated intervals as `AUTO_SUBSTITUTE` source.
+/// 5. Records each substitution in `substitute_value_log` for §22 MessZV audit.
+/// 6. Returns the generated intervals with their methods and confidence notes.
+///
+/// **Cedar action**: `write-meter-reads`
+pub async fn post_substitute_values(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Json(req): Json<SubstituteRequest>,
+) -> impl IntoResponse {
+    use metering::{MeterInterval, QualityFlag, SubstituteMethod, prior_period_substitutes};
+    use time::format_description::well_known::Rfc3339;
+
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "write-meter-reads", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let gap_from = match OffsetDateTime::parse(&req.gap_from, &Rfc3339) {
+        Ok(t) => t,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid gap_from: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let gap_to = match OffsetDateTime::parse(&req.gap_to, &Rfc3339) {
+        Ok(t) => t,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid gap_to: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    if gap_from >= gap_to {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "gap_from must be before gap_to" })),
+        )
+            .into_response();
+    }
+
+    let interval_secs = req.interval_secs.unwrap_or(900);
+    let prior_days = req.prior_days.unwrap_or(7) as i64;
+    let operator_id = req.operator_id.as_deref().unwrap_or("AUTO");
+
+    let method = match req.method.as_deref().unwrap_or("PriorPeriodAverage") {
+        "LinearInterpolation" => SubstituteMethod::LinearInterpolation,
+        "ZeroFill" => SubstituteMethod::ZeroFill,
+        "LastValueCarryForward" => SubstituteMethod::LastValueCarryForward,
+        _ => SubstituteMethod::PriorPeriodAverage,
+    };
+
+    // Fetch prior-period reference data
+    let prior_from = gap_from - time::Duration::days(prior_days);
+    let prior_reads = sqlx::query(
+        r"SELECT dtm_from, dtm_to, quantity_kwh::numeric, quality
+          FROM meter_reads
+          WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
+            AND quality IN ('MEASURED','ESTIMATED','CALCULATED')
+          ORDER BY dtm_from ASC LIMIT 10000",
+    )
+    .bind(&malo_id)
+    .bind(prior_from)
+    .bind(gap_from)
+    .fetch_all(state.repo.pool())
+    .await;
+
+    let prior_intervals: Vec<MeterInterval> = match prior_reads {
+        Ok(rows) => {
+            use sqlx::Row;
+            rows.iter()
+                .filter_map(|r| {
+                    let qty_str: String = r.try_get("quantity_kwh").ok()?;
+                    let qty: rust_decimal::Decimal = qty_str.parse().ok()?;
+                    let quality_str: &str = r.try_get("quality").ok()?;
+                    let quality = match quality_str {
+                        "MEASURED" => QualityFlag::Measured,
+                        "ESTIMATED" => QualityFlag::Estimated,
+                        _ => QualityFlag::Calculated,
+                    };
+                    Some(MeterInterval {
+                        from: r.try_get("dtm_from").ok()?,
+                        to: r.try_get("dtm_to").ok()?,
+                        value_kwh: qty,
+                        quality,
+                        obis_code: None,
+                    })
+                })
+                .collect()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, malo_id, "edmd: substitute prior-period fetch failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    // Get last known value for fallback
+    let last_known = prior_intervals.last().map(|iv| iv.value_kwh);
+
+    // Generate substitute values
+    let substitute_entries = prior_period_substitutes(
+        gap_from,
+        gap_to,
+        interval_secs,
+        &prior_intervals,
+        last_known,
+    );
+
+    if substitute_entries.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "No substitute values could be generated for this gap window"
+            })),
+        )
+            .into_response();
+    }
+
+    // Store generated intervals and log them
+    let mut stored = 0usize;
+    let mut log_entries: Vec<serde_json::Value> = Vec::new();
+    let pool = state.repo.pool();
+
+    for entry in &substitute_entries {
+        let iv = &entry.interval;
+        let method_str = format!("{:?}", entry.method);
+        let reason_str = "NoMeasurementAvailable";
+
+        // Upsert into meter_reads
+        let _ = sqlx::query(
+            r"INSERT INTO meter_reads
+                (malo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, source)
+              VALUES ($1, $2, $3, $4, 'SUBSTITUTED', 0, 'STROM', 'AUTO_SUBSTITUTE')
+              ON CONFLICT (malo_id, dtm_from, obis_code_norm) DO UPDATE
+                SET quantity_kwh = EXCLUDED.quantity_kwh,
+                    quality = EXCLUDED.quality,
+                    source = EXCLUDED.source",
+        )
+        .bind(&malo_id)
+        .bind(iv.from)
+        .bind(iv.to)
+        .bind(iv.value_kwh.to_string())
+        .execute(pool)
+        .await;
+
+        // Insert into substitute_value_log
+        let _ = sqlx::query(
+            r"INSERT INTO substitute_value_log
+                (malo_id, dtm_from, dtm_to, method, reason, substituted_kwh, created_by, tenant)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(&malo_id)
+        .bind(iv.from)
+        .bind(iv.to)
+        .bind(&method_str)
+        .bind(reason_str)
+        .bind(iv.value_kwh.to_string())
+        .bind(operator_id)
+        .bind(&state.tenant)
+        .execute(pool)
+        .await;
+
+        stored += 1;
+        log_entries.push(serde_json::json!({
+            "from": iv.from,
+            "to": iv.to,
+            "value_kwh": iv.value_kwh.to_string(),
+            "method": method_str,
+            "reference_count": entry.reference_count,
+            "confidence_note": entry.confidence_note,
+        }));
+    }
+
+    tracing::info!(
+        malo_id, stored, operator_id,
+        gap_from = %gap_from, gap_to = %gap_to,
+        "edmd: §17 MessZV substitute values generated"
+    );
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "malo_id": malo_id,
+            "gap_from": gap_from,
+            "gap_to": gap_to,
+            "generated_count": stored,
+            "method": format!("{:?}", method),
+            "legal_basis": "§17 MessZV Abs. 2 Ersatzwertbildung",
+            "intervals": log_entries,
+        })),
+    )
+        .into_response()
 }

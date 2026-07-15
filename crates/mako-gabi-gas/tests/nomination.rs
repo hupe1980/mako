@@ -39,7 +39,7 @@ fn send_nomination(synthetic_pid: u32) -> NominationCommand {
         synthetic_pid,
         sender_eic: "11XBKV-SENDTEST1".to_owned(),
         receiver_eic: "11XFNB-RECVTEST2".to_owned(),
-        gas_day: "20250115".to_owned(),
+        gas_day: mako_gabi_gas::GasDay::parse("2025-01-15").unwrap(),
         nomination_ref: MessageRef::new("NOMINT-2025-001"),
     }
 }
@@ -48,7 +48,7 @@ fn receive_nomres(acceptance: NomresAcceptance) -> NominationCommand {
     NominationCommand::ReceiveNomres {
         nomres_ref: MessageRef::new("NOMRES-2025-001"),
         acceptance,
-        gas_day: "20250115".to_owned(),
+        gas_day: mako_gabi_gas::GasDay::parse("2025-01-15").unwrap(),
         rejection_reason: None,
     }
 }
@@ -57,7 +57,7 @@ fn receive_nomres_rejected(reason: &str) -> NominationCommand {
     NominationCommand::ReceiveNomres {
         nomres_ref: MessageRef::new("NOMRES-2025-001"),
         acceptance: NomresAcceptance::Rejected,
-        gas_day: "20250115".to_owned(),
+        gas_day: mako_gabi_gas::GasDay::parse("2025-01-15").unwrap(),
         rejection_reason: Some(reason.to_owned()),
     }
 }

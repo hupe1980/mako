@@ -6,11 +6,12 @@ parent: Services
 mermaid: true
 description: >
   edmd operator guide: Energy Data Management daemon. Stores MSCONS meter
-  readings, iMSys direct push for §41a real-time billing, Hampel-filter quality scoring,
+  readings, iMSys direct push for §41a real-time billing, Hampel-filter quality scoring
+  (V01–V10 validation), virtual meters (§42b GGV), §17 MessZV substitution + forecasting,
   reading-order scheduling (Ablesesteuerung), MeterBillingPeriod (RLM
   Spitzenleistung + Gas Brennwert/Zustandszahl), Mehr-/Mindermengensaldo
-  imbalance, Iceberg/S3 OLAP archive, MCP server. PostgreSQL-backed,
-  OIDC-secured, CloudEvents webhook.
+  imbalance, BSI TR-03109 SMGW lifecycle, Iceberg/S3 OLAP archive, MCP server.
+  PostgreSQL-backed, OIDC-secured, CloudEvents webhook.
 ---
 
 # `edmd` Operator Guide
@@ -22,23 +23,32 @@ Key responsibilities:
 
 - Store MSCONS meter readings (SLP and RLM) via the webhook from `marktd`.
 - Accept **iMSys / SMGW direct push** (15-min intervals in JSON, bypassing EDIFACT) for §41a real-time billing.
-- Run the **Hampel-filter quality scorer** on all inbound interval data and emit `de.edmd.reading.quality.warning` CloudEvents for grade C/F data.
+- Run the **Hampel-filter quality scorer** and **V01–V10 validation engine** on all inbound interval data. Emit `de.edmd.reading.quality.warning` CloudEvents for grade C/F data.
 - Schedule and track **reading orders** (Ablesesteuerung) for all three market roles (LF, MSB, NB). Auto-creates `INSRPT_STOERUNG` orders when a WiM INSRPT PID 23001 Störungsmeldung arrives.
+- Compute and serve **virtual meter time series** (Sum, Residual, PvSelfConsumption, GgvAllocation per §42b EEG GGV community solar) on demand.
+- Generate **§17 MessZV annual forecasts** (Jahresprognose) and **prior-period substitute values** for gap intervals.
+- Provide resampled Lastgang (hourly / daily / monthly / yearly buckets) and monthly Summenzeitreihe for MaBiS.
 - Provide a time-series query API for ERP and `netzbilanzd`.
 - Export BO4E `Lastgang` objects and `Zeitreihe` objects for ERP and API-Webdienste Strom consumers.
 - Compute `MeterBillingPeriod` — RLM Spitzenleistung (kW) and Gas Brennwert / Zustandszahl — required by `netzbilanzd` for Leistungspreis billing.
 - Accumulate **Mehr-/Mindermengensaldo** imbalance records per MaLo.
 - **Apache Iceberg V2 OLAP archival**: automatically export `meter_reads` older than the configured retention window (default 12 months) to Parquet files on S3/GCS/Azure in Iceberg V2 table format.
 
-The **domain calculation logic** is provided by the [`metering`](https://github.com/hupe1980/mako/tree/main/crates/metering) library crate (zero I/O, no async, 69 tests):
+The **domain calculation logic** is provided by the [`metering`](https://github.com/hupe1980/mako/tree/main/crates/metering) library crate (zero I/O, no async, 177 tests):
 
-| Function | §-basis | Used in |
+| Function / Type | §-basis | Used in |
 |---|---|---|
 | `gas_m3_to_kwh_hs(m3, hs, z)` | §24 GasGVV / DVGW G 685 | Gas direct push |
 | `aggregate(intervals, AggregationConfig)` | §2 Nr. 17 MessZV | `MeterBillingPeriod` |
 | `classify_messtyp(intervals, source)` | §3/§4 MessZV, §41a EnWG | iMSys classification |
 | `compute_imbalance(actual, contracted)` | §27 MessZV | Mehr-/Mindermengensaldo |
 | `score_intervals(intervals, config)` | — | Hampel quality scoring (A/B/C/F) |
+| `validate_intervals(intervals, config)` | §17–22 MessZV | V01–V10 validation engine |
+| `resample(intervals, config)` | §27 MessZV, MaBiS | Hourly/daily/monthly resampling |
+| `compute_virtual_meter(rule, sources)` | §42b EEG, §42a EEG | GGV community solar, Residuallast |
+| `project_annual_consumption(intervals, _)` | §17 MessZV Jahresprognose | Annual consumption forecast |
+| `prior_period_substitutes(gap, _, _, prior, _)` | §17 Abs. 2 MessZV | Prior-period gap filling |
+| `SmgwSession`, `ClsChannel` | BSI TR-03109, §14a EnWG | SMGW lifecycle + CLS management |
 
 ```mermaid
 graph TB
@@ -243,8 +253,13 @@ This eliminates the risk of billing a zero-reading period after a device swap �
 | `get_billing_period` | MeterBillingPeriod (arbeitsmenge, spitzenleistung, brennwert) |
 | `get_device_history` | MSB device history text for LanceDB RAG indexing |
 | `get_quality_warnings` | Hampel-filter quality warnings (grade A/B/C/F) |
+| `list_reading_orders` | Ablesesteuerung orders for a MaLo |
+| `list_overdue_reading_orders` | §40 EnWG compliance gaps |
+| `trigger_jahresablesung` | Launch or preview annual reading campaign |
+| `get_correction_history` | Bitemporal correction audit trail (§22 MessZV) |
+| `validate_timeseries` | Run V01–V10 validation on stored meter reads |
 
-Prompts: `analyze-consumption`, `submit-mscons`, `quality-assessment`.
+Prompts: `analyze-consumption`, `submit-mscons`, `quality-assessment`, `jahresablesung-workflow`, `reading-order-lifecycle`.
 
 ---
 │                                                                       │

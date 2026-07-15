@@ -110,6 +110,11 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/billing/:id/correction",
             post(handlers::post_correction),
         )
+        // Tarifwechsel: combined invoice for price change mid-period (§41 EnWG)
+        .route(
+            "/api/v1/billing/:malo_id/tarifwechsel",
+            post(handlers::post_tarifwechsel),
+        )
         // L2: B2B Sammelrechnung for Rahmenvertrag with rechnungsstellung=SAMMEL
         .route(
             "/api/v1/billing/sammelrechnung/:rahmenvertrag_id",

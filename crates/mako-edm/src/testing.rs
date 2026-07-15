@@ -195,6 +195,33 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
         // In-memory stub — no-op for testing.
         Ok(0)
     }
+
+    async fn store_corrections(
+        &self,
+        records: &[crate::domain::CorrectionRecord],
+    ) -> Result<Vec<uuid::Uuid>, EdmError> {
+        use uuid::Uuid;
+        // In-memory stub: apply corrections to stored reads, return dummy UUIDs.
+        let mut ids = Vec::with_capacity(records.len());
+        {
+            let mut reads = self.reads.lock().unwrap();
+            for rec in records {
+                // Update any existing read in-memory.
+                for read in reads.iter_mut() {
+                    if read.malo_id == rec.malo_id
+                        && read.dtm_from == rec.dtm_from
+                        && read.dtm_to == rec.dtm_to
+                    {
+                        read.quantity_kwh = rec.corrected_kwh;
+                        read.quality = rec.corrected_quality;
+                        break;
+                    }
+                }
+                ids.push(Uuid::new_v4());
+            }
+        }
+        Ok(ids)
+    }
 }
 
 #[cfg(test)]

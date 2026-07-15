@@ -906,12 +906,57 @@ WiM Strom, but with Gas-specific qualifier codes and a **10-Werktage deadline**
 > DVGW transport workflows (nominations, allocations) and BK7 billing (INVOIC
 > 31010) — analogous to `mako-gpke` sitting on top of `edi-energy`.
 
+### Gas balancing process flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant BKV as BKV
+    participant FNB as FNB / MGV
+    participant VNB as VNB
+
+    Note over BKV,FNB: D-1 (deadline 13:00 CET per KoV §3.2)
+    BKV->>FNB: NOMINT 90011/90012
+    FNB-->>BKV: NOMRES 90021/90022
+
+    Note over BKV,FNB: Day D intraday
+    BKV->>FNB: DELORD 90061
+    FNB-->>BKV: DELRES 90062
+    FNB->>BKV: SCHEDL 90031
+
+    Note over FNB,BKV: After day D (KoV §6.4)
+    FNB->>BKV: ALOCAT 90001 (Initial)
+    FNB->>BKV: ALOCAT 90001 (Correction 1..n)
+    FNB->>BKV: ALOCAT 90001 (Final — binding)
+    FNB->>BKV: IMBNOT 90041
+
+    Note over VNB,FNB: Sub-daily
+    VNB->>FNB: ALOCAT 90003
+    FNB->>BKV: TRANOT 90051
+```
+
+### Domain model
+
+`mako-gabi-gas` provides a gas-specific domain vocabulary in `src/domain.rs` and `src/portfolio.rs`.
+All energy quantities use `Decimal` — no float arithmetic.
+
+| Type | Description | Key method |
+|---|---|---|
+| `GasDay` | Typed gas market day. Starts 06:00 CET (DST-aware). | `start_utc()`, `duration_hours()` (23/24/25), `nomination_deadline_utc()` |
+| `GasBeschaffenheit` | Brennwert Hs/Hu + Zustandszahl. DVGW G 685/G 260. | `to_kwh_hs(m3)` = m³ × Hs × Z, rounded to 3 dp |
+| `GasQuantity` | Gas energy in kWh_Hs with optional m³ context. | `from_m3(vol, beschaffenheit)`, `from_kwh(kwh)` |
+| `NominationQuantity` | Submitted / accepted / curtailed breakdown. | `accept_partial(kwh, reason)`, `is_curtailed()` |
+| `AllocationVersion` | Initial / Correction(n) / Final per KoV §6.4. | `is_revision()` |
+| `GasMarketRole` | Typed BKV/FNB/VNB/MGV/LF/Händler classification. | `submits_nominations()`, `has_imbalance_obligation()` |
+| `GasImbalanceSaldo` | Nomination − allocation imbalance. | `direction()` → Mehr / Minder / Balanced |
+| `GasPortfolioBalance` | BKV portfolio across all Bilanzkreise. | `net_imbalance_kwh()`, `open_imbalance_count()` |
+
 **DVGW transport processes** (see [DVGW — Gas Transport](#dvgw--gas-transport) for the full PID/message table):
 
 | Process | Roles | Format | Workflow | Crate |
 |---|---|---|---|---|
 | Nomination / Renomination | BKV → FNB/MGV | NOMINT / NOMRES | `gabi-gas-nomination` | `mako-gabi-gas` ✅ |
-| Allocation | FNB/MGV/VNB → BKV | ALOCAT | `gabi-gas-allocation` | `mako-gabi-gas` ✅ |
+| Allocation (Initial/Correction/Final) | FNB/MGV/VNB → BKV | ALOCAT | `gabi-gas-allocation` | `mako-gabi-gas` ✅ |
 | Day-ahead schedule | sender → receiver | SCHEDL | `gabi-gas-schedl` | `mako-gabi-gas` ✅ |
 | Imbalance notification | FNB/MGV → BKV | IMBNOT | `gabi-gas-imbnot` | `mako-gabi-gas` ✅ |
 | Transport notification | FNB/VNB → BKV/GH/MGV | TRANOT | `gabi-gas-tranot` | `mako-gabi-gas` ✅ |

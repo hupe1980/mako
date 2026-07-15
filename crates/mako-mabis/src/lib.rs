@@ -14,6 +14,7 @@
 //! | Clearingliste DZR (BIKO → NB/ÜNB) | **55069** | ✅ Implemented |
 //! | Clearingliste BAS (BIKO → BKV) | **55070** | ✅ Implemented |
 //! | Lieferantenclearingliste (NB → LF) | **55065** | ✅ Implemented |
+//! | UTILTS aggregation (ÜNB → BIKO) | — | ✅ `utilts_aggregation` |
 //!
 //! > **PID 13003** is the MSCONS Summenzeitreihe PID (`"Summenzeitreihen und
 //! > Ausfallarbeitssummen"`), confirmed in MSCONS AHB 2.4c/2.5 (all FV versions)
@@ -86,6 +87,7 @@
 
 pub mod bilanzkreisabrechnung;
 pub mod clearingliste;
+pub mod utilts_aggregation;
 
 pub use bilanzkreisabrechnung::{
     BillingCommand, BillingData, BillingEvent, BillingProjection, BillingRecord, BillingRecordData,
@@ -97,6 +99,10 @@ pub use clearingliste::{
     ClearinglisteKind, ClearinglisteState, MabisClearinglisteWorkflow,
     WORKFLOW_NAME as CLEARINGLISTE_WORKFLOW_NAME,
 };
+// Re-export canonical topology IDs from mako-edm (single source of truth).
+// Previously these were also defined in `utilts_aggregation` — that was removed.
+pub use mako_edm::{BilanzierungsgebietId, BilanzkreisId};
+pub use utilts_aggregation::{SumInterval, Summenzeitreihe, SummenzeitreiheBuilder};
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
 

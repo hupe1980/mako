@@ -41,9 +41,24 @@ CREATE TABLE IF NOT EXISTS meter_reads (
 CREATE INDEX IF NOT EXISTS mr_malo_dtm    ON meter_reads (malo_id, dtm_from, dtm_to);
 CREATE INDEX IF NOT EXISTS mr_tenant      ON meter_reads (tenant_id) WHERE tenant_id IS NOT NULL;
 
--- Optional: convert meter_reads to a TimescaleDB hypertable for time-series performance.
--- Run this manually after enabling the TimescaleDB extension:
---   SELECT create_hypertable('meter_reads', 'dtm_from', if_not_exists => TRUE);
+-- TimescaleDB hypertable for meter_reads (RECOMMENDED for production).
+--
+-- Converting meter_reads to a TimescaleDB hypertable provides:
+--   - 10-100× faster time-range queries (columnar chunks, per-chunk min/max indexes)
+--   - Automatic chunk-based compression (reduces storage by 60-90%)
+--   - Continuous aggregates for pre-computed billing summaries
+--   - Data retention policies (automatically drop old hot-tier data after archival)
+--
+-- To enable: install TimescaleDB extension and run once:
+--   SELECT create_hypertable('meter_reads', 'dtm_from',
+--       chunk_time_interval => INTERVAL '7 days',
+--       if_not_exists => TRUE);
+--
+-- For managed PostgreSQL (AWS RDS, Azure Flexible Server): use the
+-- timescaledb_toolkit extension and verify replica support before enabling.
+--
+-- Production recommendation: enable this before the first data load.
+-- Retrofitting a large existing table requires a lock and data copy.
 
 
 -- ── Billing period aggregation ─────────────────────────────────────────────────

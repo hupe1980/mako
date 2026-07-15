@@ -29,8 +29,25 @@ pub enum PositionCategory {
     Discount,
     /// Non-commodity service fee (MSB, HEMS subscription, e-mobility roaming).
     Fee,
-    /// Informational position (Brennwertkorrektur, §51 suspension info).
+    /// Informational position (Brennwertkorrektur, §51 suspension info, Zählerstand).
     Info,
+    /// Advance payment deduction on final invoice (Jahresabrechnung §41 EnWG).
+    ///
+    /// Does NOT affect `netto_eur` or `mwst_eur` — deducted separately in
+    /// `Invoice::zahlbetrag_eur = brutto_eur - abschlag_total_eur`.
+    Abschlag,
+
+    /// Customer bonus (Willkommensbonus, Treuebonus, Wechselprämie).
+    ///
+    /// Semantically distinct from `Discount` (contractual price reduction) and
+    /// from `Credit` (product-level credit note). Bonuses are one-time or
+    /// conditional rewards that the customer earned by:
+    /// - Switching to this supplier (Wechselprämie)
+    /// - Staying with the supplier for N years (Treuebonus)
+    /// - Signing up for a specific product (Willkommensbonus)
+    ///
+    /// MwSt treatment: same as `Discount` (reduces the MwSt base).
+    Bonus,
 }
 
 // ── BillingPosition ───────────────────────────────────────────────────────────
@@ -86,6 +103,18 @@ pub struct BillingPosition {
 
     /// Free-form tags for downstream filtering.
     pub tags: Vec<String>,
+
+    /// MwSt rate applicable to this position (fraction, e.g. `0.19`, `0.07`, `0.0`).
+    ///
+    /// When `Some`, the `MwStProvider` uses this rate for this position instead of the
+    /// engine-wide default. Enables multi-rate VAT on a single invoice:
+    /// - Standard electricity/gas: `None` (uses engine default, typically `0.19`)
+    /// - Renewable Fernwärme: `Some(dec!(0.07))` (§12 Abs. 2 Nr. 1 UStG)
+    /// - Solar PV ≤30 kWp since 01.01.2023: `Some(dec!(0.0))` (§12 Abs. 3 UStG Solarpaket I)
+    ///
+    /// Positions with category `Tax`, `Abschlag`, or `Info` are excluded from MwSt computation.
+    #[serde(default)]
+    pub applicable_tax_rate: Option<Decimal>,
 }
 
 impl BillingPosition {
@@ -110,6 +139,7 @@ impl BillingPosition {
             net_eur,
             category,
             tags: Vec::new(),
+            applicable_tax_rate: None,
         }
     }
 
@@ -134,6 +164,7 @@ impl BillingPosition {
             net_eur,
             category,
             tags: Vec::new(),
+            applicable_tax_rate: None,
         }
     }
 
@@ -148,6 +179,18 @@ impl BillingPosition {
     #[must_use]
     pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
         self.tags.push(tag.into());
+        self
+    }
+
+    /// Set the MwSt rate for this position (§ UStG).
+    ///
+    /// Override the engine-wide default for this specific position.
+    /// Use `dec!(0.07)` for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
+    /// `dec!(0.0)` for solar PV ≤30 kWp (§12 Abs. 3 UStG),
+    /// or omit to use the engine default (19%).
+    #[must_use]
+    pub fn with_tax_rate(mut self, rate: Decimal) -> Self {
+        self.applicable_tax_rate = Some(rate);
         self
     }
 

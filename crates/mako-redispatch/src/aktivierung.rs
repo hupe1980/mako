@@ -90,6 +90,22 @@ pub const IFTSTA_PIDS: &[u32] = &[21_037, 21_038];
 /// | 13026 | EEG-Überführungszeitreihe aufgrund Ausfallarbeit   |
 ///
 /// Source: MSCONS AHB (Redispatch 2.0 Annex), IFTSTA AHB + PID 4.0.
+///
+/// ## Design note — intentional duplication
+///
+/// These five PID numbers are also defined in `mako-edm::REDISPATCH_MSCONS_PIDS`
+/// so that the `edmd` ingest filter can accept them without depending on
+/// `mako-redispatch`. The two definitions must always agree; they are validated
+/// together by `cargo xtask validate-pruefids`.
+///
+/// A cross-crate dependency between this process-engine crate and the data-tier
+/// `mako-edm` crate would be the wrong direction architecturally:
+///   - `mako-redispatch` = process/workflow layer (stateful, event-sourced)
+///   - `mako-edm` = data/repository layer (storage types, receipts, OLAP)
+///
+/// Coupling the workflow layer to the data layer just for 5 constants would be
+/// over-engineering. Stable regulatory constants with cross-crate `xtask`
+/// validation are an acceptable and common Rust workspace pattern.
 pub const MSCONS_PIDS: &[u32] = &[13_020, 13_021, 13_022, 13_023, 13_026];
 
 /// Redispatch ORDERS PIDs — inbound requests related to Ausfallarbeit.

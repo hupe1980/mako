@@ -51,6 +51,8 @@ use mako_engine::{
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 
+use crate::domain::{GasDay, NominationQuantity};
+
 // ── Synthetic PID set ─────────────────────────────────────────────────────────
 
 /// All synthetic PIDs for the NOMINT/NOMRES nomination cycle.
@@ -155,10 +157,15 @@ pub struct NominationData {
     pub sender_eic: String,
     /// EIC code of the receiving FNB/MGV.
     pub receiver_eic: String,
-    /// Gas day / nomination period (from NOMINT DTM qualifier 137).
-    pub gas_day: String,
+    /// Gas day for this nomination.
+    pub gas_day: GasDay,
     /// NOMINT document reference (from BGM element 1 — used for NOMRES correlation).
     pub nomination_ref: MessageRef,
+    /// Nominated quantity with optional NOMRES acceptance breakdown.
+    ///
+    /// `None` when the nomination message did not carry an explicit quantity
+    /// (e.g. a cancellation or renomination-to-zero).
+    pub quantity: Option<NominationQuantity>,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -178,7 +185,7 @@ pub enum NominationEvent {
         /// EIC code of the receiving FNB/MGV.
         receiver_eic: String,
         /// Gas day / nomination period (DTM 137).
-        gas_day: String,
+        gas_day: GasDay,
         /// NOMINT document reference.
         nomination_ref: MessageRef,
     },
@@ -187,14 +194,14 @@ pub enum NominationEvent {
         /// NOMRES message reference.
         nomres_ref: MessageRef,
         /// Gas day confirmed by the FNB/MGV.
-        gas_day: String,
+        gas_day: GasDay,
     },
     /// FNB/MGV partially accepted the nomination (curtailment applied).
     PartiallyAccepted {
         /// NOMRES message reference.
         nomres_ref: MessageRef,
         /// Gas day confirmed by the FNB/MGV.
-        gas_day: String,
+        gas_day: GasDay,
     },
     /// FNB/MGV rejected the nomination.
     Rejected {
@@ -307,7 +314,7 @@ pub enum NominationCommand {
         /// EIC code of the receiving FNB/MGV.
         receiver_eic: String,
         /// Gas day / nomination period.
-        gas_day: String,
+        gas_day: GasDay,
         /// NOMINT document reference.
         nomination_ref: MessageRef,
     },
@@ -323,7 +330,7 @@ pub enum NominationCommand {
         /// Overall acceptance status from the leading STS segment.
         acceptance: NomresAcceptance,
         /// Gas day confirmed by the FNB/MGV.
-        gas_day: String,
+        gas_day: GasDay,
         /// Human-readable rejection reason (populated when `acceptance = Rejected`).
         rejection_reason: Option<String>,
     },
@@ -366,8 +373,9 @@ impl Workflow for GaBiGasNominationWorkflow {
                 counterparty: *counterparty,
                 sender_eic: sender_eic.clone(),
                 receiver_eic: receiver_eic.clone(),
-                gas_day: gas_day.clone(),
+                gas_day: *gas_day,
                 nomination_ref: nomination_ref.clone(),
+                quantity: None, // populated later when quantity is parsed from NOMINT payload
             }),
 
             NominationEvent::Accepted { .. } => match state {

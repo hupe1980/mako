@@ -377,6 +377,87 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         .map_err(|e| EdmError::Database(e.to_string()))?;
         Ok(result.rows_affected())
     }
+
+    async fn store_corrections(
+        &self,
+        records: &[mako_edm::domain::CorrectionRecord],
+    ) -> Result<Vec<uuid::Uuid>, mako_edm::error::EdmError> {
+        use mako_edm::domain::CorrectionSource;
+
+        let mut correction_ids = Vec::with_capacity(records.len());
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| mako_edm::error::EdmError::Database(e.to_string()))?;
+
+        for rec in records {
+            let source_str = match rec.source {
+                CorrectionSource::MsconsUpdate => "MSCONS_UPDATE",
+                CorrectionSource::Operator => "OPERATOR",
+                CorrectionSource::AutoSubstitute => "AUTO_SUBSTITUTE",
+                CorrectionSource::ImsysDirectPush => "IMSYS_DIRECT_PUSH",
+                CorrectionSource::Other => "OTHER",
+            };
+
+            // 1. Insert correction audit record
+            let row = sqlx::query(
+                r"INSERT INTO meter_read_corrections
+                      (malo_id, dtm_from, dtm_to,
+                       original_kwh, original_quality, corrected_kwh, corrected_quality,
+                       reason, source, corrected_by, process_id, pid, tenant_id)
+                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                  RETURNING correction_id",
+            )
+            .bind(&rec.malo_id)
+            .bind(rec.dtm_from)
+            .bind(rec.dtm_to)
+            .bind(rec.original_kwh.to_string())
+            .bind(quality_to_str(rec.original_quality))
+            .bind(rec.corrected_kwh.to_string())
+            .bind(quality_to_str(rec.corrected_quality))
+            .bind(&rec.reason)
+            .bind(source_str)
+            .bind(&rec.corrected_by)
+            .bind(rec.process_id)
+            .bind(rec.pid.map(|p| p as i32))
+            .bind(rec.tenant_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| mako_edm::error::EdmError::Database(e.to_string()))?;
+
+            let correction_id: uuid::Uuid = row
+                .try_get("correction_id")
+                .map_err(|e| mako_edm::error::EdmError::Database(e.to_string()))?;
+            correction_ids.push(correction_id);
+
+            // 2. Overwrite the meter_reads row with the corrected value
+            //    and increment the correction counter.
+            sqlx::query(
+                r"UPDATE meter_reads
+                  SET quantity_kwh     = $4,
+                      quality          = $5,
+                      correction_count = correction_count + 1
+                  WHERE malo_id  = $1
+                    AND dtm_from = $2
+                    AND dtm_to   = $3",
+            )
+            .bind(&rec.malo_id)
+            .bind(rec.dtm_from)
+            .bind(rec.dtm_to)
+            .bind(rec.corrected_kwh.to_string())
+            .bind(quality_to_str(rec.corrected_quality))
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| mako_edm::error::EdmError::Database(e.to_string()))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| mako_edm::error::EdmError::Database(e.to_string()))?;
+
+        Ok(correction_ids)
+    }
 }
 
 // ── Row mapping helpers ───────────────────────────────────────────────────────
@@ -414,6 +495,13 @@ fn row_to_read(row: &sqlx::postgres::PgRow) -> Result<MeterRead, EdmError> {
         tenant_id: row
             .try_get("tenant_id")
             .map_err(|e| EdmError::Database(e.to_string()))?,
+        source: mako_edm::domain::IngestionSource::from_db_str(
+            row.try_get::<Option<&str>, _>("source")
+                .unwrap_or(None)
+                .unwrap_or("MSCONS"),
+        ),
+        push_session: row.try_get("push_session").unwrap_or(None),
+        quality_warnings: row.try_get("quality_warnings").unwrap_or(None),
     })
 }
 
@@ -449,6 +537,9 @@ fn quality_to_str(q: QualityFlag) -> &'static str {
         QualityFlag::Estimated => "ESTIMATED",
         QualityFlag::Substituted => "SUBSTITUTED",
         QualityFlag::Calculated => "CALCULATED",
+        QualityFlag::Corrected => "CORRECTED",
+        QualityFlag::Preliminary => "PRELIMINARY",
+        QualityFlag::Faulty => "FAULTY",
         QualityFlag::Unknown => "UNKNOWN",
     }
 }
@@ -459,6 +550,9 @@ fn str_to_quality(s: &str) -> QualityFlag {
         "ESTIMATED" => QualityFlag::Estimated,
         "SUBSTITUTED" => QualityFlag::Substituted,
         "CALCULATED" => QualityFlag::Calculated,
+        "CORRECTED" => QualityFlag::Corrected,
+        "PRELIMINARY" => QualityFlag::Preliminary,
+        "FAULTY" => QualityFlag::Faulty,
         _ => QualityFlag::Unknown,
     }
 }

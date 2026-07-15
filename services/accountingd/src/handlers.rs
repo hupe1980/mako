@@ -54,7 +54,7 @@ pub async fn get_account(
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    match fetch_account(&pool, &malo_id, lf_mp_id).await {
+    match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -85,7 +85,7 @@ pub async fn get_balance(
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    match fetch_account(&pool, &malo_id, lf_mp_id).await {
+    match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(row)) => Json(serde_json::json!({
             "malo_id": malo_id,
             "balance_ct": row.balance_ct,
@@ -106,7 +106,7 @@ pub async fn get_ledger(
     Query(q): Query<LedgerQuery>,
 ) -> impl IntoResponse {
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    let account = match fetch_account(&pool, &malo_id, lf_mp_id).await {
+    let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -125,7 +125,7 @@ pub async fn get_kontoauszug(
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    let account = match fetch_account(&pool, &malo_id, lf_mp_id).await {
+    let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -527,7 +527,20 @@ pub async fn get_offene_posten(
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Query(q): Query<OffenePostenQuery>,
 ) -> impl IntoResponse {
-    let min_ct = q.min_balance_eur.map(|e| (e * 100.0) as i64).unwrap_or(1);
+    // P0-1 fix: parse min_balance_eur as a decimal string to avoid f64 rounding errors.
+    // e.g. "1.99" must produce 199 ct, not 198 ct from (1.99 * 100.0) as i64.
+    let min_ct: i64 = q
+        .min_balance_eur
+        .as_deref()
+        .and_then(|s| {
+            use rust_decimal::Decimal;
+            use std::str::FromStr;
+            Decimal::from_str(s).ok().map(|d| {
+                use rust_decimal::prelude::ToPrimitive as _;
+                (d * Decimal::from(100)).round().to_i64().unwrap_or(1)
+            })
+        })
+        .unwrap_or(1);
     match list_overdue_accounts(&pool, &cfg.tenant, min_ct, q.limit.unwrap_or(200).min(2000)).await
     {
         Ok(rows) => Json(rows).into_response(),
@@ -535,9 +548,14 @@ pub async fn get_offene_posten(
     }
 }
 
+/// Query parameters for `GET /api/v1/offene-posten`.
+///
+/// `min_balance_eur` is a **decimal string** (e.g. `"1.99"`) to avoid f64 rounding errors.
+/// Float query parameters in financial APIs can silently lose precision.
 #[derive(Debug, Deserialize)]
 pub struct OffenePostenQuery {
-    pub min_balance_eur: Option<f64>,
+    /// Minimum balance in EUR, as a decimal string (e.g. `"1.99"`). Default: 1 ct minimum.
+    pub min_balance_eur: Option<String>,
     pub limit: Option<i64>,
 }
 
@@ -562,7 +580,7 @@ pub async fn escalate_dunning(
     Path(account_id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let account = match fetch_account_by_id(&pool, account_id).await {
+    let account = match fetch_account_by_id(&pool, account_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -682,10 +700,11 @@ pub async fn run_sepa(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    // Filter: only mandates with positive balance (outstanding debt).
+    // Filter: only mandates with a scheduled Abschlag (§40 Abs. 1 EnWG monthly collection).
+    // Note: Abschlag is collected regardless of credit balance — the Jahresabschluss reconciles.
     let mut direct_debits = Vec::new();
     for mandate in &mandates {
-        if let Some(acct) = fetch_account_by_id(&pool, mandate.account_id)
+        if let Some(acct) = fetch_account_by_id(&pool, mandate.account_id, &cfg.tenant)
             .await
             .ok()
             .flatten()
@@ -695,13 +714,37 @@ pub async fn run_sepa(
         }
     }
 
-    let xml = build_pain_008(&cfg.tenant, &direct_debits);
-    (
-        StatusCode::OK,
-        [(axum::http::header::CONTENT_TYPE, "application/xml")],
-        xml,
-    )
-        .into_response()
+    // P1-2 fix: validate creditor_iban before generating pain.008.
+    // A missing or invalid creditor IBAN causes hard rejection at the bank with return fees.
+    let creditor_iban = match cfg.creditor_iban.as_deref().filter(|s| !s.is_empty()) {
+        Some(iban) => iban,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "creditor_iban not configured — set a valid SEPA IBAN in accountingd.toml"
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    match build_pain_008(creditor_iban, &direct_debits) {
+        Ok(xml) => (
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "application/xml; charset=utf-8",
+            )],
+            xml,
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 // ── Vorauszahlung (BO4E typed advance-payment, L12 — §40 Abs. 1 EnWG) ────────
@@ -1004,7 +1047,7 @@ pub async fn post_jahresabschluss(
     let dry_run = q.dry_run.unwrap_or(false);
 
     // 1. Resolve account.
-    let acct = match fetch_account(&pool, &malo_id, lf_mp_id).await {
+    let acct = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => {
             return (
@@ -1303,5 +1346,197 @@ mod iban_tests {
     #[test]
     fn too_short() {
         assert!(validate_iban("DE89").is_err());
+    }
+}
+
+// ── P1-3: Open-item management ────────────────────────────────────────────────
+
+/// `GET /api/v1/accounts/{malo_id}/open-items`
+///
+/// Returns all unpaid or partially-paid debit entries for this account,
+/// computed via **FIFO clearing** of available credits against oldest debits.
+///
+/// ## What is an "open item"?
+///
+/// An open item (Offener Posten) is an individual RECHNUNG, STORNO, MAHNGEBUEHR,
+/// or ABSCHLAG debit that has not been fully covered by ZAHLUNG/GUTSCHRIFT credits.
+///
+/// ## Why not just use `balance_ct`?
+///
+/// `balance_ct` tells you the total outstanding amount but not *which* invoices
+/// are unpaid. Open-item management answers: "Invoice R2026-01 is unpaid;
+/// Invoice R2025-12 is partially paid (€42 remaining)."
+///
+/// ## FIFO clearing
+///
+/// Payments are applied to the oldest debits first. This matches:
+/// - Standard European utility billing practice (§252 HGB Vorsichtsprinzip)
+/// - SAP FI-CA default (oldest-first clearing)
+///
+/// ## Response
+///
+/// ```json
+/// [
+///   { "id": "...", "entry_type": "RECHNUNG", "amount_ct": 15000,
+///     "outstanding_ct": 7500, "reference_id": "R2026-01",
+///     "booking_date": "2026-01-15", "description": "Kundenrechnung" }
+/// ]
+/// ```
+pub async fn get_open_items(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(malo_id): Path<String>,
+    Query(q): Query<AccountQuery>,
+) -> impl IntoResponse {
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
+    let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    match crate::pg::list_open_items(&pool, account.account_id, &cfg.tenant).await {
+        Ok(items) => Json(serde_json::json!({
+            "malo_id": malo_id,
+            "balance_ct": account.balance_ct,
+            "balance_eur": format_ct_as_eur(account.balance_ct),
+            "open_item_count": items.len(),
+            "open_items": items,
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── P1-4: GDPR Art. 17 anonymization ─────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+pub struct AnonymizeRequest {
+    /// Operator identity for the GDPR Art. 5(2) audit log.
+    pub requested_by: String,
+    /// Legal basis for erasure (e.g. `"GDPR Art. 17 - customer request #42"`).
+    pub legal_basis: String,
+}
+
+/// `POST /api/v1/accounts/{malo_id}/anonymize`
+///
+/// Pseudonymize all PII for an account while preserving financial records.
+///
+/// ## What is anonymized
+///
+/// - `accounts.iban` → `"ANONYMIZED"`
+/// - `accounts.mandatsref` → `NULL`
+/// - `accounts.zahlungsinformation` → `NULL`
+/// - `accounts.vorauszahlung` → `NULL`
+/// - `sepa_mandates.iban` → `"ANONYMIZED"`
+/// - `sepa_mandates.kontoinhaber` → `"ANONYMIZED"`
+/// - `sepa_mandates.bic` → `NULL`
+///
+/// ## What is preserved
+///
+/// All `ledger_entries` (amounts, dates, types, references) are kept intact.
+/// `malo_id` is retained (location pseudonym, not personal data per BDEW).
+/// Financial records are exempt from GDPR Art. 17 erasure under Art. 17(3)(b)
+/// and §238 HGB / §147 AO retention requirements.
+///
+/// ## Audit trail
+///
+/// An immutable record is written to `anonymization_log` for GDPR Art. 5(2)
+/// accountability.
+///
+/// ## Error responses
+///
+/// - `404` — account not found
+/// - `409` — already anonymized
+/// - `422` — missing `requested_by` or `legal_basis`
+pub async fn post_anonymize(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(malo_id): Path<String>,
+    Query(q): Query<AccountQuery>,
+    Json(req): Json<AnonymizeRequest>,
+) -> impl IntoResponse {
+    if req.requested_by.is_empty() || req.legal_basis.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "requested_by and legal_basis are required for GDPR audit trail"
+            })),
+        )
+            .into_response();
+    }
+
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
+    let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    match crate::pg::anonymize_account(
+        &pool,
+        account.account_id,
+        &cfg.tenant,
+        &req.requested_by,
+        &req.legal_basis,
+    )
+    .await
+    {
+        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
+        Err(e) if e.to_string().contains("already anonymized") => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "account already anonymized" })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── Balance reconciliation ────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ReconcileQuery {
+    pub lf_mp_id: Option<String>,
+    /// When `true`, resets `balance_ct` to the recomputed value (safe, transactional).
+    pub repair: Option<bool>,
+}
+
+/// `POST /api/v1/accounts/{malo_id}/reconcile`
+///
+/// Detect (and optionally repair) a `balance_ct` cache drift.
+///
+/// `balance_ct` is a denormalized cache maintained by the `write_entry` transaction.
+/// A crash between `INSERT ledger_entries` and `UPDATE accounts SET balance_ct` could
+/// leave the cache stale. This endpoint detects the drift and, with `?repair=true`,
+/// atomically resets `balance_ct` to `SUM(ledger_entries.amount_ct)`.
+///
+/// ## Response
+///
+/// ```json
+/// {
+///   "is_consistent": true,
+///   "cached_balance_ct": 5000,
+///   "recomputed_balance_ct": 5000,
+///   "drift_ct": 0
+/// }
+/// ```
+///
+/// A non-zero `drift_ct` indicates a bug and must be investigated before repair.
+/// This endpoint is idempotent: running it multiple times with `repair=true` is safe.
+pub async fn post_reconcile(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(malo_id): Path<String>,
+    Query(q): Query<ReconcileQuery>,
+) -> impl IntoResponse {
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
+    let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let repair = q.repair.unwrap_or(false);
+    match crate::pg::reconcile_balance(&pool, account.account_id, &cfg.tenant, repair).await {
+        Ok(result) => Json(result).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

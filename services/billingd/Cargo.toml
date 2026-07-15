@@ -20,7 +20,7 @@ path = "src/main.rs"
 [dependencies]
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 billing      = { workspace = true }
-energy-billing = { workspace = true }
+energy-billing = { workspace = true, features = ["eeg"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
 mako-markt   = { workspace = true, features = ["marktd-client"] }

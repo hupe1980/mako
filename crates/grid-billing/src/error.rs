@@ -1,4 +1,4 @@
-//! Error types for `mako-nne`.
+//! Error types for `grid-billing`.
 
 /// Errors returned by the billing calculation functions.
 #[derive(Debug, Clone, thiserror::Error)]

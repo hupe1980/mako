@@ -14,9 +14,10 @@ use crate::{
     config::EinsdConfig,
     pg::{
         AnlageUpsertRequest, AnlagenQuery, SettleOverrides, build_settle_input,
-        decommission_anlage, fetch_anlage, fetch_epex_price, list_anlagen, list_expiring,
-        list_settlement_receipts, list_unsettled, lookup_verguetungssatz, run_settlement,
-        upsert_anlage, upsert_epex_price, zusammenlegen,
+        decommission_anlage, fetch_anlage, fetch_epex_price, fetch_jahresmarktwert_single,
+        list_anlagen, list_expiring, list_settlement_receipts, list_unsettled,
+        lookup_verguetungssatz, run_settlement, upsert_anlage, upsert_epex_price,
+        upsert_jahresmarktwert, zusammenlegen,
     },
 };
 
@@ -425,6 +426,59 @@ pub struct SettlementsQuery {
 pub struct EpexPriceBody {
     pub avg_ct_kwh: Decimal,
     pub source: Option<String>,
+}
+
+// ── §20 Abs. 2 Jahresmarktwert prices ──────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct JahresmarktwertBody {
+    pub avg_ct_kwh: Decimal,
+    pub source: Option<String>,
+}
+
+/// `PUT /api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}`
+///
+/// Import or update a technology-specific monthly Jahresmarktwert price
+/// (§20 Abs. 2 + Anlage 1 EEG 2023), published by ÜNB at netztransparenz.de.
+///
+/// `erzeugungsart` must match an `erzeugungsart` column value (e.g. `WIND_ONSHORE`,
+/// `SOLAR_AUFDACH`, `BIOMASSE`) or `DEFAULT` for the generic fallback row.
+///
+/// For MarketPremium (Direktvermarktung / Ausschreibung) settlements, the
+/// technology-specific Jahresmarktwert takes precedence over the generic EPEX
+/// monthly average from `epex_monthly_prices`.
+pub async fn put_jahresmarktwert(
+    Extension(pool): Extension<PgPool>,
+    Path((year, month, erzeugungsart)): Path<(i16, i16, String)>,
+    Json(body): Json<JahresmarktwertBody>,
+) -> impl IntoResponse {
+    if !(1..=12).contains(&month) {
+        return (StatusCode::BAD_REQUEST, "month must be 1–12").into_response();
+    }
+    let source = body.source.as_deref().unwrap_or("manual");
+    match upsert_jahresmarktwert(&pool, year, month, &erzeugungsart, body.avg_ct_kwh, source).await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}`
+pub async fn get_jahresmarktwert(
+    Extension(pool): Extension<PgPool>,
+    Path((year, month, erzeugungsart)): Path<(i16, i16, String)>,
+) -> impl IntoResponse {
+    match fetch_jahresmarktwert_single(&pool, year, month, &erzeugungsart).await {
+        Ok(Some(p)) => Json(serde_json::json!({
+            "billing_year": year,
+            "billing_month": month,
+            "erzeugungsart": erzeugungsart,
+            "avg_ct_kwh": p,
+        }))
+        .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 /// `PUT /api/v1/epex-monthly/{year}/{month}`
@@ -1190,8 +1244,6 @@ pub async fn post_correction_settle(
     Path((tr_id, year, month)): Path<(String, i16, i16)>,
     Json(req): Json<CorrectionSettleRequest>,
 ) -> impl IntoResponse {
-    use crate::pg::{fetch_anlage, fetch_epex_price, run_settlement};
-
     let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),

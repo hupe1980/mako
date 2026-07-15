@@ -1,6 +1,6 @@
 //! MCP server for `einsd` — Einspeiser Registry + EEG/KWKG Settlement.
 //!
-//! ## Tools (14)
+//! ## Tools (17)
 //!
 //! | Tool | Description |
 //! |---|---|
@@ -14,8 +14,13 @@
 //! | `list_unsettled_plants` | Plants not yet settled for a given month |
 //! | `get_epex_monthly_price` | Look up stored EPEX Spot monthly average |
 //! | `import_epex_monthly_price` | Store/update EPEX Spot monthly average price |
+//! | `import_jahresmarktwert` | Store/update §20 Abs. 2 technology-specific monthly Marktwert (ÜNB) |
 //! | `get_compliance_status` | Check §52 EEG compliance status for a plant (MaStR, Fernsteuerbarkeit) |
 //! | `list_plants_without_mastr` | Find plants not registered in MaStR (§52 §11 EEG 2023 violation) |
+//! | `check_direktvermarktung_compliance` | List plants >100 kW not in Direktvermarktung (§3 Nr. 1 + §20 EEG) |
+//! | `check_sect44b_quota` | Check §44b biogas annual 45%-cap quota status |
+//! | `get_settlement_state_history` | Fetch §22 MessZV audit trail of settlement state transitions |
+//! | `get_jahresmarktwert` | Look up stored §20 Abs. 2 technology-specific monthly Marktwert |
 //!
 //! ## Prompts (6)
 //!
@@ -132,6 +137,36 @@ pub struct LookupStatutoryRateParams {
     pub eeg_year: i16,
     /// VOLLEINSPEISUNG or UEBERSCHUSSEINSPEISUNG (solar only; default: UEBERSCHUSS).
     pub messkonzept: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ImportJahresmarktwertParams {
+    pub billing_year: i16,
+    pub billing_month: i16,
+    /// Technology type matching erzeugungsart column values, e.g. WIND_ONSHORE,
+    /// SOLAR_AUFDACH, SOLAR_FREIFLAECHE, BIOMASSE, BIOGAS, WASSERKRAFT, or DEFAULT.
+    pub erzeugungsart: String,
+    /// §20 Abs. 2 + Anlage 1 EEG 2023 monthly technology-specific Marktwert in ct/kWh.
+    /// Published by ÜNB at netztransparenz.de.
+    pub avg_ct_kwh: f64,
+    /// Source description (e.g. "netztransparenz.de", "manual").
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct JahresmarktwertLookupParams {
+    pub billing_year: i16,
+    pub billing_month: i16,
+    /// Technology type or DEFAULT.
+    pub erzeugungsart: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SettlementStateHistoryParams {
+    /// TechnischeRessource ID of the plant.
+    pub tr_id: String,
+    /// Max results (default 50, max 200).
+    pub limit: Option<u32>,
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -831,6 +866,140 @@ impl EinsdMcpHandler {
                      else if exhaustion_pct >= 75.0 { "WARNING: quota >75% exhausted" }
                      else { "OK" },
             "legal_basis": "§44b Abs. 1 EEG 2023: annual cap = leistung_kw × 0.45 × 8760 kWh for BIOGAS >100 kW (excl. §51b Ausschreibung).",
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    #[tool(
+        name = "import_jahresmarktwert",
+        description = "Store or update a §20 Abs. 2 + Anlage 1 EEG 2023 technology-specific monthly \
+Marktwert published by the ÜNB (netztransparenz.de). \
+For MarketPremium (Direktvermarktung / Ausschreibung) settlements this value takes \
+precedence over the generic EPEX monthly average from import_epex_monthly_price. \
+erzeugungsart must match plant erzeugungsart values (WIND_ONSHORE, SOLAR_AUFDACH, \
+SOLAR_FREIFLAECHE, BIOMASSE, BIOGAS, WASSERKRAFT, etc.) or 'DEFAULT' for the generic fallback."
+    )]
+    async fn import_jahresmarktwert(
+        &self,
+        Parameters(params): Parameters<ImportJahresmarktwertParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::upsert_jahresmarktwert;
+        use rust_decimal::Decimal;
+        use std::str::FromStr as _;
+        let avg = Decimal::from_str(&params.avg_ct_kwh.to_string())
+            .unwrap_or_else(|_| Decimal::try_from(params.avg_ct_kwh).unwrap_or(Decimal::ZERO));
+        let source = params.source.as_deref().unwrap_or("manual");
+        match upsert_jahresmarktwert(
+            &self.state.pool,
+            params.billing_year,
+            params.billing_month,
+            &params.erzeugungsart,
+            avg,
+            source,
+        )
+        .await
+        {
+            Ok(()) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "Jahresmarktwert stored: {}/{}/{} = {:.4} ct/kWh (source: {}). \
+                 This value will be used for all {} MarketPremium settlements for \
+                 billing_year={} billing_month={}.",
+                params.billing_year,
+                params.billing_month,
+                params.erzeugungsart,
+                params.avg_ct_kwh,
+                source,
+                params.erzeugungsart,
+                params.billing_year,
+                params.billing_month,
+            ))])),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "get_jahresmarktwert",
+        description = "Look up the stored §20 Abs. 2 technology-specific monthly Marktwert for a given \
+year, month, and erzeugungsart. Returns NOT_FOUND when no row exists (settlements will \
+fall back to EPEX in that case). Use 'DEFAULT' as erzeugungsart to check the generic fallback row."
+    )]
+    async fn get_jahresmarktwert_tool(
+        &self,
+        Parameters(params): Parameters<JahresmarktwertLookupParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::fetch_jahresmarktwert_single;
+        match fetch_jahresmarktwert_single(
+            &self.state.pool,
+            params.billing_year,
+            params.billing_month,
+            &params.erzeugungsart,
+        )
+        .await
+        {
+            Ok(Some(p)) => ContentBlock::json(serde_json::json!({
+                "billing_year": params.billing_year,
+                "billing_month": params.billing_month,
+                "erzeugungsart": params.erzeugungsart,
+                "avg_ct_kwh": p,
+                "legal_basis": "§20 Abs. 2 + Anlage 1 EEG 2023 (ÜNB-published technology-specific Marktwert)",
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            Ok(None) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "No Jahresmarktwert stored for {}/{}/{} — settlements use EPEX fallback.",
+                params.billing_year, params.billing_month, params.erzeugungsart
+            ))])),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        name = "get_settlement_state_history",
+        description = "Fetch the §22 MessZV audit trail of settlement state transitions for a plant \
+(tr_id). Returns all state changes (Active → Reduced → Suspended → PostEeg → Ended) with \
+effective dates and transition reasons. Required for BNetzA regulatory audit and §20 EnWG \
+compliance reporting."
+    )]
+    async fn get_settlement_state_history(
+        &self,
+        Parameters(params): Parameters<SettlementStateHistoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = params.limit.unwrap_or(50).min(200);
+        let rows = sqlx::query(
+            "SELECT id, from_state, to_state, effective_from, reason, notes, recorded_at \
+              FROM settlement_state_transitions \
+             WHERE tr_id = $1 AND tenant = $2 \
+             ORDER BY effective_from DESC, recorded_at DESC \
+             LIMIT $3",
+        )
+        .bind(&params.tr_id)
+        .bind(&self.state.tenant)
+        .bind(i64::from(limit))
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let items: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                use sqlx::Row as _;
+                serde_json::json!({
+                    "id": r.try_get::<String, _>("id").unwrap_or_default(),
+                    "from_state": r.try_get::<String, _>("from_state").unwrap_or_default(),
+                    "to_state": r.try_get::<String, _>("to_state").unwrap_or_default(),
+                    "effective_from": r.try_get::<time::Date, _>("effective_from").map(|d| d.to_string()).unwrap_or_default(),
+                    "reason": r.try_get::<String, _>("reason").unwrap_or_default(),
+                    "notes": r.try_get::<Option<String>, _>("notes").unwrap_or(None),
+                    "recorded_at": r.try_get::<time::OffsetDateTime, _>("recorded_at").map(|t| t.to_string()).unwrap_or_default(),
+                })
+            })
+            .collect();
+
+        ContentBlock::json(serde_json::json!({
+            "tr_id": params.tr_id,
+            "total": items.len(),
+            "transitions": items,
+            "legal_basis": "§22 MessZV: 3-year audit trail of settlement state transitions.",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))

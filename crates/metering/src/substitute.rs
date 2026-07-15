@@ -82,8 +82,61 @@ pub enum SubstituteMethod {
 /// let config = FillGapsConfig::prior_period(prior);
 /// let filled = fill_gaps_with_config(&current, 900, period_from, period_to, &config);
 /// ```
-#[derive(Debug, Clone, Default)]
+/// Reason why a substitute value was generated (for §22 MessZV audit trail).
+///
+/// Stored alongside each synthetic interval so that auditors and billing systems
+/// can explain every line item.
+///
+/// ## Legal basis
+///
+/// §17 MessZV requires the MSB to document the substitute value method.
+/// §22 MessZV requires a 3-year audit trail for all billing-relevant data.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
+pub enum SubstitutionReason {
+    /// §17 Abs. 1 MessZV — no measurement available for this interval.
+    NoMeasurementAvailable,
+    /// Meter hardware failure or communication fault.
+    MeterFault,
+    /// SMGW communication error (gateway not reachable).
+    GatewayCommFailure,
+    /// Plausibility check failed — value rejected, substitute generated.
+    PlausibilityCheckFailed,
+    /// Manual correction by MSB or operator.
+    ManualCorrection,
+    /// Meter exchange — value interpolated across the replacement boundary.
+    MeterExchangeInterpolation,
+    /// DST spring-forward: the "missing" hour (clock jumped from 02:00 to 03:00 CET).
+    DstSpringForward,
+    /// Billing period start/end gap filled for annual settlement.
+    BillingPeriodGapFill,
+    /// Other documented reason — see free-text `note` field if available.
+    Other,
+}
+
+impl SubstitutionReason {
+    /// Human-readable explanation for this reason (German).
+    #[must_use]
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::NoMeasurementAvailable => "Kein Messwert verfügbar (§17 Abs. 1 MessZV)",
+            Self::MeterFault => "Zählerdefekt oder Kommunikationsstörung",
+            Self::GatewayCommFailure => "SMGW-Kommunikationsfehler",
+            Self::PlausibilityCheckFailed => "Plausibilitätsprüfung fehlgeschlagen",
+            Self::ManualCorrection => "Manuelle Korrektur durch MSB/Betreiber",
+            Self::MeterExchangeInterpolation => "Zählerwechsel — Interpolation über Wechselgrenze",
+            Self::DstSpringForward => "Sommerzeit-Umstellung — fehlende Stunde",
+            Self::BillingPeriodGapFill => "Abrechnungszeitraum-Lücke",
+            Self::Other => "Sonstiger dokumentierter Grund",
+        }
+    }
+}
+
+/// Configuration for [`fill_gaps_with_config`].
+///
+/// Controls which substitute value method is applied, how many prior-period
+/// reference intervals are used, and what reason is recorded in the audit trail.
 pub struct FillGapsConfig {
     /// Which method to apply when synthesising missing values.
     ///
@@ -104,6 +157,26 @@ pub struct FillGapsConfig {
     /// Default: `3`. Gaps of ≤ this length always use linear interpolation.
     /// Gaps longer than this threshold use the `method` field.
     pub short_gap_threshold: usize,
+
+    /// Documented reason for gap filling (§22 MessZV audit trail).
+    ///
+    /// When set, the generated substitute intervals carry this reason in their
+    /// audit metadata. Used by `edmd` to persist the substitution rationale
+    /// in `meter_read_corrections`.
+    ///
+    /// `None` = reason not specified (acceptable for automated gap-fill).
+    pub reason: Option<SubstitutionReason>,
+}
+
+impl Default for FillGapsConfig {
+    fn default() -> Self {
+        Self {
+            method: SubstituteMethod::default(),
+            prior_period_intervals: Vec::new(),
+            short_gap_threshold: 3,
+            reason: None,
+        }
+    }
 }
 
 impl FillGapsConfig {
@@ -114,6 +187,7 @@ impl FillGapsConfig {
             method: SubstituteMethod::PriorPeriodAverage,
             prior_period_intervals,
             short_gap_threshold: 3,
+            reason: None,
         }
     }
 
@@ -124,6 +198,7 @@ impl FillGapsConfig {
             method: SubstituteMethod::ZeroFill,
             prior_period_intervals: Vec::new(),
             short_gap_threshold: 0,
+            reason: None,
         }
     }
 }
@@ -562,6 +637,7 @@ mod tests {
             method: SubstituteMethod::PriorPeriodAverage,
             prior_period_intervals: vec![prior_reading],
             short_gap_threshold: 0,
+            reason: None,
         };
         let filled = fill_gaps_with_config(&intervals, 900, from, to, &config);
 
@@ -601,6 +677,7 @@ mod tests {
             method: SubstituteMethod::ZeroFill,
             prior_period_intervals: vec![],
             short_gap_threshold: 3,
+            reason: None,
         };
         let filled = fill_gaps_with_config(&intervals, 900, from, to, &config);
         assert_eq!(filled.len(), 3);

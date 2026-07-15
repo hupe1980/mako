@@ -12,8 +12,10 @@ use mako_engine::{
     event_store::InMemoryEventStore, ids::TenantId, process::Process, types::MessageRef,
     version::WorkflowId,
 };
+use mako_gabi_gas::allocation::AllocationVersion;
 use mako_gabi_gas::{
     ALLOCATION_PIDS, AllocationCommand, AllocationState, AllocationType, GaBiGasAllocationWorkflow,
+    GasDay,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────────────────────
@@ -31,7 +33,9 @@ fn receive_alocat(synthetic_pid: u32, gas_day: &str) -> AllocationCommand {
         synthetic_pid,
         sender_eic: "11XFNB-SENDTEST1".to_owned(),
         receiver_eic: "11XBKV-RECVTEST2".to_owned(),
-        gas_day: gas_day.to_owned(),
+        gas_day: GasDay::parse(gas_day).expect("valid gas day"),
+        version: AllocationVersion::Initial,
+        allocated_quantity: None,
         clearing_number: Some("CLR-2025-001".to_owned()),
         message_ref: MessageRef::new("ALOCAT-2025-001"),
     }
@@ -107,7 +111,7 @@ async fn fnb_daily_alocat_received() {
         AllocationState::AllocationReceived(data) => {
             assert_eq!(data.synthetic_pid, 90001);
             assert_eq!(data.allocation_type, AllocationType::FnbDailyToBkv);
-            assert_eq!(data.gas_day, "20250115");
+            assert_eq!(data.gas_day, GasDay::parse("2025-01-15").unwrap());
             assert_eq!(data.clearing_number.as_deref(), Some("CLR-2025-001"));
         }
         other => panic!("expected AllocationReceived, got {}", other.label()),

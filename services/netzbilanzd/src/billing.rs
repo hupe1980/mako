@@ -229,6 +229,9 @@ pub async fn run_billing_internal(
                     spitzenleistung_kw: pos.spitzenleistung_kw,
                     leistungspreis_eur_per_kw: pos.leistungspreis_eur_per_kw,
                     ka_satz_ct_per_kwh: pos.ka_satz_ct_per_kwh,
+                    tariff_sheet_id: None,
+                    sparte: grid_billing::Sparte::Strom,
+                    ka_klasse: None,
                 };
                 let mut r = calculate_nne_invoice(&input)
                     .map_err(|e| anyhow::anyhow!("billing calc failed for {}: {e}", pos.malo_id))?;
@@ -330,6 +333,7 @@ pub async fn run_billing_internal(
                     profil_kwh: profil,
                     mehr_preis_ct_per_kwh: mp,
                     minder_preis_ct_per_kwh: mnp,
+                    sparte: grid_billing::Sparte::Strom,
                 };
                 let result = calculate_mmm_invoice(&input)
                     .map_err(|e| anyhow::anyhow!("billing calc failed for {}: {e}", pos.malo_id))?;
@@ -413,6 +417,9 @@ pub async fn run_billing_internal(
                     spitzenleistung_kw: None,
                     leistungspreis_eur_per_kw: None,
                     ka_satz_ct_per_kwh: None,
+                    tariff_sheet_id: None,
+                    sparte: grid_billing::Sparte::Strom,
+                    ka_klasse: None,
                 };
                 let mut r = calculate_nne_invoice(&input)
                     .map_err(|e| anyhow::anyhow!("billing calc failed for {}: {e}", pos.malo_id))?;
@@ -529,6 +536,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: None,
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let result = calculate_nne_invoice(&input).expect("nne calculation must succeed");
         assert_eq!(result.pid, 31001, "NNE Strom must use PID 31001");
@@ -564,6 +574,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: None,
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let result = calculate_nne_invoice(&input).expect("tou calculation must succeed");
         // HT: 500 × 32.0 ct = 160.00 EUR; NT: 200 × 24.0 ct = 48.00 EUR; total = 208.00 EUR
@@ -599,6 +612,7 @@ mod tests {
             profil_kwh: dec!(1000),
             mehr_preis_ct_per_kwh: dec!(5.0),
             minder_preis_ct_per_kwh: dec!(4.0),
+            sparte: grid_billing::Sparte::Strom,
         };
         let result = calculate_mmm_invoice(&input).expect("mmm calculation must succeed");
         assert_eq!(result.pid, 31002, "MMM must use PID 31002");
@@ -628,6 +642,7 @@ mod tests {
             profil_kwh: dec!(1000),
             mehr_preis_ct_per_kwh: dec!(5.0),
             minder_preis_ct_per_kwh: dec!(4.0),
+            sparte: grid_billing::Sparte::Strom,
         };
         let result = calculate_mmm_invoice(&input).expect("mmm calculation must succeed");
         // Minder: -max(0, 1000-800) × 4ct = -200 × 0.04 = -8.00 EUR (credit)
@@ -661,6 +676,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: Some(dec!(1.32)), // §17 StromNZV residential KA
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let result = calculate_nne_invoice(&input).expect("nne+ka calculation must succeed");
         // NNE: 1000 × 28.50ct = 285.00 EUR; KA: 1000 × 1.32ct = 13.20 EUR; total = 298.20 EUR
@@ -734,6 +752,7 @@ mod tests {
             profil_kwh: dec!(1000), // SLP profile forecast
             mehr_preis_ct_per_kwh: dec!(3.00),
             minder_preis_ct_per_kwh: dec!(2.50),
+            sparte: grid_billing::Sparte::Strom,
         };
         let result = calculate_mmm_invoice(&input).expect("mmm calc must succeed");
         assert_eq!(result.pid, 31002, "MMM Strom must use PID 31002");
@@ -763,6 +782,7 @@ mod tests {
             profil_kwh: dec!(1000), // SLP profile forecast
             mehr_preis_ct_per_kwh: dec!(3.00),
             minder_preis_ct_per_kwh: dec!(2.50),
+            sparte: grid_billing::Sparte::Strom,
         };
         let result = calculate_mmm_invoice(&input).expect("mmm calc must succeed");
         // Mindermenge = 100 kWh; credit to LF = -100 × 2.50ct = -2.50 EUR
@@ -790,6 +810,7 @@ mod tests {
             profil_kwh: dec!(1000),
             mehr_preis_ct_per_kwh: dec!(3.00),
             minder_preis_ct_per_kwh: dec!(2.50),
+            sparte: grid_billing::Sparte::Strom,
         };
         let result = calculate_mmm_invoice(&input).expect("mmm calc must succeed");
         let diff = result.total_eur.abs();
@@ -825,6 +846,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: None,
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let result = calculate_nne_invoice(&input).expect("§14a ToU calc must succeed");
         assert_eq!(result.pid, 31001);
@@ -866,6 +890,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: Some(dec!(1.32)),
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let result = calculate_nne_invoice(&input).expect("§14a ToU+KA must succeed");
         // HT: 600×4.00ct=24.00; NT: 400×1.50ct=6.00; KA: 1000×1.32ct=13.20; total=43.20
@@ -908,6 +935,9 @@ mod tests {
             spitzenleistung_kw: Some(dec!(120)),
             leistungspreis_eur_per_kw: Some(dec!(8.50)),
             ka_satz_ct_per_kwh: None,
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let result = calculate_nne_invoice(&input).expect("RLM calc must succeed");
         // 50000 × 3.80ct = 1900 EUR; 120 × 8.50 EUR = 1020 EUR; total = 2920 EUR
@@ -949,6 +979,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: None,
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let mut result = calculate_nne_invoice(&input).expect("NNE Gas calc must succeed");
         // Billing module generates PID 31001 by default; override to 31005 for Gas (same path as billing.rs)
@@ -991,6 +1024,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: None,
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let mut result = calculate_nne_invoice(&input).expect("AWH calc must succeed");
         result.pid = 31011;
@@ -1029,6 +1065,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: None,
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let result = calculate_nne_invoice(&input).expect("precision calc must succeed");
         // 1234.567 × 12.345ct / 100 = 152.39553915 EUR (rounded to 5dp: 152.39554)
@@ -1094,6 +1133,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: None,
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let result = calculate_nne_invoice(&input).expect("calc must succeed");
         let store = InMemoryPreisblattStore::new();
@@ -1130,6 +1172,7 @@ mod tests {
             profil_kwh: dec!(1000),
             mehr_preis_ct_per_kwh: dec!(3.00),
             minder_preis_ct_per_kwh: dec!(2.50),
+            sparte: grid_billing::Sparte::Strom,
         };
         let result = calculate_mmm_invoice(&input).expect("mmm calc must succeed");
         let store = InMemoryPreisblattStore::new();
@@ -1188,6 +1231,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: None,
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let result = calculate_nne_invoice(&input).expect("must succeed");
         // due_date must be after invoice_date (§21 MessZV Zahlungsziel)
@@ -1222,6 +1268,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: None,
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
 
         // nne_strom → 31001
@@ -1252,6 +1301,7 @@ mod tests {
             profil_kwh: dec!(100),
             mehr_preis_ct_per_kwh: dec!(3),
             minder_preis_ct_per_kwh: dec!(2),
+            sparte: grid_billing::Sparte::Strom,
         };
         let r = calculate_mmm_invoice(&mmm_input).unwrap();
         assert_eq!(r.pid, 31002, "mmm must be PID 31002");
@@ -1298,6 +1348,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: None,
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let result = calculate_nne_invoice(&input).expect("zero-NT §14a must succeed");
         // HT: 1000 × 4.00ct = 40.00 EUR; NT: 0 × 1.50ct = 0; total = 40.00
@@ -1334,6 +1387,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: Some(dec!(1.32)),
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let r_res = calculate_nne_invoice(&residential).unwrap();
         let diff = (r_res.total_eur - dec!(298.20)).abs();
@@ -1346,6 +1402,9 @@ mod tests {
         // Commercial G0: 0.11 ct/kWh KA
         let commercial = NneInput {
             ka_satz_ct_per_kwh: Some(dec!(0.11)),
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
             rechnungsnummer: "KA-G0".to_owned(),
             ..residential
         };
@@ -1377,6 +1436,7 @@ mod tests {
             profil_kwh: dec!(1000),
             mehr_preis_ct_per_kwh: dec!(3.00),
             minder_preis_ct_per_kwh: dec!(2.50),
+            sparte: grid_billing::Sparte::Strom,
         };
         // Both "mmm" and "mmm_strom" map to the same grid_billing::MmmInput path.
         // Verify the formula produces the same result for any label.
@@ -1416,6 +1476,9 @@ mod tests {
             spitzenleistung_kw: Some(dec!(0)), // zero — no Leistung position expected
             leistungspreis_eur_per_kw: Some(dec!(8.50)),
             ka_satz_ct_per_kwh: None,
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let result = calculate_nne_invoice(&input).expect("zero Spitze must succeed");
         // Only Arbeit: 50000 × 3.80ct = 1900 EUR; Leistung = 0 × 8.50 = 0
@@ -1453,6 +1516,9 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: None,
+            tariff_sheet_id: None,
+            sparte: grid_billing::Sparte::Strom,
+            ka_klasse: None,
         };
         let result = calculate_nne_invoice(&input).expect("2-day billing must succeed");
         let diff = (result.total_eur - dec!(13.68)).abs(); // 48 × 28.50ct = 13.68 EUR

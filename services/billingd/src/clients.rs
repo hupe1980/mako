@@ -188,11 +188,11 @@ fn extract_tariff_from_product_data(
     let mut kwkg_zuschlag_ct_per_kwh: Option<Decimal> = None;
     let mut marktwert_ct_per_kwh: Option<Decimal> = None;
     let mut vermarktungsgebuehr_ct_per_kwh: Option<Decimal> = None;
-    let mut hems_platform_fee_eur_per_month: Option<Decimal> = None;
+    let mut hems_subscription_eur_per_month_from_code: Option<Decimal> = None;
     let mut hems_optimization_event_eur: Option<Decimal> = None;
     let mut hems_readout_event_eur: Option<Decimal> = None;
-    let mut emobility_service_fee_eur_per_month: Option<Decimal> = None;
-    let mut emobility_arbeitspreis_ct_per_kwh: Option<Decimal> = None;
+    let mut emobility_service_fee_eur_from_code: Option<Decimal> = None;
+    let mut emobility_kwh_price_ct_from_code: Option<Decimal> = None;
     let mut emobility_session_fee_eur: Option<Decimal> = None;
     let mut emobility_roaming_fee_eur: Option<Decimal> = None;
     let mut service_fee_eur: Option<Decimal> = None;
@@ -237,11 +237,11 @@ fn extract_tariff_from_product_data(
             ("VERMARKTUNGSGEBUEHR", _) => vermarktungsgebuehr_ct_per_kwh = preis,
             ("STEUERUNGSRABATT_MODUL1", _) => steuerungsrabatt_modul1_eur_per_kw_year = preis,
             ("STEUERUNGSRABATT_MODUL3", _) => steuerungsrabatt_modul3_eur_per_kw_year = preis,
-            ("HEMS_PLATTFORMGEBUEHR", _) => hems_platform_fee_eur_per_month = preis,
+            ("HEMS_PLATTFORMGEBUEHR", _) => hems_subscription_eur_per_month_from_code = preis,
             ("HEMS_OPTIMIERUNGSEVENT", _) => hems_optimization_event_eur = preis,
             ("HEMS_AUSLESUNG", _) => hems_readout_event_eur = preis,
-            ("EMOBILITY_SERVICEGEBUEHR", _) => emobility_service_fee_eur_per_month = preis,
-            ("EMOBILITY_ARBEITSPREIS", _) => emobility_arbeitspreis_ct_per_kwh = preis,
+            ("EMOBILITY_SERVICEGEBUEHR", _) => emobility_service_fee_eur_from_code = preis,
+            ("EMOBILITY_ARBEITSPREIS", _) => emobility_kwh_price_ct_from_code = preis,
             ("EMOBILITY_SESSION", _) => emobility_session_fee_eur = preis,
             ("EMOBILITY_ROAMING", _) => emobility_roaming_fee_eur = preis,
             ("SERVICE_GEBUEHR", _) => service_fee_eur = preis,
@@ -278,11 +278,8 @@ fn extract_tariff_from_product_data(
         kwkg_zuschlag_ct_per_kwh,
         marktwert_ct_per_kwh,
         vermarktungsgebuehr_ct_per_kwh,
-        hems_platform_fee_eur_per_month,
         hems_optimization_event_eur,
         hems_readout_event_eur,
-        emobility_service_fee_eur_per_month,
-        emobility_arbeitspreis_ct_per_kwh,
         emobility_session_fee_eur,
         emobility_roaming_fee_eur,
         service_fee_eur,
@@ -301,24 +298,53 @@ fn extract_tariff_from_product_data(
             "sect14a_modul3_entschaedigung_ct_per_kwh",
         ),
         waerme_leistungspreis_eur_per_kw_year: get_decimal("waerme_leistungspreis_eur_per_kw_year"),
-        hems_subscription_eur_per_month: get_decimal("hems_subscription_eur_per_month"),
-        emobility_service_fee_eur: get_decimal("emobility_service_fee_eur"),
-        emobility_kwh_price_ct: get_decimal("emobility_kwh_price_ct"),
+        hems_subscription_eur_per_month: get_decimal("hems_subscription_eur_per_month")
+            .or(hems_subscription_eur_per_month_from_code),
+        emobility_service_fee_eur: get_decimal("emobility_service_fee_eur")
+            .or(emobility_service_fee_eur_from_code),
+        emobility_kwh_price_ct: get_decimal("emobility_kwh_price_ct")
+            .or(emobility_kwh_price_ct_from_code),
+        auf_abschlag_ct_per_kwh: get_decimal("auf_abschlag_ct_per_kwh"),
+        auf_abschlag_eur_per_month: get_decimal("auf_abschlag_eur_per_month"),
+        msb_gebuehr_ct_per_day: get_decimal("msb_gebuehr_ct_per_day"),
+        // Block tariff tiers — deserialised from tarifbd JSONB when present
+        block_tiers: product
+            .and_then(|p| p.get("block_tiers"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
+        // Minimum invoice amount (brutto EUR) — from tarifbd product JSONB
+        minimum_invoice_eur_brutto: get_decimal("minimum_invoice_eur_brutto"),
+        // Indexed price config — deserialised from tarifbd JSONB when present
+        indexed_price: product
+            .and_then(|p| p.get("indexed_price"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
+        // Seasonal price overrides — from tarifbd JSONB
+        seasonal_prices: product
+            .and_then(|p| p.get("seasonal_prices"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
+        // waerme_is_renewable — boolean flag in tarifbd product JSONB
+        waerme_is_renewable: product
+            .and_then(|p| p.get("waerme_is_renewable"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        // anlage_kwp, industrie_stromsteuer_befreiung, preisgarantie_bis — from JSONB when set
+        anlage_kwp: get_decimal("anlage_kwp"),
+        industrie_stromsteuer_befreiung: product
+            .and_then(|p| p.get("industrie_stromsteuer_befreiung"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        preisgarantie_bis: product
+            .and_then(|p| p.get("preisgarantie_bis"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| {
+                time::Date::parse(s, time::macros::format_description!("[year]-[month]-[day]")).ok()
+            }),
         // register_count is already set above via shorthand field
+        leistungspreis_strom_ct_per_kw_month: get_decimal("leistungspreis_strom_ct_per_kw_month"),
+        gas_energiesteuer_befreiung: product
+            .and_then(|p| p.get("gas_energiesteuer_befreiung"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     })
-}
-
-impl TarifbdClient {
-    /// Stub: fetch Gas NNE/KA from marktd.  Until marktd exposes a Gas-specific
-    /// `PreisblattGasNetznutzung` endpoint, callers supply `GridInput::gas_*` overrides.
-    #[allow(dead_code)]
-    pub async fn get_gas_grid_input(&self, malo_id: &str) -> Result<crate::calculator::GridInput> {
-        tracing::debug!(
-            malo_id,
-            "billingd: gas GridInput from marktd not yet available — use request override"
-        );
-        Ok(crate::calculator::GridInput::default())
-    }
 }
 
 // ── EdmdClient ────────────────────────────────────────────────────────────────
@@ -383,6 +409,7 @@ impl EdmdClient {
                 .get("steuerung_stunden")
                 .and_then(|v| v.as_str())
                 .and_then(|s| s.parse().ok()),
+            ..Default::default()
         };
         Ok(Some(meter))
     }

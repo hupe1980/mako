@@ -47,4 +47,7 @@ pub const ORDRSP_ABLEHNUNG_PID: u32 = 19110;
 /// | PID   | Description |
 /// |-------|-------------|
 /// | 13013 | Marktlokationsscharfe Allokationsliste Gas (Gas-only MMMA, NB → LF) |
-pub const MMMA_MSCONS_PIDS: &[u32] = &[13013];
+///
+/// This constant aliases [`mako_edm::GAS_MMMA_PIDS`] for convenience.
+/// The canonical source of truth is `mako-edm`.
+pub use mako_edm::GAS_MMMA_PIDS as MMMA_MSCONS_PIDS;

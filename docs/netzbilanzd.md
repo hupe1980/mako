@@ -108,9 +108,13 @@ graph LR
    | `minder_preis_ct_per_kwh` | Same as above | Same as above |
    | `lastprofil` | `marktd GET /api/v1/malo/{id}` → `bilanzierungsmethode` | `billing_type = "mmm_*"`, field absent |
 
-2. **Invoice generation** — pure `grid-billing` library, no I/O, all amounts in
-   `EuroAmount` = `i64 × 10⁻⁵ EUR` (no `f64` in billing path).
-   Returns `GridInvoice` (domain type, no BO4E dep);
+2. **Invoice generation** — pure `grid-billing` library, no I/O.
+   Returns `GridSettlement` (domain type, no BO4E dep) with:
+   - **`counterparty_mp_id`** — auto-populated from `lf_mp_id` (NNE/MMM) or `msb_mp_id` (PID 31009)
+   - **`CalculationTrace`** per position — `explanation`, `legal_refs`, `tariff_source`, `gross_eur`
+   - **`LegalReference`** list — e.g. `StromNEV §21`, `KAV §2 Abs. 2`, `§14a EnWG Modul 2`
+   - **`Sparte`** on input drives legal refs + `SettlementType` automatically (`Gas` → `GasNEV §14`, PID 31005)
+
    `netzbilanzd` calls `into_rechnung()` locally before validation and serialization.
 
 3. **Self-validation** — `invoic-checker` checks 1–3 run immediately.
@@ -124,8 +128,10 @@ graph LR
    inspect full `rechnung` BO4E payload with `GET /api/v1/billing/drafts/{id}`.
 
 6. **Dispatch** — `PUT /api/v1/billing/drafts/{id}/dispatch` re-validates
-   then issues the corresponding `makod` command. The `lf_mp_id` is the counterparty
-   for all types except `msb_31009` (uses `msb_mp_id`).
+   then issues the corresponding `makod` command.
+   The invoice recipient (`counterparty_mp_id`) is set automatically by `grid-billing`
+   from the input: `lf_mp_id` for NNE/MMM, `msb_mp_id` for `msb_31009`.
+   No separate lookup required.
 
 7. **Payment lifecycle** — REMADV responses update `status` automatically via
    the `POST /api/v1/webhooks/remadv` CloudEvent endpoint.
@@ -190,6 +196,50 @@ into separate HT (Hochlast) and NT (Niedertarif) positions:
 one per GGV tenant MaLo. Proportional attribution via `tenant_consumption` map or
 equal-split fallback when consumption data is unavailable. The GGV topology is
 auto-discovered from `marktd` Lokationszuordnung (edges `beziehungstyp = "GGV_MIETER"`).
+
+---
+
+## Calculation audit trail
+
+Every `GridSettlement` returned by `grid-billing` carries a full `CalculationTrace`
+per position. This answers *"why is this amount on the invoice?"* without re-running
+the calculation — a BNetzA §20 EnWG regulatory requirement.
+
+```
+GET /api/v1/billing/drafts/{id}
+→ rechnung JSONB
+  rechnungspositionen[0].positionstext = "Netznutzung Arbeit HT (§14a Modul 2)"
+  trace.explanation  = "600.000 kWh × 0.042000 EUR/kWh = 25.20000 EUR"
+  trace.legal_refs   = ["§14a EnWG Modul 2", "BNetzA BK6-22-300", "StromNEV §21"]
+  trace.tariff_source.sheet_id = "Preisblatt-NNE-2026-Q1"
+  trace.gross_eur    = 25.200000
+```
+
+`netzbilanzd` stores the `rechnung` BO4E JSON in `invoice_drafts.rechnung_json`.
+The trace is embedded in the `zusatz_attribute` of each position by `into_rechnung()`
+so it survives serialization.
+
+```mermaid
+flowchart LR
+    input["NneInput\n(sparte, tariff_sheet_id,\nka_klasse, ...)"]
+    calc["grid_billing::\ncalculate_nne_invoice()"]
+    gs["GridSettlement\ncounterparty_mp_id\npositions[n].trace\n  .explanation\n  .legal_refs\n  .tariff_source"]
+    rechnung["rubo4e::Rechnung\nrechnungspositionen"]
+    db[("invoice_drafts\n.rechnung_json")]
+
+    input --> calc --> gs --> rechnung --> db
+```
+
+### Legal references by billing type
+
+| Billing type | Arbeit basis | Leistung basis | KA basis | MMM basis |
+|---|---|---|---|---|
+| `nne_strom` | StromNEV §21 | StromNEV §17 | KAV §2 Abs. 2 | — |
+| `nne_strom` + §14a | §14a EnWG Modul 2 · BNetzA BK6-22-300 | StromNEV §17 | KAV §2 Abs. 2 | — |
+| `nne_gas` | GasNEV §14 | — | — | — |
+| `mmm_strom` | — | — | — | StromNZV §15 · GPKE BK6-22-024 |
+| `mmm_gas` | — | — | — | GasNZV §14 · GeLi Gas BK7-24-01-009 |
+| `msb_31009` | — | — | — | MsbG §§6–7 · MessZV §2 |
 
 ---
 

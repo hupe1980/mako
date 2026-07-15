@@ -434,3 +434,102 @@ All types:
 | How EDIFACT messages are parsed and validated | [Parsing Guide](../parsing) |
 | How the engine routes messages to workflows | [Process Engine](../engine) |
 | BO4E objects in ERP integration | [ERP Integration](../erp-integration) |
+| Gas balancing domain model | [GaBi Gas domain](#gas-domain--gabi-gas) (below) |
+
+---
+
+## Gas Domain — GaBi Gas
+
+The `mako-gabi-gas` crate provides a dedicated domain vocabulary for the German
+gas market, all in `src/domain.rs` and `src/portfolio.rs`. All energy quantities
+use `Decimal` — no float arithmetic (**DVGW G 685 requires ≥ 3 decimal places**).
+
+### GasDay — typed gas market day
+
+The German gas day is defined by **DVGW G 2000 §3.2**: it starts and ends at
+**06:00 CET** (Central European Time), which is UTC-offset aware:
+
+| Season | Local | UTC |
+|---|---|---|
+| Winter (CET, UTC+1) | 06:00 CET | 05:00 UTC |
+| Summer (CEST, UTC+2) | 06:00 CEST | 04:00 UTC |
+
+DST transitions produce 23-hour (spring forward) or 25-hour (fall back) gas days.
+The nomination deadline per KoV §3.2 is **D-1 13:00 CET**.
+
+```rust
+let day = GasDay::new(date!(2026-01-15));
+assert_eq!(day.start_utc().hour(), 5);          // 05:00 UTC (CET winter)
+assert_eq!(day.duration_hours(), 24);
+assert_eq!(GasDay::new(date!(2026-03-28)).duration_hours(), 23); // spring-forward day
+assert_eq!(GasDay::new(date!(2026-10-24)).duration_hours(), 25); // fall-back day
+```
+
+### GasBeschaffenheit + GasQuantity
+
+The DVGW G 685 conversion formula:
+
+$$kWh_{Hs} = m^3 \times H_s \times Z$$
+
+```rust
+let beschaffenheit = GasBeschaffenheit {
+    brennwert_hs_kwh_per_m3: dec!(10.55),  // Abrechnungsbrennwert from MSCONS PID 13007
+    zustandszahl: dec!(0.9764),             // pressure/temperature correction
+    quality_class: GasQualityClass::HGas,
+    ..
+};
+let q = GasQuantity::from_m3(dec!(100), beschaffenheit);
+assert_eq!(q.energy_kwh_hs, dec!(1030.102));  // rounded to 3 decimal places
+```
+
+Gas quality classes per **DVGW G 260**:
+
+| Class | Hs range (kWh/m³) | Usage |
+|---|---|---|
+| H-Gas | 9.5–13.1 | Most German transmission grids |
+| L-Gas | 7.5–10.3 | Parts of northern Germany |
+| Biogas | variable | Injected biomethane |
+
+### AllocationVersion — KoV §6.4 correction tracking
+
+ALOCAT messages may be sent as initial, corrected, or final allocations:
+
+| Variant | Meaning |
+|---|---|
+| `Initial` | First ALOCAT for this gas day — preliminary |
+| `Correction(n)` | nth corrected allocation (1-based) |
+| `Final` | Binding for imbalance settlement — no further corrections |
+
+### GasMarketRole
+
+| Role | `GasMarketRole` | Notes |
+|---|---|---|
+| Bilanzkreisverantwortlicher | `Bkv` | Submits NOMINT; receives ALOCAT; subject to IMBNOT |
+| Fernleitungsnetzbetreiber | `Fnb` | Sends daily ALOCAT 90001; receives NOMINT |
+| Verteilnetzbetreiber | `Vnb` | Sends sub-daily ALOCAT 90003 |
+| Marktgebietsverantwortlicher | `Mgv` | Sends monthly ALOCAT 90002; imbalance settlement |
+| Lieferant | `Lf` | Supplies end customers; does not submit DVGW nominations directly |
+| Händler | `Haendler` | May submit nominations and delivery orders |
+
+### GasPortfolioBalance
+
+`GasPortfolioBalance` aggregates all BKV positions across Bilanzkreise for a
+gas day, enabling portfolio-level imbalance management:
+
+```rust
+let balance: GasPortfolioBalance = compute_portfolio(bkv_eic, gas_day, positions);
+println!("Net imbalance: {} kWh",  balance.net_imbalance_kwh());
+println!("Direction: {:?}",         balance.portfolio_direction()); // Mehr/Minder/Balanced
+println!("Open positions: {}",      balance.open_imbalance_count());
+println!("Fully settled: {}",       balance.is_fully_settled());
+```
+
+### Gas identifier formats
+
+| Identifier | Format | Standard | Example |
+|---|---|---|---|
+| EIC (BKV / FNB / MGV) | 16 chars alphanumeric | ENTSO-E EIC code | `21X000000001368S` |
+| Bilanzkreis-EIC | 16 chars | ENTSO-E EIC code | `11YAPG4CTRDNZ--A` |
+| DVGW-Codenummer (NB) | 13 digits, starts `98` | DVGW registry | `9800357000001` |
+| BDEW-Codenummer (LF) | 13 digits, starts `99` | BDEW registry | `9900357000004` |
+| Gas Zählpunkt (MeLo) | 11 chars | DVGW G 2000 | `DE000123400M` |

@@ -17,8 +17,8 @@ use crate::{
     calculator::{
         BillingContext, BillingEngine, DynamicInterval, EegMeterInput, EmobilityMeterInput,
         GasMeterInput, GridInput, HemsMeterInput, Invoice, InvoiceType, MeterInput, MwStProvider,
-        Quantities, RegulatoryRates, ServiceMeterInput, SolarMeterInput, SolarProvider,
-        TariffInput, WaermeMeterInput,
+        PricingModel, Quantities, RegulatoryRates, ServiceMeterInput, SolarMeterInput,
+        SolarProvider, TariffInput, WaermeMeterInput, negate_rechnung_json_for_correction,
     },
     clients::{EdmdClient, TarifbdClient, VertragdClient},
     config::BillingdConfig,
@@ -40,8 +40,12 @@ use crate::{
 #[derive(Debug, Deserialize)]
 pub struct CalculateRequest {
     pub lf_mp_id: String,
-    #[allow(dead_code)]
-    pub nb_mp_id: String,
+    /// §41 Abs. 1 Nr. 5 EnWG — Netzbetreiber identification on the invoice.
+    ///
+    /// When set, propagated to `BillingContext.nb_mp_id`. When absent, `billingd`
+    /// looks up the NB from `marktd` via the MaLo's grid assignment.
+    #[serde(default)]
+    pub nb_mp_id: Option<String>,
     pub period_from: String,
     pub period_to: String,
     /// Override: supply product data directly (skip tarifbd lookup).
@@ -321,6 +325,10 @@ async fn dispatch_invoice(
     let quantities =
         build_quantities(tariff, req, malo_id, period_from, period_to, edmd, marktd).await?;
 
+    // Generate a unique billing run ID for audit trail and duplicate detection.
+    // Stored on the Invoice and propagated to the billing_records table.
+    let run_id = Uuid::new_v4().to_string();
+
     let ctx = BillingContext {
         malo_id: malo_id.to_owned(),
         lf_mp_id: req.lf_mp_id.clone(),
@@ -330,14 +338,23 @@ async fn dispatch_invoice(
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         contract_id: None,
+        // Propagate minimum invoice from product definition (tarifbd) to billing context.
+        minimum_invoice_eur_brutto: tariff.minimum_invoice_eur_brutto,
+        // §41 Abs. 1 Nr. 5 EnWG — Netzbetreiber identification on invoice.
+        nb_mp_id: req.nb_mp_id.clone(),
+        // Audit trail: unique run ID links DB record to calculation output.
+        billing_run_id: Some(run_id),
+        ..Default::default()
     };
 
-    let engine = tariff.build_engine(&grid, rates).ok_or_else(|| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("unsupported product category: {}", tariff.category),
-        )
-    })?;
+    let engine = PricingModel::try_from(tariff.clone())
+        .and_then(|m| m.build_engine(&grid, rates))
+        .map_err(|e| {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("billing engine: {e}"),
+            )
+        })?;
 
     engine
         .bill(ctx, &quantities)
@@ -650,15 +667,18 @@ pub async fn post_correction(
             .into_response();
     }
 
-    // Negate all monetary amounts in the original Rechnung JSON.
-    let corrected_json = negate_rechnung_json(
-        &original.rechnung_json,
-        original
-            .rechnung_json
-            .get("rechnungsnummer")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&id.to_string()),
-    );
+    // Produce a Korrekturrechnung JSON by negating the original via the library function.
+    // The library owns all sign-negation logic for consistency with the engine's
+    // negate_positions() path used for fresh Cancellation calculations.
+    let id_str = id.to_string();
+    let original_nr = original
+        .rechnung_json
+        .get("rechnungsnummer")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&id_str);
+    let new_nr = format!("KORR-{original_nr}");
+    let corrected_json =
+        negate_rechnung_json_for_correction(&original.rechnung_json, original_nr, &new_nr);
 
     let netto = -original.total_netto_eur.unwrap_or_default();
     let brutto = -original.total_brutto_eur.unwrap_or_default();
@@ -712,101 +732,36 @@ pub async fn post_correction(
         .into_response()
 }
 
-/// Produce a Korrekturrechnung JSON by negating all monetary fields from the original.
-///
-/// Sets `istOriginal: false` and `originalRechnungsnummer`.
-/// Does NOT modify the original JSON — returns a new owned value.
-fn negate_rechnung_json(
-    original: &serde_json::Value,
-    original_rechnungsnummer: &str,
-) -> serde_json::Value {
-    let mut corrected = original.clone();
-    if let Some(obj) = corrected.as_object_mut() {
-        // Correction identity fields.
-        obj.insert("istOriginal".to_owned(), serde_json::json!(false));
-        obj.insert(
-            "originalRechnungsnummer".to_owned(),
-            serde_json::json!(original_rechnungsnummer),
-        );
-        let new_nr = format!("KORR-{original_rechnungsnummer}");
-        obj.insert("rechnungsnummer".to_owned(), serde_json::json!(new_nr));
-        obj.insert(
-            "rechnungsdatum".to_owned(),
-            serde_json::json!(
-                time::OffsetDateTime::now_utc()
-                    .format(&time::format_description::well_known::Rfc3339)
-                    .unwrap_or_default()
-            ),
-        );
-
-        // Negate totals.
-        negate_betrag_in_obj(obj, "gesamtbrutto");
-        negate_betrag_in_obj(obj, "gesamtnetto");
-
-        // Negate per-position amounts.
-        if let Some(serde_json::Value::Array(positionen)) = obj.get_mut("rechnungspositionen") {
-            for pos in positionen.iter_mut() {
-                if let Some(pos_obj) = pos.as_object_mut() {
-                    negate_betrag_in_obj(pos_obj, "betragNetto");
-                    if let Some(serde_json::Value::Object(ep)) = pos_obj.get_mut("einzelpreis") {
-                        negate_wert_field(ep);
-                    }
-                }
-            }
-        }
-
-        // Negate tax amounts.
-        if let Some(serde_json::Value::Array(steuern)) = obj.get_mut("steuern") {
-            for s in steuern.iter_mut() {
-                if let Some(s_obj) = s.as_object_mut() {
-                    negate_betrag_in_obj(s_obj, "steuerbetrag");
-                    negate_betrag_in_obj(s_obj, "steuerGrundlage");
-                }
-            }
-        }
-    }
-    corrected
-}
-
-fn negate_betrag_in_obj(obj: &mut serde_json::Map<String, serde_json::Value>, key: &str) {
-    if let Some(serde_json::Value::Object(betrag)) = obj.get_mut(key) {
-        negate_wert_field(betrag);
-    }
-}
-
-fn negate_wert_field(obj: &mut serde_json::Map<String, serde_json::Value>) {
-    if let Some(v) = obj.get("wert") {
-        let negated = match v {
-            serde_json::Value::String(s) => s
-                .parse::<Decimal>()
-                .ok()
-                .map(|d| serde_json::json!((-d).to_string())),
-            serde_json::Value::Number(n) => n.as_f64().map(|f| serde_json::json!(-f)),
-            _ => None,
-        };
-        if let Some(neg) = negated {
-            obj.insert("wert".to_owned(), neg);
-        }
-    }
-}
-
-// ── §42a GGV Community Solar Multi-Tenant Billing (B1) ─────────────────────────
+// ── §42b EEG 2023 (Solarpaket I) GGV Community Solar Multi-Tenant Billing ─────
 
 /// Per-tenant input for the GGV proportional billing endpoint.
 ///
 /// Each entry represents one tenant delivery point under the shared PV installation.
-/// `consumption_kwh` is the metered Eigenverbrauch for the billing period from `edmd`.
+/// `consumption_kwh` is the metered actual consumption for the billing period from `edmd`.
 #[derive(Debug, serde::Deserialize)]
 pub struct GgvTenantInput {
     /// 11-digit MaLo-ID for this tenant's delivery point.
     pub malo_id: String,
-    /// Metered Eigenverbrauch for the period (kWh) — from `edmd`.
+    /// Metered actual consumption for the period (kWh) — from `edmd`.
+    ///
+    /// When `nutzungsplan` is set in `GgvBillingRequest`, billing is split into
+    /// PV portion (allocated from plant generation) + residual grid portion.
+    /// Without `nutzungsplan`, the full amount is billed as solar eigenverbrauch.
     pub consumption_kwh: rust_decimal::Decimal,
     /// Override product code; if absent, looked up from `tarifbd`.
     pub product_code: Option<String>,
     /// Supply price override (ct/kWh); if absent, looked up from `tarifbd`.
     pub arbeitspreis_ct_per_kwh: Option<rust_decimal::Decimal>,
-    /// GGV Rabatt override (ct/kWh, max 10% below Grundversorgungstarif per §42a EEG).
+    /// Standard grid electricity rate for residual consumption (ct/kWh).
+    ///
+    /// Required when `pv_generation_kwh` is set and some tenants have consumption
+    /// exceeding their PV allocation (grid fallback billing).
+    pub grid_arbeitspreis_ct_per_kwh: Option<rust_decimal::Decimal>,
+    /// GGV Rabatt on the PV portion (ct/kWh, §42b Abs. 3 EEG 2023).
+    ///
+    /// The discount reduces the net price of the PV portion below the standard
+    /// electricity rate. Per §42b Abs. 3 EEG 2023 the LF must pass on savings from
+    /// reduced grid charges for locally consumed PV electricity.
     pub gemeinschaft_rabatt_ct_per_kwh: Option<rust_decimal::Decimal>,
 }
 
@@ -818,34 +773,257 @@ pub struct GgvTenantInput {
 pub struct GgvBillingRequest {
     pub lf_mp_id: String,
     /// NB MP-ID for NNE pass-through (optional — supply in individual tenant rows if different).
-    #[allow(dead_code)]
+    #[serde(default)]
     pub nb_mp_id: Option<String>,
     pub period_from: String,
     pub period_to: String,
+    /// Total PV generation of the GGV plant for the billing period (kWh).
+    ///
+    /// When supplied together with `nutzungsplan`, enables the full §42b billing model:
+    /// - PV generation is allocated per tenant via the Nutzungsplan fractions
+    /// - Each tenant invoice shows both the PV portion and the grid fallback portion
+    ///
+    /// When `None`, each tenant's full `consumption_kwh` is billed as solar eigenverbrauch
+    /// (the previous simplified model — valid only when consumption ≤ plant output).
+    pub pv_generation_kwh: Option<rust_decimal::Decimal>,
+    /// GGV allocation plan: tenant fractions that sum to 1.0.
+    ///
+    /// Required when `pv_generation_kwh` is supplied. The fractions determine how much
+    /// of the plant's generation each tenant is entitled to (§42b Abs. 2 EEG 2023).
+    /// Entries must match the `malo_id` values in `tenants`.
+    pub nutzungsplan: Option<Vec<NutzungsplanInput>>,
     /// All tenant delivery points belonging to this GGV installation.
     pub tenants: Vec<GgvTenantInput>,
 }
 
-/// `POST /api/v1/billing/ggv/{ggv_id}` — §42a EEG community solar billing.
+/// One entry in the GGV Nutzungsplan submitted via the billing API.
+#[derive(Debug, serde::Deserialize)]
+pub struct NutzungsplanInput {
+    pub malo_id: String,
+    pub fraction: rust_decimal::Decimal,
+}
+
+/// `POST /api/v1/billing/ggv/{ggv_id}` — §42b EEG 2023 community solar billing.
 ///
 /// ## Algorithm (§42a EEG 2023 proportional allocation)
 ///
 /// 1. Validate all tenant inputs; reject if `tenants` is empty or total kWh = 0.
-/// 2. For each tenant:
-///    - Fetch `TariffInput` (from request override or `tarifbd`)
-///    - Set `SolarMeterInput.eigenverbrauch_kwh = tenant.consumption_kwh`
-///    - Apply `gemeinschaft_rabatt_ct_per_kwh` capped at ≤10% of `arbeitspreis_ct_per_kwh`
-///    - Run `calculate_solar` (pure, deterministic)
-/// 3. Store one `billing_record` per tenant.
-/// 4. Store one consolidated SAMMEL record keyed on `ggv_id`.
-/// 5. Emit `de.billing.rechnung.erstellt` for the SAMMEL record.
+/// ## §42b EEG 2023 (Solarpaket I) compliance
 ///
-/// ## §42a compliance
+/// The handler supports two billing models:
 ///
-/// The GGV rabatt must not exceed 10% of the applicable Grundversorgungstarif
-/// (§42a Abs. 4 EEG).  The handler logs a warning if the operator-supplied
-/// `gemeinschaft_rabatt_ct_per_kwh` would exceed that cap — enforcement is the
-/// operator's responsibility via the `tarifbd` product definition.
+/// **Model A — Nutzungsplan-based (recommended)**: Supply `pv_generation_kwh` +
+/// `nutzungsplan`. Each tenant is allocated a proportional share of plant generation.
+/// Request body for `POST /api/v1/billing/{malo_id}/tarifwechsel`.
+///
+/// Calculates a combined invoice when a price change occurs within the billing
+/// period. Uses `billing::merge_period_documents` semantics via `Invoice::merge()`.
+#[derive(Debug, serde::Deserialize)]
+pub struct TarifwechselRequest {
+    /// Lieferant MP-ID.
+    pub lf_mp_id: String,
+    /// §41 Abs. 1 Nr. 5 EnWG — Netzbetreiber identification.
+    #[serde(default)]
+    pub nb_mp_id: Option<String>,
+    /// Start of the billing period (inclusive, YYYY-MM-DD).
+    pub period_from: String,
+    /// End of the billing period (inclusive, YYYY-MM-DD).
+    pub period_to: String,
+    /// Date when the new tariff takes effect (YYYY-MM-DD, must be within the period).
+    pub switch_date: String,
+    /// Old tariff (applies from `period_from` to `switch_date - 1`).
+    pub old_tariff: TariffInput,
+    /// New tariff (applies from `switch_date` to `period_to`).
+    pub new_tariff: TariffInput,
+    /// Meter data for the old sub-period.
+    #[serde(default)]
+    pub old_meter: Option<MeterInput>,
+    /// Meter data for the new sub-period.
+    #[serde(default)]
+    pub new_meter: Option<MeterInput>,
+    /// Optional grid pass-through data.
+    #[serde(default)]
+    pub grid: Option<GridInput>,
+}
+
+/// `POST /api/v1/billing/{malo_id}/tarifwechsel`
+///
+/// Calculates a combined invoice for a billing period containing a price change
+/// (Tarifwechsel). The period is split at `switch_date`:
+///
+/// - **Sub-period A**: `period_from` → `switch_date - 1` at `old_tariff`
+/// - **Sub-period B**: `switch_date` → `period_to` at `new_tariff`
+///
+/// The two invoices are merged via [`Invoice::merge()`] using the same logic
+/// as `billing::merge_period_documents`: positions are concatenated, totals
+/// re-summed. Tax is applied **independently** per sub-period (correct for
+/// mid-month rate changes per §41 EnWG).
+///
+/// ## Legal basis
+///
+/// §41 Abs. 1 Nr. 4 EnWG: every price change requires transparent itemisation
+/// on the next invoice showing the old and new price with their respective
+/// applicable periods.
+pub async fn post_tarifwechsel(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<BillingdConfig>>,
+    Extension(rates): Extension<Arc<RegulatoryRates>>,
+    Path(malo_id): Path<String>,
+    Json(req): Json<TarifwechselRequest>,
+) -> impl IntoResponse {
+    // Parse all three date boundaries
+    let (period_from, period_to) = match parse_period(&req.period_from, &req.period_to) {
+        Ok(d) => d,
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("period: {e}")).into_response(),
+    };
+    let switch_date = match parse_period(&req.switch_date, &req.switch_date) {
+        Ok((d, _)) => d,
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("switch_date: {e}")).into_response(),
+    };
+    if switch_date <= period_from || switch_date > period_to {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!(
+                "switch_date {switch_date} must be strictly inside [{period_from}, {period_to}]"
+            ),
+        )
+            .into_response();
+    }
+
+    let grid = req.grid.clone().unwrap_or_default();
+
+    // Build the rechnungsnummer prefix — use timestamp for uniqueness
+    let base_nr = format!("TW-{malo_id}-{period_from}",);
+
+    // ── Sub-period A: period_from → switch_date - 1 ───────────────────────────
+    let period_a_to = switch_date - time::Duration::days(1);
+    let run_id_a = Uuid::new_v4().to_string();
+    let ctx_a = BillingContext {
+        malo_id: malo_id.clone(),
+        lf_mp_id: req.lf_mp_id.clone(),
+        rechnungsnummer: format!("{base_nr}-A"),
+        period_from,
+        period_to: period_a_to,
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: (*rates).clone(),
+        nb_mp_id: req.nb_mp_id.clone(),
+        billing_run_id: Some(run_id_a),
+        ..Default::default()
+    };
+    let quantities_a = Quantities {
+        electricity: req.old_meter.clone(),
+        ..Default::default()
+    };
+    let engine_a = match PricingModel::try_from(req.old_tariff.clone())
+        .and_then(|m| m.build_engine(&grid, &rates))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            return (StatusCode::UNPROCESSABLE_ENTITY, format!("old_tariff: {e}")).into_response();
+        }
+    };
+    let inv_a = match engine_a.bill(ctx_a, &quantities_a) {
+        Ok(i) => i,
+        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    };
+
+    // ── Sub-period B: switch_date → period_to ─────────────────────────────────
+    let run_id_b = Uuid::new_v4().to_string();
+    let ctx_b = BillingContext {
+        malo_id: malo_id.clone(),
+        lf_mp_id: req.lf_mp_id.clone(),
+        rechnungsnummer: format!("{base_nr}-B"),
+        period_from: switch_date,
+        period_to,
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: (*rates).clone(),
+        nb_mp_id: req.nb_mp_id.clone(),
+        billing_run_id: Some(run_id_b),
+        ..Default::default()
+    };
+    let quantities_b = Quantities {
+        electricity: req.new_meter.clone(),
+        ..Default::default()
+    };
+    let engine_b = match PricingModel::try_from(req.new_tariff.clone())
+        .and_then(|m| m.build_engine(&grid, &rates))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            return (StatusCode::UNPROCESSABLE_ENTITY, format!("new_tariff: {e}")).into_response();
+        }
+    };
+    let inv_b = match engine_b.bill(ctx_b, &quantities_b) {
+        Ok(i) => i,
+        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    };
+
+    // ── Merge via billing::merge_period_documents semantics ───────────────────
+    let merged = inv_a.merge(inv_b);
+    merged.assert_valid();
+
+    let rechnung_json = merged.to_rechnung_json();
+    let netto = merged.netto_eur;
+    let brutto = merged.brutto_eur;
+
+    let product_code = format!("{}-{}", req.old_tariff.category, req.new_tariff.category);
+    let record_id = match insert_billing_record(
+        &pool,
+        &malo_id,
+        &req.lf_mp_id,
+        &product_code,
+        "TARIFWECHSEL",
+        period_from,
+        period_to,
+        &rechnung_json,
+        netto,
+        brutto,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    if let Some(ref webhook_url) = cfg.erp_webhook_url {
+        emit_cloud_event_inner(
+            webhook_url,
+            &pool,
+            record_id,
+            &malo_id,
+            &req.lf_mp_id,
+            &rechnung_json,
+            false,
+        )
+        .await;
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "record_id": record_id,
+            "malo_id": malo_id,
+            "period_from": period_from.to_string(),
+            "switch_date": switch_date.to_string(),
+            "period_to": period_to.to_string(),
+            "netto_eur": netto,
+            "brutto_eur": brutto,
+            "old_category": req.old_tariff.category,
+            "new_category": req.new_tariff.category,
+        })),
+    )
+        .into_response()
+}
+
+/// Per-tenant invoices show both the PV portion (at GGV rate) and the residual grid
+/// electricity (at standard rate). This correctly implements §42b Abs. 2 EEG 2023.
+///
+/// **Model B — Direct consumption (legacy)**: Omit `pv_generation_kwh`. Each
+/// tenant's full `consumption_kwh` is billed as solar eigenverbrauch. Only valid
+/// when consumption ≤ plant output for all tenants.
+///
+/// The GGV Rabatt (§42b Abs. 3 EEG 2023) must reflect the savings from reduced
+/// network charges for locally consumed PV electricity.
 #[allow(clippy::too_many_arguments)]
 pub async fn post_ggv_billing(
     Extension(pool): Extension<PgPool>,
@@ -876,6 +1054,31 @@ pub async fn post_ggv_billing(
             .into_response();
     }
 
+    // ── §42b Model A: Nutzungsplan-based PV allocation ─────────────────────────
+    // Build a MaloId → allocated_pv_kwh map when pv_generation_kwh is supplied.
+    let pv_allocations: std::collections::HashMap<String, rust_decimal::Decimal> =
+        if let (Some(pv_gen_kwh), Some(np)) = (req.pv_generation_kwh, req.nutzungsplan.as_ref()) {
+            use energy_billing::{GgvNutzungsplan, GgvNutzungsplanEntry};
+            let plan = GgvNutzungsplan(
+                np.iter()
+                    .map(|e| GgvNutzungsplanEntry {
+                        malo_id: e.malo_id.clone(),
+                        fraction: e.fraction,
+                    })
+                    .collect(),
+            );
+            if let Err(e) = plan.validate() {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!("nutzungsplan: {e}"),
+                )
+                    .into_response();
+            }
+            plan.allocate(pv_gen_kwh).into_iter().collect()
+        } else {
+            std::collections::HashMap::new()
+        };
+
     let rates = cfg.regulatory_rates();
     let mut tenant_results: Vec<serde_json::Value> = Vec::with_capacity(req.tenants.len());
     let mut sammel_netto = rust_decimal::Decimal::ZERO;
@@ -896,6 +1099,7 @@ pub async fn post_ggv_billing(
                     "product_code": tenant.product_code,
                     "solar_arbeitspreis_ct_per_kwh": tenant.arbeitspreis_ct_per_kwh,
                     "gemeinschaft_rabatt_ct_per_kwh": tenant.gemeinschaft_rabatt_ct_per_kwh,
+                    "arbeitspreis_ct_per_kwh": tenant.grid_arbeitspreis_ct_per_kwh,
                 });
                 match serde_json::from_value::<TariffInput>(map) {
                     Ok(t) => t,
@@ -915,8 +1119,13 @@ pub async fn post_ggv_billing(
         if let Some(ap) = tenant.arbeitspreis_ct_per_kwh {
             tariff.solar_arbeitspreis_ct_per_kwh = Some(ap);
         }
+        if let Some(grid_ap) = tenant.grid_arbeitspreis_ct_per_kwh {
+            tariff.arbeitspreis_ct_per_kwh = Some(grid_ap);
+        }
         if let Some(rabatt) = tenant.gemeinschaft_rabatt_ct_per_kwh {
-            // §42a EEG cap guard: log warning if rabatt > 10% of Arbeitspreis.
+            // §42b Abs. 3 EEG 2023: GGV Rabatt must reflect reduced network charges.
+            // Log a diagnostic warning if the rabatt exceeds a meaningful share of the price
+            // (the exact cap depends on the applicable Grundversorgungstarif, not just 10%).
             if let Some(ap) = tariff.solar_arbeitspreis_ct_per_kwh {
                 let cap = ap * rust_decimal_macros::dec!(0.10);
                 if rabatt > cap {
@@ -924,8 +1133,9 @@ pub async fn post_ggv_billing(
                         malo_id = %tenant.malo_id,
                         ggv_id = %ggv_id,
                         rabatt_ct = %rabatt,
-                        cap_ct = %cap,
-                        "billingd GGV: gemeinschaft_rabatt exceeds §42a 10% cap — verify product definition"
+                        cap_diagnostic = %cap,
+                        "billingd GGV: gemeinschaft_rabatt > 10% of Arbeitspreis — \
+                         verify §42b Abs. 3 EEG 2023 compliance against local Grundversorgungstarif"
                     );
                 }
             }
@@ -933,12 +1143,26 @@ pub async fn post_ggv_billing(
         }
         tariff.category = "SOLAR".to_owned();
 
-        let quantities = Quantities {
-            solar: Some(SolarMeterInput {
-                eigenverbrauch_kwh: tenant.consumption_kwh,
-            }),
-            ..Default::default()
+        // ── Build Quantities: Model A (GgvSolarInput) or Model B (SolarMeterInput) ──
+        let quantities = if let Some(&pv_allocated) = pv_allocations.get(&tenant.malo_id) {
+            // Model A: proportional allocation — hybrid PV + grid billing
+            Quantities {
+                ggv_solar: Some(energy_billing::GgvSolarInput {
+                    pv_allocated_kwh: pv_allocated,
+                    actual_consumption_kwh: tenant.consumption_kwh,
+                }),
+                ..Default::default()
+            }
+        } else {
+            // Model B: direct consumption as solar eigenverbrauch
+            Quantities {
+                solar: Some(SolarMeterInput {
+                    eigenverbrauch_kwh: tenant.consumption_kwh,
+                }),
+                ..Default::default()
+            }
         };
+
         let rechnungsnummer = tenant
             .product_code
             .as_deref()
@@ -954,6 +1178,7 @@ pub async fn post_ggv_billing(
             invoice_type: InvoiceType::Initial,
             regulatory_rates: rates.clone(),
             contract_id: None,
+            ..Default::default()
         };
         let engine = tariff
             .build_engine(&GridInput::default(), &rates)
@@ -1429,7 +1654,7 @@ pub async fn post_sammelrechnung(
     for entry in &malos {
         let dummy_req = CalculateRequest {
             lf_mp_id: req.lf_mp_id.clone(),
-            nb_mp_id: String::new(),
+            nb_mp_id: None,
             period_from: req.period_from.clone(),
             period_to: req.period_to.clone(),
             tariff: None,

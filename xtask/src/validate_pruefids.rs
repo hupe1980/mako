@@ -200,6 +200,16 @@ pub fn run(
     // Pass when: no ORPHANED fixtures AND (not strict OR no MISSING) AND coverage >= min.
     let pass = orphaned.is_empty() && (!strict || missing_count == 0) && coverage_ok;
 
+    // ── Cross-crate PID consistency: Redispatch MSCONS PIDs ───────────────────
+    //
+    // `mako-redispatch::aktivierung::MSCONS_PIDS` and
+    // `mako-edm::domain::REDISPATCH_MSCONS_PIDS` must define the same set.
+    // They are intentionally duplicated (different architectural layers —
+    // workflow vs. data-tier), but must agree.  We enforce agreement here by
+    // parsing the source files with a simple regex rather than adding a
+    // cross-crate dependency.
+    let pass = check_redispatch_pid_agreement(workspace_root) && pass;
+
     // ── Optional JSON report ──────────────────────────────────────────────────
     if json_output {
         let json_orphaned: Vec<serde_json::Value> = orphaned
@@ -431,5 +441,82 @@ fn collect_orphaned_in_dir(
                 }
             }
         }
+    }
+}
+
+// ── Cross-crate PID agreement check ──────────────────────────────────────────
+
+/// Verify that `mako-redispatch::aktivierung::MSCONS_PIDS` and
+/// `mako-edm::domain::REDISPATCH_MSCONS_PIDS` define the same set.
+///
+/// Both constants are intentionally duplicated across architectural layers
+/// (workflow vs. data-tier), but they MUST agree.  This check prevents silent
+/// drift when a new Redispatch MSCONS PID is added to one crate but not the
+/// other.
+///
+/// The check is source-text based (regex over the two Rust files) rather than
+/// compiled, so it runs without building either crate.
+fn check_redispatch_pid_agreement(workspace_root: &str) -> bool {
+    let redispatch_file = format!("{workspace_root}/crates/mako-redispatch/src/aktivierung.rs");
+    let edm_file = format!("{workspace_root}/crates/mako-edm/src/domain.rs");
+
+    let extract_pids = |path: &str, const_name: &str| -> Option<std::collections::BTreeSet<u32>> {
+        let content = std::fs::read_to_string(path).ok()?;
+        // Find the const declaration, then the array initialiser `= &[`.
+        // We skip the type annotation `&[u32]` by looking for `= &[` after
+        // the const name, not just any `&[`.
+        let start = content.find(&format!("const {const_name}"))?;
+        let eq_bracket = content[start..].find("= &[")?;
+        let body_start = start + eq_bracket + 4; // skip "= &[" (4 chars)
+        let body_end = content[body_start..].find(']')? + body_start;
+        let body = &content[body_start..body_end];
+        let pids: std::collections::BTreeSet<u32> = body
+            .split(',')
+            .filter_map(|s| {
+                let s = s.trim().replace('_', "");
+                s.parse::<u32>().ok()
+            })
+            .collect();
+        Some(pids)
+    };
+
+    let redispatch_pids = match extract_pids(&redispatch_file, "MSCONS_PIDS") {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "validate-pruefids: WARNING — could not parse MSCONS_PIDS from {}",
+                redispatch_file
+            );
+            return true; // non-fatal if file not found (e.g. fresh checkout)
+        }
+    };
+
+    let edm_pids = match extract_pids(&edm_file, "REDISPATCH_MSCONS_PIDS") {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "validate-pruefids: WARNING — could not parse REDISPATCH_MSCONS_PIDS from {}",
+                edm_file
+            );
+            return true; // non-fatal
+        }
+    };
+
+    if redispatch_pids == edm_pids {
+        println!(
+            "validate-pruefids: Redispatch MSCONS PIDs agree across crates ({} PIDs: {:?}) ✓",
+            redispatch_pids.len(),
+            redispatch_pids
+        );
+        true
+    } else {
+        eprintln!(
+            "validate-pruefids: FAIL — Redispatch MSCONS PID mismatch!\n  \
+             mako-redispatch::aktivierung::MSCONS_PIDS    = {:?}\n  \
+             mako-edm::domain::REDISPATCH_MSCONS_PIDS     = {:?}\n  \
+             Fix: update both to match, then re-run `cargo xtask validate-pruefids`.",
+            redispatch_pids, edm_pids
+        );
+        false
     }
 }

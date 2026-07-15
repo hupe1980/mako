@@ -32,6 +32,8 @@
 //! | `GET`    | `/api/v1/anlagen/{tr_id}/settlements` | Settlement history |
 //! | `PUT`    | `/api/v1/epex-monthly/{year}/{month}` | Import EPEX monthly price |
 //! | `GET`    | `/api/v1/epex-monthly/{year}/{month}` | Fetch stored EPEX price |
+//! | `PUT`    | `/api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}` | Import §20 Abs. 2 technology-specific Marktwert (ÜNB) |
+//! | `GET`    | `/api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}` | Fetch stored Jahresmarktwert |
 //! | `GET`    | `/health` | Liveness check |
 //! | `GET`    | `/health/ready` | Readiness check |
 
@@ -260,6 +262,11 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/epex-monthly/:year/:month",
             put(handlers::put_epex_price).get(handlers::get_epex_price),
+        )
+        // ── §20 Abs. 2 Jahresmarktwert prices (ÜNB-published) ─────────────────
+        .route(
+            "/api/v1/jahresmarktwert/:year/:month/:erzeugungsart",
+            put(handlers::put_jahresmarktwert).get(handlers::get_jahresmarktwert),
         )
         // ── EEG tariff rate lookup ─────────────────────────────────────────────
         .route(
