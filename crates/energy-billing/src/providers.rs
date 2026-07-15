@@ -4,7 +4,7 @@
 //! a `TariffInput` (the product definition from `tarifbd`) and register them
 //! with `BillingEngine`.
 
-use billing::BillingError;
+use billing::{BillingError, DynamicPricing};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
@@ -1196,17 +1196,23 @@ impl BillingProvider for DynamicElectricityProvider {
             );
         }
 
-        // Per-interval EPEX pricing.
-        // Primary source: `self.spot_price_source` (e.g. live API, Tibber, NordPool).
-        // Fallback: `quantities.dynamic_epex_prices` (pre-fetched map set by billingd
-        // from `marktd GET /api/v1/epex-preise`). This is the typical production path
-        // when `build_engine()` creates the provider before prices are known.
-        let mut total_kwh = Decimal::ZERO;
-        let mut total_energy_eur = Decimal::ZERO;
+        // Per-interval EPEX pricing via `billing::DynamicPricing`.
+        //
+        // `DynamicPricing` computes the weighted-average unit price using
+        // `Amount<5>` arithmetic throughout — no intermediate Decimal accumulation.
+        // We pass it (kwh, eur_per_kwh) pairs; it returns a single `LineItem` from
+        // which we extract `net_amount` and `quantity_value` to build our own
+        // `BillingPosition` (with energy-billing tags and legal basis).
+        //
+        // Primary price source: `self.spot_price_source` (live API / Tibber / NordPool).
+        // Fallback: `quantities.dynamic_epex_prices` (pre-fetched map from billingd /
+        // marktd). This is the typical production path when `build_engine()` creates
+        // the provider before prices are known.
         let mut missing_price_intervals: u32 = 0;
+        let mut priced_pairs: Vec<(Decimal, billing::Amount<5>)> =
+            Vec::with_capacity(quantities.dynamic_intervals.len());
 
         for interval in &quantities.dynamic_intervals {
-            // Try primary SpotPriceSource first, then quantities fallback.
             let price_ct = self
                 .spot_price_source
                 .price_ct_kwh(interval.timestamp_utc)
@@ -1214,7 +1220,6 @@ impl BillingProvider for DynamicElectricityProvider {
                     if quantities.dynamic_epex_prices.is_empty() {
                         return None;
                     }
-                    // Same UTC → Berlin conversion as EpexSpotSource.
                     use time_tz::{OffsetDateTimeExt, timezones};
                     let berlin = timezones::db::europe::BERLIN;
                     let local = interval.timestamp_utc.to_timezone(berlin);
@@ -1226,14 +1231,22 @@ impl BillingProvider for DynamicElectricityProvider {
                 missing_price_intervals += 1;
                 continue;
             };
+
             let effective_ct = if let Some(floor) = floor_ct {
                 price_ct.max(floor)
             } else {
                 price_ct
             };
-            let eur = validated_eur(interval.kwh * effective_ct / dec!(100));
-            total_kwh += interval.kwh;
-            total_energy_eur += eur;
+
+            // ct/kWh → EUR/kWh as Amount<5>.  round_dp(5) first ensures the
+            // Decimal has at most 5 non-zero fractional digits before conversion.
+            // EPEX prices are typically 2 dp in ct/kWh → 4 dp after /100, so this
+            // never loses precision in practice.
+            if let Ok(price_eur) =
+                billing::Amount::<5>::try_from((effective_ct / dec!(100)).round_dp(5))
+            {
+                priced_pairs.push((interval.kwh, price_eur));
+            }
         }
 
         if missing_price_intervals > 0 {
@@ -1245,11 +1258,19 @@ impl BillingProvider for DynamicElectricityProvider {
             );
         }
 
-        if total_kwh > Decimal::ZERO {
+        if !priced_pairs.is_empty() {
+            let item = DynamicPricing::from_intervals(priced_pairs)
+                .and_then(|dp| dp.with_unit("kWh").calculate())
+                .map_err(|e| BillingError::InvalidInput {
+                    reason: format!("§41a DynamicPricing: {e}"),
+                })?;
+
+            let total_kwh = item.quantity_value().unwrap_or_default();
+            let total_eur = item.net_amount.to_decimal();
             let avg_ct = if total_kwh.is_zero() {
                 Decimal::ZERO
             } else {
-                (total_energy_eur * dec!(100) / total_kwh).round_dp(4)
+                (total_eur * dec!(100) / total_kwh).round_dp(4)
             };
             positions.push(BillingPosition {
                 description: format!("Arbeitspreis {source_name} (∅ {avg_ct:.4} ct/kWh)",),
@@ -1257,7 +1278,7 @@ impl BillingProvider for DynamicElectricityProvider {
                 quantity: total_kwh,
                 unit: "kWh".to_owned(),
                 unit_price_eur: avg_ct / dec!(100),
-                net_eur: validated_eur(total_energy_eur),
+                net_eur: total_eur,
                 category: PositionCategory::Commodity,
                 tags: vec![
                     "commodity".to_owned(),

@@ -58,7 +58,9 @@ fn monat_pos(number: u32, text: &str, months: Decimal, unit_price_eur: Decimal) 
 }
 
 fn decimal_to_euro_amount(d: Decimal) -> Result<EuroAmount, BillingError> {
-    EuroAmount::checked_from_decimal(d).map_err(|_| BillingError::MonetaryOverflow)
+    EuroAmount::checked_from_decimal(d).map_err(|_| BillingError::MonetaryOverflow {
+        input_value: Some(d),
+    })
 }
 
 // ── NNE invoice (PID 31001 / 31005 / 31006) ──────────────────────────────────
@@ -94,7 +96,9 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<GridInvoice, BillingErr
     }
     if input.spitzenleistung_kw.is_some() != input.leistungspreis_eur_per_kw.is_some() {
         return Err(BillingError::InvalidInput {
-            reason: "spitzenleistung_kw and leistungspreis_eur_per_kw must both be set or both absent".to_owned(),
+            reason:
+                "spitzenleistung_kw and leistungspreis_eur_per_kw must both be set or both absent"
+                    .to_owned(),
         });
     }
 

@@ -174,9 +174,14 @@ impl BillingPosition {
     }
 }
 
-/// Round a monetary EUR amount to 5 decimal places (matching `EuroAmount` precision).
+/// Round and range-validate a monetary EUR amount to 5 decimal places.
+///
+/// Uses [`billing::EuroAmount`] internally to detect overflow (max ~92 M EUR).
+/// Returns `Decimal::ZERO` on overflow (same behaviour as `eeg-billing`).
 pub(crate) fn validated_eur(amount: Decimal) -> Decimal {
-    amount.round_dp(5)
+    billing::EuroAmount::checked_from_decimal(amount)
+        .map(|a| a.to_decimal())
+        .unwrap_or(Decimal::ZERO)
 }
 
 // ── Convenience constructors ──────────────────────────────────────────────────

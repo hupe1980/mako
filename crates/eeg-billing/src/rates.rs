@@ -110,45 +110,37 @@ pub fn solar_pv_ueberschuss_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
         // ── EEG 2024 / Solarpaket I — valid from 01.05.2024 ──────────────────
         // Source: §48 Abs. 2 EEG 2023 n.F. (Solarpaket I, BGBl I 2024 Nr. 107)
-        2024..=2026 => Some(
-            RateLookup::builder()
-                .at_most(dec!(10), amount_ct("8.51")) // ≤10 kWp:  8.51 ct/kWh
-                .at_most(dec!(40), amount_ct("7.43")) // ≤40 kWp:  7.43 ct/kWh
-                .fallback(amount_ct("7.64")) // >40 kWp:  7.64 ct/kWh (≤1 MWp)
-                .build()
-                .expect("static EEG 2024 solar PV Überschuss table always valid"),
-        ),
+        2024..=2026 => RateLookup::builder()
+            .at_most(dec!(10), amount_ct("8.51")) // ≤10 kWp:  8.51 ct/kWh
+            .at_most(dec!(40), amount_ct("7.43")) // ≤40 kWp:  7.43 ct/kWh
+            .fallback(amount_ct("7.64")) // >40 kWp:  7.64 ct/kWh (≤1 MWp)
+            .build()
+            .ok(),
 
         // ── EEG 2023 (initial) — valid from 01.02.2023 to 30.04.2024 ─────────
         // Source: §48 Abs. 2 EEG 2023 a.F. (BGBl I 2023 Nr. 1)
-        2023 => Some(
-            RateLookup::builder()
-                .at_most(dec!(10), amount_ct("8.11")) // ≤10 kWp:  8.11 ct/kWh
-                .at_most(dec!(40), amount_ct("6.79")) // ≤40 kWp:  6.79 ct/kWh
-                .fallback(amount_ct("5.56")) // >40 kWp:  5.56 ct/kWh (≤1 MWp)
-                .build()
-                .expect("static EEG 2023 initial solar PV Überschuss table always valid"),
-        ),
+        2023 => RateLookup::builder()
+            .at_most(dec!(10), amount_ct("8.11")) // ≤10 kWp:  8.11 ct/kWh
+            .at_most(dec!(40), amount_ct("6.79")) // ≤40 kWp:  6.79 ct/kWh
+            .fallback(amount_ct("5.56")) // >40 kWp:  5.56 ct/kWh (≤1 MWp)
+            .build()
+            .ok(),
 
         // ── EEG 2021 — Q3 2021 starting rate ─────────────────────────────────
-        2021 | 2022 => Some(
-            RateLookup::builder()
-                .at_most(dec!(10), amount_ct("9.03")) // ≤10 kWp:  9.03 ct/kWh
-                .at_most(dec!(40), amount_ct("8.75")) // ≤40 kWp:  8.75 ct/kWh
-                .fallback(amount_ct("7.29")) // >40 kWp:  7.29 ct/kWh (≤750 kWp)
-                .build()
-                .expect("static EEG 2021 solar PV Überschuss table always valid"),
-        ),
+        2021 | 2022 => RateLookup::builder()
+            .at_most(dec!(10), amount_ct("9.03")) // ≤10 kWp:  9.03 ct/kWh
+            .at_most(dec!(40), amount_ct("8.75")) // ≤40 kWp:  8.75 ct/kWh
+            .fallback(amount_ct("7.29")) // >40 kWp:  7.29 ct/kWh (≤750 kWp)
+            .build()
+            .ok(),
 
         // ── EEG 2017 — Q2 2017 starting rate ─────────────────────────────────
-        2017..=2020 => Some(
-            RateLookup::builder()
-                .at_most(dec!(10), amount_ct("12.35")) // ≤10 kWp: 12.35 ct/kWh
-                .at_most(dec!(40), amount_ct("12.00")) // ≤40 kWp: 12.00 ct/kWh
-                .fallback(amount_ct("10.96")) // >40 kWp: 10.96 ct/kWh (≤750 kWp)
-                .build()
-                .expect("static EEG 2017 solar PV Überschuss table always valid"),
-        ),
+        2017..=2020 => RateLookup::builder()
+            .at_most(dec!(10), amount_ct("12.35")) // ≤10 kWp: 12.35 ct/kWh
+            .at_most(dec!(40), amount_ct("12.00")) // ≤40 kWp: 12.00 ct/kWh
+            .fallback(amount_ct("10.96")) // >40 kWp: 10.96 ct/kWh (≤750 kWp)
+            .build()
+            .ok(),
 
         // ── Earlier EEG versions ──────────────────────────────────────────────
         _ => None,
@@ -191,29 +183,25 @@ pub fn solar_pv_lookup(eeg_year: i16) -> Option<RateLookup> {
 pub fn solar_pv_volleinspeisung_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
         // ── EEG 2024 (Solarpaket I) Volleinspeisung ────────────────────────────
-        2024..=2026 => Some(
-            RateLookup::builder()
-                .at_most(dec!(10), amount_ct("13.31")) // 8.51 + 4.80
-                .at_most(dec!(40), amount_ct("11.23")) // 7.43 + 3.80
-                .at_most(dec!(100), amount_ct("12.74")) // 7.64 + 5.10
-                .at_most(dec!(400), amount_ct("10.84")) // 7.64 + 3.20
-                .fallback(amount_ct("9.54")) // 7.64 + 1.90  (≤1 MWp)
-                .build()
-                .expect("static EEG 2024 solar PV Volleinspeisung table always valid"),
-        ),
+        2024..=2026 => RateLookup::builder()
+            .at_most(dec!(10), amount_ct("13.31")) // 8.51 + 4.80
+            .at_most(dec!(40), amount_ct("11.23")) // 7.43 + 3.80
+            .at_most(dec!(100), amount_ct("12.74")) // 7.64 + 5.10
+            .at_most(dec!(400), amount_ct("10.84")) // 7.64 + 3.20
+            .fallback(amount_ct("9.54")) // 7.64 + 1.90  (≤1 MWp)
+            .build()
+            .ok(),
 
         // ── EEG 2023 initial Volleinspeisung ──────────────────────────────────
         // §48 Abs. 2 (8.11/6.79/5.56) + Abs. 2a bonus (4.89/3.79/…)
-        2023 => Some(
-            RateLookup::builder()
-                .at_most(dec!(10), amount_ct("13.00")) // 8.11 + 4.89
-                .at_most(dec!(40), amount_ct("10.58")) // 6.79 + 3.79
-                .at_most(dec!(100), amount_ct("11.36")) // 5.56 + 5.80
-                .at_most(dec!(400), amount_ct("8.60")) // 5.56 + 3.04
-                .fallback(amount_ct("7.31")) // 5.56 + 1.75
-                .build()
-                .expect("static EEG 2023 initial solar PV Volleinspeisung table always valid"),
-        ),
+        2023 => RateLookup::builder()
+            .at_most(dec!(10), amount_ct("13.00")) // 8.11 + 4.89
+            .at_most(dec!(40), amount_ct("10.58")) // 6.79 + 3.79
+            .at_most(dec!(100), amount_ct("11.36")) // 5.56 + 5.80
+            .at_most(dec!(400), amount_ct("8.60")) // 5.56 + 3.04
+            .fallback(amount_ct("7.31")) // 5.56 + 1.75
+            .build()
+            .ok(),
 
         // ── Earlier versions ── use einsd DB lookup for quarterly degression
         _ => None,
@@ -252,22 +240,18 @@ pub fn wind_onshore_lookup(eeg_year: i16) -> Option<RateLookup> {
         // Source: §21 EEG 2023 i.V.m. Anlage 2, Referenzwert wind onshore
         // Plants ≤750 kW: statutory AW = 6.28 ct/kWh
         // Plants >750 kW: mandatory tender (AW set by BNetzA per auction round)
-        2023..=2026 => Some(
-            RateLookup::builder()
-                .at_most(dec!(750), amount_ct("6.28")) // ≤750 kW: tender-exempt AW
-                .fallback(amount_ct("6.28")) // >750 kW: tender-based (use direktverm_aw_ct)
-                .build()
-                .expect("static EEG 2023 wind onshore table always valid"),
-        ),
+        2023..=2026 => RateLookup::builder()
+            .at_most(dec!(750), amount_ct("6.28")) // ≤750 kW: tender-exempt AW
+            .fallback(amount_ct("6.28")) // >750 kW: tender-based (use direktverm_aw_ct)
+            .build()
+            .ok(),
 
         // ── EEG 2021 ──────────────────────────────────────────────────────────
-        2021 | 2022 => Some(
-            RateLookup::builder()
-                .at_most(dec!(750), amount_ct("6.29")) // ≤750 kW
-                .fallback(amount_ct("6.29"))
-                .build()
-                .expect("static EEG 2021 wind onshore table always valid"),
-        ),
+        2021 | 2022 => RateLookup::builder()
+            .at_most(dec!(750), amount_ct("6.29")) // ≤750 kW
+            .fallback(amount_ct("6.29"))
+            .build()
+            .ok(),
 
         _ => None,
     }
@@ -294,23 +278,19 @@ pub fn biomasse_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
         // ── EEG 2023 ──────────────────────────────────────────────────────────
         // Source: §21 EEG 2023 i.V.m. Anlage 3 (Biomasse §21 Abs. 1)
-        2023..=2026 => Some(
-            RateLookup::builder()
-                .at_most(dec!(500), amount_ct("14.67")) // ≤500 kW
-                .at_most(dec!(5_000), amount_ct("11.90")) // ≤5 MW
-                .fallback(amount_ct("7.58")) // >5 MW
-                .build()
-                .expect("static EEG 2023 biomasse table always valid"),
-        ),
+        2023..=2026 => RateLookup::builder()
+            .at_most(dec!(500), amount_ct("14.67")) // ≤500 kW
+            .at_most(dec!(5_000), amount_ct("11.90")) // ≤5 MW
+            .fallback(amount_ct("7.58")) // >5 MW
+            .build()
+            .ok(),
 
-        2021 | 2022 => Some(
-            RateLookup::builder()
-                .at_most(dec!(500), amount_ct("13.63"))
-                .at_most(dec!(5_000), amount_ct("11.42"))
-                .fallback(amount_ct("7.26"))
-                .build()
-                .expect("static EEG 2021 biomasse table always valid"),
-        ),
+        2021 | 2022 => RateLookup::builder()
+            .at_most(dec!(500), amount_ct("13.63"))
+            .at_most(dec!(5_000), amount_ct("11.42"))
+            .fallback(amount_ct("7.26"))
+            .build()
+            .ok(),
 
         _ => None,
     }
@@ -338,16 +318,14 @@ pub fn biomasse_lookup(eeg_year: i16) -> Option<RateLookup> {
 /// ```
 pub fn kwkg_zuschlag_lookup() -> Option<RateLookup> {
     // §7 KWKG 2023, Anlage: Vergütungssätze nach Leistungsklasse
-    Some(
-        RateLookup::builder()
-            .at_most(dec!(50), amount_ct("8.00")) // ≤50 kW_el:   8.00 ct/kWh
-            .at_most(dec!(100), amount_ct("6.00")) // ≤100 kW_el:  6.00 ct/kWh
-            .at_most(dec!(250), amount_ct("5.00")) // ≤250 kW_el:  5.00 ct/kWh
-            .at_most(dec!(2_000), amount_ct("4.00")) // ≤2 MW_el:    4.00 ct/kWh
-            .fallback(amount_ct("3.00")) // >2 MW_el:    3.00 ct/kWh
-            .build()
-            .expect("static KWKG 2023 Zuschlag table always valid"),
-    )
+    RateLookup::builder()
+        .at_most(dec!(50), amount_ct("8.00")) // ≤50 kW_el:   8.00 ct/kWh
+        .at_most(dec!(100), amount_ct("6.00")) // ≤100 kW_el:  6.00 ct/kWh
+        .at_most(dec!(250), amount_ct("5.00")) // ≤250 kW_el:  5.00 ct/kWh
+        .at_most(dec!(2_000), amount_ct("4.00")) // ≤2 MW_el:    4.00 ct/kWh
+        .fallback(amount_ct("3.00")) // >2 MW_el:    3.00 ct/kWh
+        .build()
+        .ok()
 }
 
 // ── Convenience helper ────────────────────────────────────────────────────────
@@ -402,17 +380,15 @@ pub fn wasserkraft_lookup(eeg_year: i16) -> Option<RateLookup> {
         // EEG 2017–2023: §40 EEG 2023 / §40 EEG 2021 / §29 EEG 2017.
         // Rates are identical across EEG versions for Wasserkraft.
         // Source: §40 Abs. 1 EEG 2023 (BGBl. I 2023 Nr. 1, S. 2476).
-        2017..=2026 => Some(
-            RateLookup::builder()
-                .at_most(dec!(500), amount_ct("12.37")) // ≤ 500 kW
-                .at_most(dec!(2_000), amount_ct("9.79")) // ≤ 2 MW
-                .at_most(dec!(5_000), amount_ct("7.56")) // ≤ 5 MW
-                .at_most(dec!(10_000), amount_ct("6.47")) // ≤ 10 MW
-                .at_most(dec!(20_000), amount_ct("5.59")) // ≤ 20 MW
-                .fallback(amount_ct("3.88")) //  > 20 MW
-                .build()
-                .expect("static Wasserkraft rate table always valid"),
-        ),
+        2017..=2026 => RateLookup::builder()
+            .at_most(dec!(500), amount_ct("12.37")) // ≤ 500 kW
+            .at_most(dec!(2_000), amount_ct("9.79")) // ≤ 2 MW
+            .at_most(dec!(5_000), amount_ct("7.56")) // ≤ 5 MW
+            .at_most(dec!(10_000), amount_ct("6.47")) // ≤ 10 MW
+            .at_most(dec!(20_000), amount_ct("5.59")) // ≤ 20 MW
+            .fallback(amount_ct("3.88")) //  > 20 MW
+            .build()
+            .ok(),
         _ => None,
     }
 }
@@ -434,18 +410,14 @@ pub fn geothermie_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
         // Source: §41 Abs. 1 EEG 2023. Flat rate, no capacity tiers.
         // For plants > 150 kW: AW is set by BNetzA tender — use TariffSource::Auction.
-        2023..=2026 => Some(
-            RateLookup::builder()
-                .fallback(amount_ct("25.20")) // flat for ≤ 150 kW; > 150 kW uses auction
-                .build()
-                .expect("static geothermie table always valid"),
-        ),
-        2017..=2022 => Some(
-            RateLookup::builder()
-                .fallback(amount_ct("25.20"))
-                .build()
-                .expect("static geothermie table always valid"),
-        ),
+        2023..=2026 => RateLookup::builder()
+            .fallback(amount_ct("25.20")) // flat for ≤ 150 kW; > 150 kW uses auction
+            .build()
+            .ok(),
+        2017..=2022 => RateLookup::builder()
+            .fallback(amount_ct("25.20"))
+            .build()
+            .ok(),
         _ => None,
     }
 }
@@ -466,18 +438,14 @@ pub fn geothermie_lookup(eeg_year: i16) -> Option<RateLookup> {
 pub fn gasart_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
         // Source: §42 Abs. 1 EEG 2023. Flat rate regardless of capacity.
-        2023..=2026 => Some(
-            RateLookup::builder()
-                .fallback(amount_ct("7.74"))
-                .build()
-                .expect("static gasart (Klär-/Deponie-/Grubengas) table always valid"),
-        ),
-        2017..=2022 => Some(
-            RateLookup::builder()
-                .fallback(amount_ct("7.74"))
-                .build()
-                .expect("static gasart table always valid"),
-        ),
+        2023..=2026 => RateLookup::builder()
+            .fallback(amount_ct("7.74"))
+            .build()
+            .ok(),
+        2017..=2022 => RateLookup::builder()
+            .fallback(amount_ct("7.74"))
+            .build()
+            .ok(),
         _ => None,
     }
 }
@@ -524,7 +492,9 @@ pub fn lookup_rate(
         _ => None,
     }
     .ok_or(BillingError::InvalidInput {
-        reason: "no static rate table for this erzeugungsart/eeg_year combination — use einsd DB lookup".to_owned(),
+        reason:
+            "no static rate table for this erzeugungsart/eeg_year combination — use einsd DB lookup"
+                .to_owned(),
     })?;
 
     table.rate_for(leistung_kwp)

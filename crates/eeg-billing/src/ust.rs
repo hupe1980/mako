@@ -289,6 +289,22 @@ pub fn qualifies_for_12_abs3(
 #[must_use]
 pub fn ust_tax_layers(status: VatStatus) -> Vec<Box<dyn TaxLayer>> {
     use billing::tax::FixedRateTax;
+    // Returns a tax layer that applies to ALL positions in the document.
+    //
+    // ## Mixed-rate documents (e.g. EEG feed-in credit + NNE grid charge)
+    //
+    // When a single `BillingDocument` mixes positions with different VAT treatment
+    // (e.g. 0% on PV feed-in under §12 Abs. 3 UStG, 19% on NNE grid charges),
+    // do NOT use `ust_tax_layers` — build the tax layer directly with `.with_tag()`:
+    //
+    // ```rust,ignore
+    // use billing::tax::FixedRateTax;
+    // // Only NNE positions (tagged "nne") get 19% VAT:
+    // let vat_nne = FixedRateTax::new("USt 19\u{202f}%", dec!(0.19)).with_tag("nne");
+    // // EEG positions (tagged "eeg") remain tax-exempt.
+    // ```
+    //
+    // `FixedRateTax::with_tag` is available in `billing 0.5.1`.
     match status {
         VatStatus::Regelbesteuerung => vec![Box::new(FixedRateTax::new(
             "Umsatzsteuer 19\u{202f}%",

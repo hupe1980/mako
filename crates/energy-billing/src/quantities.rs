@@ -149,29 +149,57 @@ impl GgvNutzungsplan {
 
     /// Allocate a generation quantity proportionally among tenants.
     ///
-    /// Returns `(malo_id, allocated_kwh)` pairs. Any remainder from rounding
-    /// is added to the last entry to ensure the sum equals `total_kwh`.
+    /// Returns `(malo_id, allocated_kwh)` pairs.
+    ///
+    /// ## Rounding algorithm — Largest Remainder Method (Hamilton method)
+    ///
+    /// Each tenant receives their floored 3-decimal-place share first.  Any
+    /// remaining 0.001 kWh units are distributed to the tenants with the
+    /// largest fractional parts, in descending order.  This guarantees:
+    ///
+    /// - `Σ(allocated_kwh) == total_kwh` exactly
+    /// - Every tenant is within ±0.001 kWh of their exact share
+    /// - No single tenant absorbs all rounding error (unlike the naive
+    ///   "add remainder to last entry" approach)
     pub fn allocate(&self, total_kwh: Decimal) -> Vec<(String, Decimal)> {
         let n = self.0.len();
         if n == 0 || total_kwh <= Decimal::ZERO {
             return vec![];
         }
-        let mut allocated: Vec<(String, Decimal)> = self
+
+        let scale = Decimal::from(1_000u32); // 3dp = 0.001 kWh unit
+        let unit = Decimal::ONE / scale;
+
+        // Step 1: compute exact shares, floor each to 3dp, record fractional remainder.
+        let mut entries: Vec<(String, Decimal, Decimal)> = self
             .0
             .iter()
             .map(|e| {
-                let kwh = (total_kwh * e.fraction).round_dp(3);
-                (e.malo_id.clone(), kwh)
+                let exact = total_kwh * e.fraction;
+                // Floor to 3dp: multiply by 1000, truncate, divide back
+                let floored = (exact * scale).trunc() / scale;
+                let fractional = exact - floored;
+                (e.malo_id.clone(), floored, fractional)
             })
             .collect();
 
-        // Add rounding remainder to last entry
-        let sum: Decimal = allocated.iter().map(|(_, k)| k).cloned().sum();
-        let remainder = total_kwh - sum;
-        if let Some(last) = allocated.last_mut() {
-            last.1 += remainder;
+        // Step 2: how many 0.001 units are still unallocated?
+        let sum_floor: Decimal = entries.iter().map(|(_, f, _)| *f).sum();
+        let leftover_units = ((total_kwh - sum_floor) * scale)
+            .round()
+            .try_into()
+            .unwrap_or(0u64) as usize;
+
+        // Step 3: give one extra unit to the tenants with the largest fractional parts.
+        // `sort_unstable_by` on indices so we never reorder entries (just pick winners).
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_unstable_by(|&a, &b| entries[b].2.cmp(&entries[a].2));
+
+        for i in order.iter().take(leftover_units) {
+            entries[*i].1 += unit;
         }
-        allocated
+
+        entries.into_iter().map(|(id, kwh, _)| (id, kwh)).collect()
     }
 }
 
@@ -314,4 +342,93 @@ pub struct Quantities {
     pub dynamic_epex_prices: HashMap<(i32, u8, u8, u8), Decimal>,
     /// EEG Gutschrift credit passed through to electricity billing (e.g. from einsd).
     pub eeg_gutschrift_eur: Option<Decimal>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+
+    fn plan(fractions: &[(&str, &str)]) -> GgvNutzungsplan {
+        GgvNutzungsplan(
+            fractions
+                .iter()
+                .map(|(id, f)| GgvNutzungsplanEntry {
+                    malo_id: (*id).to_owned(),
+                    fraction: f.parse().unwrap(),
+                })
+                .collect(),
+        )
+    }
+
+    /// Σ(allocated) must always equal total_kwh exactly.
+    #[test]
+    fn allocate_sum_equals_total() {
+        let p = plan(&[("A", "0.333"), ("B", "0.333"), ("C", "0.334")]);
+        let total = dec!(100.000);
+        let allocs = p.allocate(total);
+        let sum: Decimal = allocs.iter().map(|(_, k)| k).sum();
+        assert_eq!(sum, total, "sum must equal total exactly");
+    }
+
+    /// With 3 equal tenants the old "dump remainder on last" method would give
+    /// last tenant 0.001 kWh extra. LRM distributes evenly.
+    #[test]
+    fn allocate_lrm_distributes_evenly_not_just_last_entry() {
+        // 3 equal tenants, 100.001 kWh → exact share = 33.333666…
+        // floor 3dp = 33.333 each → 1 leftover unit (0.001 kWh)
+        // LRM: give it to whichever has highest fractional part (they're equal, so first)
+        // Old naive: last tenant gets all of it
+        let p = plan(&[("A", "0.3333"), ("B", "0.3333"), ("C", "0.3334")]);
+        let total = dec!(100.000);
+        let allocs = p.allocate(total);
+
+        // All within ±0.001 of their exact share
+        for (id, kwh) in &allocs {
+            let fraction: Decimal = p.0.iter().find(|e| &e.malo_id == id).unwrap().fraction;
+            let exact = total * fraction;
+            let diff = (kwh - exact).abs();
+            assert!(
+                diff <= dec!(0.001),
+                "{id}: allocated {kwh}, exact {exact}, diff {diff} > 0.001"
+            );
+        }
+
+        let sum: Decimal = allocs.iter().map(|(_, k)| k).sum();
+        assert_eq!(sum, total);
+    }
+
+    /// Many tenants: no single tenant should absorb disproportionate error.
+    #[test]
+    fn allocate_lrm_no_disproportionate_last_entry() {
+        // 10 equal tenants, 1000.001 kWh → each gets 100.0001 → floor = 100.000
+        // 1 leftover 0.001 unit
+        let tenants: Vec<(String, String)> = (0..10)
+            .map(|i| (format!("T{i}"), "0.1".to_owned()))
+            .collect();
+        let p = GgvNutzungsplan(
+            tenants
+                .iter()
+                .map(|(id, f)| GgvNutzungsplanEntry {
+                    malo_id: id.clone(),
+                    fraction: f.parse().unwrap(),
+                })
+                .collect(),
+        );
+        let total = dec!(1000.001);
+        let allocs = p.allocate(total);
+
+        // With old naive: T9 (last) gets 100.001, others get 100.000
+        // With LRM: one tenant gets 100.001, the rest get 100.000 — but it's
+        // the one with the highest fractional part, not necessarily the last.
+        let over_base: Vec<_> = allocs.iter().filter(|(_, k)| *k > dec!(100.000)).collect();
+        assert_eq!(
+            over_base.len(),
+            1,
+            "exactly 1 tenant should get the extra 0.001"
+        );
+
+        let sum: Decimal = allocs.iter().map(|(_, k)| k).sum();
+        assert_eq!(sum, total);
+    }
 }

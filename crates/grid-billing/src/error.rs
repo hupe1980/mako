@@ -13,6 +13,10 @@ pub enum BillingError {
     /// Monetary precision overflow — the calculated amount exceeds `i64` range.
     ///
     /// This can only happen for unrealistically large billing amounts (> ~92 million EUR).
-    #[error("monetary overflow: amount too large for EuroAmount representation")]
-    MonetaryOverflow,
+    /// `input_value` carries the `Decimal` that caused the overflow so callers can log it.
+    #[error("monetary overflow: amount {input_value:?} too large for EuroAmount representation")]
+    MonetaryOverflow {
+        /// The value that caused the overflow, if available.
+        input_value: Option<rust_decimal::Decimal>,
+    },
 }

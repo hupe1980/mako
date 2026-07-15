@@ -869,9 +869,16 @@ impl SettlePosition {
         // rate_ct_kwh is derived from integer arithmetic (ct/100).  BO4E Preis.wert
         // is defined as 6 decimal places; rounding here keeps the stored unit_price
         // consistent with the rendered output.
-        let mut builder =
-            LineItem::for_usage_rounded(&self.description, self.kwh, "kWh", rate_eur, "EUR/kWh", 6, RoundingStrategy::MidpointAwayFromZero)
-                .meta("legal_basis", self.legal_basis.as_str());
+        let mut builder = LineItem::for_usage_rounded(
+            &self.description,
+            self.kwh,
+            "kWh",
+            rate_eur,
+            "EUR/kWh",
+            6,
+            RoundingStrategy::MidpointAwayFromZero,
+        )
+        .meta("legal_basis", self.legal_basis.as_str());
 
         // Category tags for ERP filtering
         if self.legal_basis.contains("EEG") || self.legal_basis.contains("post-F\u{00f6}rderung") {

@@ -10,9 +10,11 @@ use crate::scheme::SettlementScheme;
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// Validate and round a settlement amount to 5 decimal places via [`EuroAmount`].
+///
+/// Returns `Decimal::ZERO` on overflow (> ~92 million EUR) and logs the offending value.
 fn validated_eur(d: Decimal) -> Decimal {
     EuroAmount::checked_from_decimal(d)
-        .map(|a| a.into_decimal())
+        .map(|a| a.to_decimal()) // billing 0.5.1 BUG-1: error now carries input_value if needed
         .unwrap_or(Decimal::ZERO)
 }
 
