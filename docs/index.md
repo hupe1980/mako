@@ -124,7 +124,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <p>
       All 17 EDI@Energy message types with a 5-layer validation pipeline:
       schema → code lists → MIG structural → AHB Prüfidentifikator-specific → semantic cross-field rules.
-      Structured <code>EdiEnergyReport</code> with per-rule violation details, not raw parse errors.
+      Returns a structured <code>EdiEnergyReport</code> with per-rule violation details — not raw parse errors.
     </p>
     <a href="{{ '/parsing' | relative_url }}">Parsing guide →</a>
   </div>
@@ -133,21 +133,20 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">⚙️</div>
     <h3>Event-Sourced Process Runtime</h3>
     <p>
-      Durable, replayable MaKo workflows built on <code>mako-engine</code>.
+      45+ durable, replayable MaKo workflows built on <code>mako-engine</code>.
       Atomic dual-write (events + APERAK outbox in one <code>WriteBatch</code>) guarantees
-      no lost messages on crash. Format-version coexistence: FV2025-10-01 and FV2026-10-01
-      run simultaneously.
+      no lost messages on crash. FV2025-10-01 and FV2026-10-01 coexist simultaneously.
     </p>
     <a href="{{ '/engine' | relative_url }}">Engine guide →</a>
   </div>
 
   <div class="mako-feature">
-    <div class="mako-feature__icon">⏱</div>
+    <div class="mako-feature__icon">⚖️</div>
     <h3>Automated Regulatory Compliance</h3>
     <p>
-      APERAK 45-minute deadline enforced in <code>processd</code>.
+      APERAK 45-minute deadline enforced automatically in <code>processd</code>.
       Cedar ABAC generates per-decision audit records proving §20 EnWG non-discrimination.
-      BNetzA KPI reports are a SQL query, not a log search.
+      BNetzA KPI reports are a SQL query — not a log search.
     </p>
     <a href="{{ '/bnetza' | relative_url }}">BNetzA reference →</a>
   </div>
@@ -156,24 +155,11 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">🌱</div>
     <h3>EEG/KWKG Settlement</h3>
     <p>
-      <strong>9 settlement schemes</strong> — FeedInTariff (§21 EEG), TenantElectricity (§38a),
-      MarketPremium (§20 EEG; §§22a/28 Ausschreibung via <code>TariffSource::Auction</code>),
-      PostEeg Spot (configurable price floor), Eigenverbrauch, KwkSurcharge (§7 KWKG 2023),
-      FlexibilityPremium (§50b EEG), FlexibilitySurcharge (§50a EEG), TemporaryFeedInTariff (§21 Abs. 1 Nr. 2).
-      <strong>§20 Abs. 3 Managementprämie</strong> incorporated into AW before spread (EEG 2023 correct formula).
-      <strong>§51 version-aware Negativpreisregel</strong> — EEG 2017/2021/2023 thresholds + Bestandsschutz.
-      <strong>§51a Verlängerungsanspruch</strong>, <strong>§51b biogas Ausschreibung</strong> (AW=0 when EPEX≤2ct/kWh),
-      <strong>§52 Pflichtzahlungen</strong> (€10/kW, cumulative from violation start date), <strong>§52 Abs. 6 Netting</strong>,
-      <strong>§53b regional reduction</strong> (BNetzA grid-area Grünstromkennzeichnung), <strong>§54 Ausschreibungsreduzierung</strong>,
-      <strong>§19 EInsMan compensation</strong> (§51 exemption for curtailed kWh per §19 Abs. 2 EEG 2023),
-      <strong>§21b Veräußerungsform Wechsel</strong> (monthly switch guard + mandatory threshold enforcement),
-      <strong>§22 MessZV correction receipts</strong> (correction_of traceability, original preserved in history),
-      <strong>§25 Abs. 1 Satz 3 anteilige Zahlung</strong> (prorate_days for pro-rata Grundpreis on move-in / move-out),
-      <strong>§26 Abs. 1 Fälligkeitsdatum</strong> (15th of following month, computed automatically),
-      <strong>§100 Bestandsschutz auto-override</strong> via <code>TariffSource::Transitional(Paragraph100Rule)</code>,
-      quarterly degression (§23a), §36k Korrekturfaktor,
-      multi-meter Messkonzept (§42b GGV, §14a HT/NT). Repowering §22, Zusammenlegung §24.
-      <strong>324 tests</strong> in <code>eeg-billing</code> (incl. 12 proptest invariants, 166 regulatory showcase, `InbetriebnahmeTyp` lifecycle).
+      <strong>9 settlement schemes</strong> from §21 FeedInTariff to §50a/50b FlexibilitätsPrämien,
+      including Direktvermarktung MarketPremium, KWKG Zuschlag, and Post-EEG Spot.
+      Version-aware <strong>§51 Negativpreisregel</strong> (EEG 2017/2021/2023 + Bestandsschutz),
+      §52 Pflichtzahlungen (cumulative from violation start), §100 auto-override, §36k Korrekturfaktor.
+      Pure <code>eeg-billing</code> crate — <strong>324 tests</strong>, zero I/O.
     </p>
     <a href="{{ '/einsd' | relative_url }}">einsd guide →</a>
   </div>
@@ -182,105 +168,73 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">🧾</div>
     <h3>Energy Billing Engine</h3>
     <p>
-      12 product categories — STROM (Eintarif/HT/NT/RLM), GAS, WAERME, SOLAR,
-      EEG/EINSPEISUNG, WAERMEPUMPE, WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG.
-      Pure calculation in the <strong><code>energy-billing</code></strong> crate
-      (<strong>148 tests</strong>: unit, property-based, golden master — zero I/O, zero async).
-      <strong>RLM demand charge</strong> (<code>leistungspreis_strom_ct_per_kw_month</code>) for large C&amp;I customers.
-      <strong>Gas §54 EnergieStG exemption</strong> (<code>gas_energiesteuer_befreiung</code>) for KWK / industrial customers.
-      <strong>Historic levy lookups</strong> (<code>stromsteuer_for_year</code>, <code>energiesteuer_gas_for_year</code> incl. 2022 0-rate) for retroactive corrections.
-      <strong>PricingModel</strong> typed enum replaces string dispatch.
-      HT/NT via <code>billing::TimeOfUsePricing</code>; block tariffs via <code>billing::TariffSchedule</code>.
-      Pro-rata Grundpreis (<code>prorate_days()</code>) for move-in / move-out / Tarifwechsel.
-      §41a EPEX dynamic tariffs (iMSys required per §41a Abs. 4, annual savings comparison per §41a Abs. 6).
-      §12 Abs. 3 UStG auto-0% MwSt for solar PV ≤30 kWp.
-      <code>Invoice::merge()</code> for Tarifwechsel;
-      <code>Invoice::allocate_proportionally()</code> for B2B shared buildings.
-      XRechnung 3.0 / ZUGFeRD 2.3 (EN16931, B2G mandate 01.01.2027).
+      <strong>12 product categories</strong> — STROM (SLP/HT/NT/RLM), GAS, WAERME, SOLAR,
+      EEG/EINSPEISUNG, §14a WAERMEPUMPE/WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG.
+      RLM demand charge, Gas §54 KWK exemption, historic levy lookups (incl. 2022 0-rate),
+      §41a EPEX, XRechnung 3.0 / ZUGFeRD 2.3 (EN16931, B2G mandate 01.01.2027).
+      Pure <code>energy-billing</code> crate — <strong>148 tests</strong>, zero I/O.
     </p>
     <a href="{{ '/billingd' | relative_url }}">billingd guide →</a>
   </div>
 
   <div class="mako-feature">
-    <div class="mako-feature__icon">�</div>
+    <div class="mako-feature__icon">📊</div>
     <h3>Grid Settlement Engine</h3>
     <p>
-      The pure <code>grid-billing</code> crate calculates NNE, KA, MMM, MSB, and GeLi Gas AWH
-      Sperrprozesse invoices with full audit trails. Every position carries a
-      <strong><code>CalculationTrace</code></strong> — <code>explanation</code>,
-      <code>legal_refs</code> (e.g. <code>StromNEV §21</code>, <code>KAV §2 Abs. 2</code>,
-      <code>§14a EnWG Modul 2</code>), and <code>tariff_source</code> — so any amount can
-      be reconstructed without re-running the calculation.
-      <strong><code>Sparte::Gas</code></strong> automatically selects <code>GasNEV §14</code>
-      legal references and PID 31005.
-      <strong><code>KaKlasse</code></strong> annotates the KAV §2 rate tier for each KA position.
-      <strong><code>calculate_reversal()</code></strong> creates immutable Stornorechnung reversals.
-      Zero BO4E dependency — the service layer (<code>netzbilanzd</code>, <code>invoicd</code>)
-      owns <code>into_rechnung()</code> conversion.
+      <code>grid-billing</code> calculates NNE, KA, MMM, MSB, and AWH Sperrprozesse invoices.
+      Every position carries a <strong><code>CalculationTrace</code></strong> with explanation,
+      legal refs (StromNEV §21, GasNEV §14, KAV §2, §14a EnWG), and tariff source — fully auditable.
+      <code>Sparte::Gas</code> auto-selects GasNEV §14 refs and PID 31005.
+      <code>calculate_reversal()</code> produces immutable Stornorechnung. Zero BO4E dependency.
     </p>
     <a href="{{ '/netzbilanzd' | relative_url }}">netzbilanzd guide →</a>
   </div>
 
   <div class="mako-feature">
-    <div class="mako-feature__icon">�🔄</div>
-    <h3>Contract &amp; Customer Management</h3>
-    <p>
-      <code>vertragd</code> manages B2C and B2B customers with role-based multi-user portal access
-      (<code>kunden_identitaeten</code>: N OIDC logins per company with <code>standort_filter</code> site scoping),
-      B2B <code>Rahmenverträge</code> with portfolio pricing and Sammelrechnung,
-      and <code>Versorgungsverträge</code> per site/commodity. Serves as the sole OIDC→MaLo
-      authorization gateway for <code>portald</code>.
-    </p>
-    <a href="{{ '/vertragd' | relative_url }}">vertragd guide →</a>
-  </div>
-
-  <div class="mako-feature">
     <div class="mako-feature__icon">📡</div>
-    <h3>iMSys Direct Push, Quality &amp; Smart Meter Lifecycle</h3>
+    <h3>Smart Meter &amp; Energy Data</h3>
     <p>
-      <code>edmd</code> accepts 15-min interval data directly from SMGW/iMSys gateways
-      without waiting for the MSCONS round-trip. A <strong>Hampel-filter quality scorer</strong>
-      (window k=3, MAD-based σ, grades A/B/C/F) runs on every batch via the
-      <code>metering</code> domain library
-      (Gas m³→kWh conversion, SLP/RLM/iMSys classification, billing period aggregation,
-      virtual meters, resampling, §17 MessZV substitute value forecasting).
-      Grade F blocks the billing run; grade C/F emits <code>de.edmd.reading.quality.warning</code>.
-      The <strong>BSI TR-03109</strong> gateway session model (<code>SmgwSession</code>,
-      <code>ClsChannel</code>) tracks certificate lifecycle and §14a CLS channel health.
+      <code>edmd</code> accepts 15-min iMSys/SMGW data directly — no MSCONS round-trip required.
+      Hampel-filter quality scorer (grades A/B/C/F) runs on every batch; grade F blocks billing.
+      §17 MessZV substitute value generation, virtual meters (§42b GGV), resampling, and Iceberg/S3 OLAP.
+      BSI TR-03109 <code>SmgwSession</code> + <code>ClsChannel</code> track §14a CLS certificate health.
     </p>
     <a href="{{ '/edmd' | relative_url }}">edmd guide →</a>
   </div>
 
   <div class="mako-feature">
-    <div class="mako-feature__icon">�</div>
+    <div class="mako-feature__icon">🤝</div>
+    <h3>Contract &amp; Customer Management</h3>
+    <p>
+      <code>vertragd</code> manages B2C and B2B customers with role-based multi-user portal access,
+      B2B Rahmenverträge (portfolio pricing, Sammelrechnung), and Versorgungsverträge per site/commodity.
+      Preisgarantie guard prevents unauthorized tariff changes.
+      Serves as the sole OIDC→MaLo authorization gateway for <code>portald</code>.
+    </p>
+    <a href="{{ '/vertragd' | relative_url }}">vertragd guide →</a>
+  </div>
+
+  <div class="mako-feature">
+    <div class="mako-feature__icon">🛠️</div>
     <h3>Service SDK</h3>
     <p>
-      <code>mako-service</code> is the shared SDK that all 17 daemons build on. It eliminates
-      boilerplate: <code>shutdown::token()</code> wires SIGINT + SIGTERM in one call;
-      <code>OidcConfig::build_verifier()</code> replaces 8-line copy-paste OIDC startup code;
-      <code>McpAuth</code> + <code>McpAuthConfig</code> unify MCP authentication across all services;
-      <code>init_tracing_from_env</code> sets up structured JSON logging with optional OTel.
-      Services focus on domain logic, not infrastructure.
+      <code>mako-service</code> is the shared infrastructure all 17 daemons build on.
+      SIGINT/SIGTERM graceful drain, OIDC verifier, MCP auth, Cedar ABAC, OpenTelemetry,
+      EventBus (WebhookBus / KafkaBus), webhook HMAC verification, and rate limiting —
+      all wired with one call per service.
     </p>
     <a href="https://github.com/hupe1980/mako/tree/main/crates/mako-service">mako-service SDK →</a>
   </div>
 
   <div class="mako-feature">
-    <div class="mako-feature__icon">�🤖</div>
+    <div class="mako-feature__icon">🤖</div>
     <h3>AI / LLM Integration</h3>
     <p>
-      Every service ships an MCP server at <code>/mcp</code>.
-      <code>agentd</code> runs an Orchestrator + Specialist Mesh with LanceDB RAG
-      (ANN vector search, S3/GCS/local). OpenAI, Anthropic, AWS Bedrock SigV4 providers.
-      WASM plugins via <code>mako-plugin</code> (Extism sandbox). <strong>24 bundled specialists</strong> cover
-      billing anomaly detection, compliance (§20 EnWG parity), EEG lifecycle,
-      Sperrung compliance (BK6-22-024), grid anomaly detection, processd STP monitoring,
-      customer portal automation, BNetzA annual reporting,
-      §17 MessZV substitute-value generation (replacement-value-agent),
-      MaBiS UTILTS deadline monitoring (mabis-syncd-agent),
-      and BSI TR-03109 gateway certificate &amp; §14a CLS health (smgw-diagnostics-agent).
-      Glob-pattern <code>trigger_event_types</code> route all <code>de.mako.*</code>,
-      <code>de.eeg.*</code>, <code>de.sperr.*</code> etc. events to the right specialist automatically.
+      Every service exposes tools and prompts at <code>/mcp</code> (Streamable HTTP 2025-11-05).
+      <code>agentd</code> runs an Orchestrator + <strong>24 specialist agents</strong> with LanceDB RAG,
+      OpenAI / Anthropic / AWS Bedrock SigV4, and WASM plugin sandboxing.
+      Specialists cover billing anomaly detection, §20 EnWG compliance, SMGW BSI TR-03109 diagnostics,
+      MaBiS UTILTS deadline monitoring, and more — auto-triggered via glob <code>trigger_event_types</code>.
     </p>
     <a href="{{ '/agentd' | relative_url }}">agentd guide →</a>
   </div>
@@ -292,60 +246,100 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
 
 ## Architecture
 
-The system is organized in four layers — EDIFACT protocol, market data hub, automation, and retail billing — connected by CloudEvents 1.0 webhooks.
+The system organizes 17 independently deployable services across five functional layers,
+connected by CloudEvents 1.0 webhooks and a shared `mako-service` infrastructure SDK.
 
 </div>
 
 ```mermaid
 graph TB
-    BDEW["BDEW counterparty\n(NB · MSB · LF)"]
+    BDEW["BDEW counterparty
+(NB · MSB · LF)"]
 
     subgraph core ["Protocol + Market Data"]
         direction LR
-        makod["makod :8080/:4080\nedi-energy · mako-engine\n45+ workflows · SlateDB"]
-        marktd["marktd :8180\nMaLo · MeLo · contracts\nVersorgungsStatus · EventBus"]
+        makod["makod :8080/:4080
+edi-energy · mako-engine
+45+ workflows · SlateDB"]
+        marktd["marktd :8180
+MaLo · MeLo · contracts
+VersorgungsStatus · EventBus"]
         makod -->|"CloudEvents"| marktd
     end
 
-    subgraph auto ["Automation"]
+    subgraph auto ["Automation (NB role)"]
         direction LR
-        processd["processd :8580\nAnmeldung STP ≥95%\nLF E_0624 45-min auto-response"]
-        invoicd["invoicd :8280\ninvoic-checker 6 checks\n§22 MessZV receipts"]
-        netzbilanzd["netzbilanzd :8680\nNNE/KA/MMM/MSB/AWH billing\nINVOIC 31001/31002/31005/31009/31011\nREMADV lifecycle · 13-tool MCP"]
+        processd["processd :8580
+Anmeldung STP ≥95%
+LF E_0624 45-min auto"]
+        invoicd["invoicd :8280
+invoic-checker 6 checks
+§22 MessZV receipts"]
+        netzbilanzd["netzbilanzd :8680
+NNE/KA/MMM/MSB billing
+GridSettlement · CalculationTrace"]
+        sperrd["sperrd :8780
+Sperrung tracking
+IFTSTA 21039 auto-dispatch"]
     end
 
-    subgraph energy ["Energy Data"]
+    subgraph data ["Energy Data + Observability"]
         direction LR
-        edmd["edmd :8380\nMSCONS meter reads\nIceberg/S3 OLAP archive"]
-        einsd["einsd :9180\nEEG/KWKG settlement\n9 schemes · eeg-billing crate\n§52 sanctions · §51 neg-price\n§51b biogas · §53b/54 reductions\n§21b Wechsel · §19 EInsMan\n§22 MessZV corrections\nderive_settlement_state\n8 migrations · **324 tests**"]
+        edmd["edmd :8380
+MSCONS · iMSys push
+Hampel quality · Iceberg"]
+        einsd["einsd :9180
+EEG/KWKG settlement
+9 schemes · 324 tests"]
+        obsd["obsd :8480
+KPI reports
+§20 EnWG parity"]
+        mabis["mabis-syncd :8880
+MaBiS UTILTS
+day-3/day-8 schedule"]
+        nis["nis-syncd :9680
+NIS grid import
+~80% → ≥95% STP"]
     end
 
     subgraph retail ["Retail Billing (LF)"]
         direction TB
-        tarifbd["tarifbd :9080\nUser-defined product catalog\nEPEX Spot prices"]
-        billingd["billingd :9280\n12 energy categories\n§41a EPEX · XRechnung 3.0"]
-        accountingd["accountingd :9380\nKundenkonto ledger\nFIFO open-items · SEPA pain.008+pain.001\nAuto-dunning · GDPR anonymize"]
+        tarifbd["tarifbd :9080
+Product catalog
+EPEX §41a"]
+        billingd["billingd :9280
+12 categories
+XRechnung 3.0"]
+        accountingd["accountingd :9380
+Kundenkonto ledger
+SEPA · auto-dunning"]
         tarifbd --> billingd --> accountingd
     end
 
     subgraph b2c ["B2C + AI"]
         direction LR
-        vertragd["vertragd :9780\nContract & Customer Management\nKunden · Rahmenverträge · B2B/B2C\nkunden_identitaeten · portald auth"]
-        agentd["agentd :9580\nLLM Orchestrator + Specialist Mesh\nLanceDB RAG · MCP tools"]
-        portald["portald :9480\nCustomer Portal gateway\nREST + SSE · OIDC-gated"]
+        vertragd["vertragd :9780
+Contract & Customer
+B2C+B2B · OIDC gateway"]
+        portald["portald :9480
+Customer Portal
+REST + SSE"]
+        agentd["agentd :9580
+24 AI specialists
+LanceDB RAG · MCP"]
     end
 
-    BDEW <-->|"AS4/ebMS3 · REST\niMS REST/WS"| makod
-    marktd -->|"EventBus fan-out"| processd & invoicd & edmd & auto
-    processd -->|"decisions"| makod
-    invoicd -->|"settle/dispute"| makod
+    BDEW <-->|"AS4/REST/iMS"| makod
+    marktd -->|"EventBus fan-out"| processd & invoicd & edmd & obsd & agentd
+    processd -->|commands| makod
+    invoicd -->|settle/dispute| makod
+    nis -->|"PUT malo_grid"| marktd
+    mabis -->|"UTILTS cmd"| makod
     edmd -->|"MeterBillingPeriod"| billingd
-    marktd -->|"NNE/KA tariffs"| billingd
     einsd -->|"EEG credits"| accountingd
     vertragd -->|"start-supply"| processd
-    agentd -.->|"MCP tools"| core & retail & auto
-    ERP["ERP / CRM"] --> vertragd
-    accountingd --> ERP
+    portald -->|aggregates| billingd & accountingd & edmd & einsd
+    agentd -.->|"MCP tools"| core & auto & data
 ```
 
 <div markdown="1">
@@ -354,7 +348,7 @@ graph TB
 
 ## Quick Start
 
-Install the EDIFACT parsing and process engine libraries:
+**Library usage** — add to `Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -374,20 +368,24 @@ let pid = msg.detect_pruefidentifikator()?.as_u32();  // → 55001
 println!("PID {pid}: GPKE Lieferbeginn Strom");
 ```
 
-**Run a supplier-switch workflow:**
+**Local development** — run services directly, infra in Docker (`cargo-watch` required):
 
-```rust
-use mako_engine::{builder::EngineBuilder, event_store::InMemoryEventStore};
-use mako_gpke::wechselprozesse::GpkeSupplierChangeWorkflow;
+```bash
+just infra-up            # start postgres, all 13 databases pre-created
 
-let ctx = EngineBuilder::new()
-    .with_event_store(InMemoryEventStore::new())
-    .build();
-let process = ctx.spawn::<GpkeSupplierChangeWorkflow>(
-    tenant_id, workflow_id("gpke-switch", "FV2025-10-01")
-);
-// Events + APERAK outbox written atomically — no lost messages on crash
-let envelopes = process.execute_and_enqueue(cmd).await?;
+just dev marktd          # hot-reload — cargo watch -x "run -p marktd"
+just dev processd        # separate terminal per service
+just dev makod
+```
+
+**Full demo stack (10 services):**
+
+```bash
+git clone https://github.com/hupe1980/mako
+cd mako/demo
+docker buildx bake makod marktd processd invoicd edmd obsd netzbilanzd nis-syncd
+docker compose up -d
+bash smoke.sh
 ```
 
 → Full walkthrough: [Getting Started guide]({{ '/getting-started' | relative_url }})
@@ -453,7 +451,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/einsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">einsd</span>
     <span class="mako-service-card__port">:9180</span>
-    <span class="mako-service-card__desc">Einspeiser registry. 9 EEG/KWKG settlement schemes. §51/§51a/§51b Negativpreisregel. §100 Bestandsschutz auto-override. §25 Abs. 1 Satz 3 anteilige Zahlung. §26 Fälligkeitsdatum. §19 EInsMan compensation. §21b Veräußerungsform Wechsel. §53b/§54 regional+auction reductions. §22 MessZV correction receipts. derive_settlement_state auto-update. Repowering §22. 301 eeg-billing tests. 14-tool MCP. §3 Nr. 1 Direktvermarktung compliance check. §44b Biogas quota monitoring.</span>
+    <span class="mako-service-card__desc">Einspeiser registry. 9 EEG/KWKG settlement schemes. §51/§51a/§51b Negativpreisregel. §100 Bestandsschutz auto-override. §25 Abs. 1 Satz 3 anteilige Zahlung. §26 Fälligkeitsdatum. §19 EInsMan compensation. §21b Veräußerungsform Wechsel. §53b/§54 regional+auction reductions. §22 MessZV correction receipts. derive_settlement_state auto-update. Repowering §22. <strong>324 eeg-billing tests</strong>. 14-tool MCP. §3 Nr. 1 Direktvermarktung compliance check. §44b Biogas quota monitoring.</span>
   </a>
   <a href="{{ '/obsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">obsd</span>

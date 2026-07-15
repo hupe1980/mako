@@ -7,7 +7,7 @@
 //!
 //! All source series must be aligned to the same UTC timestamp grid. Only
 //! timestamps present in **all** required source series are included in the output.
-//! Use [`resample`] first if source series have different resolutions.
+//! Use [`crate::resample`] first if source series have different resolutions.
 //!
 //! ## Virtual source column
 //!

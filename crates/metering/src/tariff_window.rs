@@ -13,7 +13,7 @@
 //!
 //! ## Relationship to `metering::aggregation`
 //!
-//! [`metering::aggregation`] uses pre-defined HT/NT schedules from `HtNtSchedule`
+//! [`crate::aggregation`] uses pre-defined HT/NT schedules from `HtNtSchedule`
 //! to split 15-min interval energy into HT vs NT registers for billing.
 //!
 //! ## DST handling

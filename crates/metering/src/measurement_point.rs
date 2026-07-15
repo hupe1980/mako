@@ -6,7 +6,7 @@
 //! - A specific OBIS register
 //! - The accountable market role
 //!
-//! This is the structural metadata layer that connects raw [`MeterInterval`]
+//! This is the structural metadata layer that connects raw [`crate::MeterInterval`]
 //! data to the regulatory and billing context required by German MaKo.
 //!
 //! ## Relationship to MSCONS
