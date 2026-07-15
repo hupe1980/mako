@@ -91,6 +91,7 @@ Quick reference across all process families. Each row is a top-level domain.
 | **MaBiS Bilanzkreisabrechnung** | ⚡ | `mako-mabis` `mabis-billing` | MSCONS 13003; IFTSTA 21000–21005 | 1 WT (§13.8) | BK6-24-174 |
 | **MaBiS Clearingliste** | ⚡ | `mako-mabis` `mabis-clearingliste` | UTILMD 55065/55069/55070 | — | BK6-24-174 |
 | **GeLi Gas Lieferantenwechsel** | 🔥 | `mako-geli-gas` `geli-gas-supplier-change` | UTILMD G 44001–44021 | 10 WT | BK7-24-01-009 |
+| **GeLi Gas Lieferbeginn (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-lf-anmeldung` | UTILMD G 44001 (out) · 44003/44004 (in) | 10 WT | BK7-24-01-009 |
 | **GeLi Gas Stornierung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung` | UTILMD G 44022 (Nb-only inbound) | 10 WT | BK7-24-01-009 |
 | **GeLi Gas Stornierung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung-lf` | UTILMD G 44023/44024 (Lf-only inbound) | 10 WT | BK7-24-01-009 |
 | **GeLi Gas Sperrung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-lf` | ORDERS 17115/17117 · ORDCHG 39000 | 10 WT | BK7-24-01-009 |
@@ -137,10 +138,12 @@ Quick reference across all process families. Each row is a top-level domain.
 3. [MaBiS — Bilanzkreisabrechnung Strom](#mabis--bilanzkreisabrechnung-strom)
 4. [GeLi Gas — Lieferantenwechsel Gas](#geli-gas--lieferantenwechsel-gas)
    - [Lieferantenwechsel Gas](#lieferantenwechsel-gas)
+     - [LF-seitige Einreichung (geli-gas-lf-anmeldung)](#lf-seitige-einreichung-geli-gas-lf-anmeldung)
    - [Sperrung / Entsperrung Gas](#sperrung--entsperrung-gas)
    - [Gas Abrechnung — Billing Scope](#gas-abrechnung--billing-scope)
    - [Gas Datenabruf](#gas-datenabruf)
    - [MSCONS Gas — Messwert- und Energiemengenübermittlung](#mscons-gas--messwert--und-energiemengenübermittlung)
+   - [Process Symmetry: GPKE ↔ GeLi Gas](#process-symmetry-gpke--geli-gas)
 5. [WiM Gas — Messstellenbetrieb Gas](#wim-gas--messstellenbetrieb-gas)
    - [WiM Gas Abrechnung](#wim-gas-abrechnung)
    - [WiM Gas — INSRPT Störungsmeldungen](#wim-gas--insrpt-störungsmeldungen)
@@ -295,25 +298,21 @@ acknowledgement is via APERAK within 24 h.
 
 #### INVOIC — Netznutzungs- und Mehr-/Mindermengenabrechnung
 
-| Process | Sender → Empfänger | INVOIC PID | Content | Crate |
-|---|---|---|---|---|
-| Abschlagsrechnung | NB → LF | INVOIC **31001** | Netznutzung Abschlag | `mako-gpke` ✅ |
-| NN-Rechnung | NB → LF | INVOIC **31002** | Netznutzungsabrechnung (Jahresabrechnung) | `mako-gpke` ✅ |
-| Mehr-/Mindermengen Strom | NB → LF | INVOIC **31005–31008** | MMM Strom Abrechnung | `mako-gpke` ✅ |
-| MSB-Rechnung | MSB → LF | INVOIC **31009** | WiM Messstellenbetriebsabrechnung | `mako-wim` ✅ |
-
-> **Note:** PIDs 31003 and 31004 do not belong to GPKE Strom. A Strom-only
-> deployment never receives these messages. See the [WiM Gas](#wim-gas--messstellenbetrieb-gas)
-> section if deploying Gas metering-service billing.
-
-> **Regulatory boundary:** PIDs 31005–31008 are exclusively **Strom** processes per
-> BNetzA BK6 Mitteilung Nr. 72 (05.02.2026). Gas MMM billing uses separate PIDs.
+| Process | Sender → Empfänger | INVOIC PID | Content | Sparte | Crate |
+|---|---|---|---|---|---|
+| Abschlagsrechnung | NB → LF | INVOIC **31001** | Netznutzung Abschlag (StromNEV §21) | ⚡ | `mako-gpke` ✅ |
+| NN-Rechnung / MMM | NB → LF | INVOIC **31002** | Mehr-/Mindermengen Strom (MMM) | ⚡ | `mako-gpke` ✅ |
+| NNE Gas | NB → LF | INVOIC **31005** | Netznutzungsentgelt Gas (GasNEV §14) | 🔥 | `netzbilanzd` ✅ |
+| NNE selbstausgestellt | NB+LF same entity | INVOIC **31006** | Selbst ausgestellte NNE | ⚡ | `netzbilanzd` ✅ |
+| WiM Gas Rechnung | gMSB → NB | INVOIC **31003** | MSB-Gerätewechsel Gas | 🔥 | `mako-wim-gas` ⚠️ |
+| Stornorechnung WiM Gas | gMSB → NB | INVOIC **31004** | Storno MSB-Rechnung Gas | 🔥 | `mako-wim-gas` ⚠️ |
+| MSB-Rechnung Strom | MSB → LF | INVOIC **31009** | WiM Messstellenbetriebsabrechnung | ⚡ | `mako-wim` ✅ |
+| MMM Gas aggregiert | NB → MGV | INVOIC **31007** | Aggreg. MMM-Rechnung Gas | 🔥 | `mako-gabi-gas` ✅ |
+| MMM Gas selbstausgestellt | MGV | INVOIC **31008** | Selbst ausgest. MMM-Rechnung Gas | 🔥 | `mako-gabi-gas` ✅ |
+| AWH Sperrprozesse Gas | GNB/VNB → LF | INVOIC **31011** | Sonstige Leistung Sperrung Gas | 🔥 | `mako-geli-gas` ✅ |
+| Kapazitätsabrechnung Gas | GNB → KN | INVOIC **31010** | Kapazitätsabrechnung Gas | 🔥 | `mako-gabi-gas` ✅ |
 
 #### REMADV / COMDIS — Zahlungsabwicklung
-
-After an INVOIC is received, the **payer** (LF or NB) sends a REMADV to confirm or
-partially reject the payment. The **invoicer** (NB or MSB) can dispute the REMADV
-via COMDIS 29001.
 
 | Message | Sender → Empfänger | PID | Meaning | Crate |
 |---|---|---|---|---|
@@ -660,7 +659,60 @@ object. The grid operator is called **GNB** (Gasnetzbetreiber), not NB.
 > - `Lf`-only: PIDs 44023/44024 → `geli-gas-stornierung-lf` (LF receives GNB response)
 > - `Msb`/`Nmsb`/`all()`: `mako-wim-gas` `wim-gas-stornierung` handles all three
 
-**Message flow — Lieferbeginn Gas:**
+---
+
+#### LF-seitige Einreichung (geli-gas-lf-anmeldung)
+
+When makod is deployed in the **LF role**, the LF initiates the Lieferbeginn Gas by sending
+UTILMD G 44001 outbound to the GNB. The response arrives inbound as 44003 (Bestätigung)
+or 44004 (Ablehnung). This mirrors the GPKE `gpke-lf-anmeldung` workflow for Strom.
+
+**Workflow:** `geli-gas-lf-anmeldung` — APERAK Frist: **10 Werktage**
+
+| Direction | Message | PID | Role |
+|---|---|---|---|
+| Outbound (LFN → GNB) | Anmeldung Lieferbeginn | UTILMD G **44001** | LFN initiates |
+| Inbound (GNB → LFN) | Bestätigung Lieferbeginn | UTILMD G **44003** | GNB confirms |
+| Inbound (GNB → LFN) | Ablehnung Lieferbeginn | UTILMD G **44004** | GNB rejects |
+| Outbound (LFN → LFA) | Kündigung beim alten LF | UTILMD G **44016** | Concurrent with 44001 |
+| Inbound (LFA → LFN) | Bestätigung Kündigung | UTILMD G **44017** | LFA confirms |
+| Inbound (LFA → LFN) | Ablehnung Kündigung | UTILMD G **44018** | LFA rejects |
+
+> **Einreichungstag rule (Gas):** Like GPKE Strom, UTILMD G 44001 (LFN → GNB) and
+> UTILMD G 44016 (LFN → LFA) must be submitted on the **same Werktag**.
+> The Mindestvorlauffrist for a Standardwechsel is **10 Werktage** — significantly
+> longer than the GPKE 7-Werktage window. Gas has **no fast-switch equivalent**
+> (`Schneller Lieferantenwechsel` does not exist in Gas; BK7-24-01-009 §2.1).
+
+```mermaid
+sequenceDiagram
+    participant LFN as Neuer LF (LFN)
+    participant GNB as Gasnetzbetreiber (GNB)
+    participant LFA as Alter LF (LFA)
+
+    Note over LFN,LFA: Einreichungstag = gleichzeitig
+    LFN->>GNB: UTILMD G 44001 (Anmeldung Lieferbeginn)
+    LFN->>LFA: UTILMD G 44016 (Kündigung beim alten LF)
+
+    Note over LFN,GNB: Frist: 10 Werktage (keine Express-Option)
+
+    alt GNB bestätigt
+        GNB-->>LFN: UTILMD G 44003 (Bestätigung Lieferbeginn)
+        LFA-->>LFN: UTILMD G 44017 (Bestätigung Kündigung)
+    else GNB lehnt ab
+        GNB-->>LFN: UTILMD G 44004 (Ablehnung Lieferbeginn)
+    else LFA lehnt ab
+        LFA-->>LFN: UTILMD G 44018 (Ablehnung Kündigung)
+    end
+
+    Note over LFN,LFA: Zum Lieferbeginn-Datum
+    GNB->>LFA: UTILMD G 44007 (Abmeldung NN)
+    LFA-->>GNB: UTILMD G 44008 (Bestätigung) oder 44009 (Ablehnung)
+```
+
+---
+
+**Message flow — Lieferbeginn Gas (GNB-Sicht):**
 
 ```mermaid
 sequenceDiagram
@@ -769,26 +821,14 @@ sequenceDiagram
 
 ### Gas Abrechnung — Billing Scope
 
-GeLi Gas (BK7-24-01-009) governs supplier switching **and** AWH billing.
-The BK7 regulator did not mandate EDI@Energy INVOIC messages for GNB→LF gas
-network access charges; that billing is settled via bilateral contracts outside
-the EDIFACT/AS4 channel.
-
-Gas billing mandated under BK7 belongs to **three** crates by domain:
-
 | INVOIC PID | Content | Sender → Empfänger | Crate |
 |---|---|---|---|
-| **31003** | WiM Gas Rechnung (gMSB-Gerätewechsel) | gMSB → NB | `mako-wim-gas` ⚠️ |
+| **31005** | Netznutzungsentgelt Gas (GasNEV §14) | NB → LF | `netzbilanzd` ✅ |
+| **31011** | AWH Sperrprozesse Gas | GNB/VNB → LF | `mako-geli-gas` ✅ |
+| **31003** | WiM Gas Rechnung (Gerätewechsel) | gMSB → NB | `mako-wim-gas` ⚠️ |
 | **31004** | Stornorechnung WiM Gas | gMSB → NB | `mako-wim-gas` ⚠️ |
-| **31010** | Kapazitätsabrechnung Gas (Kapazitätsnutzer) | GNB → KN | `mako-gabi-gas` ✅ |
-| **31011** | Rechnung sonstige Leistung (AWH Sperrprozesse Gas) | GNB/VNB → LF | `mako-geli-gas` `geli-gas-sperrprozesse-invoic` ✅ |
-
-> **PID 31011** belongs to GeLi Gas (BK7-24-01-009): the GNB/VNB bills the
-> LFN/LFA for AWH (abrechnungswürdige Handlungen) during Sperrprozesse.
-> Direction is NB → LF — not NB → BKV. This is not a GaBi Gas process.
->
-> A Gas-only deployment never sees INVOIC PIDs from the Strom range (31001, 31002,
-> 31005–31008, 31009). Those are not registered and will be dead-lettered.
+| **31007/31008** | Aggreg. MMM-Rechnung Gas | NB → MGV | `mako-gabi-gas` ✅ |
+| **31010** | Kapazitätsabrechnung Gas | GNB → KN | `mako-gabi-gas` ✅ |
 
 ---
 
@@ -818,8 +858,60 @@ with APERAK within **10 Werktage** (BK7-24-01-009).
 | **13007** | Gasbeschaffenheit (Brennwert, Zustandszahl) | GNB → LF · MSBA → GNB |
 | **13008** | Lastgang Gas | GNB → LF · MSBA → GNB |
 | **13009** | Energiemenge Gas | MSBA/MSBN → GNB · GNB → LF |
-| **13013** | Allokationsliste Gas (MaLo-scharf, MMM) | GNB → LF |
-| **13014** | Bilanzierte Menge Gas/Strom (MaLo-scharf, MMM) | ÜNB → GNB · GNB → LF |
+
+> **PIDs 13013 and 13014** are listed here for cross-reference only.
+> **13013** (Allokationsliste Gas, MMMA) belongs to `mako-gabi-gas` (`gabi-gas-mmma`) — GaBi Gas
+> billing domain (BK7-14-020). **13014** (Bilanzierte Menge Gas/Strom) is a GaBi Gas/ÜNB process.
+> Neither is registered under `mako-geli-gas`; Gas-only deployments that do not load `mako-gabi-gas`
+> will dead-letter these PIDs.
+
+| PID | Content | Sender → Empfänger | Crate |
+|---|---|---|---|
+| **13002** | Zählerstand Gas | MSBA/MSBN → GNB · GNB → LF | `mako-geli-gas` ✅ |
+| **13007** | Gasbeschaffenheit (Brennwert, Zustandszahl) | GNB → LF · MSBA → GNB | `mako-geli-gas` ✅ |
+| **13008** | Lastgang Gas | GNB → LF · MSBA → GNB | `mako-geli-gas` ✅ |
+| **13009** | Energiemenge Gas | MSBA/MSBN → GNB · GNB → LF | `mako-geli-gas` ✅ |
+| **13013** | Allokationsliste Gas (MaLo-scharf, MMMA) | GNB → MGV | **`mako-gabi-gas`** `gabi-gas-mmma` — GaBi Gas domain |
+| **13014** | Bilanzierte Menge Gas/Strom (MaLo-scharf) | ÜNB → GNB · GNB → LF | **`mako-gabi-gas`** — GaBi Gas domain |
+
+---
+
+### Process Symmetry: GPKE ↔ GeLi Gas
+
+> **Why doesn't GeLi Gas have every GPKE process?**
+>
+> GPKE (Strom) and GeLi Gas (Gas) share the same *business goals* — supplier switching,
+> disconnection, billing, data retrieval — but have structurally different regulatory frameworks.
+> The asymmetry is real and intentional, not a documentation or implementation gap.
+
+| GPKE Process (Strom) | GeLi Gas Equivalent | Notes |
+|---|---|---|
+| Lieferantenwechsel (NB-Sicht) — UTILMD 55001–55018 | Lieferantenwechsel (GNB-Sicht) — UTILMD G 44001–44021 | ✅ Direct equivalent. Gas has no fast-switch option (10 WT only) |
+| Lieferantenwechsel (LF-Sicht) — `gpke-lf-anmeldung` | Lieferbeginn (LF-Sicht) — `geli-gas-lf-anmeldung` (44001 out, 44003/44004 in) | ✅ Direct equivalent |
+| Abmeldung NB-initiiert — UTILMD 55007–55009 | Abmeldung NN (GNB → LFN) — UTILMD G 44007–44009 | ✅ Direct equivalent |
+| Stornierung — UTILMD 55022–55024 | Stornierung — UTILMD G 44022–44024 | ✅ Direct equivalent (role-conditional routing) |
+| Sperrung/Entsperrung — ORDERS 17115–17117 | Sperrung/Entsperrung — ORDERS 17115–17117 | ✅ **Same PIDs**, different market; routed by commodity |
+| INVOIC NNE Strom — 31001 | **INVOIC 31005** — NNE Gas (NB → LF, GasNEV §14) | ✅ Direct equivalent. `netzbilanzd` `billing_type: "nne_gas"` generates PID 31005 via `SettlementType::NneGas`; same calculation as Strom, legal refs switch to `GasNEV §14` |
+| INVOIC MMM Strom — 31002 (NB → LF) | **GaBi Gas** INVOIC 31007/31008 (`mako-gabi-gas`) | ⚠️ Equivalent exists but **different counterparty**: Gas MMM (Aggreg. MMM-Rechnung) flows **NB → MGV** (Marktgebietsverantwortlicher), not NB → LF as in Strom. `invoicd` handles 31007/31008 with MMMA Gas (THE) price check |
+| **Neuanlage MaLo** — UTILMD 55600–55605 | Embedded in UTILMD G 44001 (Lieferbeginn) | ⚠️ Gas has no separate "Neuanlage" PID set; new connections use the same 44001 PID as supplier changes |
+| **Ankündigung Zuordnung LF** — UTILMD 55607–55609 | ❌ No equivalent | Strom-only balancing group notification (§14a EnWG / iMSys demand response) |
+| **UTILTS** — 25001/25004–25010 | ❌ No equivalent | UTILTS carries Zählzeitdefinitionen (HT/NT tariff clocks) and Berechnungsformeln — concepts that don't exist in Gas regulation |
+| **Allokationsliste Strom** — ORDERS 17110 · MSCONS 13014 | **GaBi Gas** Allokationsliste — MSCONS 13013 (`mako-gabi-gas`) | Different crate/domain: Gas allocation belongs to GaBi Gas (BK7-14-020), not GeLi Gas |
+| **Konfiguration / iMSys** — ORDERS 17134/17135 | **WiM Gas** — UTILMD G 44039–44053 | Handled by `mako-wim-gas`; MSB gateway configuration is a WiM concern in both Strom and Gas |
+| **GPKE Anfrage Bestellung** — UTILMD 55555 | ❌ No equivalent | Strom-only Stammdaten process for special metering configurations |
+| **MSCONS Zählerstand** — 13005/13006 | MSCONS Gas Zählerstand — 13002/13008/13009 | ✅ Equivalent function; Gas uses separate PID range due to Gas-specific Brennwert/Zustandszahl fields |
+| Datenabruf — ORDERS 17004/17102 | Datenabruf Gas — ORDERS 17103/17104 | ✅ Direct equivalent (Gas-specific fields: Abrechnungsbrennwert, Zustandszahl) |
+| PARTIN Strom — 37000–37006 | PARTIN Gas — 37008–37014 | ✅ Direct equivalent — separate PID ranges for separate partner data schemas |
+| IFTSTA 21039 (Sperrung Vollzug) | IFTSTA 21039 (Gas Sperrung Vollzug) | ✅ Same PID, routed by Sparte |
+
+**Key Gas-only processes (no GPKE equivalent):**
+
+| GeLi Gas Process | Reason |
+|---|---|
+| MSCONS 13007 (Gasbeschaffenheit: Brennwert, Zustandszahl) | Gas physical properties required for billing conversion (m³ → kWh_Hs per DVGW G 685); no Strom analogue |
+| INVOIC 31011 (AWH Sperrprozesse) | Gas Sperrung involves separate gMSB layer; GNB bills LF for AWH. Strom Sperrung costs are handled via INVOIC 31001/31002 |
+| GaBi Gas ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES (DVGW) | Gas balancing and transport nomination — no Strom equivalent (Strom uses redispatch and BKV processes) |
+| Datenabruf 17103/17104 (Brennwert/Zustandszahl) | Gas-specific physical data required for settlement |
 
 ---
 
