@@ -4,6 +4,7 @@
 //! for BDEW AS4 strict compliance.  [`BdewAs4Profile`] combines the profile stack
 //! with a [`PModeRegistry`] for a single, startup-time entry point.
 
+pub use asx_rs::as4::As4PushPolicy;
 use asx_rs::core::InteropMode;
 use asx_rs::interop::{
     BaseProfile, CanonicalizationPolicy, ProfileStack, ProfileValidationReport,
@@ -15,11 +16,60 @@ use crate::{
     pmode::{BdewAction, PMode, PModeRegistry, bdew_pmode_with_endpoint},
 };
 
+// ── Per-partner encryption certificate store ──────────────────────────────────
+/// PEM-encoded X.509 certificate for encrypting outbound AS4 messages to a
+/// specific trading partner.
+///
+/// Stored as `Arc<[u8]>` (byte slice) to allow cheap cloning across the
+/// `BdewAs4Sender` and the `BdewAs4Profile`.
+type EncryptionCertPem = std::sync::Arc<[u8]>;
+
 /// Short identifier for the BDEW MaKo AS4 profile.
 pub const PROFILE_NAME: &str = "bdew_mako_as4";
 
 /// Profile version string (mirrors the AS4 Kommunikationshandbuch edition).
 pub const PROFILE_VERSION: &str = "2.0.0";
+
+/// Build an [`As4PushPolicy`] preset for BDEW AS4-Profil v1.2 inbound receive.
+///
+/// Equivalent to [`As4PushPolicy::regulated()`] with the operator's own
+/// decryption private key wired in, enabling decryption of inbound encrypted
+/// AS4 messages.
+///
+/// # BDEW AS4-Profil v1.2 §2.2.6.2.2
+///
+/// BDEW requires every inbound message to be encrypted with the operator's
+/// EC (BrainpoolP256r1) public key. Supply the corresponding private key here
+/// to decrypt them. The key must be in PEM format (PKCS#8 or SEC1 encoding).
+///
+/// # Parameters
+///
+/// - `decryption_key_pem` — `None` for sign-only mode (testing / before certs arrive).
+///   `Some(pem_bytes)` for production with inbound decryption enabled.
+///
+/// # Example
+///
+/// ```rust
+/// use mako_as4::profile::bdew_push_policy;
+///
+/// // Sign-only (development / no BDEW PKI certs yet)
+/// let policy = bdew_push_policy(None);
+///
+/// // Production with inbound decryption
+/// let key_pem: Vec<u8> = std::fs::read("/etc/certs/as4-decrypt.key.pem").unwrap_or_default();
+/// let policy = bdew_push_policy(Some(key_pem));
+/// ```
+pub fn bdew_push_policy(decryption_key_pem: Option<Vec<u8>>) -> As4PushPolicy {
+    let mut policy = As4PushPolicy::regulated();
+    if let Some(key) = decryption_key_pem {
+        policy.inbound_decryption_key_pem = Some(std::sync::Arc::from(key.as_slice()));
+        // Enforce that every inbound message is encrypted (BDEW AS4-Profil v1.2 §2.2.6.2.2).
+        // Only set when a decryption key is provided; otherwise the policy builder
+        // would reject the config (require_encrypted_inbound = true without a key).
+        policy.require_encrypted_inbound = true;
+    }
+    policy
+}
 
 /// Creates a [`ProfileStack`] pre-configured for BDEW MaKo AS4 compliance.
 ///
@@ -58,8 +108,11 @@ pub fn bdew_mako_profile_stack() -> ProfileStack {
             canonicalization: CanonicalizationPolicy::default(),
             security: SecurityPolicy {
                 require_signature: true,
-                // Encryption is optional per BDEW AS4 Kommunikationshandbuch §5.6
-                require_encryption: false,
+                // Mandatory per BDEW AS4-Profil v1.2 §2.2.6.2.2.
+                // asx-rs v0.6 implements ECDH-ES + ConcatKDF + AES-128-KW with
+                // BrainpoolP256r1 (BSI TR-03116-3 §9.2) automatically when the
+                // recipient certificate has an EC public key.
+                require_encryption: true,
             },
             validation: ValidationPolicy {
                 reject_ambiguous_headers: true,
@@ -98,6 +151,12 @@ pub fn bdew_mako_profile_stack() -> ProfileStack {
 pub struct BdewAs4Profile {
     stack: ProfileStack,
     registry: PModeRegistry,
+    /// Per-partner encryption certificates: `partner_mp_id → PEM cert bytes`.
+    ///
+    /// Used by the outbound send path to populate `As4SendCredentials::recipient_cert_pem`.
+    /// BDEW AS4-Profil v1.2 §2.2.6.2.2 requires each message to be encrypted with the
+    /// **recipient's** encryption certificate.
+    encryption_certs: std::collections::HashMap<String, EncryptionCertPem>,
 }
 
 impl Default for BdewAs4Profile {
@@ -112,6 +171,7 @@ impl BdewAs4Profile {
         Self {
             stack: bdew_mako_profile_stack(),
             registry: PModeRegistry::new(),
+            encryption_certs: std::collections::HashMap::new(),
         }
     }
 
@@ -181,6 +241,47 @@ impl BdewAs4Profile {
                 .register(bdew_pmode_with_endpoint(id, &mp_id, action, &url));
         }
         self
+    }
+
+    /// Register the encryption certificate for a trading partner.
+    ///
+    /// `cert_pem` is the partner's X.509 certificate (PEM-encoded) used to encrypt
+    /// outbound AS4 messages. Per BDEW AS4-Profil v1.2 §2.2.6.2.2 the recipient's
+    /// encryption certificate is required for every outbound message when
+    /// `security.encrypt = true`.
+    ///
+    /// The certificate is stored keyed by `partner_mp_id` (13-digit GLN).
+    /// It is returned by [`get_partner_encryption_cert`](Self::get_partner_encryption_cert)
+    /// for injection into `As4SendCredentials::recipient_cert_pem` at send time.
+    ///
+    /// # Note
+    ///
+    /// BDEW uses **separate** signing and encryption keypairs. The encryption certificate
+    /// corresponds to the partner's EC keypair (BrainpoolP256r1). Do not use the signing
+    /// certificate here.
+    pub fn register_partner_encryption_cert(
+        &mut self,
+        partner_mp_id: impl Into<String>,
+        cert_pem: impl Into<Vec<u8>>,
+    ) -> &mut Self {
+        self.encryption_certs
+            .insert(partner_mp_id.into(), cert_pem.into().into());
+        self
+    }
+
+    /// Return the encryption certificate PEM for a trading partner, if registered.
+    ///
+    /// Used by the outbound send path to populate `As4SendCredentials::recipient_cert_pem`.
+    /// Returns `None` when no encryption certificate has been registered for this partner.
+    pub fn get_partner_encryption_cert(&self, partner_mp_id: &str) -> Option<&[u8]> {
+        self.encryption_certs
+            .get(partner_mp_id)
+            .map(|arc| arc.as_ref())
+    }
+
+    /// Returns `true` if at least one partner has an encryption certificate registered.
+    pub fn has_any_encryption_certs(&self) -> bool {
+        !self.encryption_certs.is_empty()
     }
 
     /// Resolve the first P-Mode for `partner_mp_id` matching this BDEW [`BdewAction`].
@@ -287,8 +388,8 @@ mod tests {
             "signing must be required"
         );
         assert!(
-            !stack.base.security.require_encryption,
-            "encryption must be optional (not required)"
+            stack.base.security.require_encryption,
+            "encryption must be required — BDEW AS4-Profil v1.2 §2.2.6.2.2"
         );
     }
 

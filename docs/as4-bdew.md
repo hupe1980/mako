@@ -1,0 +1,353 @@
+---
+layout: default
+title: BDEW AS4 Guide
+nav_order: 16
+parent: Reference
+mermaid: true
+description: >
+  How to configure makod for BDEW AS4-Profil v1.2 production deployments.
+  Covers the certificate triplet (TLS / signing / encryption), P-Mode registry,
+  BDEW Verzeichnisdienst endpoint discovery, and testing without WIRK certificates.
+---
+
+# BDEW AS4 Guide
+
+AS4 became the mandatory transport for BDEW MaKo since **1 April 2024** (Strom, BK6-22-024)
+and **1 April 2025** (Gas, BK7-22-023). This guide covers everything needed to operate
+`makod` in a BDEW production environment.
+
+---
+
+## BDEW AS4-Profil v1.2 vs PEPPOL/CEF
+
+BDEW AS4 is based on the CEF eDelivery profile but extends it with mandatory BSI TR-03116-3
+cryptographic algorithms. The differences are significant enough to cause interoperability
+failures if you treat them as equivalent.
+
+| Aspect | PEPPOL / CEF eDelivery | BDEW AS4-Profil v1.2 (01.04.2026) |
+|---|---|---|
+| Signing algorithm | RSA-SHA256 | **ECDSA-SHA256 + BrainpoolP256r1** |
+| Encryption | Optional | **Mandatory** |
+| Key agreement | RSA-OAEP | **ECDH-ES + ConcatKDF** |
+| Payload cipher | AES-256-GCM | **AES-128-GCM** |
+| EC curve | P-256 (NIST) | **BrainpoolP256r1** (RFC 5639) |
+| PKI | PEPPOL PKI | **SM-PKI** (BSI) / BDEW Marktpartner PKI |
+| Service URI | PEPPOL identifier | `urn:bdew:as4:service` |
+| Action URI | PEPPOL BIS type | `urn:bdew:as4:service:<EDIFACT_TYPE>` |
+| Receipt | Optional synchronous | **Mandatory synchronous** (§4.6.3) |
+| Dedup window | Not prescribed | **72 hours** (§4.2) |
+| Certificate triplet | 2 (TLS + signing) | **3 (TLS + signing + encryption)** |
+
+The signing algorithm is auto-detected from the key type: EC keys use ECDSA-SHA256,
+RSA keys use RSA-SHA256. Encryption uses ECDH-ES + ConcatKDF + AES-128-GCM when the
+recipient certificate carries an EC public key. Supply BrainpoolP256r1 material and the
+correct paths are selected without any explicit configuration.
+
+---
+
+## Certificate triplet
+
+BDEW requires **three separate X.509 keypairs** per market participant, all using
+BrainpoolP256r1. These are called the WIRK certificates:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Certificate triplet (SM-PKI / BDEW Marktpartner PKI)               │
+│                                                                     │
+│  ┌──────────────────┐   ┌───────────────────┐   ┌────────────────┐  │
+│  │   TLS cert       │   │  Signing cert      │   │ Encryption cert│  │
+│  │  (mTLS auth)     │   │  (WS-Security sig) │   │ (ECDH-ES KEX)  │  │
+│  │  KeyUsage:       │   │  KeyUsage:         │   │ KeyUsage:      │  │
+│  │  digitalSig +    │   │  digitalSignature  │   │ keyAgreement   │  │
+│  │  keyEncipherment │   │                    │   │                │  │
+│  └──────────────────┘   └───────────────────┘   └────────────────┘  │
+│                                                                     │
+│  All three: EC BrainpoolP256r1 · BSI TR-03116-3 §9.1/§9.2          │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Obtaining WIRK certificates
+
+1. Register as a Marktpartner at [bdew-codes.de](https://www.bdew-codes.de)
+2. Apply for a WIRK certificate at the BDEW Marktpartner portal
+3. The CA signs three certificates (TLS, signing, encryption) for your GLN
+4. Download as PKCS#12 bundles and extract PEM with:
+
+```bash
+# Extract signing cert + key
+openssl pkcs12 -in signing.p12 -nocerts -nodes -out as4-signing.key.pem
+openssl pkcs12 -in signing.p12 -nokeys        -out as4-signing.cert.pem
+
+# Extract encryption cert + key
+openssl pkcs12 -in encryption.p12 -nocerts -nodes -out as4-encrypt.key.pem
+openssl pkcs12 -in encryption.p12 -nokeys        -out as4-encrypt.cert.pem
+
+# Extract BDEW CA trust anchor
+openssl pkcs12 -in signing.p12 -cacerts -nokeys  -out bdew-ca.cert.pem
+```
+
+---
+
+## makod configuration
+
+```toml
+# makod.toml
+
+[[party]]
+gln      = "9900357000004"          # your 13-digit BDEW GLN
+primary  = true
+roles    = ["NB"]                   # NB, LF, MSB, BKV, …
+```
+
+### CLI / environment variables
+
+| Flag | Env var | Purpose |
+|---|---|---|
+| `--as4-addr :4080` | `MAKOD_AS4_ADDR` | AS4 inbound listen address |
+| `--as4-signing-key-pem <PEM>` | `MAKOD_AS4_SIGNING_KEY_PEM` | Signing private key (ECDSA BrainpoolP256r1) |
+| `--as4-signing-cert-pem <PEM>` | `MAKOD_AS4_SIGNING_CERT_PEM` | Signing X.509 certificate |
+| `--as4-trust-anchor-pem <PEM>` | `MAKOD_AS4_TRUST_ANCHOR_PEM` | BDEW PKI CA certificate (trust anchor) |
+| `--as4-decryption-key-pem <PEM>` | `MAKOD_AS4_DECRYPTION_KEY_PEM` | Own EC decryption private key |
+| `--as4-party-id <GLN>` | `MAKOD_AS4_PARTY_ID` | AS4 `<eb:PartyId>` (defaults to `--tenant-id`) |
+| `--as4-partner <GLN=URL>` | `MAKOD_AS4_PARTNER` | Trading partner endpoint (repeatable) |
+| `--as4-partner-cert <GLN=PEM>` | `MAKOD_AS4_PARTNER_CERT` | Per-partner encryption cert (repeatable) |
+
+### Example production startup
+
+```bash
+makod \
+  --tenant-id 9900357000004 \
+  --as4-addr :4080 \
+  --as4-party-id 9900357000004 \
+  --as4-signing-key-pem  "$(cat /etc/certs/as4-signing.key.pem)" \
+  --as4-signing-cert-pem "$(cat /etc/certs/as4-signing.cert.pem)" \
+  --as4-trust-anchor-pem "$(cat /etc/certs/bdew-ca.cert.pem)" \
+  --as4-decryption-key-pem "$(cat /etc/certs/as4-encrypt.key.pem)" \
+  --as4-partner 9900000000001=https://netzbetreiber-a.example/as4/inbox \
+  --as4-partner-cert "9900000000001=$(cat /etc/partner-certs/9900000000001-encrypt.pem)" \
+  --http-addr :8080
+```
+
+### Kubernetes secret example
+
+```yaml
+# k8s/makod-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: makod-as4-certs
+type: Opaque
+stringData:
+  AS4_SIGNING_KEY_PEM:    <base64-encoded PEM>
+  AS4_SIGNING_CERT_PEM:   <base64-encoded PEM>
+  AS4_DECRYPTION_KEY_PEM: <base64-encoded PEM>
+  AS4_TRUST_ANCHOR_PEM:   <base64-encoded BDEW CA PEM>
+```
+
+Use `_FILE` suffix to load from a mounted secret:
+
+```bash
+MAKOD_AS4_SIGNING_KEY_PEM_FILE=/run/secrets/as4-signing-key  makod ...
+```
+
+---
+
+## P-Mode registry
+
+Every trading partner requires registered P-Modes before AS4 messages can be delivered.
+`makod` registers one P-Mode per standard BDEW EDIFACT message type for each partner.
+
+```bash
+# Register all standard BDEW EDIFACT actions for one partner in one flag:
+--as4-partner 9900000000001=https://partner.example/as4/inbox
+
+# Register their encryption certificate for outbound encryption:
+--as4-partner-cert "9900000000001=$(cat /etc/partner-certs/9900000000001-encrypt.pem)"
+```
+
+P-Modes are registered at startup. To add a new trading partner, restart `makod` with the
+new `--as4-partner` / `--as4-partner-cert` flags.
+
+---
+
+## BDEW Verzeichnisdienst — dynamic endpoint discovery
+
+The BDEW Verzeichnisdienst (BNetzA API-Webdienste Strom) provides dynamic AS4 endpoint
+lookup for LF → NB MSCONS deliveries. Configure it to avoid hard-coding partner endpoints:
+
+```bash
+--verzeichnisdienst-url https://verzeichnisdienst.bdew-codes.de
+```
+
+`makod` calls the Verzeichnisdienst on startup and refreshes endpoints every 5 minutes.
+Static `--as4-partner` entries always take priority over Verzeichnisdienst responses.
+
+---
+
+## Message flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant LF as LF counterparty
+    participant TLS as mTLS (port 4080)
+    participant makod as makod AS4 ingest
+    participant sig as WS-Security verify
+    participant dec as XML decrypt
+    participant edifact as edi-energy
+
+    LF->>TLS: HTTPS POST (mutual TLS — TLS cert)
+    TLS->>makod: As4HttpIngress (body bytes)
+    makod->>sig: verify ECDSA-SHA256 signature
+    Note over sig: trust anchor = BDEW PKI CA cert
+    sig->>dec: decrypt AES-128-GCM payload
+    Note over dec: ECDH-ES key agreement<br/>using own EC decryption key
+    dec->>edifact: raw EDIFACT bytes
+    edifact->>makod: edi-energy parse + validate
+    makod-->>LF: synchronous eb:Receipt (signed)
+```
+
+---
+
+## Testing without WIRK certificates
+
+WIRK certificate registration takes days to weeks. Use `mako-as4`'s built-in test helpers
+to run integration tests locally immediately:
+
+### Rust unit/integration tests
+
+```toml
+[dev-dependencies]
+mako-as4 = { path = "../mako-as4", features = ["testing"] }
+```
+
+```rust
+use mako_as4::testing::BdewTestPki;
+
+#[test]
+fn test_as4_round_trip() {
+    // Generate a full three-keypair bundle in one call.
+    let pki = BdewTestPki::generate("Test NB 9900357000004");
+
+    // Build a test SessionContext for asx-rs:
+    let session = asx_rs::core::SessionContextBuilder::new("sess-test", "9900357000004")
+        .with_signing_cert_pem(pki.signing.cert_pem_str())
+        .with_signing_key_pem(pki.signing.key_pem_str())
+        .with_trust_anchor_pem(pki.signing.cert_pem_str())  // self-signed: cert IS the CA
+        .build()
+        .unwrap();
+
+    // Register the partner's encryption cert in the profile:
+    let mut profile = mako_as4::BdewAs4Profile::new();
+    profile
+        .register_partner_all_actions("4012345000023", "http://127.0.0.1:9999/as4")
+        .register_partner_encryption_cert("4012345000023", &pki.encryption.cert_pem);
+
+    // Wire decryption key into ingest handler:
+    // handler.with_decryption_key_pem(Some(pki.encryption.key_pem.clone()))
+
+    assert!(!pki.signing.cert_pem.is_empty());
+    assert!(!pki.encryption.cert_pem.is_empty());
+}
+```
+
+### Generating test certificates manually with OpenSSL
+
+```bash
+# Generate BrainpoolP256r1 EC signing key and self-signed cert
+openssl ecparam -name brainpoolP256r1 -genkey -noout -out test-signing.key.pem
+openssl req -new -x509 -key test-signing.key.pem \
+  -out test-signing.cert.pem -days 365 \
+  -subj "/CN=Test NB 9900357000004"
+
+# Generate encryption keypair
+openssl ecparam -name brainpoolP256r1 -genkey -noout -out test-encrypt.key.pem
+openssl req -new -x509 -key test-encrypt.key.pem \
+  -out test-encrypt.cert.pem -days 365 \
+  -subj "/CN=Test NB 9900357000004 (enc)"
+
+# Verify curve
+openssl ec -in test-signing.key.pem -text -noout | grep "NIST CURVE\|ASN1 OID"
+```
+
+### Local two-makod AS4 test
+
+The fastest way to test the full AS4 stack is to run two `makod` instances locally —
+one as sender, one as receiver — using self-signed test certificates:
+
+```bash
+# Terminal 1 — receiver (NB)
+makod \
+  --tenant-id 9900357000004 \
+  --as4-addr :4080 \
+  --as4-signing-key-pem "$(cat test-signing.key.pem)" \
+  --as4-signing-cert-pem "$(cat test-signing.cert.pem)" \
+  --as4-trust-anchor-pem "$(cat test-signing.cert.pem)" \
+  --as4-decryption-key-pem "$(cat test-encrypt.key.pem)" \
+  --http-addr :8080 \
+  --allow-no-as4-signing  # skip transport validation in dev
+
+# Terminal 2 — sender (LF)
+makod \
+  --tenant-id 4012345000023 \
+  --as4-signing-key-pem "$(cat lf-signing.key.pem)" \
+  --as4-signing-cert-pem "$(cat lf-signing.cert.pem)" \
+  --as4-trust-anchor-pem "$(cat test-signing.cert.pem)" \
+  --as4-partner "9900357000004=http://localhost:4080" \
+  --as4-partner-cert "9900357000004=$(cat test-encrypt.cert.pem)" \
+  --http-addr :8081
+```
+
+---
+
+## BDEW cryptographic algorithm reference
+
+### Signing (§2.2.6.2.1, BSI TR-03116-3 §9.1)
+
+```
+SignatureMethod Algorithm = "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256"
+HashFunction Algorithm   = "http://www.w3.org/2001/04/xmlenc#sha256"
+EC Curve                 = BrainpoolP256r1 (RFC 5639)
+Token Type               = BinarySecurityToken / X509PKIPathv1
+Exclusive C14N           = "http://www.w3.org/2001/10/xml-exc-c14n#"
+```
+
+### Encryption (§2.2.6.2.2, BSI TR-03116-3 §9.2)
+
+```
+EncryptedData algorithm   = "http://www.w3.org/2009/xmlenc11#aes128-gcm"
+Key wrap (CEK)            = "http://www.w3.org/2001/04/xmlenc#kw-aes128"
+Key agreement             = "http://www.w3.org/2009/xmlenc11#ECDH-ES"
+Key derivation            = "http://www.w3.org/2009/xmlenc11#ConcatKDF"
+ConcatKDF digest          = "http://www.w3.org/2001/04/xmlenc#sha256"
+EC Curve                  = BrainpoolP256r1
+Key reference in KeyInfo  = X509SKI
+AlgorithmID/PartyUInfo/PartyVInfo = empty strings (§2.2.6.2.2)
+```
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Counterparty rejects signature | Wrong key type (RSA instead of EC) | Use EC (BrainpoolP256r1) signing key |
+| Counterparty cannot decrypt | Missing or wrong encryption cert | `--as4-partner-cert GLN=<partner-encrypt.cert.pem>` (EC cert, not signing cert) |
+| Own decryption fails | Decryption key not configured | `--as4-decryption-key-pem` with EC private key PEM |
+| Trust verification failure | Self-signed cert or wrong CA | `--as4-trust-anchor-pem` must be the BDEW PKI CA (not the signing cert itself) |
+| Inbound messages not arriving | AS4 not configured | `--as4-addr :4080` + signing key/cert required |
+| "AS4 inbox dedup is volatile" warning | No `--data-dir` set | Add `--data-dir /var/lib/makod` for durable dedup (required for BDEW conformance) |
+| Partner endpoint not found | P-Mode not registered | Add `--as4-partner GLN=URL` for the recipient GLN |
+
+---
+
+## Further reading
+
+| Resource | Description |
+|---|---|
+| [BDEW AS4-Profil v1.2](https://www.edi-energy.de) | Official AS4 specification (01.04.2026) |
+| [BSI TR-03116-3](https://www.bsi.bund.de) | Cryptographic requirements for Telematikinfrastruktur |
+| [RFC 5639](https://www.rfc-editor.org/rfc/rfc5639) | BrainpoolP256r1 curve definition |
+| [RFC 6090](https://www.rfc-editor.org/rfc/rfc6090) | Fundamental EC cryptography (referenced by BDEW §2.2.6.2.1/2) |
+| [makod operator guide](./makod) | Full makod configuration reference |
+| [ERP integration guide](./erp-integration) | CloudEvents, Command API, HMAC |

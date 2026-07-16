@@ -34,6 +34,7 @@ use crate::constants;
 // Re-export `asx_rs` P-Mode types so consumers don't need a direct `asx_rs` dep
 // for the common registry / P-Mode operations.
 pub use asx_rs::as4::pmode::{MepType, PMode, PModeRegistry, PModeSecurity, PayloadPackagingMode};
+pub use asx_rs::crypto::wssec::WsSecOutboundKeyInfoProfile;
 
 /// EDIFACT message types used in BDEW German energy market communication.
 ///
@@ -153,16 +154,35 @@ impl BdewAction {
     }
 }
 
-/// Build a BDEW MaKo P-Mode with opinionated defaults (no encryption, no endpoint).
+/// Build a BDEW MaKo P-Mode with BDEW-compliant security defaults.
 ///
 /// The returned [`PMode`] is pre-configured with:
-/// - `mep`: [`MepType::OneWayPush`] — mandatory per BDEW AS4 spec
+/// - `mep`: [`MepType::OneWayPush`] — mandatory per BDEW AS4-Profil §2.2
 /// - `service`: [`constants::SERVICE`]
 /// - `service_type`: [`constants::SERVICE_TYPE`] (empty)
-/// - `security.sign = true` — mandatory
-/// - `security.encrypt = false` — optional; use [`bdew_pmode_encrypted`] if needed
+/// - `security.sign = true` — mandatory (ECDSA-SHA256 + BrainpoolP256r1 per §2.2.6.2.1)
+/// - `security.encrypt = true` — **mandatory** per BDEW AS4-Profil v1.2 §2.2.6.2.2
+///   (ECDH-ES + ConcatKDF + AES-128-GCM with BrainpoolP256r1 per BSI TR-03116-3 §9.2)
+/// - `security.outbound_key_info_profile`: [`WsSecOutboundKeyInfoProfile::X509PKIPathv1`]
+///   — mandatory per BDEW AS4-Profil §2.2.6.2.1 (PKI path token type)
 /// - `payload_packaging`: [`PayloadPackagingMode::MimeAttachment`]
 /// - `endpoint_url`: `None` — use [`bdew_pmode_with_endpoint`] to include the URL
+///
+/// # Algorithm selection
+///
+/// asx-rs v0.6 selects the WS-Security algorithm automatically from the
+/// signing key type:
+/// - EC key (BrainpoolP256r1) → ECDSA-SHA256 (BDEW-compliant)
+/// - RSA key → RSA-SHA256 (not BDEW-compliant; use only for testing)
+///
+/// For the encryption path, the key transport algorithm is selected from the
+/// **recipient** certificate's key type at send time:
+/// - EC certificate → ECDH-ES + ConcatKDF + AES-128-KW (BDEW-compliant)
+/// - RSA certificate → RSA-OAEP (not BDEW-compliant)
+///
+/// For BDEW production deployments supply BrainpoolP256r1 EC credentials for
+/// both signing and encryption. Use [`crate::testing::BdewTestPki`] for
+/// ephemeral test keypairs.
 ///
 /// Register the returned value in a [`PModeRegistry`].
 ///
@@ -192,9 +212,13 @@ pub fn bdew_pmode(
         mep: MepType::OneWayPush,
         security: PModeSecurity {
             sign: true,
-            encrypt: false,
+            // Mandatory per BDEW AS4-Profil v1.2 §2.2.6.2.2.
+            // Requires `recipient_cert_pem` in `As4SendCredentials` at send time.
+            encrypt: true,
             encrypt_soap_headers: false,
             compress: false,
+            // BDEW AS4-Profil §2.2.6.2.1 requires X509PKIPathv1 BST token type.
+            outbound_key_info_profile: WsSecOutboundKeyInfoProfile::X509PKIPathv1,
         },
         payload_packaging: PayloadPackagingMode::MimeAttachment,
         endpoint_url: None,
@@ -207,8 +231,8 @@ pub fn bdew_pmode(
 /// everything needed for outbound delivery — no separate `PartnerDirectory`
 /// lookup required.
 ///
-/// The `endpoint_url` is validated for non-emptiness and HTTPS scheme by
-/// `asx-rs` when the P-Mode is materialised at send time.
+/// Both signing and encryption are enabled per BDEW AS4-Profil v1.2 §2.2.6.
+/// Supply `recipient_cert_pem` in [`asx_rs::as4::As4SendCredentials`] at send time.
 ///
 /// # Example
 ///
@@ -222,6 +246,7 @@ pub fn bdew_pmode(
 ///     "https://partner.example/as4/inbox",
 /// );
 /// assert_eq!(pm.endpoint_url.as_deref(), Some("https://partner.example/as4/inbox"));
+/// assert!(pm.security.encrypt);
 /// ```
 pub fn bdew_pmode_with_endpoint(
     id: impl Into<String>,
@@ -235,25 +260,34 @@ pub fn bdew_pmode_with_endpoint(
     }
 }
 
-/// Build a BDEW MaKo P-Mode with payload encryption enabled.
+/// Build a BDEW MaKo P-Mode with signing only (non-production / testing).
 ///
-/// Same as [`bdew_pmode`] but with `security.encrypt = true`.
-/// The caller must supply `recipient_cert_pem` in [`asx_rs::as4::As4SendCredentials`]
-/// when building the send policy from this P-Mode.
+/// Same as [`bdew_pmode`] but with `security.encrypt = false`.
+///
+/// # ⚠ Non-BDEW-compliant
+///
+/// This produces sign-only messages. BDEW AS4-Profil v1.2 §2.2.6.2.2 **requires**
+/// encryption in production. Use this variant only in:
+/// - Local development without BDEW PKI certificates
+/// - Tests that bypass AS4 transport entirely (`--allow-no-as4-signing`)
+/// - Pre-production smoke testing with bilateral test agreements
+///
+/// For BDEW production deployments, use [`bdew_pmode`] (sign + encrypt).
 ///
 /// # Example
 ///
 /// ```rust
-/// use mako_as4::pmode::{bdew_pmode_encrypted, BdewAction};
+/// use mako_as4::pmode::{bdew_pmode_sign_only, BdewAction};
 ///
-/// let pm = bdew_pmode_encrypted(
-///     "pm-utilmd-encrypted-9900000000001",
+/// let pm = bdew_pmode_sign_only(
+///     "pm-dev-9900000000001",
 ///     "9900000000001",
 ///     BdewAction::Utilmd,
 /// );
-/// assert!(pm.security.encrypt);
+/// assert!(pm.security.sign);
+/// assert!(!pm.security.encrypt);
 /// ```
-pub fn bdew_pmode_encrypted(
+pub fn bdew_pmode_sign_only(
     id: impl Into<String>,
     partner_mp_id: impl Into<String>,
     action: BdewAction,
@@ -261,27 +295,38 @@ pub fn bdew_pmode_encrypted(
     PMode {
         security: PModeSecurity {
             sign: true,
-            encrypt: true,
+            encrypt: false,
             encrypt_soap_headers: false,
             compress: false,
+            outbound_key_info_profile: WsSecOutboundKeyInfoProfile::X509PKIPathv1,
         },
         ..bdew_pmode(id, partner_mp_id, action)
     }
 }
 
+/// Build a BDEW MaKo P-Mode with payload encryption enabled.
+///
+/// Alias for [`bdew_pmode`] — encryption is now the default.
+/// Kept for source compatibility only.
+#[inline]
+pub fn bdew_pmode_encrypted(
+    id: impl Into<String>,
+    partner_mp_id: impl Into<String>,
+    action: BdewAction,
+) -> PMode {
+    bdew_pmode(id, partner_mp_id, action)
+}
+
 /// Build a BDEW MaKo P-Mode with encryption enabled and endpoint baked in.
 ///
-/// Combines [`bdew_pmode_encrypted`] and [`bdew_pmode_with_endpoint`].
+/// Alias for [`bdew_pmode_with_endpoint`] — encryption is now the default.
 pub fn bdew_pmode_encrypted_with_endpoint(
     id: impl Into<String>,
     partner_mp_id: impl Into<String>,
     action: BdewAction,
     endpoint_url: impl Into<String>,
 ) -> PMode {
-    PMode {
-        endpoint_url: Some(endpoint_url.into()),
-        ..bdew_pmode_encrypted(id, partner_mp_id, action)
-    }
+    bdew_pmode_with_endpoint(id, partner_mp_id, action, endpoint_url)
 }
 
 #[cfg(test)]
@@ -314,7 +359,10 @@ mod tests {
         assert_eq!(pm.action, BdewAction::Utilmd.as_uri());
         assert_eq!(pm.mep, MepType::OneWayPush);
         assert!(pm.security.sign);
-        assert!(!pm.security.encrypt);
+        assert!(
+            pm.security.encrypt,
+            "BDEW AS4-Profil v1.2 §2.2.6.2.2 requires encryption"
+        );
         assert_eq!(pm.payload_packaging, PayloadPackagingMode::MimeAttachment);
         assert!(
             pm.endpoint_url.is_none(),
@@ -328,7 +376,10 @@ mod tests {
         let pm = bdew_pmode_with_endpoint("pm-1", "9900000000001", BdewAction::Utilmd, url);
         assert_eq!(pm.endpoint_url.as_deref(), Some(url));
         assert!(pm.security.sign);
-        assert!(!pm.security.encrypt);
+        assert!(
+            pm.security.encrypt,
+            "bdew_pmode_with_endpoint must inherit encrypt:true from bdew_pmode"
+        );
     }
 
     #[test]

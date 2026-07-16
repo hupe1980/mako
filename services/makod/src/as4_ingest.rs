@@ -33,7 +33,7 @@
 use std::sync::Arc;
 
 use asx_rs::as4::{
-    As4PushPolicy, As4ReceiveOutcome, As4ReceivePushRequest, generate_receipt_for_output,
+    As4ReceiveOutcome, As4ReceivePushRequest, generate_receipt_for_output,
     receive_push_with_dedup_async,
 };
 use asx_rs::core::{AsxError, ErrorCode, ErrorContext, SessionContext};
@@ -131,6 +131,12 @@ pub struct BdewAs4IngestHandler {
     event_bus: Arc<EventBus>,
     /// Deduplication backend.
     dedup: Arc<dyn DedupStorage>,
+    /// Operator's own AS4 inbound decryption private key (EC, BrainpoolP256r1).
+    ///
+    /// Per BDEW AS4-Profil v1.2 §2.2.6.2.2 inbound messages are encrypted with
+    /// the operator's EC public key. asx-rs v0.7 decrypts them via ECDH-ES +
+    /// ConcatKDF when an EC private key is supplied.
+    decryption_key_pem: Option<std::sync::Arc<[u8]>>,
     /// CONTRL Empfangsbestätigung emitter for Gas interchanges.
     ///
     /// Per CONTRL AHB 1.0 §2.3.1 and APERAK AHB 1.0 §2.3 (Gas rules),
@@ -153,8 +159,21 @@ impl BdewAs4IngestHandler {
             session,
             event_bus,
             dedup,
+            decryption_key_pem: None,
             contrl_ack: None,
         }
+    }
+
+    /// Set the operator's own AS4 inbound decryption private key.
+    ///
+    /// When set, `As4PushPolicy.inbound_decryption_key_pem` is populated so
+    /// inbound encrypted AS4 messages can be decrypted. The key must be EC
+    /// (BrainpoolP256r1) corresponding to the encryption certificate published
+    /// to BDEW trading partners.
+    #[must_use]
+    pub fn with_decryption_key_pem(mut self, key_pem: Option<Vec<u8>>) -> Self {
+        self.decryption_key_pem = key_pem.map(|k| std::sync::Arc::from(k.as_slice()));
+        self
     }
 
     /// Wire a `ContrlAckService` to emit Gas CONTRL Empfangsbestätigungen
@@ -172,7 +191,11 @@ impl As4AxumHandler for BdewAs4IngestHandler {
             http_content_type: ingress.content_type.clone(),
             payload: Arc::clone(&ingress.body),
             receipt_payload: None,
-            policy: As4PushPolicy::regulated(),
+            policy: mako_as4::bdew_push_policy(
+                self.decryption_key_pem
+                    .as_ref()
+                    .map(|k| k.as_ref().to_vec()),
+            ),
             authenticated_sender_scope: None,
         };
 

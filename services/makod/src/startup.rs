@@ -454,6 +454,12 @@ pub(crate) struct WorkersConfig {
     pub as4_signing_key_pem: Option<SecretString>,
     pub as4_signing_cert_pem: Option<String>,
     pub as4_trust_anchor_pem: Option<String>,
+    /// Per-partner encryption certificates: `GLN=<PEM>` pairs.
+    ///
+    /// The PEM is the trading partner's X.509 encryption certificate (EC BrainpoolP256r1).
+    /// Used by the outbound AS4 sender to populate `As4SendCredentials::recipient_cert_pem`
+    /// when `security.encrypt = true` (the BDEW-compliant default).
+    pub as4_partner_certs: Vec<String>,
     pub as4_party_id: Option<String>,
     // ── MaLo-ID sender config ────────────────────────────────────────────
     pub maloid_partner: Vec<String>,
@@ -583,6 +589,37 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
                 ));
             }
             profile.register_partner_all_actions(mp_id, url);
+        }
+        // ── Register per-partner encryption certificates ──────────────────
+        // Format: GLN=<PEM> (the partner's X.509 encryption certificate).
+        // Used for ECDH-ES key agreement (BDEW AS4-Profil v1.2 §2.2.6.2.2).
+        for pair in &cfg.as4_partner_certs {
+            let (mp_id, cert_pem) = pair.split_once('=').ok_or_else(|| {
+                anyhow::anyhow!("--as4-partner-cert: expected GLN=<PEM>, got {pair:?}")
+            })?;
+            let mp_id = mp_id.trim();
+            let cert_pem = cert_pem.trim();
+            if mp_id.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "--as4-partner-cert: GLN must not be empty in {pair:?}"
+                ));
+            }
+            profile.register_partner_encryption_cert(mp_id, cert_pem.as_bytes().to_vec());
+        }
+        if !cfg.as4_partner_certs.is_empty() {
+            let glns: Vec<&str> = cfg
+                .as4_partner_certs
+                .iter()
+                .filter_map(|p| p.split_once('=').map(|(g, _)| g.trim()))
+                .collect();
+            info!(partners = ?glns, "AS4 per-partner encryption certificates registered");
+        } else if !cfg.as4_partner.is_empty() {
+            tracing::warn!(
+                "AS4 partners registered without encryption certificates. \
+                 BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every outbound message to be encrypted \
+                 with the recipient's EC (BrainpoolP256r1) certificate. \
+                 Add --as4-partner-cert GLN=<PEM> for each partner."
+            );
         }
         profile
     };

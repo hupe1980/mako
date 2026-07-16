@@ -24,7 +24,7 @@ crates/mako-gabi-gas/     GaBi Gas 2.0 (BK7-14-020) — INVOIC 31010 (Kapazität
 crates/dvgw-edi/          DVGW EDIFACT formats — ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES
 crates/mako-nbw/          Netzbetreiberwechsel — PARTIN bulk DSO handover [placeholder]
 crates/energy-api/        BDEW API-Webdienste Strom REST/WebSocket client+server
-crates/mako-as4/          AS4 transport [placeholder]
+crates/mako-as4/          BDEW AS4-Profil v1.2 — `BdewAs4Profile`, `bdew_pmode()` (sign+encrypt, X509PKIPathv1, BrainpoolP256r1), `bdew_pmode_sign_only()`, `bdew_push_policy()` (require_encrypted_inbound), `WsSecOutboundKeyInfoProfile`, `BdewAction` enum (17 EDIFACT types), `PartnerDirectory`, per-partner encryption cert registry; testing feature: `BdewTestPki` + `generate_self_signed_bdew_keypair()` + `MockAs4Endpoint` (delegating to asx-rs v0.7 `generate_self_signed_ec_keypair(EcCurve::BrainpoolP256r1)` + `mock_endpoint::MockAs4Endpoint`); constants: `SIG_ALGO_ECDSA_SHA256`, `ENC_KEY_AGREEMENT_ECDH_ES`, `ENC_KEY_DERIVATION_CONCAT_KDF`, `ENC_KEY_WRAP_AES128`, `ENC_CONTENT_AES128_GCM`; asx-rs v0.7 auto-detects ECDSA vs RSA from key type and ECDH-ES vs RSA-OAEP from cert type
 crates/mako-redispatch/   Redispatch 2.0 [placeholder]
 crates/redispatch-xml/    Redispatch 2.0 XML/XSD format parsing
 crates/mako-markt/        Market data library — MaloId, MeloId, MarktpartnerId, repository traits, AppState, CloudEvents, VersorgungsStatus, PriCatRepository, MaloGridRecord/MaloGridRepository, PreisblattMessungRepository, SteuerbareRessourceRepository, DeviceRepository (Zaehler/Geraet), testing feature

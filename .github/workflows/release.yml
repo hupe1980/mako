@@ -350,7 +350,7 @@ jobs:
             runner: ubuntu-latest
             tag: linux-amd64
           - platform: linux/arm64
-            runner: ubuntu-24.04-arm64
+            runner: ubuntu-24.04-arm
             tag: linux-arm64
     steps:
       - uses: actions/checkout@v4
@@ -401,7 +401,7 @@ jobs:
             runner: ubuntu-latest
             tag: linux-amd64
           - platform: linux/arm64
-            runner: ubuntu-24.04-arm64
+            runner: ubuntu-24.04-arm
             tag: linux-arm64
     steps:
       - uses: actions/checkout@v4

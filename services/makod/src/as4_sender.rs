@@ -604,7 +604,18 @@ impl As4Sender for BdewAs4Sender {
                 message_id: message_id_str.clone(),
                 payload: payload_bytes,
                 policy,
-                credentials: None,
+                // Populate the recipient's encryption certificate.
+                // BDEW AS4-Profil v1.2 §2.2.6.2.2: every outbound message must be encrypted
+                // with the recipient's EC (BrainpoolP256r1) certificate via ECDH-ES.
+                // asx-rs v0.7 implements ECDH-ES + ConcatKDF + AES-128-KW when an EC cert
+                // is supplied — no RSA fallback path on the BDEW profile.
+                credentials: profile.get_partner_encryption_cert(recipient.as_ref()).map(
+                    |cert_pem| asx_rs::as4::As4SendCredentials {
+                        recipient_cert_pem: Some(std::sync::Arc::from(cert_pem)),
+                        signing_cert_pem: None,
+                        signing_key_pem: None,
+                    },
+                ),
                 payload_filename,
             };
 

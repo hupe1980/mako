@@ -36,10 +36,14 @@ pub const AGREEMENT_TYPE: &str = "bdew:as4";
 pub const DEFAULT_MPC: &str =
     "http://docs.oasis-open.org/ebxml-msg/ebms/v3.0/ns/core/200704/defaultMPC";
 
-// ── WS-Security algorithms ────────────────────────────────────────────────────
+// ── WS-Security signing algorithms ───────────────────────────────────────────
 
-/// RSA-SHA256 signature algorithm (mandatory, BDEW AS4 Kommunikationshandbuch §5.5).
-pub const SIG_ALGO_RSA_SHA256: &str = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
+/// ECDSA-SHA256 signature algorithm.
+///
+/// Mandatory per BDEW AS4-Profil v1.2 §2.2.6.2.1 and BSI TR-03116-3 §9.1.
+/// Use with a BrainpoolP256r1 EC signing key; the algorithm is auto-detected
+/// from the key type — no explicit configuration needed.
+pub const SIG_ALGO_ECDSA_SHA256: &str = "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256";
 
 /// SHA-256 digest algorithm (mandatory for all signed content).
 pub const DIGEST_SHA256: &str = "http://www.w3.org/2001/04/xmlenc#sha256";
@@ -49,17 +53,31 @@ pub const DIGEST_SHA256: &str = "http://www.w3.org/2001/04/xmlenc#sha256";
 /// Required by BDEW for WS-Security XMLDSig (BDEW AS4 Kommunikationshandbuch §5.5).
 pub const C14N_EXCLUSIVE: &str = "http://www.w3.org/2001/10/xml-exc-c14n#";
 
-// ── Optional encryption algorithms ────────────────────────────────────────────
+// ── XML Encryption algorithms ─────────────────────────────────────────────────
 
-/// RSA-OAEP key transport algorithm for AS4 payload encryption (optional).
+/// ECDH-ES key agreement algorithm.
 ///
-/// Used to wrap the symmetric content-encryption key.
-pub const ENC_KEY_TRANSPORT_RSA_OAEP: &str = "http://www.w3.org/2001/04/xmlenc#rsa-oaep-mgf1p";
+/// Mandatory per BDEW AS4-Profil v1.2 §2.2.6.2.2 and BSI TR-03116-3 §9.2.
+/// Automatically selected when the recipient certificate carries an EC public key.
+pub const ENC_KEY_AGREEMENT_ECDH_ES: &str = "http://www.w3.org/2009/xmlenc11#ECDH-ES";
 
-/// AES-128-CBC content encryption algorithm (optional, BDEW AS4 Kommunikationshandbuch §5.6).
-pub const ENC_CONTENT_AES128_CBC: &str = "http://www.w3.org/2001/04/xmlenc#aes128-cbc";
+/// ConcatKDF key derivation algorithm (NIST SP 800-56A §5.8.1).
+///
+/// Used inside ECDH-ES key agreement to derive the key-encryption key (KEK).
+pub const ENC_KEY_DERIVATION_CONCAT_KDF: &str = "http://www.w3.org/2009/xmlenc11#ConcatKDF";
 
-/// AES-256-GCM content encryption algorithm (alternative optional cipher).
+/// AES-128 Key Wrap algorithm (RFC 3394).
+///
+/// Mandatory per BDEW AS4-Profil v1.2 §2.2.6.2.2: wraps the CEK with the
+/// ECDH-ES-derived KEK.
+pub const ENC_KEY_WRAP_AES128: &str = "http://www.w3.org/2001/04/xmlenc#kw-aes128";
+
+/// AES-128-GCM content encryption algorithm.
+///
+/// Mandatory per BDEW AS4-Profil v1.2 §2.2.6.2.2.
+pub const ENC_CONTENT_AES128_GCM: &str = "http://www.w3.org/2009/xmlenc11#aes128-gcm";
+
+/// AES-256-GCM content encryption algorithm (alternative, not mandated by BDEW v1.2).
 pub const ENC_CONTENT_AES256_GCM: &str = "http://www.w3.org/2009/xmlenc11#aes256-gcm";
 
 // ── Reliability ───────────────────────────────────────────────────────────────

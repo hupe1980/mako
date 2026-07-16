@@ -25,8 +25,10 @@
 //!       --api-webdienste-addr <ADDR>       API-Webdienste Strom listen address [env: MAKOD_API_WEBDIENSTE_ADDR=]
 //!       --tenant-id <ID>                   Operator tenant identifier (BDEW code / GLN / EIC) [env: MAKOD_TENANT_ID=] [default: default]
 //!       --as4-addr <ADDR>                  AS4 inbound transport address [env: MAKOD_AS4_ADDR=]
-//!       --as4-signing-key-pem <PEM>        PEM private key for AS4 signing [env: MAKOD_AS4_SIGNING_KEY_PEM=]
+//!       --as4-signing-key-pem <PEM>        PEM private key for AS4 signing (ECDSA BrainpoolP256r1) [env: MAKOD_AS4_SIGNING_KEY_PEM=]
 //!       --as4-signing-cert-pem <PEM>       PEM X.509 certificate for AS4 signing [env: MAKOD_AS4_SIGNING_CERT_PEM=]
+//!       --as4-decryption-key-pem <PEM>     PEM private key for AS4 inbound decryption (ECDH-ES, BrainpoolP256r1) [env: MAKOD_AS4_DECRYPTION_KEY_PEM=]
+//!       --as4-partner-cert <GLN=PEM>       Per-partner encryption certificate for outbound AS4 (repeatable) [env: MAKOD_AS4_PARTNER_CERT=]
 //!       --as4-party-id <GLN>               AS4 party ID (operator GLN) [env: MAKOD_AS4_PARTY_ID=]
 //!       --as4-partner <GLN=URL>            Trading partner AS4 endpoint (repeatable) [env: MAKOD_AS4_PARTNER=]
 //!       --check                            Validate config/profiles/adapters and exit (no workers started) [env: MAKOD_CHECK=]
@@ -545,6 +547,47 @@ struct Cli {
     /// Can also be set via the `MAKOD_AS4_PARTY_ID` environment variable.
     #[arg(long, value_name = "GLN", env = "MAKOD_AS4_PARTY_ID")]
     as4_party_id: Option<String>,
+
+    /// PEM-encoded ECDSA private key for AS4 inbound **decryption** (own encryption identity).
+    ///
+    /// This is the operator's own EC (BrainpoolP256r1) private key corresponding to
+    /// the encryption certificate published to BDEW trading partners. Trading partners
+    /// use the public key from this certificate to encrypt outbound AS4 messages.
+    /// Provide this key to decrypt inbound AS4 messages.
+    ///
+    /// Separate from `--as4-signing-key-pem`: BDEW requires distinct keypairs for
+    /// signing (ECDSA) and encryption (ECDH-ES), both using BrainpoolP256r1.
+    ///
+    /// Can also be set via the `MAKOD_AS4_DECRYPTION_KEY_PEM` environment variable.
+    #[arg(
+        long,
+        value_name = "PEM",
+        env = "MAKOD_AS4_DECRYPTION_KEY_PEM",
+        hide_env_values = true,
+        value_parser = |s: &str| Ok::<SecretString, std::convert::Infallible>(SecretString::new(s.into())),
+    )]
+    as4_decryption_key_pem: Option<SecretString>,
+
+    /// Register a trading-partner encryption certificate for outbound AS4 encryption.
+    ///
+    /// Format: `<GLN>=<PEM>` where PEM is the partner's X.509 encryption certificate
+    /// (not their signing certificate — BDEW uses separate keypairs for each).
+    ///
+    /// Repeat the flag to register multiple partners. Required for every partner
+    /// when `security.encrypt = true` (which is the BDEW-compliant default).
+    ///
+    /// BDEW AS4-Profil v1.2 §2.2.6.2.2: the recipient's encryption certificate
+    /// (BrainpoolP256r1) is used for ECDH-ES key agreement.
+    ///
+    /// Can also be set via the `MAKOD_AS4_PARTNER_CERT` environment variable
+    /// (comma-separated for multiple entries).
+    #[arg(
+        long,
+        value_name = "GLN=PEM",
+        env = "MAKOD_AS4_PARTNER_CERT",
+        value_delimiter = ','
+    )]
+    as4_partner_cert: Vec<String>,
 
     /// Register a trading-partner AS4 endpoint for outbound EDIFACT delivery.
     ///
@@ -1697,6 +1740,11 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                 event_bus,
                 dedup,
             )
+            .with_decryption_key_pem(
+                cli.as4_decryption_key_pem
+                    .as_ref()
+                    .map(|s| s.expose_secret().as_bytes().to_vec()),
+            )
             .with_contrl_ack(Arc::clone(&contrl_svc)),
         );
 
@@ -1784,6 +1832,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         as4_signing_key_pem: cli.as4_signing_key_pem.clone(),
         as4_signing_cert_pem: cli.as4_signing_cert_pem.clone(),
         as4_trust_anchor_pem: cli.as4_trust_anchor_pem.clone(),
+        as4_partner_certs: cli.as4_partner_cert.clone(),
         as4_party_id: cli.as4_party_id.clone(),
         maloid_partner: cli.maloid_partner.clone(),
         verzeichnisdienst_url: cli.verzeichnisdienst_url.clone(),
