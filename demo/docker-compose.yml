@@ -1,15 +1,11 @@
 # makod demo — full stack docker compose
 #
-# Core demo stack (10 services):
+# Core demo stack (5 services):
 #   • postgres     — PostgreSQL (one database per service)
 #   • webhook   :8000 — ERP CloudEvent receiver (Python, in-memory)
 #   • marktd    :8180 — Market Data Hub (MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, event_log replay)
 #   • processd  :8580 — NB STP auto-responder + LF E_0624 auto-response (netz-checker, §20 parity)
 #   • makod     :8080 — EDIFACT process engine (in-memory; use slatedb feature for persistent storage)
-#   • invoicd   :8280 — INVOIC plausibility-check daemon (LF role, §22 MessZV receipt retention)
-#   • netzbilanzd :8680 — NNE/KA/MMM billing daemon (NB role, INVOIC 31001/31002/31005 generation)
-#   • edmd      :8380 — Energy Data Management (MSCONS meter readings, MeterBillingPeriod)
-#   • obsd      :8480 — Business-process observability (ProcessProjection, BNetzA KPI, §20 parity)
 #   • nis-syncd :9680 — NIS/GIS grid topology import adapter (stateless, lifts NB STP to ≥95%)
 #
 # Excluded from demo (run separately when needed):
@@ -96,7 +92,7 @@ services:
     environment:
       MARKTD_STORAGE__POSTGRES__URL: postgres://demo:demo-secret@postgres/marktd
       MARKTD_MAKOD__API_KEY:         demo-secret-change-me
-      MARKTD_WEBHOOK__INBOUND_SECRET: demo-makod-webhook-secret
+      MARKTD_WEBHOOK__INBOUND_SECRET: ""  # no HMAC in demo — accepts all events from makod
     command:
       - "--config=/etc/marktd/marktd.toml"
     # distroless has no shell — use service_started dependency instead of healthcheck
@@ -127,7 +123,6 @@ services:
       PROCESSD_DATABASE__URL:         postgres://demo:demo-secret@postgres/processd
       PROCESSD_MAKOD__API_KEY:        demo-secret-change-me
       PROCESSD_MARKTD__API_KEY:       demo-processd-key
-      PROCESSD_WEBHOOK__INBOUND_SECRET: processd-webhook-secret
     command:
       - "--config=/etc/processd/processd.toml"
     # distroless has no shell — use service_started dependency instead of healthcheck
@@ -159,132 +154,3 @@ services:
       - "--auth-key=demo=demo-secret-change-me"
     restart: unless-stopped
 
-  # ── invoicd — INVOIC Plausibility-Check Daemon ──────────────────────────────
-  # LF-role daemon: validates inbound INVOIC (31001/31002/31005/31006) against
-  # PRICAT tariffs, persists every receipt for §22 MessZV compliance, and
-  # dispatches REMADV 33001 (accept) or COMDIS 29001 / REMADV 33002 (dispute).
-  # Self-registers with marktd on startup — no manual subscription required.
-  invoicd:
-    image: invoicd:dev
-    depends_on:
-      postgres:
-        condition: service_healthy
-      marktd:
-        condition: service_started
-      makod:
-        condition: service_started
-    ports:
-      - "8280:8280"
-    volumes:
-      - ./invoicd.toml:/etc/invoicd/invoicd.toml:ro
-    environment:
-      INVOICD_DATABASE__URL:          postgres://demo:demo-secret@postgres/invoicd
-      INVOICD_MAKOD__API_KEY:         demo-secret-change-me
-      INVOICD_MARKTD__API_KEY:        demo-invoicd-key
-      INVOICD_WEBHOOK__INBOUND_SECRET: invoicd-webhook-secret
-    command:
-      - "--config=/etc/invoicd/invoicd.toml"
-    healthcheck:
-      disable: true
-    restart: unless-stopped
-
-  # ── edmd — Energy Data Management Daemon ────────────────────────────────────
-  # Stores MSCONS meter readings received via marktd EventBus.
-  # Provides time-series query API and MeterBillingPeriod for invoicd and ERP.
-  # Self-registers with marktd on startup.
-  edmd:
-    image: edmd:dev
-    depends_on:
-      postgres:
-        condition: service_healthy
-      marktd:
-        condition: service_started
-    ports:
-      - "8380:8380"
-    volumes:
-      - ./edmd.toml:/etc/edmd/edmd.toml:ro
-    environment:
-      EDMD_DATABASE__URL:  postgres://demo:demo-secret@postgres/edmd
-      EDMD_MARKTD__API_KEY: demo-edmd-key
-      EDMD_WEBHOOK__INBOUND_SECRET: edmd-webhook-secret
-    command:
-      - "--config=/etc/edmd/edmd.toml"
-    healthcheck:
-      disable: true
-    restart: unless-stopped
-
-  # ── obsd — Business-Process Observability Daemon ────────────────────────────
-  # Projects all de.mako.process.* events into ProcessProjection records.
-  # Exposes BNetzA KPI reports, overdue-process detection, and §20 parity data.
-  # Bridges deadline breaches to Alertmanager (configure OBSD_ALERTMANAGER_URL).
-  # Self-registers with marktd on startup.
-  obsd:
-    image: obsd:dev
-    depends_on:
-      postgres:
-        condition: service_healthy
-      marktd:
-        condition: service_started
-    ports:
-      - "8480:8480"
-    volumes:
-      - ./obsd.toml:/etc/obsd/obsd.toml:ro
-    environment:
-      OBSD_DATABASE__URL:  postgres://demo:demo-secret@postgres/obsd
-      OBSD_MARKTD__API_KEY: demo-obsd-key
-      OBSD_WEBHOOK__INBOUND_SECRET: obsd-webhook-secret
-    command:
-      - "--config=/etc/obsd/obsd.toml"
-    healthcheck:
-      disable: true
-    restart: unless-stopped
-
-  # ── netzbilanzd — NNE/MMM Billing Daemon (NB role) ─────────────────────────
-  # Generates INVOIC 31001/31002/31005 from operator-supplied meter readings.
-  # Self-validates via invoic-checker before dispatching to makod.
-  # POST /api/v1/billing/run → draft; PUT /dispatch → EDIFACT INVOIC to LF.
-  netzbilanzd:
-    image: netzbilanzd:dev
-    depends_on:
-      postgres:
-        condition: service_healthy
-      makod:
-        condition: service_started
-      marktd:
-        condition: service_started
-    ports:
-      - "8680:8680"
-    volumes:
-      - ./netzbilanzd.toml:/etc/netzbilanzd/netzbilanzd.toml:ro
-    environment:
-      NETZBILANZD_DATABASE_URL:      postgres://demo:demo-secret@postgres/netzbilanzd
-      NETZBILANZD_MARKTD_API_KEY:    demo-netzbilanzd-key
-      NETZBILANZD_MAKOD_API_KEY:     demo-secret-change-me
-    command:
-      - "--config=/etc/netzbilanzd/netzbilanzd.toml"
-    # distroless has no shell — use service_started dependency instead of healthcheck
-    healthcheck:
-      disable: true
-    restart: unless-stopped
-
-  # ── nis-syncd — NIS/GIS Grid Topology Import Adapter (NB role, stateless) ──
-  # Accepts NIS export batches and pushes malo_grid records to marktd.
-  # Lifts processd NB STP from ~80% to ≥95% once grid topology is populated.
-  # POST /api/v1/grid/sync — idempotent; ?dry_run=true for diff-only mode.
-  nis-syncd:
-    image: nis-syncd:dev
-    depends_on:
-      marktd:
-        condition: service_started
-    ports:
-      - "9680:9680"
-    volumes:
-      - ./nis-syncd.toml:/etc/nis-syncd/nis-syncd.toml:ro
-    environment:
-      NIS_SYNCD_MARKTD_API_KEY: demo-nis-syncd-key
-    command:
-      - "--config=/etc/nis-syncd/nis-syncd.toml"
-    # Stateless — no database, no healthcheck needed
-    healthcheck:
-      disable: true
-    restart: unless-stopped

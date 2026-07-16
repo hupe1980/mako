@@ -1161,9 +1161,18 @@ pub struct VersorgungsStatusRecord {
     pub nb_mp_id: String,
     /// `process_id` of the last process that triggered a state change.
     pub last_process_id: Option<Uuid>,
-    /// Last time this record was updated.
+    /// Last time this record was updated (RFC 3339).
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
-    /// Tenant GLN (operator primary GLN).
+    /// Tenant identifier — data-isolation key written to every database row.
+    ///
+    /// Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique
+    /// string is valid (UUID, slug, etc.).  This is **not** a GLN.
+    ///
+    /// Not returned in API responses: `marktd` is a single-tenant daemon — every
+    /// SQL query is already scoped by `AppState::tenant_gln`, so the client only
+    /// ever sees their own data and the value is implicit from the server config.
+    #[serde(skip_serializing, default)]
     pub tenant: String,
     /// Optimistic concurrency version; incremented on each update.
     pub version: i64,

@@ -45,7 +45,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-edi-energy = "0.7"
+edi-energy = "0.11"
 ```
 
 ### Parse and validate
@@ -141,7 +141,7 @@ To enable a minimal build for a single message type:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.7", default-features = false, features = ["utilmd", "serde"] }
+edi-energy = { version = "0.11", default-features = false, features = ["utilmd", "serde"] }
 ```
 
 ## Multi-Tenant and Test Isolation

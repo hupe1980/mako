@@ -542,6 +542,46 @@ for code examples covering every module.
 
 ---
 
+## End-to-end: UTILMD 55001 Lieferbeginn
+
+This sequence traces a complete GPKE supplier-switch from the LF submitting the
+Anmeldung to the NB Bestätigung being delivered back.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant LF as LFN :8080
+    participant makod as makod :8080
+    participant marktd as marktd :8180
+    participant processd as processd :8580
+    participant erp as ERP webhook
+
+    LF->>makod: POST /edifact  (UTILMD PID 55001, AS4 or REST)
+    Note over makod: edi-energy: parse + validate<br/>PidRouter → gpke-supplier-change<br/>WorkflowOutput → events + APERAK outbox
+    makod-->>LF: APERAK BGM+312 (within 45 min — auto)
+    makod->>marktd: POST /api/v1/events  de.mako.process.initiated  (CloudEvents 1.0)
+    marktd->>processd: POST /webhook  de.mako.process.initiated  (EventBus fan-out)
+    marktd->>erp: POST <webhook_url>  de.mako.process.initiated  (ERP subscription)
+
+    Note over processd: receive AnmeldungAnfrage from event payload
+    processd->>marktd: GET /api/v1/versorgung/{malo_id}  (VersorgungsStatus)
+    processd->>marktd: GET /api/v1/malo/{malo_id}/grid  (NIS grid record)
+    processd->>marktd: GET /api/v1/partners/{lf_mp_id}  (partner known?)
+    Note over processd: netz_checker::evaluate<br/>check 1: grid record exists<br/>check 2: no pending Anmeldung (A06)<br/>check 3: not retroactive (A97)<br/>check 4: Bilanzierungsgebiet match (A02)<br/>check 5: LF in partner directory (A05)<br/>check 6: Mindestvorlauffrist met (A99)<br/>→ Accept (or Reject/Escalate)
+    processd->>makod: POST /api/v1/commands  gpke.lieferbeginn.bestaetigen
+    Note over makod: Workflow::handle → events + UTILMD 55003 outbox<br/>AtomicAppend::append_with_outbox (single WriteBatch)
+    makod-->>LF: UTILMD PID 55003 Bestätigung Lieferbeginn (via AS4/REST)
+    makod->>marktd: POST /api/v1/events  de.mako.process.completed  (CloudEvents 1.0)
+    marktd->>erp: POST <webhook_url>  de.mako.process.completed  (ERP subscription)
+```
+
+**Key timing guarantees:**
+- APERAK BGM+312 (step 2): within 45 minutes per APERAK AHB §2.4.1
+- `processd` decision (steps 7–11): typically < 500 ms from event delivery
+- Total LF→NB confirmation: measured in seconds, not minutes
+
+---
+
 ## Outbound flows
 
 ### AS4 EDIFACT delivery

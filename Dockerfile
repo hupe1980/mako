@@ -50,7 +50,7 @@
 
 # Global ARGs — available in FROM lines; must be re-declared inside a stage
 # to be visible in that stage's RUN commands.
-ARG RUST_VERSION=1.89
+ARG RUST_VERSION=1.94
 ARG DEBIAN_CODENAME=bookworm
 ARG PROFILE=release
 
@@ -68,19 +68,24 @@ FROM lukemathwalker/cargo-chef:latest-rust-${RUST_VERSION}-${DEBIAN_CODENAME} AS
 #   libclang-dev    aws-lc-sys bindgen
 #   cmake           aws-lc-sys cmake build
 #   nasm            aws-lc-sys x86 assembly (also available on arm64, unused there)
+#   protobuf-compiler  lance-encoding (LanceDB / agentd) — protoc binary
+#   libprotobuf-dev    lance-encoding — google/protobuf/*.proto well-known types in /usr/include
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
         libssl-dev \
         libclang-dev \
         cmake \
         nasm \
+        protobuf-compiler \
+        libprotobuf-dev \
+        mold \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
 # Statically link OpenSSL so the runtime image needs no libssl.so.
-# Disable incremental compilation — it is counter-productive in Docker because
-# each layer starts from a clean state; it wastes disk I/O and build time.
+# mold: use via mold -run in cargo build steps (no clang wrapper needed).
+# CARGO_INCREMENTAL=0 globally; application layers override to 1 with target/ cache.
 ENV OPENSSL_STATIC=1 \
     CARGO_INCREMENTAL=0
 
@@ -96,7 +101,39 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 3 — builder  (cook deps + compile binary)
+# ║ Stage 3a — demo-builder  (8 demo services — NO LanceDB/agentd/einsd/tarifbd)
+# ╚══════════════════════════════════════════════════════════════════════════════
+# Compiles only the 7 services used by demo/docker-compose.yml.
+# edmd is excluded: its iceberg + datafusion deps add ~12 min to the cold build.
+# edmd can be built separately: docker build --target edmd-runtime -t edmd:dev .
+# Skips agentd (LanceDB ~800 extra crates), einsd (iceberg), and 7 LF services.
+# Expected build time: ~6-8 min cold (3 services, no iceberg/LanceDB).
+# Demo runtime targets (makod, marktd, processd, invoicd, obsd,
+# netzbilanzd, nis-syncd) all use --from=demo-builder.
+FROM chef AS demo-builder
+ARG PROFILE=release
+
+COPY --from=planner /build/recipe.json recipe.json
+RUN --mount=type=cache,id=cargo-registry-demo,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-target-demo,sharing=locked,target=/build/target \
+    cargo chef cook --profile ${PROFILE} \
+                    -p makod -p marktd -p processd \
+                    --recipe-path recipe.json
+
+COPY . .
+RUN --mount=type=cache,id=cargo-registry-demo,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-target-demo,sharing=locked,target=/build/target \
+    CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} \
+                -p makod -p marktd \
+    && CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} -p processd --features integrated \
+    && BIN_DIR="$([ "${PROFILE}" = "release" ] && echo target/release || echo target/debug)" \
+    && cp "${BIN_DIR}/makod"       /usr/local/bin/makod       && strip /usr/local/bin/makod \
+    && cp "${BIN_DIR}/marktd"      /usr/local/bin/marktd      && strip /usr/local/bin/marktd \
+    && cp "${BIN_DIR}/processd"    /usr/local/bin/processd    && strip /usr/local/bin/processd \
+    && install -d -o 65532 -g 65532 -m 0700 /var/lib/makod
+
+# ╔══════════════════════════════════════════════════════════════════════════════
+# ║ Stage 3b — builder  (all 17 services — production / CI release pipeline)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM chef AS builder
 ARG PROFILE=release
@@ -111,6 +148,7 @@ ARG PROFILE=release
 # live in the Docker layer, not the mount).
 COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
     cargo chef cook --profile ${PROFILE} \
                     -p makod -p marktd -p processd -p invoicd -p edmd -p obsd \
                     -p netzbilanzd -p sperrd -p nis-syncd -p einsd \
@@ -119,15 +157,14 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
                     --recipe-path recipe.json
 
 # ── Application layer (rebuilt on every source change) ────────────────────────
-# COPY real source over the stubs created by cargo chef cook, then build.
-# Cargo only recompiles crates whose source has actually changed.
 COPY . .
 RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
-    cargo build --profile ${PROFILE} -p makod -p marktd -p invoicd -p edmd -p obsd \
+    --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
+    CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} -p makod -p marktd -p invoicd -p edmd -p obsd \
                                      -p netzbilanzd -p sperrd -p nis-syncd -p einsd \
                                      -p tarifbd -p billingd -p accountingd \
                                      -p vertragd -p portald -p agentd -p mabis-syncd \
-    && cargo build --profile ${PROFILE} -p processd --features integrated \
+    && CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} -p processd --features integrated \
     && BIN_DIR="$([ "${PROFILE}" = "release" ] && echo target/release || echo target/debug)" \
     && cp "${BIN_DIR}/makod"       /usr/local/bin/makod       && strip /usr/local/bin/makod \
     && cp "${BIN_DIR}/marktd"      /usr/local/bin/marktd      && strip /usr/local/bin/marktd \
@@ -137,7 +174,6 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
     && cp "${BIN_DIR}/obsd"        /usr/local/bin/obsd        && strip /usr/local/bin/obsd \
     && cp "${BIN_DIR}/netzbilanzd" /usr/local/bin/netzbilanzd && strip /usr/local/bin/netzbilanzd \
     && cp "${BIN_DIR}/sperrd"      /usr/local/bin/sperrd      && strip /usr/local/bin/sperrd \
-    && cp "${BIN_DIR}/nis-syncd"   /usr/local/bin/nis-syncd   && strip /usr/local/bin/nis-syncd \
     && cp "${BIN_DIR}/einsd"       /usr/local/bin/einsd       && strip /usr/local/bin/einsd \
     && cp "${BIN_DIR}/tarifbd"     /usr/local/bin/tarifbd     && strip /usr/local/bin/tarifbd \
     && cp "${BIN_DIR}/billingd"    /usr/local/bin/billingd    && strip /usr/local/bin/billingd \
@@ -161,23 +197,23 @@ FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 # tzdata: distroless/cc does not ship /usr/share/zoneinfo.
 # Copy only the zone data needed for TZ=Europe/Berlin (CET/CEST).
 # time::OffsetDateTime reads the zone file at the path pointed to by $TZ.
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
+COPY --from=demo-builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
+COPY --from=demo-builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
+COPY --from=demo-builder /usr/share/zoneinfo/leap-seconds.list \
                     /usr/share/zoneinfo/leap-seconds.list
 # Set /etc/localtime so that localtime(3) resolves correctly for code that
 # does not consult $TZ directly.
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
+COPY --from=demo-builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
 
 ENV TZ=Europe/Berlin
 
 # Binary — root:root 0755, runs as uid 65532 (distroless nonroot).
-COPY --from=builder --chown=root:root /usr/local/bin/makod /usr/local/bin/makod
+COPY --from=demo-builder --chown=root:root /usr/local/bin/makod /usr/local/bin/makod
 
 # Persistent state directory — pre-created with uid 65532 ownership so that
 # SlateDB can write here even when no volume is mounted (e.g. --check mode).
 # VOLUME is declared AFTER this COPY so Docker does not discard the ownership.
-COPY --from=builder /var/lib/makod /var/lib/makod
+COPY --from=demo-builder /var/lib/makod /var/lib/makod
 
 # Persistent state directory.
 # Mount a named volume or PVC here; ensure it is writable by uid 65532.
@@ -227,15 +263,15 @@ LABEL org.opencontainers.image.title="makod" \
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot AS marktd-runtime
 
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
+COPY --from=demo-builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
+COPY --from=demo-builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
+COPY --from=demo-builder /usr/share/zoneinfo/leap-seconds.list \
                     /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
+COPY --from=demo-builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
 
 ENV TZ=Europe/Berlin
 
-COPY --from=builder --chown=root:root /usr/local/bin/marktd /usr/local/bin/marktd
+COPY --from=demo-builder --chown=root:root /usr/local/bin/marktd /usr/local/bin/marktd
 
 EXPOSE 8180
 
@@ -263,15 +299,15 @@ LABEL org.opencontainers.image.title="marktd" \
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot AS processd-runtime
 
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
+COPY --from=demo-builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
+COPY --from=demo-builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
+COPY --from=demo-builder /usr/share/zoneinfo/leap-seconds.list \
                     /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
+COPY --from=demo-builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
 
 ENV TZ=Europe/Berlin
 
-COPY --from=builder --chown=root:root /usr/local/bin/processd /usr/local/bin/processd
+COPY --from=demo-builder --chown=root:root /usr/local/bin/processd /usr/local/bin/processd
 
 EXPOSE 8580
 

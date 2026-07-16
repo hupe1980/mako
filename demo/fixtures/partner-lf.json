@@ -1,6 +1,7 @@
 {
   "mp_id": "4012345000023",
   "display_name": "Demo Lieferant GmbH",
+  "makoadresse": ["https://as4.example.com/as4/receive"],
   "channels": [
     {
       "qualifier": "AK",

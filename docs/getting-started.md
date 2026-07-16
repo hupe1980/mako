@@ -21,14 +21,9 @@ complete end-to-end flow: UTILMD 55001 → automatic NB decision → UTILMD 5500
 |---|---|---|
 | `postgres` | `5432` | PostgreSQL — one database per service |
 | `webhook` | `8000` | Demo ERP event receiver (Python, in-memory) |
-| `marktd` | `8180` | Market Data Hub — MaLo/MeLo/NeLo/TR, Lokationszuordnung graph, VersorgungsStatus, `event_log` replay |
-| `processd` | `8580` | NB STP auto-responder + LF E_0624 (45 min) + LFN bootstrap (Strom/Gas) |
-| `invoicd` | `8280` | INVOIC settlement (PIDs 31001/31002/31005/31006/31009) + payment CloudEvents |
-| `netzbilanzd` | `8680` | NNE/KA/MMM billing (NB role) — generates INVOIC 31001/31002/31005 |
-| `edmd` | `8380` | Energy Data Management — MSCONS meter readings, `MeterBillingPeriod` |
-| `obsd` | `8480` | Business-process observability — ProcessProjection, BNetzA KPI reports |
-| `nis-syncd` | `9680` | NIS grid topology import (NB role, stateless) — lifts `processd` NB STP to ≥95% |
-| `makod` | `8080` | EDIFACT process engine — GPKE/WiM/GeLi Gas, AS4, SlateDB |
+| `marktd` | `8180` | Market Data Hub — MaLo/MeLo/NeLo/TR, VersorgungsStatus, EventBus fan-out, `event_log` replay |
+| `processd` | `8580` | NB STP auto-responder — netz-checker (6 checks), LF E_0624 (45 min) |
+| `makod` | `8080` | EDIFACT process engine — GPKE/WiM/GeLi Gas, in-memory |
 
 ```mermaid
 sequenceDiagram
@@ -72,17 +67,12 @@ git clone https://github.com/hupe1980/mako.git
 cd mako
 
 # Build all demo images at once with docker buildx bake (recommended)
-docker buildx bake makod marktd processd invoicd edmd obsd netzbilanzd nis-syncd
+docker buildx bake makod marktd processd
 
 # Or build individually:
-docker build --target runtime             -t makod:dev       .
-docker build --target marktd-runtime      -t marktd:dev      .
-docker build --target processd-runtime    -t processd:dev    .
-docker build --target invoicd-runtime     -t invoicd:dev     .
-docker build --target edmd-runtime        -t edmd:dev        .
-docker build --target obsd-runtime        -t obsd:dev        .
-docker build --target netzbilanzd-runtime -t netzbilanzd:dev .
-docker build --target nis-syncd-runtime   -t nis-syncd:dev   .
+docker build --target runtime          -t makod:dev     .
+docker build --target marktd-runtime   -t marktd:dev    .
+docker build --target processd-runtime -t processd:dev  .
 ```
 
 > The `processd-runtime` stage builds with `--features integrated` (includes
@@ -106,20 +96,13 @@ demo-postgres-1    postgres:17-alpine Up (healthy)   5432/tcp
 demo-webhook-1     python:3.12-alpine Up             0.0.0.0:8000->8000/tcp
 demo-marktd-1      marktd:dev         Up             0.0.0.0:8180->8180/tcp
 demo-processd-1    processd:dev       Up             0.0.0.0:8580->8580/tcp
-demo-invoicd-1     invoicd:dev        Up             0.0.0.0:8280->8280/tcp
-demo-netzbilanzd-1 netzbilanzd:dev    Up             0.0.0.0:8680->8680/tcp
-demo-edmd-1        edmd:dev           Up             0.0.0.0:8380->8380/tcp
-demo-obsd-1        obsd:dev           Up             0.0.0.0:8480->8480/tcp
-demo-nis-syncd-1   nis-syncd:dev      Up             0.0.0.0:9680->9680/tcp
 demo-makod-1       makod:dev          Up             0.0.0.0:8080->8080/tcp
 ```
 
 **What happens at startup:**  
-`processd` self-registers its EventBus subscription with `marktd` on startup via
-`PROCESSD_SELF_REGISTER_WEBHOOK_URL` — no manual subscription curl required.
-`invoicd`, `edmd`, and `obsd` also self-register their subscriptions automatically.
-`marktd`, `processd`, `invoicd`, `edmd`, and `obsd` each run SQLx migrations
-against their own PostgreSQL database (created by `init-db.sh`) on startup.
+`processd` self-registers its EventBus subscription with `marktd` on startup —
+no manual subscription curl required. Both `marktd` and `processd` run SQLx
+migrations automatically on first boot (databases are created by `init-db.sh`).
 
 ---
 
@@ -133,15 +116,6 @@ curl -s http://localhost:8180/health | jq .
 # → {"status":"ok"}
 
 curl -s http://localhost:8580/health/ready
-# → 200 OK
-
-curl -s http://localhost:8280/health/ready
-# → 200 OK
-
-curl -s http://localhost:8380/health/ready
-# → 200 OK
-
-curl -s http://localhost:8480/health/ready
 # → 200 OK
 ```
 
@@ -270,8 +244,14 @@ Output ends with:
 ```
 ✓ processd NB auto-responder dispatched bestaetigen → UTILMD 55003 already arrived
 ✓ POST /api/v1/commands → HTTP 409 (auto-responder already accepted — idempotency confirmed)
+✓ UTILMD 55003 Bestätigung Lieferbeginn delivered to LFN
 All smoke tests passed.
+  Wechselprozess auto-responder: ENABLED
+  Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55003
 ```
+
+The `HTTP 409` is the **idempotency proof** — `processd` already dispatched
+`bestaetigen` automatically before the manual ERP call arrived.
 
 ---
 
@@ -286,12 +266,7 @@ All smoke tests passed.
 | marktd metrics | http://localhost:8180/metrics |
 | processd decisions | http://localhost:8580/api/v1/decisions |
 | processd approval queue | http://localhost:8580/api/v1/queue |
-| invoicd receipt ledger | http://localhost:8280/api/v1/receipts |
-| invoicd overdue-REMADV | http://localhost:8280/api/v1/overdue-remadv |
-| edmd meter reads | http://localhost:8380/api/v1/deliveries/{malo_id} |
-| obsd process projections | http://localhost:8480/obs/processes |
-| obsd KPI report | http://localhost:8480/obs/kpis |
-| Webhook event log | http://localhost:8000/events |
+| ERP webhook event log | http://localhost:8000/events |
 
 ---
 

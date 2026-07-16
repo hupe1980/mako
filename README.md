@@ -66,7 +66,7 @@ The workspace covers the full BDEW MaKo stack across four layers:
 | `sperrd` | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch, `GET /stats` compliance snapshot, 5-tool MCP server |
 | `edmd` | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Hampel quality scoring, V01–V10 validation, virtual meters (§42b GGV), §17 MessZV Jahresprognose, Iceberg/S3 OLAP, 10-tool MCP server |
 | `mabis-syncd` | `:8880` | ÜNB/NB | MaBiS UTILTS synchronisation — aggregates per-MaLo Lastgang; submits to BIKO; vorläufig day 3 + endgültig day 8 schedule |
-| `einsd` | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 9 settlement schemes, §52 sanctions, §51 neg-price, 12 MCP tools + 6 prompts |
+| `einsd` | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 9 settlement schemes, §52 sanctions, §51 neg-price, 14 MCP tools + 6 prompts |
 | `obsd` | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation, `GET /api/v1/audit/bnetza-report` |
 | `nis-syncd` | `:9680` | NB | NIS/GIS grid topology import — concurrent sync, drift detection, `check_malo_grid` MCP tool |
 | `tarifbd` | `:9080` | LF | Product & Tariff Catalog — user-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE), EPEX Spot for §41a |
@@ -365,7 +365,7 @@ let repo = InMemoryMaloRepository::default();
 | [nis-syncd Operator Guide](./docs/nis-syncd.md) | NIS/GIS grid topology import: sync, dry-run, drift detection, STP impact |
 | [edmd Operator Guide](./docs/edmd.md) | Energy Data Management: MSCONS storage, BO4E `Energiemenge` deliveries, `Lastgang`/`Zeitreihe`, `MeterBillingPeriod` |
 | [obsd Operator Guide](./docs/obsd.md) | Observability: process projections, KPI reports, §20 EnWG parity |
-| [einsd Operator Guide](./docs/einsd.md) | EEG/KWKG Settlement: 9 settlement schemes, §20 Abs. 3 Managementprämie, §23a degression, §36k wind, §42b GGV metering, Repowering §22, KWKG Förderdauer, 12 MCP tools, eeg-agent |
+| [einsd Operator Guide](./docs/einsd.md) | EEG/KWKG Settlement: 9 settlement schemes, §20 Abs. 3 Managementprämie, §23a degression, §36k wind, §42b GGV metering, Repowering §22, KWKG Förderdauer, 14 MCP tools, eeg-agent |
 | [tarifbd Operator Guide](./docs/tarifbd.md) | Product & Tariff Catalog: STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE, EPEX Spot prices for §41a |
 | [billingd Operator Guide](./docs/billingd.md) | Energy Billing Engine: STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY; §41a dynamic; XRechnung 3.0 |
 | [accountingd Operator Guide](./docs/accountingd.md) | Massenkontokorrent: FIFO open-items, auto-dunning engine, SEPA pain.008+pain.001, GDPR anonymization, balance reconciliation |

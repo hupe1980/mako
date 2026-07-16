@@ -1,6 +1,6 @@
 ---
 layout: default
-title: "accountingd"
+title: accountingd Operator Guide
 nav_order: 33
 parent: Services
 mermaid: true

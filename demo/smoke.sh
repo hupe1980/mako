@@ -208,7 +208,7 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     # The smoke test also registers 4012345000023 in makod (step 3), but that is
     # a separate registry.  Without this step, processd returns ERC A05 (Reject).
     info "[P1b] PUT LF partner 4012345000023 in marktd partner directory (netz-checker check 5)"
-    LF_PARTNER_JSON='{"mp_id":"4012345000023","display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","channels":{}}'
+    LF_PARTNER_JSON='{"mp_id":"4012345000023","display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","makoadresse":[],"channels":{}}'
     resp=$(marktd_put_json "/api/v1/partners/4012345000023" "$LF_PARTNER_JSON")
     code=$(status "$resp")
     [[ "$code" == "200" || "$code" == "201" ]] || \

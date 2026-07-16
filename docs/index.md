@@ -378,14 +378,15 @@ just dev processd        # separate terminal per service
 just dev makod
 ```
 
-**Full demo stack (10 services):**
+**Full demo stack:**
 
 ```bash
 git clone https://github.com/hupe1980/mako
-cd mako/demo
-docker buildx bake makod marktd processd invoicd edmd obsd netzbilanzd nis-syncd
+cd mako
+docker buildx bake makod marktd processd
+cd demo
 docker compose up -d
-bash smoke.sh
+MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 bash smoke.sh
 ```
 
 → Full walkthrough: [Getting Started guide]({{ '/getting-started' | relative_url }})

@@ -27,19 +27,15 @@ own_mp_id = "9900357000004"
 
 [makod]
 url     = "http://makod:8080"
-# api_key is injected via PROCESSD_MAKOD__API_KEY env var
-api_key = ""  # must match makod --auth-key
+api_key = "demo-secret-change-me"  # matches makod --auth-key
 
 [marktd]
 url     = "http://marktd:8180"
-# api_key is injected via PROCESSD_MARKTD__API_KEY env var
-api_key = ""  # any non-empty value accepted in demo (OIDC disabled)
+api_key = "demo-processd-key"  # any value accepted (OIDC disabled)
 
 [webhook]
-# HMAC-SHA256 secret — must match the webhook_secret registered with marktd.
-# Set to the same value as [subscription].webhook_url in the marktd subscription.
-# inbound_secret is injected via PROCESSD_WEBHOOK__INBOUND_SECRET env var
-inbound_secret = ""
+# inbound_secret is intentionally absent in demo — processd accepts all events
+# without HMAC verification.  In production, set to match marktd subscription secret.
 
 [subscription]
 # processd self-registers this subscription with marktd on startup.

@@ -25,6 +25,7 @@ use mako_markt::{
 };
 use mako_service::cedar::CedarEnforcer;
 use serde::{Deserialize, Serialize};
+use time::format_description::well_known::Rfc3339;
 use utoipa::{IntoParams, ToSchema};
 
 use super::{Claims, IntoMdmResponse as _, etag, parse_if_match};
@@ -61,7 +62,10 @@ impl From<VersorgungsStatusRecord> for VersorgungsStatusResponse {
             msb_mp_id: r.msb_mp_id,
             nb_mp_id: r.nb_mp_id,
             last_process_id: r.last_process_id.map(|u| u.to_string()),
-            updated_at: r.updated_at.to_string(),
+            updated_at: r
+                .updated_at
+                .format(&Rfc3339)
+                .unwrap_or_else(|_| r.updated_at.to_string()),
             version: r.version,
         }
     }

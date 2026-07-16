@@ -67,18 +67,14 @@ ci: check test clippy fmt-check deny no-version-alias doc-check codegen-check va
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
-# Build the production daemon
-build:
-    cargo build -p makod --release
-
-# Build debug daemon (fast iteration)
-build-dev:
-    cargo build -p makod
-
-# Build all six production daemons (release)
-build-all:
-    cargo build --profile release -p makod -p marktd -p invoicd -p edmd -p obsd \
-        && cargo build --profile release -p processd --features integrated
+# Build the 3 demo Docker images — makod, marktd, processd.
+# Only deps needed for the Lieferbeginn smoke test; no iceberg/LanceDB.
+# Expected cold build: ~8 min (debug) / ~12 min (release).
+# Optional services (invoicd, netzbilanzd, obsd): build with --target <name>-runtime.
+build-demo profile="dev":
+    docker build --target runtime             --build-arg PROFILE={{ profile }} -t makod:dev     .
+    docker build --target marktd-runtime      --build-arg PROFILE={{ profile }} -t marktd:dev    .
+    docker build --target processd-runtime    --build-arg PROFILE={{ profile }} -t processd:dev  .
 
 # Build xtask (needed after changing xtask commands)
 build-xtask:

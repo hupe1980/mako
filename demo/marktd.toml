@@ -27,5 +27,5 @@ tenant_id = "9900357000004"
 
 [webhook]
 inbound_path   = "/api/v1/events"
-# inbound_secret is injected via MARKTD_WEBHOOK__INBOUND_SECRET env var
-inbound_secret = ""
+# inbound_secret intentionally absent in demo — accepts all events without HMAC verification.
+# In production, set to match makod's ERP webhook_secret.

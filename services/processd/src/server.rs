@@ -139,8 +139,13 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("processd: failed to connect to PostgreSQL: {e}"))?;
 
+    // Apply schema migrations.
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("processd: running database migrations: {e}"))?;
+
     info!("processd: running");
-    // Schema must be applied manually — see migrations/0001_initial.sql for DDL.
 
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))

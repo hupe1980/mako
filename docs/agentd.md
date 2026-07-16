@@ -1,6 +1,6 @@
 ---
 layout: default
-title: "agentd"
+title: agentd Operator Guide
 nav_order: 37
 parent: Services
 mermaid: true

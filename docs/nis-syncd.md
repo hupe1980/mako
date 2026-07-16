@@ -1,6 +1,6 @@
 ---
 layout: default
-title: nis-syncd
+title: nis-syncd Operator Guide
 nav_order: 30
 parent: Services
 description: >-

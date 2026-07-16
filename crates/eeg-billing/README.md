@@ -7,7 +7,7 @@ the Einspeiser Registry daemon. It covers the full EEG legal framework from EEG 
 EEG 2023 (Solarpaket I) and KWKG 2023, with all version-specific rule variants enforced
 automatically based on the plant's `EegGesetz` year.
 
-**301 tests** · zero I/O · zero async · zero `unsafe` · no float money (`rust_decimal`) ·
+**324 tests** · zero I/O · zero async · zero `unsafe` · no float money (`rust_decimal`) ·
 MSRV 1.94
 
 ---

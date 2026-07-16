@@ -1,6 +1,6 @@
 ---
 layout: default
-title: "vertragd"
+title: vertragd Operator Guide
 nav_order: 34
 parent: Services
 mermaid: true

@@ -155,7 +155,11 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connecting to PostgreSQL")?;
 
-    // Schema must be applied manually — see migrations/0001_initial.sql for DDL.
+    // Apply schema migrations.
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .context("marktd: running database migrations")?;
 
     // ── --check mode early exit ────────────────────────────────────────────────
     //

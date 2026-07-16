@@ -1,6 +1,6 @@
 ---
 layout: default
-title: "einsd"
+title: einsd Operator Guide
 nav_order: 28
 parent: Services
 mermaid: true

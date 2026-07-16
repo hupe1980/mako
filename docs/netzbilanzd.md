@@ -1,6 +1,6 @@
 ---
 layout: default
-title: netzbilanzd
+title: netzbilanzd Operator Guide
 nav_order: 25
 parent: Services
 description: >-
