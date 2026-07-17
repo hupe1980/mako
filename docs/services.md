@@ -61,7 +61,7 @@ graph TB
         portald[":9480 portald\ncustomer portal read-model\nSSE · §41 self-service"]
     end
 
-    agentd[":9580 agentd\n24 AI specialists · LanceDB RAG\nMCP tools · OpenAI/Anthropic/Bedrock"]
+    agentd[":9580 agentd\n26 built-in specialists (binary)\nsequential|parallel|race dispatch\nLanceDB RAG · A2A cards\nMCP tools · OpenAI/Anthropic/Bedrock"]
 
     ext -->|AS4 / REST| makod
     makod <-->|CloudEvents| marktd
@@ -116,7 +116,7 @@ graph TB
 |---|---|---|---|
 | [vertragd](./vertragd) | `:9780` | LF | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, kunden_identitaeten (N portal users per company), Tarifwechsel, Kündigung, OIDC→MaLo auth gateway for portald |
 | [portald](./portald) | `:9480` | LF | Customer Portal gateway — aggregates all LF services, REST + SSE, §41 EnWG self-service write API (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16), 8-tool MCP server |
-| [agentd](./agentd) | `:9580` | All | Multi-agent LLM orchestration — Orchestrator + Specialist Mesh, **24 bundled specialists** (incl. replacement-value, mabis-syncd, smgw-diagnostics agents), LanceDB RAG, MCP tools across all 17 services, glob `trigger_event_types`, `GET /api/v1/sessions`, `POST /api/v1/rag/search` |
+| [agentd](./agentd) | `:9580` | All | Multi-agent LLM orchestration — **26 built-in specialists compiled into binary**, activated via `[bundled_agents]`; `sequential`/`parallel`/`race` dispatch modes; A2A agent cards at `/.well-known/agents/{name}`; builtin catalog at `GET /api/v1/agents/catalog`; LanceDB RAG; MCP tools across all 17 services |
 
 ---
 

@@ -237,6 +237,7 @@ section above.
 | GPKE 31001–31005 | Abrechnung INVOIC | `de.mako.process.initiated` → `de.mako.process.completed` + `de.invoic.receipt.settled`/`disputed` |
 | WiM 31009 | MSB-Rechnung (LF payer) | `de.mako.process.initiated` → REMADV → `de.invoic.receipt.settled`/`disputed` |
 | WiM 55039, 55042, 55051, 55168 | Gerätewechsel / MSB-Wechsel | `de.mako.process.initiated` → `de.mako.aperak.accepted` → `de.mako.process.completed` |
+| WiM 55168 (Konfiguration confirmed) | Steuerungsauftrag positive Endantwort | `de.mako.process.completed` + **`de.vpp.dispatch.confirmed`** → auto-billing in `billingd` |
 | GeLi Gas 44001–44006 | Lieferbeginn Gas (LFN-initiated) | `de.mako.process.initiated` → `de.mako.aperak.accepted` → `de.mako.process.completed` |
 | GeLi Gas 44017–44018 | Lieferende / Kündigung Gas | same |
 | GeLi Gas 17103 | Gas Datenabruf (Brennwert/Zustandszahl) | `de.mako.process.initiated` → `de.mako.process.completed` |
@@ -328,6 +329,7 @@ BO4E-typed JSON object. Deserialise using the ERP's own BO4E library.
 | `de.mako.process.completed` | Lieferbeginn/Lieferende confirmed | `Marktlokation` + `Vertrag` |
 | `de.mako.process.failed` | Fatal error / regulatory deadline exceeded | `Marktlokation` |
 | `de.mako.malo.identified` | MaLo-ID lookup resolved | `Marktlokation` |
+| `de.vpp.dispatch.confirmed` | WiM Steuerungsauftrag (PID 55168) positively confirmed by MSB — triggers VPP auto-billing in `billingd` | `{tx_id, location_id, max_power_kw, execution_time_from, execution_time_until, command_type, sender_mp_id, produkt_code}` |
 
 **Full example:**
 

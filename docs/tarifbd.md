@@ -62,6 +62,7 @@ graph LR
 | `GET` | `/api/v1/products/{lf_mp_id}` | List products (`?category=&sparte=&kundentyp=`) |
 | `GET` | `/api/v1/products/{lf_mp_id}/{product_code}/history` | Immutable version audit log |
 | `GET/PUT` | `/api/v1/customer/{malo_id}/product` | Active product for a MaLo / Tarifwechsel |
+| `GET` | `/api/v1/comparison-feed` | **Comparison portal feed** — ETag-cached, paginated tariff listing |
 | `PUT` | `/api/v1/epex-prices/{date}` | Import EPEX day-ahead prices (24-entry array) |
 | `GET` | `/api/v1/epex-prices/{date}/hourly` | 24-hour ct/kWh array |
 | `GET` | `/api/v1/epex-prices/{year}/{month}/average` | Monthly average — used by `einsd` Direktvermarktung |
@@ -136,6 +137,118 @@ the 24-hour array for 15-min Lastgang × EPEX multiplication (§41a pipeline).
 
 For `einsd` Direktvermarktung: `GET /api/v1/epex-prices/2026/7/average` returns the
 monthly average used in `max(0, AW − EPEX)`.
+
+---
+
+## Comparison portal feed
+
+`GET /api/v1/comparison-feed` returns a machine-readable tariff listing for **Verivox,
+Check24**, BNetzA Markttransparenzstelle, and similar integrators. The feed is also
+compliant with §42d EnWG (mandatory machine-readable tariff publication since 2024).
+
+### Query parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `sparte` | string | all | Filter: `STROM` \| `GAS` \| `WAERME` |
+| `kundentyp` | string | all | Filter: `Haushalt` \| `Gewerbe` \| `Waermepumpe` \| `Ladesaeule` |
+| `verbrauch_kwh` | decimal | `3500` | Annual consumption for `jahreskosten` estimation |
+| `oekolabel` | string | — | Show only products with this label (e.g. `OK_POWER`) |
+| `include_dynamic` | bool | `true` | Include §41a EPEX-linked dynamic tariffs |
+| `only_dynamic` | bool | `false` | Return only §41a dynamic tariffs |
+| `limit` | integer | `100` | Page size (1–500) |
+| `cursor` | string | — | Pagination cursor from `meta.next_cursor` |
+| `lf_mp_id` | string | `cfg.tenant` | Override operator ID |
+
+### Example: Household electricity tariffs
+
+```bash
+curl -s "http://tarifbd:9080/api/v1/comparison-feed?sparte=STROM&kundentyp=Haushalt&verbrauch_kwh=3500" | jq .
+```
+
+```json
+{
+  "meta": {
+    "generated_at": "2026-07-17T12:00:00Z",
+    "lf_mp_id": "9900357000004",
+    "verbrauch_kwh": "3500",
+    "sparte_filter": "STROM",
+    "kundentyp_filter": "Haushalt",
+    "total_returned": 3,
+    "next_cursor": null
+  },
+  "tarife": [
+    {
+      "product_code": "STROM-PREMIUM-2026",
+      "name": "Mako Strom Premium",
+      "category": "STROM",
+      "sparte": "STROM",
+      "kundentyp": "Haushalt",
+      "register_count": "Eintarif",
+      "ist_oekostrom": true,
+      "ist_dynamisch": false,
+      "valid_from": "2026-01-01",
+      "valid_to": null,
+      "preise": {
+        "grundpreis_ct_per_day": "5.50",
+        "arbeitspreis_ct_per_kwh": "28.40",
+        "arbeitspreis_ht_ct_per_kwh": null,
+        "arbeitspreis_nt_ct_per_kwh": null,
+        "leistungspreis_ct_per_kw_month": null
+      },
+      "jahreskosten_supply_netto_eur": "1014.08",
+      "jahreskosten_supply_brutto_eur": "1206.75",
+      "mwst_pct": "19",
+      "laufzeit_monate": 12,
+      "kuendigungsfrist_wochen": 4,
+      "mindestlaufzeit_monate": 12,
+      "preisgarantie_bis": "2027-06-30",
+      "bonus_rabatt_eur": "50.00",
+      "energiemix": { "anteil": [...], "co2Emission": 42.0 },
+      "oekolabel": ["OK_POWER"],
+      "tarifpreisblatt": { "...": "full BO4E payload" },
+      "updated_at": "2026-07-17T10:00:00Z"
+    }
+  ]
+}
+```
+
+### Caching and efficiency
+
+Responses include `ETag` and `Cache-Control: public, max-age=300` (5-minute cache).
+**Comparison portals should send `If-None-Match` on every poll** — the server returns
+`304 Not Modified` (no body) when no products have changed since the last request.
+
+The ETag changes whenever any product in the result set is updated (`PUT /products`),
+so changes propagate to portals within 5 minutes of the next poll.
+
+### What `jahreskosten_supply_*` includes and excludes
+
+`jahreskosten_supply_netto_eur` = Grundpreis (EUR/a) + Arbeitspreis (EUR/a) **only**.
+
+**Excluded:** NNE, Konzessionsabgabe, Stromsteuer, and MwSt — these vary by DSO/PLZ
+and must be added by the portal integrator:
+
+```
+Jahresgesamtkosten = jahreskosten_supply_brutto_eur
+                   + NNE_brutto (from marktd PreisblattNetznutzung by PLZ)
+                   + Stromsteuer (2.05 ct/kWh × verbrauch_kwh / 100)
+```
+
+### Pagination
+
+The feed is ordered `(updated_at DESC, product_code ASC)`. When `meta.next_cursor`
+is non-null, pass it as `?cursor=<value>` in the next request. New products always
+appear on page 1; existing pages remain stable.
+
+```bash
+# Page 1
+curl "http://tarifbd:9080/api/v1/comparison-feed?limit=2"
+# → meta.next_cursor: "2026-07-17T10:00:00Z,STROM-BASIC"
+
+# Page 2
+curl "http://tarifbd:9080/api/v1/comparison-feed?limit=2&cursor=2026-07-17T10:00:00Z,STROM-BASIC"
+```
 
 ---
 

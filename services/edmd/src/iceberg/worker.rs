@@ -107,6 +107,11 @@ impl ArchiveWorker {
         let batch_size = self.cfg.batch_size as i64;
 
         // ── 1. Load rows eligible for archival ────────────────────────────────
+        // NOTE: No tenant filter here — the archive worker operates on all tenants
+        // per run. Each archived row's `tenant_id` is preserved in the Iceberg data.
+        // For strict per-tenant isolation, the RunConfig should carry a tenant field
+        // and this query should include `AND tenant = $3`. This is tracked as
+        // a future hardening item (H8 from the security audit).
         let rows = sqlx::query_as::<_, RawMeterRead>(
             r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh,
                      quality, pid, sparte, obis_code, tenant_id
@@ -202,19 +207,61 @@ impl ArchiveWorker {
             .map(|f| f.file_size_in_bytes() as i64)
             .sum();
 
-        // ── 4. Commit Iceberg snapshot ────────────────────────────────────────
+        // ── 4. Commit Iceberg snapshot (with CatalogCommitConflicts retry) ────
         // Transaction pattern (iceberg 0.9.1):
         //   tx.fast_append().add_data_files(files).apply(tx)  → modified tx
         //   tx.commit(&catalog)  → writes new snapshot metadata via SqlCatalog
-        let tx = Transaction::new(&table);
-        let tx = tx
-            .fast_append()
-            .add_data_files(data_files)
-            .apply(tx)
-            .map_err(|e| anyhow::anyhow!("fast_append apply: {e}"))?;
-        tx.commit(&catalog)
-            .await
-            .map_err(|e| anyhow::anyhow!("transaction commit: {e}"))?;
+        //
+        // On CatalogCommitConflicts (concurrent writers), reload the Table
+        // metadata from the catalog to avoid livelock on a stale snapshot,
+        // then retry.  The data files are already written to S3 and can be
+        // reused — only the transaction needs to be rebuilt.
+        let mut last_commit_err = None;
+        let mut committed = false;
+        for attempt in 0..3_u32 {
+            // Reload the table on each retry to get the latest snapshot.
+            let current_table = if catalog.table_exists(&table_ident).await? {
+                catalog.load_table(&table_ident).await?
+            } else {
+                table.clone()
+            };
+            let tx = Transaction::new(&current_table);
+            let tx = tx
+                .fast_append()
+                .add_data_files(data_files.clone())
+                .apply(tx)
+                .map_err(|e| anyhow::anyhow!("fast_append apply: {e}"))?;
+            match tx.commit(&catalog).await {
+                Ok(_updated_table) => {
+                    committed = true;
+                    break;
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("CatalogCommitConflict")
+                        || msg.contains("commit conflict")
+                        || msg.contains("concurrent")
+                    {
+                        tracing::warn!(
+                            attempt,
+                            error = %e,
+                            "iceberg-worker: CatalogCommitConflicts — reloading table and retrying"
+                        );
+                        tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await;
+                        last_commit_err = Some(e);
+                    } else {
+                        // Non-retryable error
+                        return Err(anyhow::anyhow!("transaction commit (permanent): {e}"));
+                    }
+                }
+            }
+        }
+        if !committed {
+            return Err(anyhow::anyhow!(
+                "iceberg-worker: commit failed after 3 retries: {}",
+                last_commit_err.map_or_else(|| "unknown".to_owned(), |e| e.to_string())
+            ));
+        }
 
         // ── 5. Mark rows archived in PostgreSQL (bulk UPDATE) ─────────────────
         let malo_ids: Vec<&str> = reads.iter().map(|r| r.malo_id.as_str()).collect();
@@ -447,6 +494,9 @@ fn raw_to_read(r: &RawMeterRead) -> MeterRead {
         ),
         push_session: r.push_session.clone(),
         quality_warnings: None, // not stored in raw Iceberg rows
+        sender_mp_id: None,
+        allocation_version: "INITIAL".to_owned(),
+        valid_from_tx: None,
     }
 }
 

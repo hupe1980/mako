@@ -476,10 +476,49 @@ impl Workflow for WimSteuerungsauftragWorkflow {
             }
 
             SteuerungsauftragCommand::SendEndantwortPositiv { reference_id } => {
-                if !matches!(state, SteuerungsauftragState::Received(_)) {
+                let SteuerungsauftragState::Received(data) = &state else {
                     return Err(WorkflowError::invalid_state("Received", state.status_str()));
+                };
+                let event = SteuerungsauftragEvent::EndantwortPositiv { reference_id };
+
+                // Emit a `DispatchConfirmed` outbox entry for `Konfiguration`
+                // (load-reduction) commands so that `billingd` can auto-trigger
+                // VPP settlement billing without operator intervention.
+                //
+                // `InitialZustand` (reset) commands restore normal operation —
+                // no dispatch billing event is emitted for resets.
+                //
+                // The payload carries all dispatch metadata needed by
+                // `billingd POST /api/v1/webhooks/vpp-dispatch`.
+                if matches!(data.command_type, SteuerungsCommandType::Konfiguration) {
+                    let payload = serde_json::json!({
+                        "tx_id":               data.tx_id,
+                        "location_id":         data.location_id.as_str(),
+                        "location_type":       match &data.location_id {
+                                                   LocationId::Sr(_) => "sr",
+                                                   LocationId::Nelo(_) => "nelo",
+                                               },
+                        "execution_time_from": data.execution_time_from,
+                        "execution_time_until": data.execution_time_until,
+                        "max_power_kw":        data.max_power_kw,
+                        "command_type":        "Konfiguration",
+                        "sender_mp_id":        data.sender_mp_id.as_str(),
+                        "produkt_code":        data.produkt_code,
+                    });
+                    let outbox = mako_engine::outbox::PendingOutbox::new(
+                        "DispatchConfirmed",
+                        // recipient = the NB/LF that sent the Steuerungsauftrag
+                        data.sender_mp_id.as_str(),
+                        payload,
+                    );
+                    Ok(mako_engine::workflow::WorkflowOutput::with_outbox(
+                        vec![event],
+                        vec![outbox],
+                    ))
+                } else {
+                    // InitialZustand reset — no billing event.
+                    Ok(vec![event].into())
                 }
-                Ok(vec![SteuerungsauftragEvent::EndantwortPositiv { reference_id }].into())
             }
 
             SteuerungsauftragCommand::SendEndantwortNegativ { reason } => {

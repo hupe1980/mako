@@ -862,6 +862,8 @@ dependencies = [
 [[package]]
 name = "asx-rs"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0aaf7618cad7fe2820bebc9e2633fa6cbf164d41289dd36bc15d89569132ab56"
 dependencies = [
  "aes-gcm",
  "axum",
@@ -4383,7 +4385,6 @@ dependencies = [
  "billing",
  "eeg-billing",
  "proptest",
- "rubo4e",
  "rust_decimal",
  "rust_decimal_macros",
  "serde",
@@ -5266,6 +5267,7 @@ dependencies = [
  "proptest",
  "rust_decimal",
  "rust_decimal_macros",
+ "serde_json",
  "thiserror 2.0.18",
  "time",
 ]
@@ -7744,6 +7746,7 @@ dependencies = [
  "edifact-rs",
  "energy-api",
  "fd-lock",
+ "governor",
  "hmac 0.12.1",
  "jsonwebtoken",
  "mako-as4",
@@ -13182,6 +13185,7 @@ version = "0.11.0"
 dependencies = [
  "anyhow",
  "axum",
+ "hmac 0.12.1",
  "mako-markt",
  "mako-service",
  "reqwest 0.13.1",
@@ -13192,6 +13196,7 @@ dependencies = [
  "sepa",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "thiserror 2.0.18",
  "time",

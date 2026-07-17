@@ -296,28 +296,100 @@ Returns `HTTP 404` for B2B `Geschaeftspartner` records that have no Person store
 
 ---
 
+## Zahlungsinformation (IBAN / SEPA)
+
+Payment details are stored as a typed `rubo4e::current::Zahlungsinformation` COM. IBAN is
+validated with ISO 13616 mod-97 checksum on every `PUT`.
+
+```http
+PUT /api/v1/kunden/{id}/zahlungsinformation
+Content-Type: application/json
+
+{
+  "_typ": "ZAHLUNGSINFORMATION",
+  "iban":           "DE89370400440532013000",
+  "bic":            "COBADEFFXXX",
+  "kontoinhaber":   "Max Mustermann",
+  "sepaReferenz":   "MAKO-2025-001",
+  "zahlungsart":    "SEPA_LASTSCHRIFT"
+}
+```
+
+The stored `zahlungsart` controls `accountingd` SEPA batch generation:
+- `SEPA_LASTSCHRIFT` — included in pain.008 direct-debit runs when `sepa_erlaubt = true`
+- `UEBERWEISUNG` / `BAR` — invoice-only; excluded from SEPA batches
+
+---
+
+## GDPR compliance
+
+### Art. 15 — Right of access
+
+`GET /api/v1/kunden/{id}/export` returns a complete structured JSON export of all stored PII:
+Kunde, Person, Zahlungsinformation, KundenIdentitaeten, Versorgungsverträge, and
+Vertragskomponenten. Suitable for the statutory data-subject access request.
+
+### Art. 17 — Right to erasure
+
+`POST /api/v1/kunden/{id}/anonymize` pseudonymizes all PII while retaining contract
+records for the 10-year legal retention period (§147 AO):
+
+```http
+POST /api/v1/kunden/{id}/anonymize
+Content-Type: application/json
+
+{ "requested_by": "operator-1" }
+```
+
+**What is anonymized:**
+- `kunden.geschaeftspartner` — replaced with an opaque pseudonym token
+- `kunden.person` — nulled
+- `kunden.zahlungsinformation` — IBAN/BIC replaced with `ANONYMIZED`
+- `kunden.umsatzsteuer_id` — nulled
+- `kunden_identitaeten.oidc_sub` — replaced with `anon:{uuid}` (portal access revoked)
+- `kunden_identitaeten.email` / `display_name` — nulled
+
+**Retention:** Contract history (Versorgungsverträge, Vertragskomponenten, Rechnungen)
+is retained unmodified for §147 AO compliance (10-year obligation).
+
+**Audit trail:** Every anonymization is written to the immutable `anonymization_log`
+table with `requested_by`, `anonymized_at`, and the list of affected fields.
+Required by GDPR Art. 5(2) accountability principle.
+
+The operation is **irreversible**. Returns `HTTP 200` on success, `HTTP 404` when the
+customer does not exist.
+
+---
+
 ## REST API
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/kunden` | Create / upsert customer |
-| `GET` | `/api/v1/kunden` | List customers (`?tenant=&limit=`) |
+| `POST` | `/api/v1/kunden` | Create / upsert customer (idempotent on `erp_kunde_id`) |
+| `GET` | `/api/v1/kunden` | List customers (`?kundentyp=&limit=`) |
 | `GET` | `/api/v1/kunden/{id}` | Customer + active identities + malo_ids |
 | `PUT` | `/api/v1/kunden/{id}` | Update customer (name, address, SEPA, …) |
 | `GET` | `/api/v1/kunden/by-sub/{sub}` | Resolve OIDC sub → Kunde + scoped malo_ids |
-| `GET` | `/api/v1/kunden/authenticate` | `?malo_id=` auth check; 200 / 403 |
+| `GET` | `/api/v1/kunden/authenticate` | `?malo_id=` auth check for portald; 200 / 403 |
+| `GET\|PUT` | `/api/v1/kunden/{id}/person` | `rubo4e::current::Person` BO — B2C natural-person details (GDPR Art. 15) |
+| `GET\|PUT` | `/api/v1/kunden/{id}/zahlungsinformation` | `rubo4e::current::Zahlungsinformation` COM — IBAN mod-97 validated |
+| `GET` | `/api/v1/kunden/{id}/export` | **GDPR Art. 15/20** — full PII export |
+| `POST` | `/api/v1/kunden/{id}/anonymize` | **GDPR Art. 17** — right to erasure (irreversible pseudonymization) |
 | `POST` | `/api/v1/kunden/{id}/identitaeten` | Add portal user (idempotent on `oidc_sub`) |
 | `GET` | `/api/v1/kunden/{id}/identitaeten` | List active portal users |
+| `DELETE` | `/api/v1/kunden/{id}/identitaeten/{sub}` | Revoke portal access for a user |
+| `GET` | `/api/v1/kunden/{id}/portfolio` | B2B portfolio: all active MaLo/Sparte pairs |
 | `POST` | `/api/v1/kunden/{id}/rahmenvertraege` | Create B2B Rahmenvertrag |
 | `GET` | `/api/v1/kunden/{id}/rahmenvertraege` | List Rahmenverträge |
-| `POST` | `/api/v1/kunden/{id}/vertraege` | Create Versorgungsvertrag |
+| `POST` | `/api/v1/kunden/{id}/vertraege` | Create Versorgungsvertrag (idempotent on `erp_contract_id`) |
 | `GET` | `/api/v1/kunden/{id}/vertraege` | List supply contracts for customer |
 | `GET` | `/api/v1/vertraege` | All active contracts (`?tenant=&status=`) |
+| `GET` | `/api/v1/vertraege/expiring` | Near-expiry contracts (`?days=30`) — §13 GasGVV / §41 EnWG |
 | `GET` | `/api/v1/vertraege/{id}` | Contract + Komponenten + status |
-| `POST` | `/api/v1/vertraege/{id}/tarifwechsel` | Change product code (no new UTILMD); blocked within Preisgarantie window |
+| `POST` | `/api/v1/vertraege/{id}/tarifwechsel` | Change product code; blocked within Preisgarantie window |
+| `POST` | `/api/v1/vertraege/{id}/stornieren` | Cancel pre-activation contract (`ANGELEGT`/`IN_BEARBEITUNG` only) |
 | `POST` | `/api/v1/vertraege/{id}/kuendigen` | Initiate Lieferende for all commodities |
 | `GET\|PUT` | `/api/v1/vertraege/{id}/preisgarantie` | Typed `rubo4e::current::Preisgarantie` COM |
-| `GET\|PUT` | `/api/v1/kunden/{id}/person` | `rubo4e::current::Person` BO for B2C customers (GDPR Art. 15) |
 | `POST` | `/api/v1/events` | Inbound CloudEvents from `makod` / `processd` |
 | `GET` | `/health` | Liveness |
 | `GET` | `/health/ready` | Readiness |
@@ -326,13 +398,17 @@ Returns `HTTP 404` for B2B `Geschaeftspartner` records that have no Person store
 
 ## CloudEvents emitted
 
+All events are delivered as CloudEvents 1.0 JSON to `erp.webhook_url` with an
+`X-Mako-Signature: <HMAC-SHA256-hex>` header when `erp.hmac_secret` is configured.
+
 | Event type | When |
 |---|---|
 | `de.vertrag.aktiv` | All commodity Komponenten confirmed by NB |
-| `de.vertrag.tarifwechsel` | Product change committed |
-| `de.vertrag.tarifwechsel_geplant` | Future Tarifwechsel stored (applied by background worker on `wirksamkeit`) |
-| `de.vertrag.preisaenderung.ankuendigung` | Emitted 42 days before `wirksamkeit` (§41 Abs. 3 EnWG ≥ 6 weeks notice) |
-| `de.vertrag.preisgarantie.updated` | Preisgarantie COM stored or replaced |
+| `de.vertrag.teilerfuellung` | First Komponente confirmed, others still pending |
+| `de.vertrag.tarifwechsel` | Product change committed (immediate or on `wirksamkeit`) |
+| `de.vertrag.tarifwechsel_geplant` | Future Tarifwechsel stored (applied by background worker) |
+| `de.vertrag.preisaenderung.ankuendigung` | 42 days before `wirksamkeit` (§41 Abs. 3 EnWG ≥ 6 weeks notice) |
+| `de.vertrag.autoerneuerung.ankuendigung` | 30 days before auto-renewal (§13 GasGVV / §14 StromGVV) |
 | `de.vertrag.abgeschlossen` | All Lieferende confirmed; Schlussrechnung trigger |
 | `de.vertrag.position.abgelehnt` | NB rejected a commodity (ERC A02 / A05 / A97) |
 
@@ -363,13 +439,21 @@ mako_timeout_werktage = 10   # operator escalation after N Werktage without NB r
 
 ## MCP tools
 
-`vertragd` ships a built-in MCP server at `/mcp` (Streamable HTTP 2025-11-05):
+`vertragd` ships a built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25) with
+**9 read-only tools** and **2 prompts**.
 
-| Tool | Description |
-|---|---|
-| `get_vertrag` | Get contract status, Komponenten, and pending MaKo process IDs |
-| `list_active_vertraege` | List AKTIV contracts, filterable by MaLo, customer, product |
-| `get_kunde` | Customer profile + identity list + active MaLo IDs |
-| `get_identitaeten` | List portal users for a Kunde with roles and site scopes |
+| Tool | Annotations | Description |
+|---|---|---|
+| `get_vertrag_status` | `read_only` | Full contract + Komponenten + pending MaKo process IDs |
+| `list_offene_vertraege` | `read_only` | All AKTIV/IN_BEARBEITUNG/TEILERFUELLUNG/GEKÜNDIGT (`limit` param) |
+| `get_kunde_by_sub` | `read_only` | OIDC sub → Kunde + scoped MaLo IDs (portald auth path) |
+| `list_expiring_contracts` | `read_only` | Near-expiry by `vertragsende` or `preisgarantie_bis` (`days` param, default 30) |
+| `list_pending_tarifwechsel` | `read_only` | Upcoming Tarifwechsel + `preisanpassung_notif_sent` flag (§41 Abs. 3 EnWG) |
+| `find_stuck_workflows` | `read_only` | ANGEMELDET > N Werktage — requires operator escalation (§20 EnWG) |
+| `get_customer_portfolio` | `read_only` | B2B portfolio: all active MaLo/Sparte for one Kunde |
+| `list_alle_kunden` | `read_only` | All Kunden for CRM/ERP sync (`kundentyp` filter, max 500) |
+| `compute_kuendigungsfrist` | `read_only` | Earliest valid Kündigung date (§14 StromGVV / §13 GasGVV) |
 
-**Prompt:** `contract-review` — guided analysis of stuck contracts with NB ERC escalation advice.
+**Prompts:**
+- `o2c_review` — full Order-to-Cash pipeline review: stuck contracts, expiring prices, pending Tarifwechsel
+- `b2b_onboarding` — step-by-step Rahmenvertrag + N Versorgungsverträge onboarding guide

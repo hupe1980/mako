@@ -436,3 +436,62 @@ impl As4AxumHandler for BdewAs4IngestHandler {
 pub fn router(handler: Arc<BdewAs4IngestHandler>, config: RouterConfig) -> Router {
     as4_router(handler, "/as4/inbox", config)
 }
+
+// ── AS4 inbound rate-limit middleware ─────────────────────────────────────────
+
+/// Global GCRA token-bucket rate limiter for the AS4 inbound endpoint.
+///
+/// Sustained limit: **100 requests/second**, burst allowance: **50 requests**.
+/// Returns `HTTP 429 Too Many Requests` when the bucket is empty, protecting
+/// the event store from capacity exhaustion (OWASP A05).
+///
+/// BDEW AS4 is a machine-to-machine protocol between authenticated market
+/// participants; 100 req/s is well above the realistic peak from any single
+/// operator and well below the event store write capacity.
+static AS4_RATE_LIMITER: std::sync::LazyLock<
+    governor::RateLimiter<
+        governor::state::NotKeyed,
+        governor::state::InMemoryState,
+        governor::clock::DefaultClock,
+    >,
+> = std::sync::LazyLock::new(|| {
+    use std::num::NonZeroU32;
+    let quota = governor::Quota::per_second(NonZeroU32::new(100).unwrap())
+        .allow_burst(NonZeroU32::new(50).unwrap());
+    governor::RateLimiter::direct(quota)
+});
+
+/// Axum middleware that enforces the AS4 inbound rate limit.
+///
+/// Returns `429 Too Many Requests` with a `Retry-After: 1` header when the
+/// GCRA token bucket is exhausted. A `tracing::warn!` is emitted on each
+/// rejection so operators can detect unusual traffic patterns.
+pub async fn rate_limit_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    match AS4_RATE_LIMITER.check() {
+        Ok(()) => next.run(req).await,
+        Err(_) => {
+            tracing::warn!(
+                method = %req.method(),
+                uri    = %req.uri(),
+                "AS4 inbound rate limit exceeded (100 req/s) — returning 429. \
+                 Possible misconfigured or malicious counterparty."
+            );
+            axum::response::Response::builder()
+                .status(axum::http::StatusCode::TOO_MANY_REQUESTS)
+                .header("Retry-After", "1")
+                .header("Content-Type", "text/plain")
+                .body(axum::body::Body::from(
+                    "AS4 inbound rate limit exceeded. Retry after 1 second.",
+                ))
+                .unwrap_or_else(|_| {
+                    axum::response::Response::builder()
+                        .status(axum::http::StatusCode::TOO_MANY_REQUESTS)
+                        .body(axum::body::Body::empty())
+                        .unwrap()
+                })
+        }
+    }
+}

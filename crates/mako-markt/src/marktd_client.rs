@@ -980,6 +980,77 @@ impl MarktdClient {
         Ok(Some(body))
     }
 
+    /// `PUT /api/v1/zaehler/{zaehler_id}/register`
+    ///
+    /// Upsert a `ZaehlzeitRegisterRecord` for a given Zähler.  Idempotent: the
+    /// server uses `ON CONFLICT (zaehler_id, tenant, bezeichnung, valid_from) DO
+    /// UPDATE` so repeated calls with the same business key are safe.
+    ///
+    /// Called by `makod` after processing an inbound ORDERS 17102–17133 that
+    /// carries ZAK+ZE register definitions.
+    pub async fn put_zaehler_register(
+        &self,
+        zaehler_id: &str,
+        rec: &crate::repository::ZaehlzeitRegisterRecord,
+    ) -> Result<(), MarktdClientError> {
+        let url = format!("{}/api/v1/zaehler/{}/register", self.base_url, zaehler_id);
+        let resp = self
+            .client
+            .put(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .json(rec)
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            let s = resp.status().as_u16();
+            warn!(
+                zaehler_id,
+                status = s,
+                "MarktdClient: put_zaehler_register non-2xx"
+            );
+            return Err(MarktdClientError::Http(format!("HTTP {s}")));
+        }
+        info!(
+            zaehler_id,
+            bezeichnung = %rec.bezeichnung,
+            "MarktdClient: ZaehlzeitRegister upserted from WiM Stammdaten"
+        );
+        Ok(())
+    }
+
+    /// `PUT /api/v1/zaehler-register/{register_id}/saisons`
+    ///
+    /// Upsert a `ZaehlzeitSaisonRecord` for a given register.
+    pub async fn put_zaehler_saison(
+        &self,
+        register_id: uuid::Uuid,
+        rec: &crate::repository::ZaehlzeitSaisonRecord,
+    ) -> Result<(), MarktdClientError> {
+        let url = format!(
+            "{}/api/v1/zaehler-register/{}/saisons",
+            self.base_url, register_id
+        );
+        let resp = self
+            .client
+            .put(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .json(rec)
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            let s = resp.status().as_u16();
+            warn!(
+                %register_id,
+                status = s,
+                "MarktdClient: put_zaehler_saison non-2xx"
+            );
+            return Err(MarktdClientError::Http(format!("HTTP {s}")));
+        }
+        Ok(())
+    }
+
     /// `GET /api/v1/energiemix/{nb_mp_id}?year={year}`
     ///
     /// Returns the §42 EnWG annual grid-area `Energiemix` for the given NB.

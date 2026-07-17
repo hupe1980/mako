@@ -889,3 +889,242 @@ pub async fn next_angebotsnummer(pool: &PgPool, tenant: &str) -> anyhow::Result<
     let seq: i64 = row.try_get("seq").unwrap_or(1);
     Ok(format!("ANG-{year}-{seq:06}"))
 }
+
+// ── Comparison portal feed ────────────────────────────────────────────────────
+
+/// Categories that appear in comparison portals (energy tariffs only).
+///
+/// Excludes HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, BUNDLE, EEG, EINSPEISUNG —
+/// those are not consumer-facing energy tariffs suitable for portal listing.
+pub const FEED_CATEGORIES: &[&str] = &["STROM", "GAS", "WAERME", "SOLAR", "WAERMEPUMPE", "WALLBOX"];
+
+/// Query parameters for `GET /api/v1/comparison-feed`.
+#[derive(Debug, serde::Deserialize)]
+pub struct ComparisonFeedQuery {
+    /// Filter by LF operator (defaults to `cfg.tenant`).
+    pub lf_mp_id: Option<String>,
+    /// Filter by Sparte: `STROM` | `GAS` | `WAERME`.
+    pub sparte: Option<String>,
+    /// Filter by customer segment: `Haushalt` | `Gewerbe` | `Waermepumpe` | `Ladesaeule`.
+    pub kundentyp: Option<String>,
+    /// Annual consumption in kWh used to estimate `jahreskosten_supply_*`.
+    /// Defaults to `3500` (BNetzA reference household).
+    pub verbrauch_kwh: Option<rust_decimal::Decimal>,
+    /// Filter to products carrying a specific Oekolabel (e.g. `OK_POWER`).
+    /// Use `oekolabel=OK_POWER` to list only certified green tariffs.
+    pub oekolabel: Option<String>,
+    /// Include §41a EPEX-linked dynamic tariffs.  Default: `true`.
+    pub include_dynamic: Option<bool>,
+    /// Return **only** §41a dynamic tariffs.  Default: `false`.
+    pub only_dynamic: Option<bool>,
+    /// Max results per page (1–500, default 100).
+    pub limit: Option<i64>,
+    /// Pagination cursor — the `updated_at` value of the last item on the
+    /// previous page (ISO 8601 UTC).  Absent on first request.
+    pub cursor: Option<String>,
+}
+
+/// Extracted tariff price points for a single product.
+///
+/// All prices are in **ct/kWh** or **ct/day**.  `None` means the product
+/// does not define that price dimension (e.g. no ARBEITSPREIS_NT on an
+/// Eintarif product).
+#[derive(Debug, serde::Serialize)]
+pub struct TarifPreise {
+    /// Daily standing charge in ct/day (= Grundpreis).
+    pub grundpreis_ct_per_day: Option<rust_decimal::Decimal>,
+    /// Working price for single-rate tariffs (= ARBEITSPREIS_EINTARIF).
+    /// `None` on dual-rate (HT/NT) tariffs; use `arbeitspreis_ht` instead.
+    pub arbeitspreis_ct_per_kwh: Option<rust_decimal::Decimal>,
+    /// High-tariff rate (= ARBEITSPREIS_HT).  `None` on single-rate tariffs.
+    pub arbeitspreis_ht_ct_per_kwh: Option<rust_decimal::Decimal>,
+    /// Low-tariff rate (= ARBEITSPREIS_NT).  `None` on single-rate tariffs.
+    pub arbeitspreis_nt_ct_per_kwh: Option<rust_decimal::Decimal>,
+    /// Demand charge in ct/kW/month for RLM products (= LEISTUNGSPREIS).
+    pub leistungspreis_ct_per_kw_month: Option<rust_decimal::Decimal>,
+}
+
+/// One entry in the comparison portal feed response.
+///
+/// Includes the full validated `tarifpreisblatt` BO4E payload alongside
+/// computed `jahreskosten` and extracted portal-relevant fields.
+#[derive(Debug, serde::Serialize)]
+pub struct ComparisonFeedEntry {
+    pub product_code: String,
+    pub name: String,
+    pub category: String,
+    pub sparte: Option<String>,
+    /// Customer segment this tariff is designed for (portal category filter).
+    pub kundentyp: Option<String>,
+    /// Meter register count: `Eintarif` | `Zweitarif` | `Mehrtarif`.
+    pub register_count: Option<String>,
+    /// `true` if the product has at least one Oekolabel certification.
+    pub ist_oekostrom: bool,
+    /// `true` if the product is a §41a EPEX-linked dynamic tariff.
+    pub ist_dynamisch: bool,
+    /// Product validity start (inclusive).  `null` = no start constraint.
+    pub valid_from: Option<time::Date>,
+    /// Product validity end (inclusive).  `null` = indefinitely valid.
+    pub valid_to: Option<time::Date>,
+    /// Extracted price points from `tarifpreisblatt.tarifpreispositionen`.
+    pub preise: TarifPreise,
+    /// Estimated annual supply cost in EUR **netto** (excl. MwSt) for
+    /// `verbrauch_kwh`.  Includes Grundpreis + Arbeitspreis.
+    ///
+    /// Does **not** include NNE, KA, or statutory levies — those vary by
+    /// DSO/PLZ and must be added by the comparison portal integrator.
+    /// `null` if no standard Grundpreis or Arbeitspreis is defined.
+    pub jahreskosten_supply_netto_eur: Option<rust_decimal::Decimal>,
+    /// Estimated annual supply cost **brutto** (incl. 19 % MwSt).
+    /// Derived from `jahreskosten_supply_netto_eur × 1.19`.
+    /// `null` if `jahreskosten_supply_netto_eur` is `null`.
+    pub jahreskosten_supply_brutto_eur: Option<rust_decimal::Decimal>,
+    /// MwSt rate applied to compute the brutto estimate.
+    pub mwst_pct: &'static str,
+    /// Contract term extracted from `vertragskonditionen.laufzeit` in months.
+    pub laufzeit_monate: Option<i32>,
+    /// Notice period from `vertragskonditionen.kuendigungsfrist` in weeks.
+    pub kuendigungsfrist_wochen: Option<i32>,
+    /// Minimum contract term in months (= `vertragskonditionen.mindestlaufzeit`).
+    pub mindestlaufzeit_monate: Option<i32>,
+    /// Price guarantee end date (ISO 8601) from `preisgarantie.preisgarantieBis`.
+    /// `null` if no price guarantee is defined.
+    pub preisgarantie_bis: Option<String>,
+    /// Total customer bonus/discount from `aufAbschlaege` RABATT entries in EUR.
+    /// `null` if no bonuses are defined.
+    pub bonus_rabatt_eur: Option<rust_decimal::Decimal>,
+    /// §42 EnWG `Energiemix` COM payload.  `null` if not set.
+    pub energiemix: Option<serde_json::Value>,
+    /// Oekolabel certification codes (e.g. `["OK_POWER", "GRUENER_STROM"]`).
+    pub oekolabel: Option<Vec<String>>,
+    /// Full validated BO4E `Tarifpreisblatt` payload.
+    /// Portal integrators may use this for deep tariff analysis.
+    pub tarifpreisblatt: serde_json::Value,
+    /// RFC 3339 timestamp of the last product update.
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Response metadata for `GET /api/v1/comparison-feed`.
+#[derive(Debug, serde::Serialize)]
+pub struct ComparisonFeedMeta {
+    /// UTC timestamp when this response was generated.
+    #[serde(with = "time::serde::rfc3339")]
+    pub generated_at: time::OffsetDateTime,
+    /// LF operator identifier (BDEW-Codenummer).
+    pub lf_mp_id: String,
+    /// Annual consumption used for `jahreskosten` estimates.
+    pub verbrauch_kwh: rust_decimal::Decimal,
+    /// Active Sparte filter, or `null` for all Sparten.
+    pub sparte_filter: Option<String>,
+    /// Active Kundentyp filter, or `null` for all customer types.
+    pub kundentyp_filter: Option<String>,
+    /// Number of tariff entries returned in this page.
+    pub total_returned: usize,
+    /// Pagination cursor for the next page.  `null` if this is the last page.
+    /// Pass as `?cursor=<value>` in the next request.
+    pub next_cursor: Option<String>,
+}
+
+/// `GET /api/v1/comparison-feed` response envelope.
+#[derive(Debug, serde::Serialize)]
+pub struct ComparisonFeedResponse {
+    pub meta: ComparisonFeedMeta,
+    pub tarife: Vec<ComparisonFeedEntry>,
+}
+
+/// Fetch products suitable for a comparison portal feed.
+///
+/// Returns the **currently valid** version of each energy tariff product for
+/// the given LF, ordered by `(updated_at DESC, product_code ASC)` for stable
+/// cursor-based pagination.
+///
+/// ## Filters applied
+///
+/// | Filter | SQL condition |
+/// |---|---|
+/// | Category allowlist | `category IN ('STROM','GAS','WAERME','SOLAR','WAERMEPUMPE','WALLBOX')` |
+/// | Validity window | `valid_to IS NULL OR valid_to >= CURRENT_DATE` |
+/// | Validity start | `valid_from IS NULL OR valid_from <= CURRENT_DATE` |
+/// | Sparte | optional equality |
+/// | Kundentyp | optional equality |
+/// | Oekolabel | optional `@>` array containment |
+/// | Dynamic only | `dyn_source IS NOT NULL` |
+/// | Exclude dynamic | `dyn_source IS NULL` |
+/// | Cursor | `(updated_at, product_code) < (cursor_ts, cursor_code)` |
+pub async fn fetch_comparison_feed(
+    pool: &PgPool,
+    lf_mp_id: &str,
+    q: &ComparisonFeedQuery,
+) -> anyhow::Result<Vec<ProductRow>> {
+    use time::format_description::well_known::Rfc3339;
+
+    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    // Fetch one extra row to detect whether a next page exists.
+    let fetch_limit = limit + 1;
+
+    // Parse cursor: "<rfc3339_timestamp>,<product_code>"
+    let (cursor_ts, cursor_code): (Option<time::OffsetDateTime>, Option<String>) =
+        if let Some(c) = q.cursor.as_deref() {
+            if let Some((ts_part, code_part)) = c.split_once(',') {
+                let ts = time::OffsetDateTime::parse(ts_part, &Rfc3339).ok();
+                (ts, Some(code_part.to_owned()))
+            } else {
+                // Legacy: cursor is just a timestamp (no product_code tie-breaker)
+                let ts = time::OffsetDateTime::parse(c, &Rfc3339).ok();
+                (ts, None)
+            }
+        } else {
+            (None, None)
+        };
+
+    let only_dynamic = q.only_dynamic.unwrap_or(false);
+    let exclude_dynamic = q.include_dynamic.map(|b| !b).unwrap_or(false);
+
+    // Wrap an oekolabel filter: NULL = no filter; Some("X") = must contain "X".
+    let oekolabel_filter: Option<Vec<String>> = q.oekolabel.as_ref().map(|l| vec![l.clone()]);
+
+    sqlx::query_as::<_, ProductRow>(
+        r"SELECT DISTINCT ON (product_code) *
+          FROM products
+          WHERE lf_mp_id = $1
+            AND category = ANY($2)
+            AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)
+            AND (valid_from IS NULL OR valid_from <= CURRENT_DATE)
+            AND ($3::text IS NULL OR sparte = $3)
+            AND ($4::text IS NULL OR kundentyp = $4)
+            AND ($5::bool IS FALSE OR dyn_source IS NOT NULL)
+            AND ($6::bool IS FALSE OR dyn_source IS NULL)
+            AND ($7::text[] IS NULL OR oekolabel @> $7)
+            AND (
+                $8::timestamptz IS NULL
+                OR updated_at < $8
+                OR (updated_at = $8 AND ($9::text IS NULL OR product_code > $9))
+            )
+          ORDER BY product_code, valid_from DESC NULLS LAST",
+    )
+    .bind(lf_mp_id)
+    .bind(FEED_CATEGORIES)
+    .bind(&q.sparte)
+    .bind(&q.kundentyp)
+    .bind(only_dynamic)
+    .bind(exclude_dynamic)
+    .bind(&oekolabel_filter)
+    .bind(cursor_ts)
+    .bind(&cursor_code)
+    .fetch_all(pool)
+    .await
+    .context("fetch_comparison_feed: DISTINCT ON query")
+    .map(|mut rows| {
+        // Re-sort by (updated_at DESC, product_code ASC) for stable pagination
+        // after DISTINCT ON picks the latest valid_from per product_code.
+        rows.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then(a.product_code.cmp(&b.product_code))
+        });
+        // Apply pagination limit (with one extra for next-page detection)
+        rows.truncate(fetch_limit as usize);
+        rows
+    })
+}

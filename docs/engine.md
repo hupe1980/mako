@@ -6,7 +6,8 @@ parent: Architecture
 mermaid: true
 description: >
   mako-engine architecture: event-sourced Workflow FSMs, atomic dual-write,
-  DeadlineStore, OutboxWorker, PidRouter, ProcessRegistry, and SlateDB backend.
+  DeadlineStore, OutboxWorker, PidRouter, ProcessRegistry, SlateDB backend,
+  format-version coexistence (FV2025/FV2026), and ForwardCompatible policy.
 ---
 
 # Process Engine Guide (`mako-engine`)
@@ -406,6 +407,58 @@ let envelopes = process.execute_with_context(command, ctx_with_correlation).awai
 `CorrelationId::from_interchange_ref(ref)` uses UUID v5 with a fixed namespace,
 so the same interchange reference always produces the same `CorrelationId` —
 idempotent and deterministic.
+
+---
+
+## Format-version coexistence
+
+`makod` runs **two BDEW format versions simultaneously** in production:
+
+| Format version | Valid period | Status |
+|---|---|---|
+| `FV2025-10-01` | 2025-10-01 – 2026-09-30 | Current production |
+| `FV2026-10-01` | from 2026-10-01 | Next release — profiles already deployed |
+
+The `PidRouter` dispatches each inbound EDIFACT message to the correct profile
+version based on the UNB `DE0031` date field (date of preparation) and the
+transition window. A process that **starts** under `FV2025-10-01` continues under
+those rules until it completes — even after the `FV2026-10-01` cutover date.
+
+```mermaid
+timeline
+    title Format-version lifecycle (annual BDEW release cycle)
+    section FV2025-10-01
+        Oct 2025 : Deployed, active
+        Oct 2026 : Superseded — new processes use FV2026
+    section FV2026-10-01
+        Oct 2026 : Goes live; FV2025 still handles in-flight processes
+        Sep 2027 : All FV2025 processes complete; FV2025 retired
+    section FV2027-10-01
+        Oct 2027 : Next annual release
+```
+
+### `WorkflowVersionPolicy`
+
+Every workflow must declare how it handles messages from a different format
+version than the one it was started with:
+
+```rust
+impl Workflow for MyWorkflow {
+    fn version_policy() -> WorkflowVersionPolicy {
+        WorkflowVersionPolicy::ForwardCompatible   // ← required default for all MaKo
+    }
+}
+```
+
+| Policy | Meaning | When to use |
+|---|---|---|
+| `ForwardCompatible` | Accept newer-version messages during the old version's lifetime | **Default for all MaKo workflows** — e.g. a FV2025 process can receive a FV2026-encoded APERAK |
+| `Pinned` | Reject messages from a different format version | Special-purpose only; never the default |
+| `Strict` | Enforce exact version match | Testing only |
+
+> **Do not default to `Pinned`.** A `Pinned` policy on any GPKE/WiM/GeLi Gas
+> workflow will cause the process to reject APERAKs sent by counterparties that
+> have already migrated to the next format version, silently breaking the workflow.
 
 ---
 

@@ -64,12 +64,74 @@ pub enum KaKlasse {
 /// Unit of measure for a settlement position quantity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuantityUnit {
-    /// Kilowatt-hours (energy).
+    /// Kilowatt-hours (active energy).
     Kwh,
     /// Kilowatts (demand / peak load).
     Kw,
+    /// Reactive energy (Blindarbeit) — kilovolt-ampere reactive hours.
+    ///
+    /// Used for reactive energy settlement positions per StromNEV §18.
+    Kvarh,
+    /// Reactive power (Blindleistung) — kilovolt-ampere reactive.
+    Kvar,
     /// Calendar months.
     Monat,
+}
+
+// ── Sect14aModule ─────────────────────────────────────────────────────────────
+
+/// §14a EnWG module for steuerbare Verbrauchseinrichtungen (controllable loads).
+///
+/// Source: BNetzA BK6-22-300 (Beschluss 27.11.2023, in force 01.01.2024).
+///
+/// All three modules are **mandatory** for eligible controllable loads (heat pumps,
+/// EV chargers, battery storage ≥ 4.2 kW) registered with the NB. The LF/NB
+/// must offer at least Modul 1 to all eligible customers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sect14aModule {
+    /// Modul 1 — pauschale Reduzierung (flat reduction).
+    ///
+    /// The NB applies a fixed percentage reduction to the Arbeitspreis (or
+    /// Arbeitspreis + Leistungspreis) for the entire billing period.
+    /// Reduction factor = 85 % (i.e. customer pays 85 % of full rate) per BK6-22-300
+    /// Anlage 2. The NB may set a different approved rate in their tariff sheet.
+    ///
+    /// Equivalent UTILTS segment: `CCI+ZG6 CAV+Z28:::0.85` (multiplier).
+    Modul1,
+    /// Modul 2 — variable Netzentgelte (time-variable, HT/NT split).
+    ///
+    /// Two Arbeitspreis tiers: Hochlast (HT, higher price) and Niedertarif (NT,
+    /// lower price). Periods are defined in the UTILTS Zählzeitdefinition published
+    /// by the NB. Required for iMSys meters with quarter-hour metering.
+    Modul2,
+    /// Modul 3 — Spotpreis-Netzentgelt (dynamic, spot-price linked).
+    ///
+    /// NNE follows the intraday or day-ahead electricity spot price. The calculation
+    /// basis is the `PreisblattNetznutzung.spotpreisNetzentgelt` formula defined by
+    /// the NB. Requires smart meter (iMSys) with 15-min resolution.
+    ///
+    /// Note: Modul 3 rates are not yet calculable from static inputs alone —
+    /// populate `regulatory_reduction_factor` in the trace with the effective
+    /// period-average rate when using this module.
+    Modul3,
+}
+
+impl Sect14aModule {
+    /// Canonical BNetzA decision reference for this module.
+    #[must_use]
+    pub fn bnentza_reference(self) -> &'static str {
+        "BK6-22-300"
+    }
+
+    /// Display label for the module.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Modul1 => "§14a EnWG Modul 1 (pauschale Reduzierung)",
+            Self::Modul2 => "§14a EnWG Modul 2 (HT/NT variable)",
+            Self::Modul3 => "§14a EnWG Modul 3 (Spotpreis)",
+        }
+    }
 }
 
 // ── SettlementType ────────────────────────────────────────────────────────────
@@ -85,11 +147,20 @@ pub enum SettlementType {
     NneGas,
     /// NNE selbst ausgestellt (NB + LF = same entity) — PID 31006.
     NneSelbstausstellt,
-    /// Mehr-/Mindermengen settlement Strom — PID 31002 (NB → LF).
+    /// Mehr-/Mindermengen settlement Strom — PID 31002 (NB → LF, StromNZV §15).
     MmmStrom,
+    /// Mehr-/Mindermengen settlement Gas — PID 31002 (NB → LF, GasNZV §14).
+    ///
+    /// Gas MMM settlement uses different legal references from Strom MMM:
+    /// `GasNZV §14` and `GeLi Gas BK7-24-01-009`. Using a separate variant
+    /// ensures correct audit traces without conditional logic in call sites.
+    MmmGas,
     /// Messstellenbetrieb settlement — PID 31009 (NB → MSB).
     MsbRechnung,
-    /// GaBi Gas AWH Sperrprozesse settlement — PID 31011 (NB → LF).
+    /// GaBi Gas AWH Sperrprozesse settlement — PID 31011 (NB → LF, BK7-24-01-009 §5.4).
+    ///
+    /// Rechnung sonstige Leistung: bills the LF (LFG/LFA) for abrechnungswürdige
+    /// Handlungen (AWH) performed by the GNB/VNB during Sperrung/Entsperrung.
     GasAwhSperrung,
     /// Redispatch 2.0 Einsatzkosten (NB → ÜNB, BK6-20-061).
     RedispatchKostenblatt,
@@ -98,8 +169,7 @@ pub enum SettlementType {
 impl SettlementType {
     /// Default BDEW PID for this settlement type.
     ///
-    /// Callers may override the PID (e.g. `31005` for Gas NNE, `31006` for
-    /// selbstausstellt) after construction.
+    /// Callers may override the PID after construction if needed.
     #[must_use]
     pub fn default_pid(self) -> u32 {
         match self {
@@ -107,6 +177,7 @@ impl SettlementType {
             Self::NneGas => 31005,
             Self::NneSelbstausstellt => 31006,
             Self::MmmStrom => 31002,
+            Self::MmmGas => 31002,
             Self::MsbRechnung => 31009,
             Self::GasAwhSperrung => 31011,
             Self::RedispatchKostenblatt => 0, // no standard PID
@@ -164,8 +235,8 @@ pub enum LegalReference {
     ///
     /// Governs time-variable (ToU) NNE for heat pumps, EV chargers, etc.
     Sect14aEnwg {
-        /// Module: 1, 2, or 3.
-        module: u8,
+        /// Module: Modul1 (flat reduction), Modul2 (HT/NT), or Modul3 (spot).
+        module: Sect14aModule,
     },
     /// MessZV — Messzugangsverordnung (metering access).
     MessZv {
@@ -222,7 +293,7 @@ impl LegalReference {
             Self::StromNev { paragraph } => format!("StromNEV {paragraph}"),
             Self::GasNev { paragraph } => format!("GasNEV {paragraph}"),
             Self::Kav { paragraph } => format!("KAV {paragraph}"),
-            Self::Sect14aEnwg { module } => format!("§14a EnWG Modul {module}"),
+            Self::Sect14aEnwg { module } => format!("§14a EnWG {}", module.label()),
             Self::MessZv { paragraph } => format!("MessZV {paragraph}"),
             Self::MsbG { paragraph } => format!("MsbG {paragraph}"),
             Self::BnetzaDecision { reference } => format!("BNetzA {reference}"),
@@ -339,6 +410,100 @@ pub enum WarningSeverity {
 
 // ── InvoicePosition ───────────────────────────────────────────────────────────
 
+/// Semantic kind of a billing position — used by the service layer to derive
+/// the correct `BdewArtikelnummer` for the BO4E `Rechnungsposition`.
+///
+/// `grid-billing` has no `rubo4e` dependency, so this enum is the bridge:
+/// the service layer maps `BillingPositionKind` → `BdewArtikelnummer` in
+/// `into_rechnung()`. Every position in every `GridSettlement` must carry
+/// a `kind` so the INVOIC `Rechnungsposition.artikelnummer` is never missing.
+///
+/// ## BDEW INVOIC AHB requirement
+///
+/// BDEW INVOIC AHBs (FV2025-10-01) mandate `artikelnummer` in every
+/// `SG28 PIA` line item. Missing or wrong Artikelnummern cause counterparty
+/// APERAK rejection. The `invoic-checker` checks 6 plausibility rules;
+/// Artikelnummer matching is part of the tariff-found rule (check 5).
+///
+/// ## Mapping to `BdewArtikelnummer`
+///
+/// | `BillingPositionKind` | `BdewArtikelnummer` | INVOIC AHB ref |
+/// |---|---|---|
+/// | `NneArbeit` | `Wirkarbeit` | PID 31001/31005/31006 Arbeit |
+/// | `NneArbeitHt` | `Wirkarbeit` | PID 31001 §14a Modul 2 HT |
+/// | `NneArbeitNt` | `Wirkarbeit` | PID 31001 §14a Modul 2 NT |
+/// | `NneArbeitModul1` | `Wirkarbeit` | PID 31001 §14a Modul 1 (rate reduced) |
+/// | `NneLeistung` | `Leistung` | PID 31001/31005 RLM kW charge |
+/// | `NneGasGrundpreis` | `Grundpreis` | PID 31005 monthly base fee |
+/// | `Konzessionsabgabe` | `Konzessionsabgabe` | PID 31001/31006 KAV §2 |
+/// | `Mehrmenge` | `Mehrmenge` | PID 31002 positive imbalance |
+/// | `Mindermenge` | `Mindermenge` | PID 31002 negative imbalance (credit) |
+/// | `MsbGrundgebuehr` | `EntgeltEinbauBetriebWartungMesstechnik` | PID 31009 MSB monthly fee |
+/// | `Messdienstleistung` | `EntgeltMessungAblesung` | PID 31009 reading service |
+/// | `GasAwhSperrung` | `Sperrkosten` | PID 31011 AWH disconnection |
+/// | `GasAwhEntsprrung` | `Entsperrkosten` | PID 31011 AWH reconnection |
+/// | `GasAwhSonstige` | `EntgeltAbrechnung` | PID 31011 other AWH |
+/// | `Blindmehrarbeit` | `Blindmehrarbeit` | Reactive energy excess |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BillingPositionKind {
+    /// Netznutzungsentgelt Arbeit — flat-rate active energy charge (kWh).
+    /// SLP or Gas. → `BdewArtikelnummer::Wirkarbeit`
+    NneArbeit,
+    /// §14a Modul 2 Hochlast (HT) Arbeit — time-variable higher-price band.
+    /// → `BdewArtikelnummer::Wirkarbeit`
+    NneArbeitHt,
+    /// §14a Modul 2 Niedertarif (NT) Arbeit — time-variable lower-price band.
+    /// → `BdewArtikelnummer::Wirkarbeit`
+    NneArbeitNt,
+    /// §14a Modul 1 Arbeit — flat percentage reduction applied to Arbeitspreis.
+    /// → `BdewArtikelnummer::Wirkarbeit` (same article, different rate)
+    NneArbeitModul1,
+    /// §14a Modul 3 Spotpreis-NNE — per-dispatch-interval variable rate position.
+    ///
+    /// One `InvoicePosition` is generated per dispatch interval from
+    /// `NneInput::sect14a_modul3_intervals`. Each carries a
+    /// `lastvariable_preisposition_json` with the BO4E `LastvariablePreisposition`
+    /// COM data (pricing formula parameters) for ERP-side validation and portal
+    /// display of the per-interval tariff breakdown.
+    ///
+    /// Regulatory basis: BNetzA BK6-22-300 Anlage 2 §3 — Spotpreis-Netzentgelt.
+    /// → `BdewArtikelnummer::Wirkarbeit`
+    NneArbeitModul3,
+    /// Netznutzungsentgelt Leistung — RLM peak demand charge (kW).
+    /// → `BdewArtikelnummer::Leistung`
+    NneLeistung,
+    /// Gas NNE monthly base fee (Grundpreis / Verrechnungspreis).
+    /// GasNEV §14. → `BdewArtikelnummer::Grundpreis`
+    NneGasGrundpreis,
+    /// Konzessionsabgabe — KAV §2 municipal concession fee.
+    /// → `BdewArtikelnummer::Konzessionsabgabe`
+    Konzessionsabgabe,
+    /// Mehrmengen — positive imbalance (actual > profiled).
+    /// PID 31002 StromNZV §15 / GasNZV §14. → `BdewArtikelnummer::Mehrmenge`
+    Mehrmenge,
+    /// Mindermengen — negative imbalance credit note (actual < profiled).
+    /// PID 31002. → `BdewArtikelnummer::Mindermenge`
+    Mindermenge,
+    /// MSB Grundgebühr Messstellenbetrieb — monthly metering base fee.
+    /// MsbG §§6–7. → `BdewArtikelnummer::EntgeltEinbauBetriebWartungMesstechnik`
+    MsbGrundgebuehr,
+    /// Messdienstleistung — periodic reading service fee.
+    /// MessZV §2. → `BdewArtikelnummer::EntgeltMessungAblesung`
+    Messdienstleistung,
+    /// Gas AWH Sperrung — abrechnungswürdige Handlung disconnection.
+    /// BK7-24-01-009 §5.4. → `BdewArtikelnummer::Sperrkosten`
+    GasAwhSperrung,
+    /// Gas AWH Entsperrung — abrechnungswürdige Handlung reconnection.
+    /// BK7-24-01-009 §5.4. → `BdewArtikelnummer::Entsperrkosten`
+    GasAwhEntsprrung,
+    /// Gas AWH sonstige — other abrechnungswürdige Handlung.
+    /// BK7-24-01-009 §5.4. → `BdewArtikelnummer::EntgeltAbrechnung`
+    GasAwhSonstige,
+    /// Blindmehrarbeit — reactive energy excess charge.
+    /// StromNEV §18. → `BdewArtikelnummer::Blindmehrarbeit`
+    Blindmehrarbeit,
+}
+
 /// One line item in a grid settlement.
 ///
 /// Carries raw numbers for the service layer to map into the required format
@@ -351,6 +516,9 @@ pub struct InvoicePosition {
     pub number: u32,
     /// Human-readable position description.
     pub text: String,
+    /// Semantic position kind — used by the service layer to set
+    /// `Rechnungsposition.artikelnummer` (BDEW INVOIC AHB requirement).
+    pub kind: BillingPositionKind,
     /// Metered or contracted quantity.
     pub quantity: Decimal,
     /// Unit of measure.
@@ -361,6 +529,36 @@ pub struct InvoicePosition {
     ///
     /// May be negative for credit positions (Mindermengen, Gutschriften).
     pub net_eur: Decimal,
+    /// BDEW Artikel-ID for positions that use the new format (post-BK6-20-160).
+    ///
+    /// Used for:
+    /// - **NNE Strom** (GPKE PIDs 31001/31006): BNetzA Netznutzungspreisblatt article IDs
+    ///   (e.g. `"1-02-5-001"` for NS Grundpreis-/Arbeitspreissystem Arbeitspreis).
+    ///   The service layer populates this from the `PreisblattNetznutzung` Artikel-ID.
+    /// - **AWH Gas Sperrprozesse** (PID 31011): `"2-01-7-001"` (Sperrung) / `"2-01-7-002"` (Entsperrung)
+    ///   populated automatically by `calculate_gas_awh_invoice()`.
+    /// - **MSB** (PID 31009): `"4-02-0-xxx"` format from section 3.5 of the codelist,
+    ///   populated by the service layer from the product/Konfigurationsprodukt code.
+    ///
+    /// For Gas NNE, MMM, Konzessionsabgabe and Blindmehrarbeit, the classic
+    /// `artikelnummer` (via `BillingPositionKind`) takes precedence; this field is `None`.
+    ///
+    /// Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6 (valid 01.09.2025).
+    pub artikel_id: Option<String>,
+    /// §14a Modul 3: serialized `LastvariablePreisposition` BO4E COM for this position.
+    ///
+    /// Set when `kind == NneArbeitModul3`. Carries the pricing formula parameters
+    /// (SPOTPREIS method, `preisreferenz`, `preisBezugseinheit`) from the
+    /// `PreisblattNetznutzung.lastvariablePreispositionen` used to derive `unit_price_eur`.
+    ///
+    /// Stored as raw `serde_json::Value` so that `grid-billing` remains rubo4e-free.
+    /// The service layer (`netzbilanzd`, `billingd`) can deserialize to
+    /// `rubo4e::current::LastvariablePreisposition` for `Rechnungsposition.zusatzAttribute`
+    /// embedding, enabling ERP-side validation and portal display of the per-dispatch
+    /// tariff breakdown.
+    ///
+    /// `None` for all other position kinds.
+    pub lastvariable_preisposition_json: Option<serde_json::Value>,
     /// Full audit trace for this position.
     ///
     /// Answers "why is this amount here?" and carries all legal references.
@@ -560,6 +758,40 @@ pub struct NneInput {
     /// `None` when KA does not apply (Gas or exempt customer class).
     pub ka_satz_ct_per_kwh: Option<Decimal>,
 
+    // ── §14a Modul 1 flat reduction ───────────────────────────────────────────
+    /// §14a Modul 1 (BNetzA BK6-22-300): rate multiplier applied to the Arbeit
+    /// positions (and Leistung if applicable) before billing.
+    ///
+    /// This is the fraction of the full rate that the customer pays — a reduction
+    /// factor of `0.85` means the customer pays 85 % of the published tariff
+    /// (15 % reduction). The regulatory default per BK6-22-300 Anlage 2 is 0.85;
+    /// the NB may publish a different approved value in the `PreisblattNetznutzung`.
+    ///
+    /// `None` when §14a Modul 1 does not apply to this MaLo. Must not be set
+    /// together with ToU HT/NT fields (Modul 2) — the validator rejects the
+    /// combination.
+    ///
+    /// # Example
+    ///
+    /// Full rate: 3.5 ct/kWh, reduction factor: 0.85 → billed rate: 2.975 ct/kWh
+    pub sect14a_modul1_reduction_factor: Option<Decimal>,
+
+    // ── Gas NNE monthly base fee ──────────────────────────────────────────────
+    /// Gas NNE monthly base fee (Grundpreis / Verrechnungspreis) in **EUR/month**.
+    ///
+    /// Per GasNEV, gas network charges may include a fixed monthly standing charge
+    /// in addition to the commodity-linked Arbeitspreis.  Supply the approved
+    /// `PreisblattNetznutzung.grundpreis_eur_per_month` value here.
+    ///
+    /// `None` for Strom NNE (Strom does not have a separate Grundpreis).
+    /// `None` when the Gas tariff is purely commodity-based (no Grundpreis).
+    pub nne_grundpreis_eur_per_month: Option<Decimal>,
+    /// Number of months to apply the `nne_grundpreis_eur_per_month` to.
+    ///
+    /// Defaults to `None` (= 0 months, no Grundpreis position generated).
+    /// Required when `nne_grundpreis_eur_per_month` is set.
+    pub nne_grundpreis_months: Option<u32>,
+
     /// Optional tariff sheet identifier for audit tracing.
     ///
     /// When set, each position's `trace.tariff_source` references this sheet.
@@ -575,6 +807,82 @@ pub struct NneInput {
     /// Included in the calculation trace for KA positions so auditors can verify
     /// the rate matches the correct KAV §2 tier. `None` when KA is absent.
     pub ka_klasse: Option<KaKlasse>,
+
+    // ── §14a Modul 3 Spotpreis-NNE per-interval dispatch data ────────────────
+    /// §14a Modul 3 (BNetzA BK6-22-300 Anlage 2 §3) per-dispatch-interval positions.
+    ///
+    /// Each entry represents one 15-min interval during which a spot-price-linked
+    /// NNE rate applies. The caller fetches the EPEX Spot day-ahead price for each
+    /// interval and applies the formula from `PreisblattNetznutzung.lastvariablePreispositionen`
+    /// to derive `nne_rate_ct_per_kwh`. `grid-billing` receives pre-calculated rates —
+    /// it never queries EPEX directly.
+    ///
+    /// **Empty (default)** when §14a Modul 3 does not apply to this MaLo.
+    ///
+    /// **Cannot be combined with `sect14a_modul1_reduction_factor`** — the validator
+    /// returns `InvalidInput` when both are set.
+    ///
+    /// Each interval generates one `InvoicePosition` with
+    /// `kind = NneArbeitModul3` and `lastvariable_preisposition_json` populated.
+    #[doc = "§14a Modul 3 per-interval input data."]
+    pub sect14a_modul3_intervals: Vec<Sect14aModul3Interval>,
+}
+
+// ── Sect14aModul3Interval ─────────────────────────────────────────────────────
+
+/// One controlled dispatch interval for §14a Modul 3 (Spotpreis-Netzentgelt).
+///
+/// Each interval represents a 15-min period during which the DSO exercised load
+/// control and the NNE rate is derived from the day-ahead spot price via the
+/// formula published in `PreisblattNetznutzung.lastvariablePreispositionen`.
+///
+/// ## Calculation
+///
+/// `Einsatzkosten = menge_kwh × nne_rate_ct_per_kwh / 100`
+///
+/// The NB computes one `InvoicePosition` per interval, allowing the LF (and their
+/// customers) to see the exact tariff breakdown for each dispatch event.
+///
+/// ## Caller responsibility
+///
+/// The caller (service layer) must:
+/// 1. Fetch the EPEX Spot day-ahead price for each 15-min interval from `tarifbd`
+///    or the `PreisblattNetznutzung` formula.
+/// 2. Apply the formula from `lastvariablePreispositionen` to derive `nne_rate_ct_per_kwh`.
+/// 3. Fetch `menge_kwh` from `edmd Lastgang` for the interval.
+///
+/// `grid-billing` receives pre-calculated rates — it does NOT query EPEX or `edmd`.
+///
+/// ## Regulatory basis
+///
+/// BNetzA BK6-22-300 Anlage 2 §3 — Modul 3: Spotpreis-Netzentgelt.
+/// The NNE varies per 15-min interval based on the spot market price.
+/// All controllable loads ≥ 3.7 kW registered under §14a must have Modul 1 at minimum;
+/// Modul 3 is the opt-in premium variant (lower NNE when spot prices are low).
+#[derive(Debug, Clone)]
+pub struct Sect14aModul3Interval {
+    /// UTC start of this controlled dispatch interval (ISO-8601).
+    ///
+    /// Typically the start of a 15-min settlement slot.
+    pub period_from: time::OffsetDateTime,
+    /// UTC end of this controlled dispatch interval (ISO-8601).
+    ///
+    /// Typically `period_from + 15 min`.
+    pub period_to: time::OffsetDateTime,
+    /// Energy consumption (or reduction) during this interval in kWh.
+    ///
+    /// Sourced from `edmd Lastgang` for the MaLo during the interval window.
+    pub menge_kwh: Decimal,
+    /// Effective NNE rate in **ct/kWh** for this interval.
+    ///
+    /// Derived from the `LastvariablePreisposition` formula applied to the
+    /// applicable EPEX Spot day-ahead price. Pre-calculated by the caller.
+    pub nne_rate_ct_per_kwh: Decimal,
+    /// EPEX Spot day-ahead price in ct/kWh used to derive `nne_rate_ct_per_kwh`.
+    ///
+    /// Stored in the `CalculationTrace.explanation` for audit transparency.
+    /// `None` when the rate was determined by a fixed formula without market reference.
+    pub epex_spot_ct_per_kwh: Option<Decimal>,
 }
 
 // ── MmmInput ──────────────────────────────────────────────────────────────────
@@ -662,6 +970,88 @@ pub struct MsbInput {
     ///
     /// `None` when the MSB provides only the meter, not a separate measurement service.
     pub messdienstleistung_eur: Option<Decimal>,
+}
+
+// ── GasAwhInput ───────────────────────────────────────────────────────────────
+
+/// Input for GeLi Gas AWH Sperrprozesse settlement (PID 31011).
+///
+/// **PID 31011 — Rechnung sonstige Leistung (NB → LF)**
+///
+/// Bills the Lieferant (LFG/LFA) for abrechnungswürdige Handlungen (AWH)
+/// performed by the GNB/VNB during the Sperrung/Entsperrung process.
+/// Governed by BK7-24-01-009 §5.4 (GeLi Gas 3.0).
+///
+/// ## What counts as AWH
+///
+/// AWH are chargeable actions not included in the network tariff, triggered by
+/// the LF through the Sperrung process. Typical AWH:
+/// - `Sperrung` (disconnection)
+/// - `Entsperrung` (reconnection)
+/// - `Teilsperrung` (partial disconnection)
+/// - `Unterbrechung Verfahren` (process interruption)
+///
+/// Each action type has a fixed price published in the `PreisblattNetznutzung`.
+#[derive(Debug, Clone)]
+pub struct GasAwhInput {
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// Invoice sender — Gasnetzbetreiber (GNB/VNB) MP-ID.
+    pub nb_mp_id: String,
+    /// Invoice recipient — Lieferant Gas (LFG or LFA) MP-ID.
+    pub lf_mp_id: String,
+    /// Unique invoice number (operator-generated).
+    pub rechnungsnummer: String,
+    /// Start of billing period (inclusive, German local date).
+    pub period_from: time::Date,
+    /// End of billing period (inclusive, German local date).
+    pub period_to: time::Date,
+    /// Invoice issue date.
+    pub invoice_date: time::Date,
+    /// Payment due date (Zahlungsziel, §271 BGB).
+    pub due_date: time::Date,
+    /// Optional tariff sheet identifier for audit tracing.
+    pub tariff_sheet_id: Option<String>,
+    /// AWH line items: each chargeable action with count and unit price.
+    ///
+    /// At least one position is required.
+    pub awh_positionen: Vec<AwhPositionInput>,
+}
+
+/// One AWH action line item for [`GasAwhInput`].
+///
+/// ## Examples
+///
+/// ```rust
+/// # use grid_billing::AwhPositionInput;
+/// # use rust_decimal_macros::dec;
+/// let sperrung = AwhPositionInput {
+///     beschreibung: "Sperrung Gaszähler".to_owned(),
+///     anzahl: 1,
+///     preis_eur: dec!(45.00),
+///     artikel_id: Some("2-01-7-001".to_owned()),
+/// };
+/// ```
+#[derive(Debug, Clone)]
+pub struct AwhPositionInput {
+    /// Human-readable action description, e.g. `"Sperrung Gaszähler"`.
+    pub beschreibung: String,
+    /// Number of executions of this action.
+    pub anzahl: u32,
+    /// Price per execution in **EUR** (from `PreisblattNetznutzung`).
+    pub preis_eur: Decimal,
+    /// BDEW Artikel-ID from section 3.2 of the Codeliste Artikelnummern v5.6.
+    ///
+    /// Standard values for Gas AWH Sperrprozesse (BK7-24-01-009 §5.4):
+    /// - `"2-01-7-001"` — Unterbrechung der Anschlussnutzung (reguläre AZ)
+    /// - `"2-01-7-002"` — Wiederherstellung der Anschlussnutzung (reguläre AZ)
+    /// - `"2-01-7-003"` — Erfolglose Unterbrechung
+    /// - `"2-01-7-004"` — Stornierung Unterbrechungsauftrag (bis Vortag)
+    /// - `"2-01-7-005"` — Stornierung Unterbrechungsauftrag (am Sperrtag)
+    /// - `"2-01-7-006"` — Wiederherstellung außerhalb regulärer AZ
+    ///
+    /// `None` for custom / non-standard AWH positions.
+    pub artikel_id: Option<String>,
 }
 
 // ── ValidationResult ─────────────────────────────────────────────────────────
@@ -752,6 +1142,98 @@ pub fn validate_nne_input(input: &NneInput) -> ValidationResult {
                 .to_owned(),
         });
     }
+    // Partial HT/NT field consistency: all four must be set or all four absent.
+    let tou_count = [
+        input.arbeitsmenge_ht_kwh.is_some(),
+        input.arbeitspreis_ht_ct_per_kwh.is_some(),
+        input.arbeitsmenge_nt_kwh.is_some(),
+        input.arbeitspreis_nt_ct_per_kwh.is_some(),
+    ]
+    .iter()
+    .filter(|&&b| b)
+    .count();
+    if tou_count > 0 && tou_count < 4 {
+        r.push(SettlementWarning {
+            severity: WarningSeverity::Error,
+            code: "PARTIAL_TOU_FIELDS",
+            message: format!(
+                "§14a Modul 2 ToU: {tou_count} of 4 HT/NT fields set — all four must be provided or all absent"
+            ),
+        });
+    }
+    // §14a Modul 1 and Modul 2 are mutually exclusive.
+    if input.sect14a_modul1_reduction_factor.is_some() && tou_count == 4 {
+        r.push(SettlementWarning {
+            severity: WarningSeverity::Error,
+            code: "MODUL1_AND_MODUL2_CONFLICT",
+            message:
+                "sect14a_modul1_reduction_factor (Modul 1) cannot be combined with HT/NT ToU fields (Modul 2)"
+                    .to_owned(),
+        });
+    }
+    // §14a Modul 1 and Modul 3 are mutually exclusive.
+    if input.sect14a_modul1_reduction_factor.is_some() && !input.sect14a_modul3_intervals.is_empty()
+    {
+        r.push(SettlementWarning {
+            severity: WarningSeverity::Error,
+            code: "MODUL1_AND_MODUL3_CONFLICT",
+            message:
+                "sect14a_modul1_reduction_factor (Modul 1) cannot be combined with sect14a_modul3_intervals (Modul 3)"
+                    .to_owned(),
+        });
+    }
+    // §14a Modul 3 interval sanity checks.
+    for (i, interval) in input.sect14a_modul3_intervals.iter().enumerate() {
+        if interval.period_from >= interval.period_to {
+            r.push(SettlementWarning {
+                severity: WarningSeverity::Error,
+                code: "MODUL3_INTERVAL_PERIOD_INVALID",
+                message: format!(
+                    "sect14a_modul3_intervals[{i}]: period_from must be before period_to"
+                ),
+            });
+        }
+        if interval.menge_kwh < Decimal::ZERO {
+            r.push(SettlementWarning {
+                severity: WarningSeverity::Warning,
+                code: "MODUL3_INTERVAL_NEGATIVE_MENGE",
+                message: format!(
+                    "sect14a_modul3_intervals[{i}]: menge_kwh is negative ({}) — verify Lastgang data",
+                    interval.menge_kwh
+                ),
+            });
+        }
+        if interval.nne_rate_ct_per_kwh < Decimal::ZERO {
+            r.push(SettlementWarning {
+                severity: WarningSeverity::Warning,
+                code: "MODUL3_INTERVAL_NEGATIVE_RATE",
+                message: format!(
+                    "sect14a_modul3_intervals[{i}]: nne_rate_ct_per_kwh is negative ({}) — \
+                     Modul 3 rates should be ≥ 0; verify spot formula",
+                    interval.nne_rate_ct_per_kwh
+                ),
+            });
+        }
+    }
+    if let Some(factor) = input.sect14a_modul1_reduction_factor
+        && (factor <= Decimal::ZERO || factor > Decimal::ONE)
+    {
+        r.push(SettlementWarning {
+            severity: WarningSeverity::Error,
+            code: "INVALID_MODUL1_FACTOR",
+            message: format!("sect14a_modul1_reduction_factor must be in (0, 1], got {factor}"),
+        });
+    }
+    // Gas Grundpreis: both fields must be set together.
+    if input.nne_grundpreis_eur_per_month.is_some() != input.nne_grundpreis_months.is_some() {
+        r.push(SettlementWarning {
+            severity: WarningSeverity::Error,
+            code: "GRUNDPREIS_MONTHS_MISMATCH",
+            message:
+                "nne_grundpreis_eur_per_month and nne_grundpreis_months must both be set or both absent"
+                    .to_owned(),
+        });
+    }
     r
 }
 
@@ -816,6 +1298,51 @@ pub fn validate_msb_input(input: &MsbInput) -> ValidationResult {
             code: "ZERO_BILLING_MONTHS",
             message: "billing_months must be at least 1".to_owned(),
         });
+    }
+    r
+}
+
+/// Validate a [`GasAwhInput`] before calling [`crate::calculate_gas_awh_invoice`].
+///
+/// Checks that:
+/// - `period_from < period_to`
+/// - `awh_positionen` is non-empty
+/// - All positions have `anzahl ≥ 1` and `preis_eur ≥ 0`
+#[must_use]
+pub fn validate_gas_awh_input(input: &GasAwhInput) -> ValidationResult {
+    let mut r = ValidationResult::ok();
+    if input.period_from >= input.period_to {
+        r.push(SettlementWarning {
+            severity: WarningSeverity::Error,
+            code: "INVALID_PERIOD",
+            message: "period_from must be strictly before period_to".to_owned(),
+        });
+    }
+    if input.awh_positionen.is_empty() {
+        r.push(SettlementWarning {
+            severity: WarningSeverity::Error,
+            code: "EMPTY_AWH_POSITIONEN",
+            message: "awh_positionen must contain at least one position".to_owned(),
+        });
+    }
+    for (i, awh) in input.awh_positionen.iter().enumerate() {
+        if awh.anzahl == 0 {
+            r.push(SettlementWarning {
+                severity: WarningSeverity::Error,
+                code: "ZERO_AWH_ANZAHL",
+                message: format!("awh_positionen[{i}].anzahl must be ≥ 1"),
+            });
+        }
+        if awh.preis_eur < Decimal::ZERO {
+            r.push(SettlementWarning {
+                severity: WarningSeverity::Error,
+                code: "NEGATIVE_AWH_PREIS",
+                message: format!(
+                    "awh_positionen[{i}].preis_eur must be non-negative, got {}",
+                    awh.preis_eur
+                ),
+            });
+        }
     }
     r
 }

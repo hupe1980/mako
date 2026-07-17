@@ -16,7 +16,7 @@
 //! | `list_overdue_reading_orders`| Reading orders past `ausfuehrt_bis` (§40 EnWG compliance) |
 //! | `trigger_jahresablesung`     | Launch Jahresablesung campaign for a NB grid area |
 //! | `get_correction_history`     | §22 MessZV audit: list corrections for a MaLo |
-//! | `validate_timeseries`        | Run validation rules V01–V09 on meter reads (gaps, spikes, quality) |
+//! | `validate_timeseries`        | Run validation rules V01–V10 on meter reads (gaps, spikes, quality, rollover) |
 //!
 //! ## Prompts (5)
 //!
@@ -1227,15 +1227,17 @@ impl EdmdMcpHandler {
 
     /// `validate_timeseries` — run the metering validation engine on a MaLo's time-series.
     ///
-    /// Applies all 9 validation rules (V01–V09) to the stored meter reads:
+    /// Applies all 10 validation rules (V01–V10) to the stored meter reads:
     /// gap detection, overlap detection, negative energy, impossible spikes,
     /// zero runs, interval length consistency, DST ambiguity, future timestamps,
     /// and non-billable quality flags.
     #[tool(
         name = "validate_timeseries",
-        description = "Run the metering validation engine (rules V01–V09) on stored meter reads \
-                       for a MaLo. Identifies gaps, overlaps, spikes, zero-runs, non-billable \
-                       quality flags, and DST ambiguity. Use this before billing to detect \
+        description = "Run the metering validation engine (rules V01–V10) on stored meter reads \
+                       for a MaLo. Identifies gaps (V01), overlaps (V02), negative energy (V03), \
+                       impossible spikes (V04), zero-runs (V05), inconsistent intervals (V06), \
+                       DST ambiguity (V07), future timestamps (V08), non-billable quality (V09), \
+                       and register rollover (V10, §14 MessZV). Use before billing to detect \
                        intervals requiring §17 MessZV substitute values."
     )]
     async fn validate_timeseries(

@@ -3,7 +3,7 @@
 use axum::{
     Extension, Json,
     extract::{Path, Query},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use rubo4e::current::{Energiemix, Tarifpreisblatt};
@@ -1165,4 +1165,395 @@ pub async fn put_angebot(
             .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+// ── Comparison portal feed ────────────────────────────────────────────────────
+
+/// Extract `TarifPreise` from a product's `tarifpreispositionen` JSONB array.
+///
+/// Prices are stored as scalar `Decimal` strings after `normalize_tarifpreisblatt`
+/// validation (never nested `{"wert": ...}` objects).  Unknown preistypen are
+/// silently ignored so extended types (e.g. `EEG_VERGUETUNG`) do not pollute
+/// portal price display.
+///
+/// For dual-rate (HT/NT) tariffs:
+/// - `arbeitspreis_ct_per_kwh` is set to the HT rate (dominant rate for portals)
+/// - `arbeitspreis_ht_ct_per_kwh` and `arbeitspreis_nt_ct_per_kwh` are set separately
+///
+/// For single-rate tariffs:
+/// - `arbeitspreis_ct_per_kwh` is set to ARBEITSPREIS_EINTARIF
+/// - `arbeitspreis_ht_ct_per_kwh` and `arbeitspreis_nt_ct_per_kwh` are `None`
+pub fn extract_tarif_preise(data: &serde_json::Value) -> crate::pg::TarifPreise {
+    let positionen = data
+        .get("tarifpreispositionen")
+        .and_then(|v| v.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+
+    let mut gp: Option<Decimal> = None;
+    let mut ap_eintarif: Option<Decimal> = None;
+    let mut ap_ht: Option<Decimal> = None;
+    let mut ap_nt: Option<Decimal> = None;
+    let mut lp: Option<Decimal> = None;
+
+    for pos in positionen {
+        let pt = pos.get("preistyp").and_then(|v| v.as_str()).unwrap_or("");
+        let first_staffel_preis = pos
+            .get("preisstaffeln")
+            .and_then(|s| s.as_array())
+            .and_then(|a| a.first())
+            .and_then(|s| s.get("preis"))
+            .and_then(parse_decimal_value);
+
+        match pt {
+            "GRUNDPREIS" => gp = gp.or(first_staffel_preis),
+            "ARBEITSPREIS_EINTARIF" => ap_eintarif = ap_eintarif.or(first_staffel_preis),
+            "ARBEITSPREIS_HT" => ap_ht = ap_ht.or(first_staffel_preis),
+            "ARBEITSPREIS_NT" => ap_nt = ap_nt.or(first_staffel_preis),
+            "LEISTUNGSPREIS" => lp = lp.or(first_staffel_preis),
+            _ => {}
+        }
+    }
+
+    crate::pg::TarifPreise {
+        grundpreis_ct_per_day: gp,
+        // Single-rate tariff: use ARBEITSPREIS_EINTARIF.
+        // Dual-rate tariff: use HT as the "primary" rate for portal display.
+        arbeitspreis_ct_per_kwh: ap_eintarif.or(ap_ht),
+        arbeitspreis_ht_ct_per_kwh: ap_ht,
+        arbeitspreis_nt_ct_per_kwh: ap_nt,
+        leistungspreis_ct_per_kw_month: lp,
+    }
+}
+
+/// Parse a JSON value as a scalar Decimal.
+///
+/// Accepts strings (`"31.20"`) and JSON numbers (`31.20`).
+/// Rejects nested objects (already rejected by `normalize_tarifpreisblatt`).
+fn parse_decimal_value(v: &serde_json::Value) -> Option<Decimal> {
+    match v {
+        serde_json::Value::String(s) => s.parse().ok(),
+        serde_json::Value::Number(n) => n.to_string().parse().ok(),
+        _ => None,
+    }
+}
+
+/// Compute estimated annual supply cost (netto, excl. MwSt) for a given
+/// annual consumption.
+///
+/// ## Formula
+///
+/// ```text
+/// supply_netto = (grundpreis_ct/day × 365 / 100)  +  (arbeitspreis_ct/kWh × verbrauch_kWh / 100)
+/// ```
+///
+/// Returns `None` if neither Grundpreis nor Arbeitspreis is defined (e.g. pure
+/// Leistungspreis RLM products where the demand charge dominates).
+///
+/// **NNE, KA, Stromsteuer, and MwSt are excluded** — comparison portals add
+/// DSO-specific components by PLZ after fetching this feed.
+pub fn compute_jahreskosten_supply_netto(
+    preise: &crate::pg::TarifPreise,
+    verbrauch_kwh: Decimal,
+) -> Option<Decimal> {
+    use rust_decimal_macros::dec;
+
+    let gp_eur = preise
+        .grundpreis_ct_per_day
+        .map(|gp| (gp * dec!(365)) / dec!(100))
+        .unwrap_or(Decimal::ZERO);
+
+    let ap_eur = preise
+        .arbeitspreis_ct_per_kwh
+        .map(|ap| (ap * verbrauch_kwh) / dec!(100))
+        .unwrap_or(Decimal::ZERO);
+
+    if gp_eur == Decimal::ZERO && ap_eur == Decimal::ZERO {
+        return None;
+    }
+    Some(gp_eur + ap_eur)
+}
+
+/// Extract the price guarantee end date from the stored BO4E JSONB.
+///
+/// Looks for `data.preisgarantie.preisgarantieBis` (camelCase after BO4E roundtrip).
+/// Returns the raw string value (ISO 8601 date) as-is — no parsing needed by portals.
+pub fn extract_preisgarantie_bis(data: &serde_json::Value) -> Option<String> {
+    data.pointer("/preisgarantie/preisgarantieBis")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
+/// Extract the contract term in months from `vertragskonditionen.laufzeit`.
+///
+/// Handles `einheit` values `MONAT` (direct), `JAHR` (× 12), and `WOCHE` (÷ 4 approx).
+/// Returns `None` if `vertragskonditionen` or `laufzeit` is absent.
+pub fn extract_laufzeit_monate(data: &serde_json::Value) -> Option<i32> {
+    let einheit = data
+        .pointer("/vertragskonditionen/laufzeit/einheit")
+        .and_then(|v| v.as_str());
+    let dauer = data
+        .pointer("/vertragskonditionen/laufzeit/dauer")
+        .and_then(|v| v.as_i64())
+        .map(|d| d as i32);
+    match (einheit, dauer) {
+        (Some("MONAT"), Some(d)) => Some(d),
+        (Some("JAHR"), Some(d)) => Some(d * 12),
+        (Some("WOCHE"), Some(d)) => Some(d / 4),
+        (None, Some(d)) => Some(d), // unit missing → assume months
+        _ => None,
+    }
+}
+
+/// Extract the minimum contract term in months from `vertragskonditionen.mindestlaufzeit`.
+pub fn extract_mindestlaufzeit_monate(data: &serde_json::Value) -> Option<i32> {
+    let einheit = data
+        .pointer("/vertragskonditionen/mindestlaufzeit/einheit")
+        .and_then(|v| v.as_str());
+    let dauer = data
+        .pointer("/vertragskonditionen/mindestlaufzeit/dauer")
+        .and_then(|v| v.as_i64())
+        .map(|d| d as i32);
+    match (einheit, dauer) {
+        (Some("MONAT"), Some(d)) => Some(d),
+        (Some("JAHR"), Some(d)) => Some(d * 12),
+        (Some("WOCHE"), Some(d)) => Some(d / 4),
+        (None, Some(d)) => Some(d),
+        _ => None,
+    }
+}
+
+/// Extract the notice period in **weeks** from `vertragskonditionen.kuendigungsfrist`.
+///
+/// Handles `einheit` values `WOCHE` (direct), `MONAT` (× 4 approx), `TAG` (÷ 7 approx).
+pub fn extract_kuendigungsfrist_wochen(data: &serde_json::Value) -> Option<i32> {
+    let einheit = data
+        .pointer("/vertragskonditionen/kuendigungsfrist/einheit")
+        .and_then(|v| v.as_str());
+    let dauer = data
+        .pointer("/vertragskonditionen/kuendigungsfrist/dauer")
+        .and_then(|v| v.as_i64())
+        .map(|d| d as i32);
+    match (einheit, dauer) {
+        (Some("WOCHE"), Some(d)) => Some(d),
+        (Some("MONAT"), Some(d)) => Some(d * 4),
+        (Some("TAG"), Some(d)) => Some(d / 7),
+        (None, Some(d)) => Some(d), // unit missing → assume weeks
+        _ => None,
+    }
+}
+
+/// Extract the total customer bonus/discount (RABATT sum) from `aufAbschlaege`.
+///
+/// Sums the first `staffeln[0].wert` of every `aufAbschlaege` entry where
+/// `typ == "RABATT"`.  Returns `None` if no bonus is configured.
+///
+/// Note: Returns the gross bonus value as stored; MwSt distinction is encoded
+/// in `aufAbschlaege[i].bezug` (`BRUTTO` / `NETTO`), visible in `tarifpreisblatt`.
+pub fn extract_bonus_rabatt_eur(data: &serde_json::Value) -> Option<Decimal> {
+    use rust_decimal_macros::dec;
+    let auf = data.get("aufAbschlaege")?.as_array()?;
+    let total: Decimal = auf
+        .iter()
+        .filter(|a| {
+            a.get("typ")
+                .and_then(|v| v.as_str())
+                .map(|t| t.eq_ignore_ascii_case("RABATT"))
+                .unwrap_or(false)
+        })
+        .filter_map(|a| {
+            a.get("staffeln")?
+                .as_array()?
+                .first()?
+                .get("wert")
+                .and_then(parse_decimal_value)
+        })
+        .sum();
+    if total == dec!(0) { None } else { Some(total) }
+}
+
+/// Compute a deterministic ETag string for the comparison feed response.
+///
+/// The ETag is `"<max_updated_at_nanos>-<verbrauch_kwh>-<sparte_tag>"` —
+/// it changes whenever any product in the feed is updated, and is unique
+/// per (`verbrauch_kwh`, `sparte`) combination (different consumption levels
+/// produce different `jahreskosten` estimates).
+///
+/// Format: strong ETag per RFC 9110 §8.8.3 (quoted string).
+pub fn compute_feed_etag(
+    rows: &[crate::pg::ProductRow],
+    verbrauch_kwh: Decimal,
+    sparte: Option<&str>,
+) -> String {
+    let max_ns = rows
+        .iter()
+        .map(|r| r.updated_at.unix_timestamp_nanos())
+        .max()
+        .unwrap_or(0);
+    // Deterministic, process-restart-stable representation.
+    // No sha2 needed — nanosecond precision + query params make collisions
+    // practically impossible for a tariff feed of typical size.
+    format!(
+        "\"{}-{}-{}\"",
+        max_ns,
+        verbrauch_kwh,
+        sparte.unwrap_or("all")
+    )
+}
+
+/// `GET /api/v1/comparison-feed`
+///
+/// Returns a machine-readable tariff listing suitable for comparison portals
+/// (Verivox, Check24, Eon portal) and the BNetzA Markttransparenzstelle.
+///
+/// ## Query parameters
+///
+/// | Parameter | Type | Default | Description |
+/// |---|---|---|---|
+/// | `lf_mp_id` | string | `cfg.tenant` | LF operator ID |
+/// | `sparte` | string | — | Filter: `STROM` \| `GAS` \| `WAERME` |
+/// | `kundentyp` | string | — | Filter: `Haushalt` \| `Gewerbe` \| `Waermepumpe` \| `Ladesaeule` |
+/// | `verbrauch_kwh` | decimal | `3500` | Annual consumption for `jahreskosten` estimation |
+/// | `oekolabel` | string | — | Filter to products with this label (e.g. `OK_POWER`) |
+/// | `include_dynamic` | bool | `true` | Include §41a EPEX-linked dynamic tariffs |
+/// | `only_dynamic` | bool | `false` | Return only dynamic tariffs |
+/// | `limit` | integer | `100` | Page size (1–500) |
+/// | `cursor` | string | — | Pagination cursor from previous response `meta.next_cursor` |
+///
+/// ## Caching
+///
+/// Responses include an ETag and `Cache-Control: public, max-age=300`.
+/// Clients **should** send `If-None-Match` on subsequent polls — the server
+/// returns 304 Not Modified when no products have changed.
+///
+/// ## Supply-cost estimate
+///
+/// `jahreskosten_supply_netto_eur` = Grundpreis (EUR/a) + Arbeitspreis (EUR/a).
+/// **NNE, KA, Stromsteuer, and MwSt are excluded** — these vary by DSO/PLZ and
+/// must be added by the integrator after fetching from the respective APIs.
+/// `jahreskosten_supply_brutto_eur` applies 19 % MwSt to the netto estimate.
+///
+/// ## Pagination
+///
+/// The feed is ordered `(updated_at DESC, product_code ASC)`.  When
+/// `meta.next_cursor` is non-null, pass it as `?cursor=<value>` to retrieve the
+/// next page.  The cursor is stable: new or updated products appear on page 1
+/// without affecting subsequent pages.
+pub async fn get_comparison_feed(
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Query(q): Query<crate::pg::ComparisonFeedQuery>,
+    req_headers: HeaderMap,
+) -> impl IntoResponse {
+    use rust_decimal_macros::dec;
+    use time::format_description::well_known::Rfc3339;
+
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
+    let verbrauch_kwh = q.verbrauch_kwh.unwrap_or(dec!(3500));
+    let limit = q.limit.unwrap_or(100).clamp(1, 500) as usize;
+
+    let mut rows = match crate::pg::fetch_comparison_feed(&pool, &lf_mp_id, &q).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    };
+
+    // ── ETag / 304 Not Modified ───────────────────────────────────────────────
+    let etag = compute_feed_etag(&rows, verbrauch_kwh, q.sparte.as_deref());
+    if let Some(inm) = req_headers
+        .get("if-none-match")
+        .and_then(|v| v.to_str().ok())
+        && inm == etag
+    {
+        return StatusCode::NOT_MODIFIED.into_response();
+    }
+
+    // ── Pagination: detect next page ─────────────────────────────────────────
+    let has_next = rows.len() > limit;
+    if has_next {
+        rows.truncate(limit);
+    }
+    let next_cursor: Option<String> = if has_next {
+        rows.last().map(|r| {
+            // Compound cursor: "<updated_at>,<product_code>"
+            // The product_code tie-breaker prevents skipping rows when multiple
+            // products share the same updated_at timestamp.
+            format!(
+                "{},{}",
+                r.updated_at.format(&Rfc3339).unwrap_or_default(),
+                r.product_code
+            )
+        })
+    } else {
+        None
+    };
+
+    // ── Build response entries ────────────────────────────────────────────────
+    let tarife: Vec<crate::pg::ComparisonFeedEntry> = rows
+        .iter()
+        .map(|row| {
+            let preise = extract_tarif_preise(&row.data);
+            let netto = compute_jahreskosten_supply_netto(&preise, verbrauch_kwh);
+            let brutto = netto.map(|n| {
+                use rust_decimal_macros::dec;
+                (n * dec!(1.19)).round_dp(2)
+            });
+            let netto = netto.map(|n| n.round_dp(2));
+
+            crate::pg::ComparisonFeedEntry {
+                product_code: row.product_code.clone(),
+                name: row.name.clone(),
+                category: row.category.clone(),
+                sparte: row.sparte.clone(),
+                kundentyp: row.kundentyp.clone(),
+                register_count: row.register_count.clone(),
+                ist_oekostrom: row
+                    .oekolabel
+                    .as_ref()
+                    .map(|o| !o.is_empty())
+                    .unwrap_or(false),
+                ist_dynamisch: row.dyn_source.is_some(),
+                valid_from: row.valid_from,
+                valid_to: row.valid_to,
+                preise,
+                jahreskosten_supply_netto_eur: netto,
+                jahreskosten_supply_brutto_eur: brutto,
+                mwst_pct: "19",
+                laufzeit_monate: extract_laufzeit_monate(&row.data),
+                kuendigungsfrist_wochen: extract_kuendigungsfrist_wochen(&row.data),
+                mindestlaufzeit_monate: extract_mindestlaufzeit_monate(&row.data),
+                preisgarantie_bis: extract_preisgarantie_bis(&row.data),
+                bonus_rabatt_eur: extract_bonus_rabatt_eur(&row.data),
+                energiemix: row.energiemix.clone(),
+                oekolabel: row.oekolabel.clone(),
+                tarifpreisblatt: row.data.clone(),
+                updated_at: row.updated_at,
+            }
+        })
+        .collect();
+
+    let meta = crate::pg::ComparisonFeedMeta {
+        generated_at: time::OffsetDateTime::now_utc(),
+        lf_mp_id,
+        verbrauch_kwh,
+        sparte_filter: q.sparte.clone(),
+        kundentyp_filter: q.kundentyp.clone(),
+        total_returned: tarife.len(),
+        next_cursor,
+    };
+
+    let response = crate::pg::ComparisonFeedResponse { meta, tarife };
+
+    (
+        StatusCode::OK,
+        [
+            ("ETag", etag.as_str()),
+            ("Cache-Control", "public, max-age=300"),
+            ("Vary", "Accept-Encoding"),
+            ("X-Content-Type-Options", "nosniff"),
+        ],
+        Json(response),
+    )
+        .into_response()
 }

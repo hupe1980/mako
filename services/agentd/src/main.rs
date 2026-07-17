@@ -47,16 +47,42 @@ async fn main() -> anyhow::Result<()> {
     let cfg: AgentdConfig = load_config("agentd").context("load config")?;
     let port = cfg.port;
 
-    info!(port, tenant = %cfg.tenant, providers = cfg.providers.len(), agents = cfg.agents.len(), "agentd starting");
+    info!(
+        port,
+        tenant = %cfg.tenant,
+        providers = cfg.providers.len(),
+        custom_agents = cfg.agents.len(),
+        bundled_enable_all = cfg.bundled_agents.enable_all,
+        bundled_enabled = cfg.bundled_agents.enable.len(),
+        "agentd starting"
+    );
 
-    // Build LLM provider registry + agent registry
+    // Build LLM provider registry + agent registry (builtins + custom merged)
     let registry = AgentRegistry::build(&cfg).context("build agent registry")?;
     let orchestrator = OrchestratorAgent::new(&cfg).context("build orchestrator")?;
 
-    info!(orchestrator_model = %cfg.orchestrator.model, "orchestrator ready");
+    let builtin_count = registry
+        .agent_names
+        .iter()
+        .filter_map(|n| registry.get(n))
+        .filter(|a| a.is_builtin)
+        .count();
+    info!(
+        orchestrator_model = %cfg.orchestrator.model,
+        total_agents = registry.agent_names.len(),
+        builtin_agents = builtin_count,
+        dispatch_mode = ?cfg.orchestrator.dispatch_mode,
+        "orchestrator ready"
+    );
     for name in &registry.agent_names {
         if let Some(a) = registry.get(name) {
-            info!(agent = %name, model = %a.completion_cfg.model, triggers = a.trigger_patterns.len(), "specialist ready");
+            info!(
+                agent = %name,
+                model = %a.completion_cfg.model,
+                triggers = a.trigger_patterns.len(),
+                is_builtin = a.is_builtin,
+                "specialist ready"
+            );
         }
     }
 
@@ -96,17 +122,26 @@ async fn main() -> anyhow::Result<()> {
 
     let health = health_routes(|| async { true });
     let app = Router::new()
+        // CloudEvent ingest
         .route("/webhook", post(handlers::webhook))
+        // Manual trigger
         .route("/api/v1/run", post(handlers::manual_run))
+        // Session history
         .route("/api/v1/sessions", get(handlers::get_sessions))
-        // M9: Live RAG ingestion for MSB device history
+        // Agent discovery — list active agents
+        .route("/api/v1/agents", get(handlers::list_agents))
+        // Agent catalog — all 26 built-in definitions (even if not enabled)
+        .route("/api/v1/agents/catalog", get(handlers::agents_catalog))
+        // A2A Agent Cards for each specialist
+        .route("/.well-known/agents/:name", get(handlers::agent_card))
+        // RAG: Live ingestion and search
         .route("/api/v1/rag/ingest", post(handlers::rag_ingest))
         .route("/api/v1/rag/search", post(handlers::rag_search))
         .with_state(Arc::clone(&state))
         .merge(health);
 
     let addr = format!("0.0.0.0:{port}");
-    info!(%addr, "agentd listening");
+    info!(%addr, agents = state.registry.agent_names.len(), "agentd listening");
     let ct = mako_service::shutdown::token();
     let listener = tokio::net::TcpListener::bind(&addr).await.context("bind")?;
     mako_service::shutdown::serve(listener, app, ct).await

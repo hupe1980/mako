@@ -1,6 +1,6 @@
 //! MCP server for `billingd` — Multi-Product Billing Engine.
 //!
-//! ## Tools (10)
+//! ## Tools (12)
 //!
 //! | Tool | Description |
 //! |---|---|
@@ -12,8 +12,10 @@
 //! | `list_vpp_settlements` | List VPP aggregation settlement records |
 //! | `list_corrections` | List Korrekturrechnung / Stornorechnung records (§22 MessZV) |
 //! | `calculate_billing` | Trigger a billing calculation run for a MaLo |
-//! | `list_product_categories` | Describe all 12 billing categories and their required fields |
+//! | `list_product_categories` | Describe all 13 billing categories and their required fields |
 //! | `get_billing_summary` | Aggregate billing stats per MaLo (total billed, avg monthly) |
+//! | `validate_tariff_config` | Pre-flight validation: §41b iMSys guard, KAV plausibility, missing fields |
+//! | `explain_invoice_position` | Explain how a billing position was calculated (PositionTrace audit) |
 //!
 //! ## Prompts (6)
 //!
@@ -103,6 +105,26 @@ pub struct PreviewParams {
     pub period_from: String,
     /// Billing period end (YYYY-MM-DD).
     pub period_to: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ValidateTariffParams {
+    /// TariffInput JSON string to validate (same format as tarifbd product JSONB).
+    pub tariff_json: String,
+    /// Metering mode to test against (SLP, RLM, IMSYS). Relevant for §41b check.
+    pub metering_mode: Option<String>,
+    /// Optional MaLo-ID for context (informational only).
+    pub malo_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ExplainPositionParams {
+    /// UUID of the billing record containing the position.
+    pub record_id: String,
+    /// 1-based position number from the invoice (positionsnummer). Mutually exclusive with description_keyword.
+    pub position_number: Option<u32>,
+    /// Keyword to match in the position description (positionstext). Mutually exclusive with position_number.
+    pub description_keyword: Option<String>,
 }
 
 #[derive(Clone)]
@@ -479,9 +501,214 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
     }
 
     #[tool(
-        description = "Aggregate billing statistics for a MaLo: total billed, monthly average, \
-category breakdown, and comparison of last 3 months vs previous 3 months. \
-Use to spot billing trends, detect anomalies, and verify consistent tariff application.",
+        description = "Validate a TariffInput configuration for regulatory compliance before billing. Checks: §41b iMSys requirement for dynamic tariffs, missing mandatory fields, KAV rate plausibility, StromsteuerBefreiung certificate reminders. Returns warnings and errors without triggering a calculation.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn validate_tariff_config(
+        &self,
+        Parameters(params): Parameters<ValidateTariffParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use energy_billing::{
+            BillingContext, GridInput, InvoiceType, MeterInput, MeteringMode, Product, Quantities,
+            RegulatoryRates,
+        };
+        use time::macros::date;
+
+        let tariff: Product = serde_json::from_str(&params.tariff_json)
+            .map_err(|e| McpError::invalid_params(format!("invalid Product JSON: {e}"), None))?;
+
+        let rates = RegulatoryRates::default();
+        let grid = GridInput::default();
+
+        // Build engine for validation — use a synthetic one-month context.
+        let engine = tariff.build_engine(&grid, &rates);
+
+        // Build a context with the requested metering mode for §41b checks.
+        let metering_mode = params
+            .metering_mode
+            .as_deref()
+            .map(|m| match m.to_uppercase().as_str() {
+                "IMSYS" | "SMART_METER" => MeteringMode::Imsys,
+                "RLM" => MeteringMode::Rlm,
+                _ => MeteringMode::Slp,
+            })
+            .unwrap_or_default();
+
+        let ctx = BillingContext {
+            malo_id: params.malo_id.unwrap_or_else(|| "00000000000".to_owned()),
+            lf_mp_id: "9900000000001".to_owned(),
+            rechnungsnummer: "VALIDATE".to_owned(),
+            period_from: date!(2026 - 01 - 01),
+            period_to: date!(2026 - 01 - 31),
+            invoice_type: InvoiceType::Initial,
+            regulatory_rates: rates,
+            ..Default::default()
+        };
+
+        let quantities = Quantities {
+            electricity: Some(MeterInput {
+                arbeitsmenge_kwh: rust_decimal_macros::dec!(100),
+                metering_mode: metering_mode.clone(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let warnings = engine.validate(&ctx, &quantities);
+
+        // Additional static checks independent of engine.validate():
+        let mut extra_checks: Vec<serde_json::Value> = Vec::new();
+
+        // Check §41b: dynamic_epex requires iMSys
+        let is_dynamic = matches!(&tariff, Product::Strom(e) if e.dynamic_epex)
+            || matches!(&tariff, Product::Waermepumpe(c) if c.base.dynamic_epex)
+            || matches!(&tariff, Product::Wallbox(c) if c.base.dynamic_epex);
+        if is_dynamic && metering_mode != MeteringMode::Imsys {
+            extra_checks.push(serde_json::json!({
+                "code": "SECT41B_IMSYS_REQUIRED",
+                "severity": "Error",
+                "message": "§41b Abs. 2 EnWG: dynamic_epex=true requires MeteringMode::Imsys. Set metering_mode to IMSYS or switch to a fixed-price tariff."
+            }));
+        }
+
+        // Check §9 exemption: industrie_stromsteuer_befreiung legacy flag migration reminder
+        if matches!(&tariff, Product::Strom(e) if e.industrie_stromsteuer_befreiung && e.stromsteuer_befreiung == energy_billing::StromsteuerBefreiung::Keine)
+            || matches!(&tariff, Product::Waermepumpe(c) if c.base.industrie_stromsteuer_befreiung)
+        {
+            extra_checks.push(serde_json::json!({
+                "code": "STROMSTEUER_BEFREIUNG_LEGACY_FLAG",
+                "severity": "Warning",
+                "message": "industrie_stromsteuer_befreiung=true is a legacy flag. Migrate to stromsteuer_befreiung=INDUSTRIE_PRODUKTIONES_GEWERBE for typed §9 StromStG exemption tracking."
+            }));
+        }
+
+        // Check §42 EnWG: energiequellen should be set for STROM products
+        if matches!(tariff.category_str(), "STROM" | "WAERMEPUMPE" | "WALLBOX") {
+            let lacks_eq = match &tariff {
+                Product::Strom(e) => e.energiequellen.is_none(),
+                Product::Waermepumpe(c) | Product::Wallbox(c) => c.base.energiequellen.is_none(),
+                _ => false,
+            };
+            if lacks_eq {
+                extra_checks.push(serde_json::json!({
+                    "code": "SECT42_ENERGIEMIX_MISSING",
+                    "severity": "Warning",
+                    "message": "§42 Abs. 1 + Abs. 2 Nr. 2 EnWG: electricity tariffs should declare energiemix or energiequellen (incl. co2_g_per_kwh). Required on every electricity invoice."
+                }));
+            }
+        }
+
+        let warning_json: Vec<serde_json::Value> = warnings
+            .iter()
+            .map(|w| {
+                serde_json::json!({
+                    "code": w.code,
+                    "severity": format!("{:?}", w.severity),
+                    "message": w.message,
+                })
+            })
+            .collect();
+
+        let has_errors = warnings
+            .iter()
+            .any(|w| w.severity == energy_billing::WarningSeverity::Error)
+            || extra_checks.iter().any(|c| c["severity"] == "Error");
+
+        ContentBlock::json(serde_json::json!({
+            "category": tariff.category_str(),
+            "valid": !has_errors,
+            "warnings": warning_json,
+            "additional_checks": extra_checks,
+            "metering_mode_tested": format!("{:?}", metering_mode),
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    #[tool(
+        description = "Explain how a specific billing position was calculated. Returns the full PositionTrace: formula, inputs, regulatory citations, tariff source, and pro-rata fraction. Use this for invoice audit, customer disputes, or regulatory compliance review.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn explain_invoice_position(
+        &self,
+        Parameters(params): Parameters<ExplainPositionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::fetch_billing_record;
+        let Ok(record_id) = params.record_id.parse::<uuid::Uuid>() else {
+            return Err(McpError::invalid_params(
+                "record_id must be a valid UUID",
+                None,
+            ));
+        };
+
+        let record = fetch_billing_record(&self.state.pool, record_id)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| {
+                McpError::invalid_params(format!("record {record_id} not found"), None)
+            })?;
+
+        // Extract position from the stored rechnung_json
+        let rechnung = &record.rechnung_json;
+        let Some(positions) = rechnung["rechnungspositionen"].as_array() else {
+            return Err(McpError::internal_error(
+                "no rechnungspositionen in record",
+                None,
+            ));
+        };
+
+        // Find by 1-based position number or by description keyword
+        let target = if let Some(pos_nr) = params.position_number {
+            positions
+                .iter()
+                .find(|p| p["positionsnummer"].as_u64() == Some(pos_nr as u64))
+        } else if let Some(ref keyword) = params.description_keyword {
+            let kw_lower = keyword.to_lowercase();
+            positions.iter().find(|p| {
+                p["positionstext"]
+                    .as_str()
+                    .map(|t| t.to_lowercase().contains(&kw_lower))
+                    .unwrap_or(false)
+            })
+        } else {
+            return Err(McpError::invalid_params(
+                "provide either position_number or description_keyword",
+                None,
+            ));
+        };
+
+        match target {
+            Some(pos) => {
+                // Return the position with its trace if present
+                let explanation = serde_json::json!({
+                    "record_id": record_id,
+                    "malo_id": record.malo_id,
+                    "period": format!("{} – {}", record.period_from, record.period_to),
+                    "position": pos,
+                    "explanation": {
+                        "positionstext": pos["positionstext"],
+                        "menge": pos["positionsMenge"],
+                        "einzelpreis": pos["einzelpreis"],
+                        "gesamtpreis": pos["gesamtpreis"],
+                        "rechtsgrundlage": pos["rechtlicheGrundlage"],
+                        "kategorie": pos["kategorie"],
+                        "trace": pos.get("trace"),
+                        "note": "The 'trace' field contains formula, input_quantity, input_unit_price_eur, gross_eur, regulatory_basis, tariff_source, and pro_rata_fraction for full audit reconstruction."
+                    }
+                });
+                ContentBlock::json(explanation)
+                    .map(|b| CallToolResult::success(vec![b]))
+                    .map_err(|e| McpError::internal_error(e.message, None))
+            }
+            None => Err(McpError::invalid_params(
+                "position not found — check position_number or description_keyword",
+                None,
+            )),
+        }
+    }
+
+    #[tool(
+        description = "Aggregate billing statistics for a MaLo: total billed, monthly average, category breakdown. Use to spot billing trends and verify consistent tariff application.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_billing_summary(

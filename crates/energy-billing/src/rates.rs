@@ -7,8 +7,6 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
-use crate::tariff::TariffInput;
-
 // ── BEHG CO₂ price table ──────────────────────────────────────────────────────
 
 /// BEHG §10 CO₂ price in EUR/t by calendar year.
@@ -40,6 +38,13 @@ const BEHG_EUR_PER_T: &[(i32, u32)] = &[
 
 /// CO₂ conversion factor for H-Erdgas (kg CO₂/kWh_Hs), DVGW G 685.
 pub const BEHG_CO2_FACTOR_H_GAS: Decimal = dec!(0.20160);
+
+/// CO₂ conversion factor for L-Erdgas (kg CO₂/kWh_Hs), DVGW G 685.
+///
+/// L-Gas has a slightly lower Brennwert than H-Gas but similar specific CO₂
+/// content. The DVGW G 685 reference value for L-Gas is approximately 0.2014 kg/kWh_Hs.
+/// Use this constant for supply points in the L-Gas area (primarily NW Germany).
+pub const BEHG_CO2_FACTOR_L_GAS: Decimal = dec!(0.20140);
 
 // ── Stromsteuer history (§3 StromStG) ────────────────────────────────────────
 
@@ -206,89 +211,116 @@ impl Default for RegulatoryRates {
 }
 
 impl RegulatoryRates {
-    /// Effective Stromsteuer: product `stromsteuer_ct_per_kwh_override` wins.
-    pub fn effective_stromsteuer(&self, tariff: &TariffInput) -> Decimal {
-        tariff
-            .stromsteuer_ct_per_kwh_override
-            .unwrap_or(self.stromsteuer_ct_per_kwh)
-    }
+    // ── Typed product helpers (used by Product::build_engine) ─────────────────
 
-    /// Effective Energiesteuer Gas: product override wins.
-    pub fn effective_energiesteuer_gas(&self, tariff: &TariffInput) -> Decimal {
-        tariff
-            .energiesteuer_gas_ct_per_kwh_override
-            .unwrap_or(self.energiesteuer_gas_ct_per_kwh)
-    }
-
-    /// Effective BEHG CO₂ levy: product override wins, then `behg_gas_ct_per_kwh`.
-    pub fn effective_behg_gas(&self, tariff: &TariffInput) -> Decimal {
-        tariff
-            .behg_gas_ct_per_kwh_override
-            .unwrap_or(self.behg_gas_ct_per_kwh)
-    }
-
-    /// Effective BEHG CO₂ levy for a specific billing year.
+    /// Effective MwSt for an [`ElectricityProduct`](crate::ElectricityProduct).
     ///
-    /// Prefers product override → statutory rate for `year` → `behg_gas_ct_per_kwh`.
-    /// Use this for historical correction invoices where the wrong year's rate would
-    /// otherwise be applied.
-    pub fn effective_behg_gas_for_year(&self, tariff: &TariffInput, year: i32) -> Decimal {
-        if let Some(o) = tariff.behg_gas_ct_per_kwh_override {
+    /// Priority: `mwst_rate_override` → kWp 0% rule (§12 Abs. 3 UStG) → default.
+    #[must_use]
+    pub fn effective_mwst_electricity(&self, p: &crate::tariff::ElectricityProduct) -> Decimal {
+        if let Some(r) = p.mwst_rate_override {
+            return r;
+        }
+        if p.anlage_kwp.is_some_and(|kwp| kwp <= dec!(30)) {
+            return Decimal::ZERO;
+        }
+        self.mwst_rate
+    }
+
+    /// Effective MwSt for a [`SolarProduct`](crate::SolarProduct).
+    #[must_use]
+    pub fn effective_mwst_solar(&self, p: &crate::tariff::SolarProduct) -> Decimal {
+        if let Some(r) = p.mwst_rate_override {
+            return r;
+        }
+        if p.anlage_kwp.is_some_and(|kwp| kwp <= dec!(30)) {
+            return Decimal::ZERO;
+        }
+        self.mwst_rate
+    }
+
+    /// Effective MwSt for an [`EegProduct`](crate::EegProduct).
+    #[must_use]
+    pub fn effective_mwst_eeg(&self, p: &crate::tariff::EegProduct) -> Decimal {
+        if let Some(r) = p.mwst_rate_override {
+            return r;
+        }
+        if p.anlage_kwp.is_some_and(|kwp| kwp <= dec!(30)) {
+            return Decimal::ZERO;
+        }
+        self.mwst_rate
+    }
+
+    // ── Override-based helpers (used by providers) ────────────────────────────
+
+    /// Effective Stromsteuer — product `override_ct` wins, else statutory rate.
+    #[must_use]
+    pub fn effective_stromsteuer(&self, override_ct: Option<Decimal>) -> Decimal {
+        override_ct.unwrap_or(self.stromsteuer_ct_per_kwh)
+    }
+
+    /// Effective Energiesteuer Gas — product `override_ct` wins.
+    #[must_use]
+    pub fn effective_energiesteuer_gas(&self, override_ct: Option<Decimal>) -> Decimal {
+        override_ct.unwrap_or(self.energiesteuer_gas_ct_per_kwh)
+    }
+
+    /// Effective BEHG CO₂ levy — product `override_ct` wins.
+    #[must_use]
+    pub fn effective_behg_gas(&self, override_ct: Option<Decimal>) -> Decimal {
+        override_ct.unwrap_or(self.behg_gas_ct_per_kwh)
+    }
+
+    /// Effective BEHG for a specific billing year (retroactive corrections).
+    #[must_use]
+    pub fn effective_behg_gas_for_year(&self, override_ct: Option<Decimal>, year: i32) -> Decimal {
+        if let Some(o) = override_ct {
             return o;
         }
         behg_ct_per_kwh_for_year(year).unwrap_or(self.behg_gas_ct_per_kwh)
     }
 
-    /// Effective Stromsteuer for a specific billing year.
-    ///
-    /// Prefers product override → statutory rate for `year` → `stromsteuer_ct_per_kwh`.
-    ///
-    /// Use for retroactive correction invoices to apply the correct year's statutory rate.
-    pub fn effective_stromsteuer_for_year(&self, tariff: &TariffInput, year: i32) -> Decimal {
-        if let Some(o) = tariff.stromsteuer_ct_per_kwh_override {
+    /// Effective Stromsteuer for a specific billing year (retroactive corrections).
+    #[must_use]
+    pub fn effective_stromsteuer_for_year(
+        &self,
+        override_ct: Option<Decimal>,
+        year: i32,
+    ) -> Decimal {
+        if let Some(o) = override_ct {
             return o;
         }
         stromsteuer_for_year(year).unwrap_or(self.stromsteuer_ct_per_kwh)
     }
 
-    /// Effective Energiesteuer Gas for a specific billing year.
+    /// Effective Energiesteuer Gas for a specific billing year (retroactive corrections).
     ///
-    /// Handles the 2022 emergency 0-rate (Energiesteuersenkungsgesetz) and
-    /// post-2023 restoration automatically.
-    ///
-    /// Prefers product override → statutory rate for `year` → `energiesteuer_gas_ct_per_kwh`.
-    pub fn effective_energiesteuer_gas_for_year(&self, tariff: &TariffInput, year: i32) -> Decimal {
-        if let Some(o) = tariff.energiesteuer_gas_ct_per_kwh_override {
+    /// Handles the 2022 emergency 0-rate (Energiesteuersenkungsgesetz).
+    #[must_use]
+    pub fn effective_energiesteuer_gas_for_year(
+        &self,
+        override_ct: Option<Decimal>,
+        year: i32,
+    ) -> Decimal {
+        if let Some(o) = override_ct {
             return o;
         }
         energiesteuer_gas_for_year(year).unwrap_or(self.energiesteuer_gas_ct_per_kwh)
     }
 
-    /// Effective MwSt rate: product override → kWp auto-rule → default.
+    /// Effective MwSt from a raw override value and optional kWp.
     ///
-    /// ## Auto-zero for solar PV ≤ 30 kWp
-    ///
-    /// §12 Abs. 3 UStG (Jahressteuergesetz 2022, in force since 01.01.2023):
-    /// supply and self-consumption billing for solar PV ≤ 30 kWp is subject to
-    /// **0% MwSt** (Nullsteuersatz). When `tariff.anlage_kwp` is set and ≤ 30,
-    /// this method returns `Decimal::ZERO` automatically — no need to set
-    /// `mwst_rate_override` manually.
-    ///
-    /// ## ETS2 / BEHG post-2026 note
-    ///
-    /// Germany's BEHG fixed-price regime (§10 BEHG, max 65 EUR/t in 2026) expires
-    /// after 2026. From 2027, heating fuel carbon pricing transitions to the EU
-    /// Emissions Trading System 2 (ETS2) with market-determined prices. Configure
-    /// the current ETS2 CO₂ price in `behg_gas_ct_per_kwh` via `billingd.toml [rates]`.
-    pub fn effective_mwst(&self, tariff: &TariffInput) -> Decimal {
-        if let Some(override_rate) = tariff.mwst_rate_override {
-            return override_rate;
+    /// Used by providers that need the MwSt rate outside of `Product::build_engine`.
+    #[must_use]
+    pub fn effective_mwst_with_override(
+        &self,
+        override_rate: Option<Decimal>,
+        anlage_kwp: Option<Decimal>,
+    ) -> Decimal {
+        if let Some(r) = override_rate {
+            return r;
         }
-        // §12 Abs. 3 UStG: 0% MwSt for solar PV installations ≤ 30 kWp (since 01.01.2023).
-        if tariff
-            .anlage_kwp
-            .is_some_and(|kwp| kwp <= rust_decimal_macros::dec!(30))
-        {
+        if anlage_kwp.is_some_and(|kwp| kwp <= dec!(30)) {
             return Decimal::ZERO;
         }
         self.mwst_rate
@@ -324,10 +356,12 @@ mod tests {
     #[test]
     fn effective_behg_for_year_prefers_override() {
         let rates = RegulatoryRates::default();
-        let tariff = crate::tariff::TariffInput {
-            behg_gas_ct_per_kwh_override: Some(dec!(0.99)),
-            ..Default::default()
-        };
-        assert_eq!(rates.effective_behg_gas_for_year(&tariff, 2024), dec!(0.99));
+        assert_eq!(
+            rates.effective_behg_gas_for_year(Some(dec!(0.99)), 2024),
+            dec!(0.99)
+        );
+        // Without override, uses statutory year rate
+        let ct = rates.effective_behg_gas_for_year(None, 2024);
+        assert!(ct > dec!(0.90) && ct < dec!(0.92));
     }
 }

@@ -5,6 +5,7 @@
 //! with a [`PModeRegistry`] for a single, startup-time entry point.
 
 pub use asx_rs::as4::As4PushPolicy;
+pub use asx_rs::as4::FragmentScopePolicy;
 use asx_rs::core::InteropMode;
 use asx_rs::interop::{
     BaseProfile, CanonicalizationPolicy, ProfileStack, ProfileValidationReport,
@@ -68,6 +69,13 @@ pub fn bdew_push_policy(decryption_key_pem: Option<Vec<u8>>) -> As4PushPolicy {
         // would reject the config (require_encrypted_inbound = true without a key).
         policy.require_encrypted_inbound = true;
     }
+    // BDEW AS4-Profil v1.2 uses single-message `UserMessage` only — no fragmentation.
+    // `RequireAuthenticatedScope` (the strict default) would reject any multi-fragment
+    // message unless `authenticated_sender_scope` is supplied.  Since fragmentation is
+    // not used in BDEW MaKo, switch to `UseSoapSenderId` so that
+    // `authenticated_sender_scope: None` is always safe to pass.  The SOAP sender ID
+    // is already authenticated by the mandatory WS-Security XML-DSig signature.
+    policy.fragment_scope_policy = FragmentScopePolicy::UseSoapSenderId;
     policy
 }
 
@@ -205,8 +213,7 @@ impl BdewAs4Profile {
     /// settings (signing required, encryption optional).
     ///
     /// For per-action encryption overrides, register individual P-Modes via
-    /// [`bdew_pmode_encrypted_with_endpoint`](crate::pmode::bdew_pmode_encrypted_with_endpoint)
-    /// and [`register_pmode`](Self::register_pmode) instead.
+    /// [`bdew_pmode_with_endpoint`] and [`register_pmode`](Self::register_pmode) instead.
     ///
     /// # Example
     ///

@@ -1,8 +1,10 @@
 # metering
 
 **German energy metering domain library — interval types, gas conversion, billing period aggregation,
-SLP/RLM/iMSys classification, BSI TR-03109 SMGW lifecycle, virtual meters, resampling, forecasting,
-and Hampel-filter quality scoring.**
+SLP/RLM/iMSys classification, BSI TR-03109 SMGW lifecycle, virtual meters (§42b EnWG GGV Solarpaket I),
+resampling, forecasting, and Hampel-filter quality scoring.
+
+214 tests · zero I/O · no async · no float money**
 
 `metering` is the pure domain library used by [`edmd`](../../services/edmd/),
 [`mako-gabi-gas`](../mako-gabi-gas/), and [`mako-mabis`](../mako-mabis/) for all
@@ -18,7 +20,7 @@ metering arithmetic. It has no I/O, no async, and no floating-point money.
 | `substitute` | `fill_gaps()`, `SubstituteMethod`, `SubstitutionReason` | §17 MessZV Ersatzwertbildung |
 | `forecast` | `project_annual_consumption()`, `prior_period_substitutes()` | §17 MessZV Jahresprognose + §17 Abs. 2 prior-period gap-fill |
 | `resample` | `resample()`, `ResampledBucket` | Down-sample 15-min → hourly / daily / monthly |
-| `virtual_meter` | `compute_virtual_meter()`, `AggregationRule` | §42b EEG GGV community solar, Residuallast |
+| `virtual_meter` | `compute_virtual_meter()`, `AggregationRule` | §42b EnWG GGV: `GgvConstantAllocation` (CCI+ZG6) + `GgvProportionalAllocation` (variable); Residuallast (§42a) |
 | `smgw` | `SmgwSession`, `ClsChannel`, `GatewayCertificate` | BSI TR-03109 gateway lifecycle, §14a CLS channels |
 | `measurement_point` | `MeasurementPoint`, `MarktRolle`, `EnergyFlow` | MaLo + MeLo + OBIS + role binding |
 | `measurement_series` | `MeasurementSeries`, `MeasurementSource`, `ProvenanceEntry` | §22 MessZV provenance / explainability |
@@ -151,17 +153,67 @@ for bucket in &monthly {
 
 ---
 
-## Virtual meters (§42b EEG GGV)
+## Virtual meters (§42b EnWG GGV — Solarpaket I)
 
-```rust
-let rule = AggregationRule::GgvAllocation {
-    plant_malo_id: "PLANT".into(),
-    tenant_fractions: vec![("TENANT_A".into(), dec!(0.4)), ("TENANT_B".into(), dec!(0.35))],
-};
-let virtual_series = compute_virtual_meter(&rule, &source_map)?;
+Both GGV variants compute the tenant's **net grid draw after PV allocation**,
+satisfying §42b Abs. 5 EnWG sentence 2: the allocated PV energy can never exceed
+the tenant's actual consumption in any 15-minute interval. This is enforced by the
+`Pos()` = `max(0, x)` operator per the BDEW "Anwendungshilfe Berechnungsformeln
+Solarpaket 1" (v1.0, 25.01.2024).
+
+### Formula overview
+
+**Constant allocation** (BDEW Beispiel 1 — UTILTS CCI+ZG6):
+```
+net_grid_draw_i[t] = max(0, tenant_consumption_i[t] - fraction_i × plant_generation[t])
 ```
 
-Available rules: `Sum`, `Residual` (§42a EEG), `PvSelfConsumption`, `GgvAllocation` (§42b EEG).
+**Proportional allocation** (BDEW Beispiel 3 — variable ratio):
+```
+ratio_i[t]         = tenant_consumption_i[t] / Σ all_tenant_consumption_j[t]
+                     (0 if denominator = 0 — zero-division protected)
+net_grid_draw_i[t] = max(0, tenant_consumption_i[t] - ratio_i[t] × plant_generation[t])
+```
+
+### Constant allocation (Beispiel 1 — UTILTS CCI+ZG6)
+
+```rust
+// Tenant receives 10 % of plant generation; result = net grid draw
+let rule = AggregationRule::GgvConstantAllocation {
+    plant_melo_id: "MELO_PLANT".into(),
+    tenant_melo_id: "MELO_T2".into(),
+    fraction: dec!(0.10),
+};
+let net_grid_draw = compute_virtual_meter(&rule, &source_map)?;
+// Each interval: max(0, tenant_consumption - 0.10 × plant_generation)
+// Examples:
+//   gen=10, consumption=5  → max(0, 5 - 1) = 4  (1 kWh covered by PV)
+//   gen=10, consumption=0.5 → max(0, 0.5 - 1) = 0 (§42b cap: no negative draw)
+```
+
+### Proportional allocation (Beispiel 3 — variable ratio)
+
+```rust
+let rule = AggregationRule::GgvProportionalAllocation {
+    plant_melo_id: "MELO_PLANT".into(),
+    tenant_melo_id: "MELO_T2".into(),
+    all_tenant_melo_ids: vec!["MELO_T2".into(), "MELO_T3".into()],
+};
+let net_grid_draw = compute_virtual_meter(&rule, &source_map)?;
+// ratio = T2_consumption / (T2 + T3); net = max(0, T2 - ratio × generation)
+// zero-division protected: if all consumptions are 0 → net = 0
+```
+
+### Energy balance check (plant feed-in)
+
+The residual plant feed-in (grid export from PV) equals:
+```
+plant_feedin[t] = plant_generation[t] - Σ (tenant_consumption_i[t] - net_grid_draw_i[t])
+               = plant_generation[t] - Σ pv_allocated_i[t]
+```
+
+Available rules: `Sum`, `Residual` (§42a EEG), `PvSelfConsumption`,
+`GgvConstantAllocation`, `GgvProportionalAllocation` (§42b EnWG Solarpaket I).
 
 ---
 
@@ -219,10 +271,12 @@ println!("Spitzenlast:  {:?} kW", agg.spitzenleistung_kw);
 cargo test -p metering --all-features
 ```
 
-177 tests covering: gas conversion (DVGW G 685), aggregation (RLM/SLP/Gas), Messtyp
-classification, imbalance arithmetic, V01–V10 validation engine (incl. DST transitions),
-§17 MessZV substitute methods, resampling (hourly/daily/monthly), virtual meters (GGV/Residual),
-BSI TR-03109 SMGW + CLS lifecycle, measurement series provenance, register + ObisCode.
+214 tests covering: gas conversion (DVGW G 685), aggregation (RLM/SLP/Gas), Messtyp
+classification, imbalance arithmetic, V01–V10 validation engine (incl. DST transitions and
+V07 DST ambiguity), §17 MessZV substitute methods, resampling (hourly/daily/monthly),
+§42b EnWG GGV virtual meters (Beispiel 1 constant + Beispiel 3 proportional, Pos() cap,
+zero-division guard), §42a Residuallast, BSI TR-03109 SMGW + CLS lifecycle,
+measurement series provenance, register + ObisCode.
 
 ---
 

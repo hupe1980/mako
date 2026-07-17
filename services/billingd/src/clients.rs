@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
-use crate::calculator::{DynamicInterval, MeterInput, TariffInput};
+use energy_billing::{DynamicInterval, MeterInput, Product};
 
 // ── TarifbdClient ─────────────────────────────────────────────────────────────
 
@@ -29,7 +29,7 @@ impl TarifbdClient {
         &self,
         malo_id: &str,
         lf_mp_id: &str,
-    ) -> Result<Option<TariffInput>> {
+    ) -> Result<Option<Product>> {
         let url = format!(
             "{}/api/v1/customer/{}/product?lf_mp_id={}",
             self.base_url, malo_id, lf_mp_id
@@ -140,7 +140,7 @@ fn decimal_from_json(v: Option<&serde_json::Value>) -> Option<Decimal> {
 fn extract_tariff_from_product_data(
     data: Option<&serde_json::Value>,
     product: Option<&serde_json::Value>,
-) -> Result<TariffInput> {
+) -> Result<Product> {
     let category = product
         .and_then(|p| p.get("category"))
         .and_then(|v| v.as_str())
@@ -250,101 +250,85 @@ fn extract_tariff_from_product_data(
         }
     }
 
-    Ok(TariffInput {
-        product_code: product
-            .and_then(|p| p.get("product_code"))
-            .and_then(|v| v.as_str())
-            .map(str::to_owned),
-        category,
-        register_count,
-        grundpreis_ct_per_day,
-        arbeitspreis_ct_per_kwh,
-        arbeitspreis_ht_ct_per_kwh,
-        arbeitspreis_nt_ct_per_kwh,
-        steuerungsrabatt_modul1_eur_per_kw_year,
-        steuerungsrabatt_modul3_eur_per_kw_year,
-        gas_grundpreis_ct_per_day,
-        gas_arbeitspreis_ct_per_kwh_hs,
-        waerme_grundpreis_eur_per_month,
-        waerme_arbeitspreis_ct_per_kwh,
-        waerme_leistungspreis_eur_per_kw_month,
-        solar_arbeitspreis_ct_per_kwh,
-        mieterstrom_aufschlag_ct_per_kwh,
-        gemeinschaft_rabatt_ct_per_kwh,
-        solar_include_stromsteuer: false,
-        eeg_verguetungssatz_ct_per_kwh,
-        eeg_marktpraemie_ct_per_kwh,
-        eeg_managementpraemie_ct_per_kwh,
-        kwkg_zuschlag_ct_per_kwh,
-        marktwert_ct_per_kwh,
-        vermarktungsgebuehr_ct_per_kwh,
-        hems_optimization_event_eur,
-        hems_readout_event_eur,
-        emobility_session_fee_eur,
-        emobility_roaming_fee_eur,
-        service_fee_eur,
-        service_event_price_eur,
-        stromsteuer_ct_per_kwh_override: get_decimal("stromsteuer_ct_per_kwh_override"),
-        energiesteuer_gas_ct_per_kwh_override: get_decimal("energiesteuer_gas_ct_per_kwh_override"),
-        behg_gas_ct_per_kwh_override: get_decimal("behg_gas_ct_per_kwh_override"),
-        mwst_rate_override: get_decimal("mwst_rate_override"),
-        dynamic_epex,
-        dynamic_epex_floor_ct_kwh: get_decimal("dynamic_epex_floor_ct_kwh"),
-        // New fields with defaults — populated from tarifbd JSONB when present
-        sect14a_modul1_nne_reduktion_ct_per_kwh: get_decimal(
-            "sect14a_modul1_nne_reduktion_ct_per_kwh",
-        ),
-        sect14a_modul3_entschaedigung_ct_per_kwh: get_decimal(
-            "sect14a_modul3_entschaedigung_ct_per_kwh",
-        ),
-        waerme_leistungspreis_eur_per_kw_year: get_decimal("waerme_leistungspreis_eur_per_kw_year"),
-        hems_subscription_eur_per_month: get_decimal("hems_subscription_eur_per_month")
-            .or(hems_subscription_eur_per_month_from_code),
-        emobility_service_fee_eur: get_decimal("emobility_service_fee_eur")
-            .or(emobility_service_fee_eur_from_code),
-        emobility_kwh_price_ct: get_decimal("emobility_kwh_price_ct")
-            .or(emobility_kwh_price_ct_from_code),
-        auf_abschlag_ct_per_kwh: get_decimal("auf_abschlag_ct_per_kwh"),
-        auf_abschlag_eur_per_month: get_decimal("auf_abschlag_eur_per_month"),
-        msb_gebuehr_ct_per_day: get_decimal("msb_gebuehr_ct_per_day"),
-        // Block tariff tiers — deserialised from tarifbd JSONB when present
-        block_tiers: product
-            .and_then(|p| p.get("block_tiers"))
-            .and_then(|v| serde_json::from_value(v.clone()).ok()),
-        // Minimum invoice amount (brutto EUR) — from tarifbd product JSONB
-        minimum_invoice_eur_brutto: get_decimal("minimum_invoice_eur_brutto"),
-        // Indexed price config — deserialised from tarifbd JSONB when present
-        indexed_price: product
-            .and_then(|p| p.get("indexed_price"))
-            .and_then(|v| serde_json::from_value(v.clone()).ok()),
-        // Seasonal price overrides — from tarifbd JSONB
-        seasonal_prices: product
-            .and_then(|p| p.get("seasonal_prices"))
-            .and_then(|v| serde_json::from_value(v.clone()).ok()),
-        // waerme_is_renewable — boolean flag in tarifbd product JSONB
-        waerme_is_renewable: product
-            .and_then(|p| p.get("waerme_is_renewable"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        // anlage_kwp, industrie_stromsteuer_befreiung, preisgarantie_bis — from JSONB when set
-        anlage_kwp: get_decimal("anlage_kwp"),
-        industrie_stromsteuer_befreiung: product
-            .and_then(|p| p.get("industrie_stromsteuer_befreiung"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        preisgarantie_bis: product
-            .and_then(|p| p.get("preisgarantie_bis"))
-            .and_then(|v| v.as_str())
-            .and_then(|s| {
-                time::Date::parse(s, time::macros::format_description!("[year]-[month]-[day]")).ok()
-            }),
-        // register_count is already set above via shorthand field
-        leistungspreis_strom_ct_per_kw_month: get_decimal("leistungspreis_strom_ct_per_kw_month"),
-        gas_energiesteuer_befreiung: product
-            .and_then(|p| p.get("gas_energiesteuer_befreiung"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-    })
+    let gas_indexed_price: Option<energy_billing::IndexedPriceConfig> = product
+        .and_then(|p| p.get("gas_indexed_price"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let stromsteuer_befreiung: energy_billing::StromsteuerBefreiung = product
+        .and_then(|p| p.get("stromsteuer_befreiung"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let energiequellen: Option<energy_billing::EnergieQuellen> = product
+        .and_then(|p| p.get("energiequellen"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+    // Build a flat JSON map and deserialize to the typed Product enum.
+    // Product uses #[serde(tag = "category")] so the flat map works directly.
+    let flat = serde_json::json!({
+        "category": category,
+        "product_code": product.and_then(|p| p.get("product_code")).and_then(|v| v.as_str()),
+        "register_count": register_count,
+        "grundpreis_ct_per_day": grundpreis_ct_per_day,
+        "arbeitspreis_ct_per_kwh": arbeitspreis_ct_per_kwh,
+        "arbeitspreis_ht_ct_per_kwh": arbeitspreis_ht_ct_per_kwh,
+        "arbeitspreis_nt_ct_per_kwh": arbeitspreis_nt_ct_per_kwh,
+        "leistungspreis_strom_ct_per_kw_month": get_decimal("leistungspreis_strom_ct_per_kw_month"),
+        "sect14a_modul1_nne_reduktion_ct_per_kwh": get_decimal("sect14a_modul1_nne_reduktion_ct_per_kwh"),
+        "sect14a_modul3_entschaedigung_ct_per_kwh": get_decimal("sect14a_modul3_entschaedigung_ct_per_kwh"),
+        "steuerungsrabatt_modul1_eur_per_kw_year": steuerungsrabatt_modul1_eur_per_kw_year,
+        "steuerungsrabatt_modul3_eur_per_kw_year": steuerungsrabatt_modul3_eur_per_kw_year,
+        "gas_grundpreis_ct_per_day": gas_grundpreis_ct_per_day,
+        "gas_arbeitspreis_ct_per_kwh_hs": gas_arbeitspreis_ct_per_kwh_hs,
+        "gas_leistungspreis_ct_per_kw_month": get_decimal("gas_leistungspreis_ct_per_kw_month"),
+        "gas_indexed_price": gas_indexed_price,
+        "gas_energiesteuer_befreiung": product.and_then(|p| p.get("gas_energiesteuer_befreiung")).and_then(|v| v.as_bool()).unwrap_or(false),
+        "waerme_grundpreis_eur_per_month": waerme_grundpreis_eur_per_month,
+        "waerme_arbeitspreis_ct_per_kwh": waerme_arbeitspreis_ct_per_kwh,
+        "waerme_leistungspreis_eur_per_kw_month": waerme_leistungspreis_eur_per_kw_month,
+        "waerme_leistungspreis_eur_per_kw_year": get_decimal("waerme_leistungspreis_eur_per_kw_year"),
+        "waerme_is_renewable": product.and_then(|p| p.get("waerme_is_renewable")).and_then(|v| v.as_bool()).unwrap_or(false),
+        "waerme_erneuerbar_anteil_pct": get_decimal("waerme_erneuerbar_anteil_pct"),
+        "solar_arbeitspreis_ct_per_kwh": solar_arbeitspreis_ct_per_kwh,
+        "mieterstrom_aufschlag_ct_per_kwh": mieterstrom_aufschlag_ct_per_kwh,
+        "gemeinschaft_rabatt_ct_per_kwh": gemeinschaft_rabatt_ct_per_kwh,
+        "solar_include_stromsteuer": false,
+        "eeg_verguetungssatz_ct_per_kwh": eeg_verguetungssatz_ct_per_kwh,
+        "eeg_marktpraemie_ct_per_kwh": eeg_marktpraemie_ct_per_kwh,
+        "eeg_managementpraemie_ct_per_kwh": eeg_managementpraemie_ct_per_kwh,
+        "kwkg_zuschlag_ct_per_kwh": kwkg_zuschlag_ct_per_kwh,
+        "marktwert_ct_per_kwh": marktwert_ct_per_kwh,
+        "vermarktungsgebuehr_ct_per_kwh": vermarktungsgebuehr_ct_per_kwh,
+        "hems_subscription_eur_per_month": get_decimal("hems_subscription_eur_per_month").or(hems_subscription_eur_per_month_from_code),
+        "hems_optimization_event_eur": hems_optimization_event_eur,
+        "hems_readout_event_eur": hems_readout_event_eur,
+        "emobility_service_fee_eur": get_decimal("emobility_service_fee_eur").or(emobility_service_fee_eur_from_code),
+        "emobility_kwh_price_ct": get_decimal("emobility_kwh_price_ct").or(emobility_kwh_price_ct_from_code),
+        "emobility_session_fee_eur": emobility_session_fee_eur,
+        "emobility_roaming_fee_eur": emobility_roaming_fee_eur,
+        "service_fee_eur": service_fee_eur,
+        "service_event_price_eur": service_event_price_eur,
+        "dynamic_epex": dynamic_epex,
+        "dynamic_epex_floor_ct_kwh": get_decimal("dynamic_epex_floor_ct_kwh"),
+        "auf_abschlag_ct_per_kwh": get_decimal("auf_abschlag_ct_per_kwh"),
+        "auf_abschlag_eur_per_month": get_decimal("auf_abschlag_eur_per_month"),
+        "msb_gebuehr_ct_per_day": get_decimal("msb_gebuehr_ct_per_day"),
+        "block_tiers": product.and_then(|p| p.get("block_tiers")).cloned(),
+        "minimum_invoice_eur_brutto": get_decimal("minimum_invoice_eur_brutto"),
+        "indexed_price": product.and_then(|p| p.get("indexed_price")).cloned(),
+        "seasonal_prices": product.and_then(|p| p.get("seasonal_prices")).cloned(),
+        "anlage_kwp": get_decimal("anlage_kwp"),
+        "industrie_stromsteuer_befreiung": product.and_then(|p| p.get("industrie_stromsteuer_befreiung")).and_then(|v| v.as_bool()).unwrap_or(false),
+        "stromsteuer_befreiung": stromsteuer_befreiung,
+        "preisgarantie_bis": product.and_then(|p| p.get("preisgarantie_bis")).and_then(|v| v.as_str()),
+        "stromsteuer_ct_per_kwh_override": get_decimal("stromsteuer_ct_per_kwh_override"),
+        "energiesteuer_gas_ct_per_kwh_override": get_decimal("energiesteuer_gas_ct_per_kwh_override"),
+        "behg_gas_ct_per_kwh_override": get_decimal("behg_gas_ct_per_kwh_override"),
+        "mwst_rate_override": get_decimal("mwst_rate_override"),
+        "sharing_credit_ct_per_kwh": get_decimal("sharing_credit_ct_per_kwh"),
+        "sharing_description": product.and_then(|p| p.get("sharing_description")).and_then(|v| v.as_str()),
+        "energiequellen": energiequellen,
+    });
+    serde_json::from_value::<Product>(flat)
+        .map_err(|e| anyhow::anyhow!("product deserialization from tarifbd JSONB: {e}"))
 }
 
 // ── EdmdClient ────────────────────────────────────────────────────────────────
@@ -469,9 +453,156 @@ impl EdmdClient {
             .collect();
         Ok(intervals)
     }
+
+    /// `GET /api/v1/billing-period/{malo_id}?from=&to=` — Gas billing period.
+    ///
+    /// Extracts gas-specific fields from the `MeterBillingPeriod` response:
+    /// `messung_qm3`, `brennwert_kwh_per_m3`, `zustandszahl`, `spitzenleistung_kw`.
+    ///
+    /// Returns `None` when the endpoint returns 404 or the response does not contain
+    /// a `messung_qm3` field (i.e. the MaLo is not a gas meter).
+    ///
+    /// The same `/api/v1/billing-period/{malo_id}` endpoint is used for both Strom
+    /// (`get_billing_period`) and Gas — the two methods extract different fields from
+    /// the same response schema.
+    pub async fn get_gas_billing_period(
+        &self,
+        malo_id: &str,
+        period_from: time::Date,
+        period_to: time::Date,
+    ) -> Result<Option<GasBillingPeriod>> {
+        let url = format!(
+            "{}/api/v1/billing-period/{}?from={}&to={}",
+            self.base_url, malo_id, period_from, period_to
+        );
+        let mut req = self.client.get(&url);
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key);
+        }
+        let resp = req.send().await.context("edmd GET billing-period (gas)")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| anyhow::anyhow!("edmd gas billing-period: {e}"))?;
+
+        let body: serde_json::Value = resp.json().await.context("parse gas billing period")?;
+
+        // `messung_qm3` (or legacy `arbeitsmenge_m3`) signals this is a gas MaLo.
+        // If absent, the MaLo is likely an electricity meter — return None.
+        let messung_qm3 = body
+            .get("messung_qm3")
+            .and_then(|v| decimal_from_json(Some(v)))
+            .or_else(|| {
+                body.get("arbeitsmenge_m3")
+                    .and_then(|v| decimal_from_json(Some(v)))
+            });
+
+        let Some(messung_qm3) = messung_qm3 else {
+            return Ok(None);
+        };
+
+        Ok(Some(GasBillingPeriod {
+            messung_qm3,
+            brennwert_kwh_per_qm3: body
+                .get("brennwert_kwh_per_m3")
+                .and_then(|v| decimal_from_json(Some(v))),
+            zustandszahl: body
+                .get("zustandszahl")
+                .and_then(|v| decimal_from_json(Some(v))),
+            spitzenleistung_kw: body
+                .get("spitzenleistung_kw")
+                .and_then(|v| decimal_from_json(Some(v))),
+        }))
+    }
+
+    /// `GET /api/v1/gas-quality/{malo_id}` — MSCONS PID 13007 gas quality data.
+    ///
+    /// Returns the DSO-published Abrechnungsbrennwert and Zustandszahl for all
+    /// billing periods stored for this MaLo.  These values convert gas volume
+    /// (m³) to energy (kWh_Hs) per §24 GasGVV / DVGW G 685:
+    ///
+    /// `kWh_Hs = m³ × brennwert_kwh_per_m3 × zustandszahl`
+    ///
+    /// Returns `None` on 404 (MaLo has no gas quality data yet).
+    /// Returns `Ok(Some(vec![]))` when the response is empty.
+    pub async fn get_gas_quality(&self, malo_id: &str) -> Result<Option<Vec<GasQualityRecord>>> {
+        let url = format!("{}/api/v1/gas-quality/{}", self.base_url, malo_id);
+        let mut req = self.client.get(&url);
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key);
+        }
+        let resp = req.send().await.context("edmd GET gas-quality")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| anyhow::anyhow!("edmd gas-quality: {e}"))?;
+
+        let body: serde_json::Value = resp.json().await.context("parse gas quality")?;
+        let records: Vec<GasQualityRecord> = body
+            .get("gas_quality")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|r| {
+                        use time::format_description::well_known::Iso8601;
+                        let period_from = r
+                            .get("period_from")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| time::Date::parse(s, &Iso8601::DEFAULT).ok())?;
+                        let period_to = r
+                            .get("period_to")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| time::Date::parse(s, &Iso8601::DEFAULT).ok())?;
+                        let brennwert = decimal_from_json(r.get("brennwert_kwh_per_m3"))?;
+                        let zustandszahl = decimal_from_json(r.get("zustandszahl"))?;
+                        Some(GasQualityRecord {
+                            period_from,
+                            period_to,
+                            brennwert_kwh_per_m3: brennwert,
+                            zustandszahl,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(Some(records))
+    }
 }
 
-// ── VertragdClient ────────────────────────────────────────────────────────────
+/// Gas meter data extracted from `edmd GET /api/v1/billing-period/{malo_id}`.
+///
+/// Contains the gas-specific fields of a `MeterBillingPeriod`: the volume reading
+/// in m³ plus the DSO-supplied conversion factors for m³ → kWh_Hs.
+#[derive(Debug, Clone)]
+pub struct GasBillingPeriod {
+    /// Volume at meter conditions (m³).
+    pub messung_qm3: Decimal,
+    /// Abrechnungsbrennwert in kWh/m³ (from edmd, sourced from MSCONS PID 13007).
+    pub brennwert_kwh_per_qm3: Option<Decimal>,
+    /// Zustandszahl — dimensionless volume conversion factor.
+    pub zustandszahl: Option<Decimal>,
+    /// Peak demand in kW (Spitzenleistung) for Gas RLM billing.
+    pub spitzenleistung_kw: Option<Decimal>,
+}
+
+/// One gas quality record from `edmd GET /api/v1/gas-quality/{malo_id}`.
+///
+/// Represents one row of MSCONS PID 13007 data (Gasbeschaffenheitsdaten)
+/// published by the DSO.  The `brennwert_kwh_per_m3 × zustandszahl` product
+/// gives the kWh content per m³ of gas for a specific billing period.
+#[derive(Debug, Clone)]
+pub struct GasQualityRecord {
+    /// Billing period covered by this quality record.
+    pub period_from: time::Date,
+    /// Billing period end (inclusive).
+    pub period_to: time::Date,
+    /// Abrechnungsbrennwert in kWh/m³ (MSCONS QTY+Z08).
+    pub brennwert_kwh_per_m3: Decimal,
+    /// Zustandszahl — dimensionless compressibility/temperature factor (MSCONS QTY+Z10).
+    pub zustandszahl: Decimal,
+}
 
 /// Minimal HTTP client for querying `vertragd` contract data.
 ///

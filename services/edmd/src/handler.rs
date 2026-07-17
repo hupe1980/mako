@@ -108,11 +108,15 @@ pub async fn handle_webhook(
     // PID 23008: Gerätebefund (device inspection) → SONDERABLESUNG
     // PID 23009: WiM Gas INSRPT → SONDERABLESUNG
     if ce_type == "de.mako.process.initiated"
-        && matches!(pid, 23001 | 23003 | 23005 | 23008 | 23009)
+        && matches!(pid, 23001 | 23003 | 23004 | 23005 | 23008 | 23009)
     {
         let (anlass, description) = match pid {
             23001 => ("INSRPT_STOERUNG", "§18 MessZV Störungsmeldung"),
             23003 => ("SONDERABLESUNG", "INSRPT Technische Änderung (PID 23003)"),
+            23004 => (
+                "SONDERABLESUNG",
+                "INSRPT Bestätigung Gerätebefund (PID 23004)",
+            ),
             23005 => ("SONDERABLESUNG", "WiM Gas INSRPT (PID 23005)"),
             23008 => ("SONDERABLESUNG", "INSRPT Gerätebefund (PID 23008)"),
             23009 => ("SONDERABLESUNG", "WiM Gas INSRPT (PID 23009)"),

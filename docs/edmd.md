@@ -7,7 +7,9 @@ mermaid: true
 description: >
   edmd operator guide: Energy Data Management daemon. Stores MSCONS meter
   readings, iMSys direct push for §41a real-time billing, Hampel-filter quality scoring
-  (V01–V10 validation), virtual meters (§42b GGV), §17 MessZV substitution + forecasting,
+  (V01–V10 validation), virtual meters (§42b EnWG GGV Solarpaket I —
+  GgvConstantAllocation CCI+ZG6 Beispiel 1 + GgvProportionalAllocation variable Beispiel 3,
+  with Pos() cap per §42b Abs. 5), §17 MessZV substitution + forecasting,
   reading-order scheduling (Ablesesteuerung), MeterBillingPeriod (RLM
   Spitzenleistung + Gas Brennwert/Zustandszahl), Mehr-/Mindermengensaldo
   imbalance, BSI TR-03109 SMGW lifecycle, Iceberg/S3 OLAP archive, MCP server.
@@ -25,7 +27,7 @@ Key responsibilities:
 - Accept **iMSys / SMGW direct push** (15-min intervals in JSON, bypassing EDIFACT) for §41a real-time billing.
 - Run the **Hampel-filter quality scorer** and **V01–V10 validation engine** on all inbound interval data. Emit `de.edmd.reading.quality.warning` CloudEvents for grade C/F data.
 - Schedule and track **reading orders** (Ablesesteuerung) for all three market roles (LF, MSB, NB). Auto-creates `INSRPT_STOERUNG` orders when a WiM INSRPT PID 23001 Störungsmeldung arrives.
-- Compute and serve **virtual meter time series** (Sum, Residual, PvSelfConsumption, GgvAllocation per §42b EEG GGV community solar) on demand.
+- Compute and serve **virtual meter time series** (Sum, Residual, PvSelfConsumption, GgvConstantAllocation, GgvProportionalAllocation per §42b EnWG Solarpaket I GGV community solar) on demand.
 - Generate **§17 MessZV annual forecasts** (Jahresprognose) and **prior-period substitute values** for gap intervals.
 - Provide resampled Lastgang (hourly / daily / monthly / yearly buckets) and monthly Summenzeitreihe for MaBiS.
 - Provide a time-series query API for ERP and `netzbilanzd`.
@@ -518,7 +520,160 @@ matches `geplant_am` within ±1 day.
 
 ---
 
-## Configuration reference
+## Virtual meters (§42b EnWG GGV — Solarpaket I)
+
+`edmd` computes virtual meter time series on demand for MaLo IDs that have a
+`virtual_meter_configs` row. Virtual meters are used for:
+
+| Rule | Legal basis | Typical use-case |
+|---|---|---|
+| `Sum` | — | Portfolio totals, Summenmessung (multiple transformers, shared substations) |
+| `Residual` | §42a EEG | Grid feed-in = gross generation − own consumption |
+| `PvSelfConsumption` | §42b EEG | Prosumer: net grid draw after PV self-use |
+| `GgvConstantAllocation` | §42b Abs. 5 EnWG | GGV tenant with fixed allocation fraction (UTILTS CCI+ZG6) |
+| `GgvProportionalAllocation` | §42b Abs. 5 EnWG | GGV tenant with dynamic consumption-based allocation |
+
+### GGV allocation formulas (BDEW Anwendungshilfe, 25.01.2024)
+
+Both GGV variants compute the tenant's **net grid draw after PV allocation** —
+the energy each participant draws from the public grid *after* their community
+PV share has been credited. This is the `Malo_i Verbrauch` quantity in the
+BDEW formula sheets, and directly corresponds to the `Verbrauchszeitreihe`
+submitted to the BKV in UTILTS.
+
+The critical invariant (§42b Abs. 5 EnWG, sentence 2) is that the **allocated
+PV energy can never exceed the tenant's actual consumption** in any 15-minute
+interval. This is enforced by the `Pos()` = `max(0, x)` operator:
+
+```
+§42b Abs. 5: "Die einem einzelnen teilnehmenden Letztverbraucher im Wege der
+rechnerischen Aufteilung innerhalb eines 15-Minuten-Zeitintervalls zuteilbare
+Strommenge ist begrenzt auf die durch ihn in diesem Zeitintervall verbrauchte
+Strommenge."
+```
+
+**Constant allocation** (BDEW Beispiel 1 — UTILTS CCI+ZG6):
+
+$$\text{net\_grid\_draw}_i[t] = \max\!\bigl(0,\ c_i[t] - f_i \times g[t]\bigr)$$
+
+where $c_i[t]$ is tenant $i$'s consumption, $f_i$ is the static fraction, and $g[t]$ is plant generation.
+
+**Proportional allocation** (BDEW Beispiel 3 — variable):
+
+$$r_i[t] = \frac{c_i[t]}{\sum_j c_j[t]} \qquad \text{(0 if } \sum c_j = 0 \text{)}$$
+
+$$\text{net\_grid\_draw}_i[t] = \max\!\bigl(0,\ c_i[t] - r_i[t] \times g[t]\bigr)$$
+
+```mermaid
+graph LR
+    PLANT["MELO1 Erzeugung\n(plant generation g)"]
+    MELO2["MELO2 Verbrauch\n(tenant 2 consumption c₂)"]
+    MELO3["MELO3 Verbrauch\n(tenant 3 consumption c₃)"]
+
+    subgraph GgvConstant["GgvConstantAllocation (Beispiel 1, CCI+ZG6)"]
+        direction TB
+        F2["fraction₂ = 10 %"]
+        F3["fraction₃ = 90 %"]
+        NET2_C["Malo2 net draw\n= max(0, c₂ − 0.1×g)"]
+        NET3_C["Malo3 net draw\n= max(0, c₃ − 0.9×g)"]
+    end
+
+    subgraph GgvProportional["GgvProportionalAllocation (Beispiel 3, variable)"]
+        direction TB
+        RATIO["r₂ = c₂/(c₂+c₃)\nr₃ = c₃/(c₂+c₃)"]
+        NET2_P["Malo2 net draw\n= max(0, c₂ − r₂×g)"]
+        NET3_P["Malo3 net draw\n= max(0, c₃ − r₃×g)"]
+    end
+
+    PLANT --> F2 & F3
+    MELO2 --> NET2_C
+    F2 --> NET2_C
+    MELO3 --> NET3_C
+    F3 --> NET3_C
+
+    PLANT & MELO2 & MELO3 --> RATIO
+    RATIO --> NET2_P & NET3_P
+```
+
+### Configuring virtual meters
+
+Create a virtual meter config via the REST API (stored in `virtual_meter_configs`):
+
+```bash
+# Tenant 2: constant 10 % allocation (GgvConstantAllocation)
+curl -X POST http://edmd:8380/api/v1/virtual-meter-configs \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" -d '{
+    "virtual_malo_id": "10001234002",
+    "display_name":    "GGV MaLo2 — Wohnung 2",
+    "sparte":          "STROM",
+    "legal_basis":     "§42b EnWG Solarpaket I",
+    "valid_from":      "2026-01-01T00:00:00Z",
+    "rule_json": {
+      "GgvConstantAllocation": {
+        "plant_melo_id":  "DE0001234560001",
+        "tenant_melo_id": "DE0001234560002",
+        "fraction":       "0.10"
+      }
+    }
+  }'
+
+# Tenant 2: proportional/variable allocation (GgvProportionalAllocation)
+curl -X POST http://edmd:8380/api/v1/virtual-meter-configs \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" -d '{
+    "virtual_malo_id": "10001234002",
+    "display_name":    "GGV MaLo2 — proportional",
+    "sparte":          "STROM",
+    "legal_basis":     "§42b EnWG Solarpaket I",
+    "valid_from":      "2026-01-01T00:00:00Z",
+    "rule_json": {
+      "GgvProportionalAllocation": {
+        "plant_melo_id":      "DE0001234560001",
+        "tenant_melo_id":     "DE0001234560002",
+        "all_tenant_melo_ids": ["DE0001234560002", "DE0001234560003"]
+      }
+    }
+  }'
+```
+
+### Querying virtual meter time series
+
+```bash
+# Net grid draw for tenant MaLo2 — computed live from plant + tenant consumption MeLos
+curl -s "http://edmd:8380/api/v1/virtual/10001234002/lastgang?from=2026-07-01T00:00:00Z&to=2026-07-02T00:00:00Z" \
+  -H "Authorization: Bearer <token>" | jq '{
+    virtual_malo_id: "10001234002",
+    first_interval: .[0].werte[0]
+  }'
+```
+
+Results carry `source = "VIRTUAL"`, `quality` propagated as the worst of all
+source MeLo qualities, and `obis_code = null` (set by the caller).
+
+### Design: one rule per tenant MaLo
+
+Each GGV tenant has its own `virtual_meter_configs` row referencing the shared
+PV plant MeLo plus that tenant's consumption MeLo. For proportional allocation
+the rule also lists **all** tenant MeLos so the denominator $\sum c_j[t]$ can
+be computed.
+
+| Config field | GgvConstantAllocation | GgvProportionalAllocation |
+|---|---|---|
+| `plant_melo_id` | shared PV plant MeLo | shared PV plant MeLo |
+| `tenant_melo_id` | this tenant's MeLo | this tenant's MeLo |
+| `fraction` | static 0–1 | — |
+| `all_tenant_melo_ids` | — | all participating tenant MeLos |
+
+### UTILTS encoding (BDEW CCI+ZG6)
+
+The BDEW UTILTS message encodes both allocation methods as `CCI+ZG6` segments
+(Aufteilungsfaktor Energiemenge). Constant fractions use `CAV+Z28:::0.10` for
+10%, proportional allocation uses `CAV+Z74` (Divisionsquotient). `makod` handles
+UTILTS encoding/decoding transparently — `edmd` only deals with the computed
+net-grid-draw intervals.
+
+---
 
 `edmd` reads its configuration from a **TOML file** (default: `edmd.toml`),
 with secrets deferred to environment variables via `"env:VAR_NAME"` values.

@@ -8,13 +8,15 @@
 //! | Module | Purpose |
 //! |---|---|
 //! | `agent` | Orchestrator + specialist agent mesh |
-//! | `config` | Configuration |
+//! | `builtin` | Compiled-in specialist definitions (shipped in container) |
+//! | `config` | Configuration (`agentd.toml`) |
 //! | `handlers` | HTTP handlers + `AppState` |
 //! | `llm` | LLM provider abstraction (OpenAI, Anthropic, Bedrock) |
 //! | `mcp` | MCP tool pool across all services |
 //! | `rag` | LanceDB RAG engine |
 
 pub mod agent;
+pub mod builtin;
 pub mod config;
 pub mod handlers;
 pub mod llm;

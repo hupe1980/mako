@@ -563,3 +563,54 @@ pub fn sect53_deduction(art: crate::technology::ErzeugungsArt) -> rust_decimal::
         A::Kwk => dec!(0),
     }
 }
+
+// ── §44 Güllekleinanlage ──────────────────────────────────────────────────────
+
+/// Return the **gross AW** for **§44 Güllekleinanlage** (manure-fed small biogas).
+///
+/// ## Eligibility criteria (§44 EEG 2023)
+///
+/// - Installed capacity **≤ 75 kW_el**
+/// - ≥ 80 % of energy input from liquid or solid manure (Gülle / Festmist)
+/// - Use [`crate::biomasse::BiomassSettlementData::new`] to determine eligibility.
+///
+/// When both criteria are met, the plant receives the Güllekleinanlage Anzulegender
+/// Wert instead of the standard Biomasse rate from [`biomasse_lookup`].
+///
+/// ## Net Vergütungssatz
+///
+/// Subtract the §53 deduction (0.2 ct/kWh for Biomasse) before storing:
+/// `net = gross_aw − sect53_deduction(ErzeugungsArt::Biogas)` = 16.90 − 0.20 = **16.70 ct/kWh**
+///
+/// ## Sources
+///
+/// - §44 Abs. 1 EEG 2023 (BGBl. I 2023 Nr. 1, 10.01.2023)
+/// - BNetzA Ausschreibungsergebnisse Biomasse (reference)
+///
+/// # Example
+///
+/// ```rust
+/// use eeg_billing::rates;
+/// use rust_decimal_macros::dec;
+///
+/// // 50 kW Güllekleinanlage — eligible under §44 EEG 2023
+/// let table = rates::guellekleinanlage_rate(2023).expect("known year");
+/// assert_eq!(table.rate_for(dec!(50)).unwrap(), billing::Amount::parse("0.16900").unwrap());
+///
+/// // Plant above 75 kW — not returned; use biomasse_lookup instead
+/// assert!(table.rate_for(dec!(80)).is_err());
+/// ```
+pub fn guellekleinanlage_rate(eeg_year: i16) -> Option<RateLookup> {
+    match eeg_year {
+        // Source: §44 Abs. 1 EEG 2023 (BGBl I 2023 Nr. 1)
+        // Gross AW = 16.90 ct/kWh for ≤75 kW_el.
+        // Net (after §53 -0.2 ct) = 16.70 ct/kWh.
+        // Solarpaket I (BGBl I 2024 Nr. 107) did not change §44 rates.
+        2023..=2026 => RateLookup::builder()
+            .at_most(dec!(75), amount_ct("16.90")) // ≤75 kW_el (hard capacity ceiling per §44)
+            // No fallback: plants > 75 kW are NOT eligible for Güllekleinanlage rate.
+            .build()
+            .ok(),
+        _ => None,
+    }
+}

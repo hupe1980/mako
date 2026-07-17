@@ -15,8 +15,8 @@
 //! 8. Pro-rata fraction in [0, 1] → `brutto_eur <= full_period_brutto_eur`
 
 use energy_billing::{
-    BillingContext, GasMeterInput, GridInput, InvoiceType, MeterInput, Quantities, RegulatoryRates,
-    TariffInput,
+    BillingContext, GasMeterInput, GridInput, InvoiceType, MeterInput, Product, Quantities,
+    RegulatoryRates,
 };
 use proptest::prelude::*;
 use rust_decimal::Decimal;
@@ -81,7 +81,7 @@ proptest! {
         kwh in arb_kwh(),
         mwst_rate in arb_mwst(),
     ) {
-        let tariff: TariffInput = serde_json::from_value(serde_json::json!({
+        let tariff: Product = serde_json::from_value(serde_json::json!({
             "category": "STROM",
             "arbeitspreis_ct_per_kwh": arbeitspreis,
             "grundpreis_ct_per_day": grundpreis,
@@ -98,9 +98,7 @@ proptest! {
         };
 
         let invoice = tariff.build_engine(&GridInput::default(), &ctx.regulatory_rates)
-            .unwrap()
-            .bill(ctx, &quantities)
-            .unwrap();
+            .bill(ctx, &quantities).unwrap();
 
         invoice.assert_valid();
 
@@ -135,7 +133,7 @@ proptest! {
         kwh in arb_kwh(),
         mwst_rate in arb_mwst(),
     ) {
-        let tariff: TariffInput = serde_json::from_value(serde_json::json!({
+        let tariff: Product = serde_json::from_value(serde_json::json!({
             "category": "GAS",
             "gas_arbeitspreis_ct_per_kwh_hs": arbeitspreis,
             "gas_grundpreis_ct_per_day": grundpreis,
@@ -152,9 +150,7 @@ proptest! {
         };
 
         let invoice = tariff.build_engine(&GridInput::default(), &ctx.regulatory_rates)
-            .unwrap()
-            .bill(ctx, &quantities)
-            .unwrap();
+            .bill(ctx, &quantities).unwrap();
 
         invoice.assert_valid();
 
@@ -169,7 +165,7 @@ proptest! {
         kwh in arb_kwh(),
         ap in arb_arbeitspreis(),
     ) {
-        let tariff: TariffInput = serde_json::from_value(serde_json::json!({
+        let tariff: Product = serde_json::from_value(serde_json::json!({
             "category": "STROM",
             "arbeitspreis_ct_per_kwh": ap,
             "mwst_rate_override": 0.0,
@@ -181,9 +177,7 @@ proptest! {
             ..Default::default()
         };
         let invoice = tariff.build_engine(&GridInput::default(), &ctx.regulatory_rates)
-            .unwrap()
-            .bill(ctx, &quantities)
-            .unwrap();
+            .bill(ctx, &quantities).unwrap();
 
         prop_assert_eq!(
             invoice.mwst_eur,
@@ -204,7 +198,7 @@ proptest! {
         gp in arb_grundpreis(),
         mwst in arb_mwst(),
     ) {
-        let tariff: TariffInput = serde_json::from_value(serde_json::json!({
+        let tariff: Product = serde_json::from_value(serde_json::json!({
             "category": "STROM",
             "arbeitspreis_ct_per_kwh": 30.0,
             "grundpreis_ct_per_day": gp,
@@ -217,9 +211,7 @@ proptest! {
             ..Default::default()
         };
         let invoice = tariff.build_engine(&GridInput::default(), &ctx.regulatory_rates)
-            .unwrap()
-            .bill(ctx, &quantities)
-            .unwrap();
+            .bill(ctx, &quantities).unwrap();
 
         // Expected netto: grundpreis only = gp_ct/day × days / 100
         let days = Decimal::from(31u32); // Jan 2026 = 31 days
@@ -238,7 +230,7 @@ proptest! {
         ap in arb_arbeitspreis(),
         kwh in (0.1_f64..=50_000.0_f64).prop_map(to_decimal),
     ) {
-        let tariff: TariffInput = serde_json::from_value(serde_json::json!({
+        let tariff: Product = serde_json::from_value(serde_json::json!({
             "category": "STROM",
             "arbeitspreis_ct_per_kwh": ap,
         })).unwrap();
@@ -251,18 +243,14 @@ proptest! {
         let mut ctx_orig = base_ctx();
         ctx_orig.invoice_type = InvoiceType::Initial;
         let original = tariff.build_engine(&GridInput::default(), &ctx_orig.regulatory_rates)
-            .unwrap()
-            .bill(ctx_orig, &quantities)
-            .unwrap();
+            .bill(ctx_orig, &quantities).unwrap();
 
         let mut ctx_cancel = base_ctx();
         ctx_cancel.invoice_type = InvoiceType::Cancellation {
             original_invoice_id: "R-PROP-001".to_owned(),
         };
         let cancellation = tariff.build_engine(&GridInput::default(), &ctx_cancel.regulatory_rates)
-            .unwrap()
-            .bill(ctx_cancel, &quantities)
-            .unwrap();
+            .bill(ctx_cancel, &quantities).unwrap();
 
         // Cancellation must exactly negate the original
         let sum = original.brutto_eur + cancellation.brutto_eur;
@@ -288,7 +276,7 @@ proptest! {
         mwst_rate in arb_mwst(),
         behg_ct in (0.0_f64..=5.0_f64).prop_map(to_decimal),
     ) {
-        let tariff: TariffInput = serde_json::from_value(serde_json::json!({
+        let tariff: Product = serde_json::from_value(serde_json::json!({
             "category": "GAS",
             "gas_arbeitspreis_ct_per_kwh_hs": arbeitspreis,
             "mwst_rate_override": mwst_rate,
@@ -313,9 +301,7 @@ proptest! {
             ..Default::default()
         };
 
-        let result = tariff.build_engine(&GridInput::default(), &rates);
-        prop_assume!(result.is_some());
-        let invoice = result.unwrap().bill(ctx, &quantities).unwrap();
+        let invoice = tariff.build_engine(&GridInput::default(), &rates).bill(ctx, &quantities).unwrap();
 
         // brutto == netto + mwst (within 0.01 EUR rounding)
         let diff = (invoice.brutto_eur - (invoice.netto_eur + invoice.mwst_eur)).abs();
@@ -337,7 +323,7 @@ proptest! {
         kwh in arb_kwh(),
         kw in (0.0_f64..=10_000.0_f64).prop_map(to_decimal),
     ) {
-        let tariff: TariffInput = serde_json::from_value(serde_json::json!({
+        let tariff: Product = serde_json::from_value(serde_json::json!({
             "category": "STROM",
             "arbeitspreis_ct_per_kwh": arbeitspreis,
             "leistungspreis_strom_ct_per_kw_month": leistungspreis_ct,
@@ -353,9 +339,7 @@ proptest! {
             ..Default::default()
         };
 
-        let result = tariff.build_engine(&GridInput::default(), &ctx.regulatory_rates);
-        prop_assume!(result.is_some());
-        let invoice = result.unwrap().bill(ctx, &quantities).unwrap();
+        let invoice = tariff.build_engine(&GridInput::default(), &ctx.regulatory_rates).bill(ctx, &quantities).unwrap();
 
         // All Leistungspreis positions must be non-negative
         for pos in &invoice.positions {

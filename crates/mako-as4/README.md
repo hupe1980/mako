@@ -141,39 +141,6 @@ let url = endpoint.local_url(); // "http://127.0.0.1:PORT/as4/inbox"
 | `asx-rs` 0.7 | AS4/ebMS3 transport engine (ECDSA signing, ECDH-ES encrypt, dedup) |
 | `makod` | Production daemon — assembles AS4 ingest, sender, and all 45+ BDEW workflows |
 
----
-
-## BDEW AS4 requirements
-
-| Requirement | Specification |
-|---|---|
-| Transport | HTTPS + mutual TLS (TLS 1.2 minimum) |
-| SOAP version | 1.2 |
-| MEP | One-Way/Push (mandatory) |
-| Signing | RSA-SHA256 + Exclusive C14N + SHA-256 digest — **mandatory** |
-| Encryption | AES-128-CBC or AES-256-GCM + RSA-OAEP — **optional** |
-| Party ID | 13-digit GLN, type `urn:oasis:names:tc:ebcore:partyid-type:iso6523:0088` |
-| Retry window | 72 hours, up to 5 attempts |
-| Deduplication | Required (persistent `asx_rs::storage::TtlDedupStorage`) |
-
-AS4 became mandatory for electricity market communication on **1 April 2024**
-and for gas market communication on **1 April 2025**
-(BNetzA orders BK6-22-024 / BK7-22-023).
-
----
-
-## API overview
-
-| Module | Contents |
-|---|---|
-| `constants` | BDEW-specific service URIs, algorithm identifiers, retry parameters |
-| `pmode` | `BdewAction` enum + `bdew_pmode()` / `bdew_pmode_encrypted()` P-Mode factories |
-| `profile` | `BdewAs4Profile` entry point + `bdew_mako_profile_stack()` |
-| `partner_directory` | `PartnerDirectory` — GLN-to-endpoint resolution |
-| `server` *(feature)* | Axum-based AS4 receive endpoint + router config |
-
----
-
 ## Quick start
 
 ```rust

@@ -317,6 +317,11 @@ impl IngestionSource {
     }
 }
 
+/// Default allocation version for `serde` deserialization — see `MeterRead.allocation_version`.
+fn default_allocation_version() -> String {
+    "INITIAL".to_owned()
+}
+
 /// A single metered interval read sourced from an MSCONS message.
 ///
 /// Populated when domain crates emit typed read payloads in `ProcessCompleted`.
@@ -365,6 +370,30 @@ pub struct MeterRead {
     /// `None` = no warnings. Triggers `de.edmd.reading.quality.warning` CloudEvent.
     #[serde(default)]
     pub quality_warnings: Option<serde_json::Value>,
+
+    // ── F-12: Extended provenance fields (migrations 0006–0007) ────────────────
+    /// MP-ID of the MSB or system that delivered this reading.
+    ///
+    /// Populated from `meter_data_receipts.sender_mp_id` (MSCONS path) or from the
+    /// direct-push API header. Required for §22 MessZV per-interval MSB attribution
+    /// after an MSB switch (WiM PID 55039).
+    #[serde(default)]
+    pub sender_mp_id: Option<String>,
+
+    /// MSCONS data-delivery version per BK6-22-024 §6.4 (MaBiS AllocationVersion).
+    ///
+    /// `"INITIAL"` = vorläufig (day-3); `"FINAL"` = endgültig (day-8);
+    /// `"CORRECTION"` = Nachbearbeitungswert.
+    /// Used by `mabis-syncd` to distinguish preliminary from final Summenzeitreihen.
+    #[serde(default = "default_allocation_version")]
+    pub allocation_version: String,
+
+    /// Transaction time: when this row was first inserted (database clock).
+    ///
+    /// Combined with `meter_read_corrections.corrected_at` this gives a full
+    /// bitemporal model: "what did we know at time T?" (`valid_from_tx` ≤ T).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_from_tx: Option<OffsetDateTime>,
 }
 
 /// Query parameters for time-series reads.
@@ -374,7 +403,10 @@ pub struct TimeSeriesQuery {
     pub from: OffsetDateTime,
     pub to: OffsetDateTime,
     pub sparte: Option<Sparte>,
-    pub tenant_id: Option<Uuid>,
+    /// Tenant data-isolation key.  **Required for all production queries** —
+    /// omitting this field causes `pg/timeseries.rs::query()` to reject the call.
+    /// Previously `tenant_id: Option<Uuid>` allowed NULL which leaked cross-tenant data.
+    pub tenant: String,
 }
 
 /// Mehr-/Mindermengen imbalance report for one MaLo and one billing period.

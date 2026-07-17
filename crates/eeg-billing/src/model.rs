@@ -489,6 +489,22 @@ pub struct SettleInput {
     /// §51 Negativpreisregel does NOT apply to these kWh (§19 Abs. 2 EEG 2023).
     pub einspeisemanagement_kwh: Option<Decimal>,
 
+    /// §§42–44 EEG 2023 — Biomass/biogas fuel composition for settlement enforcement.
+    ///
+    /// When set for biomass or biogas plants, the engine enforces:
+    ///
+    /// - **§43 Abs. 1 Nr. 2 substrate cap** (max 40 % Energiepflanzen vom Acker):
+    ///   when `substrate_cap_ok = false`, settlement returns `Sanctioned` (EUR 0,
+    ///   legal_basis = "§43 Abs. 1 Nr. 2 EEG 2023").
+    /// - **§44 Güllekleinanlage** eligibility is recorded in the position label for
+    ///   audit transparency — it does **not** change the formula here; the caller
+    ///   must supply the correct Güllekleinanlage `verguetungssatz_ct`
+    ///   (use [`crate::rates::guellekleinanlage_rate`]).
+    ///
+    /// Use [`crate::biomasse::BiomassSettlementData::new`] to derive from fuel
+    /// composition data.  `None` = plant is not biomass/biogas (cap not enforced).
+    pub biomasse: Option<crate::biomasse::BiomassSettlementData>,
+
     // wind_korrekturfaktor and wind_standort moved to SettlementScheme::MarketPremium { .. }
     // post_eeg_price_floor moved to SettlementScheme::PostEeg { price_floor }
     // verguetungssatz_ct moved to scheme variants (FeedInTariff, TenantElectricity, etc.)

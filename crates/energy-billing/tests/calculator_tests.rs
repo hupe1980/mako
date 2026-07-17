@@ -8,9 +8,9 @@
 use energy_billing::{
     AbschlagDeduction, BillingContext, BillingEngine, DynamicInterval, EegMeterInput,
     ElectricityProvider, EmobilityMeterInput, GasMeterInput, GasProvider, GridInput,
-    HemsMeterInput, InvoiceType, MeterInput, MeteringMode, MwStProvider, PositionCategory,
+    HemsMeterInput, InvoiceType, MeterInput, MeteringMode, MwStProvider, PositionCategory, Product,
     Quantities, RegulatoryRates, Sect41aAnnualComparison, ServiceMeterInput, SolarMeterInput,
-    TariffInput, WaermeMeterInput, behg_ct_per_kwh_for_year,
+    WaermeMeterInput, behg_ct_per_kwh_for_year,
 };
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -33,7 +33,7 @@ fn no_grid() -> GridInput {
     GridInput::default()
 }
 
-fn j(s: &str) -> TariffInput {
+fn j(s: &str) -> Product {
     serde_json::from_str(s).unwrap()
 }
 
@@ -61,7 +61,7 @@ fn elec(kwh: rust_decimal::Decimal) -> Quantities {
 /// Execute billing through the production `build_engine` dispatch.
 ///
 /// Uses: Jan 2026 period, rates_2026(), no grid, Initial invoice type.
-fn bill(tariff: &TariffInput, q: Quantities) -> energy_billing::Invoice {
+fn bill(tariff: &Product, q: Quantities) -> energy_billing::Invoice {
     bill_full(
         tariff,
         &GridInput::default(),
@@ -72,16 +72,12 @@ fn bill(tariff: &TariffInput, q: Quantities) -> energy_billing::Invoice {
 }
 
 /// Like `bill` but with a custom `GridInput` (NNE / KA / Leistungspreis tests).
-fn bill_grid(tariff: &TariffInput, grid: &GridInput, q: Quantities) -> energy_billing::Invoice {
+fn bill_grid(tariff: &Product, grid: &GridInput, q: Quantities) -> energy_billing::Invoice {
     bill_full(tariff, grid, q, &rates_2026(), InvoiceType::Initial)
 }
 
 /// Like `bill` but with custom `RegulatoryRates` (year-specific BEHG, etc.).
-fn bill_rates(
-    tariff: &TariffInput,
-    q: Quantities,
-    rates: &RegulatoryRates,
-) -> energy_billing::Invoice {
+fn bill_rates(tariff: &Product, q: Quantities, rates: &RegulatoryRates) -> energy_billing::Invoice {
     bill_full(
         tariff,
         &GridInput::default(),
@@ -92,7 +88,7 @@ fn bill_rates(
 }
 
 /// Like `bill` but emits a `CreditNote` (EEG / EINSPEISUNG settlement).
-fn bill_credit(tariff: &TariffInput, q: Quantities) -> energy_billing::Invoice {
+fn bill_credit(tariff: &Product, q: Quantities) -> energy_billing::Invoice {
     bill_full(
         tariff,
         &GridInput::default(),
@@ -104,7 +100,7 @@ fn bill_credit(tariff: &TariffInput, q: Quantities) -> energy_billing::Invoice {
 
 /// Full-control billing helper — uses `TariffInput::build_engine` for dispatch.
 fn bill_full(
-    tariff: &TariffInput,
+    tariff: &Product,
     grid: &GridInput,
     q: Quantities,
     rates: &RegulatoryRates,
@@ -121,11 +117,7 @@ fn bill_full(
         regulatory_rates: rates.clone(),
         ..Default::default()
     };
-    tariff
-        .build_engine(grid, rates)
-        .expect("unsupported product category — update TariffInput::build_engine")
-        .bill(ctx, &q)
-        .unwrap()
+    tariff.build_engine(grid, rates).bill(ctx, &q).unwrap()
 }
 
 // ── Strom ─────────────────────────────────────────────────────────────────────
@@ -263,6 +255,7 @@ fn gas_kwh_hs_direct_determines_arbeit() {
         zustandszahl: None,
         kwh_hs: Some(dec!(500)),
         gasqualitaet: None,
+        spitzenleistung_kw: None,
     };
     let r = bill(
         &tariff,
@@ -292,6 +285,7 @@ fn gas_brennwert_conversion_equivalent_to_kwh_hs() {
         zustandszahl: Some(dec!(1)),
         kwh_hs: None,
         gasqualitaet: None,
+        spitzenleistung_kw: None,
     };
     let m2 = GasMeterInput {
         messung_qm3: dec!(0),
@@ -299,6 +293,7 @@ fn gas_brennwert_conversion_equivalent_to_kwh_hs() {
         zustandszahl: None,
         kwh_hs: Some(dec!(1000)),
         gasqualitaet: None,
+        spitzenleistung_kw: None,
     };
     let r1 = bill(
         &tariff,
@@ -522,6 +517,7 @@ fn gas_gasqualitaet_added_as_zusatz_attribut() {
         zustandszahl: None,
         kwh_hs: Some(dec!(500)),
         gasqualitaet: Some("H2_BLEND".into()),
+        spitzenleistung_kw: None,
     };
     let r = bill(
         &tariff,
@@ -534,6 +530,7 @@ fn gas_gasqualitaet_added_as_zusatz_attribut() {
     // Brutto must be identical to billing without gasqualitaet (no correction applied)
     let m_no_gq = GasMeterInput {
         gasqualitaet: None,
+        spitzenleistung_kw: None,
         ..m.clone()
     };
     let r_no_gq = bill(
@@ -573,6 +570,7 @@ fn gas_no_gasqualitaet_no_zusatz_attribut() {
         zustandszahl: None,
         kwh_hs: Some(dec!(100)),
         gasqualitaet: None,
+        spitzenleistung_kw: None,
     };
     let r = bill(
         &tariff,
@@ -757,6 +755,7 @@ fn gas_nne_and_bilanzierungsumlage_add_to_brutto() {
         zustandszahl: None,
         kwh_hs: Some(dec!(500)),
         gasqualitaet: None,
+        spitzenleistung_kw: None,
     };
     let grid_with = GridInput {
         gas_nne_arbeitspreis_ct_per_kwh: Some(dec!(4)),
@@ -1732,7 +1731,6 @@ fn jahresabrechnung_deducts_abschlage_from_zahlbetrag() {
     };
     let invoice = tariff
         .build_engine(&no_grid(), &rates_2026())
-        .expect("STROM build_engine")
         .bill(ctx_final, &quantities)
         .unwrap();
     invoice.assert_valid();
@@ -1877,11 +1875,9 @@ fn behg_year_aware_rate_differs_by_year() {
         "2026 CO2 price (65 EUR/t) must exceed 2024 (45 EUR/t)"
     );
 
-    let tariff = TariffInput {
-        category: "GAS".to_owned(),
-        gas_arbeitspreis_ct_per_kwh_hs: Some(dec!(7.50)),
-        ..Default::default()
-    };
+    let tariff: Product =
+        serde_json::from_str(r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":7.50}"#)
+            .unwrap();
     let gas_meter = GasMeterInput {
         kwh_hs: Some(dec!(500)),
         ..Default::default()
@@ -1972,7 +1968,6 @@ fn strom_zaehlerstand_produces_info_position() {
     };
     let invoice = tariff
         .build_engine(&no_grid(), &rates_2026())
-        .expect("STROM build_engine")
         .bill(
             {
                 let (f, t) = period();
@@ -2022,7 +2017,7 @@ fn strom_zaehlerstand_produces_info_position() {
 fn strom_block_tariff_splits_consumption_across_tiers() {
     use serde_json::json;
 
-    let tariff: TariffInput = serde_json::from_value(json!({
+    let tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
         "block_tiers": [
             { "bis_kwh": 1000.0, "preis_ct_per_kwh": 28.0 },
@@ -2061,7 +2056,7 @@ fn strom_block_tariff_splits_consumption_across_tiers() {
 #[test]
 fn strom_block_tariff_all_three_tiers() {
     use serde_json::json;
-    let tariff: TariffInput = serde_json::from_value(json!({
+    let tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
         "block_tiers": [
             { "bis_kwh": 1000.0, "preis_ct_per_kwh": 28.0 },
@@ -2096,10 +2091,10 @@ fn strom_block_tariff_all_three_tiers() {
 fn strom_block_tariff_lower_than_flat_rate_for_high_consumption() {
     // Block tariff is cheaper at high consumption than a flat 28ct rate
     use serde_json::json;
-    let flat_tariff: TariffInput =
+    let flat_tariff: Product =
         serde_json::from_value(json!({ "category": "STROM", "arbeitspreis_ct_per_kwh": 28.0 }))
             .unwrap();
-    let block_tariff: TariffInput = serde_json::from_value(json!({
+    let block_tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
         "block_tiers": [
             { "bis_kwh": 1000.0, "preis_ct_per_kwh": 28.0 },
@@ -2147,7 +2142,6 @@ fn strom_verbrauchshistorie_produces_info_positions() {
     };
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates_2026())
-        .unwrap()
         .bill(
             ctx,
             &Quantities {
@@ -2239,7 +2233,6 @@ fn strom_energiemix_appears_in_rechnung_json() {
     };
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates_2026())
-        .unwrap()
         .bill(
             ctx,
             &Quantities {
@@ -2330,7 +2323,7 @@ fn ggv_hybrid_billing_splits_pv_and_grid_portions() {
     );
 
     // Build tariff: solar_arbeitspreis (PV) + arbeitspreis (grid fallback)
-    let tariff: TariffInput = serde_json::from_value(json!({
+    let tariff: Product = serde_json::from_value(json!({
         "category": "SOLAR",
         "solar_arbeitspreis_ct_per_kwh": 22.0,    // GGV PV rate (cheaper)
         "arbeitspreis_ct_per_kwh": 30.0,           // Grid fallback rate
@@ -2415,7 +2408,7 @@ fn ggv_no_grid_when_pv_covers_full_consumption() {
     assert_eq!(ggv_input.grid_kwh(), dec!(0));
     assert_eq!(ggv_input.pv_coverage_ratio(), dec!(1.0000));
 
-    let tariff: TariffInput = serde_json::from_value(json!({
+    let tariff: Product = serde_json::from_value(json!({
         "category": "SOLAR",
         "solar_arbeitspreis_ct_per_kwh": 20.0,
         "arbeitspreis_ct_per_kwh": 29.0  // Grid fallback (not used here)
@@ -2716,7 +2709,6 @@ fn minimum_invoice_topup_when_below_minimum() {
     };
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates_2026())
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
     invoice.assert_valid();
@@ -2764,7 +2756,6 @@ fn minimum_invoice_no_topup_when_already_above_minimum() {
     };
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates_2026())
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
     invoice.assert_valid();
@@ -2796,14 +2787,14 @@ fn bundled_invoice_electricity_19pct_and_renewable_heat_7pct_two_tax_positions()
     use serde_json::json;
 
     // Electricity tariff — no override → engine default 19% applies
-    let elec_tariff: TariffInput = serde_json::from_value(json!({
+    let elec_tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
         "arbeitspreis_ct_per_kwh": 30.0
     }))
     .unwrap();
 
     // Renewable heat tariff — 7% VAT (§12 Abs. 2 Nr. 1 UStG)
-    let heat_tariff: TariffInput = serde_json::from_value(json!({
+    let heat_tariff: Product = serde_json::from_value(json!({
         "category": "WAERME",
         "waerme_arbeitspreis_ct_per_kwh": 10.0,
         "mwst_rate_override": 0.07
@@ -2825,11 +2816,11 @@ fn bundled_invoice_electricity_19pct_and_renewable_heat_7pct_two_tax_positions()
 
     // Single engine, both providers, single MwStProvider at 19% default
     let invoice = BillingEngine::new()
-        .add(ElectricityProvider::from_tariff(
+        .add(ElectricityProvider::from_product(
             &elec_tariff,
-            &GridInput::default(),
+            GridInput::default(),
         ))
-        .add(HeatProvider::from_tariff(&heat_tariff))
+        .add(HeatProvider::from_product(&heat_tariff))
         .add(MwStProvider::new(dec!(0.19)))
         .bill(
             {
@@ -2894,7 +2885,7 @@ fn heat_positions_carry_7pct_applicable_tax_rate() {
     };
     use serde_json::json;
 
-    let heat_tariff: TariffInput = serde_json::from_value(json!({
+    let heat_tariff: Product = serde_json::from_value(json!({
         "category": "WAERME",
         "waerme_arbeitspreis_ct_per_kwh": 12.0,
         "mwst_rate_override": 0.07
@@ -2910,7 +2901,7 @@ fn heat_positions_carry_7pct_applicable_tax_rate() {
         ..Default::default()
     };
     let invoice = BillingEngine::new()
-        .add(HeatProvider::from_tariff(&heat_tariff))
+        .add(HeatProvider::from_product(&heat_tariff))
         .add(MwStProvider::new(dec!(0.19))) // engine default 19%
         .bill(
             {
@@ -2979,7 +2970,7 @@ fn gas_indexed_price_ttf_computes_correctly() {
 
     // TTF at 35 EUR/MWh; conversion 0.1 EUR/MWh → ct/kWh
     // Effective price = 0.5 + 0.3 + 35.0 × 0.1 = 4.3 ct/kWh
-    let tariff: TariffInput = serde_json::from_value(json!({
+    let tariff: Product = serde_json::from_value(json!({
         "category": "GAS",
         "indexed_price": {
             "base_ct_per_kwh": 0.5,
@@ -3030,7 +3021,7 @@ fn gas_indexed_price_falls_back_when_no_index_value() {
     use serde_json::json;
 
     // No index_value provided → fallback to gas_arbeitspreis_ct_per_kwh
-    let tariff: TariffInput = serde_json::from_value(json!({
+    let tariff: Product = serde_json::from_value(json!({
         "category": "GAS",
         "gas_arbeitspreis_ct_per_kwh_hs": 8.0,
         "indexed_price": {
@@ -3074,7 +3065,7 @@ fn electricity_indexed_price_phelix_computes_correctly() {
     use serde_json::json;
 
     // Phelix Base at 80 EUR/MWh → 8.0 ct/kWh + 0.5 base + 0.2 spread = 8.7 ct/kWh
-    let tariff: TariffInput = serde_json::from_value(json!({
+    let tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
         "indexed_price": {
             "base_ct_per_kwh": 0.5,
@@ -3122,7 +3113,7 @@ fn renewable_fernwaerme_auto_7pct_vat_without_explicit_override() {
     use energy_billing::PositionCategory;
     use serde_json::json;
 
-    let tariff: TariffInput = serde_json::from_value(json!({
+    let tariff: Product = serde_json::from_value(json!({
         "category": "WAERME",
         "waerme_arbeitspreis_ct_per_kwh": 12.0,
         "waerme_is_renewable": true   // ← triggers auto 7%
@@ -3185,7 +3176,7 @@ fn mwst_rate_override_wins_over_waerme_is_renewable() {
     use serde_json::json;
 
     // Operator sets 19% explicitly — this overrides the auto-7%
-    let tariff: TariffInput = serde_json::from_value(json!({
+    let tariff: Product = serde_json::from_value(json!({
         "category": "WAERME",
         "waerme_arbeitspreis_ct_per_kwh": 10.0,
         "waerme_is_renewable": true,
@@ -3228,7 +3219,7 @@ fn seasonal_gas_winter_price_higher_than_summer() {
     use serde_json::json;
     use time::macros::date;
 
-    let tariff: TariffInput = serde_json::from_value(json!({
+    let tariff: Product = serde_json::from_value(json!({
         "category": "GAS",
         "seasonal_prices": [
             { "from_month": 10, "to_month": 3, "gas_arbeitspreis_ct_per_kwh_hs": 12.5, "label": "Winter" },
@@ -3267,12 +3258,10 @@ fn seasonal_gas_winter_price_higher_than_summer() {
 
     let winter_invoice = tariff
         .build_engine(&GridInput::default(), &rates_2026())
-        .unwrap()
         .bill(ctx_winter, &q)
         .unwrap();
     let summer_invoice = tariff
         .build_engine(&GridInput::default(), &rates_2026())
-        .unwrap()
         .bill(ctx_summer, &q.clone())
         .unwrap();
     winter_invoice.assert_valid();
@@ -3307,7 +3296,7 @@ fn seasonal_electricity_summer_rate_lower_than_base() {
     use serde_json::json;
     use time::macros::date;
 
-    let tariff: TariffInput = serde_json::from_value(json!({
+    let tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
         "arbeitspreis_ct_per_kwh": 30.0,    // base price (used when no season matches)
         "seasonal_prices": [
@@ -3344,12 +3333,10 @@ fn seasonal_electricity_summer_rate_lower_than_base() {
 
     let aug_invoice = tariff
         .build_engine(&GridInput::default(), &rates_2026())
-        .unwrap()
         .bill(ctx_aug, &q)
         .unwrap();
     let nov_invoice = tariff
         .build_engine(&GridInput::default(), &rates_2026())
-        .unwrap()
         .bill(ctx_nov, &q.clone())
         .unwrap();
     aug_invoice.assert_valid();
@@ -3394,7 +3381,7 @@ fn prosumer_bills_only_grid_consumption_no_nne_on_self_consumption() {
     use energy_billing::{PositionCategory, ProsumerMeterInput};
     use serde_json::json;
 
-    let tariff: TariffInput = serde_json::from_value(json!({
+    let tariff: Product = serde_json::from_value(json!({
         "category": "STROM",
         "grundpreis_ct_per_day": 10.0,
         "arbeitspreis_ct_per_kwh": 30.0
@@ -3418,8 +3405,8 @@ fn prosumer_bills_only_grid_consumption_no_nne_on_self_consumption() {
     };
 
     let invoice = energy_billing::BillingEngine::new()
-        .add(energy_billing::ElectricityProvider::from_tariff(
-            &tariff, &grid_nne,
+        .add(energy_billing::ElectricityProvider::from_product(
+            &tariff, grid_nne,
         ))
         .add(energy_billing::MwStProvider::new(dec!(0.19)))
         .bill(
@@ -3679,7 +3666,6 @@ fn nb_mp_id_appears_in_rechnung_json_when_set() {
     };
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates_2026())
-        .unwrap()
         .bill(
             ctx,
             &Quantities {
@@ -3768,14 +3754,15 @@ fn welcome_bonus_reduces_brutto_with_bonus_category() {
                 category: PositionCategory::Bonus,
                 tags: vec!["bonus".to_owned()],
                 applicable_tax_rate: None,
+                trace: energy_billing::PositionTrace::default(),
             }])
         }
     }
 
     let invoice = BillingEngine::new()
-        .add(ElectricityProvider::from_tariff(
+        .add(ElectricityProvider::from_product(
             &tariff,
-            &GridInput::default(),
+            GridInput::default(),
         ))
         .add(WelcomeBonusProvider)
         .add(MwStProvider::new(dec!(0.19)))
@@ -3842,11 +3829,11 @@ fn multi_product_electricity_and_gas_on_one_invoice() {
     };
 
     let invoice = BillingEngine::new()
-        .add(ElectricityProvider::from_tariff(
+        .add(ElectricityProvider::from_product(
             &elec_tariff,
-            &GridInput::default(),
+            GridInput::default(),
         ))
-        .add(GasProvider::from_tariff(&gas_tariff, &GridInput::default()))
+        .add(GasProvider::from_product(&gas_tariff, GridInput::default()))
         .add(MwStProvider::new(dec!(0.19)))
         .bill(ctx, &quantities)
         .unwrap();
@@ -3874,7 +3861,7 @@ fn multi_product_electricity_and_gas_on_one_invoice() {
 fn anlage_kwp_le30_auto_zero_pct_mwst() {
     // §12 Abs. 3 UStG (Solarpaket I 2023): solar PV ≤ 30 kWp → 0% MwSt automatically.
     // anlage_kwp set to 10 kWp — no mwst_rate_override needed.
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "EEG",
         "anlage_kwp": 10.0,
@@ -3904,7 +3891,6 @@ fn anlage_kwp_le30_auto_zero_pct_mwst() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
     invoice.assert_valid();
@@ -3925,7 +3911,7 @@ fn anlage_kwp_le30_auto_zero_pct_mwst() {
 #[test]
 fn anlage_kwp_above30_normal_mwst() {
     // Plants > 30 kWp get standard 19% MwSt.
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "EEG",
         "anlage_kwp": 50.0,
@@ -3955,7 +3941,6 @@ fn anlage_kwp_above30_normal_mwst() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
     invoice.assert_valid();
@@ -3970,7 +3955,7 @@ fn anlage_kwp_above30_normal_mwst() {
 #[test]
 fn industrie_stromsteuer_befreiung_produces_info_position() {
     // §9 Abs. 1 Nr. 4 StromStG — industrial Stromsteuer exemption.
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
         "arbeitspreis_ct_per_kwh": 18.0,
@@ -4000,7 +3985,6 @@ fn industrie_stromsteuer_befreiung_produces_info_position() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
     invoice.assert_valid();
@@ -4040,7 +4024,7 @@ fn metering_mode_imsys_stored_on_meter_input() {
 #[test]
 fn is_estimated_meter_produces_info_position() {
     // §17 Abs. 1 MessZV — estimated reading must be labeled on the invoice.
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
         "arbeitspreis_ct_per_kwh": 30.0
@@ -4070,7 +4054,6 @@ fn is_estimated_meter_produces_info_position() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
     invoice.assert_valid();
@@ -4089,7 +4072,7 @@ fn is_estimated_meter_produces_info_position() {
 
 #[test]
 fn zaehler_replaced_produces_info_position() {
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
         "arbeitspreis_ct_per_kwh": 30.0
@@ -4119,7 +4102,6 @@ fn zaehler_replaced_produces_info_position() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
     invoice.assert_valid();
@@ -4135,7 +4117,7 @@ fn zaehler_replaced_produces_info_position() {
 #[test]
 fn preisgarantie_bis_produces_info_position_when_in_future() {
     // §41 Abs. 1 Nr. 4 EnWG — price guarantee must appear on invoice.
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
         "arbeitspreis_ct_per_kwh": 30.0,
@@ -4165,7 +4147,6 @@ fn preisgarantie_bis_produces_info_position_when_in_future() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
     invoice.assert_valid();
@@ -4180,7 +4161,7 @@ fn preisgarantie_bis_produces_info_position_when_in_future() {
 
 #[test]
 fn billing_run_id_propagated_to_invoice_and_json() {
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
         "arbeitspreis_ct_per_kwh": 30.0
@@ -4210,7 +4191,6 @@ fn billing_run_id_propagated_to_invoice_and_json() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
     invoice.assert_valid();
@@ -4260,18 +4240,33 @@ fn metering_mode_default_is_slp() {
 fn behg_effective_mwst_anlage_kwp_30_boundary() {
     // Exactly 30 kWp → 0% MwSt (§12 Abs. 3 UStG boundary).
     let rates = RegulatoryRates::default();
-    let tariff_30: TariffInput = serde_json::from_str(r#"{"anlage_kwp": 30.0}"#).unwrap();
-    let tariff_31: TariffInput = serde_json::from_str(r#"{"anlage_kwp": 31.0}"#).unwrap();
-    let tariff_none: TariffInput = TariffInput::default();
+    let tariff_30: Product =
+        serde_json::from_str(r#"{"category":"STROM","anlage_kwp": 30.0}"#).unwrap();
+    let tariff_31: Product =
+        serde_json::from_str(r#"{"category":"STROM","anlage_kwp": 31.0}"#).unwrap();
+    let tariff_none: Product = Product::Strom(Default::default());
 
     assert_eq!(
-        rates.effective_mwst(&tariff_30),
+        match &tariff_30 {
+            Product::Strom(p) => rates.effective_mwst_electricity(p),
+            _ => rates.mwst_rate,
+        },
         Decimal::ZERO,
         "30 kWp → 0%"
     );
-    assert_eq!(rates.effective_mwst(&tariff_31), dec!(0.19), "31 kWp → 19%");
     assert_eq!(
-        rates.effective_mwst(&tariff_none),
+        match &tariff_31 {
+            Product::Strom(p) => rates.effective_mwst_electricity(p),
+            _ => rates.mwst_rate,
+        },
+        dec!(0.19),
+        "31 kWp → 19%"
+    );
+    assert_eq!(
+        match &tariff_none {
+            Product::Strom(p) => rates.effective_mwst_electricity(p),
+            _ => rates.mwst_rate,
+        },
         dec!(0.19),
         "no kWp → 19%"
     );
@@ -4285,7 +4280,7 @@ fn tou_pricing_ht_nt_matches_manual_calculation() {
     // HT: 300 kWh × 32 ct/kWh = 96.00 EUR (net)
     // NT: 200 kWh × 18 ct/kWh = 36.00 EUR (net)
     // Total net commodity: 132.00 EUR
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
         "arbeitspreis_ht_ct_per_kwh": 32.0,
@@ -4317,7 +4312,6 @@ fn tou_pricing_ht_nt_matches_manual_calculation() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
     invoice.assert_valid();
@@ -4378,7 +4372,7 @@ fn prorate_days_no_constraint_returns_full() {
 #[test]
 fn grundpreis_prorated_for_partial_period() {
     // Contract starts Jan 16 → Grundpreis should be 16 × 0.10 = 1.60 EUR (not 31 × 0.10 = 3.10)
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
         "arbeitspreis_ct_per_kwh": 30.0,
@@ -4409,7 +4403,6 @@ fn grundpreis_prorated_for_partial_period() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
     invoice.assert_valid();
@@ -4426,13 +4419,13 @@ fn grundpreis_prorated_for_partial_period() {
 #[test]
 fn invoice_merge_combines_positions_and_recalculates_totals() {
     // Two sub-period invoices merged: old tariff Jan 1-14, new tariff Jan 15-31.
-    let tariff_old: TariffInput = serde_json::from_str(
+    let tariff_old: Product = serde_json::from_str(
         r#"{
         "category": "STROM", "arbeitspreis_ct_per_kwh": 28.0, "mwst_rate_override": 0.19
     }"#,
     )
     .unwrap();
-    let tariff_new: TariffInput = serde_json::from_str(
+    let tariff_new: Product = serde_json::from_str(
         r#"{
         "category": "STROM", "arbeitspreis_ct_per_kwh": 32.0, "mwst_rate_override": 0.19
     }"#,
@@ -4477,12 +4470,10 @@ fn invoice_merge_combines_positions_and_recalculates_totals() {
 
     let inv_a = tariff_old
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx_a, &q_a)
         .unwrap();
     let inv_b = tariff_new
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx_b, &q_b)
         .unwrap();
 
@@ -4508,7 +4499,7 @@ fn invoice_merge_combines_positions_and_recalculates_totals() {
 fn invoice_allocate_proportionally_penny_correct() {
     // Split a EUR 100 invoice 60/40 between two recipients.
     // 60% → EUR 60, 40% → EUR 40. Sum must equal original exactly.
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM", "arbeitspreis_ct_per_kwh": 20.0, "mwst_rate_override": 0.0
     }"#,
@@ -4534,7 +4525,6 @@ fn invoice_allocate_proportionally_penny_correct() {
     };
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
 

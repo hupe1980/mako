@@ -98,6 +98,7 @@
 #![allow(clippy::items_after_statements)]
 
 pub mod datenabruf;
+pub mod gas_quality;
 pub mod invoic;
 pub mod lf_anmeldung;
 pub mod lf_stornierung;
@@ -172,6 +173,8 @@ pub use stornierung::{
     GeliGasStornierungState, GeliGasStornierungWorkflow, STORNIERUNG_PIDS,
     STORNIERUNG_RESPONSE_WINDOW_LABEL, WORKFLOW_NAME as STORNIERUNG_WORKFLOW_NAME,
 };
+
+pub use gas_quality::{GasQualitaet, normalize_gasqualitaet};
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
 

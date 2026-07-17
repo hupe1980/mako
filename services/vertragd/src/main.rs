@@ -127,6 +127,11 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/kunden/:id/export",
             get(handlers::get_kunde_gdpr_export),
         )
+        // GDPR Art. 17 — right to erasure (anonymize PII, retain contract records)
+        .route(
+            "/api/v1/kunden/:id/anonymize",
+            post(handlers::post_anonymize_kunde),
+        )
         // Person sub-object — B2C natural person details (L13 — GDPR Art. 15)
         .route(
             "/api/v1/kunden/:id/person",

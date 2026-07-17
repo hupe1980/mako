@@ -169,6 +169,16 @@ pub struct SettlementStateHistoryParams {
     pub limit: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ExplainSettlementParams {
+    /// TechnischeRessource ID of the plant.
+    pub tr_id: String,
+    /// Billing year (e.g. 2026).
+    pub billing_year: i16,
+    /// Billing month 1–12.
+    pub billing_month: i16,
+}
+
 // ── Handler ───────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -1004,6 +1014,78 @@ compliance reporting."
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
     }
+
+    #[tool(
+        description = "Explain a specific monthly settlement calculation: why was this EUR amount \
+             computed, which reductions applied, and what is the full position trace. Returns all \
+             SettlePosition entries (description, legal_basis, kWh, rate_ct_kwh, EUR) for the \
+             settlement receipt. Essential for operator audits, BNetzA inspections, and dispute \
+             resolution.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn explain_settlement(
+        &self,
+        Parameters(params): Parameters<ExplainSettlementParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // Fetch the stored positions from settlement_receipts
+        let row = sqlx::query(
+            "SELECT id, billing_year, billing_month, settlement_model, \
+              einspeisemenge_kwh, settlement_eur, status, positions_json, \
+              pflichtzahlung_eur, verlaengerungsanspruch_qh, \
+              billing_days_fraction, settled_at \
+             FROM settlement_receipts \
+             WHERE tr_id = $1 AND tenant = $2 \
+               AND billing_year = $3 AND billing_month = $4 \
+             ORDER BY settled_at DESC LIMIT 1",
+        )
+        .bind(&params.tr_id)
+        .bind(&self.state.tenant)
+        .bind(params.billing_year)
+        .bind(params.billing_month)
+        .fetch_optional(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let Some(row) = row else {
+            return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "No settlement found for plant {} in {}/{:02}.",
+                params.tr_id, params.billing_year, params.billing_month
+            ))]));
+        };
+
+        use sqlx::Row as _;
+        let positions: serde_json::Value = row
+            .try_get::<Option<serde_json::Value>, _>("positions_json")
+            .unwrap_or(None)
+            .unwrap_or(serde_json::Value::Array(vec![]));
+
+        let result = serde_json::json!({
+            "tr_id": params.tr_id,
+            "billing_year": params.billing_year,
+            "billing_month": params.billing_month,
+            "settlement_model": row.try_get::<String, _>("settlement_model").unwrap_or_default(),
+            "status": row.try_get::<String, _>("status").unwrap_or_default(),
+            "einspeisemenge_kwh": row.try_get::<Option<rust_decimal::Decimal>, _>("einspeisemenge_kwh").unwrap_or(None),
+            "settlement_eur": row.try_get::<Option<rust_decimal::Decimal>, _>("settlement_eur").unwrap_or(None),
+            "pflichtzahlung_eur": row.try_get::<Option<rust_decimal::Decimal>, _>("pflichtzahlung_eur").unwrap_or(None),
+            "verlaengerungsanspruch_qh": row.try_get::<i64, _>("verlaengerungsanspruch_qh").unwrap_or(0),
+            "billing_days_fraction": row.try_get::<Option<rust_decimal::Decimal>, _>("billing_days_fraction").unwrap_or(None),
+            "settled_at": row.try_get::<Option<time::OffsetDateTime>, _>("settled_at").ok().flatten().map(|t| t.to_string()),
+            "positions": positions,
+            "interpretation": format!(
+                "Settlement for {}/{:02}: {} positions listed above. \
+                 Each position shows the legal paragraph, kWh quantity, rate, and EUR amount. \
+                 The 'settlement_eur' is the sum of all position EUR values. \
+                 A pflichtzahlung_eur > 0 means a separate §52 EEG penalty is owed to the NB.",
+                params.billing_year, params.billing_month,
+                positions.as_array().map(|a| a.len()).unwrap_or(0)
+            )
+        });
+
+        ContentBlock::json(result)
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
+    }
 }
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
@@ -1233,8 +1315,10 @@ impl ServerHandler for EinsdMcpHandler {
              Core: list_plants, get_plant, list_expiring, list_settlements, list_unsettled_plants\n\
              Rates: lookup_verguetungssatz, lookup_statutory_rate\n\
              Settlement: trigger_settle, get_epex_monthly_price, import_epex_monthly_price\n\
-             Compliance: get_compliance_status, list_plants_without_mastr,\n\
-             check_direktvermarktung_compliance, check_sect44b_quota\n\n\
+             Compliance: get_compliance_status, list_plants_without_mastr, \
+             check_direktvermarktung_compliance, check_sect44b_quota\n\
+             Audit/Explainability: explain_settlement (full position trace per period), \
+             get_settlement_state_history\n\n\
              Rate tables: lookup_statutory_rate (Solarpaket I 2024 rates for SOLAR/WIND/BIOMASSE/KWKG)\n\
              Workflow: lookup_statutory_rate -> POST /api/v1/anlagen -> import_epex_monthly_price ->\n\
              trigger_settle (one) or POST /api/v1/settle/{y}/{m} (batch) -> list_settlements\n\n\

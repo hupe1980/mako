@@ -26,7 +26,8 @@
 //! | `GET`  | `/api/v1/billing/audit` | §22 MessZV BNetzA audit export |
 //! | `POST` | `/api/v1/webhooks/remadv` | REMADV CloudEvent ingest (status update) |
 //! | `GET/PUT` | `/api/v1/redispatch/kostenblatt/{activation_id}` | Redispatch 2.0 Kostenblatt |
-//! | `POST` | `/api/v1/redispatch/kostenblatt/{activation_id}/compute` | Auto-compute from edmd |
+//! | `POST` | `/api/v1/redispatch/kostenblatt/{activation_id}/compute` | Auto-compute from edmd Lastgang (15-min sum) |
+//! | `GET`  | `/api/v1/redispatch/kostenblatt/gaps/{year}/{month}` | Activations without dispatch_kwh data |
 //! | `POST` | `/api/v1/redispatch/kostenblatt/submit/{year}/{month}` | Submit pending |
 //! | `GET/PUT` | `/api/v1/billing/fremdkosten/{draft_id}` | Fremdkosten (§22 MessZV) |
 //! | `GET`  | `/health` | Liveness check |
@@ -161,9 +162,15 @@ async fn main() -> anyhow::Result<()> {
             put(handlers::put_kostenblatt).get(handlers::get_kostenblatt),
         )
         // N5: Kostenblatt edmd auto-compute (BK6-20-061 §4.2)
+        // Lastgang 15-min sum primary; billing-period fallback; manual override.
         .route(
             "/api/v1/redispatch/kostenblatt/:activation_id/compute",
             post(handlers::post_kostenblatt_compute),
+        )
+        // N5a: Kostenblatt gap detection — activations without dispatch_kwh data.
+        .route(
+            "/api/v1/redispatch/kostenblatt/gaps/:year/:month",
+            get(handlers::get_kostenblatt_gaps),
         )
         // Fremdkosten typed BO4E REST (§22 MessZV external cost pass-through)
         .route(

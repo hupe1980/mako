@@ -24,9 +24,9 @@ use rust_decimal::Decimal;
 
 use crate::error::BillingError;
 use crate::types::{
-    CalculationTrace, GridSettlement, InvoicePosition, KaKlasse, LegalReference, MmmInput,
-    MsbInput, NneInput, QuantityUnit, SettlementStatus, SettlementType, SettlementWarning, Sparte,
-    TariffSource, WarningSeverity,
+    BillingPositionKind, CalculationTrace, GasAwhInput, GridSettlement, InvoicePosition, KaKlasse,
+    LegalReference, MmmInput, MsbInput, NneInput, QuantityUnit, Sect14aModule, SettlementStatus,
+    SettlementType, SettlementWarning, Sparte, TariffSource, WarningSeverity,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -44,6 +44,7 @@ fn pos_net(qty: Decimal, unit_price_eur: Decimal) -> Decimal {
 fn kwh_pos_traced(
     number: u32,
     text: &str,
+    kind: BillingPositionKind,
     kwh: Decimal,
     unit_price_eur: Decimal,
     legal_refs: Vec<LegalReference>,
@@ -53,10 +54,13 @@ fn kwh_pos_traced(
     InvoicePosition {
         number,
         text: text.to_owned(),
+        kind,
         quantity: kwh.round_dp(3),
         unit: QuantityUnit::Kwh,
         unit_price_eur: unit_price_eur.round_dp(6),
         net_eur: pos_net(kwh, unit_price_eur),
+        artikel_id: None,
+        lastvariable_preisposition_json: None,
         trace: CalculationTrace {
             explanation: format!(
                 "{kwh:.3} kWh × {:.6} EUR/kWh = {:.5} EUR",
@@ -77,6 +81,7 @@ fn kwh_pos_traced(
 fn kw_pos_traced(
     number: u32,
     text: &str,
+    kind: BillingPositionKind,
     kw: Decimal,
     unit_price_eur: Decimal,
     legal_refs: Vec<LegalReference>,
@@ -86,10 +91,13 @@ fn kw_pos_traced(
     InvoicePosition {
         number,
         text: text.to_owned(),
+        kind,
         quantity: kw.round_dp(3),
         unit: QuantityUnit::Kw,
         unit_price_eur: unit_price_eur.round_dp(6),
         net_eur: pos_net(kw, unit_price_eur),
+        artikel_id: None,
+        lastvariable_preisposition_json: None,
         trace: CalculationTrace {
             explanation: format!(
                 "{kw:.3} kW × {:.6} EUR/kW = {:.5} EUR",
@@ -110,6 +118,7 @@ fn kw_pos_traced(
 fn monat_pos_traced(
     number: u32,
     text: &str,
+    kind: BillingPositionKind,
     months: Decimal,
     unit_price_eur: Decimal,
     legal_refs: Vec<LegalReference>,
@@ -119,10 +128,13 @@ fn monat_pos_traced(
     InvoicePosition {
         number,
         text: text.to_owned(),
+        kind,
         quantity: months.round_dp(3),
         unit: QuantityUnit::Monat,
         unit_price_eur: unit_price_eur.round_dp(6),
         net_eur: pos_net(months, unit_price_eur),
+        artikel_id: None,
+        lastvariable_preisposition_json: None,
         trace: CalculationTrace {
             explanation: format!(
                 "{months} Monate × {:.6} EUR/Monat = {:.5} EUR",
@@ -160,21 +172,31 @@ fn make_tariff_source(sheet_id: Option<&str>) -> Option<TariffSource> {
 /// and applicable [`LegalReference`]s. The service layer converts this to
 /// BO4E `Rechnung` and validates via `invoic-checker`.
 ///
-/// ## Positions
+/// ## Positions (in order)
 ///
 /// | # | Description | Condition |
 /// |---|---|---|
-/// | 1 | Netznutzung Arbeit | flat mode |
-/// | 1+2 | Arbeit HT + NT (§14a Modul 2) | ToU mode (BK6-22-300) |
+/// | 1 | Gas Grundpreis (Verrechnungspreis) | when `nne_grundpreis_eur_per_month` set (Gas only) |
+/// | next | Netznutzung Arbeit (§14a Modul 1 reduced) | Modul 1 flat reduction mode |
+/// | next | Netznutzung Arbeit HT + NT (§14a Modul 2) | ToU mode (BK6-22-300) |
+/// | next | Netznutzung Arbeit | flat mode (no §14a) |
 /// | next | Netznutzung Leistung (StromNEV §17) | RLM only |
 /// | last | Konzessionsabgabe (KAV §2) | when `ka_satz_ct_per_kwh` set |
 ///
 /// ## Legal references
 ///
+/// - Gas Grundpreis position → `GasNEV §14`
 /// - Arbeit positions → `StromNEV §21` (or `GasNEV §14` for Gas)
-/// - §14a ToU positions → `Sect14aEnwg { module: 2 }` + `BNetzA BK6-22-300`
+/// - §14a Modul 1 positions → `Sect14aEnwg { module: Modul1 }` + `BNetzA BK6-22-300`
+/// - §14a ToU positions → `Sect14aEnwg { module: Modul2 }` + `BNetzA BK6-22-300`
 /// - Leistung position → `StromNEV §17`
 /// - Konzessionsabgabe → `KAV §2 Abs. 2`
+///
+/// ## §14a Modul 1 flat reduction
+///
+/// Set `sect14a_modul1_reduction_factor = Some(dec!(0.85))` to apply the BNetzA
+/// BK6-22-300 Modul 1 15 % discount: the Arbeitspreis is multiplied by the factor
+/// before billing. The trace carries `regulatory_reduction_factor` for auditability.
 ///
 /// ## Errors
 ///
@@ -217,11 +239,33 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<GridSettlement, Billing
         ),
     };
 
-    // §14a Modul 2 ToU or flat Arbeit
+    // Gas Grundpreis / Verrechnungspreis (Gas NNE monthly standing charge per GasNEV)
+    if let (Some(gp_eur), Some(gp_months)) = (
+        input.nne_grundpreis_eur_per_month,
+        input.nne_grundpreis_months,
+    ) && gp_months > 0
+    {
+        let months = Decimal::from(gp_months);
+        let p = monat_pos_traced(
+            next,
+            "Netzentgelt Grundpreis Gas (Verrechnungspreis)",
+            BillingPositionKind::NneGasGrundpreis,
+            months,
+            gp_eur,
+            vec![LegalReference::GasNev { paragraph: "§14" }],
+            tariff_src.clone(),
+        );
+        total += p.net_eur;
+        positions.push(p);
+        next += 1;
+    }
+
+    // §14a Modul 2 ToU or §14a Modul 1 flat reduction or plain Arbeit
     let has_tou = input.arbeitsmenge_ht_kwh.is_some()
         && input.arbeitspreis_ht_ct_per_kwh.is_some()
         && input.arbeitsmenge_nt_kwh.is_some()
         && input.arbeitspreis_nt_ct_per_kwh.is_some();
+    let has_modul1 = input.sect14a_modul1_reduction_factor.is_some();
 
     if has_tou {
         let ht_kwh = input.arbeitsmenge_ht_kwh.unwrap();
@@ -229,10 +273,13 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<GridSettlement, Billing
         let p = kwh_pos_traced(
             next,
             "Netznutzung Arbeit HT (§14a Modul 2)",
+            BillingPositionKind::NneArbeitHt,
             ht_kwh,
             ht_eur,
             vec![
-                LegalReference::Sect14aEnwg { module: 2 },
+                LegalReference::Sect14aEnwg {
+                    module: Sect14aModule::Modul2,
+                },
                 LegalReference::BnetzaDecision {
                     reference: "BK6-22-300",
                 },
@@ -249,10 +296,13 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<GridSettlement, Billing
         let p = kwh_pos_traced(
             next,
             "Netznutzung Arbeit NT (§14a Modul 2)",
+            BillingPositionKind::NneArbeitNt,
             nt_kwh,
             nt_eur,
             vec![
-                LegalReference::Sect14aEnwg { module: 2 },
+                LegalReference::Sect14aEnwg {
+                    module: Sect14aModule::Modul2,
+                },
                 LegalReference::BnetzaDecision {
                     reference: "BK6-22-300",
                 },
@@ -263,11 +313,60 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<GridSettlement, Billing
         total += p.net_eur;
         positions.push(p);
         next += 1;
+    } else if has_modul1 {
+        // §14a Modul 1: apply flat percentage reduction to the Arbeitspreis.
+        // BK6-22-300 Anlage 2 default = 85 % (customer pays 85 % of full rate).
+        let factor = input.sect14a_modul1_reduction_factor.unwrap();
+        let base_eur = ct_to_eur(input.arbeitspreis_ct_per_kwh);
+        let reduced_eur = (base_eur * factor).round_dp(6);
+        let gross = input.arbeitsmenge_kwh * reduced_eur;
+        let p = InvoicePosition {
+            number: next,
+            text: format!(
+                "Netznutzung Arbeit §14a Modul 1 ({:.0}% Reduzierung)",
+                factor * HUNDRED
+            ),
+            kind: BillingPositionKind::NneArbeitModul1,
+            quantity: input.arbeitsmenge_kwh.round_dp(3),
+            unit: QuantityUnit::Kwh,
+            unit_price_eur: reduced_eur,
+            net_eur: pos_net(input.arbeitsmenge_kwh, reduced_eur),
+            artikel_id: None,
+            lastvariable_preisposition_json: None,
+            trace: CalculationTrace {
+                explanation: format!(
+                    "{:.3} kWh × {:.6} EUR/kWh (= {:.6} × {factor} Modul 1) = {:.5} EUR",
+                    input.arbeitsmenge_kwh,
+                    reduced_eur,
+                    base_eur,
+                    gross.round_dp(5)
+                ),
+                input_quantity: input.arbeitsmenge_kwh,
+                input_unit_price_eur: reduced_eur,
+                gross_eur: gross,
+                legal_refs: vec![
+                    LegalReference::Sect14aEnwg {
+                        module: Sect14aModule::Modul1,
+                    },
+                    LegalReference::BnetzaDecision {
+                        reference: "BK6-22-300",
+                    },
+                    arbeit_ref.clone(),
+                ],
+                tariff_source: tariff_src.clone(),
+                regulatory_reduction_factor: Some(factor),
+                rounding_note: Some("reduced unit price rounded to 6 dp per BK6-22-300"),
+            },
+        };
+        total += p.net_eur;
+        positions.push(p);
+        next += 1;
     } else {
         let eur = ct_to_eur(input.arbeitspreis_ct_per_kwh);
         let p = kwh_pos_traced(
             next,
             "Netznutzung Arbeit",
+            BillingPositionKind::NneArbeit,
             input.arbeitsmenge_kwh,
             eur,
             vec![arbeit_ref.clone()],
@@ -284,6 +383,7 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<GridSettlement, Billing
         let p = kw_pos_traced(
             next,
             "Netznutzung Leistung",
+            BillingPositionKind::NneLeistung,
             sl_kw,
             lp_eur,
             vec![LegalReference::StromNev { paragraph: "§17" }],
@@ -321,10 +421,13 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<GridSettlement, Billing
         let p = InvoicePosition {
             number: next,
             text: format!("Konzessionsabgabe{ka_klasse_note}"),
+            kind: BillingPositionKind::Konzessionsabgabe,
             quantity: ka_base_kwh.round_dp(3),
             unit: QuantityUnit::Kwh,
             unit_price_eur: ct_to_eur(ka_ct).round_dp(6),
             net_eur: pos_net(ka_base_kwh, ct_to_eur(ka_ct)),
+            artikel_id: None,
+            lastvariable_preisposition_json: None,
             trace: CalculationTrace {
                 explanation: format!(
                     "{ka_base_kwh:.3} kWh × {:.6} EUR/kWh = {:.5} EUR{ka_klasse_note}",
@@ -346,10 +449,103 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<GridSettlement, Billing
         positions.push(p);
     }
 
+    // ── §14a Modul 3: per-dispatch-interval Spotpreis-NNE ─────────────────────
+    // BNetzA BK6-22-300 Anlage 2 §3: One position per 15-min dispatch interval.
+    // The rate is pre-calculated by the caller from the spot-price formula in
+    // `PreisblattNetznutzung.lastvariablePreispositionen`.
+    // Each position carries a `LastvariablePreisposition` JSON for ERP validation.
+    for (seq, interval) in input.sect14a_modul3_intervals.iter().enumerate() {
+        if interval.menge_kwh <= Decimal::ZERO {
+            continue; // skip zero-energy intervals (e.g. overnight no-load)
+        }
+        let rate_eur = ct_to_eur(interval.nne_rate_ct_per_kwh);
+        let net = pos_net(interval.menge_kwh, rate_eur);
+
+        use time::format_description::well_known::Rfc3339;
+        let from_str = interval
+            .period_from
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| interval.period_from.to_string());
+        let to_str = interval
+            .period_to
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| interval.period_to.to_string());
+
+        let label = format!("§14a Modul 3 Spotpreis-NNE {from_str}–{to_str}");
+
+        // Build typed LastvariablePreisposition JSON for ERP-side validation.
+        // Format follows BO4E v202607 `LastvariablePreisposition` COM schema.
+        // The service layer deserializes to `rubo4e::current::LastvariablePreisposition`.
+        let mut lvp = serde_json::json!({
+            "_typ":                   "LASTVARIABLE_PREISPOSITION",
+            "bezeichnung":            label.as_str(),
+            "preisreferenz":          "ENERGIEMENGE",
+            "preisBezugseinheit":     "KWH",
+            "preisWaehrungseinheit":  "CT",
+            "tarifkalkulationsmethode": "SPOTPREIS",
+            "preisstaffeln": [{
+                "_typ":         "PREISSTAFFEL",
+                "einheitspreis": interval.nne_rate_ct_per_kwh.to_string(),
+                "staffelgrenzeVon": "0"
+            }]
+        });
+        if let Some(epex) = interval.epex_spot_ct_per_kwh {
+            lvp["zusatzAttribute"] = serde_json::json!([{
+                "_typ":  "ZUSATZ_ATTRIBUT",
+                "name":  "epexSpotCtPerKwh",
+                "wert":  epex.to_string()
+            }]);
+        }
+
+        let mut explanation = format!(
+            "{:.3} kWh × {:.6} EUR/kWh (§14a Modul 3 Spotpreis, interval {}/{}) = {:.5} EUR",
+            interval.menge_kwh, rate_eur, from_str, to_str, net
+        );
+        if let Some(epex) = interval.epex_spot_ct_per_kwh {
+            explanation.push_str(&format!(" [EPEX {epex:.4} ct/kWh]"));
+        }
+
+        let p = InvoicePosition {
+            number: next + seq as u32,
+            text: label,
+            kind: BillingPositionKind::NneArbeitModul3,
+            quantity: interval.menge_kwh.round_dp(3),
+            unit: QuantityUnit::Kwh,
+            unit_price_eur: rate_eur.round_dp(6),
+            net_eur: net,
+            artikel_id: None,
+            lastvariable_preisposition_json: Some(lvp),
+            trace: CalculationTrace {
+                explanation,
+                input_quantity: interval.menge_kwh,
+                input_unit_price_eur: rate_eur,
+                gross_eur: interval.menge_kwh * rate_eur,
+                legal_refs: vec![
+                    LegalReference::Sect14aEnwg {
+                        module: Sect14aModule::Modul3,
+                    },
+                    LegalReference::BnetzaDecision {
+                        reference: "BK6-22-300",
+                    },
+                    arbeit_ref.clone(),
+                ],
+                tariff_source: tariff_src.clone(),
+                regulatory_reduction_factor: None,
+                rounding_note: Some("rate ct→EUR 6 dp; net 5 dp; BK6-22-300 Anlage 2 §3"),
+            },
+        };
+        total += p.net_eur;
+        positions.push(p);
+    }
+    if !input.sect14a_modul3_intervals.is_empty() {
+        next += input.sect14a_modul3_intervals.len() as u32;
+        let _ = next; // consumed; next seq number not used further
+    }
+
     let total_eur = total.round_dp(2);
     decimal_to_euro_amount(total_eur)?;
 
-    Ok(GridSettlement {
+    let result = GridSettlement {
         pid: settlement_type.default_pid(),
         settlement_type,
         status: SettlementStatus::Initial,
@@ -364,7 +560,13 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<GridSettlement, Billing
         positions,
         total_eur,
         warnings,
-    })
+    };
+    debug_assert_eq!(
+        result.total_eur,
+        result.recomputed_total(),
+        "NNE: total_eur mismatch — calculation bug"
+    );
+    Ok(result)
 }
 
 // ── MMM invoice (PID 31002) ───────────────────────────────────────────────────
@@ -405,14 +607,26 @@ pub fn calculate_mmm_invoice(input: &MmmInput) -> Result<GridSettlement, Billing
             },
         ],
     };
-    let mmm_settlement_type = SettlementType::MmmStrom; // Gas MMM uses same invoice type
+    // Gas and Strom MMM use separate settlement types for correct audit references.
+    let mmm_settlement_type = match input.sparte {
+        Sparte::Gas => SettlementType::MmmGas,
+        Sparte::Strom => SettlementType::MmmStrom,
+    };
 
     let mehr_kwh = if diff > Decimal::ZERO {
         diff
     } else {
         Decimal::ZERO
     };
-    let p1 = kwh_pos_traced(1, "Mehrmengen", mehr_kwh, mehr_eur, mmm_refs.clone(), None);
+    let p1 = kwh_pos_traced(
+        1,
+        "Mehrmengen",
+        BillingPositionKind::Mehrmenge,
+        mehr_kwh,
+        mehr_eur,
+        mmm_refs.clone(),
+        None,
+    );
 
     let minder_kwh = if diff < Decimal::ZERO {
         -diff
@@ -424,10 +638,13 @@ pub fn calculate_mmm_invoice(input: &MmmInput) -> Result<GridSettlement, Billing
     let p2 = InvoicePosition {
         number: 2,
         text: "Mindermengen (Gutschrift)".to_owned(),
+        kind: BillingPositionKind::Mindermenge,
+        artikel_id: None,
         quantity: minder_kwh.round_dp(3),
         unit: QuantityUnit::Kwh,
         unit_price_eur: minder_eur.round_dp(6),
         net_eur: minder_net,
+        lastvariable_preisposition_json: None,
         trace: CalculationTrace {
             explanation: format!(
                 "{minder_kwh:.3} kWh × {:.6} EUR/kWh = {:.5} EUR (Gutschrift, negiert)",
@@ -502,6 +719,7 @@ pub fn calculate_msb_invoice(input: &MsbInput) -> Result<GridSettlement, Billing
     let p = monat_pos_traced(
         1,
         "Grundgebühr Messstellenbetrieb",
+        BillingPositionKind::MsbGrundgebuehr,
         months,
         input.grundgebuehr_eur_per_month,
         vec![
@@ -520,10 +738,13 @@ pub fn calculate_msb_invoice(input: &MsbInput) -> Result<GridSettlement, Billing
         let p = InvoicePosition {
             number: 2,
             text: "Messdienstleistung".to_owned(),
+            kind: BillingPositionKind::Messdienstleistung,
+            artikel_id: None,
             quantity: Decimal::ONE,
             unit: QuantityUnit::Monat,
             unit_price_eur: msl,
             net_eur: msl,
+            lastvariable_preisposition_json: None,
             trace: CalculationTrace {
                 explanation: format!("Messdienstleistung Pauschale {msl:.5} EUR"),
                 input_quantity: Decimal::ONE,
@@ -597,10 +818,13 @@ pub fn calculate_reversal(
         .map(|(i, p)| InvoicePosition {
             number: (i + 1) as u32,
             text: format!("Storno: {}", p.text),
+            kind: p.kind,
+            artikel_id: p.artikel_id.clone(),
             quantity: p.quantity,
             unit: p.unit,
             unit_price_eur: p.unit_price_eur,
             net_eur: -p.net_eur,
+            lastvariable_preisposition_json: None,
             trace: CalculationTrace {
                 explanation: format!(
                     "Storno of position {}: {} (negated)",
@@ -634,10 +858,181 @@ pub fn calculate_reversal(
         warnings: Vec::new(),
     }
 }
+
+// ── Correction ────────────────────────────────────────────────────────────────
+
+/// Create a correction of a prior settlement by applying a new settlement.
+///
+/// Combines the original settlement (reversed) and the corrected calculation
+/// into a correction-pair. Callers typically dispatch both the reversal and the
+/// new settlement to the EDIFACT channel — `calculate_correction` returns both
+/// in order so dispatch logic stays simple.
+///
+/// Returns `(reversal, replacement)` where:
+/// - `reversal` negates all original positions and references the original invoice.
+/// - `replacement` is the new calculation, with `status = Correction` and
+///   `correction_of = Some(original.rechnungsnummer)`.
+///
+/// ## Example
+///
+/// ```rust,no_run
+/// # use grid_billing::{GridSettlement, calculate_correction};
+/// # use time::macros::date;
+/// # let original: GridSettlement = unimplemented!();
+/// # let corrected: GridSettlement = unimplemented!();
+/// let (reversal, replacement) = calculate_correction(
+///     &original,
+///     corrected,
+///     "STORNO-NNE-2025-001".to_owned(),
+///     date!(2025-04-01),
+///     date!(2025-04-30),
+/// );
+/// assert_eq!(reversal.total_eur, -original.total_eur);
+/// assert_eq!(replacement.status, grid_billing::SettlementStatus::Correction);
+/// ```
+#[must_use]
+pub fn calculate_correction(
+    original: &GridSettlement,
+    mut replacement: GridSettlement,
+    reversal_rechnungsnummer: String,
+    invoice_date: time::Date,
+    due_date: time::Date,
+) -> (GridSettlement, GridSettlement) {
+    let reversal = calculate_reversal(original, reversal_rechnungsnummer, invoice_date, due_date);
+    replacement.status = SettlementStatus::Correction;
+    replacement.correction_of = Some(original.rechnungsnummer.clone());
+    (reversal, replacement)
+}
+
+// ── GeLi Gas AWH Sperrprozesse invoice (PID 31011) ────────────────────────────
+
+/// Calculate a GeLi Gas AWH Sperrprozesse settlement (PID 31011).
+///
+/// **Rechnung sonstige Leistung (NB → LF)** — bills the LF (LFG/LFA) for
+/// abrechnungswürdige Handlungen (AWH) performed by the GNB/VNB during the
+/// Sperrung/Entsperrung Gas process.
+///
+/// Governed by **BK7-24-01-009 §5.4** (GeLi Gas 3.0, Beschluss 12.09.2025).
+///
+/// ## Positions
+///
+/// One position per [`crate::AwhPositionInput`] — quantity = `anzahl` (unit: pieces → Monat
+/// placeholder), unit price = `preis_eur`. Positions are self-explaining with the
+/// action description in the `text` field.
+///
+/// ## Legal references
+///
+/// Every position cites:
+/// - `BdewAhb { reference: "GeLi Gas BK7-24-01-009 §5.4" }` (governing ruling)
+/// - `GasNev { paragraph: "§14" }` (general GasNEV charge authorisation)
+///
+/// ## Errors
+///
+/// [`BillingError::InvalidInput`] when:
+/// - `period_from >= period_to`
+/// - `awh_positionen` is empty
+/// - Any position has `anzahl == 0` or `preis_eur < 0`
+#[must_use = "handle the BillingError"]
+pub fn calculate_gas_awh_invoice(input: &GasAwhInput) -> Result<GridSettlement, BillingError> {
+    if input.period_from >= input.period_to {
+        return Err(BillingError::InvalidInput {
+            reason: "period_from must be strictly before period_to".to_owned(),
+        });
+    }
+    if input.awh_positionen.is_empty() {
+        return Err(BillingError::InvalidInput {
+            reason: "awh_positionen must contain at least one position".to_owned(),
+        });
+    }
+    for (i, awh) in input.awh_positionen.iter().enumerate() {
+        if awh.anzahl == 0 {
+            return Err(BillingError::InvalidInput {
+                reason: format!("awh_positionen[{i}].anzahl must be ≥ 1"),
+            });
+        }
+        if awh.preis_eur < Decimal::ZERO {
+            return Err(BillingError::InvalidInput {
+                reason: format!("awh_positionen[{i}].preis_eur must be non-negative"),
+            });
+        }
+    }
+
+    let tariff_src = make_tariff_source(input.tariff_sheet_id.as_deref());
+    let awh_legal_refs = vec![
+        LegalReference::BdewAhb {
+            reference: "GeLi Gas BK7-24-01-009 §5.4",
+        },
+        LegalReference::GasNev { paragraph: "§14" },
+    ];
+
+    let mut positions: Vec<InvoicePosition> = Vec::new();
+    let mut total = Decimal::ZERO;
+
+    for (i, awh) in input.awh_positionen.iter().enumerate() {
+        let qty = Decimal::from(awh.anzahl);
+        let gross = qty * awh.preis_eur;
+        let net = pos_net(qty, awh.preis_eur);
+        positions.push(InvoicePosition {
+            number: (i + 1) as u32,
+            text: awh.beschreibung.clone(),
+            kind: BillingPositionKind::GasAwhSonstige, // service layer refines if artikel_id present
+            artikel_id: awh.artikel_id.clone(),
+            quantity: qty,
+            unit: QuantityUnit::Monat, // AWH positions have no standard EDIFACT unit; Monat placeholder
+            unit_price_eur: awh.preis_eur.round_dp(6),
+            net_eur: net,
+            lastvariable_preisposition_json: None,
+            trace: CalculationTrace {
+                explanation: format!(
+                    "{} × {:.5} EUR = {:.5} EUR",
+                    awh.anzahl,
+                    awh.preis_eur,
+                    gross.round_dp(5)
+                ),
+                input_quantity: qty,
+                input_unit_price_eur: awh.preis_eur,
+                gross_eur: gross,
+                legal_refs: awh_legal_refs.clone(),
+                tariff_source: tariff_src.clone(),
+                regulatory_reduction_factor: None,
+                rounding_note: Some("net rounded to 5 dp"),
+            },
+        });
+        total += net;
+    }
+
+    let total_eur = total.round_dp(2);
+    decimal_to_euro_amount(total_eur)?;
+
+    let result = GridSettlement {
+        pid: SettlementType::GasAwhSperrung.default_pid(),
+        settlement_type: SettlementType::GasAwhSperrung,
+        status: SettlementStatus::Initial,
+        rechnungsnummer: input.rechnungsnummer.clone(),
+        correction_of: None,
+        invoice_date: input.invoice_date,
+        due_date: input.due_date,
+        period_from: input.period_from,
+        period_to: input.period_to,
+        nb_mp_id: input.nb_mp_id.clone(),
+        counterparty_mp_id: input.lf_mp_id.clone(),
+        positions,
+        total_eur,
+        warnings: Vec::new(),
+    };
+    debug_assert_eq!(
+        result.total_eur,
+        result.recomputed_total(),
+        "AWH: total_eur mismatch — calculation bug"
+    );
+    Ok(result)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{validate_mmm_input, validate_msb_input, validate_nne_input};
+    use crate::types::{
+        AwhPositionInput, GasAwhInput, validate_mmm_input, validate_msb_input, validate_nne_input,
+    };
     use rust_decimal::Decimal;
     use time::macros::date;
 
@@ -664,9 +1059,13 @@ mod tests {
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
             ka_satz_ct_per_kwh: None,
+            sect14a_modul1_reduction_factor: None,
+            nne_grundpreis_eur_per_month: None,
+            nne_grundpreis_months: None,
             tariff_sheet_id: None,
             sparte: Sparte::Strom,
             ka_klasse: None,
+            sect14a_modul3_intervals: vec![],
         }
     }
 
@@ -1001,7 +1400,9 @@ mod tests {
             LegalReference::Kav {
                 paragraph: "§2 Abs. 2",
             },
-            LegalReference::Sect14aEnwg { module: 2 },
+            LegalReference::Sect14aEnwg {
+                module: Sect14aModule::Modul2,
+            },
             LegalReference::MessZv { paragraph: "§2" },
             LegalReference::MsbG {
                 paragraph: "§§6–7"
@@ -1201,5 +1602,601 @@ mod tests {
         assert_eq!(storno.positions.len(), original.positions.len());
         assert_eq!(storno.total_eur, -original.total_eur);
         assert_eq!(storno.recomputed_total(), storno.total_eur);
+    }
+
+    // ── §14a Modul 1 (BNetzA BK6-22-300 flat reduction) ──────────────────────
+
+    #[test]
+    fn nne_sect14a_modul1_applies_reduction_factor() {
+        // 1500 kWh × 3.5 ct/kWh × 0.85 = 1500 × 0.02975 EUR = 44.625 → 44.63
+        let mut i = base_nne();
+        i.sect14a_modul1_reduction_factor = Some(d("0.85"));
+        let r = calculate_nne_invoice(&i).unwrap();
+        assert_eq!(r.positions.len(), 1);
+        assert!(
+            r.positions[0].text.contains("Modul 1"),
+            "position text must mention Modul 1"
+        );
+        // 1500 × 0.035 × 0.85 = 1500 × 0.02975 = 44.625 → round_dp(2, MidpointNearestEven) = 44.62
+        assert_eq!(r.total_eur, d("44.62"), "expected Modul 1 reduced total");
+        let refs = r.all_legal_refs();
+        assert!(
+            refs.iter().any(|r| r.contains("Modul 1")),
+            "must cite §14a Modul 1"
+        );
+        assert!(
+            refs.iter().any(|r| r.contains("BK6-22-300")),
+            "must cite BK6-22-300"
+        );
+        assert_eq!(
+            r.positions[0].trace.regulatory_reduction_factor,
+            Some(d("0.85"))
+        );
+    }
+
+    #[test]
+    fn nne_sect14a_modul1_full_reduction_yields_zero() {
+        // Reduction factor = 0 is invalid; factor = 1 = no reduction
+        let mut i = base_nne();
+        i.sect14a_modul1_reduction_factor = Some(d("1.0"));
+        let r = calculate_nne_invoice(&i).unwrap();
+        // 1500 × 0.035 × 1.0 = 52.50 — same as plain Arbeit
+        assert_eq!(r.total_eur, d("52.50"));
+    }
+
+    #[test]
+    fn validate_modul1_and_modul2_conflict_is_error() {
+        let mut i = base_nne();
+        // Set both Modul 1 and Modul 2 HT/NT fields — must be rejected
+        i.sect14a_modul1_reduction_factor = Some(d("0.85"));
+        i.arbeitsmenge_ht_kwh = Some(d("900"));
+        i.arbeitspreis_ht_ct_per_kwh = Some(d("4.0"));
+        i.arbeitsmenge_nt_kwh = Some(d("600"));
+        i.arbeitspreis_nt_ct_per_kwh = Some(d("2.0"));
+        let v = validate_nne_input(&i);
+        assert!(!v.is_valid, "Modul 1 + Modul 2 combination must be invalid");
+        assert!(
+            v.warnings
+                .iter()
+                .any(|w| w.code == "MODUL1_AND_MODUL2_CONFLICT"),
+            "must produce MODUL1_AND_MODUL2_CONFLICT warning"
+        );
+    }
+
+    #[test]
+    fn validate_partial_tou_fields_is_error() {
+        let mut i = base_nne();
+        // Only 1 of the 4 HT/NT fields set — must be rejected
+        i.arbeitsmenge_ht_kwh = Some(d("900"));
+        let v = validate_nne_input(&i);
+        assert!(!v.is_valid, "partial HT/NT set must be invalid");
+        assert!(
+            v.warnings.iter().any(|w| w.code == "PARTIAL_TOU_FIELDS"),
+            "must produce PARTIAL_TOU_FIELDS warning"
+        );
+    }
+
+    // ── Gas Grundpreis ────────────────────────────────────────────────────────
+
+    #[test]
+    fn nne_gas_with_grundpreis_adds_position() {
+        let mut i = base_nne();
+        i.sparte = Sparte::Gas;
+        i.nne_grundpreis_eur_per_month = Some(d("15.00"));
+        i.nne_grundpreis_months = Some(1);
+        let r = calculate_nne_invoice(&i).unwrap();
+        assert_eq!(r.positions.len(), 2, "Grundpreis + Arbeit");
+        assert!(
+            r.positions[0].text.contains("Grundpreis"),
+            "first position must be Grundpreis"
+        );
+        assert_eq!(r.positions[0].net_eur, d("15.00000"));
+        let refs_p0 = &r.positions[0].trace.legal_refs;
+        assert!(
+            refs_p0.iter().any(|lr| lr.citation().contains("GasNEV")),
+            "Grundpreis must cite GasNEV"
+        );
+    }
+
+    #[test]
+    fn validate_grundpreis_mismatch_is_error() {
+        let mut i = base_nne();
+        i.nne_grundpreis_eur_per_month = Some(d("15.00"));
+        // Missing nne_grundpreis_months — mismatch
+        let v = validate_nne_input(&i);
+        assert!(!v.is_valid);
+        assert!(
+            v.warnings
+                .iter()
+                .any(|w| w.code == "GRUNDPREIS_MONTHS_MISMATCH")
+        );
+    }
+
+    // ── Gas AWH Sperrprozesse (PID 31011) ─────────────────────────────────────
+
+    #[test]
+    fn gas_awh_single_sperrung_arithmetic() {
+        let input = GasAwhInput {
+            malo_id: "51238696780".into(),
+            nb_mp_id: "9900357000004".into(),
+            lf_mp_id: "9900012345678".into(),
+            rechnungsnummer: "AWH-TEST-001".into(),
+            period_from: date!(2025 - 01 - 01),
+            period_to: date!(2025 - 01 - 31),
+            invoice_date: date!(2025 - 02 - 15),
+            due_date: date!(2025 - 03 - 15),
+            tariff_sheet_id: None,
+            awh_positionen: vec![AwhPositionInput {
+                beschreibung: "Sperrung Gaszähler".into(),
+                anzahl: 1,
+                preis_eur: d("45.00"),
+                artikel_id: Some("2-01-7-001".to_owned()),
+            }],
+        };
+        let r = calculate_gas_awh_invoice(&input).unwrap();
+        assert_eq!(r.pid, 31011);
+        assert_eq!(r.settlement_type, SettlementType::GasAwhSperrung);
+        assert_eq!(r.total_eur, d("45.00"));
+        assert_eq!(r.positions.len(), 1);
+        assert_eq!(r.positions[0].text, "Sperrung Gaszähler");
+        let refs = r.all_legal_refs();
+        assert!(refs.iter().any(|r| r.contains("BK7-24-01-009")));
+    }
+
+    #[test]
+    fn gas_awh_multiple_actions_total_correct() {
+        let input = GasAwhInput {
+            malo_id: "51238696780".into(),
+            nb_mp_id: "9900357000004".into(),
+            lf_mp_id: "9900012345678".into(),
+            rechnungsnummer: "AWH-TEST-002".into(),
+            period_from: date!(2025 - 01 - 01),
+            period_to: date!(2025 - 01 - 31),
+            invoice_date: date!(2025 - 02 - 15),
+            due_date: date!(2025 - 03 - 15),
+            tariff_sheet_id: None,
+            awh_positionen: vec![
+                AwhPositionInput {
+                    beschreibung: "Sperrung".into(),
+                    anzahl: 1,
+                    preis_eur: d("45.00"),
+                    artikel_id: Some("2-01-7-001".to_owned()),
+                },
+                AwhPositionInput {
+                    beschreibung: "Entsperrung".into(),
+                    anzahl: 2,
+                    preis_eur: d("30.00"),
+                    artikel_id: Some("2-01-7-002".to_owned()),
+                },
+            ],
+        };
+        let r = calculate_gas_awh_invoice(&input).unwrap();
+        // 45 + 2×30 = 105
+        assert_eq!(r.total_eur, d("105.00"));
+        assert_eq!(r.positions.len(), 2);
+        assert_eq!(r.recomputed_total(), r.total_eur);
+    }
+
+    #[test]
+    fn gas_awh_empty_positions_rejected() {
+        let input = GasAwhInput {
+            malo_id: "51238696780".into(),
+            nb_mp_id: "9900357000004".into(),
+            lf_mp_id: "9900012345678".into(),
+            rechnungsnummer: "AWH-TEST-003".into(),
+            period_from: date!(2025 - 01 - 01),
+            period_to: date!(2025 - 01 - 31),
+            invoice_date: date!(2025 - 02 - 15),
+            due_date: date!(2025 - 03 - 15),
+            tariff_sheet_id: None,
+            awh_positionen: vec![],
+        };
+        assert!(matches!(
+            calculate_gas_awh_invoice(&input),
+            Err(BillingError::InvalidInput { .. })
+        ));
+    }
+
+    // ── Correction lifecycle ──────────────────────────────────────────────────
+
+    #[test]
+    fn correction_pair_status_and_reference() {
+        let original = calculate_nne_invoice(&base_nne()).unwrap();
+        let mut corrected_input = base_nne();
+        corrected_input.arbeitsmenge_kwh = d("1600");
+        corrected_input.rechnungsnummer = "NNE-KORR-001".into();
+        let replacement = calculate_nne_invoice(&corrected_input).unwrap();
+
+        let (reversal, corrected) = calculate_correction(
+            &original,
+            replacement,
+            "STORNO-NNE-001".into(),
+            date!(2025 - 03 - 01),
+            date!(2025 - 03 - 31),
+        );
+        assert_eq!(reversal.status, SettlementStatus::Reversal);
+        assert_eq!(reversal.total_eur, -original.total_eur);
+        assert_eq!(reversal.correction_of, Some("NNE-TEST-001".to_owned()));
+        assert_eq!(corrected.status, SettlementStatus::Correction);
+        assert_eq!(corrected.correction_of, Some("NNE-TEST-001".to_owned()));
+    }
+
+    // ── recomputed_total consistency ──────────────────────────────────────────
+
+    #[test]
+    fn nne_recomputed_total_matches_total_eur() {
+        let r = calculate_nne_invoice(&base_nne()).unwrap();
+        assert_eq!(r.recomputed_total(), r.total_eur);
+    }
+
+    #[test]
+    fn mmm_recomputed_total_matches_total_eur() {
+        let r = calculate_mmm_invoice(&base_mmm()).unwrap();
+        assert_eq!(r.recomputed_total(), r.total_eur);
+    }
+
+    // ── Gas MMM uses MmmGas settlement type ───────────────────────────────────
+
+    #[test]
+    fn mmm_gas_uses_mmm_gas_settlement_type() {
+        let mut i = base_mmm();
+        i.sparte = Sparte::Gas;
+        let r = calculate_mmm_invoice(&i).unwrap();
+        assert_eq!(
+            r.settlement_type,
+            SettlementType::MmmGas,
+            "Gas MMM must use MmmGas settlement type"
+        );
+    }
+
+    #[test]
+    fn mmm_strom_uses_mmm_strom_settlement_type() {
+        let r = calculate_mmm_invoice(&base_mmm()).unwrap();
+        assert_eq!(r.settlement_type, SettlementType::MmmStrom);
+    }
+}
+
+// ── Property tests ────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+    use rust_decimal::Decimal;
+    use time::macros::date;
+
+    fn arb_positive_kwh() -> impl Strategy<Value = Decimal> {
+        (1u64..100_000u64).prop_map(Decimal::from)
+    }
+
+    fn arb_ct_per_kwh() -> impl Strategy<Value = Decimal> {
+        (1u64..2000u64).prop_map(|n| Decimal::new(n as i64, 2)) // 0.01 – 20.00 ct/kWh
+    }
+
+    proptest! {
+        /// Invariant: reversal of any valid NNE settlement negates the total.
+        ///
+        /// For any valid (kwh, price) pair, the reversal total equals -original.total_eur.
+        #[test]
+        fn reversal_always_negates_total(
+            kwh in arb_positive_kwh(),
+            ct in arb_ct_per_kwh(),
+        ) {
+            let input = NneInput {
+                malo_id: "51238696780".into(),
+                nb_mp_id: "9900357000004".into(),
+                lf_mp_id: "9900012345678".into(),
+                rechnungsnummer: "PROP-NNE-001".into(),
+                period_from: date!(2025 - 01 - 01),
+                period_to: date!(2025 - 12 - 31),
+                invoice_date: date!(2026 - 01 - 15),
+                due_date: date!(2026 - 02 - 15),
+                arbeitsmenge_kwh: kwh,
+                arbeitspreis_ct_per_kwh: ct,
+                arbeitsmenge_ht_kwh: None,
+                arbeitspreis_ht_ct_per_kwh: None,
+                arbeitsmenge_nt_kwh: None,
+                arbeitspreis_nt_ct_per_kwh: None,
+                spitzenleistung_kw: None,
+                leistungspreis_eur_per_kw: None,
+                ka_satz_ct_per_kwh: None,
+                sect14a_modul1_reduction_factor: None,
+                nne_grundpreis_eur_per_month: None,
+                nne_grundpreis_months: None,
+                tariff_sheet_id: None,
+                sparte: Sparte::Strom,
+                ka_klasse: None,
+                sect14a_modul3_intervals: vec![],
+            };
+            if let Ok(original) = calculate_nne_invoice(&input) {
+                let reversal = calculate_reversal(
+                    &original,
+                    "PROP-STORNO-001".to_owned(),
+                    date!(2026 - 02 - 01),
+                    date!(2026 - 02 - 28),
+                );
+                prop_assert_eq!(reversal.total_eur, -original.total_eur);
+                prop_assert_eq!(reversal.recomputed_total(), reversal.total_eur);
+                prop_assert_eq!(reversal.positions.len(), original.positions.len());
+            }
+        }
+
+        /// Invariant: §14a Modul 1 reduction factor ∈ (0, 1] → billed total ≤ unreduced total.
+        #[test]
+        fn modul1_total_lte_unreduced(
+            kwh in arb_positive_kwh(),
+            ct in arb_ct_per_kwh(),
+            // factor ∈ [1%, 100%]
+            factor_pct in 1u64..=100u64,
+        ) {
+            let factor = Decimal::new(factor_pct as i64, 2);
+            let base = NneInput {
+                malo_id: "51238696780".into(),
+                nb_mp_id: "9900357000004".into(),
+                lf_mp_id: "9900012345678".into(),
+                rechnungsnummer: "PROP-M1-001".into(),
+                period_from: date!(2025 - 01 - 01),
+                period_to: date!(2025 - 12 - 31),
+                invoice_date: date!(2026 - 01 - 15),
+                due_date: date!(2026 - 02 - 15),
+                arbeitsmenge_kwh: kwh,
+                arbeitspreis_ct_per_kwh: ct,
+                arbeitsmenge_ht_kwh: None,
+                arbeitspreis_ht_ct_per_kwh: None,
+                arbeitsmenge_nt_kwh: None,
+                arbeitspreis_nt_ct_per_kwh: None,
+                spitzenleistung_kw: None,
+                leistungspreis_eur_per_kw: None,
+                ka_satz_ct_per_kwh: None,
+                sect14a_modul1_reduction_factor: None,
+                nne_grundpreis_eur_per_month: None,
+                nne_grundpreis_months: None,
+                tariff_sheet_id: None,
+                sparte: Sparte::Strom,
+                ka_klasse: None,
+                sect14a_modul3_intervals: vec![],
+            };
+            if let Ok(unreduced) = calculate_nne_invoice(&base) {
+                let mut reduced_input = base.clone();
+                reduced_input.sect14a_modul1_reduction_factor = Some(factor);
+                if let Ok(reduced) = calculate_nne_invoice(&reduced_input) {
+                    prop_assert!(
+                        reduced.total_eur <= unreduced.total_eur,
+                        "Modul 1 reduced total must be ≤ unreduced total"
+                    );
+                }
+            }
+        }
+    }
+}
+
+// ── §14a Modul 3 unit tests ───────────────────────────────────────────────────
+
+#[cfg(test)]
+mod modul3_tests {
+    use super::*;
+    use crate::types::{Sect14aModul3Interval, validate_nne_input};
+    use rust_decimal::Decimal;
+    use time::macros::date;
+
+    fn d(s: &str) -> Decimal {
+        Decimal::from_str_exact(s).expect("valid decimal literal")
+    }
+
+    fn base_nne() -> NneInput {
+        NneInput {
+            malo_id: "51238696780".into(),
+            nb_mp_id: "9900357000004".into(),
+            lf_mp_id: "9900012345678".into(),
+            rechnungsnummer: "NNE-M3-TEST".into(),
+            period_from: date!(2026 - 01 - 15),
+            period_to: date!(2026 - 01 - 16),
+            invoice_date: date!(2026 - 02 - 15),
+            due_date: date!(2026 - 03 - 15),
+            arbeitsmenge_kwh: d("1500"),
+            arbeitspreis_ct_per_kwh: d("3.5"),
+            arbeitsmenge_ht_kwh: None,
+            arbeitspreis_ht_ct_per_kwh: None,
+            arbeitsmenge_nt_kwh: None,
+            arbeitspreis_nt_ct_per_kwh: None,
+            spitzenleistung_kw: None,
+            leistungspreis_eur_per_kw: None,
+            ka_satz_ct_per_kwh: None,
+            sect14a_modul1_reduction_factor: None,
+            nne_grundpreis_eur_per_month: None,
+            nne_grundpreis_months: None,
+            tariff_sheet_id: None,
+            sparte: Sparte::Strom,
+            ka_klasse: None,
+            sect14a_modul3_intervals: vec![],
+        }
+    }
+
+    #[test]
+    fn nne_sect14a_modul3_single_interval() {
+        use time::OffsetDateTime;
+        let start = OffsetDateTime::parse(
+            "2026-01-15T10:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        let end = start + time::Duration::minutes(15);
+
+        let mut i = base_nne();
+        i.sect14a_modul3_intervals = vec![Sect14aModul3Interval {
+            period_from: start,
+            period_to: end,
+            menge_kwh: d("2.5"),
+            nne_rate_ct_per_kwh: d("1.80"),
+            epex_spot_ct_per_kwh: Some(d("12.50")),
+        }];
+        let r = calculate_nne_invoice(&i).unwrap();
+
+        // Exactly 2 positions: flat Arbeit + one Modul 3 interval
+        assert_eq!(
+            r.positions.len(),
+            2,
+            "expect base Arbeit + 1 Modul 3 position"
+        );
+
+        let modul3_pos = r
+            .positions
+            .iter()
+            .find(|p| p.kind == BillingPositionKind::NneArbeitModul3)
+            .expect("Modul 3 position must be present");
+
+        // 2.5 kWh × 0.018 EUR/kWh = 0.045 EUR
+        assert_eq!(modul3_pos.net_eur, d("0.04500"), "Modul 3 net_eur");
+        assert_eq!(modul3_pos.quantity, d("2.500"));
+        assert_eq!(modul3_pos.unit, QuantityUnit::Kwh);
+
+        // LastvariablePreisposition JSON must be typed
+        let lvp = modul3_pos
+            .lastvariable_preisposition_json
+            .as_ref()
+            .expect("LastvariablePreisposition must be set on NneArbeitModul3 positions");
+        assert_eq!(lvp["_typ"].as_str(), Some("LASTVARIABLE_PREISPOSITION"));
+        assert_eq!(lvp["tarifkalkulationsmethode"].as_str(), Some("SPOTPREIS"));
+        assert_eq!(lvp["preisreferenz"].as_str(), Some("ENERGIEMENGE"));
+        assert_eq!(lvp["preisBezugseinheit"].as_str(), Some("KWH"));
+
+        // EPEX spot price must be in zusatzAttribute
+        let zas = lvp["zusatzAttribute"]
+            .as_array()
+            .expect("zusatzAttribute when epex_spot_ct_per_kwh is set");
+        assert!(
+            zas.iter()
+                .any(|a| a["name"] == "epexSpotCtPerKwh" && a["wert"] == "12.50"),
+            "epexSpotCtPerKwh must be in zusatzAttribute"
+        );
+
+        // Legal references
+        let refs = &modul3_pos.trace.legal_refs;
+        assert!(
+            refs.iter().any(|r| matches!(
+                r,
+                LegalReference::Sect14aEnwg {
+                    module: Sect14aModule::Modul3
+                }
+            )),
+            "must reference §14a Modul 3"
+        );
+        assert!(
+            refs.iter().any(|r| matches!(
+                r,
+                LegalReference::BnetzaDecision {
+                    reference: "BK6-22-300"
+                }
+            )),
+            "must reference BK6-22-300"
+        );
+    }
+
+    #[test]
+    fn nne_sect14a_modul3_multiple_intervals_sum_correctly() {
+        use time::OffsetDateTime;
+        let base = OffsetDateTime::parse(
+            "2026-01-15T10:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        let mut i = base_nne();
+        i.sect14a_modul3_intervals = vec![
+            Sect14aModul3Interval {
+                period_from: base,
+                period_to: base + time::Duration::minutes(15),
+                menge_kwh: d("1.25"),
+                nne_rate_ct_per_kwh: d("2.00"),
+                epex_spot_ct_per_kwh: None,
+            },
+            Sect14aModul3Interval {
+                period_from: base + time::Duration::minutes(15),
+                period_to: base + time::Duration::minutes(30),
+                menge_kwh: d("1.75"),
+                nne_rate_ct_per_kwh: d("1.50"),
+                epex_spot_ct_per_kwh: None,
+            },
+        ];
+        let r = calculate_nne_invoice(&i).unwrap();
+
+        // 3 positions: flat Arbeit + 2 Modul 3 intervals
+        assert_eq!(r.positions.len(), 3);
+        let modul3: Vec<_> = r
+            .positions
+            .iter()
+            .filter(|p| p.kind == BillingPositionKind::NneArbeitModul3)
+            .collect();
+        assert_eq!(modul3.len(), 2);
+        // Interval 1: 1.25 kWh × 0.02 EUR/kWh = 0.025 EUR
+        assert_eq!(modul3[0].net_eur, d("0.02500"));
+        // Interval 2: 1.75 kWh × 0.015 EUR/kWh = 0.02625 EUR
+        assert_eq!(modul3[1].net_eur, d("0.02625"));
+        // No zusatzAttribute when epex not supplied
+        let lvp0 = modul3[0].lastvariable_preisposition_json.as_ref().unwrap();
+        assert!(lvp0.get("zusatzAttribute").is_none());
+    }
+
+    #[test]
+    fn nne_modul3_zero_kwh_interval_is_skipped() {
+        use time::OffsetDateTime;
+        let base = OffsetDateTime::parse(
+            "2026-01-15T10:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        let mut i = base_nne();
+        i.sect14a_modul3_intervals = vec![
+            Sect14aModul3Interval {
+                period_from: base,
+                period_to: base + time::Duration::minutes(15),
+                menge_kwh: d("0"),
+                nne_rate_ct_per_kwh: d("2.00"),
+                epex_spot_ct_per_kwh: None,
+            },
+            Sect14aModul3Interval {
+                period_from: base + time::Duration::minutes(15),
+                period_to: base + time::Duration::minutes(30),
+                menge_kwh: d("1.50"),
+                nne_rate_ct_per_kwh: d("1.80"),
+                epex_spot_ct_per_kwh: None,
+            },
+        ];
+        let r = calculate_nne_invoice(&i).unwrap();
+        let modul3: Vec<_> = r
+            .positions
+            .iter()
+            .filter(|p| p.kind == BillingPositionKind::NneArbeitModul3)
+            .collect();
+        assert_eq!(modul3.len(), 1, "zero-kWh interval must be skipped");
+    }
+
+    #[test]
+    fn nne_modul3_and_modul1_conflict_fails_validation() {
+        use time::OffsetDateTime;
+        let base = OffsetDateTime::parse(
+            "2026-01-15T10:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        let mut i = base_nne();
+        i.sect14a_modul1_reduction_factor = Some(d("0.85"));
+        i.sect14a_modul3_intervals = vec![Sect14aModul3Interval {
+            period_from: base,
+            period_to: base + time::Duration::minutes(15),
+            menge_kwh: d("1.0"),
+            nne_rate_ct_per_kwh: d("2.0"),
+            epex_spot_ct_per_kwh: None,
+        }];
+        let v = validate_nne_input(&i);
+        assert!(
+            !v.is_valid,
+            "Modul 1 + Modul 3 must produce validation error"
+        );
+        assert!(
+            v.warnings
+                .iter()
+                .any(|w| w.code == "MODUL1_AND_MODUL3_CONFLICT"),
+            "error code must be MODUL1_AND_MODUL3_CONFLICT"
+        );
     }
 }

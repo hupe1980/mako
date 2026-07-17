@@ -85,8 +85,12 @@ permalink: /
     <span class="mako-kpi__label">unsafe blocks</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">150+</span>
+    <span class="mako-kpi__value">160+</span>
     <span class="mako-kpi__label">MCP tools (AI-ready)</span>
+  </div>
+  <div class="mako-kpi">
+    <span class="mako-kpi__value">27</span>
+    <span class="mako-kpi__label">built-in AI specialists</span>
   </div>
   <div class="mako-kpi">
     <span class="mako-kpi__value">1.94</span>
@@ -169,10 +173,13 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <h3>Energy Billing Engine</h3>
     <p>
       <strong>12 product categories</strong> — STROM (SLP/HT/NT/RLM), GAS, WAERME, SOLAR,
-      EEG/EINSPEISUNG, §14a WAERMEPUMPE/WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG.
-      RLM demand charge, Gas §54 KWK exemption, historic levy lookups (incl. 2022 0-rate),
-      §41a EPEX, XRechnung 3.0 / ZUGFeRD 2.3 (EN16931, B2G mandate 01.01.2027).
-      Pure <code>energy-billing</code> crate — <strong>148 tests</strong>, zero I/O.
+      EEG/EINSPEISUNG, §14a WAERMEPUMPE/WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG,
+      §42c SHARING.
+      `Product` typed enum with per-category structs; `ControllableLoadProvider` for §14a;
+      §41b iMSys guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label;
+      historic levy lookups (incl. 2022 0-rate); §41a EPEX; §41b enforcement;
+      XRechnung 3.0 / ZUGFeRD 2.3 (EN16931, B2G mandate 01.01.2027).
+      Pure <code>energy-billing</code> crate — <strong>160 tests</strong>, zero I/O, no rubo4e dep.
     </p>
     <a href="{{ '/billingd' | relative_url }}">billingd guide →</a>
   </div>
@@ -181,11 +188,17 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">📊</div>
     <h3>Grid Settlement Engine</h3>
     <p>
-      <code>grid-billing</code> calculates NNE, KA, MMM, MSB, and AWH Sperrprozesse invoices.
+      <code>grid-billing</code> calculates NNE, KA, MMM, MSB, and AWH Sperrprozesse invoices
+      for PIDs 31001/31002/31005/31006/31009/31011.
       Every position carries a <strong><code>CalculationTrace</code></strong> with explanation,
-      legal refs (StromNEV §21, GasNEV §14, KAV §2, §14a EnWG), and tariff source — fully auditable.
-      <code>Sparte::Gas</code> auto-selects GasNEV §14 refs and PID 31005.
-      <code>calculate_reversal()</code> produces immutable Stornorechnung. Zero BO4E dependency.
+      legal refs (StromNEV §21, GasNEV §14, KAV §2, §14a EnWG), and tariff source.
+      <code>BillingPositionKind</code> on every position drives the service-layer BDEW Artikelnummer
+      mapping (<em>Codeliste v5.6</em>) — Gas NNE/MMM/KA use classic codes
+      (9990001…); NNE Strom uses <code>artikel_id</code> per BK6-20-160; AWH Gas uses
+      <code>2-01-7-001/002</code>.
+      §14a Modul 1 flat reduction, Modul 2 HT/NT, Gas Grundpreis, reactive energy (<code>Kvarh</code>).
+      <code>calculate_reversal()</code> produces immutable Stornorechnung;
+      <code>calculate_correction()</code> returns the (reversal, replacement) pair atomically.
     </p>
     <a href="{{ '/netzbilanzd' | relative_url }}">netzbilanzd guide →</a>
   </div>
@@ -196,8 +209,15 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <p>
       <code>edmd</code> accepts 15-min iMSys/SMGW data directly — no MSCONS round-trip required.
       Hampel-filter quality scorer (grades A/B/C/F) runs on every batch; grade F blocks billing.
-      §17 MessZV substitute value generation, virtual meters (§42b GGV), resampling, and Iceberg/S3 OLAP.
+      §17 MessZV substitute value generation, resampling, and Iceberg/S3 OLAP.
       BSI TR-03109 <code>SmgwSession</code> + <code>ClsChannel</code> track §14a CLS certificate health.
+    </p>
+    <p>
+      <strong>§42b EnWG Solarpaket I (GGV community solar):</strong>
+      Two formula-correct allocation modes per BDEW Anwendungshilfe —
+      <code>GgvConstantAllocation</code> (CCI+ZG6, static fraction, <em>Beispiel 1</em>)
+      and <code>GgvProportionalAllocation</code> (variable consumption ratio, <em>Beispiel 3</em>).
+      The <code>Pos()</code> operator enforces the §42b Abs. 5 per-tenant cap in every 15-min interval.
     </p>
     <a href="{{ '/edmd' | relative_url }}">edmd guide →</a>
   </div>
@@ -208,7 +228,9 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <p>
       <code>vertragd</code> manages B2C and B2B customers with role-based multi-user portal access,
       B2B Rahmenverträge (portfolio pricing, Sammelrechnung), and Versorgungsverträge per site/commodity.
-      Preisgarantie guard prevents unauthorized tariff changes.
+      Preisgarantie guard prevents unauthorized tariff changes (§41 EnWG).
+      <strong>GDPR Art. 15/17/20</strong> built-in — full export, irreversible pseudonymization with
+      immutable audit trail, and typed <code>Zahlungsinformation</code> (IBAN mod-97 validated).
       Serves as the sole OIDC→MaLo authorization gateway for <code>portald</code>.
     </p>
     <a href="{{ '/vertragd' | relative_url }}">vertragd guide →</a>
@@ -230,11 +252,15 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">🤖</div>
     <h3>AI / LLM Integration</h3>
     <p>
-      Every service exposes tools and prompts at <code>/mcp</code> (Streamable HTTP 2025-11-05).
-      <code>agentd</code> runs an Orchestrator + <strong>24 specialist agents</strong> with LanceDB RAG,
-      OpenAI / Anthropic / AWS Bedrock SigV4, and WASM plugin sandboxing.
-      Specialists cover billing anomaly detection, §20 EnWG compliance, SMGW BSI TR-03109 diagnostics,
-      MaBiS UTILTS deadline monitoring, and more — auto-triggered via glob <code>trigger_event_types</code>.
+      Every service exposes tools and prompts at <code>/mcp</code> (Streamable HTTP 2025-11-25).
+      <code>agentd</code> ships <strong>27 built-in specialists compiled into the container image</strong>
+      — operators activate them via <code>[bundled_agents]</code> without copying system prompts.
+      Supports <strong>sequential / parallel / race dispatch</strong> modes;
+      A2A agent cards at <code>/.well-known/agents/{name}</code>;
+      OpenAI / Anthropic / AWS Bedrock SigV4; LanceDB RAG; WASM plugin sandboxing.
+      Specialists cover billing anomaly detection, §41b/§42 compliance guard,
+      annual settlement orchestration, §20 EnWG parity, SMGW BSI TR-03109 diagnostics,
+      VPP dispatch settlement audit (RED III Art. 17), MaBiS UTILTS monitoring, and more.
     </p>
     <a href="{{ '/agentd' | relative_url }}">agentd guide →</a>
   </div>
@@ -260,10 +286,13 @@ graph TB
         direction LR
         makod["makod :8080/:4080
 edi-energy · mako-engine
-45+ workflows · SlateDB"]
+45+ workflows · SlateDB
+ZAK+ZE auto-parse (WiM Stammdaten)
+VPP DispatchConfirmed outbox"]
         marktd["marktd :8180
 MaLo · MeLo · contracts
-VersorgungsStatus · EventBus"]
+VersorgungsStatus · EventBus
+ZaehlzeitRegister auto-update"]
         makod -->|"CloudEvents"| marktd
     end
 
@@ -308,7 +337,9 @@ NIS grid import
 Product catalog
 EPEX §41a"]
         billingd["billingd :9280
-12 categories
+Product typed enum
+13 categories · 160 tests
+VPP auto-billing webhook
 XRechnung 3.0"]
         accountingd["accountingd :9380
 Kundenkonto ledger
@@ -325,12 +356,13 @@ B2C+B2B · OIDC gateway"]
 Customer Portal
 REST + SSE"]
         agentd["agentd :9580
-24 AI specialists
-LanceDB RAG · MCP"]
+27 built-in specialists
+parallel/race dispatch · LanceDB RAG · MCP"]
     end
 
     BDEW <-->|"AS4/REST/iMS"| makod
     marktd -->|"EventBus fan-out"| processd & invoicd & edmd & obsd & agentd
+    makod -->|"de.vpp.dispatch.confirmed"| billingd
     processd -->|commands| makod
     invoicd -->|settle/dispute| makod
     nis -->|"PUT malo_grid"| marktd
@@ -476,7 +508,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/billingd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">billingd</span>
     <span class="mako-service-card__port">:9280</span>
-    <span class="mako-service-card__desc">Energy billing engine. §41a dynamic EPEX. Gas Brennwertkorrektur + H2-blend audit. §14a Modul 1/3. §42a GGV community solar. XRechnung 3.0 / ZUGFeRD 2.3.</span>
+    <span class="mako-service-card__desc">Energy billing engine. §41a dynamic EPEX. Gas Brennwertkorrektur + H2-blend audit. §14a Modul 1/3. §42a GGV community solar. VPP auto-billing (de.vpp.dispatch.confirmed → Rechnung, RED III Art. 17). XRechnung 3.0 / ZUGFeRD 2.3.</span>
   </a>
   <a href="{{ '/accountingd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">accountingd</span>
@@ -500,7 +532,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/agentd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">agentd</span>
     <span class="mako-service-card__port">:9580</span>
-    <span class="mako-service-card__desc">Multi-agent LLM orchestration. 24 specialist agents. LanceDB RAG. Grid anomaly detection. Billing anomaly AI. §17 MessZV substitute-value agent. BSI TR-03109 SMGW diagnostics. MaBiS deadline monitoring. Compliance (§20 EnWG). OpenAI/Anthropic/Bedrock.</span>
+    <span class="mako-service-card__desc">Multi-agent LLM orchestration. 27 specialists compiled into container image. Activated via [bundled_agents] config. Sequential/parallel/race dispatch. A2A agent cards. LanceDB RAG. Billing regulatory guard (§41/§41b/§42). Annual settlement. Billing anomaly AI. §17 MessZV substitute-value agent. BSI TR-03109 SMGW diagnostics. VPP dispatch settlement audit (RED III Art. 17). MaBiS deadline monitoring. Compliance (§20 EnWG). OpenAI/Anthropic/Bedrock.</span>
   </a>
 </div>
 
@@ -540,7 +572,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   </div>
   <div class="mako-principle">
     <strong>MCP server in every service</strong>
-    All 17 daemons expose tools and guided prompts at <code>/mcp</code> (Streamable HTTP 2025-11-05).
+    All 17 daemons expose tools and guided prompts at <code>/mcp</code> (Streamable HTTP 2025-11-25).
     Plug any MCP-capable LLM client directly into your energy market operations.
   </div>
 </div>

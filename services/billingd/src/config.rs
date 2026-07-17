@@ -67,13 +67,30 @@ pub struct BillingdConfig {
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:BILLINGD_MCP_API_KEY"`.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
+
+    /// Shared secret for verifying inbound webhook HMAC-SHA256 signatures.
+    ///
+    /// When set, `POST /api/v1/webhooks/vpp-dispatch` (and future inbound webhook
+    /// endpoints) validate the `X-Mako-Signature: sha256=<hex>` header.
+    /// When absent, signature verification is disabled (dev mode).
+    pub inbound_webhook_secret: Option<String>,
+
+    /// Enable automatic VPP settlement billing triggered by
+    /// `de.vpp.dispatch.confirmed` CloudEvents on `POST /api/v1/webhooks/vpp-dispatch`.
+    ///
+    /// When `false` (default), the webhook endpoint still accepts events but
+    /// returns `202 Accepted` without triggering billing.  The `POST
+    /// /api/v1/billing/vpp/{vpp_id}` endpoint remains available for manual
+    /// settlement in all configurations.
+    #[serde(default)]
+    pub vpp_auto_billing: bool,
 }
 impl BillingdConfig {
     /// Build `RegulatoryRates` from config, falling back to statutory defaults.
-    pub fn regulatory_rates(&self) -> crate::calculator::RegulatoryRates {
+    pub fn regulatory_rates(&self) -> energy_billing::RegulatoryRates {
         use rust_decimal_macros::dec;
         let r = self.rates.as_ref();
-        crate::calculator::RegulatoryRates {
+        energy_billing::RegulatoryRates {
             stromsteuer_ct_per_kwh: r
                 .and_then(|r| r.stromsteuer_ct_per_kwh)
                 .unwrap_or(dec!(2.05)),

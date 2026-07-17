@@ -143,9 +143,3 @@ opt-level     = 3
 lto           = "thin"
 codegen-units = 1
 strip         = "debuginfo"
-
-# ── Local development override ───────────────────────────────────────────────
-# Use the local asx-rs workspace during development so changes to the library
-# are immediately reflected without publishing. Remove before releasing mako.
-[patch.crates-io]
-asx-rs = { path = "../asx" }

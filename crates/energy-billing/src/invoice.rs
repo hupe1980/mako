@@ -8,7 +8,7 @@ use rust_decimal_macros::dec;
 use serde::Serialize;
 
 use crate::context::BillingContext;
-use crate::position::{BillingPosition, PositionCategory};
+use crate::position::{BillingPosition, BillingWarning, PositionCategory};
 
 /// A completed invoice — the immutable result of `BillingEngine::bill()`.
 ///
@@ -28,6 +28,13 @@ use crate::position::{BillingPosition, PositionCategory};
 /// - `netto_eur < 0` → Lieferant owes the customer (credit note / Gutschrift)
 /// - `mwst_eur` always has the same sign as `netto_eur`
 /// - `zahlbetrag_eur < 0` → refund due to customer (after Abschlag deduction)
+///
+/// ## Regulatory warnings
+///
+/// `warnings` contains all non-fatal compliance notes produced during billing.
+/// Check for `WarningSeverity::Error` warnings before dispatching the invoice.
+/// Error-severity warnings indicate definite regulatory issues that the operator
+/// must resolve (e.g. §41b iMSys mismatch, §41 disclosure fields missing).
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct Invoice {
@@ -74,10 +81,21 @@ pub struct Invoice {
     /// `None` when the context did not specify a run ID (e.g. preview calls).
     /// Propagated to the Rechnung JSON as a `ZusatzAttribut` for audit trail.
     pub billing_run_id: Option<String>,
+
+    /// Non-fatal regulatory compliance warnings produced during billing.
+    ///
+    /// Check for [`WarningSeverity::Error`](crate::WarningSeverity) warnings
+    /// before dispatching the invoice. Error-severity warnings indicate definite
+    /// regulatory issues (e.g. §41b iMSys mismatch). Informational warnings are
+    /// advisory only.
+    ///
+    /// These warnings are also emitted by [`BillingEngine::validate()`](crate::BillingEngine::validate)
+    /// so operators can run a pre-flight check before committing to billing.
+    pub warnings: Vec<BillingWarning>,
 }
 
 impl Invoice {
-    /// Assemble an `Invoice` from a flat list of positions.
+    /// Assemble an `Invoice` from a flat list of positions and warnings.
     ///
     /// Separates Tax and Abschlag positions from all others:
     /// - `netto_eur` = sum of non-Tax, non-Abschlag positions
@@ -86,7 +104,11 @@ impl Invoice {
     /// - `abschlag_total_eur` = sum of Abschlag positions
     /// - `zahlbetrag_eur` = brutto - abschlag_total_eur
     #[must_use]
-    pub fn from_positions(context: BillingContext, positions: Vec<BillingPosition>) -> Self {
+    pub fn from_positions(
+        context: BillingContext,
+        positions: Vec<BillingPosition>,
+        warnings: Vec<BillingWarning>,
+    ) -> Self {
         let netto_eur: Decimal = positions
             .iter()
             .filter(|p| {
@@ -116,6 +138,7 @@ impl Invoice {
             abschlag_total_eur,
             zahlbetrag_eur,
             billing_run_id,
+            warnings,
         }
     }
 
@@ -280,6 +303,16 @@ impl Invoice {
             }));
         }
 
+        // Customer category for downstream ERP routing and regulatory rule selection.
+        {
+            let kat = format!("{:?}", ctx.kundenkategorie);
+            zusatz_attribute.push(serde_json::json!({
+                "_typ": "ZUSATZ_ATTRIBUT",
+                "name": "kundenkategorie",
+                "wert": kat
+            }));
+        }
+
         // §40a EnWG Abs. 1 — Kilowattstundenpreis (all-inclusive total price per kWh).
         // Compute from brutto_eur / billable kWh. Use total eligible kWh from positions.
         let total_kwh_positions: Decimal = self
@@ -365,143 +398,7 @@ impl Invoice {
         })
     }
 
-    /// Produce a typed BO4E `Rechnung` object.
-    ///
-    /// Requires the `bo4e` feature:
-    /// ```toml
-    /// energy-billing = { features = ["bo4e"] }
-    /// ```
-    ///
-    /// The BO4E `Rechnung` struct is the canonical representation for:
-    /// - ERP system ingestion
-    /// - XRechnung/ZUGFeRD 3.x generation
-    /// - BO4E schema validation
-    ///
-    /// ## Field mapping
-    ///
-    /// | `Invoice` | `rubo4e::Rechnung` |
-    /// |---|---|
-    /// | `billing_run_id` | `id` |
-    /// | `context.rechnungsnummer` | `rechnungsnummer` |
-    /// | `context.invoice_type` | `rechnungstyp` + `ist_storno` + `original_rechnungsnummer` |
-    /// | `context.period_from/to` | `rechnungsperiode` |
-    /// | `netto_eur` | `gesamtnetto.wert` |
-    /// | `mwst_eur` | `gesamtsteuer.wert` |
-    /// | `brutto_eur` | `gesamtbrutto.wert` |
-    /// | `zahlbetrag_eur` | `zu_zahlen.wert` |
-    /// | `context.lf_mp_id` | `rechnungsersteller.rollencodenummer` |
-    /// | `context.nb_mp_id` | `netzbetreiber.rollencodenummer` |
-    /// | `billing_run_id` | `zusatz_attribute["billingRunId"]` |
-    /// Produce a typed BO4E `Rechnung` object from this invoice.
-    ///
-    /// Requires the `bo4e` feature: `energy-billing = { features = ["bo4e"] }`.
-    ///
-    /// The resulting `rubo4e::current::Rechnung` can be serialized to canonical BO4E
-    /// JSON, used for XRechnung/ZUGFeRD generation, or validated against the BO4E schema.
-    ///
-    /// LF MP-ID and NB MP-ID are placed in `zusatz_attribute` for now (the proper
-    /// BO4E mapping via `Geschaeftspartner.rollencodenummer` requires a full
-    /// counterparty record not available here).
-    #[cfg(feature = "bo4e")]
-    #[must_use]
-    pub fn to_bo4e_rechnung(&self) -> rubo4e::current::Rechnung {
-        use rubo4e::current::{
-            Betrag, Rechnung, Rechnungstyp, Waehrungscode, Zeitraum, ZusatzAttribut,
-        };
-
-        let ctx = &self.context;
-
-        // Map InvoiceType → Rechnungstyp + storno flag + original reference
-        let (rechnungstyp, ist_storno, original_rechnungsnummer) = match &ctx.invoice_type {
-            crate::context::InvoiceType::Initial => {
-                (Some(Rechnungstyp::Turnusrechnung), None, None)
-            }
-            crate::context::InvoiceType::AdvancePayment => {
-                (Some(Rechnungstyp::Abschlagsrechnung), None, None)
-            }
-            crate::context::InvoiceType::Final => {
-                (Some(Rechnungstyp::Abschlussrechnung), None, None)
-            }
-            crate::context::InvoiceType::PartialInvoice => {
-                (Some(Rechnungstyp::Zwischenrechnung), None, None)
-            }
-            crate::context::InvoiceType::CreditNote => {
-                (Some(Rechnungstyp::Turnusrechnung), Some(false), None)
-            }
-            crate::context::InvoiceType::Cancellation {
-                original_invoice_id,
-            } => (None, Some(true), Some(original_invoice_id.clone())),
-            crate::context::InvoiceType::Correction {
-                original_invoice_id,
-                ..
-            } => (
-                Some(Rechnungstyp::Turnusrechnung),
-                None,
-                Some(original_invoice_id.clone()),
-            ),
-        };
-
-        // Helper: EUR monetary amount
-        let eur = |wert: Decimal| Betrag {
-            id: None,
-            typ: None,
-            version: None,
-            waehrung: Some(Waehrungscode::Eur),
-            wert: Some(wert),
-            zusatz_attribute: None,
-            _additional: Default::default(),
-        };
-
-        // ZusatzAttribute carry identifiers and audit metadata
-        let mut attrs: Vec<ZusatzAttribut> = vec![ZusatzAttribut {
-            name: Some("lf_mp_id".to_owned()),
-            wert: Some(serde_json::json!(ctx.lf_mp_id)),
-            _additional: Default::default(),
-        }];
-        if let Some(nb) = &ctx.nb_mp_id {
-            attrs.push(ZusatzAttribut {
-                name: Some("nb_mp_id".to_owned()),
-                wert: Some(serde_json::json!(nb)),
-                _additional: Default::default(),
-            });
-        }
-        if let Some(run_id) = &self.billing_run_id {
-            attrs.push(ZusatzAttribut {
-                name: Some("billingRunId".to_owned()),
-                wert: Some(serde_json::json!(run_id)),
-                _additional: Default::default(),
-            });
-        }
-        if let Some(malo) = Some(&ctx.malo_id).filter(|s| !s.is_empty()) {
-            attrs.push(ZusatzAttribut {
-                name: Some("malo_id".to_owned()),
-                wert: Some(serde_json::json!(malo)),
-                _additional: Default::default(),
-            });
-        }
-
-        Rechnung {
-            id: self.billing_run_id.clone(),
-            rechnungsnummer: Some(ctx.rechnungsnummer.clone()),
-            rechnungstyp,
-            ist_storno,
-            original_rechnungsnummer,
-            rechnungsperiode: Some(Zeitraum {
-                startdatum: Some(ctx.period_from),
-                enddatum: Some(ctx.period_to),
-                ..Default::default()
-            }),
-            gesamtnetto: Some(eur(self.netto_eur)),
-            gesamtsteuer: Some(eur(self.mwst_eur)),
-            gesamtbrutto: Some(eur(self.brutto_eur)),
-            zu_zahlen: Some(eur(self.zahlbetrag_eur)),
-            faelligkeitsdatum: Some(ctx.period_to + time::Duration::days(14)),
-            zusatz_attribute: Some(attrs),
-            ..Default::default()
-        }
-    }
-
-    /// Merge two invoices for adjacent billing periods (e.g. Tarifwechsel mid-period).
+    /// Merge two invoices for adjacent billing periods (§41 EnWG Tarifwechsel).
     ///
     /// Positions from `self` appear first, then `other`. Totals are re-summed.
     /// Tax layers are **not** re-applied — each invoice was already taxed independently
@@ -534,7 +431,9 @@ impl Invoice {
         }
         let mut positions = self.positions;
         positions.extend(other.positions);
-        Invoice::from_positions(ctx, positions)
+        let mut all_warnings = self.warnings;
+        all_warnings.extend(other.warnings);
+        Invoice::from_positions(ctx, positions, all_warnings)
     }
 
     /// Proportionally split this invoice across N recipients.
@@ -609,8 +508,29 @@ impl Invoice {
         Ok(recipient_positions
             .into_iter()
             .zip(contexts)
-            .map(|(positions, ctx)| Invoice::from_positions(ctx, positions))
+            .map(|(positions, ctx)| Invoice::from_positions(ctx, positions, vec![]))
             .collect())
+    }
+
+    /// Returns `true` when any warning has `WarningSeverity::Error`.
+    ///
+    /// Operators should block invoice dispatch when `has_errors()` returns `true`.
+    /// Typical causes: §41b iMSys mismatch, missing mandatory tariff fields.
+    #[must_use]
+    pub fn has_errors(&self) -> bool {
+        use crate::position::WarningSeverity;
+        self.warnings
+            .iter()
+            .any(|w| w.severity == WarningSeverity::Error)
+    }
+
+    /// Returns `true` when any warning has `WarningSeverity::Warning` or higher.
+    #[must_use]
+    pub fn has_warnings(&self) -> bool {
+        use crate::position::WarningSeverity;
+        self.warnings
+            .iter()
+            .any(|w| w.severity >= WarningSeverity::Warning)
     }
 }
 

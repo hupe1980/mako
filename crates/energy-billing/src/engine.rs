@@ -3,60 +3,52 @@
 //! Register one `BillingProvider` per product/service. Call `bill()` to run all
 //! providers in order and assemble the `Invoice`.
 //!
-//! ## Execution model
+//! ## Primary API — `Product::build_engine()`
 //!
-//! Providers run in two passes:
-//!
-//! **Pass 1 — commodity / levy providers** (`is_tax_pass() == false`):
-//! Each receives the accumulated positions from all earlier providers.
-//!
-//! **Pass 2 — tax providers** (`is_tax_pass() == true`, typically `MwStProvider`):
-//! Sees all commodity/levy positions as `prior`, computes tax on the net base.
-//!
-//! ## Example
+//! The recommended way to build an engine is via [`Product::build_engine()`](crate::Product::build_engine):
 //!
 //! ```rust
-//! use energy_billing::{
-//!     BillingContext, BillingEngine, ElectricityProvider, GasProvider,
-//!     InvoiceType, MwStProvider, Quantities, RegulatoryRates,
-//!     TariffInput, GridInput, MeterInput, GasMeterInput,
-//! };
+//! use energy_billing::{BillingContext, InvoiceType, MeterInput, Product, Quantities, RegulatoryRates, GridInput};
 //! use rust_decimal_macros::dec;
 //! use time::macros::date;
 //!
-//! let rates = RegulatoryRates::default();
+//! let product: Product = serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
 //! let ctx = BillingContext {
-//!     malo_id:          "51238696781".to_owned(),
-//!     lf_mp_id:         "9900000000001".to_owned(),
-//!     rechnungsnummer:  "R2026-001".to_owned(),
-//!     period_from:       date!(2026-01-01),
-//!     period_to:         date!(2026-01-31),
-//!     invoice_type:      InvoiceType::Initial,
-//!     contract_id:       None,
-//!     regulatory_rates:  rates.clone(),
+//!     malo_id:         "51238696781".to_owned(),
+//!     lf_mp_id:        "9900000000001".to_owned(),
+//!     rechnungsnummer: "R2026-001".to_owned(),
+//!     period_from:      date!(2026-01-01),
+//!     period_to:        date!(2026-01-31),
+//!     invoice_type:     InvoiceType::Initial,
+//!     regulatory_rates: RegulatoryRates::default(),
 //!     ..Default::default()
 //! };
 //! let quantities = Quantities {
-//!     electricity: Some(MeterInput {
-//!         arbeitsmenge_kwh: dec!(500),
-//!         ..Default::default()
-//!     }),
+//!     electricity: Some(MeterInput { arbeitsmenge_kwh: dec!(500), ..Default::default() }),
 //!     ..Default::default()
 //! };
-//! let tariff: TariffInput = serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
-//! let invoice = BillingEngine::new()
-//!     .add(ElectricityProvider::from_tariff(&tariff, &GridInput::default()))
-//!     .add(MwStProvider::new(dec!(0.19)))
-//!     .bill(ctx, &quantities)
-//!     .unwrap();
+//! let invoice = product.build_engine(&GridInput::default(), &RegulatoryRates::default())
+//!     .bill(ctx, &quantities).unwrap();
 //! assert!(invoice.brutto_eur > invoice.netto_eur);
+//! ```
+//!
+//! ## Manual engine construction
+//!
+//! For advanced use cases (e.g. combining multiple providers in one engine),
+//! you can build the engine manually:
+//!
+//! ```rust,ignore
+//! let invoice = BillingEngine::new()
+//!     .add(ElectricityProvider::new(product, GridInput::default()))
+//!     .add(MwStProvider::new(dec!(0.19)))
+//!     .bill(ctx, &quantities).unwrap();
 //! ```
 
 use billing::BillingError;
 
 use crate::context::BillingContext;
 use crate::invoice::Invoice;
-use crate::position::BillingPosition;
+use crate::position::{BillingPosition, BillingWarning, WarningSeverity};
 use crate::provider::BillingProvider;
 use crate::quantities::Quantities;
 
@@ -84,6 +76,44 @@ impl BillingEngine {
         self
     }
 
+    /// Run all registered providers and collect regulatory compliance warnings.
+    ///
+    /// Does NOT generate positions or produce an invoice. Call this before `bill()`
+    /// to check regulatory preconditions (e.g. §41b iMSys guard, missing tariff
+    /// fields) without committing to billing.
+    ///
+    /// An `Error`-severity warning indicates a definite regulatory violation.
+    /// The operator should resolve the issue before calling `bill()`.
+    #[must_use]
+    pub fn validate(&self, ctx: &BillingContext, quantities: &Quantities) -> Vec<BillingWarning> {
+        self.providers
+            .iter()
+            .flat_map(|p| p.validate_warnings(ctx, quantities))
+            .collect()
+    }
+
+    /// Bill multiple (context, quantities) pairs using this engine configuration.
+    ///
+    /// Reuses the same provider set for every item in the batch. Fails fast per item
+    /// (each error is independent). For large portfolios, collect all results and
+    /// handle errors individually.
+    ///
+    /// ## Example
+    ///
+    /// ```rust,ignore
+    /// let results = engine.bill_batch(batch);
+    /// let errors: Vec<_> = results.iter().filter_map(|r| r.as_ref().err()).collect();
+    /// ```
+    pub fn bill_batch(
+        &self,
+        batch: Vec<(BillingContext, Quantities)>,
+    ) -> Vec<Result<Invoice, BillingError>> {
+        batch
+            .into_iter()
+            .map(|(ctx, quantities)| self.bill(ctx, &quantities))
+            .collect()
+    }
+
     /// Run all providers and assemble an `Invoice`.
     ///
     /// Three-pass execution:
@@ -91,10 +121,32 @@ impl BillingEngine {
     /// 2. Tax providers (all `is_tax_pass() == true`)
     /// 3. Abschlag deductions from `ctx.abschlage` (for `InvoiceType::Final`)
     pub fn bill(
-        self,
+        &self,
         ctx: BillingContext,
         quantities: &Quantities,
     ) -> Result<Invoice, BillingError> {
+        // ── Pass 0: collect regulatory warnings ───────────────────────────────
+        // Run validate_warnings() on all providers. If any Error-severity warning
+        // is found, fail before generating any positions — the billing run is
+        // invalid and must not be dispatched.
+        let mut warnings: Vec<BillingWarning> = Vec::new();
+        for provider in self.providers.iter() {
+            let w = provider.validate_warnings(&ctx, quantities);
+            if w.iter().any(|x| x.severity == WarningSeverity::Error) {
+                // Collect all warnings (so the caller sees all violations) then fail.
+                warnings.extend(w);
+                let reasons: Vec<&str> = warnings
+                    .iter()
+                    .filter(|x| x.severity == WarningSeverity::Error)
+                    .map(|x| x.message.as_str())
+                    .collect();
+                return Err(BillingError::InvalidInput {
+                    reason: reasons.join("; "),
+                });
+            }
+            warnings.extend(w);
+        }
+
         let mut positions: Vec<BillingPosition> = Vec::new();
 
         // ── Pass 1: commodity, grid, levy ─────────────────────────────────────
@@ -135,33 +187,14 @@ impl BillingEngine {
         // When ctx.minimum_invoice_eur_brutto is set and the computed brutto_eur
         // is below the minimum, add a Mindestbetrag position and re-run the tax pass.
         if let Some(min_brutto) = ctx.minimum_invoice_eur_brutto {
-            let current_invoice = Invoice::from_positions(ctx.clone(), positions.clone());
+            let current_invoice = Invoice::from_positions(ctx.clone(), positions.clone(), vec![]);
             let current_brutto = current_invoice.brutto_eur;
             if current_brutto < min_brutto {
                 let gap_brutto = min_brutto - current_brutto;
-                // Infer MwSt rate from existing Tax positions (netto-based).
-                let netto_sum: rust_decimal::Decimal = positions
-                    .iter()
-                    .filter(|p| {
-                        !matches!(
-                            p.category,
-                            crate::position::PositionCategory::Tax
-                                | crate::position::PositionCategory::Abschlag
-                                | crate::position::PositionCategory::Info
-                        )
-                    })
-                    .map(|p| p.net_eur)
-                    .sum();
-                let tax_sum: rust_decimal::Decimal = positions
-                    .iter()
-                    .filter(|p| p.category == crate::position::PositionCategory::Tax)
-                    .map(|p| p.net_eur)
-                    .sum();
-                let mwst_rate = if netto_sum.is_zero() {
-                    ctx.regulatory_rates.mwst_rate
-                } else {
-                    (tax_sum / netto_sum).abs()
-                };
+                // Use the configured MwSt rate directly — deriving it from existing
+                // positions is unreliable when netto is zero or all positions are
+                // credits (P0 fix: use configured rate, not derived ratio).
+                let mwst_rate = ctx.regulatory_rates.mwst_rate;
                 let divisor = rust_decimal::Decimal::ONE + mwst_rate;
                 let gap_netto = if divisor.is_zero() {
                     gap_brutto
@@ -198,7 +231,7 @@ impl BillingEngine {
                 {
                     positions2.push(p.clone());
                 }
-                return Ok(Invoice::from_positions(ctx, positions2));
+                return Ok(Invoice::from_positions(ctx, positions2, warnings));
             }
         }
 
@@ -209,7 +242,7 @@ impl BillingEngine {
             negate_positions(&mut positions);
         }
 
-        Ok(Invoice::from_positions(ctx, positions))
+        Ok(Invoice::from_positions(ctx, positions, warnings))
     }
 }
 

@@ -101,7 +101,7 @@ pub enum MeasurementSource {
         corrected_by: String,
     },
 
-    /// Virtual meter computation (Sum/Residual/PvSelfConsumption/GgvAllocation).
+    /// Virtual meter computation (Sum/Residual/PvSelfConsumption/GgvConstantAllocation/GgvProportionalAllocation).
     ///
     /// Derived from real measurements via `AggregationRule`.
     VirtualMeter {

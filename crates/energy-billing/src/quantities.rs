@@ -109,6 +109,12 @@ pub struct GasMeterInput {
     /// Informational only — billing always uses the measured Brennwert.
     #[serde(default)]
     pub gasqualitaet: Option<String>,
+    /// Peak demand in kW (Spitzenleistung) for RLM gas billing.
+    ///
+    /// Required when `TariffInput::gas_leistungspreis_ct_per_kw_month` is set.
+    /// Applicable to large gas customers with RLM metering (> 1.5 GWh/year).
+    #[serde(default)]
+    pub spitzenleistung_kw: Option<Decimal>,
 }
 
 /// District heat meter data.
@@ -372,6 +378,58 @@ pub struct GridInput {
     pub gas_bilanzierungsumlage_ct_per_kwh: Option<Decimal>,
 }
 
+// ── EnergyShareMeterInput ─────────────────────────────────────────────────────
+
+/// §42c EnWG Energy Sharing — metered allocation for one community participant.
+///
+/// Populated by `billingd` from the participant's virtual meter (Summenzeitreihe)
+/// computed by `edmd` using the community's `AggregationRule::GgvConstantAllocation`
+/// or `GgvProportionalAllocation` (same infrastructure as §42b GGV).
+///
+/// ## §42c EnWG vs §42b GGV
+///
+/// | | §42b GGV (Solarpaket I) | §42c Energiegemeinschaft |
+/// |---|---|---|
+/// | Scope | Building community | Grid area (0.4 kV) |
+/// | Participants | Tenants in same building | Up to 100 members |
+/// | Plant size | No limit | ≤ 500 kW total |
+/// | Metering | Building meter | Smart meter (iMSys) mandatory |
+/// | LF billing | via SolarProvider | via EnergyShareProvider |
+///
+/// ## Billing model
+///
+/// The LF bills the full grid consumption (via `ElectricityProvider`) and then
+/// credits the sharing allocation (via `EnergyShareProvider`) at the contracted
+/// rate — typically below the retail tariff and above the wholesale price.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct EnergyShareMeterInput {
+    /// kWh allocated from the community energy pool to this participant.
+    ///
+    /// Computed from the community's total generation and this participant's
+    /// allocation fraction (`GgvConstantAllocation.fraction` or proportional ratio).
+    /// Limited to the participant's actual consumption (§42c cap clause).
+    pub allocated_kwh: Decimal,
+
+    /// Total generation from the community's shared plant (kWh).
+    ///
+    /// Optional — for invoice display and audit trail only.
+    #[serde(default)]
+    pub total_plant_generation_kwh: Option<Decimal>,
+
+    /// Participant's allocation fraction (0.0–1.0).
+    ///
+    /// Informational — used for invoice transparency only.
+    #[serde(default)]
+    pub allocation_fraction: Option<Decimal>,
+
+    /// Community registration ID (from BNetzA Marktstammdatenregister).
+    ///
+    /// §42c Abs. 3 EnWG: communities must register with the BNetzA.
+    /// The registration ID appears on invoices as a ZusatzAttribut.
+    #[serde(default)]
+    pub gemeinschaft_id: Option<String>,
+}
+
 // ── Quantities ────────────────────────────────────────────────────────────────
 
 /// All metered quantities for one billing period.
@@ -456,6 +514,18 @@ pub struct Quantities {
     /// position on the annual invoice comparing actual dynamic costs against a
     /// reference fixed tariff (§41a Abs. 6 EnWG).
     pub sect41a_annual_comparison: Option<Sect41aAnnualComparison>,
+
+    /// §42c EnWG Energy Sharing — allocated community energy for this customer.
+    ///
+    /// When set, `EnergyShareProvider` generates a credit position for the
+    /// customer's share of locally produced community electricity.
+    ///
+    /// ## Data source
+    ///
+    /// Populated by `billingd` after querying the sharing community's allocation
+    /// data from `edmd` (virtual meter with `GgvConstantAllocation` or
+    /// `GgvProportionalAllocation` rule — same infrastructure as §42b GGV).
+    pub energy_share: Option<EnergyShareMeterInput>,
 }
 
 // ── ProsumerMeterInput ────────────────────────────────────────────────────────

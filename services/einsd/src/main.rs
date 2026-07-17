@@ -59,6 +59,15 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connect PostgreSQL")?;
 
+    // Shared HTTP client — initialized once, reused for all outbound calls.
+    // Never create per-request clients; that wastes connection pool slots.
+    let http_client: Arc<reqwest::Client> = Arc::new(
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .context("build HTTP client")?,
+    );
+
     let ct = mako_service::shutdown::token();
     let mcp_state = std::sync::Arc::new(mcp_server::EinsdMcpState {
         pool: pool.clone(),
@@ -71,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
     // Background worker: emit de.eeg.anlage.foerderung_auslaufend every 6 h.
     let alert_pool = pool.clone();
     let alert_cfg = Arc::clone(&cfg);
+    let alert_client = Arc::clone(&http_client);
     tokio::spawn(async move {
         let interval_secs = alert_cfg.alert_interval_secs.unwrap_or(21_600);
         loop {
@@ -88,6 +98,7 @@ async fn main() -> anyhow::Result<()> {
                         );
                         handlers::emit_foerderung_alert_ce(
                             &alert_cfg,
+                            &alert_client,
                             &plant.tr_id,
                             &plant.malo_id,
                             plant.foerderendedatum,
@@ -111,6 +122,7 @@ async fn main() -> anyhow::Result<()> {
     // for initiating payment within 30 days of the billing month end.
     let auto_pool = pool.clone();
     let auto_cfg = Arc::clone(&cfg);
+    let auto_client = Arc::clone(&http_client);
     tokio::spawn(async move {
         // Wait for startup before first run.
         tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
@@ -153,6 +165,7 @@ async fn main() -> anyhow::Result<()> {
                 for anlage in &plants {
                     let kwh = handlers::fetch_einspeisemenge_from_edmd(
                         &auto_cfg,
+                        &auto_client,
                         &anlage.malo_id,
                         prev_month_year as i16,
                         prev_month,
@@ -184,6 +197,7 @@ async fn main() -> anyhow::Result<()> {
                         };
                         handlers::emit_settlement_ce(
                             &auto_cfg,
+                            &auto_client,
                             ce_type,
                             &anlage.tr_id,
                             &anlage.malo_id,
@@ -200,6 +214,89 @@ async fn main() -> anyhow::Result<()> {
             tokio::time::sleep(tokio::time::Duration::from_secs(82_800)).await;
         }
     });
+
+    // Background worker: auto-import §20 Abs. 2 + Anlage 1 EEG 2023 technology-specific
+    // Jahresmarktwert from ÜNB publication (netztransparenz.de or custom aggregator).
+    //
+    // Runs once on startup (after 60s delay) and then every `jahresmarktwert_import_interval_secs`
+    // (default 86400, once per day). The ÜNB publishes monthly values typically by the 5th of
+    // each month. For MarketPremium (Direktvermarktung / Ausschreibung) settlements to use the
+    // correct technology-specific AW, these values must be available before monthly settlement runs.
+    //
+    // The external URL must return JSON with the structure:
+    //   `[{ "erzeugungsart": "WIND_ONSHORE", "avg_ct_kwh": 6.42 }, ...]`
+    // where `erzeugungsart` matches the values in the `eeg_anlagen` table.
+    if let Some(jmw_url_tpl) = cfg.jahresmarktwert_url.clone() {
+        let jmw_pool = pool.clone();
+        let jmw_client = Arc::clone(&http_client);
+        let jmw_interval = cfg.jahresmarktwert_import_interval_secs.unwrap_or(86_400);
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+            loop {
+                let now = time::OffsetDateTime::now_utc();
+                // Fetch for the previous month (published by ÜNB after month close).
+                let (year, month) = if now.month() as u8 == 1 {
+                    (now.year() as i16 - 1, 12i16)
+                } else {
+                    (now.year() as i16, now.month() as i16 - 1)
+                };
+
+                let url = jmw_url_tpl
+                    .replace("{year}", &format!("{year:04}"))
+                    .replace("{month}", &format!("{month:02}"));
+
+                tracing::debug!(url = %url, year, month, "auto-importing Jahresmarktwert");
+
+                match jmw_client.get(&url).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(items) = resp.json::<Vec<serde_json::Value>>().await {
+                            for item in &items {
+                                let art = item
+                                    .get("erzeugungsart")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("DEFAULT");
+                                let avg_ct = item
+                                    .get("avg_ct_kwh")
+                                    .and_then(|v| v.as_f64())
+                                    .and_then(|f| rust_decimal::Decimal::try_from(f).ok());
+                                if let Some(ct) = avg_ct
+                                    && let Err(e) = pg::upsert_jahresmarktwert(
+                                        &jmw_pool,
+                                        year,
+                                        month,
+                                        art,
+                                        ct,
+                                        "auto-import",
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!(year, month, art, error = %e,
+                                        "Jahresmarktwert import: upsert failed");
+                                }
+                            }
+                            tracing::info!(
+                                year,
+                                month,
+                                count = items.len(),
+                                "§20 Abs. 2 Jahresmarktwert auto-imported from ÜNB"
+                            );
+                        }
+                    }
+                    Ok(resp) => {
+                        tracing::warn!(
+                            url = %url, status = %resp.status(),
+                            "Jahresmarktwert auto-import: non-2xx response"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Jahresmarktwert auto-import: HTTP error");
+                    }
+                }
+
+                tokio::time::sleep(tokio::time::Duration::from_secs(jmw_interval)).await;
+            }
+        });
+    }
 
     let app = Router::new()
         .merge(mcp_server::router(mcp_state, ct.clone()))
@@ -274,6 +371,7 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::post_verguetungssatz_lookup),
         )
         .layer(Extension(Arc::clone(&cfg)))
+        .layer(Extension(Arc::clone(&http_client)))
         .layer(Extension(pool));
 
     let port = cfg.port.unwrap_or(9180);

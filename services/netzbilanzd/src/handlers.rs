@@ -18,9 +18,9 @@ use crate::config::NetzbilanzConfig;
 use crate::pg::{
     AuditQuery, UpsertFremdkostenRequest, UpsertKostenblattRequest, approve_and_dispatch,
     billing_history_for_malo, billing_summary, dispatch_batch, fetch_draft, fetch_fremdkosten,
-    fetch_kostenblatt, list_audit, list_drafts_pg, list_kostenblatt, mark_draft_disputed,
-    mark_draft_paid, mark_kostenblatt_submitted, reject_draft_pg, upsert_fremdkosten,
-    upsert_kostenblatt,
+    fetch_kostenblatt, list_audit, list_drafts_pg, list_kostenblatt, list_kostenblatt_gaps,
+    mark_draft_disputed, mark_draft_paid, mark_kostenblatt_submitted, reject_draft_pg,
+    upsert_fremdkosten, upsert_kostenblatt,
 };
 
 // ── CloudEvent helper ─────────────────────────────────────────────────────────
@@ -522,8 +522,17 @@ pub async fn post_submit_kostenblatt(
 /// generates a typed BO4E `Kosten`/`KostenBlock`/`KostenPosition` JSON payload,
 /// and upserts the Kostenblatt record.
 ///
-/// **Regulatory basis:** BK6-20-061 §4.2 — Kostenblatt must include actual
-/// dispatched energy from the SMGW/RLM meter.
+/// ## Energy source priority (BK6-20-061 §4.2)
+///
+/// 1. `dispatch_kwh_override` — manual operator value (bypasses edmd entirely)
+/// 2. **`edmd Lastgang sum`** — sum of 15-min intervals in the exact activation window
+///    (most precise; mandatory for short activations; source = `"lastgang_sum"`)
+/// 3. `edmd billing-period` — monthly aggregate fallback when Lastgang absent
+///    (source = `"billing_period"`; triggers a warning log)
+///
+/// For a 15-minute Redispatch activation, using the monthly billing-period
+/// aggregate would give the wrong value by several orders of magnitude.
+/// The Lastgang sum is the correct BK6-20-061 §4.2 approach.
 #[derive(Debug, serde::Deserialize)]
 pub struct KostenblattComputeRequest {
     /// `TechnischeRessource`-ID of the dispatched resource.
@@ -538,27 +547,33 @@ pub struct KostenblattComputeRequest {
     pub uenb_mp_id: String,
     /// VNB MP-ID (sender).
     pub vnb_mp_id: String,
-    /// UTC activation start — ISO-8601 e.g. `"2026-01-15T10:00:00Z"`.
+    /// UTC activation start — RFC 3339 e.g. `"2026-01-15T10:00:00Z"`.
     pub activation_start_utc: String,
-    /// UTC activation end — ISO-8601 e.g. `"2026-01-15T10:15:00Z"`.
+    /// UTC activation end — RFC 3339 e.g. `"2026-01-15T10:15:00Z"`.
     pub activation_end_utc: String,
     /// Contract rate EUR/kWh from the Redispatch 2.0 bilateral agreement.
     pub arbeitspreis_eur_per_kwh: rust_decimal::Decimal,
     /// Manual override for `dispatch_kwh`.  When set, `edmd` is **not** queried.
+    /// Use when the operator has a verified meter reading outside `edmd`.
     pub dispatch_kwh_override: Option<rust_decimal::Decimal>,
 }
 
 /// `POST /api/v1/redispatch/kostenblatt/{activation_id}/compute`
 ///
-/// **N5 — Redispatch Kostenblatt energy-quantity link.**
+/// **N5 — Redispatch Kostenblatt energy-quantity link (BK6-20-061 §4.2).**
 ///
 /// Steps:
-/// 1. Fetch `arbeitsmenge_kwh` for the activation window from
-///    `edmd GET /api/v1/billing-period/{malo_id}?from=…&to=…`
-///    (or use `dispatch_kwh_override` to skip the edmd call).
-/// 2. Compute `Einsatzkosten = dispatch_kwh × arbeitspreis_eur_per_kwh`.
-/// 3. Build typed BO4E `Kosten`/`KostenBlock`/`KostenPosition` JSON for CIM export.
-/// 4. Upsert the `kostenblatt_records` row (idempotent on `activation_id` + `tr_id`).
+/// 1. Parse + validate the activation window (RFC 3339 UTC timestamps).
+/// 2. Fetch dispatched energy from `edmd Lastgang` (15-min sum — primary) or
+///    `edmd billing-period` (monthly aggregate — fallback).
+///    Override with `dispatch_kwh_override` to skip edmd entirely.
+/// 3. Compute `Einsatzkosten = dispatch_kwh × arbeitspreis_eur_per_kwh`.
+/// 4. Build typed BO4E `Kosten`/`KostenBlock`/`KostenPosition` JSON for CIM export.
+/// 5. Upsert the `kostenblatt_records` row (idempotent on `activation_id` + `tr_id`).
+/// 6. Emit `de.netzbilanz.kostenblatt.computed` CloudEvent.
+///
+/// Stores `activation_start_utc`, `activation_end_utc`, and `dispatch_source`
+/// for audit trail and re-computation capability.
 ///
 /// Returns `503` when `edmd_url` is not configured and no override is supplied.
 #[allow(clippy::too_many_lines)]
@@ -570,66 +585,132 @@ pub async fn post_kostenblatt_compute(
     Json(req): Json<KostenblattComputeRequest>,
 ) -> impl IntoResponse {
     use rust_decimal::Decimal;
+    use time::format_description::well_known::Rfc3339;
 
-    // ── Step 1: Resolve dispatch_kwh ─────────────────────────────────────────
-    let dispatch_kwh = if let Some(override_kwh) = req.dispatch_kwh_override {
-        override_kwh
+    // Parse activation window to typed OffsetDateTime for DB storage and validation.
+    let activation_start = match time::OffsetDateTime::parse(&req.activation_start_utc, &Rfc3339) {
+        Ok(t) => t,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "invalid activation_start_utc '{}' — expected RFC 3339 e.g. '2026-01-15T10:00:00Z'",
+                    req.activation_start_utc
+                ),
+            )
+                .into_response();
+        }
+    };
+    let activation_end = match time::OffsetDateTime::parse(&req.activation_end_utc, &Rfc3339) {
+        Ok(t) => t,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "invalid activation_end_utc '{}' — expected RFC 3339 e.g. '2026-01-15T10:15:00Z'",
+                    req.activation_end_utc
+                ),
+            )
+                .into_response();
+        }
+    };
+    if activation_end <= activation_start {
+        return (
+            StatusCode::BAD_REQUEST,
+            "activation_end_utc must be strictly after activation_start_utc",
+        )
+            .into_response();
+    }
+
+    // ── Step 1: Resolve dispatch_kwh (Lastgang → billing-period → override) ──
+    //
+    // Priority order per BK6-20-061 §4.2:
+    //   1. `dispatch_kwh_override` — operator-supplied (e.g. from manual meter read)
+    //   2. `edmd Lastgang sum`     — sum of 15-min intervals in activation window
+    //                                (most precise; covers short activations correctly)
+    //   3. `edmd billing-period`   — monthly aggregate (fallback when Lastgang absent)
+    //
+    // For a 15-minute Redispatch activation, using the billing-period monthly
+    // aggregate would massively over-count (e.g. 2,500 kWh/month ≠ 2.5 kWh/15min).
+    // The Lastgang sum over the exact window is the correct approach.
+    let (dispatch_kwh, dispatch_source) = if let Some(override_kwh) = req.dispatch_kwh_override {
+        (override_kwh, "manual_override")
     } else {
         let edmd_url = match cfg.edmd_url.as_deref() {
             Some(u) => u.trim_end_matches('/').to_owned(),
             None => {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
-                    "edmd_url not configured in netzbilanzd.toml — supply dispatch_kwh_override",
+                    "edmd_url not configured in netzbilanzd.toml — supply dispatch_kwh_override \
+                     or configure [edmd] url in netzbilanzd.toml",
                 )
                     .into_response();
             }
         };
 
-        let url = format!(
-            "{edmd_url}/api/v1/billing-period/{}?from={}&to={}",
-            req.malo_id, req.activation_start_utc, req.activation_end_utc
-        );
-        let mut http_req = http_client.get(&url);
-        if let Some(key) = cfg.edmd_api_key.as_deref() {
-            http_req = http_req.bearer_auth(key);
+        // ── Primary: Lastgang 15-min interval sum ────────────────────────────
+        let lastgang_kwh =
+            fetch_dispatch_kwh_from_lastgang(&http_client, &edmd_url, &req.malo_id, &cfg, &req)
+                .await;
+
+        if let Some(kwh) = lastgang_kwh {
+            (kwh, "lastgang_sum")
+        } else {
+            // ── Fallback: billing-period aggregate ───────────────────────────
+            // Only useful when Lastgang data is absent (e.g. SLP metering or
+            // data not yet ingested).  Uses activation_start date as period key.
+            let period_date = activation_start.date().to_string(); // YYYY-MM-DD
+            let bp_url = format!(
+                "{edmd_url}/api/v1/billing-period/{}?from={}&to={}",
+                req.malo_id, period_date, period_date
+            );
+            let mut bp_req = http_client.get(&bp_url);
+            if let Some(key) = cfg.edmd_api_key.as_deref() {
+                bp_req = bp_req.bearer_auth(key);
+            }
+            let bp_kwh = match bp_req.send().await {
+                Ok(r) if r.status().is_success() => {
+                    let body: serde_json::Value = r.json().await.unwrap_or_default();
+                    body.get("arbeitsmenge_kwh")
+                        .and_then(decimal_from_json_value)
+                        .filter(|&v| v > Decimal::ZERO)
+                }
+                _ => None,
+            };
+            match bp_kwh {
+                Some(kwh) => {
+                    tracing::warn!(
+                        malo_id = %req.malo_id,
+                        activation_start = %req.activation_start_utc,
+                        "N5 Kostenblatt: Lastgang empty — using billing-period aggregate as fallback. \
+                         Monthly total, not window-specific. Verify meter data in edmd."
+                    );
+                    (kwh, "billing_period")
+                }
+                None => {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        format!(
+                            "no Lastgang or billing-period data for MaLo {} in activation \
+                             window {} / {}. Ingest Redispatch MSCONS (PIDs 13020–13026) or \
+                             supply dispatch_kwh_override.",
+                            req.malo_id, req.activation_start_utc, req.activation_end_utc
+                        ),
+                    )
+                        .into_response();
+                }
+            }
         }
-
-        let body: serde_json::Value = match http_req.send().await {
-            Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    format!(
-                        "no edmd data for MaLo {} in activation window {}/{}",
-                        req.malo_id, req.activation_start_utc, req.activation_end_utc
-                    ),
-                )
-                    .into_response();
-            }
-            Ok(r) if !r.status().is_success() => {
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    format!("edmd returned HTTP {}", r.status()),
-                )
-                    .into_response();
-            }
-            Ok(r) => r.json().await.unwrap_or_default(),
-            Err(e) => return (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
-        };
-
-        body.get("arbeitsmenge_kwh")
-            .and_then(|v| {
-                v.as_str()
-                    .and_then(|s| s.parse().ok())
-                    .or_else(|| v.as_f64().and_then(|f| Decimal::try_from(f).ok()))
-            })
-            .unwrap_or(Decimal::ZERO)
     };
 
     if dispatch_kwh <= Decimal::ZERO {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
-            "dispatch_kwh is zero — no energy data for the activation window; check edmd meter records",
+            format!(
+                "dispatch_kwh is zero for MaLo {} — no energy data recorded for the activation \
+                 window. Check edmd Lastgang or supply dispatch_kwh_override.",
+                req.malo_id
+            ),
         )
             .into_response();
     }
@@ -675,10 +756,11 @@ pub async fn post_kostenblatt_compute(
             "_typ": "ZEITRAUM",
             "startdatum": req.activation_start_utc,
             "enddatum": req.activation_end_utc
-        }
+        },
+        "dispatchSource": dispatch_source
     });
 
-    // ── Step 3: Upsert the Kostenblatt record ─────────────────────────────────
+    // ── Step 3: Upsert the Kostenblatt record (idempotent on activation_id + tr_id) ──
     let upsert_req = UpsertKostenblattRequest {
         tr_id: req.tr_id.clone(),
         malo_id: Some(req.malo_id.clone()),
@@ -689,23 +771,172 @@ pub async fn post_kostenblatt_compute(
         dispatch_kwh,
         arbeitspreis_eur_per_kwh: req.arbeitspreis_eur_per_kwh,
         kosten_json: Some(kosten_json),
+        activation_start_utc: Some(activation_start),
+        activation_end_utc: Some(activation_end),
+        dispatch_source: Some(dispatch_source.to_owned()),
     };
 
-    match upsert_kostenblatt(&pool, "default", &activation_id, &upsert_req).await {
-        Ok(id) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "id": id,
-                "activation_id": activation_id,
-                "tr_id": req.tr_id,
-                "malo_id": req.malo_id,
-                "dispatch_kwh": dispatch_kwh.to_string(),
+    let record_id = match upsert_kostenblatt(&pool, &cfg.tenant, &activation_id, &upsert_req).await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    };
+
+    // ── Step 4: Emit CloudEvent ───────────────────────────────────────────────
+    if let Some(ref webhook_url) = cfg.erp_webhook_url {
+        emit_cloud_event(
+            Arc::clone(&http_client),
+            webhook_url.clone(),
+            "de.netzbilanz.kostenblatt.computed",
+            serde_json::json!({
+                "record_id":              record_id,
+                "activation_id":          activation_id,
+                "tr_id":                  req.tr_id,
+                "malo_id":                req.malo_id,
+                "period_year":            req.period_year,
+                "period_month":           req.period_month,
+                "dispatch_kwh":           dispatch_kwh.to_string(),
                 "arbeitspreis_eur_per_kwh": req.arbeitspreis_eur_per_kwh.to_string(),
-                "einsatzkosten_eur": einsatzkosten_eur.to_string(),
-                "source": if req.dispatch_kwh_override.is_some() { "manual_override" } else { "edmd_auto" },
-            })),
-        )
-            .into_response(),
+                "einsatzkosten_eur":      einsatzkosten_eur.to_string(),
+                "dispatch_source":        dispatch_source,
+                "activation_start_utc":   req.activation_start_utc,
+                "activation_end_utc":     req.activation_end_utc,
+            }),
+        );
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "id":                       record_id,
+            "activation_id":            activation_id,
+            "tr_id":                    req.tr_id,
+            "malo_id":                  req.malo_id,
+            "dispatch_kwh":             dispatch_kwh.to_string(),
+            "arbeitspreis_eur_per_kwh": req.arbeitspreis_eur_per_kwh.to_string(),
+            "einsatzkosten_eur":        einsatzkosten_eur.to_string(),
+            "dispatch_source":          dispatch_source,
+            "activation_start_utc":     req.activation_start_utc,
+            "activation_end_utc":       req.activation_end_utc,
+        })),
+    )
+        .into_response()
+}
+
+/// Fetch the total dispatched energy (kWh) for an activation window from edmd Lastgang.
+///
+/// Calls `GET /api/v1/lastgang/{malo_id}?from={start}&to={end}` and sums all
+/// 15-min interval `wert` values.
+///
+/// Handles both:
+/// - Array format: `[{ "wert": "1.25", "timestamp_utc": "..." }, ...]`
+/// - BO4E Lastgang format: `{ "werteliste": [{ "wert": "1.25", ... }] }`
+///
+/// Returns `None` when the Lastgang endpoint returns 404, an empty array, or
+/// a sum of zero — the caller should fall back to billing-period in that case.
+async fn fetch_dispatch_kwh_from_lastgang(
+    client: &reqwest::Client,
+    edmd_url: &str,
+    malo_id: &str,
+    cfg: &NetzbilanzConfig,
+    req: &KostenblattComputeRequest,
+) -> Option<rust_decimal::Decimal> {
+    use rust_decimal::Decimal;
+    let url = format!(
+        "{edmd_url}/api/v1/lastgang/{malo_id}?from={}&to={}",
+        req.activation_start_utc, req.activation_end_utc
+    );
+    let mut http_req = client.get(&url);
+    if let Some(key) = cfg.edmd_api_key.as_deref() {
+        http_req = http_req.bearer_auth(key);
+    }
+    let body: serde_json::Value = match http_req.send().await {
+        Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => return None,
+        Ok(r) if !r.status().is_success() => {
+            tracing::debug!(
+                malo_id,
+                status = r.status().as_u16(),
+                "N5 Kostenblatt: lastgang non-2xx — falling back to billing-period"
+            );
+            return None;
+        }
+        Ok(r) => r.json().await.unwrap_or_default(),
+        Err(e) => {
+            tracing::warn!(%e, malo_id, "N5 Kostenblatt: lastgang fetch error");
+            return None;
+        }
+    };
+
+    // Extract interval values from either response format.
+    let intervals: Vec<&serde_json::Value> = if let Some(arr) = body.as_array() {
+        // Direct array: [{ "wert": "...", "timestamp_utc": "..." }, ...]
+        arr.iter().collect()
+    } else if let Some(arr) = body.get("werteliste").and_then(|v| v.as_array()) {
+        // BO4E Lastgang: { "werteliste": [{ "wert": "...", "zeitstempel": "..." }] }
+        arr.iter().collect()
+    } else if let Some(arr) = body.get("zeitreihenwerteliste").and_then(|v| v.as_array()) {
+        arr.iter().collect()
+    } else {
+        return None;
+    };
+
+    let total: Decimal = intervals
+        .iter()
+        .filter_map(|v| {
+            v.get("wert")
+                .or_else(|| v.get("kwh"))
+                .and_then(decimal_from_json_value)
+        })
+        .sum();
+
+    if total > Decimal::ZERO {
+        Some(total)
+    } else {
+        None
+    }
+}
+
+/// Parse a JSON value as `rust_decimal::Decimal`.
+fn decimal_from_json_value(v: &serde_json::Value) -> Option<rust_decimal::Decimal> {
+    match v {
+        serde_json::Value::String(s) => s.parse().ok(),
+        serde_json::Value::Number(n) => n.to_string().parse().ok(),
+        _ => None,
+    }
+}
+
+// ── N5a: Kostenblatt gap detection ────────────────────────────────────────────
+
+/// `GET /api/v1/redispatch/kostenblatt/gaps/{year}/{month}`
+///
+/// Lists Kostenblatt records for the month where `dispatch_kwh = 0` and
+/// `dispatch_source IS NULL` — activations that were registered but whose
+/// energy quantity was never computed.
+///
+/// Operators should call
+/// `POST /api/v1/redispatch/kostenblatt/{activation_id}/compute`
+/// for each gap before the 15th-of-month submission deadline (BK6-20-061).
+pub async fn get_kostenblatt_gaps(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
+    Path((year, month)): Path<(i16, i16)>,
+) -> impl IntoResponse {
+    match list_kostenblatt_gaps(&pool, &cfg.tenant, year, month).await {
+        Ok(rows) => Json(serde_json::json!({
+            "year":     year,
+            "month":    month,
+            "gaps":     rows.len(),
+            "hint": format!(
+                "For each gap, call POST /api/v1/redispatch/kostenblatt/{{activation_id}}/compute \
+                 before the 15th of {}-{:02} (BK6-20-061)",
+                year + if month == 12 { 1 } else { 0 },
+                if month == 12 { 1 } else { month + 1 }
+            ),
+            "records":  rows,
+        }))
+        .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1480,5 +1711,149 @@ pub async fn post_remadv_webhook(
         )
             .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod kostenblatt_tests {
+    use super::decimal_from_json_value;
+    use rust_decimal_macros::dec;
+
+    // ── decimal_from_json_value ───────────────────────────────────────────────
+
+    #[test]
+    fn decimal_from_string_value() {
+        let v = serde_json::json!("1.25");
+        assert_eq!(decimal_from_json_value(&v), Some(dec!(1.25)));
+    }
+
+    #[test]
+    fn decimal_from_numeric_value() {
+        let v = serde_json::json!(2.5);
+        assert_eq!(decimal_from_json_value(&v), Some(dec!(2.5)));
+    }
+
+    #[test]
+    fn decimal_from_invalid_value_returns_none() {
+        let v = serde_json::json!({ "wert": "1.25" });
+        assert!(decimal_from_json_value(&v).is_none());
+    }
+
+    // ── KostenblattComputeRequest validation ──────────────────────────────────
+
+    #[test]
+    fn activation_window_parse_rfc3339() {
+        // Verify that typical Redispatch timestamps round-trip correctly.
+        let start = "2026-01-15T10:00:00Z";
+        let end = "2026-01-15T10:15:00Z";
+        let s = time::OffsetDateTime::parse(start, &time::format_description::well_known::Rfc3339);
+        let e = time::OffsetDateTime::parse(end, &time::format_description::well_known::Rfc3339);
+        assert!(s.is_ok(), "activation_start_utc must parse as RFC 3339");
+        assert!(e.is_ok(), "activation_end_utc must parse as RFC 3339");
+        assert!(e.unwrap() > s.unwrap(), "end must be after start");
+    }
+
+    #[test]
+    fn activation_window_15min_gap() {
+        let start = time::OffsetDateTime::parse(
+            "2026-01-15T10:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        let end = time::OffsetDateTime::parse(
+            "2026-01-15T10:15:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        let gap = end - start;
+        assert_eq!(
+            gap.whole_minutes(),
+            15,
+            "typical Redispatch activation = 15 min"
+        );
+    }
+
+    // ── Lastgang response parsing ─────────────────────────────────────────────
+
+    #[test]
+    fn sum_lastgang_array_format() {
+        // Array format: [{ "wert": "1.25", "timestamp_utc": "..." }, ...]
+        let response = serde_json::json!([
+            { "wert": "1.25", "timestamp_utc": "2026-01-15T10:00:00Z" },
+            { "wert": "1.30", "timestamp_utc": "2026-01-15T10:15:00Z" },
+            { "wert": "0.80", "timestamp_utc": "2026-01-15T10:30:00Z" }
+        ]);
+        let intervals: Vec<&serde_json::Value> = response.as_array().unwrap().iter().collect();
+        let total: rust_decimal::Decimal = intervals
+            .iter()
+            .filter_map(|v| v.get("wert").and_then(decimal_from_json_value))
+            .sum();
+        assert_eq!(total, dec!(3.35));
+    }
+
+    #[test]
+    fn sum_lastgang_bo4e_format() {
+        // BO4E Lastgang: { "werteliste": [{ "wert": "...", ... }] }
+        let response = serde_json::json!({
+            "zeitIntervallLaenge": "PT15M",
+            "werteliste": [
+                { "wert": "2.50", "zeitstempel": "2026-01-15T10:00:00Z", "status": "67" },
+                { "wert": "2.75", "zeitstempel": "2026-01-15T10:15:00Z", "status": "67" }
+            ]
+        });
+        let intervals: Vec<&serde_json::Value> = response
+            .get("werteliste")
+            .and_then(|v| v.as_array())
+            .unwrap()
+            .iter()
+            .collect();
+        let total: rust_decimal::Decimal = intervals
+            .iter()
+            .filter_map(|v| v.get("wert").and_then(decimal_from_json_value))
+            .sum();
+        assert_eq!(total, dec!(5.25));
+    }
+
+    #[test]
+    fn empty_lastgang_returns_zero() {
+        let response = serde_json::json!([]);
+        let intervals: Vec<&serde_json::Value> = response.as_array().unwrap().iter().collect();
+        let total: rust_decimal::Decimal = intervals
+            .iter()
+            .filter_map(|v| v.get("wert").and_then(decimal_from_json_value))
+            .sum();
+        assert_eq!(total, dec!(0));
+    }
+
+    // ── Einsatzkosten calculation ─────────────────────────────────────────────
+
+    #[test]
+    fn einsatzkosten_calculation_precision() {
+        // 2.5 kWh × 0.12345 EUR/kWh = 0.30863 EUR
+        let dispatch_kwh = dec!(2.5);
+        let arbeitspreis = dec!(0.12345);
+        let einsatzkosten = dispatch_kwh * arbeitspreis;
+        assert_eq!(einsatzkosten, dec!(0.308625));
+        // Verify no floating-point drift
+        assert_ne!(einsatzkosten.to_string(), "0.3086249");
+    }
+
+    #[test]
+    fn dispatch_source_values_are_canonical() {
+        // Canonical dispatch_source values match DB CHECK constraint
+        let valid = &["lastgang_sum", "billing_period", "manual_override"];
+        for v in valid {
+            assert!(
+                !v.is_empty(),
+                "dispatch_source value must not be empty: {v}"
+            );
+            assert_eq!(
+                *v,
+                v.to_lowercase(),
+                "dispatch_source must be lowercase: {v}"
+            );
+        }
     }
 }

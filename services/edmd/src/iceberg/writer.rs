@@ -40,6 +40,7 @@ use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use time::OffsetDateTime;
 use tracing::debug;
+use uuid::Uuid;
 
 /// Write a batch of `MeterRead` rows as Iceberg V2 Parquet data files.
 ///
@@ -60,8 +61,13 @@ pub async fn write_data_files(
     let location_gen = DefaultLocationGenerator::new(table.metadata().clone())
         .map_err(|e| anyhow::anyhow!("location generator: {e}"))?;
 
+    // F-05: Use a per-sink UUID prefix to avoid duplicate Parquet paths on restart.
+    // A fixed prefix ("edmd-archive-") would regenerate the same paths after restart
+    // because the internal counter resets to 0, causing Iceberg catalog commit failures
+    // or silent data corruption on re-committed files.
+    let sink_id = Uuid::new_v4();
     let file_name_gen =
-        DefaultFileNameGenerator::new("edmd-archive-".to_owned(), None, DataFileFormat::Parquet);
+        DefaultFileNameGenerator::new(format!("edmd-{}-", sink_id), None, DataFileFormat::Parquet);
 
     let props = WriterProperties::builder()
         .set_compression(Compression::ZSTD(Default::default()))

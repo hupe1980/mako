@@ -29,7 +29,7 @@ tariff), the output is always the same `Rechnung`. This means:
 
 - BNetzA §22 MessZV compliance: auditors can re-run the calculation from stored inputs
 - No hidden state: all inputs are either stored in `tarifbd`, `edmd`, or `marktd`
-- Testable: `energy-billing` has **148 tests** (property-based, golden master, integration) — zero I/O, zero async, all pure Rust
+- Testable: `energy-billing` has **160 tests** (property-based, golden master, integration) — zero I/O, zero async, all pure Rust
 
 ---
 
@@ -44,28 +44,32 @@ billingd (HTTP service)
     │   HTTP endpoints · tarifbd/edmd/marktd clients
     │
     └── energy-billing (pure crate, crates.io)
-            │   TariffInput · Quantities · BillingContext · RegulatoryRates
-            │   PricingModel (typed dispatch enum)
-            │   BillingEngine (provider pipeline)
-            │   Invoice { positions, netto_eur, mwst_eur, brutto_eur, zahlbetrag_eur }
+            │   Product (typed enum, 12 variants)
+            │   Quantities · BillingContext · RegulatoryRates
+            │   BillingEngine (provider pipeline, validate + bill + bill_batch)
+            │   Invoice { positions, warnings, netto_eur, mwst_eur, brutto_eur }
             │
-            ├── ElectricityProvider    §14a Modul 1/3; HT/NT via TimeOfUsePricing;
-            │                          block tariffs via TariffSchedule; §41a EPEX
-            ├── GasProvider            §10 GasGVV Brennwertkorrektur; BEHG CO₂
-            ├── HeatProvider           Fernwärme; auto-7% MwSt (renewable)
-            ├── SolarProvider          §42b Mieterstrom; §42a GGV
-            ├── EegProvider            LF-side Gutschrift; contractual §51
-            ├── EinspeisungProvider    Direktvermarktung Marktwert
-            ├── HemsProvider           Platform subscription + events
-            ├── EmobilityProvider      CPO/EMSP
-            ├── ServiceProvider        Energiedienstleistung
-            ├── DynamicElectricityProvider  §41a per-interval EPEX
-            └── MwStProvider           Multi-rate MwSt (7% / 19% / 0% per position)
+            ├── ElectricityProvider      §41a EPEX; HT/NT; block tariffs; RLM demand
+            ├── ControllableLoadProvider §14a Modul 1/3 (WAERMEPUMPE, WALLBOX)
+            ├── GasProvider              §10 GasGVV Brennwertkorrektur; BEHG CO₂
+            ├── HeatProvider             Fernwärme; auto-7% MwSt (renewable)
+            ├── SolarProvider            §42b Mieterstrom; §42a GGV
+            ├── EegProvider              LF-side Gutschrift; contractual §51
+            ├── EinspeisungProvider      Direktvermarktung Marktwert
+            ├── HemsProvider             Platform subscription + events
+            ├── EmobilityProvider        CPO/EMSP
+            ├── ServiceProvider          Energiedienstleistung
+            ├── DynamicElectricityProvider  §41a per-interval EPEX (§41b iMSys guard)
+            ├── EnergyShareProvider      §42c Energiegemeinschaft credit
+            └── MwStProvider             Multi-rate MwSt (7% / 19% / 0% per position)
 ```
 
-`energy-billing` is **zero I/O, zero async** — `BillingEngine::bill()` is a pure function returning `Result<Invoice, BillingError>`.
-`Invoice` carries `positions: Vec<BillingPosition>` and exposes `to_rechnung_json()` (BO4E JSONB) and `to_bo4e_rechnung()` (`rubo4e::current::Rechnung` with `bo4e` feature).
-Helper methods: `.assert_valid()`, `.total_by_tag()`, `.positions_by_tag()`, `.kilowattstundenpreis_brutto_ct()`.
+`energy-billing` is **zero I/O, zero async** — `BillingEngine::bill()` is a pure function
+returning `Result<Invoice, BillingError>`.
+`Invoice` carries `positions: Vec<BillingPosition>`, `warnings: Vec<BillingWarning>`, and
+exposes `to_rechnung_json()` (BO4E-compatible JSONB for `accountingd` ingestion).
+Helper methods: `.assert_valid()`, `.total_by_tag()`, `.positions_by_tag()`,
+`.kilowattstundenpreis_brutto_ct()`, `.has_errors()`.
 
 Statutory rates (Stromsteuer, Energiesteuer Gas, BEHG CO₂) are injected via `RegulatoryRates`
 from `billingd.toml` — zero hardcoded values in the crate.
@@ -80,7 +84,7 @@ graph TB
     tarifbd["tarifbd :9080\nProductDefinition\n(Tarifpreisblatt JSONB)"]
     edmd["edmd :8380\nMeterBillingPeriod\n(arbeitsmenge, spitzenleistung)"]
     marktd["marktd :8180\nPreisblattNetznutzung\nPreisblattKonzessionsabgabe"]
-    calculator["energy-billing crate\nPricingModel → BillingEngine → Invoice"]
+    calculator["energy-billing crate\nProduct → BillingEngine → Invoice"]
     pg[("PostgreSQL\nbilling_records\n§22 MessZV")]
     erp_hook["ERP webhook\nde.billing.rechnung.erstellt"]
     accountingd["accountingd :9380\n→ debit entry"]
@@ -256,7 +260,12 @@ MwSt
 
 Identical to `STROM` but §14a positions are **always included** when the product carries
 `steuerungsrabatt_modul1_eur_per_kw_year` and/or `steuerungsrabatt_modul3_eur_per_kw_year`.
-No separate provider — `PricingModel::HeatPump` and `PricingModel::Wallbox` both use `ElectricityProvider` with §14a positions included.
+No separate provider — `Product::Waermepumpe` and `Product::Wallbox` variants use
+`ControllableLoadProvider`, which delegates standard electricity billing to `ElectricityProvider`
+and appends §14a Modul 1/3 credit positions.
+
+Set `steuerungsrabatt_modul1_eur_per_kw_year` (annual capacity-based NNE reduction) and/or
+`sect14a_modul1_nne_reduktion_ct_per_kwh` (per-kWh NNE reduction) in the product definition.
 
 ### HEMS / EMOBILITY / ENERGIEDIENSTLEISTUNG / BUNDLE
 
@@ -274,19 +283,25 @@ BUNDLE: per-component recursion — ERP must submit individual calculate request
 
 ## New in this release
 
-### PricingModel — type-safe dispatch
+### Product — type-safe dispatch
+
+`Product` is a typed enum deserialized directly from `tarifbd` JSONB using the `"category"`
+discriminator. Call `product.build_engine(&grid, &rates)` to obtain a configured `BillingEngine`:
 
 ```rust
-// Before: string-based dispatch returning Option<BillingEngine>
-let engine = tariff.build_engine(&grid, &rates)?;
-
-// After: typed enum with explicit Err for unknown categories
-let engine = PricingModel::try_from(tariff)?
-    .build_engine(&grid, &rates)?;
+// Deserializes from {"category":"STROM","arbeitspreis_ct_per_kwh":32.0,...}
+let product: Product = serde_json::from_str(&product_json)?;
+let engine = product.build_engine(&grid, &rates);
+// No more Option<BillingEngine> or PricingModel::try_from() needed
+let invoice = engine.bill(ctx, &quantities)?;
 ```
 
-`PricingModel` has 12 exhaustive variants: `Electricity`, `DynamicElectricity`, `HeatPump`,
-`Wallbox`, `Gas`, `Heat`, `Solar`, `Eeg`, `Einspeisung`, `Hems`, `Emobility`, `Service`.
+`Product` has 12 exhaustive variants, each wrapping a typed per-category struct:
+`Strom(ElectricityProduct)`, `Waermepumpe/Wallbox(ControllableLoadProduct)`,
+`Gas(GasProduct)`, `Waerme(HeatProduct)`, `Solar(SolarProduct)`,
+`Eeg(EegProduct)`, `Einspeisung(EinspeisungProduct)`,
+`Hems(HemsProduct)`, `Emobility(EmobilityProduct)`, `Energiedienstleistung(ServiceProduct)`,
+`Sharing(SharingProduct)`.
 
 ### Regulatory additions
 
@@ -346,7 +361,6 @@ Every billing run now generates a unique `billing_run_id` (UUID v4). It is store
 
 - `billing_records.billing_run_id` in PostgreSQL
 - `rechnung_json.zusatzAttribute["billingRunId"]`
-- `to_bo4e_rechnung().id` (with `bo4e` feature)
 
 This links each database record to the exact calculation output for §22 MessZV compliance.
 
@@ -473,11 +487,12 @@ Re-running the same billing request updates the existing record — safe to retr
 
 ## MCP server
 
-`billingd` ships a built-in MCP server at `/mcp` (Streamable HTTP, 2025-11-05). Ten tools
+`billingd` ships a built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25). **Twelve tools**
 and six prompts are available to LLM agents:
 
 | Tool | Description |
-|---|---|
+|---|
+---|
 | `list_billing_records` | List records for a MaLo — summary without full `Rechnung` |
 | `get_billing_record` | Full BO4E `Rechnung` JSONB for a specific record UUID |
 | `preview_billing` | Dry-run preview (calls `/preview` internally — no side effects) |
@@ -486,8 +501,10 @@ and six prompts are available to LLM agents:
 | `check_billing_anomaly` | Rolling 3-month deviation check — flags invoices outside threshold |
 | `list_vpp_settlements` | List VPP aggregation settlement records |
 | `list_corrections` | List Korrekturrechnung / Stornorechnung records (§22 MessZV) |
-| `list_product_categories` | Describe all 12 categories + required `TariffInput` fields |
+| `list_product_categories` | Describe all 13 billing categories and their required product fields |
 | `get_billing_summary` | Aggregate stats per MaLo: total billed, avg monthly, by category |
+| `validate_tariff_config` | Pre-flight: §41b iMSys guard, KAV plausibility, missing fields |
+| `explain_invoice_position` | Full `PositionTrace` audit for a given position (formula, §-refs) |
 
 | Prompt | Description |
 |---|---|
@@ -521,7 +538,8 @@ Both variants include `zusatzAttribute.originalRechnungsnummer` for §22 MessZV 
 
 ### ENERGIEDIENSTLEISTUNG products
 
-When `tariff.category == "ENERGIEDIENSTLEISTUNG"`, `billingd` builds a `ServiceProvider` via `PricingModel::try_from(tariff)?.build_engine()`:
+When `tariff.category == "ENERGIEDIENSTLEISTUNG"`, `billingd` deserializes the product JSON to
+`Product::Energiedienstleistung(ServiceProduct)` and builds a `ServiceProvider`:
 
 ```json
 {
@@ -608,12 +626,139 @@ Useful for:
 |--------|-------|
 | `id` | UUID primary key |
 | `malo_id`, `lf_mp_id` | MaLo + LF identity |
-| `product_code`, `category` | Product reference |
+| `product_code`, `category` | Product reference (`VPP` for dispatch settlements) |
 | `period_from`, `period_to` | Billing period |
 | `rechnung_json` | Full BO4E `Rechnung` JSONB (§22 MessZV) |
 | `total_netto_eur`, `total_brutto_eur` | Cached totals for fast reporting |
 | `outcome` | `generated` → `dispatched` → `paid`/`disputed` |
 | `ce_id` | CloudEvent ID of emitted `de.billing.rechnung.erstellt` |
+
+### `vpp_contracts`
+
+Maps a `SteuerbareRessource`-ID (SR-ID) to the billing parameters needed for automatic
+VPP settlement via `POST /api/v1/webhooks/vpp-dispatch`.
+
+| Column | Notes |
+|--------|-------|
+| `sr_id` | SteuerbareRessource-ID (`C…`) or NeLo-ID (`10Y…` / `E…`) |
+| `vpp_id` | Operator-assigned VPP portfolio identifier (used as path on `/billing/vpp/{vpp_id}`) |
+| `malo_id`, `lf_mp_id` | Aggregation point + invoice issuer |
+| `capacity_price_eur_per_kwh` | Agreed Einsatzkosten per kWh — from TSO/DSO bilateral contract |
+| `valid_from`, `valid_to` | Contract validity window; `valid_to NULL` = currently active |
+| `mwst_rate_override` | Override MwSt rate (defaults to `billingd.toml` global) |
+
+### `vpp_dispatch_ledger`
+
+Idempotency table for `de.vpp.dispatch.confirmed` webhook delivery. Each `tx_id` is
+recorded exactly once per tenant; retried deliveries return `202 Accepted` without
+re-billing.
+
+| Column | Notes |
+|--------|-------|
+| `tx_id` | Transaction ID from the `WimSteuerungsauftrag` (primary key) |
+| `tenant` | Tenant data-isolation key |
+| `record_id` | FK to `billing_records.id` (NULL if `vpp_auto_billing = false`) |
+
+---
+
+## VPP Aggregation Billing (RED III Article 17)
+
+`billingd` supports fully automatic VPP (Virtual Power Plant) dispatch-to-billing,
+closing the loop from ORDRSP confirmation to BO4E `Rechnung` without operator intervention.
+
+### Architecture
+
+```mermaid
+sequenceDiagram
+    participant NB as NB (grid operator)
+    participant makod
+    participant billingd
+    participant accountingd
+    participant agentd as agentd<br/>(vpp-billing-agent)
+
+    NB->>makod: ORDERS 55168 Steuerungsauftrag<br/>(Konfiguration, max_power_kw=11, SR-ID=C001...)
+    makod->>makod: MSB confirms → EndantwortPositiv
+    makod--)billingd: de.vpp.dispatch.confirmed CloudEvent<br/>{tx_id, location_id, max_power_kw,<br/>execution_time_from, execution_time_until}
+    billingd->>billingd: HMAC verify + tx_id idempotency check
+    billingd->>billingd: find_active_vpp_contract(sr_id)
+    billingd->>billingd: flexibility_kwh = max_power_kw × duration_h<br/>Rechnung = flexibility_kwh × capacity_price
+    billingd--)accountingd: de.vpp.settlement.berechnet
+    makod--)agentd: de.vpp.dispatch.confirmed (monitoring trigger)
+    agentd->>billingd: verify settlement record created + arithmetic
+    agentd->>agentd: RED III Article 17 audit field check
+```
+
+### Setup
+
+**1. Register a VPP contract** for each controllable resource:
+
+```bash
+curl -s -X PUT "http://billingd:9280/api/v1/billing/vpp-contracts/C0001234567890" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "00000000-0000-0000-0000-000000000000",
+    "vpp_id": "VPP-PORTFOLIO-001",
+    "malo_id": "51238696781",
+    "lf_mp_id": "9910000000002",
+    "capacity_price_eur_per_kwh": "0.12",
+    "valid_from": "2026-01-01",
+    "mwst_rate_override": null,
+    "tenant": "9910000000002",
+    "updated_at": "2026-01-01T00:00:00Z"
+  }'
+```
+
+**2. Enable auto-billing** in `billingd.toml`:
+
+```toml
+vpp_auto_billing       = true
+inbound_webhook_secret = "env:BILLINGD_INBOUND_HMAC_SECRET"
+```
+
+**3. Register `billingd` as a subscriber** in `marktd` so it receives
+`de.vpp.dispatch.confirmed` events from `makod`'s outbox via the `marktd` EventBus fan-out:
+
+```bash
+curl -s -X PUT "http://marktd:8180/api/v1/subscriptions/billingd-vpp" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "webhook_url": "http://billingd:9280/api/v1/webhooks/vpp-dispatch",
+    "event_types": ["de.vpp.dispatch.confirmed"],
+    "hmac_secret": "env:BILLINGD_INBOUND_HMAC_SECRET"
+  }'
+```
+
+### Flexibility calculation
+
+`flexibility_kwh = max_power_kw × (execution_time_until − execution_time_from) / 3600`
+
+When `execution_time_until` is absent, `billingd` falls back to **15 minutes**
+(the statutory BNetzA §14a minimum dispatch window).
+
+### Invoice shape
+
+Each auto-billed dispatch generates a `Rechnung` with:
+- `category = "VPP"`, `product_code = "VPP_{vpp_id}"`  
+- One `Rechnungsposition` with `positionstyp = "vpp_dispatch"` and a `zeitraum` covering the exact dispatch window
+- `zusatzAttribute`: `regulatory_basis = "RED III Article 17"`, `tx_id`, `sr_id`, `flexibility_kwh`
+- The `tx_id` cross-references the originating `WimSteuerungsauftrag` process in `makod`
+
+### Manual fallback
+
+When `vpp_auto_billing = false` or no contract exists for the SR-ID, the webhook records
+the dispatch in `vpp_dispatch_ledger` without generating a `Rechnung`. Operators can
+still trigger billing manually via `POST /api/v1/billing/vpp/{vpp_id}` at any time.
+
+### Monitoring
+
+The built-in `vpp-billing-agent` in `agentd` monitors the pipeline for completeness:
+
+- **Settlement completeness**: verifies every `de.vpp.dispatch.confirmed` produced a matching settlement within the SLA window
+- **Arithmetic validation**: `flexibility_kwh = max_power_kw × duration_h`; flags deviations
+- **RED III Article 17 audit**: confirms all required `zusatzAttribute` fields are present
+- **Missing contract escalation**: alerts operator if no `vpp_contracts` row exists for the SR-ID
 
 ---
 
@@ -637,4 +782,9 @@ seller_vat_id = "DE123456789"
 
 # Optional: ERP webhook
 erp_webhook_url = "http://erp:8000/webhooks/billing"
+
+# VPP dispatch-to-billing automation (RED III Article 17)
+# Set vpp_auto_billing = true and register vpp_contracts for each SR-ID.
+vpp_auto_billing       = false          # flip to true to enable auto-billing
+inbound_webhook_secret = "env:BILLINGD_INBOUND_HMAC_SECRET"  # HMAC for POST /webhooks/vpp-dispatch
 ```

@@ -435,25 +435,51 @@ impl Workflow for WimStammdatenWorkflow {
                 standorteigenschaften,
                 zaehlwerke,
             } => {
-                if !matches!(state, StammdatenState::ValidationPassed(_)) {
+                let StammdatenState::ValidationPassed(data) = &state else {
                     return Err(WorkflowError::invalid_state(
                         "ValidationPassed",
                         state.status_str(),
                     ));
-                }
+                };
                 if !UEBERMITTLUNG_PIDS.contains(&response_pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
                         "PID {} is not a Stammdaten-Übermittlung PID (expected 17102–17133)",
                         response_pid.as_u32()
                     )));
                 }
-                Ok(vec![StammdatenEvent::StammdatenUebermittelt {
+                let melo_id = data.melo_id.as_str().to_owned();
+                let event = StammdatenEvent::StammdatenUebermittelt {
                     response_pid,
                     response_ref,
-                    standorteigenschaften,
-                    zaehlwerke,
-                }]
-                .into())
+                    standorteigenschaften: standorteigenschaften.clone(),
+                    zaehlwerke: zaehlwerke.clone(),
+                };
+
+                // If the response carries Stammdaten (ZAK+ZE registers or Standorteigenschaften),
+                // emit a ProcessCompleted outbox entry so that `marktd` can auto-update the
+                // ZaehlzeitRegister and Standorteigenschaften columns.
+                // `recipient` is empty — this entry is consumed by the ERP/marktd webhook,
+                // not by an EDIFACT AS4 recipient.
+                if !zaehlwerke.is_empty() || standorteigenschaften.is_some() {
+                    let mut payload = serde_json::json!({
+                        "melo_id": melo_id,
+                        "pid":     response_pid.as_u32(),
+                    });
+                    if !zaehlwerke.is_empty() {
+                        payload["zaehlwerke"] = serde_json::Value::Array(zaehlwerke);
+                    }
+                    if let Some(se) = standorteigenschaften {
+                        payload["standorteigenschaften"] = se;
+                    }
+                    let outbox =
+                        mako_engine::outbox::PendingOutbox::new("ProcessCompleted", "", payload);
+                    Ok(mako_engine::workflow::WorkflowOutput::with_outbox(
+                        vec![event],
+                        vec![outbox],
+                    ))
+                } else {
+                    Ok(vec![event].into())
+                }
             }
 
             StammdatenCommand::RejectAnforderung { reason } => {

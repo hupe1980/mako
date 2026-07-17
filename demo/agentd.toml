@@ -1,0 +1,139 @@
+# agentd.toml — demo configuration for the multi-agent LLM orchestration daemon.
+#
+# agentd subscribes to CloudEvents from marktd and other services, routes them
+# to specialist agents, and executes ReAct loops using MCP tools.
+#
+# DO NOT use this file in production — API keys must be injected via environment
+# variables (AGENTD_PROVIDERS__OPENAI__API_KEY=...).
+#
+# Port: 9580
+#
+# ## Key features
+#
+# - Built-in agents ship in the container image — no system prompt copy-paste needed.
+# - Enable via [bundled_agents] enable_all = true or explicit list.
+# - Custom agents in [[agents]] override built-ins with the same name.
+# - A2A agent cards at /.well-known/agents/{name}
+# - Agent catalog at GET /api/v1/agents/catalog
+
+tenant = "9900357000004"
+
+# ── LLM providers ─────────────────────────────────────────────────────────────
+# Configure at least one provider. Inject API keys via environment variables.
+
+[providers.openai]
+backend  = "openai"
+api_base = "https://api.openai.com/v1"
+api_key  = "env:OPENAI_API_KEY"
+
+# [providers.claude]
+# backend = "anthropic"
+# api_key = "env:ANTHROPIC_API_KEY"
+
+# ── Orchestrator ───────────────────────────────────────────────────────────────
+[orchestrator]
+provider      = "openai"
+model         = "gpt-4o"
+max_turns     = 10
+dispatch_mode = "sequential"   # sequential | parallel | race
+parallel_limit = 4
+
+system_prompt = """
+You are the mako orchestration agent for a German energy utility.
+Your role is to triage incoming CloudEvents and delegate to the most appropriate
+specialist agent. Always prefer direct delegation when the event type clearly
+matches a specialist's trigger_patterns. Ask for clarification only when the
+event is ambiguous. Summarize your routing decision in one sentence.
+"""
+
+# ── Built-in agents ────────────────────────────────────────────────────────────
+# Enable pre-designed specialists compiled into the agentd binary.
+# They ship in the container image — no system prompt copy-paste required.
+# Override model/provider/max_turns per-agent under [bundled_agents.overrides.<name>].
+
+[bundled_agents]
+# Enable a curated set of specialists for this demo.
+# Use enable_all = true to activate all 26 built-in agents.
+enable = [
+  "mako-agent",
+  "deadline-alert-agent",
+  "billing-agent",
+  "billing-anomaly-agent",
+  "billing-regulatory-guard-agent",
+  "jahresabrechnung-agent",
+  "eeg-agent",
+  "eeg-compliance-agent",
+  "compliance-agent",
+  "processd-agent",
+]
+
+default_provider = "openai"
+default_model    = "gpt-4o-mini"
+
+# Upgrade specific agents to more capable models
+[bundled_agents.overrides.mako-agent]
+model     = "gpt-4o"
+max_turns = 15
+
+[bundled_agents.overrides.jahresabrechnung-agent]
+model     = "gpt-4o"
+max_turns = 20
+
+[bundled_agents.overrides.eeg-compliance-agent]
+mcp_servers = ["einsd", "obsd"]
+
+# ── MCP server endpoints ──────────────────────────────────────────────────────
+# The mcp_api_key must match the value configured in each service's [mcp] section.
+mcp_api_key = "demo-mcp-key"
+
+[mcp_servers]
+einsd    = "http://einsd:9180"
+billingd = "http://billingd:9280"
+marktd   = "http://marktd:8180"
+edmd     = "http://edmd:8380"
+obsd     = "http://obsd:8480"
+processd = "http://processd:8580"
+
+# ── CloudEvent triggers ────────────────────────────────────────────────────────
+# Only events whose type matches one of these patterns trigger a session.
+
+trigger_event_types = [
+  "de.eeg.*",
+  "de.billing.rechnung.erstellt",
+  "de.agent.decision.made",
+  "de.mako.process.escalated",
+  "de.mako.process.timedout",
+  "de.invoic.receipt.disputed",
+]
+
+# Optional: emit de.agent.decision.made to marktd audit log
+# audit_webhook_url = "http://marktd:8180/api/v1/events"
+# audit_hmac_secret = "env:MARKTD_HMAC_SECRET"
+
+# ── RAG knowledge base (optional) ─────────────────────────────────────────────
+[rag]
+enabled         = false
+storage_uri     = "/var/lib/agentd/rag"
+embedding_model = "text-embedding-3-small"
+top_k           = 5
+chunk_size      = 512
+chunk_overlap   = 64
+
+# ── Custom agents (optional) ──────────────────────────────────────────────────
+# Define entirely custom agents or override built-in system prompts.
+# A custom agent with the same name as a built-in takes full precedence.
+#
+# Example: override billing-anomaly-agent with a stricter threshold
+#
+# [[agents]]
+# name      = "billing-anomaly-agent"
+# specialty = "Billing anomaly detection with 10% threshold (stricter than default 20%)"
+# provider  = "openai"
+# model     = "gpt-4o"
+# max_turns = 12
+# mcp_servers = ["billingd", "edmd"]
+# trigger_patterns = ["de.billing.rechnung.erstellt"]
+# system_prompt = """
+# You are the billing anomaly detection specialist (strict mode: 10% threshold).
+# ...your custom prompt here...
+# """

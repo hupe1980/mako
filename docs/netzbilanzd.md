@@ -176,6 +176,18 @@ into separate HT (Hochlast) and NT (Niedertarif) positions:
 - HT/NT split → `edmd GET /api/v1/billing-period/{malo_id}` (OBIS codes HT/NT)
 - Band prices → `marktd GET /api/v1/preisblaetter/{nb_mp_id}` → field `zeitvariable_preispositionen`
 
+### §14a Modul 1 — Flat reduction (mandatory offer since 01.01.2024)
+
+For controllable loads that choose Modul 1 instead of HT/NT metering, set
+`sect14a_modul1_reduction_factor` (e.g. `0.85` for 15% reduction per BK6-22-300 Anlage 2):
+
+| # | Position | Formula | Condition |
+|---|---|---|---|
+| 1 | Netznutzung Arbeit §14a Modul 1 (85% Reduzierung) | `kwh × (ct × 0.85) ÷ 100` | `sect14a_modul1_reduction_factor` set |
+
+> Modul 1 and Modul 2 (HT/NT) are **mutually exclusive**. The validator rejects both
+> being set simultaneously (`MODUL1_AND_MODUL2_CONFLICT`).
+
 ### MMM billing positions
 
 | # | Position | Formula | Condition |
@@ -190,12 +202,60 @@ into separate HT (Hochlast) and NT (Niedertarif) positions:
 | 1 | Grundgebühr Messstellenbetrieb | `grundgebuehr_eur/month × months` | Always |
 | 2 | Messdienstleistung | flat amount | When `messdienstleistung_eur` supplied |
 
+### Gas NNE with Grundpreis (GasNEV §14 monthly standing charge)
+
+When the Gas tariff includes a monthly base fee, supply `nne_grundpreis_eur_per_month`
+alongside `nne_grundpreis_months`. The resulting `Grundpreis` position uses article
+code `9990001 00008 7` (BDEW Codeliste v5.6).
+
 ### §42a GGV — Community solar / shared metering
 
 `POST /api/v1/billing/ggv-nne/{ggv_malo_id}` generates N × INVOIC 31001 drafts,
 one per GGV tenant MaLo. Proportional attribution via `tenant_consumption` map or
 equal-split fallback when consumption data is unavailable. The GGV topology is
 auto-discovered from `marktd` Lokationszuordnung (edges `beziehungstyp = "GGV_MIETER"`).
+
+---
+
+## BDEW Artikelnummern
+
+`netzbilanzd` automatically populates `Rechnungsposition.artikelnummer` and
+`Rechnungsposition.artikel_id` on every generated invoice position using the
+`kind_to_artikelnummer()` function in `into_rechnung()`.
+
+Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6 (valid 01.09.2025).
+
+| Position type | `BillingPositionKind` | `BdewArtikelnummer` | Artikelnummer code |
+|---|---|---|---|
+| NNE Gas Arbeit (all types) | `NneArbeit*` | `Wirkarbeit` | `9990001 00026 9` |
+| NNE Gas Leistung | `NneLeistung` | `Leistung` | `9990001 00005 3` |
+| Gas Grundpreis | `NneGasGrundpreis` | `Grundpreis` | `9990001 00008 7` |
+| Konzessionsabgabe | `Konzessionsabgabe` | `Konzessionsabgabe` | `9990001 00041 7` |
+| Mehrmengen | `Mehrmenge` | `Mehrmenge` | `9990001 00074 8` |
+| Mindermengen | `Mindermenge` | `Mindermenge` | `9990001 00075 6` |
+| MSB Grundgebühr | `MsbGrundgebuehr` | `EntgeltEinbauBetriebWartungMesstechnik` | `9990001 00061 5` |
+| Messdienstleistung | `Messdienstleistung` | `EntgeltMessungAblesung` | `9990001 00062 3` |
+| Blindmehrarbeit | `Blindmehrarbeit` | `Blindmehrarbeit` | `9990001 00047 5` |
+
+> **NNE Strom (PIDs 31001/31006):** BK6-20-160 replaced classic `artikelnummer` with
+> `artikel_id` from the BNetzA Netznutzungspreisblatt. The `netzbilanzd` billing run
+> handler must populate `InvoicePosition.artikel_id` from the `PreisblattNetznutzung`
+> article ID (e.g. `"1-02-5-001"` for NS Grundpreis-/Arbeitspreissystem Arbeitspreis)
+> before calling `into_rechnung()`. The `artikel_id` flows automatically to
+> `Rechnungsposition.artikel_id` in the BO4E output.
+
+**AWH Gas Sperrprozesse (PID 31011)** use `artikel_id` from section 3.2 of the codelist:
+
+| Action | `artikel_id` |
+|---|---|
+| Sperrung (reguläre AZ) | `2-01-7-001` |
+| Entsperrung (reguläre AZ) | `2-01-7-002` |
+| Erfolglose Unterbrechung | `2-01-7-003` |
+| Stornierung (bis Vortag) | `2-01-7-004` |
+| Stornierung (am Sperrtag) | `2-01-7-005` |
+| Entsperrung (außerhalb AZ) | `2-01-7-006` |
+
+Set `AwhPositionInput.artikel_id` to the appropriate code when building the `POST /billing/run` request.
 
 ---
 

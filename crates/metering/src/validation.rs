@@ -314,16 +314,21 @@ pub fn validate_intervals(
         return ValidationResult { issues };
     }
 
-    // Collect values for rolling statistics (spike detection)
-    let values: Vec<f64> = intervals
-        .iter()
-        .filter_map(|iv| iv.value_kwh.to_string().parse::<f64>().ok())
-        .collect();
-    let rolling_mean = if values.is_empty() {
-        1.0
+    // F-10: compute rolling mean using Decimal arithmetic to avoid f64 precision loss.
+    // spike_factor is config (f64, set at construction time, not a billing amount),
+    // so the comparison is done in f64 after converting from Decimal.
+    let total_kwh: Decimal = intervals.iter().map(|iv| iv.value_kwh).sum();
+    let rolling_mean_dec = if intervals.is_empty() {
+        Decimal::ONE
     } else {
-        values.iter().sum::<f64>() / values.len() as f64
+        total_kwh / Decimal::from(intervals.len() as u32)
     };
+    // Convert once for spike factor comparison (spike_factor itself is non-monetary config).
+    let rolling_mean: f64 = rolling_mean_dec
+        .to_string()
+        .parse::<f64>()
+        .unwrap_or(1.0)
+        .max(f64::EPSILON);
 
     let mut zero_run = 0usize;
 
@@ -351,7 +356,7 @@ pub fn validate_intervals(
                     ValidationRuleId::ImpossibleSpike,
                     ValidationSeverity::Warning,
                     format!(
-                        "spike {:.3} kWh is {:.1}× rolling mean {:.3} kWh at {}",
+                        "spike {:.3} kWh is {:.1}× rolling mean {:.3} kWh at {} (V04)",
                         v,
                         v / rolling_mean,
                         rolling_mean,

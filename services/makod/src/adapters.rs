@@ -877,6 +877,261 @@ pub fn wim_geraeteubernahme_registry() -> AdapterRegistry<WimGeraeteubernahmeWor
 
 /// Build an [`AdapterRegistry`] for [`WimStammdatenWorkflow`].
 ///
+/// Extract ZAK+ZE+ZD register definitions from WiM ORDERS Stammdaten segments.
+///
+/// Parses the flat list of `OwnedSegment`s and groups them into per-register
+/// JSON objects following the nesting: **ZAK → ZE → ZD**.
+///
+/// # Segment mapping (BDEW ORDERS AHB fv20251001 — WiM Stammdatenübermittlung)
+///
+/// | Segment | Field | Description |
+/// |---|---|---|
+/// | `ZAK` element 0 | `obis_kennzahl` | OBIS code (e.g. `"1-1:1.8.0"`) |
+/// | `ZAK` element 1 | `zaehlerauspraegung` | `Z01`→`HT`, `Z02`→`NT`, `Z03`→`EINZEL` |
+/// | `ZAK` element 2 | `bezeichnung` | Human-readable register label |
+/// | `ZE` element 0 | `saison` | `Z01`→`SOMMER`, `Z02`→`WINTER`, `Z03`→`GESAMT` |
+/// | `ZD` element 0 | `tagtyp` | `Z01`→`WERKTAG`, `Z02`→`SAMSTAG`, `Z03`→`SONNTAG_FEIERTAG` |
+/// | `ZD` elements 1..N | `fenster` | `"HHMM:code"` switch-point pairs |
+///
+/// # Output shape per register
+///
+/// ```json
+/// {
+///   "obis_kennzahl": "1-1:1.8.0",
+///   "zaehlerauspraegung": "HT",
+///   "bezeichnung": "HT Tarif",
+///   "saisons": [
+///     {
+///       "saison": "GESAMT",
+///       "tagtypen": [
+///         {
+///           "tagtyp": "WERKTAG",
+///           "wochentage": [1, 2, 3, 4, 5],
+///           "fenster": [
+///             {"von": "07:00", "bis": "22:00"},
+///             {"von": "22:00", "bis": "07:00"}
+///           ]
+///         }
+///       ]
+///     }
+///   ]
+/// }
+/// ```
+///
+/// The `fenster` windows are derived from consecutive switch points: the `von`
+/// time of window `i` equals the switch time, and `bis` equals the next switch
+/// time (wrapping to the first for the last entry).
+pub fn extract_zak_ze_zaehlwerke(segs: &[OwnedSegment]) -> Vec<serde_json::Value> {
+    let mut result: Vec<serde_json::Value> = Vec::new();
+
+    // --- mutable accumulator state ---
+    let mut cur_zw: Option<serde_json::Map<String, serde_json::Value>> = None;
+    let mut cur_saisons: Vec<serde_json::Value> = Vec::new();
+    let mut cur_saison: Option<serde_json::Map<String, serde_json::Value>> = None;
+    let mut cur_tagtypen: Vec<serde_json::Value> = Vec::new();
+
+    /// Flush accumulated `tagtypen` into `cur_saison`, then push saison into `cur_saisons`.
+    fn flush_saison(
+        cur_saison: &mut Option<serde_json::Map<String, serde_json::Value>>,
+        cur_tagtypen: &mut Vec<serde_json::Value>,
+        cur_saisons: &mut Vec<serde_json::Value>,
+    ) {
+        if let Some(mut s) = cur_saison.take() {
+            s.insert(
+                "tagtypen".into(),
+                serde_json::Value::Array(std::mem::take(cur_tagtypen)),
+            );
+            cur_saisons.push(serde_json::Value::Object(s));
+        } else {
+            cur_tagtypen.clear();
+        }
+    }
+
+    /// Flush accumulated `saisons` into `cur_zw`, then push zaehlwerk into `result`.
+    fn flush_zaehlwerk(
+        cur_zw: &mut Option<serde_json::Map<String, serde_json::Value>>,
+        cur_saisons: &mut Vec<serde_json::Value>,
+        result: &mut Vec<serde_json::Value>,
+    ) {
+        if let Some(mut zw) = cur_zw.take() {
+            zw.insert(
+                "saisons".into(),
+                serde_json::Value::Array(std::mem::take(cur_saisons)),
+            );
+            result.push(serde_json::Value::Object(zw));
+        } else {
+            cur_saisons.clear();
+        }
+    }
+
+    for seg in segs {
+        match seg.tag.as_str() {
+            "ZAK" => {
+                // Flush any in-progress register.
+                flush_saison(&mut cur_saison, &mut cur_tagtypen, &mut cur_saisons);
+                flush_zaehlwerk(&mut cur_zw, &mut cur_saisons, &mut result);
+
+                let obis = seg.element_str(0).unwrap_or("").to_owned();
+                let zaehlerauspraegung = match seg.element_str(1).unwrap_or("Z03") {
+                    "Z01" => "HT",
+                    "Z02" => "NT",
+                    _ => "EINZEL",
+                };
+                let bezeichnung = seg.element_str(2).unwrap_or("").to_owned();
+
+                let mut zw = serde_json::Map::new();
+                zw.insert("obis_kennzahl".into(), serde_json::Value::String(obis));
+                zw.insert(
+                    "zaehlerauspraegung".into(),
+                    serde_json::Value::String(zaehlerauspraegung.to_owned()),
+                );
+                zw.insert("bezeichnung".into(), serde_json::Value::String(bezeichnung));
+                cur_zw = Some(zw);
+            }
+            "ZE" if cur_zw.is_some() => {
+                // Flush any in-progress saison.
+                flush_saison(&mut cur_saison, &mut cur_tagtypen, &mut cur_saisons);
+
+                let saison = match seg.element_str(0).unwrap_or("Z03") {
+                    "Z01" => "SOMMER",
+                    "Z02" => "WINTER",
+                    _ => "GESAMT",
+                };
+                let mut s = serde_json::Map::new();
+                s.insert(
+                    "saison".into(),
+                    serde_json::Value::String(saison.to_owned()),
+                );
+                cur_saison = Some(s);
+            }
+            "ZD" if cur_saison.is_some() => {
+                let (tagtyp, wochentage) = match seg.element_str(0).unwrap_or("Z01") {
+                    "Z02" => ("SAMSTAG", serde_json::json!([6])),
+                    "Z03" => ("SONNTAG_FEIERTAG", serde_json::json!([7])),
+                    _ => ("WERKTAG", serde_json::json!([1, 2, 3, 4, 5])),
+                };
+
+                // Collect all "HHMM:code" switch-point pairs from elements 1..N.
+                let mut switches: Vec<String> = Vec::new();
+                let mut idx = 1usize;
+                while let Some(pair) = seg.element_str(idx) {
+                    if !pair.is_empty() {
+                        switches.push(pair.to_owned());
+                    }
+                    idx += 1;
+                }
+
+                // Build time windows: window i = [switch[i].time, switch[i+1].time).
+                // The last window wraps around to switch[0].time.
+                let times: Vec<String> = switches
+                    .iter()
+                    .map(|p| {
+                        // "HHMM:code" → "HH:MM"
+                        let raw = p.split(':').next().unwrap_or(p);
+                        if raw.len() == 4 {
+                            format!("{}:{}", &raw[..2], &raw[2..])
+                        } else {
+                            raw.to_owned()
+                        }
+                    })
+                    .collect();
+
+                let mut fenster: Vec<serde_json::Value> = Vec::with_capacity(times.len());
+                for i in 0..times.len() {
+                    let von = &times[i];
+                    let bis = if i + 1 < times.len() {
+                        times[i + 1].clone()
+                    } else if !times.is_empty() {
+                        times[0].clone()
+                    } else {
+                        "00:00".to_owned()
+                    };
+                    fenster.push(serde_json::json!({ "von": von, "bis": bis }));
+                }
+
+                cur_tagtypen.push(serde_json::json!({
+                    "tagtyp":     tagtyp,
+                    "wochentage": wochentage,
+                    "fenster":    fenster,
+                }));
+            }
+            _ => {}
+        }
+    }
+
+    // Flush any remaining accumulated state.
+    flush_saison(&mut cur_saison, &mut cur_tagtypen, &mut cur_saisons);
+    flush_zaehlwerk(&mut cur_zw, &mut cur_saisons, &mut result);
+
+    result
+}
+
+/// Build the inbound ORDERS adapter for WiM Stammdaten **Übermittlung** (PIDs 17102–17133).
+///
+/// This is the **responding-party** adapter (NB receiving MSB's master-data
+/// response). It extracts:
+/// - ZAK+ZE+ZD register definitions → `zaehlwerke`  
+/// - LOC/QTY/MEA Standorteigenschaften → `standorteigenschaften` (if present)
+/// - MeLo ID from the IDE segment
+///
+/// The resulting [`StammdatenCommand::TransmitStammdaten`] resumes (or starts)
+/// the existing `wim-stammdaten` workflow on the NB side.
+#[must_use]
+pub fn wim_stammdaten_uebermittlung_registry() -> AdapterRegistry<WimStammdatenWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Stammdaten Übermittlung adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Orders(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM Stammdaten Übermittlung adapter: expected ORDERS message".into(),
+                ));
+            };
+
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "WiM Stammdaten Übermittlung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            let message_ref = MessageRef::new(msg.message_ref());
+
+            // MeLo from the IDE segment (element 1, component 0).
+            let _melo_id = MeLo::new(
+                o.segments()
+                    .iter()
+                    .find(|s| s.tag == "IDE")
+                    .and_then(|s| s.component_str(1, 0))
+                    .unwrap_or(""),
+            );
+
+            // ZAK+ZE+ZD → typed register definitions.
+            let zaehlwerke = extract_zak_ze_zaehlwerke(o.segments());
+
+            // Standorteigenschaften is carried by UTILMD, not ORDERS 17102–17133.
+            // Future: extend if LOC/QTY segments appear in Stammdaten ORDERS.
+            let standorteigenschaften: Option<serde_json::Value> = None;
+
+            Ok(StammdatenCommand::TransmitStammdaten {
+                response_pid: pid,
+                response_ref: message_ref,
+                standorteigenschaften,
+                zaehlwerke,
+            })
+        },
+    ));
+    registry
+}
+
 /// Handles the single inbound ORDERS PID 17101 (Anforderung Stammdaten) and
 /// produces a [`StammdatenCommand::ReceiveAnforderung`].
 ///
@@ -1128,6 +1383,8 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                 // L1/N1: extract Bilanzierungsmethode (TM+EM) and Fallgruppe (TM+Z10)
                 bilanzierungsmethode: extract_bilanzierungsmethode(u.segments()),
                 fallgruppe: extract_fallgruppe(u.segments()),
+                // H2-readiness: gas quality type (placeholder — maps AHB qualifier when published)
+                gasqualitaet: extract_gasqualitaet(u.segments()),
             })
         },
     ));
@@ -3828,6 +4085,8 @@ pub fn geli_gas_mscons_registry() -> AdapterRegistry<GeliGasMsconsWorkflow> {
                 validation_errors,
                 brennwert_kwh_per_m3: extract_qty_z08(m),
                 zustandszahl: extract_qty_z10(m),
+                // H2-readiness: gas quality type not yet in MSCONS AHB — None until standardized
+                gasqualitaet: None,
             })
         },
     ));
@@ -4397,6 +4656,47 @@ pub fn extract_fallgruppe(segs: &[OwnedSegment]) -> Option<String> {
         .find(|s| s.tag == "TM" && s.element_str(0).is_some_and(|q| q == "Z10"))
         .and_then(|s| s.element_str(1))
         .map(str::to_owned)
+}
+
+/// Extract gas quality type from a UTILMD G segment list.
+///
+/// ## Current status — placeholder for H2-blend AHBs (2026–2028)
+///
+/// The DVGW and BNetzA have not yet standardized an EDIFACT qualifier for gas
+/// quality type (`H_GAS` | `L_GAS` | `H2_BLEND`) in UTILMD G messages.
+///
+/// When the 2026–2028 H2-blend AHB wave is published, add the UTILMD G segment
+/// code here — e.g. `TM+Z20` or a `CAV`/`ALC` characteristic.  The
+/// `mako_geli_gas::gas_quality::GasQualitaet::from_raw()` normalization function
+/// will convert whatever raw qualifier is used to the canonical `H_GAS` / `L_GAS` /
+/// `H2_BLEND` form before storage in `marktd.malo.gasqualitaet`.
+///
+/// ## DVGW G 260 background
+///
+/// German gas quality types are defined in DVGW G 260 §3.2:
+/// - **H-Gas** (high calorific): Wobbe index 12.4–15.7 kWh/m³
+/// - **L-Gas** (low calorific): Wobbe index 10.5–13.0 kWh/m³
+///
+/// ## H2-blend EDIFACT pilot observation
+///
+/// In GET H2 and GASCADE H2 pilot messages (2025), some implementations carry
+/// gas quality information in the `MKT+Z10` or `CAV+Z20` characteristic segment.
+/// These are NOT standardized in the BDEW AHB yet. A monitoring adapter
+/// that logs unknown `TM`/`CAV` qualifiers would help detect new codes before
+/// the formal AHB publication.
+#[allow(unused_variables)]
+pub fn extract_gasqualitaet(segs: &[OwnedSegment]) -> Option<String> {
+    use mako_geli_gas::gas_quality::normalize_gasqualitaet;
+    // Placeholder: scan for any TM segment with a gas-quality-like qualifier.
+    // Currently returns None for all standard UTILMD G messages.
+    // TODO: add the canonical BDEW AHB segment code when published (2026-2028 wave).
+    // Example future implementation:
+    //   segs.iter()
+    //       .find(|s| s.tag == "TM" && s.element_str(0).is_some_and(|q| q == "Z20"))
+    //       .and_then(|s| s.element_str(1))
+    //       .map(|raw| normalize_gasqualitaet(raw).to_owned())
+    let _ = normalize_gasqualitaet; // suppress unused warning until real mapping is added
+    None
 }
 
 // ── DVGW gas-day conversion helper ───────────────────────────────────────────

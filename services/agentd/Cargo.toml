@@ -31,7 +31,6 @@ reqwest      = { workspace = true }
 tokio-util   = { workspace = true }
 secrecy      = { version = "0.10" }
 # RAG vector store — LanceDB (persistent, S3/GCS/Azure/local)
-# rubo4e 0.7.0 fixed BUG-1 (time = "0.3" instead of pinned "0.3.53"), enabling lancedb.
 lancedb      = { workspace = true }
 # arrow 58 — matches lancedb 0.31 transitive dep. Declared explicitly here so
 # the agentd binary gets arrow 58 types that are compatible with lancedb.

@@ -22,7 +22,25 @@ pub struct AgentdConfig {
     /// Orchestrator configuration.
     pub orchestrator: OrchestratorConfig,
 
-    /// Specialized agent definitions.
+    /// Built-in specialist agent activation.
+    ///
+    /// Enables pre-designed agents compiled into the binary.
+    /// These agents ship in the container image — no copy-paste of system prompts needed.
+    ///
+    /// ```toml
+    /// [bundled_agents]
+    /// enable_all = true
+    /// default_provider = "openai"
+    /// default_model = "gpt-4o-mini"
+    ///
+    /// [bundled_agents.overrides.mako-agent]
+    /// model = "claude-3-5-sonnet-20241022"
+    /// provider = "claude"
+    /// ```
+    #[serde(default)]
+    pub bundled_agents: BundledAgentsConfig,
+
+    /// Operator-defined custom specialists. Extend or override built-ins as needed.
     #[serde(default)]
     pub agents: Vec<AgentConfig>,
 
@@ -42,6 +60,89 @@ pub struct AgentdConfig {
     /// Audit CloudEvent webhook (marktd event_log).
     pub audit_webhook_url: Option<String>,
     pub audit_hmac_secret: Option<String>,
+}
+
+// ── BundledAgentsConfig ────────────────────────────────────────────────────
+
+/// Configuration for enabling compiled-in (built-in) specialist agents.
+///
+/// Built-in agents ship inside the `agentd` container image — operators do not
+/// need to write system prompts. Activate them by name or enable all at once.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundledAgentsConfig {
+    /// Enable ALL 26 built-in specialist agents at once.
+    ///
+    /// When `true`, `enable` list is ignored.
+    #[serde(default)]
+    pub enable_all: bool,
+
+    /// Explicitly enable specific built-in agents by name.
+    ///
+    /// Example: `enable = ["eeg-compliance-agent", "billing-anomaly-agent"]`
+    #[serde(default)]
+    pub enable: Vec<String>,
+
+    /// Default LLM provider name for all built-in agents (must exist in `[providers]`).
+    /// Each agent can override this via `[bundled_agents.overrides.<name>]`.
+    pub default_provider: Option<String>,
+
+    /// Default model for all built-in agents.
+    /// Each agent can override this via `[bundled_agents.overrides.<name>]`.
+    pub default_model: Option<String>,
+
+    /// Per-agent overrides for model, provider, max_turns, or mcp_servers.
+    ///
+    /// ```toml
+    /// [bundled_agents.overrides.mako-agent]
+    /// model = "claude-3-5-sonnet-20241022"
+    /// provider = "claude"
+    /// max_turns = 20
+    /// ```
+    #[serde(default)]
+    pub overrides: HashMap<String, AgentOverride>,
+}
+
+/// Per-agent override for built-in agents.
+///
+/// All fields are optional — only set what you want to change from the built-in default.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentOverride {
+    /// Override the LLM provider name.
+    pub provider: Option<String>,
+    /// Override the LLM model identifier.
+    pub model: Option<String>,
+    /// Override maximum ReAct turns.
+    pub max_turns: Option<u32>,
+    /// Override which MCP servers this agent can access.
+    pub mcp_servers: Option<Vec<String>>,
+    /// Override the system prompt prefix (appended BEFORE the built-in prompt).
+    /// Use for org-specific context injection without replacing the full prompt.
+    pub system_prompt_prefix: Option<String>,
+}
+
+// ── DispatchMode ───────────────────────────────────────────────────────────
+
+/// How the orchestrator dispatches events to specialists.
+///
+/// Default: `Sequential`.
+#[derive(Debug, Default, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DispatchMode {
+    /// Route to one specialist at a time (current default).
+    /// Low token cost; good for clear single-domain events.
+    #[default]
+    Sequential,
+
+    /// Fan out to ALL matching specialists concurrently.
+    /// Returns an aggregated `AgentDecision` with all responses.
+    /// Good for compliance events that need multiple independent checks.
+    Parallel,
+
+    /// Fan out to matching specialists; return the first to complete.
+    /// Best for latency-sensitive events where any specialist can handle it.
+    Race,
 }
 
 // ── Provider config ────────────────────────────────────────────────────────
@@ -78,6 +179,16 @@ pub struct OrchestratorConfig {
     pub max_turns: u32,
     /// Custom system prompt prefix for the orchestrator.
     pub system_prompt: Option<String>,
+    /// How to dispatch events to specialists.
+    /// `sequential` (default): one specialist at a time.
+    /// `parallel`: fan out to all matching specialists concurrently.
+    /// `race`: first specialist to complete wins.
+    #[serde(default)]
+    pub dispatch_mode: DispatchMode,
+    /// Maximum number of specialists to run in parallel (used with `parallel` and `race`).
+    /// Default: 4.
+    #[serde(default = "default_parallel_limit")]
+    pub parallel_limit: usize,
 }
 
 // ── Specialist agent config ────────────────────────────────────────────────
@@ -173,6 +284,9 @@ fn default_agent_turns() -> u32 {
 }
 fn default_true() -> bool {
     true
+}
+fn default_parallel_limit() -> usize {
+    4
 }
 fn default_rag_db() -> String {
     "/var/lib/agentd/rag".into()

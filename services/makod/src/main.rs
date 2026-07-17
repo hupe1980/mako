@@ -1664,6 +1664,21 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                  BDEW/BNetzA PKI CA certificate to fix this."
             );
         }
+
+        // BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every inbound message to be
+        // encrypted.  Without an own decryption private key, `bdew_push_policy`
+        // cannot enable `require_encrypted_inbound` and will silently accept
+        // unencrypted inbound messages.
+        if cli.as4_decryption_key_pem.is_none() {
+            tracing::warn!(
+                "AS4 inbound decryption key not configured \
+                 (--as4-decryption-key-pem / MAKOD_AS4_DECRYPTION_KEY_PEM not set). \
+                 Inbound AS4 messages will be accepted WITHOUT verifying that they are \
+                 encrypted, violating BDEW AS4-Profil v1.2 §2.2.6.2.2. \
+                 Set --as4-decryption-key-pem to your own EC (BrainpoolP256r1) \
+                 private key to enforce encrypted inbound in production."
+            );
+        }
         let session = {
             let session_id = format!("makod-{}", uuid::Uuid::new_v4());
             let trust_anchor = cli
@@ -1749,7 +1764,12 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         );
 
         let app = as4_ingest::router(handler, mako_as4::bdew_router_config())
-            .merge(health::router(health_state.clone()));
+            .merge(health::router(health_state.clone()))
+            // OWASP A05 — rate limit the AS4 inbound endpoint to prevent
+            // capacity exhaustion by a misconfigured or malicious counterparty.
+            // Uses a GCRA token bucket: 100 req/s sustained, burst of 50.
+            // Returns HTTP 429 when the bucket is exhausted.
+            .layer(axum::middleware::from_fn(as4_ingest::rate_limit_middleware));
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| anyhow::anyhow!("AS4 server bind {addr}: {e}"))?;

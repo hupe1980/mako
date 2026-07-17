@@ -11,7 +11,6 @@ rust-version.workspace = true
 [dependencies]
 billing             = { workspace = true }
 eeg-billing         = { workspace = true, features = ["serde"], optional = true }
-rubo4e              = { workspace = true, optional = true }
 rust_decimal        = { workspace = true }
 rust_decimal_macros = { workspace = true }
 serde               = { workspace = true, features = ["derive"] }
@@ -24,11 +23,8 @@ tracing             = { version = "0.1", default-features = false }
 ## Enable EEG settlement delegation to `eeg-billing`.
 ## Required for `EegProvider` full-accuracy path (`quantities.eeg_full`).
 eeg = ["dep:eeg-billing"]
-## Enable typed BO4E invoice generation (`Invoice::to_bo4e_rechnung()`).
-## Adds a dependency on `rubo4e`.
-bo4e = ["dep:rubo4e"]
 ## Enable all optional features.
-full = ["eeg", "bo4e"]
+full = ["eeg"]
 
 [dev-dependencies]
 time = { workspace = true, features = ["macros"] }

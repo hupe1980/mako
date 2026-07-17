@@ -303,6 +303,9 @@ impl NetzbilanzMcpHandler {
             dispatch_kwh,
             arbeitspreis_eur_per_kwh: arbeitspreis,
             kosten_json: Some(kosten_json),
+            activation_start_utc: None,
+            activation_end_utc: None,
+            dispatch_source: Some("manual_override".to_owned()),
         };
         match crate::pg::upsert_kostenblatt(
             &self.state.pool,

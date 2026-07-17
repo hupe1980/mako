@@ -73,6 +73,12 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connect PostgreSQL")?;
 
+    // Run migrations (0001_initial.sql → 0002_vpp_contracts.sql → …).
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .context("run migrations")?;
+
     let tarifbd = Arc::new(clients::TarifbdClient::new(&cfg.tarifbd_url));
     let edmd = Arc::new(clients::EdmdClient::new(
         &cfg.edmd_url,
@@ -129,6 +135,34 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/billing/vpp/:vpp_id",
             post(handlers::post_vpp_billing),
+        )
+        // B12: VPP contract registry — capacity price per SR-ID
+        .route(
+            "/api/v1/billing/vpp-contracts",
+            axum::routing::get(handlers::list_vpp_contracts),
+        )
+        .route(
+            "/api/v1/billing/vpp-contracts/:sr_id",
+            axum::routing::put(handlers::put_vpp_contract),
+        )
+        // B12: VPP dispatch-confirmed auto-billing webhook (de.vpp.dispatch.confirmed)
+        .route(
+            "/api/v1/webhooks/vpp-dispatch",
+            post(handlers::post_vpp_webhook),
+        )
+        // B12: VPP contract registry — configure SR-ID → VPP billing parameters
+        .route(
+            "/api/v1/billing/vpp-contracts",
+            axum::routing::get(handlers::list_vpp_contracts),
+        )
+        .route(
+            "/api/v1/billing/vpp-contracts/:sr_id",
+            axum::routing::put(handlers::put_vpp_contract),
+        )
+        // B12: VPP auto-billing webhook — de.vpp.dispatch.confirmed from makod outbox
+        .route(
+            "/api/v1/webhooks/vpp-dispatch",
+            post(handlers::post_vpp_webhook),
         )
         // B10: XRechnung B2G submission (\u00a727 EGovG — mandatory from 01.01.2027)
         .route(

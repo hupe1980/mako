@@ -67,12 +67,14 @@ utoipa-axum        = "0.2"
 utoipa-swagger-ui  = { version = "9", features = ["axum"] }
 rmcp = { version = "2.0.0", features = ["transport-io", "transport-streamable-http-server"] }
 schemars = { version = "1.2.1", features = ["chrono04"] }
+governor = "0.6"
 
 [dev-dependencies]
 # Adds the "testing" feature on top of the production "slatedb" dep,
 # enabling InMemoryEventStore, NoopDeadLetterSink, InMemoryInboxStore.
 # Must never appear in a production build.
 mako-engine  = { path = "../../crates/mako-engine", features = ["testing"] }
+mako-as4     = { path = "../../crates/mako-as4", features = ["testing"] }
 tokio        = { version = "1", features = ["full"] }
 serde_json   = { workspace = true }
 time         = { workspace = true }

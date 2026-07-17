@@ -373,7 +373,7 @@ pub async fn reject_draft_pg(pool: &PgPool, id: Uuid, reason: &str) -> anyhow::R
 
 // ── Kostenblatt (Redispatch 2.0, N4) ─────────────────────────────────────────
 
-/// Stored Kostenblatt record row (migration 0002).
+/// Stored Kostenblatt record row (migration 0002 + 0004).
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct KostenblattRow {
     pub id: Uuid,
@@ -392,6 +392,14 @@ pub struct KostenblattRow {
     pub status: String,
     pub submitted_at: Option<time::OffsetDateTime>,
     pub dispatch_ref: Option<String>,
+    /// UTC start of the activation window (migration 0004).  `None` for records
+    /// inserted before 0004 or without an explicit compute request.
+    pub activation_start_utc: Option<time::OffsetDateTime>,
+    /// UTC end of the activation window (migration 0004).
+    pub activation_end_utc: Option<time::OffsetDateTime>,
+    /// Data provenance: `"lastgang_sum"` | `"billing_period"` | `"manual_override"`.
+    /// `None` for legacy records inserted before migration 0004.
+    pub dispatch_source: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
 }
@@ -411,6 +419,12 @@ pub struct UpsertKostenblattRequest {
     pub arbeitspreis_eur_per_kwh: Decimal,
     /// Full `rubo4e::current::Kosten` JSON for CIM export (optional).
     pub kosten_json: Option<serde_json::Value>,
+    /// UTC activation start — stored for re-computation and audit trail.
+    pub activation_start_utc: Option<time::OffsetDateTime>,
+    /// UTC activation end.
+    pub activation_end_utc: Option<time::OffsetDateTime>,
+    /// Data provenance: `"lastgang_sum"` | `"billing_period"` | `"manual_override"`.
+    pub dispatch_source: Option<String>,
 }
 
 pub async fn upsert_kostenblatt(
@@ -423,12 +437,16 @@ pub async fn upsert_kostenblatt(
         r"INSERT INTO kostenblatt_records
               (tenant, activation_id, tr_id, malo_id,
                period_year, period_month, uenb_mp_id, vnb_mp_id,
-               dispatch_kwh, arbeitspreis_eur_per_kwh, kosten_json)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+               dispatch_kwh, arbeitspreis_eur_per_kwh, kosten_json,
+               activation_start_utc, activation_end_utc, dispatch_source)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
           ON CONFLICT (tenant, activation_id, tr_id) DO UPDATE
           SET dispatch_kwh             = EXCLUDED.dispatch_kwh,
               arbeitspreis_eur_per_kwh = EXCLUDED.arbeitspreis_eur_per_kwh,
               kosten_json              = COALESCE(EXCLUDED.kosten_json, kostenblatt_records.kosten_json),
+              activation_start_utc     = COALESCE(EXCLUDED.activation_start_utc, kostenblatt_records.activation_start_utc),
+              activation_end_utc       = COALESCE(EXCLUDED.activation_end_utc, kostenblatt_records.activation_end_utc),
+              dispatch_source          = COALESCE(EXCLUDED.dispatch_source, kostenblatt_records.dispatch_source),
               updated_at               = now()
           RETURNING id",
     )
@@ -443,6 +461,9 @@ pub async fn upsert_kostenblatt(
     .bind(req.dispatch_kwh)
     .bind(req.arbeitspreis_eur_per_kwh)
     .bind(&req.kosten_json)
+    .bind(req.activation_start_utc)
+    .bind(req.activation_end_utc)
+    .bind(&req.dispatch_source)
     .fetch_one(pool)
     .await
     .context("upsert_kostenblatt")?;
@@ -503,6 +524,39 @@ pub async fn mark_kostenblatt_submitted(
     .await
     .context("mark_kostenblatt_submitted")?;
     Ok(())
+}
+
+/// Return Kostenblatt records for a month that have no energy data yet.
+///
+/// A "gap" is a record where `dispatch_kwh = 0` AND `dispatch_source IS NULL` —
+/// meaning the energy quantity was never computed from any source (neither
+/// Lastgang nor billing-period nor operator override).
+///
+/// Operators should call
+/// `POST /api/v1/redispatch/kostenblatt/{activation_id}/compute`
+/// for each gap before the 15th-of-month submission deadline.
+pub async fn list_kostenblatt_gaps(
+    pool: &PgPool,
+    tenant: &str,
+    period_year: i16,
+    period_month: i16,
+) -> anyhow::Result<Vec<KostenblattRow>> {
+    sqlx::query_as::<_, KostenblattRow>(
+        r"SELECT * FROM kostenblatt_records
+          WHERE tenant = $1
+            AND period_year = $2
+            AND period_month = $3
+            AND dispatch_kwh = 0
+            AND dispatch_source IS NULL
+            AND status = 'pending'
+          ORDER BY created_at DESC",
+    )
+    .bind(tenant)
+    .bind(period_year)
+    .bind(period_month)
+    .fetch_all(pool)
+    .await
+    .context("list_kostenblatt_gaps")
 }
 
 // ── Fremdkosten (§22 MessZV external cost pass-through, BO4E typed) ───────────

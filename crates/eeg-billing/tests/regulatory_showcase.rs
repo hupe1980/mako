@@ -4040,3 +4040,277 @@ fn eeg2023_sect51_applies_to_all_once_imesys_installed() {
     assert_eq!(out.eligible_kwh, Some(d("50")));
     assert_eq!(out.settlement_eur, Some(d("4.055")));
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// §43 Abs. 1 Nr. 2 EEG 2023 — Biomass substrate cap blocks settlement
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// §43 Abs. 1 Nr. 2 EEG 2023 — plant with >40% Energiepflanzen vom Acker
+/// loses EEG support for the billing period entirely.
+///
+/// Legal basis: §43 Abs. 1 Nr. 2 EEG 2023 (BGBl. I 2023 Nr. 1):
+/// "Der Anteil der im Durchschnitt des Kalenderjahres für die Erzeugung von
+/// Strom und Wärme … eingesetzten Energiepflanzen … 40 Prozent nicht übersteigen."
+#[test]
+fn sect43_substrate_cap_exceeded_blocks_settlement() {
+    use eeg_billing::biomasse::{BiomassBrennstoff, BiomassSettlementData};
+
+    // Plant with 55% Energiepflanzen (exceeds 40% cap)
+    let biomasse = BiomassSettlementData::new(
+        BiomassBrennstoff::PflanzlicheBiomasse,
+        dec!(0.0),  // no Gülle
+        dec!(0.55), // 55% Energiepflanzen — cap exceeded
+        dec!(200),  // 200 kW plant
+    );
+    assert!(!biomasse.substrate_cap_ok);
+
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("14.47"),
+        },
+        einspeisemenge_kwh: Some(d("10000")),
+        biomasse: Some(biomasse),
+        ..SettleInput::default()
+    });
+
+    // §43 cap violated → settlement must be blocked
+    assert_eq!(out.status, SettlementStatus::Sanctioned);
+    assert_eq!(out.settlement_eur, Some(Decimal::ZERO));
+    assert!(
+        out.positions.iter().any(|p| p.legal_basis.contains("§43")),
+        "position must cite §43 EEG 2023"
+    );
+}
+
+/// §43 Abs. 1 Nr. 2 EEG 2023 — plant exactly at the 40% cap proceeds normally.
+#[test]
+fn sect43_substrate_cap_exactly_at_limit_allows_settlement() {
+    use eeg_billing::biomasse::{BiomassBrennstoff, BiomassSettlementData};
+
+    // Plant exactly at 40% cap — must NOT be blocked
+    let biomasse = BiomassSettlementData::new(
+        BiomassBrennstoff::PflanzlicheBiomasse,
+        dec!(0.0),  // no Gülle
+        dec!(0.40), // exactly 40% — within limit
+        dec!(200),
+    );
+    assert!(biomasse.substrate_cap_ok);
+
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("14.47"),
+        },
+        einspeisemenge_kwh: Some(d("5000")),
+        biomasse: Some(biomasse),
+        ..SettleInput::default()
+    });
+
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    // 5000 × 14.47 / 100 = 723.50 EUR
+    assert_eq!(out.settlement_eur, Some(d("723.50")));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// §44 EEG 2023 — Güllekleinanlage rate table
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// §44 EEG 2023 — Güllekleinanlage: correct gross AW from rate table.
+///
+/// Plants ≤75 kW_el with ≥80% Gülle input receive 16.90 ct/kWh gross AW
+/// (net after §53 -0.2 ct deduction = 16.70 ct/kWh).
+///
+/// Legal basis: §44 EEG 2023 (BGBl. I 2023 Nr. 1)
+#[test]
+fn sect44_guellebonusanlage_rate_table() {
+    use eeg_billing::biomasse::{BiomassBrennstoff, BiomassSettlementData};
+    use eeg_billing::rates;
+
+    // Verify rate table lookup
+    let table = rates::guellekleinanlage_rate(2023).expect("EEG 2023 Güllekleinanlage rates known");
+    let gross_aw = table.rate_for(dec!(50)).expect("50 kW in range");
+    // Gross AW = 16.90 ct/kWh → Amount<5> = 0.16900 EUR/kWh
+    // billing::Amount is EUR/kWh; convert to ct for readable assertion
+    let gross_aw_ct = gross_aw.to_decimal() * rust_decimal::Decimal::from(100u32);
+    assert_eq!(
+        gross_aw_ct.round_dp(2),
+        dec!(16.90),
+        "§44 EEG 2023 gross AW = 16.90 ct/kWh"
+    );
+
+    // Plants > 75 kW must not receive Güllekleinanlage rate
+    // rate_for returns Result<Amount, BillingError>; Err = capacity exceeds table
+    assert!(
+        table.rate_for(dec!(80)).is_err(),
+        ">75 kW not eligible for Güllekleinanlage rate"
+    );
+
+    // Net rate = gross − §53 deduction (0.2 ct for Biomasse)
+    let sect53 = rates::sect53_deduction(eeg_billing::ErzeugungsArt::Biogas);
+    let net_ct: rust_decimal::Decimal = dec!(16.90) - sect53;
+    assert_eq!(
+        net_ct,
+        dec!(16.70),
+        "net Vergütungssatz after §53 deduction = 16.70 ct/kWh"
+    );
+
+    // Settlement with the net rate
+    let biomasse = BiomassSettlementData::new(
+        BiomassBrennstoff::Guelle,
+        dec!(0.85), // 85% Gülle
+        dec!(0.05),
+        dec!(50), // 50 kW — Güllekleinanlage eligible
+    );
+    assert!(biomasse.ist_guellebonusanlage);
+
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: net_ct, // 16.70 ct/kWh (after §53 deduction)
+        },
+        einspeisemenge_kwh: Some(d("2000")),
+        biomasse: Some(biomasse),
+        ..SettleInput::default()
+    });
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    // 2000 × 16.70 / 100 = 334.00 EUR
+    assert_eq!(out.settlement_eur, Some(d("334.00")));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// §42a EEG 2023 — Holzbiomasse restriction post-2026
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// §42a EEG 2023 — new Holzbiomasse plant commissioned from 2026-01-01
+/// loses EEG eligibility (fresh wood primary energy prohibition).
+#[test]
+fn sect42a_holzbiomasse_post_2026_blocked() {
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("14.47"),
+        },
+        einspeisemenge_kwh: Some(d("8000")),
+        erzeugungsart: Some(eeg_billing::ErzeugungsArt::BiomassHolz),
+        inbetriebnahme: Some(date!(2026 - 03 - 15)), // commissioned after restriction
+        ..SettleInput::default()
+    });
+
+    assert_eq!(
+        out.status,
+        SettlementStatus::Sanctioned,
+        "Holzbiomasse ≥ 2026 must be Sanctioned"
+    );
+    assert_eq!(out.settlement_eur, Some(Decimal::ZERO));
+    assert!(
+        out.positions.iter().any(|p| p.legal_basis.contains("§42a")),
+        "position must cite §42a EEG 2023"
+    );
+}
+
+/// §42a EEG 2023 — Holzbiomasse plant commissioned BEFORE 2026 retains Bestandsschutz.
+#[test]
+fn sect42a_holzbiomasse_pre_2026_bestandsschutz() {
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("13.63"),
+        },
+        einspeisemenge_kwh: Some(d("5000")),
+        erzeugungsart: Some(eeg_billing::ErzeugungsArt::BiomassHolz),
+        inbetriebnahme: Some(date!(2022 - 06 - 01)), // pre-2026 → Bestandsschutz
+        ..SettleInput::default()
+    });
+
+    assert_eq!(
+        out.status,
+        SettlementStatus::Calculated,
+        "Pre-2026 Holzbiomasse plant retains EEG support (Bestandsschutz)"
+    );
+    // 5000 × 13.63 / 100 = 681.50 EUR
+    assert_eq!(out.settlement_eur, Some(d("681.50")));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// §§70–74 EEG 2023 — Wind offshore settlement via MarketPremium
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// §§70–74 EEG 2023 — Wind offshore: always tender-based (§22 Abs. 3 EEG).
+/// Settled as MarketPremium with BNetzA-awarded AW.
+///
+/// Legal basis: §§70–74 EEG 2023 (Offshore-Zuschlag via BNetzA-Ausschreibung).
+#[test]
+fn wind_offshore_market_premium_settlement() {
+    use eeg_billing::scheme::AusschreibungMetadata;
+
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: d("8.40"), // BNetzA tender-awarded AW
+            managementpraemie_ct: None,  // auto-computed
+            wind_korrekturfaktor: None,  // offshore uses no §36k correction
+            wind_standort: None,
+        },
+        tariff_source: TariffSource::Auction(AusschreibungMetadata {
+            zuschlag_id: Some("BNetzA-OFF-2024-001".to_owned()),
+            award_ct: Some(d("8.40")),
+            award_date: Some(date!(2024 - 05 - 01)),
+            award_expired: false,
+            innovation_auction: false,
+            is_buergerenergie: false,
+            is_biogas_sect51b: false,
+        }),
+        einspeisemenge_kwh: Some(d("50000000")), // 50 GWh offshore farm
+        marktwert_ct_kwh: Some(d("6.20")),       // EPEX monthly avg
+        leistung_kwp: Some(d("120000")),         // 120 MW
+        erzeugungsart: Some(eeg_billing::ErzeugungsArt::WindOffshore),
+        eeg_gesetz: EegGesetz::Eeg2023,
+        ..SettleInput::default()
+    });
+
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    // Marktprämie = max(0, AW + mgmt − EPEX) × kWh
+    // mgmt = 0.2 ct (>100 MW), spread = 8.40 + 0.2 - 6.20 = 2.40 ct
+    // 50_000_000 × 2.40 / 100 = 1_200_000 EUR
+    assert_eq!(out.settlement_eur, Some(d("1200000.00")));
+    assert!(out.settlement_eur.is_some_and(|e| e > Decimal::ZERO));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// §48b EEG 2023 (Solarpaket I) — Stecker-PV SLP billing
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// §48b EEG 2023 (Solarpaket I, BGBl I 2024 Nr. 107) — Stecker-PV (Balkonkraftwerk).
+///
+/// Stecker-PV (≤2 kWp) uses simplified SLP S0 annual feed-in estimation.
+/// No mandatory MaStR registration below 800 W (§9 Abs. 1 EEG 2023 exception).
+/// Einspeisevergütung is the same formula as standard solar but at the applicable
+/// Solarpaket I rate.
+///
+/// Note: Stecker-PV feed-in is typically very small (annual ~100–300 kWh).
+/// The rate is based on §48 Abs. 2 EEG 2023 (Überschusseinspeisung, ≤10 kWp).
+#[test]
+fn sect48b_stecker_pv_annual_settlement_via_slp_estimate() {
+    // EEG 2024 (Solarpaket I) rate for ≤10 kWp Überschusseinspeisung: 8.51 ct/kWh
+    let rate = eeg_billing::rates::solar_pv_ueberschuss_lookup(2024)
+        .expect("Solarpaket I rates known")
+        .rate_for(dec!(0.8)) // 800 W Stecker-PV
+        .expect("800 W in range");
+
+    assert_eq!(
+        rate,
+        billing::Amount::parse("0.08510").unwrap(),
+        "Stecker-PV ≤10 kWp: 8.51 ct/kWh (Solarpaket I)"
+    );
+
+    // Annual SLP estimate: 120 kWh net feed-in for 800 W balcony panel
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.11"), // net after §53 deduction (8.51 - 0.40)
+        },
+        einspeisemenge_kwh: Some(d("120")), // 120 kWh annual feed-in
+        erzeugungsart: Some(eeg_billing::ErzeugungsArt::SolarStecker),
+        leistung_kwp: Some(d("0.80")),
+        eeg_gesetz: EegGesetz::Eeg2023,
+        ..SettleInput::default()
+    });
+
+    assert_eq!(out.status, SettlementStatus::Calculated);
+    // 120 × 8.11 / 100 = 9.732 EUR
+    assert_eq!(out.settlement_eur, Some(d("9.732")));
+}

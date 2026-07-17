@@ -10,6 +10,14 @@
 //! 1. **Standard electricity** — SLP customer, flat rate, 31-day month
 //! 2. **Gas with Brennwert + BEHG** — monthly gas bill with levies
 //! 3. **EEG feed-in Gutschrift** — solar plant operator monthly credit note
+//! 4. **RLM demand charge** — large commercial electricity with Leistungspreis
+//! 5. **Gas Energiesteuer exemption** — CHP (KWK) §54 EnergieStG
+//! 6. **2022 Energiesteuersenkung** — historic zero-rate check
+//! 7. **§41b enforcement** — dynamic tariff rejects non-iMSys metering mode
+//! 8. **§40a Kilowattstundenpreis** — mandatory all-inclusive price per kWh
+//! 9. **§41 mandatory fields** — rechnung_json contains all §41 EnWG fields
+//! 10. **§42c Energy Sharing** — sharing credit reduces effective customer cost
+//! 11. **Industrie §9 StromStG** — typed StromsteuerBefreiung enum
 //!
 //! ## Updating golden values
 //!
@@ -18,11 +26,106 @@
 //! path so the expected values can be verified by hand.
 
 use energy_billing::{
-    BillingContext, GasMeterInput, GridInput, InvoiceType, MeterInput, PositionCategory,
-    Quantities, RegulatoryRates, TariffInput,
+    BillingContext, GasMeterInput, GridInput, InvoiceType, MeterInput, PositionCategory, Product,
+    Quantities, RegulatoryRates,
 };
 use rust_decimal_macros::dec;
 use time::macros::date;
+
+// ── Scenario 7 (here ordered first as a regression guard): §41b enforcement ──
+
+/// **Golden: §41b EnWG — dynamic tariff must be rejected for non-iMSys meter**
+///
+/// §41b Abs. 2 EnWG prohibits offering §41a dynamic tariffs to customers who
+/// do not have an intelligent metering system (iMSys / Smart Meter Gateway).
+///
+/// When `dynamic_epex = true` AND `electricity.metering_mode = Slp`, the engine
+/// must return `Err(BillingError::InvalidInput)` — not produce a partial invoice.
+#[test]
+fn sect41b_dynamic_tariff_rejects_non_imsys_metering_mode() {
+    use energy_billing::*;
+    use rust_decimal_macros::dec;
+    use time::macros::date;
+
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        malo_id: "51238696780".into(),
+        lf_mp_id: "9900000000001".into(),
+        rechnungsnummer: "R41B-TEST-001".into(),
+        period_from: date!(2026 - 01 - 01),
+        period_to: date!(2026 - 01 - 31),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+
+    let tariff: Product = serde_json::from_str(
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":20}"#,
+    )
+    .unwrap();
+
+    // SLP metering mode — §41b violation
+    let quantities_slp = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(300),
+            metering_mode: MeteringMode::Slp,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let result = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(ctx.clone(), &quantities_slp);
+
+    assert!(
+        result.is_err(),
+        "§41b: dynamic_epex + Slp must return Err, got Ok(invoice)"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("41b") || err_msg.contains("iMSys") || err_msg.contains("IMSYS"),
+        "§41b error message must reference §41b or iMSys, got: {err_msg}"
+    );
+
+    // Validate also returns the error
+    let warnings = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .validate(&ctx, &quantities_slp);
+    assert!(
+        !warnings.is_empty(),
+        "§41b: validate() must return at least one warning for SLP + dynamic_epex"
+    );
+    let has_error = warnings
+        .iter()
+        .any(|w| w.severity == WarningSeverity::Error);
+    assert!(
+        has_error,
+        "§41b: at least one Error-severity warning expected"
+    );
+
+    // iMSys mode — must succeed
+    let quantities_imsys = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(300),
+            metering_mode: MeteringMode::Imsys,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let result_imsys = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(ctx, &quantities_imsys);
+    assert!(
+        result_imsys.is_ok(),
+        "§41b: dynamic_epex + Imsys must succeed, got: {:?}",
+        result_imsys.err()
+    );
+    assert!(
+        result_imsys.unwrap().warnings.is_empty(),
+        "§41b: no warnings for valid iMSys + dynamic_epex combination"
+    );
+}
 
 // ── Scenario 1: Standard electricity — SLP customer, Eintarif ────────────────
 
@@ -48,7 +151,7 @@ use time::macros::date;
 /// ```
 #[test]
 fn golden_strom_slp_eintarif_jan_2026() {
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
         "arbeitspreis_ct_per_kwh": 28.50,
@@ -85,7 +188,6 @@ fn golden_strom_slp_eintarif_jan_2026() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
 
@@ -147,7 +249,7 @@ fn golden_strom_slp_eintarif_jan_2026() {
 /// ```
 #[test]
 fn golden_gas_with_levies_jan_2026() {
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "GAS",
         "gas_arbeitspreis_ct_per_kwh_hs": 7.50,
@@ -184,7 +286,6 @@ fn golden_gas_with_levies_jan_2026() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
 
@@ -267,7 +368,7 @@ fn golden_gas_with_levies_jan_2026() {
 fn golden_eeg_gutschrift_10kwp_jan_2026() {
     use energy_billing::EegMeterInput;
 
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "EEG",
         "eeg_verguetungssatz_ct_per_kwh": 8.20,
@@ -299,7 +400,6 @@ fn golden_eeg_gutschrift_10kwp_jan_2026() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &rates)
-        .unwrap()
         .bill(ctx, &quantities)
         .unwrap();
 
@@ -355,7 +455,7 @@ fn golden_eeg_gutschrift_10kwp_jan_2026() {
 /// (exact values depend on internal rounding — the key check is positions exist)
 #[test]
 fn golden_rlm_demand_charge() {
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
         "arbeitspreis_ct_per_kwh": 24.00,
@@ -394,9 +494,8 @@ fn golden_rlm_demand_charge() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &ctx.regulatory_rates)
-        .expect("RLM tariff must build engine")
         .bill(ctx, &quantities)
-        .expect("RLM billing must succeed");
+        .unwrap();
 
     // Arbeitspreis: 12 000 × 24.00ct / 100 = 2 880.00 EUR
     let arbeit = invoice
@@ -458,7 +557,7 @@ fn golden_rlm_demand_charge() {
 /// - BEHG applies: 50 000 × 1.310 ct / 100 = 655.00 EUR
 #[test]
 fn golden_gas_energiesteuer_exempt_kwk() {
-    let tariff: TariffInput = serde_json::from_str(
+    let tariff: Product = serde_json::from_str(
         r#"{
         "category": "GAS",
         "gas_arbeitspreis_ct_per_kwh_hs": 8.00,
@@ -495,9 +594,8 @@ fn golden_gas_energiesteuer_exempt_kwk() {
 
     let invoice = tariff
         .build_engine(&GridInput::default(), &ctx.regulatory_rates)
-        .expect("KWK gas tariff must build engine")
         .bill(ctx, &quantities)
-        .expect("KWK gas billing must succeed");
+        .unwrap();
 
     // No regular Energiesteuer levy position
     let has_regular_energiesteuer = invoice
@@ -571,4 +669,361 @@ fn golden_2022_energiesteuer_senkung_zero_rate() {
         let rate = stromsteuer_for_year(year).expect("StromStG rate known");
         assert_eq!(rate, dec!(2.05), "StromStG {year}: must be 2.05 ct/kWh");
     }
+}
+
+// ── §40a EnWG — Kilowattstundenpreis completeness ─────────────────────────────
+
+/// §40a EnWG Abs. 1: electricity invoices must show the all-inclusive price per kWh.
+/// Verified: kilowattstundenpreis_brutto_ct returns a sensible value covering all charges.
+#[test]
+fn sect40a_kilowattstundenpreis_brutto_includes_all_charges() {
+    use energy_billing::*;
+    use rust_decimal::Decimal;
+    use rust_decimal_macros::dec;
+    use time::macros::date;
+
+    // Standard household: 500 kWh @ 30 ct/kWh + 0.11 ct KA + 2.05 ct Stromsteuer + 19% MwSt
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        malo_id: "51238696780".into(),
+        lf_mp_id: "9900000000001".into(),
+        rechnungsnummer: "R40A-TEST-001".into(),
+        period_from: date!(2026 - 01 - 01),
+        period_to: date!(2026 - 01 - 31),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates.clone(),
+        kundenkategorie: CustomerKategorie::Haushalt,
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(500),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let tariff: Product = serde_json::from_str(
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0,"grundpreis_ct_per_day":8.22}"#,
+    )
+    .unwrap();
+    let invoice = BillingEngine::new()
+        .add(ElectricityProvider::from_product(
+            &tariff,
+            GridInput::default(),
+        ))
+        .add(MwStProvider::new(dec!(0.19)))
+        .bill(ctx, &quantities)
+        .unwrap();
+
+    invoice.assert_valid();
+
+    // §40a: kilowattstundenpreis must be computable
+    let kwh_preis = invoice
+        .kilowattstundenpreis_brutto_ct(dec!(500))
+        .expect("§40a kilowattstundenpreis must be Some for non-zero kWh");
+
+    // With 30ct Arbeit + Stromsteuer + MwSt the all-in price must be > 30 ct
+    assert!(
+        kwh_preis > dec!(30.0),
+        "§40a kilowattstundenpreis must include all charges, got {kwh_preis:.4} ct/kWh"
+    );
+    // And below 50 ct as a sanity bound
+    assert!(
+        kwh_preis < dec!(50.0),
+        "§40a kilowattstundenpreis seems too high: {kwh_preis:.4} ct/kWh"
+    );
+
+    // §40a Abs. 1 — must return None for zero kWh (avoid division by zero)
+    assert!(
+        invoice
+            .kilowattstundenpreis_brutto_ct(Decimal::ZERO)
+            .is_none(),
+        "§40a: kilowattstundenpreis must be None when kWh = 0"
+    );
+}
+
+// ── §41 EnWG — Mandatory invoice fields ───────────────────────────────────────
+
+/// §41 Abs. 1 EnWG requires specific mandatory fields on every energy invoice.
+/// This test verifies that `to_rechnung_json()` includes all required fields.
+#[test]
+fn sect41_rechnung_json_contains_mandatory_fields() {
+    use energy_billing::*;
+    use rust_decimal_macros::dec;
+    use time::macros::date;
+
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        malo_id: "51238696780".into(),
+        lf_mp_id: "9900000000001".into(),
+        rechnungsnummer: "R41-TEST-001".into(),
+        period_from: date!(2026 - 01 - 01),
+        period_to: date!(2026 - 01 - 31),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates.clone(),
+        zaehler_id: Some("1EFW1234567".into()), // §41 Abs. 1 Nr. 6 — Zählernummer
+        nb_mp_id: Some("9900357000004".into()), // §41 Abs. 1 Nr. 5 — Netzbetreiber
+        energiemix: Some("100% Ökostrom (EE-Strom HKN-zertifiziert)".into()), // §42 EnWG
+        billing_run_id: Some("d1a2b3c4-0001".into()),
+        kundenkategorie: CustomerKategorie::Haushalt,
+        verbrauchshistorie: Some(Verbrauchshistorie {
+            vorjahr_kwh: Some(dec!(5800)),
+            bundesdurchschnitt_kwh: Some(dec!(3500)),
+            kundengruppe: Some("2-Personen-Haushalt".into()),
+        }),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(500),
+            zaehlernummer: Some("1EFW1234567".into()),
+            zaehlerstand_von: Some(dec!(12345.678)),
+            zaehlerstand_bis: Some(dec!(12845.678)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let tariff: Product =
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
+    let invoice = BillingEngine::new()
+        .add(ElectricityProvider::from_product(
+            &tariff,
+            GridInput::default(),
+        ))
+        .add(MwStProvider::new(dec!(0.19)))
+        .bill(ctx, &quantities)
+        .unwrap();
+
+    let json = invoice.to_rechnung_json();
+
+    // §41 Abs. 1 Nr. 1 — Rechnungsnummer
+    assert_eq!(
+        json["rechnungsnummer"].as_str(),
+        Some("R41-TEST-001"),
+        "§41 Abs. 1 Nr. 1: rechnungsnummer required"
+    );
+
+    // §41 Abs. 1 Nr. 2 — Rechnungsdatum
+    assert!(
+        json["rechnungsdatum"].is_string(),
+        "§41 Abs. 1 Nr. 2: rechnungsdatum required"
+    );
+
+    // §41 Abs. 1 Nr. 2 — Abrechnungszeitraum (period_from / period_to)
+    assert!(
+        json["rechnungsperiode"]["startdatum"].is_string(),
+        "§41 Abs. 1 Nr. 2: rechnungsperiode.startdatum required"
+    );
+
+    // Positions exist
+    let positions = json["rechnungspositionen"]
+        .as_array()
+        .expect("rechnungspositionen must be an array");
+    assert!(
+        !positions.is_empty(),
+        "invoice must have at least one position"
+    );
+
+    // ZusatzAttribute must contain the mandatory regulatory fields
+    let attrs = json["zusatzAttribute"]
+        .as_array()
+        .expect("zusatzAttribute must be present");
+
+    let has_attr = |name: &str| attrs.iter().any(|a| a["name"].as_str() == Some(name));
+
+    // §41 Abs. 1 Nr. 3 — Verbrauchshistorie in ZusatzAttribute
+    assert!(
+        has_attr("verbrauchVorjahr"),
+        "§41 Abs. 1 Nr. 3: verbrauchVorjahr ZusatzAttribut required when Verbrauchshistorie set"
+    );
+
+    // §42 EnWG — Energiemix
+    assert!(
+        has_attr("energiemix"),
+        "§42 EnWG: energiemix ZusatzAttribut required"
+    );
+
+    // CustomerKategorie for ERP routing
+    assert!(
+        has_attr("kundenkategorie"),
+        "kundenkategorie ZusatzAttribut required for ERP routing"
+    );
+
+    // BillingRunId for audit trail
+    assert!(
+        has_attr("billingRunId"),
+        "billingRunId ZusatzAttribut required for audit trail"
+    );
+}
+
+// ── §42c EnWG — Energy Sharing credit ─────────────────────────────────────────
+
+/// §42c EnWG: community energy sharing generates a credit reducing effective cost.
+#[test]
+fn sect42c_energy_sharing_credit_reduces_effective_cost() {
+    use energy_billing::*;
+    use rust_decimal_macros::dec;
+    use time::macros::date;
+
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        malo_id: "51238696780".into(),
+        lf_mp_id: "9900000000001".into(),
+        rechnungsnummer: "R42C-TEST-001".into(),
+        period_from: date!(2026 - 01 - 01),
+        period_to: date!(2026 - 01 - 31),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(500),
+            ..Default::default()
+        }),
+        energy_share: Some(EnergyShareMeterInput {
+            allocated_kwh: dec!(150), // 150 kWh from community PV
+            total_plant_generation_kwh: Some(dec!(400)),
+            allocation_fraction: Some(dec!(0.375)),
+            gemeinschaft_id: Some("EGK-2024-001".into()),
+        }),
+        ..Default::default()
+    };
+
+    // SHARING tariff: full STROM price + sharing credit
+    let strom_tariff: Product = serde_json::from_str(
+        r#"{"category":"SHARING","arbeitspreis_ct_per_kwh":32.0,"sharing_credit_ct_per_kwh":20.0}"#,
+    )
+    .unwrap();
+    let invoice = strom_tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(ctx.clone(), &quantities)
+        .unwrap();
+
+    invoice.assert_valid();
+
+    // The sharing credit must be present as a negative EnergyShare position
+    let share_pos: Vec<_> = invoice
+        .positions
+        .iter()
+        .filter(|p| p.category == PositionCategory::EnergyShare)
+        .collect();
+    assert_eq!(
+        share_pos.len(),
+        1,
+        "exactly one EnergyShare credit position"
+    );
+    assert!(
+        share_pos[0].net_eur < dec!(0),
+        "sharing credit must be negative (reduces customer cost)"
+    );
+
+    // Credit amount: 150 kWh × 20 ct = 30.00 EUR (net, before MwSt)
+    let expected_credit_netto = dec!(-30.0);
+    let diff = (share_pos[0].net_eur - expected_credit_netto).abs();
+    assert!(
+        diff < dec!(0.001),
+        "sharing credit: expected {expected_credit_netto:.5}, got {:.5}",
+        share_pos[0].net_eur
+    );
+
+    // §42c legal basis must be cited
+    assert!(
+        share_pos[0].legal_basis.as_deref() == Some("§42c EnWG"),
+        "§42c EnWG must be cited as legal basis for sharing credit"
+    );
+
+    // Effective cost is less than without sharing
+    let tariff_no_share: Product =
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":32.0}"#).unwrap();
+    let invoice_no_share = BillingEngine::new()
+        .add(ElectricityProvider::from_product(
+            &tariff_no_share,
+            GridInput::default(),
+        ))
+        .add(MwStProvider::new(dec!(0.19)))
+        .bill(
+            ctx,
+            &Quantities {
+                electricity: Some(MeterInput {
+                    arbeitsmenge_kwh: dec!(500),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert!(
+        invoice.brutto_eur < invoice_no_share.brutto_eur,
+        "sharing customer must pay less (brutto {:.2} vs no-sharing {:.2})",
+        invoice.brutto_eur,
+        invoice_no_share.brutto_eur
+    );
+}
+
+// ── CustomerKategorie — industrial Stromsteuer exemption ──────────────────────
+
+/// §9 Nr. 1 StromStG: industrial customers (Industrie category) with
+/// `industrie_stromsteuer_befreiung = true` must not have a Stromsteuer position.
+#[test]
+fn industrie_customer_stromsteuer_befreiung_removes_levy() {
+    use energy_billing::*;
+    use rust_decimal_macros::dec;
+    use time::macros::date;
+
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        malo_id: "51238696780".into(),
+        lf_mp_id: "9900000000001".into(),
+        rechnungsnummer: "R-INDUSTRIE-001".into(),
+        period_from: date!(2026 - 01 - 01),
+        period_to: date!(2026 - 01 - 31),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates.clone(),
+        kundenkategorie: CustomerKategorie::Industrie,
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(50_000), // large industrial customer
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let tariff: Product = serde_json::from_str(
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":18.0,"industrie_stromsteuer_befreiung":true}"#,
+    )
+    .unwrap();
+
+    let invoice = BillingEngine::new()
+        .add(ElectricityProvider::from_product(
+            &tariff,
+            GridInput::default(),
+        ))
+        .add(MwStProvider::new(dec!(0.19)))
+        .bill(ctx, &quantities)
+        .unwrap();
+
+    // Stromsteuer levy position must be absent (§9 Nr. 1 StromStG exemption)
+    let stromsteuer_positions: Vec<_> = invoice
+        .positions
+        .iter()
+        .filter(|p| p.has_tag("stromsteuer"))
+        .collect();
+    assert!(
+        stromsteuer_positions.is_empty(),
+        "§9 StromStG: industrial exemption — no Stromsteuer position should appear"
+    );
+
+    // Instead, an informational exemption note with tag "stromsteuer_befreiung" should appear
+    let exemption_info: Vec<_> = invoice
+        .positions
+        .iter()
+        .filter(|p| p.category == PositionCategory::Info && p.has_tag("stromsteuer_befreiung"))
+        .collect();
+    assert!(
+        !exemption_info.is_empty(),
+        "§9 StromStG: industrial exemption must generate an informational position with tag 'stromsteuer_befreiung'"
+    );
 }

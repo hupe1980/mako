@@ -126,6 +126,7 @@ impl MockGnb {
                 message_ref,
                 bilanzierungsmethode: None,
                 fallgruppe: None,
+                gasqualitaet: None,
                 ..
             } => {
                 assert_eq!(pid.as_u32(), 44002, "adapter must extract PID 44002");
@@ -147,6 +148,7 @@ impl MockGnb {
                     message_ref,
                     bilanzierungsmethode: None,
                     fallgruppe: None,
+                    gasqualitaet: None,
                     validation_passed: true,
                     validation_errors: vec![],
                     received_at: time::OffsetDateTime::now_utc(),
@@ -329,6 +331,7 @@ async fn e2e_lieferende_gas_ahb_validation_failure() {
             message_ref: mako_engine::types::MessageRef::new("MSG-GAS-003"),
             bilanzierungsmethode: None,
             fallgruppe: None,
+            gasqualitaet: None,
             validation_passed: false,
             validation_errors: vec![
                 "UTILMD G segment IDE missing mandatory Z18 Marktlokation reference".to_owned(),

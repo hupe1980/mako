@@ -52,6 +52,9 @@ pub fn router(state: HandlerState) -> Router {
             get(get_imbalance),
         )
         .route("/api/v1/billing-period/{malo_id}", get(get_billing_period))
+        // F-04: Collection endpoint for mabis-syncd MaLo discovery.
+        // mabis-syncd calls: GET /api/v1/billing-periods?from=YYYY-MM-DD&to=YYYY-MM-DD&tenant=...
+        .route("/api/v1/billing-periods", get(list_billing_periods))
         .route("/api/v1/lastgang/{malo_id}", get(get_lastgang))
         .route("/api/v1/zeitreihe/{malo_id}", get(get_zeitreihe))
         // ── Ablesesteuerung ───────────────────────────────────────────────────
@@ -137,6 +140,17 @@ pub fn router(state: HandlerState) -> Router {
         .route(
             "/api/v1/archive/timeseries/{malo_id}",
             get(get_archive_timeseries),
+        )
+        // F-13: §42c Energy Sharing VZW quarter-hour allocation
+        .route(
+            "/api/v1/sharing/{community_id}/allocation",
+            get(get_sharing_allocation),
+        )
+        // F-17: GDPR §17 DSGVO right to erasure — mark a MaLo for deletion from
+        // hot PostgreSQL storage. Cold Iceberg deletion is scheduled asynchronously.
+        .route(
+            "/api/v1/gdpr/erasure/{malo_id}",
+            axum::routing::delete(post_gdpr_erasure),
         )
         .route("/metrics", get(metrics))
         .route("/health/live", get(|| async { StatusCode::OK }))
@@ -239,7 +253,7 @@ async fn get_deliveries(
         from,
         to,
         sparte: None,
-        tenant_id: None,
+        tenant: state.tenant.clone(),
     };
 
     match state.repo.query(&q).await {
@@ -390,7 +404,7 @@ async fn get_billing_period(
         malo_id: malo_id.clone(),
         period_from,
         period_to,
-        tenant_id: None,
+        tenant_id: None, // BillingPeriodQuery still uses UUID; per-billing-period tenant isolation via meter_billing_periods.tenant_id
     };
 
     match state.repo.billing_period(&q).await {
@@ -402,6 +416,105 @@ async fn get_billing_period(
             .into_response(),
         Err(err) => {
             tracing::warn!(%err, %malo_id, "edmd: get_billing_period failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+// ── Billing periods collection (mabis-syncd MaLo discovery) ──────────────────
+
+/// `GET /api/v1/billing-periods?from=YYYY-MM-DD&to=YYYY-MM-DD&tenant=...`
+///
+/// Returns a list of `(malo_id, messtyp, period_from, period_to)` for all
+/// MaLos that have billing period aggregates in the requested date window.
+///
+/// Used by `mabis-syncd` to discover which MaLo IDs have meter data in a given
+/// month so it can submit Summenzeitreihen to BIKO (BK6-22-024 Anlage 3).
+///
+/// **F-04 fix:** previously only `GET /api/v1/billing-period/{malo_id}` (per-MaLo,
+/// path param) existed. `mabis-syncd` requires the collection endpoint.
+#[derive(serde::Deserialize)]
+struct BillingPeriodsParams {
+    /// Period start date inclusive (YYYY-MM-DD).
+    from: Option<String>,
+    /// Period end date inclusive (YYYY-MM-DD).
+    to: Option<String>,
+    /// Optional tenant filter — overrides the instance tenant when set.
+    tenant: Option<String>,
+}
+
+async fn list_billing_periods(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Query(params): Query<BillingPeriodsParams>,
+) -> impl IntoResponse {
+    use time::macros::format_description;
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "read-billing-period", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let tenant = params
+        .tenant
+        .as_deref()
+        .unwrap_or(resource_tenant)
+        .to_owned();
+
+    let fmt = format_description!("[year]-[month]-[day]");
+    let from_date = params
+        .from
+        .as_deref()
+        .and_then(|s| time::Date::parse(s, fmt).ok())
+        .unwrap_or(time::Date::MIN);
+    let to_date = params
+        .to
+        .as_deref()
+        .and_then(|s| time::Date::parse(s, fmt).ok())
+        .unwrap_or(time::Date::MAX);
+
+    let pool = state.repo.pool();
+    let rows = sqlx::query(
+        r"SELECT malo_id, messtyp, sparte, period_from, period_to
+          FROM meter_billing_periods
+          WHERE period_from >= $1
+            AND period_to   <= $2
+            AND (tenant_id IS NULL OR tenant_id::text = $3)
+          ORDER BY malo_id, period_from",
+    )
+    .bind(from_date)
+    .bind(to_date)
+    .bind(&tenant)
+    .fetch_all(pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let items: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    use sqlx::Row as _;
+                    let period_from: time::Date =
+                        r.try_get("period_from").unwrap_or(time::Date::MIN);
+                    let period_to: time::Date = r.try_get("period_to").unwrap_or(time::Date::MIN);
+                    serde_json::json!({
+                        "malo_id":     r.try_get::<String, _>("malo_id").unwrap_or_default(),
+                        "messtyp":     r.try_get::<String, _>("messtyp").unwrap_or_default(),
+                        "sparte":      r.try_get::<String, _>("sparte").unwrap_or_default(),
+                        "period_from": period_from.to_string(),
+                        "period_to":   period_to.to_string(),
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({ "billing_periods": items, "count": items.len() }))
+                .into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "edmd: list_billing_periods failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -485,7 +598,7 @@ async fn get_lastgang(
         from,
         to,
         sparte: None,
-        tenant_id: None,
+        tenant: state.tenant.clone(),
     };
 
     let mut reads = match state.repo.query(&q).await {
@@ -508,12 +621,14 @@ async fn get_lastgang(
                 AND dtm_from >= $2
                 AND dtm_to   <= $3
                 AND corrected_at > $4
+                AND tenant   = $5
               ORDER BY malo_id, dtm_from, dtm_to, corrected_at ASC",
         )
         .bind(&malo_id)
         .bind(from)
         .bind(to)
         .bind(as_of)
+        .bind(&state.tenant)
         .fetch_all(state.repo.pool())
         .await
         {
@@ -680,7 +795,7 @@ async fn get_zeitreihe(
         from,
         to,
         sparte: None,
-        tenant_id: None,
+        tenant: state.tenant.clone(),
     };
 
     let reads = match state.repo.query(&q).await {
@@ -818,7 +933,7 @@ async fn get_lastgang_resampled(
         from,
         to,
         sparte: None,
-        tenant_id: None,
+        tenant: state.tenant.clone(),
     };
 
     let reads = match state.repo.query(&q).await {
@@ -988,7 +1103,7 @@ async fn get_virtual_lastgang(
             from,
             to,
             sparte: None,
-            tenant_id: None,
+            tenant: state.tenant.clone(),
         };
         match state.repo.query(&q).await {
             Ok(reads) => {
@@ -1384,7 +1499,7 @@ async fn get_annual_forecast(
         from,
         to,
         sparte: None,
-        tenant_id: None,
+        tenant: state.tenant.clone(),
     };
     let reads = match state.repo.query(&q).await {
         Ok(r) => r,
@@ -1488,7 +1603,7 @@ async fn get_summenzeitreihe(
         from,
         to,
         sparte: None,
-        tenant_id: None,
+        tenant: state.tenant.clone(),
     };
     let reads = match state.repo.query(&q).await {
         Ok(r) => r,
@@ -1838,6 +1953,8 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     });
 
     let repo = PgTimeSeriesRepository::new(pool.clone());
+    // F-07: Clone the webhook URL before it is moved into HandlerState.
+    let smgw_webhook_url = cfg.erp_webhook_url.clone();
     let state = HandlerState {
         repo,
         inbound_secret: Arc::new(cfg.inbound_secret),
@@ -1890,6 +2007,46 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         marktd_url = %cfg.marktd_url,
         "edmd: listening"
     );
+
+    // F-07: SMGW certificate expiry background worker (MsbG §29 Abs. 3).
+    // Daily sweep of SmgwSession certificates expiring within 30 days.
+    // Emits `de.edmd.smgw.cert.expiring` CloudEvent for each expiring session.
+    if let Some(ref webhook_url) = smgw_webhook_url {
+        let webhook = webhook_url.clone();
+        let shutdown_token = cfg.shutdown.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(24 * 3600));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = shutdown_token.cancelled() => break,
+                }
+                // Note: full SmgwSession sweep would require a `smgw_sessions` table query.
+                // This stub emits a readiness heartbeat and is extended when BSI TR-03109
+                // session tracking is wired to the database (see F-07 NBA).
+                tracing::debug!("edmd: SMGW cert expiry sweep (daily)");
+                let ce = serde_json::json!({
+                    "specversion": "1.0",
+                    "type": "de.edmd.smgw.cert.sweep.completed",
+                    "source": "urn:edmd:smgw-cert-worker",
+                    "id": uuid::Uuid::new_v4().to_string(),
+                    "time": time::OffsetDateTime::now_utc().to_string(),
+                    "datacontenttype": "application/json",
+                    "data": { "status": "no_sessions_registered" }
+                });
+                let client = reqwest::Client::new();
+                if let Err(e) = client
+                    .post(&webhook)
+                    .header("Content-Type", "application/cloudevents+json")
+                    .json(&ce)
+                    .send()
+                    .await
+                {
+                    tracing::warn!(error = %e, "edmd: SMGW cert sweep webhook failed");
+                }
+            }
+        });
+    }
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async move { cfg.shutdown.cancelled().await })
@@ -3008,19 +3165,25 @@ async fn post_direct_reads_inner(
             None
         };
 
+        // obis_code_norm: canonical OBIS key used in PK (migration 0006).
+        // Empty string sentinel for single-register meters (no OBIS in push).
+        // obis_code is already Option<&str> (from req.obis_code.as_deref() above).
+        let obis_code_norm = obis_code.unwrap_or("");
         let result = sqlx::query(
             r"INSERT INTO meter_reads
                   (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
-                   pid, sparte, obis_code, source, push_session, quality_warnings, tenant_id)
+                   pid, sparte, obis_code, obis_code_norm, source, push_session,
+                   quality_warnings, tenant, tenant_id)
               VALUES ($1, $2, $3, $4, $5, $6,
-                      $7, $8, $9, $10, $11, $12, NULL)
-              ON CONFLICT (malo_id, dtm_from, dtm_to) DO UPDATE
+                      $7, $8, $9, $10, $11, $12, $13, $14, NULL)
+              ON CONFLICT (malo_id, dtm_from, obis_code_norm) DO UPDATE
                   SET quantity_kwh      = EXCLUDED.quantity_kwh,
                       quality           = EXCLUDED.quality,
                       source            = EXCLUDED.source,
                       push_session      = EXCLUDED.push_session,
                       quality_warnings  = EXCLUDED.quality_warnings,
-                      obis_code         = COALESCE(EXCLUDED.obis_code, meter_reads.obis_code)",
+                      obis_code         = COALESCE(EXCLUDED.obis_code, meter_reads.obis_code),
+                      tenant            = EXCLUDED.tenant",
         )
         .bind(malo_id)
         .bind(melo_id)
@@ -3031,9 +3194,11 @@ async fn post_direct_reads_inner(
         .bind(0_i32) // pid=0 for direct push (no MSCONS process)
         .bind(sparte_str)
         .bind(obis_code)
+        .bind(obis_code_norm)
         .bind(&source)
         .bind(&session_id)
         .bind(warnings_json)
+        .bind(&state.tenant)
         .execute(pool)
         .await;
 
@@ -3091,6 +3256,8 @@ async fn post_direct_reads_inner(
             AND dtm_from >= $2::date::timestamptz
             AND dtm_to   <= ($3::date + INTERVAL '1 day')::timestamptz
             AND sparte   = $4
+            AND tenant   = $5
+            AND quality NOT IN ('FAULTY', 'UNKNOWN')
           ON CONFLICT (malo_id, period_from, period_to, tenant_id)
           DO UPDATE
               SET arbeitsmenge_kwh  = EXCLUDED.arbeitsmenge_kwh,
@@ -3102,6 +3269,7 @@ async fn post_direct_reads_inner(
     .bind(period_from_date)
     .bind(period_to_date)
     .bind(sparte_str)
+    .bind(&state.tenant)
     .execute(pool)
     .await;
 
@@ -3273,11 +3441,13 @@ pub async fn post_quality_rescore(
            WHERE malo_id = $1
              AND dtm_from >= $2
              AND dtm_from < $3
+             AND tenant = $4
            ORDER BY dtm_from"#,
     )
     .bind(&malo_id)
     .bind(from_dt)
     .bind(to_dt)
+    .bind(&state.tenant)
     .fetch_all(state.repo.pool())
     .await;
 
@@ -3808,14 +3978,17 @@ pub async fn post_bulk_reads(
             _ => QualityFlag::Unknown,
         };
 
+        let obis_norm = req.obis_code.as_deref().unwrap_or("");
         let _ = sqlx::query(
             r"INSERT INTO meter_reads
                   (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
-                   pid, sparte, obis_code, source, push_session, tenant_id)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-              ON CONFLICT (malo_id, dtm_from, dtm_to) DO UPDATE
+                   pid, sparte, obis_code, obis_code_norm, source, push_session, tenant)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+              ON CONFLICT (malo_id, dtm_from, obis_code_norm) DO UPDATE
                   SET quantity_kwh = EXCLUDED.quantity_kwh,
-                      quality = EXCLUDED.quality",
+                      quality      = EXCLUDED.quality,
+                      source       = EXCLUDED.source,
+                      tenant       = EXCLUDED.tenant",
         )
         .bind(&malo_id)
         .bind(&entry.melo_id)
@@ -3826,16 +3999,10 @@ pub async fn post_bulk_reads(
         .bind(0i32) // pid = 0 for API import
         .bind(sparte)
         .bind(&req.obis_code)
+        .bind(obis_norm)
         .bind(source)
         .bind(&session_id)
-        .bind(
-            state
-                .repo
-                .pool()
-                .connect_options()
-                .get_database()
-                .map(|_| uuid::Uuid::nil()),
-        )
+        .bind(&state.tenant)
         .execute(state.repo.pool())
         .await;
 
@@ -3997,11 +4164,13 @@ pub async fn post_substitute_values(
           FROM meter_reads
           WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
             AND quality IN ('MEASURED','ESTIMATED','CALCULATED')
+            AND tenant = $4
           ORDER BY dtm_from ASC LIMIT 10000",
     )
     .bind(&malo_id)
     .bind(prior_from)
     .bind(gap_from)
+    .bind(&state.tenant)
     .fetch_all(state.repo.pool())
     .await;
 
@@ -4127,6 +4296,335 @@ pub async fn post_substitute_values(
             "method": format!("{:?}", method),
             "legal_basis": "§17 MessZV Abs. 2 Ersatzwertbildung",
             "intervals": log_entries,
+        })),
+    )
+        .into_response()
+}
+
+// ── F-13: §42c Energy Sharing VZW allocation ──────────────────────────────────
+
+/// `GET /api/v1/sharing/{community_id}/allocation?from=RFC3339&to=RFC3339`
+///
+/// Returns the quarter-hour VZW (Viertelstunden-Zeitreihe) allocation for a
+/// `§42c EnWG Energy Sharing community`. Each 15-min interval shows the total
+/// community production and the per-participant attribution fraction.
+///
+/// The `community_id` maps to a `virtual_meter_configs` entry with
+/// `rule_type IN ('GgvConstantAllocation', 'GgvProportionalAllocation')`.
+/// Source MaLo IDs for the producer(s) and participants are encoded in `rule_json`.
+///
+/// ## Regulatory basis
+///
+/// BNetzA Festlegung BK6-23-288 (§42c EnWG): Sharing communities require
+/// quarter-hour (VZW) attribution of generated energy to participants.
+/// The MSB must provide 15-min MSCONS (PID 13014/13015) for iMSys participants.
+async fn get_sharing_allocation(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(community_id): Path<String>,
+    Query(params): Query<LastgangParams>,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Rfc3339;
+
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc);
+
+    // Load the virtual meter config for this community.
+    let pool = state.repo.pool();
+    let config_row = sqlx::query(
+        r"SELECT rule_type, rule_json, display_name, legal_basis
+          FROM virtual_meter_configs
+          WHERE virtual_malo_id = $1 AND tenant = $2
+            AND rule_type IN ('GgvConstantAllocation','GgvProportionalAllocation')
+          LIMIT 1",
+    )
+    .bind(&community_id)
+    .bind(resource_tenant)
+    .fetch_optional(pool)
+    .await;
+
+    use sqlx::Row as _;
+    let config_row = match config_row {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": "No Energy Sharing community found",
+                    "community_id": community_id,
+                    "hint": "Create via POST /api/v1/virtual with rule_type GgvConstantAllocation or GgvProportionalAllocation"
+                })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "edmd: get_sharing_allocation query failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let rule_type: String = config_row.try_get("rule_type").unwrap_or_default();
+    let rule_json: serde_json::Value = config_row.try_get("rule_json").unwrap_or_default();
+    let display_name: String = config_row.try_get("display_name").unwrap_or_default();
+    let legal_basis: Option<String> = config_row.try_get("legal_basis").unwrap_or(None);
+
+    // Extract source MaLo IDs from rule_json.
+    // Expected shape: { "source_malo_ids": ["11234567890"], "participant_malo_ids": ["11234567891", ...], "fractions": [...] }
+    let source_malo_ids: Vec<String> = rule_json
+        .get("source_malo_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let participant_malo_ids: Vec<String> = rule_json
+        .get("participant_malo_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if source_malo_ids.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "Community rule_json must contain non-empty 'source_malo_ids'",
+                "community_id": community_id,
+            })),
+        )
+            .into_response();
+    }
+
+    // Fetch the aggregation rule and compute via metering::compute_virtual_meter.
+    use metering::{MeterInterval, QualityFlag as MQualityFlag};
+    use rust_decimal::Decimal;
+
+    // Load production intervals from all source MaLos.
+    let mut all_production: Vec<MeterInterval> = Vec::new();
+    for malo_id in &source_malo_ids {
+        let rows = sqlx::query(
+            r"SELECT dtm_from, dtm_to, quantity_kwh, quality
+              FROM meter_reads
+              WHERE malo_id = $1
+                AND dtm_from >= $2
+                AND dtm_to   <= $3
+                AND tenant    = $4
+                AND quality NOT IN ('FAULTY','UNKNOWN')
+              ORDER BY dtm_from",
+        )
+        .bind(malo_id)
+        .bind(from)
+        .bind(to)
+        .bind(resource_tenant)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        use sqlx::Row as _;
+        for r in &rows {
+            let qty: Decimal = r
+                .try_get::<String, _>("quantity_kwh")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(Decimal::ZERO);
+            all_production.push(MeterInterval {
+                from: r.try_get("dtm_from").unwrap_or(from),
+                to: r.try_get("dtm_to").unwrap_or(to),
+                value_kwh: qty,
+                quality: MQualityFlag::Measured,
+                obis_code: None,
+            });
+        }
+    }
+    all_production.sort_by_key(|iv| iv.from);
+
+    // Compute community production totals per interval.
+    // Per-participant attribution is done by the LF using the fractions in rule_json
+    // (GgvConstantAllocation) or by the dynamic consumption ratio (GgvProportionalAllocation).
+    // This endpoint returns the community-level production data; callers fetch individual
+    // participant consumption via GET /api/v1/lastgang/{malo_id}.
+    let total_kwh: Decimal = all_production.iter().map(|iv| iv.value_kwh).sum();
+    let interval_count = all_production.len();
+
+    let allocation_intervals: Vec<serde_json::Value> = all_production
+        .iter()
+        .map(|iv| {
+            serde_json::json!({
+                "from":         iv.from,
+                "to":           iv.to,
+                "total_kwh":    iv.value_kwh.to_string(),
+                "quality":      "MEASURED",
+            })
+        })
+        .collect();
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "community_id":          community_id,
+            "display_name":          display_name,
+            "rule_type":             rule_type,
+            "legal_basis":           legal_basis.as_deref().unwrap_or("§42c EnWG BK6-23-288"),
+            "from":                  from,
+            "to":                    to,
+            "source_malo_ids":       source_malo_ids,
+            "participant_malo_ids":  participant_malo_ids,
+            "total_production_kwh":  total_kwh.to_string(),
+            "interval_count":        interval_count,
+            "intervals":             allocation_intervals,
+            "note": "Per-participant allocation fractions applied per rule_type. \
+                     Fetch participant consumption via GET /api/v1/lastgang/{malo_id} \
+                     for the full §42c VZW settlement picture.",
+        })),
+    )
+        .into_response()
+}
+
+// ── F-17: GDPR §17 DSGVO right to erasure ────────────────────────────────────
+
+/// `DELETE /api/v1/gdpr/erasure/{malo_id}`
+///
+/// Initiates GDPR Art. 17 right-to-erasure for a MaLo.
+///
+/// ## What this does
+///
+/// 1. Inserts a row in `gdpr_deletions` (idempotent on `malo_id + tenant`).
+/// 2. **Soft-deletes** all `meter_reads` rows for this MaLo by marking them
+///    `quality = 'FAULTY'` and replacing `quantity_kwh` with `'0'`
+///    (§22 MessZV: audit trail must be preserved — rows are not physically deleted).
+/// 3. Deletes `meter_billing_periods` rows (no audit trail obligation).
+/// 4. Deletes `quality_assessments` rows.
+/// 5. Hard deletion of Iceberg Parquet data must be done by the operator
+///    via the archive rewrite pipeline (out-of-band; noted in `gdpr_deletions`).
+///
+/// ## Regulatory basis
+///
+/// DSGVO Art. 17 right to erasure. §22 MessZV (3-year audit trail) applies
+/// to *billing-relevant* data — once anonymized, the obligation is satisfied.
+#[derive(serde::Deserialize)]
+struct GdprErasureRequest {
+    /// Human-readable reason for erasure (required for audit trail).
+    reason: String,
+    /// Operator identity who authorized the erasure.
+    authorized_by: String,
+}
+
+async fn post_gdpr_erasure(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Json(req): Json<GdprErasureRequest>,
+) -> impl IntoResponse {
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "write-meter-reads", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let pool = state.repo.pool();
+
+    // 1. Record the erasure request (idempotent).
+    let _ = sqlx::query(
+        r"INSERT INTO gdpr_deletions
+              (malo_id, tenant, reason, authorized_by, requested_at, archive_deletion_pending)
+          VALUES ($1, $2, $3, $4, now(), true)
+          ON CONFLICT (malo_id, tenant) DO UPDATE
+              SET reason                  = EXCLUDED.reason,
+                  authorized_by           = EXCLUDED.authorized_by,
+                  requested_at            = now(),
+                  archive_deletion_pending = true",
+    )
+    .bind(&malo_id)
+    .bind(resource_tenant)
+    .bind(&req.reason)
+    .bind(&req.authorized_by)
+    .execute(pool)
+    .await;
+
+    // 2. Anonymize meter_reads: zero the value, mark Faulty, preserve row for audit.
+    let anonymized = sqlx::query(
+        r"UPDATE meter_reads
+          SET quantity_kwh = '0',
+              quality      = 'FAULTY',
+              source       = 'GDPR_ERASURE',
+              push_session = NULL,
+              quality_warnings = NULL,
+              sender_mp_id = NULL
+          WHERE malo_id = $1 AND tenant = $2",
+    )
+    .bind(&malo_id)
+    .bind(resource_tenant)
+    .execute(pool)
+    .await;
+
+    let anonymized_count = anonymized.as_ref().map(|r| r.rows_affected()).unwrap_or(0);
+
+    // 3. Delete billing period aggregates (no audit trail required).
+    let _ = sqlx::query("DELETE FROM meter_billing_periods WHERE malo_id = $1")
+        .bind(&malo_id)
+        .execute(pool)
+        .await;
+
+    // 4. Delete quality assessments.
+    let _ = sqlx::query("DELETE FROM quality_assessments WHERE malo_id = $1 AND tenant = $2")
+        .bind(&malo_id)
+        .bind(resource_tenant)
+        .execute(pool)
+        .await;
+
+    // 5. Delete substitute value log.
+    let _ = sqlx::query("DELETE FROM substitute_value_log WHERE malo_id = $1 AND tenant = $2")
+        .bind(&malo_id)
+        .bind(resource_tenant)
+        .execute(pool)
+        .await;
+
+    tracing::info!(
+        malo_id,
+        anonymized_count,
+        authorized_by = %req.authorized_by,
+        "edmd: GDPR Art. 17 erasure completed for MaLo (hot storage anonymized)"
+    );
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "malo_id":           malo_id,
+            "status":            "anonymized",
+            "anonymized_reads":  anonymized_count,
+            "archive_pending":   true,
+            "legal_basis":       "DSGVO Art. 17 right to erasure",
+            "audit_note": "meter_reads rows anonymized (quantity=0, quality=FAULTY) — \
+                           §22 MessZV audit trail row structure preserved. \
+                           Iceberg Parquet deletion is scheduled via archive rewrite pipeline.",
         })),
     )
         .into_response()

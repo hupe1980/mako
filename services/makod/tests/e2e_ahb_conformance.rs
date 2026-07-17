@@ -457,6 +457,7 @@ async fn ahb_44001_lieferbeginn_gas_validates_and_dispatches() {
         message_ref: cmd_ref,
         bilanzierungsmethode: None,
         fallgruppe: None,
+        gasqualitaet: None,
         ..
     } = adapter_cmd
     else {
@@ -496,6 +497,7 @@ async fn ahb_44001_lieferbeginn_gas_validates_and_dispatches() {
         message_ref: cmd_ref,
         bilanzierungsmethode: None,
         fallgruppe: None,
+        gasqualitaet: None,
         validation_passed: report.is_valid(), // ← authoritative AHB result, no bypass
         validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
         received_at: time::OffsetDateTime::now_utc(),

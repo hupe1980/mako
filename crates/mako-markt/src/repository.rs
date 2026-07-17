@@ -120,8 +120,17 @@ pub struct MaloRecord {
     /// Bilanzierungsgebiet EIC code (`LOC+237` in UTILMD) extracted from `Marktlokation`.
     /// Used by `processd` NB check 4 as fallback when `malo_grid` is not populated.
     pub bilanzierungsgebiet: Option<String>,
-    /// Gas quality (`HGas` | `LGas`) extracted from `Marktlokation`.
-    /// Used for Gas tariff routing and GeLi Gas process validation.
+    /// Gas quality extracted from `Marktlokation.standorteigenschaften.gasqualitaet`.
+    ///
+    /// Canonical form: `"H_GAS"` | `"L_GAS"` | `"H2_BLEND"` | `"BIOGAS"` | `"FLUESSIGGAS"`.
+    ///
+    /// Legacy values received via UTILMD G (`"HGas"`, `"LGas"`) are normalized to
+    /// the canonical form on write via `mako_geli_gas::gas_quality::normalize_gasqualitaet()`.
+    ///
+    /// Used for:
+    /// - Gas tariff routing in `billingd` (Brennwert/Zustandszahl defaults differ by quality)
+    /// - Invoice audit annotation (`ZusatzAttribut.gasqualitaet` per §22 MessZV)
+    /// - H2-blend detection for future DVGW G 260 billing compliance
     pub gasqualitaet: Option<String>,
     /// Energy direction (`Aussp` = generation, `Einsp` = consumption).
     pub energierichtung: Option<String>,
@@ -339,7 +348,10 @@ pub struct MaloTypedFields {
     pub netzebene: Option<String>,
     /// Bilanzierungsgebiet EIC code — primary input for `processd` NB check 4.
     pub bilanzierungsgebiet: Option<String>,
-    /// Gas quality (`"HGas"` | `"LGas"`).
+    /// Gas quality — canonical form: `"H_GAS"` | `"L_GAS"` | `"H2_BLEND"` | `"BIOGAS"`.
+    ///
+    /// Legacy UTILMD G values (`"HGas"`, `"LGas"`) are normalized to the canonical
+    /// form by the `marktd` GeLi Gas event handler.
     pub gasqualitaet: Option<String>,
     /// Energy direction (`"Aussp"` = generation, `"Einsp"` = consumption).
     pub energierichtung: Option<String>,

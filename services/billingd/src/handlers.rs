@@ -14,12 +14,6 @@ use time::format_description::well_known::Iso8601;
 use uuid::Uuid;
 
 use crate::{
-    calculator::{
-        BillingContext, BillingEngine, DynamicInterval, EegMeterInput, EmobilityMeterInput,
-        GasMeterInput, GridInput, HemsMeterInput, Invoice, InvoiceType, MeterInput, MwStProvider,
-        PricingModel, Quantities, RegulatoryRates, ServiceMeterInput, SolarMeterInput,
-        SolarProvider, TariffInput, WaermeMeterInput, negate_rechnung_json_for_correction,
-    },
     clients::{EdmdClient, TarifbdClient, VertragdClient},
     config::BillingdConfig,
     pg::{
@@ -28,6 +22,11 @@ use crate::{
         mark_dispatched,
     },
     xrechnung::{build_zugferd_cii_xml, info_from_rechnung_json},
+};
+use energy_billing::{
+    BillingContext, DynamicInterval, EegMeterInput, EmobilityMeterInput, GasMeterInput, GridInput,
+    HemsMeterInput, Invoice, InvoiceType, MeterInput, Product, Quantities, RegulatoryRates,
+    ServiceMeterInput, SolarMeterInput, WaermeMeterInput, negate_rechnung_json_for_correction,
 };
 
 // ── Request bodies ─────────────────────────────────────────────────────────────
@@ -49,7 +48,7 @@ pub struct CalculateRequest {
     pub period_from: String,
     pub period_to: String,
     /// Override: supply product data directly (skip tarifbd lookup).
-    pub tariff: Option<TariffInput>,
+    pub tariff: Option<Product>,
     /// Override: supply Strom meter data directly (skip edmd lookup).
     pub meter: Option<MeterInput>,
     /// Override: supply grid pass-through data directly (skip marktd lookup).
@@ -80,7 +79,7 @@ pub struct CalculateRequest {
 ///
 /// Pipeline:
 /// 1. Parse + validate period
-/// 2. Fetch `TariffInput` from `tarifbd` (or use request override)
+/// 2. Fetch `Product` from `tarifbd` (or use request override)
 /// 3. Fetch consumption from `edmd` (or use request override)
 /// 4. Fetch grid pass-through from `marktd` (or use request override)
 /// 5. Dispatch to category-specific pure calculator
@@ -132,8 +131,8 @@ pub async fn post_calculate(
         &pool,
         &malo_id,
         &req.lf_mp_id,
-        tariff.product_code.as_deref().unwrap_or(&tariff.category),
-        &tariff.category,
+        tariff.product_code().unwrap_or(tariff.category_str()),
+        tariff.category_str(),
         period_from,
         period_to,
         &result.to_rechnung_json(),
@@ -233,7 +232,7 @@ pub async fn post_preview(
 
 /// Build the `Quantities` for a billing request by resolving meter data.
 async fn build_quantities(
-    tariff: &TariffInput,
+    tariff: &Product,
     req: &CalculateRequest,
     malo_id: &str,
     period_from: time::Date,
@@ -246,9 +245,14 @@ async fn build_quantities(
         ..Default::default()
     };
 
-    match tariff.category.as_str() {
+    match tariff.category_str() {
         "STROM" | "WAERMEPUMPE" | "WALLBOX" => {
-            if tariff.dynamic_epex {
+            let is_dynamic = match tariff {
+                Product::Strom(p) => p.dynamic_epex,
+                Product::Waermepumpe(p) | Product::Wallbox(p) => p.base.dynamic_epex,
+                _ => false,
+            };
+            if is_dynamic {
                 q.dynamic_intervals =
                     fetch_dynamic_intervals(malo_id, period_from, period_to, edmd).await;
                 q.dynamic_epex_prices = fetch_epex_prices(period_from, period_to, marktd).await;
@@ -259,14 +263,7 @@ async fn build_quantities(
         }
         "GAS" => {
             let mut meter = req.gas_meter.clone().unwrap_or_default();
-            // Auto-fetch gasqualitaet from marktd for §22 MessZV audit transparency.
-            if meter.gasqualitaet.is_none()
-                && let Ok(Some(malo_fields)) = marktd.get_malo(malo_id).await
-                && malo_fields.gasqualitaet.is_some()
-            {
-                meter.gasqualitaet = malo_fields.gasqualitaet;
-                tracing::debug!(malo_id, gasqualitaet = ?meter.gasqualitaet, "billingd GAS: injected gasqualitaet from marktd");
-            }
+            enrich_gas_meter(&mut meter, malo_id, period_from, period_to, edmd, marktd).await;
             q.gas = Some(meter);
         }
         "WAERME" => {
@@ -302,7 +299,7 @@ async fn build_quantities(
 /// Returns an `Invoice` instead of a `BillingResult`.
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_invoice(
-    tariff: &TariffInput,
+    tariff: &Product,
     req: &CalculateRequest,
     malo_id: &str,
     rechnungsnummer: &str,
@@ -313,7 +310,7 @@ async fn dispatch_invoice(
     marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
 ) -> Result<Invoice, (StatusCode, String)> {
     // BUNDLE: requires component recursion — not yet supported
-    if tariff.category == "BUNDLE" {
+    if tariff.category_str() == "BUNDLE" {
         return Err((
             StatusCode::NOT_IMPLEMENTED,
             "BUNDLE billing: resolve component products and submit individual calculate requests"
@@ -339,7 +336,7 @@ async fn dispatch_invoice(
         regulatory_rates: rates.clone(),
         contract_id: None,
         // Propagate minimum invoice from product definition (tarifbd) to billing context.
-        minimum_invoice_eur_brutto: tariff.minimum_invoice_eur_brutto,
+        minimum_invoice_eur_brutto: tariff.minimum_invoice_eur_brutto(),
         // §41 Abs. 1 Nr. 5 EnWG — Netzbetreiber identification on invoice.
         nb_mp_id: req.nb_mp_id.clone(),
         // Audit trail: unique run ID links DB record to calculation output.
@@ -347,14 +344,7 @@ async fn dispatch_invoice(
         ..Default::default()
     };
 
-    let engine = PricingModel::try_from(tariff.clone())
-        .and_then(|m| m.build_engine(&grid, rates))
-        .map_err(|e| {
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                format!("billing engine: {e}"),
-            )
-        })?;
+    let engine = tariff.build_engine(&grid, rates);
 
     engine
         .bill(ctx, &quantities)
@@ -367,7 +357,7 @@ async fn dispatch_invoice(
 /// New callers should use `dispatch_invoice` directly.
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_calculator(
-    tariff: &TariffInput,
+    tariff: &Product,
     req: &CalculateRequest,
     malo_id: &str,
     rechnungsnummer: &str,
@@ -490,7 +480,7 @@ async fn resolve_tariff(
     req: &CalculateRequest,
     tarifbd: &TarifbdClient,
     malo_id: &str,
-) -> Result<TariffInput, (StatusCode, String)> {
+) -> Result<Product, (StatusCode, String)> {
     if let Some(t) = req.tariff.clone() {
         return Ok(t);
     }
@@ -501,6 +491,223 @@ async fn resolve_tariff(
             format!("No active product for MaLo {malo_id} / LF {}", req.lf_mp_id),
         )),
         Err(e) => Err((StatusCode::BAD_GATEWAY, format!("tarifbd: {e}"))),
+    }
+}
+
+// ── Gas meter auto-enrichment ─────────────────────────────────────────────────
+
+/// Normalize a raw `gasqualitaet` string to a canonical BO4E / BNetzA MaStR form.
+///
+/// ## Canonical values
+///
+/// | Canonical | Aliases accepted |
+/// |---|---|
+/// | `H_GAS` | `HGas`, `H-Gas`, `H-gas`, `HGAS`, `HIGH_CALORIFIC` |
+/// | `L_GAS` | `LGas`, `L-Gas`, `L-gas`, `LGAS`, `LOW_CALORIFIC` |
+/// | `H2_BLEND` | `H2Blend`, `H2-Blend`, `HYDROGEN_BLEND` |
+/// | `BIOGAS` | `BioGas`, `Bio-Gas` |
+/// | `FLUESSIGGAS` | `LPG`, `FlüssigGas` |
+///
+/// Unknown values are returned as-is (upper-case, underscores).
+///
+/// ## Why normalization matters
+///
+/// `marktd` stores `gasqualitaet` as extracted from the UTILMD G `STS+E01+Z12`
+/// qualifier — typically `"HGas"` or `"LGas"` (legacy German abbreviations).
+/// The BO4E schema (`rubo4e::GasQualitaet`) and BNetzA MaStR use `"H_GAS"` /
+/// `"L_GAS"` / `"H2_BLEND"`.  Billing invoices, comparison portals, and AI agents
+/// all benefit from a single canonical form.
+pub(crate) fn normalize_gasqualitaet(raw: &str) -> String {
+    // Normalize to UPPER_SNAKE_CASE first for uniform matching.
+    let norm = raw.trim().to_uppercase().replace(['-', ' '], "_");
+    match norm.as_str() {
+        "HGAS" | "H_GAS" | "HIGH_CALORIFIC" | "HOCHKALORISCH" | "ERDGAS_H" => "H_GAS".to_owned(),
+        "LGAS" | "L_GAS" | "LOW_CALORIFIC" | "NIEDERKALORISCH" | "ERDGAS_L" => "L_GAS".to_owned(),
+        "H2_BLEND" | "H2BLEND" | "HYDROGEN_BLEND" | "HYDROGEN_GAS" | "H2_GAS" => {
+            "H2_BLEND".to_owned()
+        }
+        "BIOGAS" | "BIO_GAS" | "BIOMETHANE" | "BIOMETHAN" => "BIOGAS".to_owned(),
+        "FLUESSIGGAS" | "FLUSSIGGAS" | "LPG" | "LIQUID_GAS" => "FLUESSIGGAS".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+/// Auto-enrich a `GasMeterInput` with data from `edmd` and `marktd`.
+///
+/// This is the **Gas billing data pipeline** for `billingd`.  It fills in
+/// missing fields using the priority order below, without overriding anything
+/// the caller already supplied.
+///
+/// ## Priority order (highest to lowest)
+///
+/// | Field | 1st source | 2nd source | Fallback |
+/// |---|---|---|---|
+/// | `messung_qm3` | caller (`req.gas_meter`) | `edmd` billing-period | `0` (engine rejects) |
+/// | `brennwert_kwh_per_qm3` | caller | edmd **gas-quality** (PID 13007) | edmd billing-period | `None` (engine applies default 10.55) |
+/// | `zustandszahl` | caller | edmd gas-quality (PID 13007) | edmd billing-period | `None` (engine applies default 1.0) |
+/// | `spitzenleistung_kw` | caller | edmd billing-period | `None` (no RLM demand charge) |
+/// | `gasqualitaet` | caller | marktd MaLo fields | `None` (no audit annotation) |
+///
+/// ## Non-blocking
+///
+/// All external fetches are best-effort.  Failures are logged as `WARN` and
+/// billing proceeds with the data available.  This prevents an edmd or marktd
+/// outage from blocking all gas invoicing.
+///
+/// ## DVGW G 685 / §24 GasGVV compliance
+///
+/// `brennwert_kwh_per_qm3` × `zustandszahl` converts m³ → kWh_Hs.  The
+/// energy-billing engine applies DVGW defaults when both are absent:
+/// - brennwert: 10.55 kWh/m³ (German-average H-Gas per DVGW G 685 §5.3)
+/// - zustandszahl: 1.0 (pressure/temperature ≈ reference conditions)
+///
+/// To suppress the engine default and ensure the DSO-published values are
+/// always used, operators should verify that MSCONS PID 13007 data is flowing
+/// into `edmd` before running billing.
+async fn enrich_gas_meter(
+    meter: &mut GasMeterInput,
+    malo_id: &str,
+    period_from: time::Date,
+    period_to: time::Date,
+    edmd: &EdmdClient,
+    marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
+) {
+    use crate::clients::{GasBillingPeriod, GasQualityRecord};
+
+    // Track which fields were enriched for structured logging.
+    let mut enriched_from_edmd_period = false;
+    let mut enriched_bw_from_edmd_quality = false;
+    let mut enriched_gq_from_marktd = false;
+
+    // ── Step 1: Volume + conversion factors from edmd billing period ──────────
+    // Fetch only when the caller did not supply a volume reading.
+    // The billing period endpoint carries the DSO-confirmed summary quantities.
+    if meter.messung_qm3 == rust_decimal::Decimal::ZERO {
+        match edmd
+            .get_gas_billing_period(malo_id, period_from, period_to)
+            .await
+        {
+            Ok(Some(GasBillingPeriod {
+                messung_qm3,
+                brennwert_kwh_per_qm3,
+                zustandszahl,
+                spitzenleistung_kw,
+            })) => {
+                meter.messung_qm3 = messung_qm3;
+                if meter.brennwert_kwh_per_qm3.is_none() {
+                    meter.brennwert_kwh_per_qm3 = brennwert_kwh_per_qm3;
+                }
+                if meter.zustandszahl.is_none() {
+                    meter.zustandszahl = zustandszahl;
+                }
+                if meter.spitzenleistung_kw.is_none() {
+                    meter.spitzenleistung_kw = spitzenleistung_kw;
+                }
+                enriched_from_edmd_period = true;
+            }
+            Ok(None) => {
+                tracing::debug!(malo_id, "billingd GAS: no billing period in edmd");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    malo_id,
+                    error = %e,
+                    "billingd GAS: edmd billing-period fetch failed — proceeding without"
+                );
+            }
+        }
+    }
+
+    // ── Step 2: Abrechnungsbrennwert + Zustandszahl from edmd gas-quality ─────
+    // MSCONS PID 13007 (Gasbeschaffenheitsdaten) carries the DSO-published
+    // monthly Brennwert and Zustandszahl — more precise than the billing-period
+    // summary because it covers the exact billing window.
+    // Only fetch when at least one conversion factor is still missing.
+    if meter.brennwert_kwh_per_qm3.is_none() || meter.zustandszahl.is_none() {
+        match edmd.get_gas_quality(malo_id).await {
+            Ok(Some(records)) => {
+                // Find the record whose period best covers the billing period.
+                // "Best" = latest period_from that still starts ≤ billing period end,
+                // ensuring we pick the most recent DSO-published Brennwert.
+                let best: Option<&GasQualityRecord> = records
+                    .iter()
+                    .filter(|q| q.period_from <= period_to && q.period_to >= period_from)
+                    .max_by_key(|q| q.period_from);
+
+                if let Some(q) = best {
+                    if meter.brennwert_kwh_per_qm3.is_none() {
+                        meter.brennwert_kwh_per_qm3 = Some(q.brennwert_kwh_per_m3);
+                        enriched_bw_from_edmd_quality = true;
+                    }
+                    if meter.zustandszahl.is_none() {
+                        meter.zustandszahl = Some(q.zustandszahl);
+                        enriched_bw_from_edmd_quality = true;
+                    }
+                } else if !records.is_empty() {
+                    tracing::debug!(
+                        malo_id,
+                        period_from = %period_from,
+                        period_to   = %period_to,
+                        "billingd GAS: edmd gas-quality records exist but none cover billing period"
+                    );
+                }
+            }
+            Ok(None) => {
+                tracing::debug!(
+                    malo_id,
+                    "billingd GAS: no gas-quality data in edmd (PID 13007 not yet received)"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    malo_id,
+                    error = %e,
+                    "billingd GAS: edmd gas-quality fetch failed — proceeding without"
+                );
+            }
+        }
+    }
+
+    // ── Step 3: gasqualitaet annotation from marktd MaLo ──────────────────────
+    // Informational only — billing always uses the measured Brennwert.
+    // Annotated on the invoice as `ZusatzAttribut` for §22 MessZV audit trail
+    // and for H2-blend detection in downstream AI agents (eeg-compliance-agent).
+    if meter.gasqualitaet.is_none() {
+        match marktd.get_malo(malo_id).await {
+            Ok(Some(malo_fields)) => {
+                if let Some(raw_gq) = malo_fields.gasqualitaet {
+                    let canonical = normalize_gasqualitaet(&raw_gq);
+                    meter.gasqualitaet = Some(canonical);
+                    enriched_gq_from_marktd = true;
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    malo_id,
+                    error = %e,
+                    "billingd GAS: marktd get_malo failed — proceeding without gasqualitaet"
+                );
+            }
+        }
+    }
+
+    // ── Structured enrichment summary ─────────────────────────────────────────
+    // Logged at DEBUG level so billing operators can verify auto-enrichment
+    // without flooding production logs.
+    if enriched_from_edmd_period || enriched_bw_from_edmd_quality || enriched_gq_from_marktd {
+        tracing::debug!(
+            malo_id,
+            messung_qm3                   = %meter.messung_qm3,
+            brennwert_kwh_per_qm3         = ?meter.brennwert_kwh_per_qm3,
+            zustandszahl                  = ?meter.zustandszahl,
+            spitzenleistung_kw            = ?meter.spitzenleistung_kw,
+            gasqualitaet                  = ?meter.gasqualitaet,
+            enriched_from_edmd_period,
+            enriched_bw_from_edmd_quality,
+            enriched_gq_from_marktd,
+            "billingd GAS: meter enrichment complete"
+        );
     }
 }
 
@@ -832,9 +1039,9 @@ pub struct TarifwechselRequest {
     /// Date when the new tariff takes effect (YYYY-MM-DD, must be within the period).
     pub switch_date: String,
     /// Old tariff (applies from `period_from` to `switch_date - 1`).
-    pub old_tariff: TariffInput,
+    pub old_tariff: Product,
     /// New tariff (applies from `switch_date` to `period_to`).
-    pub new_tariff: TariffInput,
+    pub new_tariff: Product,
     /// Meter data for the old sub-period.
     #[serde(default)]
     pub old_meter: Option<MeterInput>,
@@ -914,14 +1121,7 @@ pub async fn post_tarifwechsel(
         electricity: req.old_meter.clone(),
         ..Default::default()
     };
-    let engine_a = match PricingModel::try_from(req.old_tariff.clone())
-        .and_then(|m| m.build_engine(&grid, &rates))
-    {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::UNPROCESSABLE_ENTITY, format!("old_tariff: {e}")).into_response();
-        }
-    };
+    let engine_a = req.old_tariff.build_engine(&grid, &rates);
     let inv_a = match engine_a.bill(ctx_a, &quantities_a) {
         Ok(i) => i,
         Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
@@ -945,14 +1145,7 @@ pub async fn post_tarifwechsel(
         electricity: req.new_meter.clone(),
         ..Default::default()
     };
-    let engine_b = match PricingModel::try_from(req.new_tariff.clone())
-        .and_then(|m| m.build_engine(&grid, &rates))
-    {
-        Ok(e) => e,
-        Err(e) => {
-            return (StatusCode::UNPROCESSABLE_ENTITY, format!("new_tariff: {e}")).into_response();
-        }
-    };
+    let engine_b = req.new_tariff.build_engine(&grid, &rates);
     let inv_b = match engine_b.bill(ctx_b, &quantities_b) {
         Ok(i) => i,
         Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
@@ -966,7 +1159,11 @@ pub async fn post_tarifwechsel(
     let netto = merged.netto_eur;
     let brutto = merged.brutto_eur;
 
-    let product_code = format!("{}-{}", req.old_tariff.category, req.new_tariff.category);
+    let product_code = format!(
+        "{}-{}",
+        req.old_tariff.category_str(),
+        req.new_tariff.category_str()
+    );
     let record_id = match insert_billing_record(
         &pool,
         &malo_id,
@@ -1008,8 +1205,8 @@ pub async fn post_tarifwechsel(
             "period_to": period_to.to_string(),
             "netto_eur": netto,
             "brutto_eur": brutto,
-            "old_category": req.old_tariff.category,
-            "new_category": req.new_tariff.category,
+            "old_category": req.old_tariff.category_str(),
+            "new_category": req.new_tariff.category_str(),
         })),
     )
         .into_response()
@@ -1086,14 +1283,14 @@ pub async fn post_ggv_billing(
     let mut sammel_positions: Vec<serde_json::Value> = Vec::new();
 
     for tenant in &req.tenants {
-        // Build TariffInput — prefer request overrides, fall back to tarifbd lookup.
-        let mut tariff = match tarifbd
+        // Build Product — prefer request overrides, fall back to tarifbd lookup.
+        let tariff = match tarifbd
             .get_customer_product(&tenant.malo_id, &req.lf_mp_id)
             .await
         {
             Ok(Some(t)) => t,
             Ok(None) => {
-                // No product in tarifbd — build minimal TariffInput from request overrides.
+                // No product in tarifbd — build minimal Product from request overrides.
                 let map = serde_json::json!({
                     "category": "SOLAR",
                     "product_code": tenant.product_code,
@@ -1101,7 +1298,7 @@ pub async fn post_ggv_billing(
                     "gemeinschaft_rabatt_ct_per_kwh": tenant.gemeinschaft_rabatt_ct_per_kwh,
                     "arbeitspreis_ct_per_kwh": tenant.grid_arbeitspreis_ct_per_kwh,
                 });
-                match serde_json::from_value::<TariffInput>(map) {
+                match serde_json::from_value::<Product>(map) {
                     Ok(t) => t,
                     Err(e) => {
                         return (
@@ -1116,32 +1313,43 @@ pub async fn post_ggv_billing(
         };
 
         // Per-request overrides take precedence over tarifbd product data.
-        if let Some(ap) = tenant.arbeitspreis_ct_per_kwh {
-            tariff.solar_arbeitspreis_ct_per_kwh = Some(ap);
-        }
-        if let Some(grid_ap) = tenant.grid_arbeitspreis_ct_per_kwh {
-            tariff.arbeitspreis_ct_per_kwh = Some(grid_ap);
-        }
-        if let Some(rabatt) = tenant.gemeinschaft_rabatt_ct_per_kwh {
-            // §42b Abs. 3 EEG 2023: GGV Rabatt must reflect reduced network charges.
-            // Log a diagnostic warning if the rabatt exceeds a meaningful share of the price
-            // (the exact cap depends on the applicable Grundversorgungstarif, not just 10%).
-            if let Some(ap) = tariff.solar_arbeitspreis_ct_per_kwh {
-                let cap = ap * rust_decimal_macros::dec!(0.10);
-                if rabatt > cap {
-                    tracing::warn!(
-                        malo_id = %tenant.malo_id,
-                        ggv_id = %ggv_id,
-                        rabatt_ct = %rabatt,
-                        cap_diagnostic = %cap,
-                        "billingd GGV: gemeinschaft_rabatt > 10% of Arbeitspreis — \
-                         verify §42b Abs. 3 EEG 2023 compliance against local Grundversorgungstarif"
-                    );
+        // Product is an enum — apply overrides by rebuilding the Solar/Sharing variant.
+        let tariff = match tariff {
+            Product::Solar(mut p) => {
+                if let Some(ap) = tenant.arbeitspreis_ct_per_kwh {
+                    p.solar_arbeitspreis_ct_per_kwh = Some(ap);
                 }
+                // solar_arbeitspreis is also used for grid remainder in SolarProvider
+                if let Some(rabatt) = tenant.gemeinschaft_rabatt_ct_per_kwh {
+                    if let Some(ap) = p.solar_arbeitspreis_ct_per_kwh {
+                        let cap = ap * rust_decimal_macros::dec!(0.10);
+                        if rabatt > cap {
+                            tracing::warn!(
+                                malo_id = %tenant.malo_id,
+                                ggv_id = %ggv_id,
+                                rabatt_ct = %rabatt,
+                                cap_diagnostic = %cap,
+                                "billingd GGV: gemeinschaft_rabatt > 10% of Arbeitspreis — \
+                                 verify §42b Abs. 3 EEG 2023 compliance against local Grundversorgungstarif"
+                            );
+                        }
+                    }
+                    p.gemeinschaft_rabatt_ct_per_kwh = Some(rabatt);
+                }
+                Product::Solar(p)
             }
-            tariff.gemeinschaft_rabatt_ct_per_kwh = Some(rabatt);
-        }
-        tariff.category = "SOLAR".to_owned();
+            Product::Sharing(mut p) => {
+                if let Some(ap) = tenant.arbeitspreis_ct_per_kwh {
+                    p.electricity.solar_include_stromsteuer = false; // GGV shares are Stromsteuer-free
+                    p.electricity.arbeitspreis_ct_per_kwh = Some(ap);
+                }
+                if let Some(rabatt) = tenant.gemeinschaft_rabatt_ct_per_kwh {
+                    p.sharing_credit_ct_per_kwh = Some(rabatt);
+                }
+                Product::Sharing(p)
+            }
+            other => other,
+        };
 
         // ── Build Quantities: Model A (GgvSolarInput) or Model B (SolarMeterInput) ──
         let quantities = if let Some(&pv_allocated) = pv_allocations.get(&tenant.malo_id) {
@@ -1180,13 +1388,7 @@ pub async fn post_ggv_billing(
             contract_id: None,
             ..Default::default()
         };
-        let engine = tariff
-            .build_engine(&GridInput::default(), &rates)
-            .unwrap_or_else(|| {
-                BillingEngine::new()
-                    .add(SolarProvider::from_tariff(&tariff))
-                    .add(MwStProvider::new(rates.mwst_rate))
-            });
+        let engine = tariff.build_engine(&GridInput::default(), &rates);
 
         let result = match engine.bill(ctx, &quantities) {
             Ok(r) => r,
@@ -1203,7 +1405,7 @@ pub async fn post_ggv_billing(
             &pool,
             &tenant.malo_id,
             &req.lf_mp_id,
-            tariff.product_code.as_deref().unwrap_or("SOLAR_GGV"),
+            tariff.product_code().unwrap_or("SOLAR_GGV"),
             "SOLAR",
             period_from,
             period_to,
@@ -1724,8 +1926,8 @@ pub async fn post_sammelrechnung(
             &pool,
             &entry.malo_id,
             &req.lf_mp_id,
-            tariff.product_code.as_deref().unwrap_or(&tariff.category),
-            &tariff.category,
+            tariff.product_code().unwrap_or(tariff.category_str()),
+            tariff.category_str(),
             period_from,
             period_to,
             &result.to_rechnung_json(),
@@ -2093,4 +2295,558 @@ fn build_ubl_invoice(row: &crate::pg::BillingRecordRow, cfg: &BillingdConfig) ->
 </ubl:Invoice>"#,
         lines = lines.join("\n"),
     )
+}
+
+// ── VPP Contract Registry (B12) ──────────────────────────────────────────────
+
+/// `PUT /api/v1/billing/vpp-contracts/{sr_id}`
+///
+/// Upsert a VPP contract for a `SteuerbareRessource`.
+///
+/// Idempotent on `(sr_id, tenant, valid_from)`.
+/// Used to configure the capacity price and billing identifiers that `billingd`
+/// needs when auto-settling a `de.vpp.dispatch.confirmed` dispatch event.
+pub async fn put_vpp_contract(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<BillingdConfig>>,
+    Path(sr_id): Path<String>,
+    Json(mut row): Json<crate::pg::VppContractRow>,
+) -> impl IntoResponse {
+    row.sr_id = sr_id;
+    row.tenant = cfg.tenant.clone();
+    row.updated_at = time::OffsetDateTime::now_utc();
+    if row.id.is_nil() {
+        row.id = Uuid::new_v4();
+    }
+    match crate::pg::upsert_vpp_contract(&pool, &row).await {
+        Ok(id) => (StatusCode::OK, Json(serde_json::json!({ "id": id }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/billing/vpp-contracts`
+///
+/// List all VPP contracts for this tenant.
+pub async fn list_vpp_contracts(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<BillingdConfig>>,
+) -> impl IntoResponse {
+    match crate::pg::list_vpp_contracts(&pool, &cfg.tenant).await {
+        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── VPP Auto-Billing Webhook (B12 — RED III Article 17) ──────────────────────
+
+/// `POST /api/v1/webhooks/vpp-dispatch`
+///
+/// **VPP Dispatch Confirmed auto-billing trigger.**
+///
+/// Receives `de.vpp.dispatch.confirmed` CloudEvents emitted by `makod` when
+/// the MSB sends a positive `EndantwortPositiv` for a WiM Steuerungsauftrag
+/// (PID 55168).  Auto-generates a VPP settlement `Rechnung` using the
+/// pre-configured `VppContractRow` for the dispatched SR-ID.
+///
+/// ## Idempotency
+///
+/// Each `tx_id` is recorded in `vpp_dispatch_ledger`.  Repeated delivery
+/// (outbox retry) returns `202 Accepted` without re-billing.
+///
+/// ## HMAC verification
+///
+/// When `[inbound_webhook_secret]` is configured in `billingd.toml`, the
+/// `X-Mako-Signature: sha256=<hex>` header is verified.  Requests with
+/// invalid or missing signatures are rejected with `401 Unauthorized`.
+///
+/// ## Auto-billing disabled
+///
+/// When `vpp_auto_billing = false` in config (the default), the webhook accepts
+/// events and records them in `vpp_dispatch_ledger` but does **not** generate a
+/// `Rechnung`.  The manual `POST /api/v1/billing/vpp/{vpp_id}` endpoint remains
+/// available.
+///
+/// ## CloudEvent data schema
+///
+/// ```json
+/// {
+///   "tx_id":               "abc123",
+///   "location_id":         "C0001234567890",
+///   "location_type":       "sr",
+///   "execution_time_from": "2026-01-15T10:00:00Z",
+///   "execution_time_until": "2026-01-15T10:15:00Z",
+///   "max_power_kw":        "11.0",
+///   "command_type":        "Konfiguration",
+///   "sender_mp_id":        "9900123456789",
+///   "produkt_code":        "TX-MODUL2-HT"
+/// }
+/// ```
+pub async fn post_vpp_webhook(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<BillingdConfig>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    // ── 1. HMAC signature verification ────────────────────────────────────────
+    if let Some(ref secret) = cfg.inbound_webhook_secret {
+        let sig = headers
+            .get("x-mako-signature")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.strip_prefix("sha256=").unwrap_or(v));
+        match sig {
+            Some(hex)
+                if mako_markt::cloudevents::verify_signature(secret.as_bytes(), &body, hex) => {}
+            Some(_) => {
+                tracing::warn!("billingd: vpp-dispatch webhook — invalid HMAC signature");
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+            None => {
+                tracing::warn!("billingd: vpp-dispatch webhook — missing X-Mako-Signature");
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+        }
+    }
+
+    // ── 2. Parse CloudEvent ───────────────────────────────────────────────────
+    let event: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("invalid JSON: {e}")).into_response();
+        }
+    };
+    let data = event
+        .get("data")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    let tx_id = data
+        .get("tx_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| {
+            event
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+        })
+        .to_owned();
+
+    // ── 3. Idempotency check ───────────────────────────────────────────────────
+    match crate::pg::is_vpp_dispatch_processed(&pool, &tx_id, &cfg.tenant).await {
+        Ok(true) => {
+            tracing::debug!(tx_id, "billingd: vpp-dispatch already processed — skipping");
+            return StatusCode::ACCEPTED.into_response();
+        }
+        Ok(false) => {}
+        Err(e) => {
+            tracing::warn!(tx_id, error = %e, "billingd: vpp_dispatch_ledger check failed");
+            // Fail-open: continue processing to avoid blocking billing.
+        }
+    }
+
+    // ── 4. Extract dispatch metadata ──────────────────────────────────────────
+    let location_id = data
+        .get("location_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let location_type = data
+        .get("location_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("sr");
+    let execution_time_from = data
+        .get("execution_time_from")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let execution_time_until = data
+        .get("execution_time_until")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let max_power_kw: rust_decimal::Decimal = data
+        .get("max_power_kw")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(rust_decimal::Decimal::ZERO);
+
+    // Only SR-IDs are currently supported for VPP contract lookup.
+    // NeLo-IDs (grid constraint redispatch) use a different billing flow.
+    if location_type != "sr" {
+        tracing::debug!(
+            tx_id,
+            location_type,
+            "billingd: vpp-dispatch webhook — skipping non-SR location"
+        );
+        let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, None).await;
+        return StatusCode::ACCEPTED.into_response();
+    }
+
+    // ── 5. Look up active VPP contract ────────────────────────────────────────
+    let today = time::OffsetDateTime::now_utc().date();
+    let contract =
+        match crate::pg::find_active_vpp_contract(&pool, &location_id, &cfg.tenant, today).await {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                tracing::warn!(
+                    tx_id,
+                    sr_id = %location_id,
+                    "billingd: vpp-dispatch — no active VPP contract found; cannot auto-bill"
+                );
+                let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, None).await;
+                return StatusCode::ACCEPTED.into_response();
+            }
+            Err(e) => {
+                tracing::error!(tx_id, error = %e, "billingd: vpp_contract lookup failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
+
+    // ── 6. Check vpp_auto_billing flag ────────────────────────────────────────
+    if !cfg.vpp_auto_billing {
+        tracing::info!(
+            tx_id,
+            vpp_id = %contract.vpp_id,
+            "billingd: vpp-dispatch — auto-billing disabled; recording dispatch only"
+        );
+        let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, None).await;
+        return StatusCode::ACCEPTED.into_response();
+    }
+
+    // ── 7. Compute flexibility_kwh from dispatch window ────────────────────────
+    // flexibility_kwh = max_power_kw × duration_hours
+    // Duration is derived from execution_time_until − execution_time_from.
+    // Falls back to 15 minutes (standard §14a dispatch window) if no end time.
+    let flexibility_kwh = compute_dispatch_flexibility_kwh(
+        max_power_kw,
+        &execution_time_from,
+        execution_time_until.as_deref(),
+    );
+
+    if flexibility_kwh <= rust_decimal::Decimal::ZERO {
+        tracing::warn!(
+            tx_id,
+            "billingd: vpp-dispatch — zero flexibility; no billing"
+        );
+        let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, None).await;
+        return StatusCode::ACCEPTED.into_response();
+    }
+
+    // ── 8. Build and run VPP billing ──────────────────────────────────────────
+    // Billing period = calendar day of dispatch_from.
+    let period_from = parse_dispatch_date(&execution_time_from).unwrap_or(today);
+    let period_to = period_from; // single-day billing record per dispatch
+
+    let mwst_rate = contract
+        .mwst_rate_override
+        .unwrap_or_else(|| cfg.regulatory_rates().mwst_rate);
+    let position_netto = (flexibility_kwh * contract.capacity_price_eur_per_kwh).round_dp(5);
+    let mwst_eur = (position_netto * mwst_rate).round_dp(5);
+    let total_brutto = position_netto + mwst_eur;
+
+    let rechnungsnummer = format!(
+        "VPP-{}-{}-{}",
+        contract.vpp_id,
+        period_from,
+        tx_id.get(..8).unwrap_or(&tx_id)
+    );
+
+    let rechnung_json = serde_json::json!({
+        "_typ": "RECHNUNG",
+        "rechnungsnummer": rechnungsnummer,
+        "rechnungsart": "ABSCHLAGSRECHNUNG",
+        "rechnungsdatum": today.to_string(),
+        "marktlokationsId": contract.malo_id,
+        "herausgeber": {
+            "_typ": "MARKTTEILNEHMER",
+            "marktpartnercode": contract.lf_mp_id
+        },
+        "rechnungsperiode": {
+            "_typ": "ZEITRAUM",
+            "startdatum": period_from.to_string(),
+            "enddatum": period_to.to_string()
+        },
+        "rechnungspositionen": [{
+            "_typ": "RECHNUNGSPOSITION",
+            "positionsnummer": 1,
+            "positionstext": format!(
+                "VPP Dispatch {} – {} (SR: {})",
+                execution_time_from,
+                execution_time_until.as_deref().unwrap_or("open"),
+                location_id
+            ),
+            "positionsMenge": {
+                "_typ": "MENGE",
+                "wert": flexibility_kwh.to_string(),
+                "einheit": "KWH"
+            },
+            "einzelpreis": {
+                "_typ": "PREIS",
+                "wert": contract.capacity_price_eur_per_kwh.to_string(),
+                "einheit": "EUR"
+            },
+            "gesamtpreis": {
+                "_typ": "BETRAG",
+                "wert": position_netto.to_string(),
+                "waehrung": "EUR"
+            },
+            "positionstyp": "vpp_dispatch",
+            "zeitraum": {
+                "_typ": "ZEITRAUM",
+                "startdatum": execution_time_from,
+                "enddatum": execution_time_until.as_deref().unwrap_or(&execution_time_from)
+            },
+            "referenz": { "tx_id": tx_id, "sr_id": location_id }
+        }],
+        "steuern": [{
+            "_typ": "STEUERBETRAG",
+            "steuerkennzeichen": "UST_19",
+            "steuerbetrag": {
+                "_typ": "BETRAG",
+                "wert": mwst_eur.to_string(),
+                "waehrung": "EUR"
+            },
+            "steuerGrundlage": {
+                "_typ": "BETRAG",
+                "wert": position_netto.to_string(),
+                "waehrung": "EUR"
+            }
+        }],
+        "gesamtnetto":  { "_typ": "BETRAG", "wert": position_netto.to_string(), "waehrung": "EUR" },
+        "gesamtbrutto": { "_typ": "BETRAG", "wert": total_brutto.to_string(),  "waehrung": "EUR" },
+        "zusatzAttribute": [
+            { "_typ": "ZUSATZ_ATTRIBUT", "name": "vpp_id",         "wert": contract.vpp_id.clone() },
+            { "_typ": "ZUSATZ_ATTRIBUT", "name": "tx_id",          "wert": tx_id.clone() },
+            { "_typ": "ZUSATZ_ATTRIBUT", "name": "sr_id",          "wert": location_id.clone() },
+            { "_typ": "ZUSATZ_ATTRIBUT", "name": "flexibility_kwh","wert": flexibility_kwh.to_string() },
+            { "_typ": "ZUSATZ_ATTRIBUT", "name": "regulatory_basis","wert": "RED III Article 17" }
+        ]
+    });
+
+    let record_id = match insert_billing_record(
+        &pool,
+        &contract.malo_id,
+        &contract.lf_mp_id,
+        &format!("VPP_{}", contract.vpp_id),
+        "VPP",
+        period_from,
+        period_to,
+        &rechnung_json,
+        position_netto,
+        total_brutto,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(tx_id, error = %e, "billingd: vpp auto-billing insert failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    // Record for idempotency.
+    let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, Some(record_id)).await;
+
+    tracing::info!(
+        tx_id,
+        %record_id,
+        vpp_id = %contract.vpp_id,
+        malo_id = %contract.malo_id,
+        flexibility_kwh = %flexibility_kwh,
+        total_brutto = %total_brutto,
+        "billingd: VPP dispatch auto-billed"
+    );
+
+    // ── 9. Emit de.vpp.settlement.berechnet ───────────────────────────────────
+    if let Some(ref webhook_url) = cfg.erp_webhook_url {
+        let ce_id = Uuid::new_v4();
+        let ce = serde_json::json!({
+            "specversion": "1.0",
+            "type": "de.vpp.settlement.berechnet",
+            "source": format!("urn:billingd:vpp:{}", contract.vpp_id),
+            "id": ce_id.to_string(),
+            "time": time::OffsetDateTime::now_utc().to_string(),
+            "subject": contract.vpp_id,
+            "datacontenttype": "application/json",
+            "data": {
+                "record_id":          record_id.to_string(),
+                "vpp_id":             contract.vpp_id,
+                "malo_id":            contract.malo_id,
+                "lf_mp_id":           contract.lf_mp_id,
+                "tx_id":              tx_id,
+                "sr_id":              location_id,
+                "flexibility_kwh":    flexibility_kwh.to_string(),
+                "total_netto_eur":    position_netto.to_string(),
+                "total_brutto_eur":   total_brutto.to_string(),
+                "trigger":            "auto",
+                "rechnung":           rechnung_json,
+            }
+        });
+        emit_cloud_event(
+            webhook_url,
+            &pool,
+            record_id,
+            &contract.malo_id,
+            &contract.lf_mp_id,
+            &ce["data"],
+        )
+        .await;
+        let _ = mark_dispatched(&pool, record_id, ce_id).await;
+    }
+
+    StatusCode::ACCEPTED.into_response()
+}
+
+/// Compute delivered flexibility in kWh from dispatch parameters.
+///
+/// `flexibility_kwh = max_power_kw × duration_hours`
+///
+/// Duration is parsed from ISO-8601 UTC timestamps.  Falls back to 15 minutes
+/// (the standard BNetzA §14a dispatch window minimum) when `time_until` is
+/// absent or parsing fails.
+fn compute_dispatch_flexibility_kwh(
+    max_power_kw: rust_decimal::Decimal,
+    time_from: &str,
+    time_until: Option<&str>,
+) -> rust_decimal::Decimal {
+    use rust_decimal_macros::dec;
+
+    let duration_hours = time_until
+        .and_then(|tu| {
+            let f = time::OffsetDateTime::parse(
+                time_from,
+                &time::format_description::well_known::Rfc3339,
+            )
+            .ok()?;
+            let u = time::OffsetDateTime::parse(tu, &time::format_description::well_known::Rfc3339)
+                .ok()?;
+            let secs = (u - f).whole_seconds();
+            if secs > 0 {
+                Some(rust_decimal::Decimal::from(secs) / dec!(3600))
+            } else {
+                None
+            }
+        })
+        .unwrap_or(dec!(0.25)); // 15-minute default
+
+    (max_power_kw * duration_hours).round_dp(6)
+}
+
+/// Extract the calendar date (UTC) from an ISO-8601 timestamp string.
+fn parse_dispatch_date(ts: &str) -> Option<time::Date> {
+    time::OffsetDateTime::parse(ts, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .map(|dt| dt.date())
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod gas_enrichment_tests {
+    use super::normalize_gasqualitaet;
+
+    // ── normalize_gasqualitaet ────────────────────────────────────────────────
+
+    #[test]
+    fn normalize_hgas_variants() {
+        // All aliases for H-Gas must map to "H_GAS"
+        for raw in &[
+            "HGas",
+            "H-Gas",
+            "H-gas",
+            "HGAS",
+            "H_GAS",
+            "HIGH_CALORIFIC",
+            "ERDGAS_H",
+        ] {
+            assert_eq!(
+                normalize_gasqualitaet(raw),
+                "H_GAS",
+                "expected H_GAS for input {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_lgas_variants() {
+        for raw in &[
+            "LGas",
+            "L-Gas",
+            "L-gas",
+            "LGAS",
+            "L_GAS",
+            "LOW_CALORIFIC",
+            "ERDGAS_L",
+        ] {
+            assert_eq!(
+                normalize_gasqualitaet(raw),
+                "L_GAS",
+                "expected L_GAS for input {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_h2_blend_variants() {
+        for raw in &[
+            "H2_BLEND",
+            "H2Blend",
+            "H2-Blend",
+            "HYDROGEN_BLEND",
+            "H2BLEND",
+        ] {
+            assert_eq!(
+                normalize_gasqualitaet(raw),
+                "H2_BLEND",
+                "expected H2_BLEND for input {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_biogas_variants() {
+        for raw in &["BIOGAS", "BioGas", "Bio-Gas", "BIOMETHANE", "BIOMETHAN"] {
+            assert_eq!(
+                normalize_gasqualitaet(raw),
+                "BIOGAS",
+                "expected BIOGAS for input {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_fluessiggas_variants() {
+        for raw in &["FLUESSIGGAS", "LPG", "LIQUID_GAS"] {
+            assert_eq!(
+                normalize_gasqualitaet(raw),
+                "FLUESSIGGAS",
+                "expected FLUESSIGGAS for input {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_unknown_returns_uppercase_underscored() {
+        // Unknown values are normalized to UPPER_SNAKE_CASE but preserved.
+        assert_eq!(normalize_gasqualitaet("syngas"), "SYNGAS");
+        assert_eq!(
+            normalize_gasqualitaet("Compressed Natural Gas"),
+            "COMPRESSED_NATURAL_GAS"
+        );
+    }
+
+    #[test]
+    fn normalize_already_canonical_is_idempotent() {
+        for canonical in &["H_GAS", "L_GAS", "H2_BLEND", "BIOGAS", "FLUESSIGGAS"] {
+            let result = normalize_gasqualitaet(canonical);
+            assert_eq!(
+                &result, canonical,
+                "normalize_gasqualitaet should be idempotent on canonical value {canonical}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_trims_whitespace() {
+        assert_eq!(normalize_gasqualitaet("  HGas  "), "H_GAS");
+        assert_eq!(normalize_gasqualitaet("\tLGas\n"), "L_GAS");
+    }
 }

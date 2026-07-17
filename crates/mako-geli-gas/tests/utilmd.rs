@@ -159,6 +159,7 @@ async fn end_to_end_lieferbeginn_gas_pipeline() {
         received_at: time::OffsetDateTime::now_utc(),
         bilanzierungsmethode: None,
         fallgruppe: None,
+        gasqualitaet: None,
     };
 
     // ── Step 5: Execute against in-memory engine ──────────────────────────────
@@ -232,6 +233,7 @@ async fn wrong_pid_returns_workflow_error() {
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsmethode: None,
             fallgruppe: None,
+            gasqualitaet: None,
         })
         .await;
 

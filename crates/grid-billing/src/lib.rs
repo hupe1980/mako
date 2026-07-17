@@ -54,9 +54,13 @@
 //!     spitzenleistung_kw: None,
 //!     leistungspreis_eur_per_kw: None,
 //!     ka_satz_ct_per_kwh: Some(d("0.11")),
+//!     sect14a_modul1_reduction_factor: None,
+//!     nne_grundpreis_eur_per_month: None,
+//!     nne_grundpreis_months: None,
 //!     tariff_sheet_id: Some("Preisblatt-NNE-2025-Q1".into()),
 //!     sparte: grid_billing::Sparte::Strom,
 //!     ka_klasse: Some(grid_billing::KaKlasse::TarifkundeLow),
+//!     sect14a_modul3_intervals: vec![],
 //! }).expect("valid billing input");
 //!
 //! // Every position explains itself:
@@ -77,12 +81,19 @@ pub mod error;
 pub mod types;
 
 pub use billing::{
-    calculate_mmm_invoice, calculate_msb_invoice, calculate_nne_invoice, calculate_reversal,
+    calculate_correction, calculate_gas_awh_invoice, calculate_mmm_invoice, calculate_msb_invoice,
+    calculate_nne_invoice, calculate_reversal,
 };
 pub use error::BillingError;
 pub use types::{
+    // AWH positions
+    AwhPositionInput,
+    // BDEW Artikelnummer bridge — maps InvoicePosition.kind → BdewArtikelnummer in service layer
+    BillingPositionKind,
     // Domain types for explainability + audit
     CalculationTrace,
+    // Input types
+    GasAwhInput,
     // Backward-compatible alias for GridSettlement — same type, kept for call-site stability
     GridInvoice,
     // Core settlement output
@@ -90,11 +101,12 @@ pub use types::{
     InvoicePosition,
     KaKlasse,
     LegalReference,
-    // Input types
     MmmInput,
     MsbInput,
     NneInput,
     QuantityUnit,
+    // §14a module type (replaces module: u8 for type safety)
+    Sect14aModule,
     SettlementStatus,
     SettlementType,
     SettlementWarning,
@@ -103,6 +115,7 @@ pub use types::{
     ValidationResult,
     WarningSeverity,
     // Validation functions
+    validate_gas_awh_input,
     validate_mmm_input,
     validate_msb_input,
     validate_nne_input,

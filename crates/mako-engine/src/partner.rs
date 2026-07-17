@@ -535,6 +535,12 @@ impl<S: PartnerStore> PartnerStore for Arc<S> {
 ///
 /// ⚠️ **Data loss**: All upserts are silently discarded. PARTIN-derived
 /// updates received at runtime will not be retained across restarts.
+#[cfg_attr(
+    not(any(test, feature = "testing")),
+    deprecated = "NoopPartnerStore must not be instantiated in production builds; \
+                  PARTIN-derived partner updates will be silently discarded. \
+                  Use SlateDbPartnerStore or another durable PartnerStore instead."
+)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoopPartnerStore;
 

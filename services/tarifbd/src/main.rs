@@ -141,6 +141,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/angebote/:id",
             axum::routing::put(handlers::put_angebot),
         )
+        // ── Comparison portal feed (public, ETag-cached) ──────────────────────
+        // GET /api/v1/comparison-feed?sparte=STROM&verbrauch_kwh=3500&limit=100
+        // No auth required — returns public product data only.
+        // Responses cached 5 minutes (Cache-Control: public, max-age=300).
+        .route(
+            "/api/v1/comparison-feed",
+            get(handlers::get_comparison_feed),
+        )
         .layer(Extension(Arc::clone(&cfg)))
         .layer(Extension(pool.clone()));
 

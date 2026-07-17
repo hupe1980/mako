@@ -646,6 +646,14 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
             .clone()
             .unwrap_or_else(|| cfg.gln_registry.primary_gln().to_owned());
 
+        // NOTE: One outbound SessionContext / signing key is used for ALL mp_ids.
+        // For a combined Strom+Gas deployment the Gas mp_id's outbound AS4 messages
+        // are signed with the Strom (primary) cert.  Counterparties validate the cert
+        // against the BDEW/SM-PKI CA trust anchor, not against <eb:From>, so this is
+        // accepted in practice.  Full per-mp_id cert isolation would require separate
+        // SessionContexts keyed by sender mp_id — tracked as a future enhancement.
+        // See docs/as4-bdew.md §"Signing cert and <eb:From>" for guidance.
+
         let outbound_session = {
             let session_id = format!("makod-outbound-{}", uuid::Uuid::new_v4());
             let trust_anchor = cfg

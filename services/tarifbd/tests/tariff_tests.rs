@@ -784,3 +784,390 @@ mod mwst_tests {
         assert_eq!(brutto_kleinunternehmer, dec!(250.00));
     }
 }
+
+// ── Comparison feed helper tests ─────────────────────────────────────────────
+
+#[cfg(test)]
+mod comparison_feed_tests {
+    use rust_decimal_macros::dec;
+    use tarifbd::handlers::{
+        compute_feed_etag, compute_jahreskosten_supply_netto, extract_bonus_rabatt_eur,
+        extract_kuendigungsfrist_wochen, extract_laufzeit_monate, extract_mindestlaufzeit_monate,
+        extract_preisgarantie_bis, extract_tarif_preise,
+    };
+    use tarifbd::pg::ProductRow;
+
+    // ── Helper: minimal ProductRow for ETag tests ─────────────────────────────
+
+    fn dummy_row(updated_at_secs: i64, product_code: &str) -> ProductRow {
+        ProductRow {
+            id: uuid::Uuid::nil(),
+            lf_mp_id: "9900357000004".to_owned(),
+            product_code: product_code.to_owned(),
+            category: "STROM".to_owned(),
+            name: "Test Tariff".to_owned(),
+            sparte: Some("STROM".to_owned()),
+            register_count: None,
+            kundentyp: None,
+            dyn_source: None,
+            valid_from: None,
+            valid_to: None,
+            data: serde_json::Value::Null,
+            bo4e_version: "v202607.0.0".to_owned(),
+            energiemix: None,
+            oekolabel: None,
+            updated_at: time::OffsetDateTime::from_unix_timestamp(updated_at_secs).unwrap(),
+        }
+    }
+
+    // ── extract_tarif_preise ──────────────────────────────────────────────────
+
+    #[test]
+    fn extract_eintarif_preise() {
+        let data = serde_json::json!({
+            "tarifpreispositionen": [
+                { "preistyp": "GRUNDPREIS",           "preisstaffeln": [{ "preis": "5.50" }] },
+                { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "28.40" }] }
+            ]
+        });
+        let preise = extract_tarif_preise(&data);
+        assert_eq!(preise.grundpreis_ct_per_day, Some(dec!(5.50)));
+        assert_eq!(preise.arbeitspreis_ct_per_kwh, Some(dec!(28.40)));
+        assert!(preise.arbeitspreis_ht_ct_per_kwh.is_none());
+        assert!(preise.arbeitspreis_nt_ct_per_kwh.is_none());
+        assert!(preise.leistungspreis_ct_per_kw_month.is_none());
+    }
+
+    #[test]
+    fn extract_zweitarif_preise() {
+        let data = serde_json::json!({
+            "tarifpreispositionen": [
+                { "preistyp": "GRUNDPREIS",      "preisstaffeln": [{ "preis": "6.00" }] },
+                { "preistyp": "ARBEITSPREIS_HT", "preisstaffeln": [{ "preis": "31.20" }] },
+                { "preistyp": "ARBEITSPREIS_NT", "preisstaffeln": [{ "preis": "22.80" }] }
+            ]
+        });
+        let preise = extract_tarif_preise(&data);
+        assert_eq!(preise.grundpreis_ct_per_day, Some(dec!(6.00)));
+        // For portal display, arbeitspreis_ct_per_kwh = HT rate
+        assert_eq!(preise.arbeitspreis_ct_per_kwh, Some(dec!(31.20)));
+        assert_eq!(preise.arbeitspreis_ht_ct_per_kwh, Some(dec!(31.20)));
+        assert_eq!(preise.arbeitspreis_nt_ct_per_kwh, Some(dec!(22.80)));
+    }
+
+    #[test]
+    fn extract_preise_from_numeric_json_number() {
+        // preis stored as JSON number (not string) is also valid
+        let data = serde_json::json!({
+            "tarifpreispositionen": [
+                { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": 29.5 }] }
+            ]
+        });
+        let preise = extract_tarif_preise(&data);
+        assert_eq!(preise.arbeitspreis_ct_per_kwh, Some(dec!(29.5)));
+    }
+
+    #[test]
+    fn extract_preise_empty_positionen() {
+        let data = serde_json::json!({ "tarifpreispositionen": [] });
+        let preise = extract_tarif_preise(&data);
+        assert!(preise.grundpreis_ct_per_day.is_none());
+        assert!(preise.arbeitspreis_ct_per_kwh.is_none());
+    }
+
+    #[test]
+    fn extract_preise_no_positionen_field() {
+        let data = serde_json::json!({ "name": "No positions" });
+        let preise = extract_tarif_preise(&data);
+        assert!(preise.grundpreis_ct_per_day.is_none());
+        assert!(preise.arbeitspreis_ct_per_kwh.is_none());
+    }
+
+    #[test]
+    fn extract_preise_unknown_preistyp_ignored() {
+        // Extended preistypen (EEG_VERGUETUNG, etc.) must not pollute portal prices
+        let data = serde_json::json!({
+            "tarifpreispositionen": [
+                { "preistyp": "EEG_VERGUETUNG", "preisstaffeln": [{ "preis": "8.00" }] },
+                { "preistyp": "GRUNDPREIS",     "preisstaffeln": [{ "preis": "4.80" }] }
+            ]
+        });
+        let preise = extract_tarif_preise(&data);
+        assert_eq!(preise.grundpreis_ct_per_day, Some(dec!(4.80)));
+        // EEG_VERGUETUNG must NOT appear as arbeitspreis
+        assert!(preise.arbeitspreis_ct_per_kwh.is_none());
+    }
+
+    // ── compute_jahreskosten_supply_netto ─────────────────────────────────────
+
+    #[test]
+    fn jahreskosten_eintarif_3500_kwh() {
+        // BNetzA reference household: 3500 kWh/a
+        // GP: 5.50 ct/day × 365 / 100 = 20.075 EUR/a
+        // AP: 28.40 ct/kWh × 3500 / 100 = 994.00 EUR/a
+        // Total netto: 1014.075 EUR/a
+        let preise = tarifbd::pg::TarifPreise {
+            grundpreis_ct_per_day: Some(dec!(5.50)),
+            arbeitspreis_ct_per_kwh: Some(dec!(28.40)),
+            arbeitspreis_ht_ct_per_kwh: None,
+            arbeitspreis_nt_ct_per_kwh: None,
+            leistungspreis_ct_per_kw_month: None,
+        };
+        let netto = compute_jahreskosten_supply_netto(&preise, dec!(3500)).unwrap();
+        assert_eq!(netto, dec!(1014.075));
+    }
+
+    #[test]
+    fn jahreskosten_no_ap_returns_none() {
+        let preise = tarifbd::pg::TarifPreise {
+            grundpreis_ct_per_day: None,
+            arbeitspreis_ct_per_kwh: None,
+            arbeitspreis_ht_ct_per_kwh: None,
+            arbeitspreis_nt_ct_per_kwh: None,
+            leistungspreis_ct_per_kw_month: None,
+        };
+        assert!(compute_jahreskosten_supply_netto(&preise, dec!(3500)).is_none());
+    }
+
+    #[test]
+    fn jahreskosten_only_grundpreis() {
+        // Subscription product with only Grundpreis (flat fee)
+        let preise = tarifbd::pg::TarifPreise {
+            grundpreis_ct_per_day: Some(dec!(100.00)),
+            arbeitspreis_ct_per_kwh: None,
+            arbeitspreis_ht_ct_per_kwh: None,
+            arbeitspreis_nt_ct_per_kwh: None,
+            leistungspreis_ct_per_kw_month: None,
+        };
+        // 100 ct/day × 365 / 100 = 365 EUR/a
+        let netto = compute_jahreskosten_supply_netto(&preise, dec!(0)).unwrap();
+        assert_eq!(netto, dec!(365.00));
+    }
+
+    // ── extract_preisgarantie_bis ─────────────────────────────────────────────
+
+    #[test]
+    fn extract_preisgarantie_present() {
+        let data = serde_json::json!({
+            "preisgarantie": { "preisgarantieBis": "2027-12-31" }
+        });
+        assert_eq!(
+            extract_preisgarantie_bis(&data),
+            Some("2027-12-31".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_preisgarantie_absent() {
+        let data = serde_json::json!({ "name": "No guarantee" });
+        assert!(extract_preisgarantie_bis(&data).is_none());
+    }
+
+    // ── extract_laufzeit_monate ───────────────────────────────────────────────
+
+    #[test]
+    fn laufzeit_monat() {
+        let data = serde_json::json!({ "vertragskonditionen": { "laufzeit": { "einheit": "MONAT", "dauer": 12 } } });
+        assert_eq!(extract_laufzeit_monate(&data), Some(12));
+    }
+
+    #[test]
+    fn laufzeit_jahr() {
+        let data = serde_json::json!({ "vertragskonditionen": { "laufzeit": { "einheit": "JAHR", "dauer": 2 } } });
+        assert_eq!(extract_laufzeit_monate(&data), Some(24));
+    }
+
+    #[test]
+    fn laufzeit_absent() {
+        let data = serde_json::json!({});
+        assert!(extract_laufzeit_monate(&data).is_none());
+    }
+
+    // ── extract_mindestlaufzeit_monate ────────────────────────────────────────
+
+    #[test]
+    fn mindestlaufzeit_monat() {
+        let data = serde_json::json!({
+            "vertragskonditionen": { "mindestlaufzeit": { "einheit": "MONAT", "dauer": 6 } }
+        });
+        assert_eq!(extract_mindestlaufzeit_monate(&data), Some(6));
+    }
+
+    // ── extract_kuendigungsfrist_wochen ───────────────────────────────────────
+
+    #[test]
+    fn kuendigungsfrist_wochen() {
+        let data = serde_json::json!({
+            "vertragskonditionen": { "kuendigungsfrist": { "einheit": "WOCHE", "dauer": 4 } }
+        });
+        assert_eq!(extract_kuendigungsfrist_wochen(&data), Some(4));
+    }
+
+    #[test]
+    fn kuendigungsfrist_monat_to_wochen() {
+        // 3 months × 4 weeks/month = 12 weeks
+        let data = serde_json::json!({
+            "vertragskonditionen": { "kuendigungsfrist": { "einheit": "MONAT", "dauer": 3 } }
+        });
+        assert_eq!(extract_kuendigungsfrist_wochen(&data), Some(12));
+    }
+
+    #[test]
+    fn kuendigungsfrist_absent() {
+        let data = serde_json::json!({});
+        assert!(extract_kuendigungsfrist_wochen(&data).is_none());
+    }
+
+    // ── extract_bonus_rabatt_eur ──────────────────────────────────────────────
+
+    #[test]
+    fn bonus_sum_of_rabatte() {
+        let data = serde_json::json!({
+            "aufAbschlaege": [
+                { "bezeichnung": "Neukundenbonus", "typ": "RABATT",    "staffeln": [{ "wert": "50.00" }] },
+                { "bezeichnung": "Sofortbonus",    "typ": "RABATT",    "staffeln": [{ "wert": "25.00" }] },
+                { "bezeichnung": "Netzsurcharge",  "typ": "AUFSCHLAG", "staffeln": [{ "wert": "10.00" }] }
+            ]
+        });
+        // Sum of RABATT only: 50 + 25 = 75, AUFSCHLAG excluded
+        assert_eq!(extract_bonus_rabatt_eur(&data), Some(dec!(75.00)));
+    }
+
+    #[test]
+    fn bonus_no_rabatt_returns_none() {
+        let data = serde_json::json!({
+            "aufAbschlaege": [
+                { "typ": "AUFSCHLAG", "staffeln": [{ "wert": "10.00" }] }
+            ]
+        });
+        assert!(extract_bonus_rabatt_eur(&data).is_none());
+    }
+
+    #[test]
+    fn bonus_empty_auf_abschlaege_returns_none() {
+        let data = serde_json::json!({ "aufAbschlaege": [] });
+        assert!(extract_bonus_rabatt_eur(&data).is_none());
+    }
+
+    #[test]
+    fn bonus_absent_auf_abschlaege_returns_none() {
+        let data = serde_json::json!({ "name": "no bonuses" });
+        assert!(extract_bonus_rabatt_eur(&data).is_none());
+    }
+
+    // ── compute_feed_etag ─────────────────────────────────────────────────────
+
+    #[test]
+    fn etag_is_quoted_string() {
+        let rows = vec![dummy_row(1_700_000_000, "STROM-01")];
+        let etag = compute_feed_etag(&rows, dec!(3500), Some("STROM"));
+        assert!(etag.starts_with('"'), "ETag must start with '\"'");
+        assert!(etag.ends_with('"'), "ETag must end with '\"'");
+    }
+
+    #[test]
+    fn etag_changes_when_product_updated() {
+        let rows_old = vec![dummy_row(1_700_000_000, "STROM-01")];
+        let rows_new = vec![dummy_row(1_700_000_001, "STROM-01")];
+        let etag_old = compute_feed_etag(&rows_old, dec!(3500), Some("STROM"));
+        let etag_new = compute_feed_etag(&rows_new, dec!(3500), Some("STROM"));
+        assert_ne!(
+            etag_old, etag_new,
+            "ETag must change when updated_at changes"
+        );
+    }
+
+    #[test]
+    fn etag_changes_for_different_verbrauch() {
+        let rows = vec![dummy_row(1_700_000_000, "STROM-01")];
+        let etag_3500 = compute_feed_etag(&rows, dec!(3500), Some("STROM"));
+        let etag_5000 = compute_feed_etag(&rows, dec!(5000), Some("STROM"));
+        assert_ne!(
+            etag_3500, etag_5000,
+            "ETag must differ for different verbrauch_kwh"
+        );
+    }
+
+    #[test]
+    fn etag_is_deterministic() {
+        let rows = vec![dummy_row(1_700_000_000, "STROM-01")];
+        let e1 = compute_feed_etag(&rows, dec!(3500), Some("STROM"));
+        let e2 = compute_feed_etag(&rows, dec!(3500), Some("STROM"));
+        assert_eq!(e1, e2, "ETag must be deterministic across calls");
+    }
+
+    #[test]
+    fn etag_empty_rows() {
+        // Empty feed (no products) must produce a stable ETag
+        let etag = compute_feed_etag(&[], dec!(3500), None);
+        assert!(etag.starts_with('"'));
+    }
+
+    // ── feed category allowlist ───────────────────────────────────────────────
+
+    #[test]
+    fn feed_categories_contains_energy_tariffs_only() {
+        use tarifbd::pg::FEED_CATEGORIES;
+        // HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, BUNDLE must NOT appear in
+        // the comparison feed — they are service products, not energy tariffs.
+        let non_portal_categories = &["HEMS", "EMOBILITY", "ENERGIEDIENSTLEISTUNG", "BUNDLE"];
+        for cat in non_portal_categories {
+            assert!(
+                !FEED_CATEGORIES.contains(cat),
+                "Non-energy category {cat} must not appear in FEED_CATEGORIES"
+            );
+        }
+        // Energy tariff categories must be present
+        for cat in &["STROM", "GAS", "WAERME"] {
+            assert!(
+                FEED_CATEGORIES.contains(cat),
+                "Energy category {cat} must appear in FEED_CATEGORIES"
+            );
+        }
+    }
+
+    // ── end-to-end: full product JSONB → feed entry fields ───────────────────
+
+    #[test]
+    fn full_strom_tariff_extraction() {
+        // Simulate a fully populated STROM Tarifpreisblatt JSONB as stored by tarifbd.
+        let data = serde_json::json!({
+            "_typ": "TARIFPREISBLATT",
+            "tarifpreispositionen": [
+                { "preistyp": "GRUNDPREIS",           "preisstaffeln": [{ "preis": "5.50" }] },
+                { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "28.40" }] }
+            ],
+            "preisgarantie": { "preisgarantieBis": "2027-06-30" },
+            "vertragskonditionen": {
+                "laufzeit":          { "einheit": "MONAT", "dauer": 12 },
+                "mindestlaufzeit":   { "einheit": "MONAT", "dauer": 12 },
+                "kuendigungsfrist":  { "einheit": "WOCHE", "dauer": 4 }
+            },
+            "aufAbschlaege": [
+                { "typ": "RABATT", "bezeichnung": "Neukundenbonus", "staffeln": [{ "wert": "50.00" }] }
+            ]
+        });
+
+        let preise = extract_tarif_preise(&data);
+        assert_eq!(preise.grundpreis_ct_per_day, Some(dec!(5.50)));
+        assert_eq!(preise.arbeitspreis_ct_per_kwh, Some(dec!(28.40)));
+
+        // jahreskosten: 5.50 ct/d × 365 / 100 + 28.40 ct/kWh × 3500 / 100
+        //             = 20.075 + 994.00 = 1014.075 EUR/a netto
+        let netto = compute_jahreskosten_supply_netto(&preise, dec!(3500)).unwrap();
+        assert_eq!(netto, dec!(1014.075));
+
+        // brutto: 1014.075 × 1.19 = 1206.74925 (portal rounds to 2dp)
+        let brutto = (netto * dec!(1.19)).round_dp(2);
+        assert_eq!(brutto, dec!(1206.75));
+
+        assert_eq!(
+            extract_preisgarantie_bis(&data),
+            Some("2027-06-30".to_owned())
+        );
+        assert_eq!(extract_laufzeit_monate(&data), Some(12));
+        assert_eq!(extract_mindestlaufzeit_monate(&data), Some(12));
+        assert_eq!(extract_kuendigungsfrist_wochen(&data), Some(4));
+        assert_eq!(extract_bonus_rabatt_eur(&data), Some(dec!(50.00)));
+    }
+}

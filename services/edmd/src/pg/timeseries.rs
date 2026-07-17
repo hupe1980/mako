@@ -55,45 +55,77 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
     }
 
     async fn store_reads(&self, reads: &[MeterRead]) -> Result<(), EdmError> {
-        for read in reads {
-            sqlx::query(
-                r"INSERT INTO meter_reads
-                      (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, obis_code, tenant_id)
-                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                  ON CONFLICT (malo_id, dtm_from, dtm_to) DO UPDATE
-                      SET quantity_kwh = EXCLUDED.quantity_kwh,
-                          quality     = EXCLUDED.quality,
-                          obis_code   = COALESCE(EXCLUDED.obis_code, meter_reads.obis_code)",
-            )
-            .bind(&read.malo_id)
-            .bind(&read.melo_id)
-            .bind(read.dtm_from)
-            .bind(read.dtm_to)
-            .bind(read.quantity_kwh.to_string())
-            .bind(quality_to_str(read.quality))
-            .bind(read.pid as i32)
-            .bind(sparte_to_str(read.sparte))
-            .bind(&read.obis_code)
-            .bind(read.tenant_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| EdmError::Database(e.to_string()))?;
+        if reads.is_empty() {
+            return Ok(());
         }
+        // F-01 fix: ON CONFLICT (malo_id, dtm_from, obis_code_norm) matches PK from migration 0006.
+        // F-06 fix: unnest() batch INSERT eliminates O(n) round-trips — one query per batch.
+        let malo_ids: Vec<&str> = reads.iter().map(|r| r.malo_id.as_str()).collect();
+        let melo_ids: Vec<Option<&str>> = reads.iter().map(|r| r.melo_id.as_deref()).collect();
+        let dtm_froms: Vec<OffsetDateTime> = reads.iter().map(|r| r.dtm_from).collect();
+        let dtm_tos: Vec<OffsetDateTime> = reads.iter().map(|r| r.dtm_to).collect();
+        let quantities: Vec<String> = reads.iter().map(|r| r.quantity_kwh.to_string()).collect();
+        let qualities: Vec<&str> = reads.iter().map(|r| quality_to_str(r.quality)).collect();
+        let pids: Vec<i32> = reads.iter().map(|r| r.pid as i32).collect();
+        let spartes: Vec<&str> = reads.iter().map(|r| sparte_to_str(r.sparte)).collect();
+        let obis_codes: Vec<Option<&str>> = reads.iter().map(|r| r.obis_code.as_deref()).collect();
+        // obis_code_norm: empty string sentinel for single-register meters (migration 0006 PK).
+        let obis_norms: Vec<String> = reads
+            .iter()
+            .map(|r| r.obis_code.clone().unwrap_or_default())
+            .collect();
+        let sources: Vec<&str> = reads.iter().map(|_| "MSCONS").collect();
+
+        sqlx::query(
+            r"INSERT INTO meter_reads
+                  (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
+                   pid, sparte, obis_code, obis_code_norm, source)
+              SELECT * FROM unnest(
+                  $1::text[], $2::text[], $3::timestamptz[], $4::timestamptz[],
+                  $5::text[], $6::text[], $7::int4[], $8::text[],
+                  $9::text[], $10::text[], $11::text[]
+              )
+              ON CONFLICT (malo_id, dtm_from, obis_code_norm) DO UPDATE
+                  SET quantity_kwh = EXCLUDED.quantity_kwh,
+                      quality     = EXCLUDED.quality,
+                      obis_code   = COALESCE(EXCLUDED.obis_code, meter_reads.obis_code)",
+        )
+        .bind(&malo_ids as &[&str])
+        .bind(&melo_ids as &[Option<&str>])
+        .bind(&dtm_froms)
+        .bind(&dtm_tos)
+        .bind(&quantities as &[String])
+        .bind(&qualities as &[&str])
+        .bind(&pids)
+        .bind(&spartes as &[&str])
+        .bind(&obis_codes as &[Option<&str>])
+        .bind(&obis_norms as &[String])
+        .bind(&sources as &[&str])
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EdmError::Database(e.to_string()))?;
         Ok(())
     }
 
     async fn query(&self, q: &TimeSeriesQuery) -> Result<Vec<MeterRead>, EdmError> {
+        // F-03 / F-08: use TEXT tenant column (added in migration 0007) instead of the
+        // nullable UUID. The old `($N::uuid IS NULL OR tenant_id = $N)` guard returned ALL
+        // tenants' data when the UUID was NULL — a GDPR Art. 32 data leak.
         let rows = sqlx::query(
-            r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, obis_code, tenant_id
+            r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
+                     pid, sparte, obis_code, source, push_session, quality_warnings,
+                     sender_mp_id, allocation_version, valid_from_tx
               FROM meter_reads
-              WHERE malo_id = $1
+              WHERE malo_id  = $1
                 AND dtm_from >= $2
                 AND dtm_to   <= $3
+                AND tenant    = $4
               ORDER BY dtm_from",
         )
         .bind(&q.malo_id)
         .bind(q.from)
         .bind(q.to)
+        .bind(&q.tenant)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EdmError::Database(e.to_string()))?;
@@ -110,13 +142,15 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         to: OffsetDateTime,
         tenant_id: Option<Uuid>,
     ) -> Result<Vec<MeterDataReceipt>, EdmError> {
+        // F-08: meter_data_receipts uses tenant_id UUID (not TEXT); keep UUID guard but
+        // require non-NULL — empty string tenant is never stored as NULL UUID.
         let rows = sqlx::query(
             r"SELECT process_id, pid, malo_id, sender_mp_id, message_ref, received_at, tenant_id
               FROM meter_data_receipts
               WHERE malo_id    = $1
                 AND received_at >= $2
                 AND received_at <= $3
-                AND ($4::uuid IS NULL OR tenant_id = $4)
+                AND (tenant_id = $4 OR $4 IS NULL)
               ORDER BY received_at DESC",
         )
         .bind(malo_id)
@@ -147,7 +181,8 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
               WHERE malo_id    = $1
                 AND dtm_from::date >= $2
                 AND dtm_to::date   <= $3
-                AND ($4::uuid IS NULL OR tenant_id = $4)",
+                AND quality NOT IN ('FAULTY', 'UNKNOWN')
+                AND (tenant_id = $4 OR $4 IS NULL)",
         )
         .bind(malo_id)
         .bind(from)
@@ -189,10 +224,12 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         tenant_id: Option<Uuid>,
     ) -> Result<Option<MeterRead>, EdmError> {
         let row = sqlx::query(
-            r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, obis_code, tenant_id
+            r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
+                     pid, sparte, obis_code, source, push_session, quality_warnings,
+                     sender_mp_id, allocation_version, valid_from_tx
               FROM meter_reads
               WHERE malo_id = $1
-                AND ($2::uuid IS NULL OR tenant_id = $2)
+                AND (tenant_id = $2 OR $2 IS NULL)
               ORDER BY dtm_from DESC
               LIMIT 1",
         )
@@ -231,8 +268,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
               WHERE malo_id = $1
                 AND period_from = $2
                 AND period_to = $3
-                AND (($4::uuid IS NULL AND tenant_id IS NULL)
-                     OR tenant_id = $4)",
+                AND (tenant_id = $4 OR $4 IS NULL)",
         )
         .bind(&q.malo_id)
         .bind(q.period_from)
@@ -278,12 +314,15 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
 
         // Fall back: on-the-fly aggregation from raw meter_reads.
         let rows = sqlx::query(
-            r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, obis_code, tenant_id
+            r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
+                     pid, sparte, obis_code, source, push_session, quality_warnings,
+                     sender_mp_id, allocation_version, valid_from_tx
               FROM meter_reads
               WHERE malo_id = $1
                 AND dtm_from >= $2
                 AND dtm_to   <= $3
-                AND ($4::uuid IS NULL OR tenant_id = $4)
+                AND (tenant_id = $4 OR $4 IS NULL)
+                AND quality NOT IN ('FAULTY', 'UNKNOWN')
               ORDER BY dtm_from ASC",
         )
         .bind(&q.malo_id)
@@ -502,6 +541,13 @@ fn row_to_read(row: &sqlx::postgres::PgRow) -> Result<MeterRead, EdmError> {
         ),
         push_session: row.try_get("push_session").unwrap_or(None),
         quality_warnings: row.try_get("quality_warnings").unwrap_or(None),
+        // F-12: provenance fields added in migrations 0006-0007 — returned by all queries.
+        sender_mp_id: row.try_get("sender_mp_id").unwrap_or(None),
+        allocation_version: row
+            .try_get::<Option<String>, _>("allocation_version")
+            .unwrap_or(None)
+            .unwrap_or_else(|| "INITIAL".to_owned()),
+        valid_from_tx: row.try_get("valid_from_tx").unwrap_or(None),
     })
 }
 

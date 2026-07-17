@@ -1,7 +1,18 @@
 //! Virtual meter compute engine.
 //!
-//! Applies an [`AggregationRule`] to a map of source MaLo time series to produce
-//! a derived virtual meter time series.
+//! Applies an [`AggregationRule`] to a map of source MaLo / MeLo time series
+//! to produce a derived virtual meter time series.
+//!
+//! ## GGV net grid draw (§42b EnWG, Solarpaket I)
+//!
+//! Both GGV variants compute the tenant's **net grid draw after PV allocation**:
+//!
+//! - [`AggregationRule::GgvConstantAllocation`]: static fraction from UTILTS CCI+ZG6
+//! - [`AggregationRule::GgvProportionalAllocation`]: dynamic ratio from actual consumption
+//!
+//! The result is the `Malo_i Verbrauch` quantity in the BDEW Anwendungshilfe —
+//! the energy each tenant draws from the public grid after their share of the
+//! community PV has been credited.
 //!
 //! ## Timestamp alignment
 //!
@@ -9,15 +20,10 @@
 //! timestamps present in **all** required source series are included in the output.
 //! Use [`crate::resample()`] first if source series have different resolutions.
 //!
-//! ## Virtual source column
-//!
-//! All output intervals carry `obis_code = None` — callers should set the
-//! appropriate OBIS code after computing (e.g. `ObisCode::STROM_BEZUG_TOTAL`
-//! for a Sum result).
-//!
 //! ## Legal basis
 //!
-//! - **§42b EEG 2023 (Solarpaket I)** — GGV community allocation
+//! - **§42b Abs. 5 EnWG (Solarpaket I)** — GGV community allocation formulas
+//! - **BDEW Anwendungshilfe "Berechnungsformeln Solarpaket 1"** v1.0, 25.01.2024
 //! - **§42a EEG** — residual metering for feed-in compensation
 //! - **GPKE BK6-22-024** — portfolio aggregation for BKV settlement
 //! - **BSI TR-03109** — SMGW sub-metering aggregation for §14a
@@ -76,10 +82,16 @@ pub fn compute_virtual_meter(
             grid_malo_id,
             generation_malo_id,
         } => compute_net_grid(grid_malo_id, generation_malo_id, sources),
-        AggregationRule::GgvAllocation {
-            plant_malo_id,
-            tenant_fractions,
-        } => compute_ggv(plant_malo_id, tenant_fractions, sources),
+        AggregationRule::GgvConstantAllocation {
+            plant_melo_id,
+            tenant_melo_id,
+            fraction,
+        } => compute_ggv_constant(plant_melo_id, tenant_melo_id, *fraction, sources),
+        AggregationRule::GgvProportionalAllocation {
+            plant_melo_id,
+            tenant_melo_id,
+            all_tenant_melo_ids,
+        } => compute_ggv_proportional(plant_melo_id, tenant_melo_id, all_tenant_melo_ids, sources),
     }
 }
 
@@ -187,34 +199,132 @@ fn compute_net_grid(
     Ok(result)
 }
 
-// ── GGV allocation ────────────────────────────────────────────────────────────
+// ── GGV constant allocation (§42b EnWG Beispiel 1, CCI+ZG6) ──────────────────
 
-fn compute_ggv(
+/// Constant-fraction GGV allocation per §42b Abs. 5 EnWG.
+///
+/// Formula (BDEW Anwendungshilfe Beispiel 1):
+/// ```text
+/// net_grid_draw[t] = max(0, tenant_consumption[t] - fraction × plant_generation[t])
+/// ```
+///
+/// The `max(0, …)` is the `Pos()` operator (UTILTS Z83). It ensures the tenant
+/// cannot "receive" more PV energy than they actually consumed in the interval,
+/// satisfying §42b Abs. 5 EnWG: "begrenzt auf die durch ihn in diesem
+/// Zeitintervall verbrauchte Strommenge."
+fn compute_ggv_constant(
     plant_id: &str,
-    tenant_fractions: &[(String, Decimal)],
+    tenant_id: &str,
+    fraction: Decimal,
     sources: &HashMap<String, Vec<MeterInterval>>,
 ) -> Result<Vec<MeterInterval>, VirtualMeterError> {
     if !sources.contains_key(plant_id) {
         return Err(VirtualMeterError::MissingSource(plant_id.to_owned()));
     }
-    let total_fraction: Decimal = tenant_fractions.iter().map(|(_, f)| *f).sum();
-    if total_fraction <= Decimal::ZERO || total_fraction > Decimal::ONE {
-        return Err(VirtualMeterError::InvalidFractions {
-            sum: total_fraction,
+    if !sources.contains_key(tenant_id) {
+        return Err(VirtualMeterError::MissingSource(tenant_id.to_owned()));
+    }
+    if fraction <= Decimal::ZERO || fraction > Decimal::ONE {
+        return Err(VirtualMeterError::InvalidFractions { sum: fraction });
+    }
+
+    let aligned = aligned_timestamps([plant_id, tenant_id].iter().copied(), sources);
+    let mut result = Vec::with_capacity(aligned.len());
+    for ts in aligned {
+        let plant_iv = lookup(sources, plant_id, ts);
+        let tenant_iv = lookup(sources, tenant_id, ts);
+
+        // allocated = fraction × plant_generation (UTILTS Z82 × ZG6)
+        let allocated = fraction * plant_iv.value_kwh;
+        // net_grid_draw = Pos(consumption - allocated) = max(0, consumption - allocated)
+        let net_grid_draw = (tenant_iv.value_kwh - allocated).max(Decimal::ZERO);
+
+        result.push(MeterInterval {
+            from: ts,
+            to: tenant_iv.to,
+            value_kwh: net_grid_draw,
+            quality: worst_quality(plant_iv.quality, tenant_iv.quality),
+            obis_code: None,
         });
     }
-    // The virtual meter = total generation allocated to all tenants combined
-    let plant_ivs = &sources[plant_id];
-    let result = plant_ivs
-        .iter()
-        .map(|iv| MeterInterval {
-            from: iv.from,
-            to: iv.to,
-            value_kwh: iv.value_kwh * total_fraction,
-            quality: iv.quality,
-            obis_code: None,
-        })
+    Ok(result)
+}
+
+// ── GGV proportional allocation (§42b EnWG Beispiel 3) ───────────────────────
+
+/// Variable consumption-proportional GGV allocation per §42b Abs. 5 EnWG.
+///
+/// Formula (BDEW Anwendungshilfe Beispiel 3):
+/// ```text
+/// total[t]        = Σ all_tenant_consumption_j[t]
+/// ratio[t]        = tenant_consumption[t] / total[t]  (0 when total = 0)
+/// net_grid_draw[t] = max(0, tenant_consumption[t] - ratio[t] × plant_generation[t])
+/// ```
+///
+/// Division-by-zero protection: when `total[t] = 0`, `ratio[t] = 0` and
+/// `net_grid_draw[t] = 0`. This matches the BDEW Anwendungshilfe note:
+/// "Ist die Energiemenge einer Marktlokation zugeordneten Messlokation = 0,
+/// so ist auch der Verbrauch der Marktlokation auf 0 zu setzen."
+fn compute_ggv_proportional(
+    plant_id: &str,
+    tenant_id: &str,
+    all_tenant_ids: &[String],
+    sources: &HashMap<String, Vec<MeterInterval>>,
+) -> Result<Vec<MeterInterval>, VirtualMeterError> {
+    if !sources.contains_key(plant_id) {
+        return Err(VirtualMeterError::MissingSource(plant_id.to_owned()));
+    }
+    for id in all_tenant_ids {
+        if !sources.contains_key(id.as_str()) {
+            return Err(VirtualMeterError::MissingSource(id.clone()));
+        }
+    }
+    // tenant_id must be present in all_tenant_ids (sanity — not hard-errored here,
+    // a missing tenant_id is caught by the loop above if it's correctly listed)
+    if !sources.contains_key(tenant_id) {
+        return Err(VirtualMeterError::MissingSource(tenant_id.to_owned()));
+    }
+
+    // Align all IDs: plant + every tenant
+    let all_ids: Vec<&str> = std::iter::once(plant_id)
+        .chain(all_tenant_ids.iter().map(String::as_str))
         .collect();
+    let aligned = aligned_timestamps(all_ids.iter().copied(), sources);
+    let mut result = Vec::with_capacity(aligned.len());
+
+    for ts in aligned {
+        let plant_iv = lookup(sources, plant_id, ts);
+        let tenant_iv = lookup(sources, tenant_id, ts);
+
+        // Denominator: Σ all tenant consumptions
+        let total_consumption: Decimal = all_tenant_ids
+            .iter()
+            .map(|id| lookup(sources, id, ts).value_kwh)
+            .sum();
+
+        // Dynamic ratio: protect against zero-division
+        let net_grid_draw = if total_consumption > Decimal::ZERO {
+            let ratio = tenant_iv.value_kwh / total_consumption;
+            let allocated = ratio * plant_iv.value_kwh;
+            (tenant_iv.value_kwh - allocated).max(Decimal::ZERO)
+        } else {
+            // All tenants consume 0 → grid draw is 0
+            Decimal::ZERO
+        };
+
+        // Worst quality across plant + all tenants (any estimated interval affects output)
+        let quality = all_tenant_ids.iter().fold(plant_iv.quality, |q, id| {
+            worst_quality(q, lookup(sources, id, ts).quality)
+        });
+
+        result.push(MeterInterval {
+            from: ts,
+            to: tenant_iv.to,
+            value_kwh: net_grid_draw,
+            quality,
+            obis_code: None,
+        });
+    }
     Ok(result)
 }
 
@@ -397,40 +507,289 @@ mod tests {
         assert_eq!(result[0].value_kwh, dec!(2.0));
     }
 
-    // ── GGV ───────────────────────────────────────────────────────────────────
+    // ── GGV constant allocation (§42b Beispiel 1) ────────────────────────────
 
     #[test]
-    fn ggv_allocation_scales_by_total_fraction() {
+    fn ggv_constant_tenant_draws_residual_after_pv() {
+        // Beispiel 1: Melo2=10%, Melo3=90%
+        // Interval: plant generates 10 kWh, tenant consumes 5 kWh
+        // allocated = 10% × 10 = 1 kWh → net_grid_draw = max(0, 5 - 1) = 4 kWh
         let mut map: HashMap<String, Vec<MeterInterval>> = HashMap::new();
-        let (kp, vp) = source("PLANT", vec![(0, dec!(10.0)), (15, dec!(8.0))]);
-        map.insert(kp, vp);
+        map.insert(
+            "PLANT".to_owned(),
+            vec![make_iv(ts(0), dec!(10.0), QualityFlag::Measured)],
+        );
+        map.insert(
+            "T2".to_owned(),
+            vec![make_iv(ts(0), dec!(5.0), QualityFlag::Measured)],
+        );
 
-        let rule = AggregationRule::GgvAllocation {
-            plant_malo_id: "PLANT".to_owned(),
-            tenant_fractions: vec![("T1".to_owned(), dec!(0.4)), ("T2".to_owned(), dec!(0.35))],
+        let rule = AggregationRule::GgvConstantAllocation {
+            plant_melo_id: "PLANT".to_owned(),
+            tenant_melo_id: "T2".to_owned(),
+            fraction: dec!(0.10),
         };
         let result = compute_virtual_meter(&rule, &map).unwrap();
-        // Total fraction = 0.75
-        assert_eq!(result[0].value_kwh, dec!(7.5));
-        assert_eq!(result[1].value_kwh, dec!(6.0));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].value_kwh, dec!(4.0), "net grid draw = 5 - 1 = 4");
     }
 
     #[test]
-    fn ggv_invalid_fractions_rejected() {
+    fn ggv_constant_allocation_capped_by_tenant_consumption() {
+        // §42b Abs. 5: allocated PV ≤ tenant consumption
+        // plant = 10 kWh, fraction = 90%, allocation attempt = 9 kWh
+        // but tenant only consumes 2 kWh → net_grid_draw = max(0, 2 - 9) = 0
+        // (tenant gets 2 kWh of PV, excess 7 kWh feeds back to grid)
         let mut map: HashMap<String, Vec<MeterInterval>> = HashMap::new();
-        let (kp, vp) = source("PLANT", vec![(0, dec!(10.0))]);
-        map.insert(kp, vp);
+        map.insert(
+            "PLANT".to_owned(),
+            vec![make_iv(ts(0), dec!(10.0), QualityFlag::Measured)],
+        );
+        map.insert(
+            "T3".to_owned(),
+            vec![make_iv(ts(0), dec!(2.0), QualityFlag::Measured)],
+        );
 
-        let rule = AggregationRule::GgvAllocation {
-            plant_malo_id: "PLANT".to_owned(),
-            tenant_fractions: vec![
-                ("T1".to_owned(), dec!(0.7)),
-                ("T2".to_owned(), dec!(0.5)), // sum = 1.2 — invalid
+        let rule = AggregationRule::GgvConstantAllocation {
+            plant_melo_id: "PLANT".to_owned(),
+            tenant_melo_id: "T3".to_owned(),
+            fraction: dec!(0.90),
+        };
+        let result = compute_virtual_meter(&rule, &map).unwrap();
+        assert_eq!(
+            result[0].value_kwh,
+            dec!(0.0),
+            "pos(2 - 9) = 0 — cap enforced"
+        );
+    }
+
+    #[test]
+    fn ggv_constant_feedin_balance_check() {
+        // BDEW Beispiel 1: plant=10 kWh, T2=10%, T3=90%
+        // T2 consumes 5, T3 consumes 20
+        // T2 net = max(0, 5 - 1) = 4  → PV to T2 = 1
+        // T3 net = max(0, 20 - 9) = 11 → PV to T3 = 9
+        // Total PV delivered = 1 + 9 = 10 = full plant generation (no grid feed-in)
+        let plant_gen = dec!(10.0);
+        let t2_consumption = dec!(5.0);
+        let t3_consumption = dec!(20.0);
+
+        let t2_net = (t2_consumption - dec!(0.10) * plant_gen).max(Decimal::ZERO);
+        let t3_net = (t3_consumption - dec!(0.90) * plant_gen).max(Decimal::ZERO);
+
+        let pv_to_t2 = t2_consumption - t2_net;
+        let pv_to_t3 = t3_consumption - t3_net;
+        let grid_feedin = plant_gen - pv_to_t2 - pv_to_t3;
+
+        assert_eq!(t2_net, dec!(4.0));
+        assert_eq!(t3_net, dec!(11.0));
+        assert_eq!(pv_to_t2 + pv_to_t3, dec!(10.0));
+        assert_eq!(grid_feedin, dec!(0.0), "all PV consumed locally");
+    }
+
+    #[test]
+    fn ggv_constant_multiple_intervals() {
+        let mut map: HashMap<String, Vec<MeterInterval>> = HashMap::new();
+        map.insert(
+            "PLANT".to_owned(),
+            vec![
+                make_iv(ts(0), dec!(10.0), QualityFlag::Measured),
+                make_iv(ts(15), dec!(0.0), QualityFlag::Measured),
             ],
+        );
+        map.insert(
+            "T".to_owned(),
+            vec![
+                make_iv(ts(0), dec!(3.0), QualityFlag::Measured),
+                make_iv(ts(15), dec!(3.0), QualityFlag::Measured),
+            ],
+        );
+
+        let rule = AggregationRule::GgvConstantAllocation {
+            plant_melo_id: "PLANT".to_owned(),
+            tenant_melo_id: "T".to_owned(),
+            fraction: dec!(0.5),
+        };
+        let result = compute_virtual_meter(&rule, &map).unwrap();
+        assert_eq!(result[0].value_kwh, dec!(0.0), "3 - 5 < 0 → max(0)");
+        assert_eq!(
+            result[1].value_kwh,
+            dec!(3.0),
+            "no PV → full load from grid"
+        );
+    }
+
+    #[test]
+    fn ggv_constant_invalid_fraction_rejected() {
+        let mut map: HashMap<String, Vec<MeterInterval>> = HashMap::new();
+        map.insert(
+            "PLANT".to_owned(),
+            vec![make_iv(ts(0), dec!(1.0), QualityFlag::Measured)],
+        );
+        map.insert(
+            "T".to_owned(),
+            vec![make_iv(ts(0), dec!(1.0), QualityFlag::Measured)],
+        );
+
+        let rule = AggregationRule::GgvConstantAllocation {
+            plant_melo_id: "PLANT".to_owned(),
+            tenant_melo_id: "T".to_owned(),
+            fraction: dec!(1.5), // > 1 — invalid
         };
         assert!(matches!(
             compute_virtual_meter(&rule, &map),
             Err(VirtualMeterError::InvalidFractions { .. })
+        ));
+    }
+
+    // ── GGV proportional allocation (§42b Beispiel 3) ────────────────────────
+
+    #[test]
+    fn ggv_proportional_tenant_gets_consumption_weighted_pv() {
+        // Beispiel 3: plant=10 kWh, T2 consumes 2, T3 consumes 8
+        // T2 ratio = 2/10 = 0.2 → allocation = 0.2 × 10 = 2 → net = max(0, 2-2) = 0
+        // T3 ratio = 8/10 = 0.8 → allocation = 0.8 × 10 = 8 → net = max(0, 8-8) = 0
+        // both tenants fully covered by PV
+        let mut map: HashMap<String, Vec<MeterInterval>> = HashMap::new();
+        map.insert(
+            "PLANT".to_owned(),
+            vec![make_iv(ts(0), dec!(10.0), QualityFlag::Measured)],
+        );
+        map.insert(
+            "T2".to_owned(),
+            vec![make_iv(ts(0), dec!(2.0), QualityFlag::Measured)],
+        );
+        map.insert(
+            "T3".to_owned(),
+            vec![make_iv(ts(0), dec!(8.0), QualityFlag::Measured)],
+        );
+
+        let rule_t2 = AggregationRule::GgvProportionalAllocation {
+            plant_melo_id: "PLANT".to_owned(),
+            tenant_melo_id: "T2".to_owned(),
+            all_tenant_melo_ids: vec!["T2".to_owned(), "T3".to_owned()],
+        };
+        let rule_t3 = AggregationRule::GgvProportionalAllocation {
+            plant_melo_id: "PLANT".to_owned(),
+            tenant_melo_id: "T3".to_owned(),
+            all_tenant_melo_ids: vec!["T2".to_owned(), "T3".to_owned()],
+        };
+
+        let r2 = compute_virtual_meter(&rule_t2, &map).unwrap();
+        let r3 = compute_virtual_meter(&rule_t3, &map).unwrap();
+        assert_eq!(r2[0].value_kwh, dec!(0.0), "T2 fully covered by PV");
+        assert_eq!(r3[0].value_kwh, dec!(0.0), "T3 fully covered by PV");
+    }
+
+    #[test]
+    fn ggv_proportional_partial_coverage() {
+        // plant=6 kWh, T2 consumes 2, T3 consumes 8 → total=10
+        // T2 ratio = 0.2 → allocated = 0.2 × 6 = 1.2 → net = 2 - 1.2 = 0.8
+        // T3 ratio = 0.8 → allocated = 0.8 × 6 = 4.8 → net = 8 - 4.8 = 3.2
+        let mut map: HashMap<String, Vec<MeterInterval>> = HashMap::new();
+        map.insert(
+            "PLANT".to_owned(),
+            vec![make_iv(ts(0), dec!(6.0), QualityFlag::Measured)],
+        );
+        map.insert(
+            "T2".to_owned(),
+            vec![make_iv(ts(0), dec!(2.0), QualityFlag::Measured)],
+        );
+        map.insert(
+            "T3".to_owned(),
+            vec![make_iv(ts(0), dec!(8.0), QualityFlag::Measured)],
+        );
+
+        let rule_t2 = AggregationRule::GgvProportionalAllocation {
+            plant_melo_id: "PLANT".to_owned(),
+            tenant_melo_id: "T2".to_owned(),
+            all_tenant_melo_ids: vec!["T2".to_owned(), "T3".to_owned()],
+        };
+        let rule_t3 = AggregationRule::GgvProportionalAllocation {
+            plant_melo_id: "PLANT".to_owned(),
+            tenant_melo_id: "T3".to_owned(),
+            all_tenant_melo_ids: vec!["T2".to_owned(), "T3".to_owned()],
+        };
+
+        let r2 = compute_virtual_meter(&rule_t2, &map).unwrap();
+        let r3 = compute_virtual_meter(&rule_t3, &map).unwrap();
+        assert_eq!(r2[0].value_kwh, dec!(0.8));
+        assert_eq!(r3[0].value_kwh, dec!(3.2));
+        // total PV delivered = (2-0.8) + (8-3.2) = 1.2 + 4.8 = 6 = plant generation
+        assert_eq!(
+            (dec!(2.0) - r2[0].value_kwh) + (dec!(8.0) - r3[0].value_kwh),
+            dec!(6.0)
+        );
+    }
+
+    #[test]
+    fn ggv_proportional_zero_division_guard() {
+        // All tenants consume 0 → denominator = 0 → no PV allocated, no grid draw
+        let mut map: HashMap<String, Vec<MeterInterval>> = HashMap::new();
+        map.insert(
+            "PLANT".to_owned(),
+            vec![make_iv(ts(0), dec!(5.0), QualityFlag::Measured)],
+        );
+        map.insert(
+            "T2".to_owned(),
+            vec![make_iv(ts(0), dec!(0.0), QualityFlag::Measured)],
+        );
+        map.insert(
+            "T3".to_owned(),
+            vec![make_iv(ts(0), dec!(0.0), QualityFlag::Measured)],
+        );
+
+        let rule = AggregationRule::GgvProportionalAllocation {
+            plant_melo_id: "PLANT".to_owned(),
+            tenant_melo_id: "T2".to_owned(),
+            all_tenant_melo_ids: vec!["T2".to_owned(), "T3".to_owned()],
+        };
+        let result = compute_virtual_meter(&rule, &map).unwrap();
+        assert_eq!(
+            result[0].value_kwh,
+            dec!(0.0),
+            "zero total → zero draw (no division by zero)"
+        );
+    }
+
+    #[test]
+    fn ggv_proportional_cap_when_allocation_exceeds_consumption() {
+        // plant=100 kWh, T2 consumes 1, T3 consumes 1 → total=2
+        // T2 ratio = 0.5, allocated = 50 kWh but T2 only consumed 1 → net = max(0, 1-50) = 0
+        let mut map: HashMap<String, Vec<MeterInterval>> = HashMap::new();
+        map.insert(
+            "PLANT".to_owned(),
+            vec![make_iv(ts(0), dec!(100.0), QualityFlag::Measured)],
+        );
+        map.insert(
+            "T2".to_owned(),
+            vec![make_iv(ts(0), dec!(1.0), QualityFlag::Measured)],
+        );
+        map.insert(
+            "T3".to_owned(),
+            vec![make_iv(ts(0), dec!(1.0), QualityFlag::Measured)],
+        );
+
+        let rule = AggregationRule::GgvProportionalAllocation {
+            plant_melo_id: "PLANT".to_owned(),
+            tenant_melo_id: "T2".to_owned(),
+            all_tenant_melo_ids: vec!["T2".to_owned(), "T3".to_owned()],
+        };
+        let result = compute_virtual_meter(&rule, &map).unwrap();
+        assert_eq!(result[0].value_kwh, dec!(0.0), "§42b cap: no negative draw");
+    }
+
+    #[test]
+    fn ggv_proportional_missing_source_returns_error() {
+        let map: HashMap<String, Vec<MeterInterval>> = HashMap::new();
+        let rule = AggregationRule::GgvProportionalAllocation {
+            plant_melo_id: "PLANT".to_owned(),
+            tenant_melo_id: "T".to_owned(),
+            all_tenant_melo_ids: vec!["T".to_owned()],
+        };
+        assert!(matches!(
+            compute_virtual_meter(&rule, &map),
+            Err(VirtualMeterError::MissingSource(_))
         ));
     }
 

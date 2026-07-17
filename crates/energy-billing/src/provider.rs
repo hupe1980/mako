@@ -22,7 +22,7 @@
 use billing::BillingError;
 
 use crate::context::BillingContext;
-use crate::position::BillingPosition;
+use crate::position::{BillingPosition, BillingWarning};
 
 // ── Quantities ────────────────────────────────────────────────────────────────
 
@@ -127,5 +127,25 @@ pub trait BillingProvider: Send + Sync {
     /// have completed. The default is `false`.
     fn is_tax_pass(&self) -> bool {
         false
+    }
+
+    /// Produce regulatory compliance warnings without generating billing positions.
+    ///
+    /// Called by [`BillingEngine::validate()`](crate::BillingEngine::validate) and
+    /// [`BillingEngine::bill()`](crate::BillingEngine::bill) to collect warnings
+    /// before and during billing.
+    ///
+    /// Default implementation returns no warnings. Override in providers that must
+    /// enforce regulatory preconditions (e.g. `DynamicElectricityProvider` enforces
+    /// §41b iMSys requirement).
+    ///
+    /// Warnings with `WarningSeverity::Error` cause `BillingEngine::bill()` to return
+    /// `Err(BillingError::InvalidInput)` before any positions are generated.
+    fn validate_warnings(
+        &self,
+        _ctx: &BillingContext,
+        _quantities: &Quantities,
+    ) -> Vec<BillingWarning> {
+        vec![]
     }
 }

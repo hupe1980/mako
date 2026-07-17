@@ -659,6 +659,125 @@ impl MakodMcpHandler {
         .map(|block| CallToolResult::success(vec![block]))
         .map_err(|e| McpError::internal_error(e.message, None))
     }
+
+    /// Return the number of active process instances registered in this makod instance.
+    ///
+    /// Scans the process registry key-space to return a live count.  Use for
+    /// capacity planning and AI-assisted incident triage ("how many processes are
+    /// currently in-flight?").
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = false),
+        description = "Return the total number of active (registered) MaKo process instances."
+    )]
+    async fn list_active_processes(&self) -> Result<CallToolResult, McpError> {
+        use mako_engine::registry::ProcessRegistry as _;
+        let registry = self.state.process_store.as_process_registry();
+        let count = registry
+            .len()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        ContentBlock::json(serde_json::json!({
+            "active_process_count": count,
+            "tenant": self.state.tenant_id_str,
+            "note": "Count of process instances (streams) registered in the process \
+                     registry. Each entry corresponds to one MaKo workflow instance \
+                     (e.g. one Lieferantenwechsel or one Messstellenwechsel).",
+        }))
+        .map(|block| CallToolResult::success(vec![block]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    /// Return outbox delivery status: total pending messages, oldest pending message age.
+    ///
+    /// Use for operational monitoring and incident triage ("are messages stuck in
+    /// the outbox?").  A non-zero queue with old messages indicates a stalled
+    /// outbox worker or unavailable trading partner.
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = false),
+        description = "Return current AS4 outbox delivery status: pending count and age."
+    )]
+    async fn get_outbox_status(&self) -> Result<CallToolResult, McpError> {
+        use mako_engine::outbox::OutboxStore as _;
+        // pending_now gives a snapshot of up to 100 messages due for delivery now.
+        let pending: Vec<mako_engine::outbox::OutboxMessage> = self
+            .state
+            .process_store
+            .pending_now(100)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let total_in_queue: usize = self
+            .state
+            .process_store
+            .len()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let now = time::OffsetDateTime::now_utc();
+        let oldest_secs: i64 = pending
+            .iter()
+            .map(|m| (now - m.created_at).whole_seconds())
+            .max()
+            .unwrap_or(0);
+
+        let alert = total_in_queue > 0 && oldest_secs > 300; // >5 min = potentially stuck
+        ContentBlock::json(serde_json::json!({
+            "pending_now_sample":    pending.len(),
+            "total_in_queue":        total_in_queue,
+            "oldest_pending_secs":   oldest_secs,
+            "alert": alert,
+            "tenant": self.state.tenant_id_str,
+            "note": if alert {
+                "⚠️ Messages have been in the outbox for more than 5 minutes — \
+                 the outbox worker may be stalled or the recipient endpoint may be down. \
+                 Check makod logs for AS4 delivery errors."
+            } else {
+                "Outbox is processing normally."
+            },
+        }))
+        .map(|block| CallToolResult::success(vec![block]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    /// Return the most recent permanently-failed (dead-lettered) messages.
+    ///
+    /// Dead-lettered messages have exhausted all delivery retries or were
+    /// rejected with a permanent error.  Each entry needs operator investigation.
+    /// Under §22 MessZV, dead-lettered EDIFACT messages must be resolved within
+    /// the regulatory deadline window.
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = false),
+        description = "Return the 20 most recent permanently dead-lettered messages (§22 MessZV)."
+    )]
+    async fn list_dead_letters(&self) -> Result<CallToolResult, McpError> {
+        let records = self
+            .state
+            .process_store
+            .list_dead_letters(20)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let items: Vec<serde_json::Value> = records
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "rejected_at":   r.rejected_at,
+                    "reason_label":  r.reason_label,
+                    "reason_detail": r.reason_detail,
+                })
+            })
+            .collect();
+
+        ContentBlock::json(serde_json::json!({
+            "dead_letter_count": items.len(),
+            "alert": !items.is_empty(),
+            "items": items,
+            "note": "Dead-lettered messages have permanently failed delivery. \
+                     Investigate each entry and re-submit via POST /api/v1/commands \
+                     or the ERP command API. §22 MessZV requires timely resolution.",
+        }))
+        .map(|block| CallToolResult::success(vec![block]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
 }
 
 // ── Prompt argument types ─────────────────────────────────────────────────────

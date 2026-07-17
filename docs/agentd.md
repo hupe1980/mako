@@ -6,8 +6,8 @@ parent: Services
 mermaid: true
 description: >
   agentd operator guide: Multi-agent LLM orchestration daemon.
-  Orchestrator + Specialist Mesh pattern, LanceDB RAG, ReAct loop with MCP tools,
-  OpenAI / Anthropic / AWS Bedrock SigV4, WASM plugins via mako-plugin.
+  27 built-in specialists ship in container image. Orchestrator + Specialist Mesh,
+  LanceDB RAG, parallel dispatch, A2A agent cards, OpenAI / Anthropic / AWS Bedrock.
 ---
 
 # `agentd` — Multi-Agent LLM Orchestration
@@ -23,9 +23,42 @@ Port: **`:9580`**
 | `POST /webhook` | Inbound CloudEvent trigger |
 | `POST /api/v1/run` | Manual agent invocation |
 | `GET /api/v1/sessions` | Last 100 agent decisions (in-memory ring buffer) |
-| `POST /api/v1/rag/ingest` | Index a live text document into LanceDB (M9: MSB device history) |
+| `GET /api/v1/agents` | List all active agents (built-in + custom) |
+| `GET /api/v1/agents/catalog` | Full catalog of all 27 built-in definitions |
+| `GET /.well-known/agents/{name}` | A2A Agent Card for a specialist |
+| `POST /api/v1/rag/ingest` | Index a live text document into LanceDB |
 | `POST /api/v1/rag/search` | Query the RAG knowledge base directly |
 | `GET /health` · `GET /health/ready` | Liveness / readiness |
+
+---
+
+## Key design decisions
+
+### 27 built-in specialists ship in the container image
+
+The most important architectural change from the naive "put prompts in demo config" approach:
+all 27 specialist system prompts are **compiled into the agentd binary** and ship in the
+container image. Operators activate them via `[bundled_agents]` in `agentd.toml` without
+copying hundreds of lines of system prompts.
+
+This follows the same principle as `makod`'s compiled-in AHB profiles — domain knowledge
+lives in the binary, not in operator-managed config files.
+
+### A2A Protocol compliance
+
+Each specialist exposes an [A2A Agent Card](https://a2a-protocol.org/) at
+`/.well-known/agents/{name}` — a standards-based capability declaration that enables
+external systems to discover and interact with mako specialists without prior configuration.
+
+### Parallel dispatch (new)
+
+The orchestrator supports three dispatch modes:
+
+| Mode | Behaviour | Best for |
+|---|---|---|
+| `sequential` (default) | Route to one specialist | Clear single-domain events |
+| `parallel` | Fan out to ALL matching specialists concurrently | Compliance events needing multiple checks |
+| `race` | Fan out; return first specialist to complete | Latency-sensitive events |
 
 ---
 
@@ -35,50 +68,92 @@ Port: **`:9580`**
 graph TB
     TRIGGER["Trigger\nCloudEvent webhook\nor POST /api/v1/run"]
 
-    subgraph orchestrator [Orchestrator Agent]
-        ORCH["Route to specialist\nor answer directly"]
+    subgraph orchestrator ["Orchestrator Agent"]
+        ORCH["1. Direct match (trigger_patterns)\n2. LLM triage (tool call)\n3. Fallback: orchestrator handles directly"]
+        MODE["DispatchMode:\nsequential | parallel | race"]
     end
 
-    subgraph specialists [Specialist Agents]
-        MAKO["mako-agent\n(Anthropic Claude)\nEDIFACT · UTILMD · deadlines"]
-        DEADLINE["deadline-alert-agent\n(Anthropic Claude)\nAPERAK 45-min · 10WT · §20 EnWG"]
-        BILLING["billing-agent\n(OpenAI GPT)\nbillingd · invoicd · O2C"]
-        ANOMALY["billing-anomaly-agent\nrolling 3-month deviation check"]
-        EEG["eeg-agent\n(Anthropic Claude)\neinsd · §21 EEG · settlements"]
-        COMP["compliance-agent\n§20 EnWG · BNetzA · obsd"]
-        MSB["msb-history-agent\nINSRPT · device history RAG\nLanceDB indexing"]
-        PAYMENT["payment-reconciliation-agent\nCAMT.054 matching · Offene Posten"]
-        GRID["grid-anomaly-agent\nbilanzierungsgebiet drift\nERC A99 prevention"]
+    subgraph builtin ["26 Built-in Specialists (compiled into binary)"]
+        direction LR
+        MAKO["mako-agent\nEDIFACT · UTILMD · deadlines"]
+        BILLING["billing-agent\nbillingd · invoicd · O2C"]
+        BILREG["billing-regulatory-guard-agent\n§40/§41/§41b/§42 compliance"]
+        JAHRB["jahresabrechnung-agent\nAnnual settlement orchestrator"]
+        ANOMALY["billing-anomaly-agent\n20% deviation check"]
+        EEG["eeg-agent + eeg-compliance-agent\neinsd · §52 · §44b · §20 EEG"]
+        MORE["... 20 more specialists"]
     end
 
-    subgraph rag [RAG Knowledge Base]
+    subgraph rag ["RAG Knowledge Base"]
         LANCE["LanceDB\nS3 / GCS / local\nANN vector search"]
-        CHUNKS["MSB device history\nAHB PDFs · runbooks\nBNetzA decisions"]
-        CHUNKS --> LANCE
     end
 
-    subgraph tools [MCP Tools — all 17 services]
-        T1["makod: submit_command\nlist_workflows · get_status"]
-        T2["marktd: get_malo · get_versorgungsstatus\nget_konfigurationsprodukte"]
-        T3["billingd: calculate · check_billing_anomaly"]
-        T4["edmd: get_quality_warnings · get_device_history\nvalidate_timeseries · get_summenzeitreihe"]
-        T5["accountingd: suggest_payment_match"]
-        T6["obsd: list_overdue · kpi_report · get_bnetza_report"]
-        T7["... 100+ more tools"]
-    end
-
-    subgraph plugins [WASM Plugins via mako-plugin]
-        P1["Custom validators"]
-        P2["ERP-specific formatters"]
-        P3["Domain extensions (Extism sandbox)"]
+    subgraph tools ["MCP Tools — all 17 services (160+ tools)"]
+        T1["makod · marktd · billingd"]
+        T2["edmd · accountingd · obsd"]
+        T3["einsd · netzbilanzd · sperrd · ..."]
     end
 
     TRIGGER --> orchestrator
-    orchestrator --> specialists
-    specialists -->|"ReAct: think → act → observe"| tools
-    specialists -->|"background knowledge"| rag
-    specialists -->|"extension hooks"| plugins
-    specialists -->|"de.agent.decision.made"| ERP["ERP · Alertmanager"]
+    orchestrator --> builtin
+    builtin -->|"ReAct: reason → act → observe"| tools
+    builtin -->|"background knowledge"| rag
+```
+
+### Routing flow
+
+```mermaid
+sequenceDiagram
+    participant CE as CloudEvent
+    participant Orch as Orchestrator
+    participant Reg as AgentRegistry
+    participant Spec as Specialist
+    participant MCP as MCP Tools
+
+    CE->>Orch: de.billing.rechnung.erstellt
+    Orch->>Reg: find_specialist(event_type)
+    Note over Reg: trigger_patterns match?
+    Reg-->>Orch: billing-regulatory-guard-agent
+    Orch->>Spec: run(event_data)
+    loop ReAct loop (max_turns)
+        Spec->>MCP: get_billing_record(record_id)
+        MCP-->>Spec: Rechnung JSON
+        Spec->>MCP: validate_tariff_config(tariff)
+        MCP-->>Spec: compliance warnings
+        Note over Spec: Structure output
+    end
+    Spec-->>Orch: AgentDecision {outcome, summary}
+    Orch-->>CE: de.agent.decision.made (audit)
+```
+
+### Parallel dispatch flow
+
+```mermaid
+sequenceDiagram
+    participant CE as CloudEvent
+    participant Orch as Orchestrator
+    participant A1 as billing-anomaly-agent
+    participant A2 as billing-regulatory-guard-agent
+    participant MCP as MCP Tools
+
+    CE->>Orch: de.billing.rechnung.erstellt
+    Note over Orch: dispatch_mode = parallel
+    Note over Orch: 2 specialists match trigger
+    par Concurrent execution
+        Orch->>A1: run(event_data)
+        A1->>MCP: check_billing_anomaly
+        MCP-->>A1: deviation_pct: 35%
+        A1-->>Orch: ANOMALY_DETECTED: WARNING
+    and
+        Orch->>A2: run(event_data)
+        A2->>MCP: get_billing_record
+        MCP-->>A2: Rechnung JSON
+        A2->>MCP: validate_tariff_config
+        MCP-->>A2: §42 ENERGIEMIX_MISSING
+        A2-->>Orch: COMPLIANCE_STATUS: WARNINGS
+    end
+    Note over Orch: Merge all AgentDecisions
+    Orch-->>CE: de.agent.decision.made (merged)
 ```
 
 ---
@@ -102,33 +177,43 @@ graph TB
 
 ### Bundled specialists
 
-| Specialist | Provider | Triggers | MCP tools used |
-|---|---|---|---|
-| `mako-agent` | Anthropic Claude | `de.mako.process.*`, `de.mako.aperak.*` | makod, marktd, processd, obsd |
-| `deadline-alert-agent` | Anthropic Claude | `de.mako.process.escalated`, `de.mako.process.timedout`, `de.obs.stp.parity.alert` | makod, obsd, marktd |
-| `billing-agent` | OpenAI GPT | `de.invoic.receipt.disputed`, `de.accounting.*` | invoicd, billingd, accountingd, netzbilanzd |
-| `netzbilanz-agent` | Anthropic Claude | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched` | netzbilanzd, marktd, edmd |
-| `invoice-reconciliation-agent` | Anthropic Claude Opus | `de.invoic.payment.overdue`, `de.invoic.receipt.disputed` | invoicd, marktd, netzbilanzd |
-| `billing-anomaly-agent` | OpenAI GPT | `de.billing.rechnung.erstellt` | billingd, tarifbd, edmd |
-| `eeg-agent` | Anthropic Claude | `de.eeg.*` | einsd, edmd, marktd |
-| `compliance-agent` | Anthropic Claude | (manual / scheduled) | obsd, processd, marktd, invoicd |
-| `payment-reconciliation-agent` | OpenAI GPT | `de.accounting.payment.due`, `de.accounting.bankruecklast` | accountingd |
-| `msb-history-agent` | Anthropic Claude | `de.edmd.reading.quality.warning`, `de.edmd.reading.direct.stored` | edmd, makod, marktd |
-| `meter-data-agent` | Anthropic Claude | `de.edmd.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd |
-| `grid-anomaly-agent` | Anthropic Claude | `de.markt.grid.drift.detected`, `de.markt.nb-contract.updated` | marktd, obsd |
-| `tariff-optimization-agent` | OpenAI GPT | `de.billing.rechnung.erstellt`, `de.mako.process.completed` | billingd, tarifbd, edmd, marktd |
-| `vertragd-agent` | Anthropic Claude | `de.vertrag.*`, `de.mako.process.abgelehnt` | vertragd, processd, marktd |
-| `tarifbd-agent` | Anthropic Claude | `de.tarifd.product.updated`, `de.tarifd.angebot.*` | tarifbd, marktd |
-| `processd-agent` | Anthropic Claude | `de.mako.process.initiated`, `de.mako.process.rejected` | processd, marktd, obsd |
-| `sperrd-agent` | Anthropic Claude | `de.sperr.*`, `de.mako.process.completed` | sperrd, makod, marktd |
-| `nis-syncd-agent` | Anthropic Claude | `de.markt.grid.drift.detected`, `de.markt.malo.updated` | nis-syncd, processd, marktd, obsd |
-| `portald-agent` | Anthropic Claude | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung_auslaufend`, `de.accounting.mahnung.issued` | portald, billingd, einsd, accountingd |
-| `regulatory-reporting-agent` | Anthropic Claude Opus | (manual / scheduled) | obsd, processd, invoicd, marktd |
-| `replacement-value-agent` | Anthropic Claude | `de.edmd.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd, obsd |
-| `mabis-syncd-agent` | Anthropic Claude | `de.edmd.reading.quality.warning` | edmd, obsd, marktd |
-| `smgw-diagnostics-agent` | Anthropic Claude | `de.edmd.reading.quality.warning`, `de.edmd.reading.direct.stored`, `de.mako.process.initiated` | edmd, marktd, obsd, processd |
+All provider/model assignments are **operator-configured** via `[bundled_agents] default_model`
+and `[bundled_agents.overrides.<name>]`. The built-in definitions contain only the system
+prompt, default trigger patterns, and default MCP server requirements.
 
-All 24 specialists are configured in `agentd.toml` — see `demo/agentd.toml` for a fully working example.
+| Specialist | Default triggers | Default MCP servers |
+|---|---|---|
+| `mako-agent` | `de.mako.process.*`, `de.mako.aperak.*` | makod, marktd, processd, obsd |
+| `deadline-alert-agent` | `de.mako.process.escalated`, `de.mako.process.timedout`, `de.obs.stp.parity.alert` | obsd, makod, marktd |
+| `billing-agent` | `de.invoic.receipt.disputed`, `de.accounting.*` | invoicd, billingd, accountingd, netzbilanzd |
+| `netzbilanz-agent` | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched` | netzbilanzd, marktd, edmd |
+| `invoice-reconciliation-agent` | `de.invoic.payment.overdue`, `de.invoic.receipt.disputed` | invoicd, marktd, netzbilanzd |
+| `billing-anomaly-agent` | `de.billing.rechnung.erstellt` | billingd, edmd |
+| `billing-regulatory-guard-agent` | `de.billing.rechnung.erstellt` | billingd, marktd |
+| `jahresabrechnung-agent` | manual trigger | billingd, edmd, marktd |
+| `eeg-agent` | `de.eeg.anlage.foerderung_auslaufend`, `de.edmd.reading.direct.stored` | einsd, edmd, marktd |
+| `eeg-compliance-agent` | `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*` | einsd, obsd |
+| `payment-reconciliation-agent` | `de.accounting.payment.due`, `de.accounting.bankruecklast` | accountingd |
+| `compliance-agent` | `de.obs.stp.parity.alert` | obsd, processd, marktd, invoicd |
+| `msb-history-agent` | `de.edmd.reading.quality.warning`, `de.edmd.reading.direct.stored` | edmd, makod, marktd |
+| `meter-data-agent` | `de.edmd.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd |
+| `grid-anomaly-agent` | `de.markt.grid.drift.detected`, `de.markt.nb-contract.updated` | marktd, obsd |
+| `tariff-optimization-agent` | `de.billing.rechnung.erstellt`, `de.mako.process.completed` | billingd, tarifbd, edmd, marktd |
+| `vertragd-agent` | `de.vertrag.*`, `de.mako.process.abgelehnt` | vertragd, processd, marktd |
+| `tarifbd-agent` | `de.tarifd.product.updated`, `de.tarifd.angebot.*` | tarifbd, marktd |
+| `processd-agent` | `de.mako.process.initiated`, `de.mako.process.rejected` | processd, marktd, obsd |
+| `sperrd-agent` | `de.sperr.*`, `de.mako.process.completed` | sperrd, makod, marktd |
+| `nis-syncd-agent` | `de.markt.grid.drift.detected`, `de.markt.malo.updated` | nis-syncd, processd, marktd, obsd |
+| `portald-agent` | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung_auslaufend`, `de.accounting.mahnung.issued` | portald, billingd, einsd, accountingd |
+| `regulatory-reporting-agent` | manual / scheduled | obsd, processd, invoicd, marktd |
+| `replacement-value-agent` | `de.edmd.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd, obsd |
+| `mabis-syncd-agent` | `de.edmd.reading.quality.warning` | edmd, obsd, marktd |
+| `smgw-diagnostics-agent` | `de.edmd.reading.quality.warning`, `de.edmd.reading.direct.stored`, `de.mako.process.initiated` | edmd, marktd, obsd, processd |
+| `vpp-billing-agent` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` | billingd, marktd, obsd |
+
+All 27 specialist definitions are compiled into the `agentd` binary. Activate them via
+`[bundled_agents]` in `agentd.toml` — no system prompt copy-paste required.
+See `demo/agentd.toml` for a working example.
 
 ---
 
@@ -138,7 +223,7 @@ All 24 specialists are configured in `agentd.toml` — see `demo/agentd.toml` fo
 |---|---|---|
 | OpenAI | `openai` | `text-embedding-3-small` for embeddings; compatible with Azure OpenAI, Ollama, LM Studio |
 | Anthropic | `anthropic` | Claude 3.5 Sonnet; BM25 keyword fallback (no embedding API) |
-| AWS Bedrock | `bedrock` | SigV4 signed requests (no AWS SDK — manual HMAC-SHA256); Claude on Bedrock |
+| AWS Bedrock | `bedrock` | SigV4 signed requests; Claude on Bedrock or Titan embeddings |
 
 ---
 
@@ -175,70 +260,83 @@ storage_uri = "az://my-container/rag"         # Azure Blob
 
 ## Configuration
 
+### Minimal — enable built-in specialists
+
 ```toml
-# agentd.toml
-database_url = "postgresql://..."   # optional: for audit log
-port         = 9580
-tenant       = "9900357000004"
+# agentd.toml — using built-in specialist catalog
+tenant = "9900357000004"
 
-[orchestrator]
-provider = "mako-agent"   # which provider the orchestrator uses for triage
-
-[[providers]]
-name    = "mako-agent"
-backend = "anthropic"
-model   = "claude-3-5-sonnet-20241022"
-api_key = "env:ANTHROPIC_API_KEY"
-
-[[providers]]
-name    = "billing-agent"
+[providers.openai]
 backend = "openai"
-model   = "gpt-4o"
 api_key = "env:OPENAI_API_KEY"
 
-[[providers]]
-name    = "bedrock-agent"
-backend = "bedrock"
-model   = "anthropic.claude-3-5-sonnet-20241022-v2:0"
-aws_region = "eu-central-1"
-# Uses AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY env vars or instance role
+[orchestrator]
+provider   = "openai"
+model      = "gpt-4o"
+max_turns  = 10
+dispatch_mode = "sequential"  # sequential | parallel | race
 
-[[agents]]
-name     = "mako-agent"
-provider = "mako-agent"
-use_rag  = true
-system_prompt = """
-  You are an expert on German energy market communication (BDEW MaKo).
-  Use the available tools to answer questions about EDIFACT processes,
-  regulatory deadlines, and market data.
-"""
-trigger_patterns = ["de.mako.*", "mako.process.*"]
+# ── Enable built-in specialists ───────────────────────────────────────────────
+[bundled_agents]
+enable_all       = true          # activate all 27 built-in specialists
+default_provider = "openai"
+default_model    = "gpt-4o-mini"
 
-[[agents]]
-name     = "billing-agent"
-provider = "billing-agent"
-use_rag  = false
-trigger_patterns = ["de.billing.*", "de.accounting.*"]
+# Upgrade specific agents to more capable models
+[bundled_agents.overrides.mako-agent]
+model = "gpt-4o"
+
+[bundled_agents.overrides.jahresabrechnung-agent]
+model     = "gpt-4o"
+max_turns = 20
 
 [mcp_servers]
-makod       = "http://makod:8080/mcp"
-marktd      = "http://marktd:8180/mcp"
-billingd    = "http://billingd:9280/mcp"
-accountingd = "http://accountingd:9380/mcp"
-vertragd    = "http://vertragd:9780/mcp"
-obsd        = "http://obsd:8480/mcp"
-# ... all 17 services
+makod    = "http://makod:8080/mcp"
+marktd   = "http://marktd:8180/mcp"
+billingd = "http://billingd:9280/mcp"
+edmd     = "http://edmd:8380/mcp"
+obsd     = "http://obsd:8480/mcp"
+# ... all 17 services at their respective ports
+mcp_api_key = "env:AGENTD_MCP_API_KEY"
 
-[rag]
-storage_uri    = "./data/rag"
-embedding_dim  = 1536
-top_k          = 5
-chunk_size     = 512
-chunk_overlap  = 64
+trigger_event_types = [
+  "de.mako.process.escalated",
+  "de.billing.rechnung.erstellt",
+  "de.eeg.*",
+  "de.invoic.receipt.disputed",
+]
+```
 
-# [[rag.sources]]
-# name = "billingd-guide"
-# path = "./docs/billingd.md"
+### Custom agents — override or extend built-ins
+
+```toml
+# Custom agent that overrides billing-anomaly-agent with stricter threshold
+[[agents]]
+name      = "billing-anomaly-agent"
+specialty = "Billing anomaly detection — strict mode (10% threshold)"
+provider  = "openai"
+model     = "gpt-4o"
+max_turns = 12
+mcp_servers = ["billingd", "edmd"]
+trigger_patterns = ["de.billing.rechnung.erstellt"]
+system_prompt = """
+You are the billing anomaly detection specialist (strict mode: 10% threshold).
+# ... your custom prompt ...
+"""
+```
+
+### Parallel dispatch — compliance events
+
+```toml
+# Fan out to ALL specialists matching the event type simultaneously
+[orchestrator]
+dispatch_mode  = "parallel"
+parallel_limit = 4  # max concurrent specialists
+
+# billing.rechnung.erstellt now triggers BOTH:
+# - billing-anomaly-agent    (deviation check)
+# - billing-regulatory-guard-agent  (§40/§41/§41b compliance)
+# simultaneously, returning aggregated results
 ```
 
 ---
@@ -310,6 +408,9 @@ EDIFACT rules), `WebhookPlugin` (sign/enrich outbound webhooks).
 | `POST` | `/webhook` | Inbound CloudEvent trigger |
 | `POST` | `/api/v1/run` | Manual agent invocation |
 | `GET`  | `/api/v1/sessions` | Last 100 agent decisions (in-memory ring buffer) |
+| `GET`  | `/api/v1/agents` | List all active agents (built-in + custom) with capabilities |
+| `GET`  | `/api/v1/agents/catalog` | Full catalog of all 27 built-in definitions (even if not enabled) |
+| `GET`  | `/.well-known/agents/{name}` | A2A Agent Card for a named specialist |
 | `POST` | `/api/v1/rag/ingest` | Index a live text document into LanceDB |
 | `POST` | `/api/v1/rag/search` | Query the RAG knowledge base directly |
 | `GET`  | `/health` | Liveness |

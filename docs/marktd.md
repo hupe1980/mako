@@ -1592,6 +1592,53 @@ and time range. No application-level iteration is needed on the consumer side.
 15-min slot in the billing month and aggregates kWh by zone. This eliminates the need for
 operators to maintain manual HT/NT time-window configuration per meter in the billing engine.
 
+### Automatic population from WiM Stammdaten (ORDERS 17102–17133)
+
+`marktd` populates `ZaehlzeitRegister` and `ZaehlzeitSaison` **automatically** when `makod`
+receives an inbound WiM Stammdaten response (ORDERS PIDs 17102–17133) from the MSB.
+
+The adapter `extract_zak_ze_zaehlwerke()` in `makod` parses the EDIFACT **ZAK+ZE+ZD** segments:
+
+| Segment | Field | Codes |
+|---------|-------|-------|
+| `ZAK` element 0 | `obis_kennzahl` | OBIS code (e.g. `"1-1:1.8.0"`) |
+| `ZAK` element 1 | `zaehlerauspraegung` | `Z01`→`HT`, `Z02`→`NT`, `Z03`→`EINZEL` |
+| `ZAK` element 2 | `bezeichnung` | Human-readable register label |
+| `ZE` element 0 | `saison` | `Z01`→`SOMMER`, `Z02`→`WINTER`, `Z03`→`GESAMT` |
+| `ZD` element 0 | `tagtyp` | `Z01`→`WERKTAG`, `Z02`→`SAMSTAG`, `Z03`→`SONNTAG_FEIERTAG` |
+| `ZD` elements 1..N | time windows | `"HHMM:RegisterCode"` switch-point pairs |
+
+After parsing, `makod` emits a `ProcessCompleted` outbox entry (CloudEvent type
+`de.mako.process.completed`, PID 17102–17133) carrying `melo_id` and `zaehlwerke`.
+When `marktd`'s `event_ingest` handler receives this event, it:
+
+1. Looks up the Zaehler associated with the MeLo via `list_zaehler_by_melo()`
+2. For each `zaehlwerk`, calls `upsert_register()` (idempotent on `zaehler_id + bezeichnung + valid_from`)
+3. For each season window (ZE→ZD), calls `upsert_saison()` with a deterministic UUID
+   derived from `(register_id, saison, tagtyp, zeit_von)` — safe for at-least-once delivery
+
+This means operators **do not need to manually provision** ZaehlzeitRegister entries for
+meters where the MSB sends WiM ORDERS Stammdaten responses — `marktd` and `makod` handle
+it automatically.
+
+**Data flow:**
+
+```mermaid
+sequenceDiagram
+    participant MSB
+    participant makod
+    participant marktd
+    participant billingd
+
+    MSB->>makod: ORDERS PID 17102–17133<br/>ZAK+ZE+ZD segments
+    makod->>makod: extract_zak_ze_zaehlwerke()<br/>parse OBIS / saisons / fenster
+    makod--)marktd: de.mako.process.completed<br/>{melo_id, zaehlwerke:[...]}
+    marktd->>marktd: list_zaehler_by_melo(melo_id)
+    marktd->>marktd: upsert_register() + upsert_saison()<br/>(idempotent, deterministic UUID)
+    billingd->>marktd: GET /zaehler/{id}/tariff-zone?datetime=...
+    marktd-->>billingd: { "tariff_zone": "HT" }
+```
+
 ---
 
 ## SteuerbareRessource Registry

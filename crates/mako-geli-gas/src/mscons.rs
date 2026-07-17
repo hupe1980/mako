@@ -73,6 +73,13 @@ pub struct GasMsconsDatenData {
     /// `None` for PIDs 13002, 13008, 13009.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zustandszahl: Option<String>,
+    /// Gas quality type (PID 13007 only).
+    ///
+    /// Normalized to canonical form: `"H_GAS"` | `"L_GAS"` | `"H2_BLEND"` | `"BIOGAS"`.
+    /// `None` until the DVGW/BNetzA EDIFACT qualifier for gas quality type in
+    /// MSCONS is standardized (expected 2026–2028 AHB wave).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gasqualitaet: Option<String>,
 }
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -95,6 +102,12 @@ pub enum GasMsconsDatenEvent {
         /// Zustandszahl (PID 13007 only, from `QTY+Z10`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         zustandszahl: Option<String>,
+        /// Gas quality type (PID 13007 only).
+        ///
+        /// Canonical: `"H_GAS"` | `"L_GAS"` | `"H2_BLEND"` | `"BIOGAS"`.
+        /// `None` until the DVGW/BNetzA H2-blend AHB qualifier is published.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gasqualitaet: Option<String>,
     },
     /// AHB validation passed; data available for downstream use.
     ValidationPassed {
@@ -184,6 +197,10 @@ pub enum GasMsconsDatenCommand {
         ///
         /// `None` for PIDs 13002, 13008, 13009.
         zustandszahl: Option<String>,
+        /// Gas quality type (PID 13007 only).
+        ///
+        /// Canonical: `"H_GAS"` | `"L_GAS"` | `"H2_BLEND"`. `None` until AHB is published.
+        gasqualitaet: Option<String>,
     },
 }
 
@@ -211,6 +228,7 @@ impl Workflow for GeliGasMsconsWorkflow {
                 message_ref,
                 brennwert_kwh_per_m3,
                 zustandszahl,
+                gasqualitaet,
             } => {
                 if matches!(state, GasMsconsDatenState::New) {
                     GasMsconsDatenState::DatenErhalten(GasMsconsDatenData {
@@ -219,6 +237,7 @@ impl Workflow for GeliGasMsconsWorkflow {
                         message_ref: message_ref.clone(),
                         brennwert_kwh_per_m3: brennwert_kwh_per_m3.clone(),
                         zustandszahl: zustandszahl.clone(),
+                        gasqualitaet: gasqualitaet.clone(),
                     })
                 } else {
                     state
@@ -252,6 +271,7 @@ impl Workflow for GeliGasMsconsWorkflow {
                 validation_errors,
                 brennwert_kwh_per_m3,
                 zustandszahl,
+                gasqualitaet,
             } => {
                 if !MSCONS_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
@@ -267,6 +287,7 @@ impl Workflow for GeliGasMsconsWorkflow {
                     message_ref: message_ref.clone(),
                     brennwert_kwh_per_m3: brennwert_kwh_per_m3.clone(),
                     zustandszahl: zustandszahl.clone(),
+                    gasqualitaet: gasqualitaet.clone(),
                 };
                 let mut events = vec![erhalten_event];
                 let outbox = if validation_passed {
@@ -282,6 +303,7 @@ impl Workflow for GeliGasMsconsWorkflow {
                                 "pid": pid.as_u32(),
                                 "brennwert_kwh_per_m3": brennwert_kwh_per_m3,
                                 "zustandszahl": zustandszahl,
+                                "gasqualitaet": gasqualitaet,
                             }),
                         )
                         .caused_by(1),

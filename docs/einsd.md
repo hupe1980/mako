@@ -11,7 +11,7 @@ description: >
   §36k Wind Korrekturfaktor, §42b GGV multi-meter Messkonzept,
   §51 Negativpreisregel, §52 Pflichtzahlungen + §52 Abs. 6 Netting,
   SettlementPeriodState lifecycle, Repowering §22, Zusammenlegung §24,
-  KWKG Förderdauer, 301 eeg-billing tests, 14 MCP tools, eeg-agent.
+  KWKG Förderdauer, 324 eeg-billing tests, 14 MCP tools, eeg-agent.
 ---
 
 # `einsd` — Einspeiser Registry + EEG/KWKG Settlement

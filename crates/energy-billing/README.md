@@ -20,18 +20,34 @@ billingd (HTTP service)
     │
     └── energy-billing (pure crate)
             │
-            ├── PricingModel       — typed enum, type-safe dispatch per product
-            ├── TariffInput        — product pricing from tarifbd (JSONB)
-            ├── Quantities         — all meter inputs for one billing period
-            ├── BillingContext     — period, IDs, invoice type, regulatory rates
-            ├── BillingEngine      — composes BillingProvider instances
-            ├── BillingProvider    — one implementation per product/tax type
-            └── Invoice            — immutable result with positions + totals + BO4E JSON
+            ├── Product                — typed enum with 12 per-category variants
+            │     ├── Strom(ElectricityProduct)
+            │     ├── Waermepumpe/Wallbox(ControllableLoadProduct)   §14a
+            │     ├── Gas(GasProduct)
+            │     ├── Waerme(HeatProduct)
+            │     ├── Solar(SolarProduct)
+            │     ├── Eeg(EegProduct)
+            │     ├── Einspeisung(EinspeisungProduct)
+            │     ├── Hems/Emobility/Energiedienstleistung(…)
+            │     └── Sharing(SharingProduct)                        §42c
+            │
+            ├── Quantities             — all meter inputs for one billing period
+            ├── BillingContext         — period, IDs, invoice type, regulatory rates
+            ├── BillingEngine          — composes BillingProvider instances
+            │     ├── validate()       — pre-flight regulatory check (no positions)
+            │     ├── bill(&self, …)   — pure function → Result<Invoice, BillingError>
+            │     └── bill_batch(…)    — portfolio billing
+            ├── BillingProvider        — one implementation per product/tax type
+            └── Invoice                — result with positions + totals + warnings + BO4E JSON
+                  ├── warnings: Vec<BillingWarning>    — regulatory compliance notices
+                  ├── has_errors()                     — any Error-severity warning?
+                  └── to_rechnung_json()               — BO4E JSONB for accountingd
 ```
 
 The engine runs in passes:
 
 ```
+Pass 0  validate_warnings()      §41b iMSys guard · regulatory pre-checks
 Pass 1  commodity / levy providers   (ElectricityProvider, GasProvider, …)
 Pass 2  tax provider                 (MwStProvider — sees all net positions)
 Pass 3  Abschlag deductions          (Final invoice reconciliation)
@@ -44,11 +60,13 @@ Pass 5  Cancellation sign reversal   (Stornorechnung — all signs negated)
 ## Quick start
 
 ```rust
-use energy_billing::*;
+use energy_billing::{Product, BillingContext, InvoiceType, MeterInput, Quantities,
+                     RegulatoryRates, GridInput};
 use rust_decimal_macros::dec;
 use time::macros::date;
 
-let tariff: TariffInput = serde_json::from_str(r#"{
+// Deserialize directly from tarifbd JSONB using the "category" discriminator
+let product: Product = serde_json::from_str(r#"{
     "category": "STROM",
     "arbeitspreis_ct_per_kwh": 32.0,
     "grundpreis_ct_per_day": 12.0
@@ -73,9 +91,9 @@ let quantities = Quantities {
     ..Default::default()
 };
 
-// Type-safe dispatch via PricingModel enum
-let invoice = PricingModel::try_from(tariff)?
-    .build_engine(&GridInput::default(), &ctx.regulatory_rates)?
+// Build and run — Product::build_engine() handles all category routing
+let invoice = product
+    .build_engine(&GridInput::default(), &ctx.regulatory_rates)
     .bill(ctx, &quantities)?;
 
 invoice.assert_valid();
@@ -86,22 +104,34 @@ let rechnung_json: serde_json::Value = invoice.to_rechnung_json();
 
 ---
 
-## Product categories
+## Product enum
 
-| `PricingModel` variant | Category string | Key features |
-|---|---|---|
-| `Electricity` | `STROM` | SLP/RLM; HT/NT via `billing::TimeOfUsePricing`; block tariffs via `billing::TariffSchedule`; RLM demand charge (`leistungspreis_strom_ct_per_kw_month`); §14a Modul 1/3; EEG Gutschrift pass-through |
-| `DynamicElectricity` | `STROM` + `dynamic_epex: true` | §41a per-interval EPEX; price floor; §41a Abs. 4 iMSys validation; §41a Abs. 6 annual savings |
-| `HeatPump` | `WAERMEPUMPE` | §14a mandatory; same as `Electricity` |
-| `Wallbox` | `WALLBOX` | §14a mandatory; same as `Electricity` |
-| `Gas` | `GAS` | §10 GasGVV Brennwertkorrektur; Energiesteuer; §54 EnergieStG KWK/industrial exemption; BEHG CO₂; H2-blend annotation |
-| `Heat` | `WAERME` | Fernwärme: Grundpreis + Leistungspreis + Arbeitspreis; auto-7% MwSt for renewable sources |
-| `Solar` | `SOLAR` | §42b EEG Mieterstrom; §42a GGV; 0% MwSt for ≤30 kWp (§12 Abs. 3 UStG) |
-| `Eeg` | `EEG` | LF-side Gutschrift; §51 contractual Negativpreisregel; full accuracy via `eeg` feature |
-| `Einspeisung` | `EINSPEISUNG` | Direktvermarktung: Marktwert − Vermarktungsgebühr |
-| `Hems` | `HEMS` | Platform subscription + optimization events |
-| `Emobility` | `EMOBILITY` | CPO/EMSP: service fee + kWh + session/roaming |
-| `Service` | `ENERGIEDIENSTLEISTUNG` | Flat fee + per-event |
+`Product` is the typed dispatch enum that replaces the old flat `TariffInput` god-struct.
+Each category has its own struct with only the relevant fields — no silent field confusion.
+
+```rust
+// Deserializes via #[serde(tag = "category")] from flat tarifbd JSONB:
+// {"category":"STROM","arbeitspreis_ct_per_kwh":28.5} → Product::Strom(ElectricityProduct{...})
+// {"category":"WAERMEPUMPE","sect14a_modul1_nne_reduktion_ct_per_kwh":1.5,...} → Product::Waermepumpe(...)
+// {"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":7.5,...} → Product::Gas(GasProduct{...})
+```
+
+| `Product` variant | Category string | Provider | Key features |
+|---|---|---|---|
+| `Strom(ElectricityProduct)` | `STROM` | `ElectricityProvider` or `DynamicElectricityProvider` | SLP/RLM; HT/NT; block tariffs; §41a EPEX |
+| `Waermepumpe(ControllableLoadProduct)` | `WAERMEPUMPE` | `ControllableLoadProvider` | §14a Modul 1/3 mandatory |
+| `Wallbox(ControllableLoadProduct)` | `WALLBOX` | `ControllableLoadProvider` | §14a Modul 1/3 mandatory |
+| `Gas(GasProduct)` | `GAS` | `GasProvider` | Brennwertkorrektur; Energiesteuer; BEHG CO₂ |
+| `Waerme(HeatProduct)` | `WAERME` | `HeatProvider` | Fernwärme; auto-7% MwSt renewable |
+| `Solar(SolarProduct)` | `SOLAR` | `SolarProvider` | §42b GGV; §42a Mieterstrom; 0% MwSt ≤30 kWp |
+| `Eeg(EegProduct)` | `EEG` | `EegProvider` | LF-side Gutschrift; `eeg` feature for §51/§52 |
+| `Einspeisung(EinspeisungProduct)` | `EINSPEISUNG` | `EinspeisungProvider` | Direktvermarktung Marktwert − Gebühr |
+| `Hems(HemsProduct)` | `HEMS` | `HemsProvider` | Platform subscription + events |
+| `Emobility(EmobilityProduct)` | `EMOBILITY` | `EmobilityProvider` | CPO/EMSP: service + kWh + session/roaming |
+| `Energiedienstleistung(ServiceProduct)` | `ENERGIEDIENSTLEISTUNG` | `ServiceProvider` | Flat fee + per-event |
+| `Sharing(SharingProduct)` | `SHARING` | `ElectricityProvider` + `EnergyShareProvider` | §42c Energiegemeinschaft credit |
+
+`ControllableLoadProduct` composes `ElectricityProduct` (via `#[serde(flatten)]`) plus §14a fields — the standard electricity billing is delegated to `ElectricityProvider` then §14a credits are appended.
 
 ---
 
@@ -111,16 +141,57 @@ let rechnung_json: serde_json::Value = invoice.to_rechnung_json();
 |---|---|
 | HT/NT Zweitarif | `billing::TimeOfUsePricing` (validated, penny-correct) |
 | Block / graduated tariffs | `billing::TariffSchedule::graduated()` |
-| Indexed prices (TTF, Phelix) | `IndexedPriceConfig { base_ct, spread_ct, index_value, factor }` |
+| Indexed prices (TTF, Phelix, NCG) | `IndexedPriceConfig { base_ct, spread_ct, index_value, factor }` |
+| Gas indexed price | `gas_indexed_price: Option<IndexedPriceConfig>` in `GasProduct` |
 | Seasonal prices | `SeasonalPriceOverride` by month range (wraps year boundary) |
 | §41a EPEX dynamic | `billing::DynamicPricing` with per-interval kWh × price |
+| §41b iMSys guard | Hard error when `dynamic_epex=true` and `MeteringMode != Imsys` |
 | Pro-rata Grundpreis | `ctx.prorate_days()` clips to `vertragsbeginn`/`vertragsende` |
 | Minimum invoice (B2B) | Pass 4 auto-top-up to `minimum_invoice_eur_brutto` |
 | Discounts / bonuses | `auf_abschlag_ct_per_kwh`, `auf_abschlag_eur_per_month`, `Bonus` category |
 | MSB pass-through | `msb_gebuehr_ct_per_day` (MsbG) |
 | Multi-rate MwSt | Per-position `applicable_tax_rate` → grouped `MwStProvider` |
 | Auto-0% MwSt solar ≤30 kWp | `anlage_kwp ≤ 30` (§12 Abs. 3 UStG Solarpaket I) |
-| Stromsteuer exemption | `industrie_stromsteuer_befreiung` (§9 Abs. 1 Nr. 4 StromStG) |
+| Stromsteuer exemption | `StromsteuerBefreiung` typed enum (§9 Nr. 1-5 + §9a) |
+| Gas RLM Leistungspreis | `gas_leistungspreis_ct_per_kw_month` in `GasProduct` |
+| §42 Energiemix | `EnergieQuellen` struct with `co2_g_per_kwh` (mandatory §42 Abs. 2 Nr. 2 EnWG) |
+
+---
+
+## Regulatory compliance
+
+### §41b EnWG — iMSys guard for dynamic tariffs
+
+Dynamic tariffs (`Product::Strom(p)` where `p.dynamic_epex = true`) require an intelligent
+metering system. `BillingEngine::bill()` rejects with `BillingError::InvalidInput` when
+`quantities.electricity.metering_mode != MeteringMode::Imsys`:
+
+```rust
+// Pre-flight check: validate without generating positions
+let warnings = engine.validate(&ctx, &quantities);
+for w in &warnings {
+    if w.severity == WarningSeverity::Error {
+        eprintln!("[{}] {}", w.code, w.message);
+    }
+}
+// §41b violations produce BillingWarning { code: "SECT41B_IMSYS_REQUIRED", severity: Error }
+```
+
+### §9 StromStG — typed Stromsteuer exemption
+
+`StromsteuerBefreiung` is a typed enum covering all §9 StromStG exemption grounds:
+
+```rust
+pub enum StromsteuerBefreiung {
+    Keine,                     // Standard Stromsteuer applies
+    Bahnstrom,                 // §9 Nr. 1 — rail traction
+    NachweisErneuerbarer,      // §9 Nr. 2 — certified renewable
+    KwkSelbstverbrauch,        // §9 Nr. 3 — CHP < 2 MW
+    IndustrieProduktionesGewerbe, // §9 Nr. 4 — industry > 2 GWh/year
+    LandForstwirtschaft,       // §9 Nr. 5 — agricultural
+    SolarEigenverbrauch,       // §9a Nr. 1 — PV self-consumption ≤ 30 kWp
+}
+```
 
 ---
 
@@ -160,21 +231,38 @@ pub struct MeterInput {
 
 ---
 
-## Key `TariffInput` regulatory fields
+## Key regulatory fields per product
+
+### `ElectricityProduct` / `ControllableLoadProduct`
 
 | Field | Law | Effect |
 |---|---|---|
 | `anlage_kwp` | §12 Abs. 3 UStG | Auto-0% MwSt when ≤ 30 kWp (Solarpaket I 2023) |
-| `industrie_stromsteuer_befreiung` | §9 Abs. 1 Nr. 4 StromStG | Replaces levy with exemption notice |
-| `gas_energiesteuer_befreiung` | §54 EnergieStG | KWK / industrial gas Energiesteuer exemption notice |
-| `leistungspreis_strom_ct_per_kw_month` | §41 EnWG | RLM demand charge on `spitzenleistung_kw` (ct/kW/month) |
-| `preisgarantie_bis` | §41 Abs. 1 Nr. 4 EnWG | Price guarantee expiry shown on invoice |
-| `waerme_is_renewable` | §12 Abs. 2 Nr. 1 UStG | Auto-7% MwSt for renewable Fernwärme |
-| `mwst_rate_override` | §12 UStG | Override default 19% per product |
-| `sect14a_modul1_nne_reduktion_ct_per_kwh` | §14a EnWG | NNE reduction (ct/kWh) |
-| `steuerungsrabatt_modul1_eur_per_kw_year` | §14a EnWG | Capacity-based NNE reduction |
-| `minimum_invoice_eur_brutto` | Contract | B2B minimum consumption commitment |
-| `dynamic_epex_floor_ct_kwh` | §41a EnWG | Floor on spot price pass-through |
+| `stromsteuer_befreiung` | §9 StromStG | Typed enum; replaces levy with exemption notice |
+| `industrie_stromsteuer_befreiung` | §9 Nr. 4 StromStG | Legacy bool; prefer `stromsteuer_befreiung` |
+| `leistungspreis_strom_ct_per_kw_month` | §41 EnWG | RLM demand charge (ct/kW/month) |
+| `preisgarantie_bis` | §41 Abs. 1 Nr. 4 EnWG | Price guarantee expiry on invoice |
+| `mwst_rate_override` | §12 UStG | Override 19% per product |
+| `dynamic_epex` | §41a EnWG | EPEX spot billing (requires `MeteringMode::Imsys`) |
+| `dynamic_epex_floor_ct_kwh` | §41a EnWG | Price floor for spot pass-through |
+| `energiequellen` | §42 Abs. 2 Nr. 2 EnWG | Typed fuel mix with CO₂ label |
+
+### `ControllableLoadProduct` (§14a extras)
+
+| Field | Law | Effect |
+|---|---|---|
+| `sect14a_modul1_nne_reduktion_ct_per_kwh` | §14a EnWG | Per-kWh NNE credit |
+| `steuerungsrabatt_modul1_eur_per_kw_year` | §14a EnWG | Capacity NNE reduction |
+| `sect14a_modul3_entschaedigung_ct_per_kwh` | §14a EnWG | Per-kWh Entschädigung |
+| `steuerungsrabatt_modul3_eur_per_kw_year` | §14a EnWG | Capacity Entschädigung |
+
+### `GasProduct`
+
+| Field | Law | Effect |
+|---|---|---|
+| `gas_energiesteuer_befreiung` | §54 EnergieStG | KWK / industrial exemption notice |
+| `gas_leistungspreis_ct_per_kw_month` | §41 EnWG | RLM demand charge for large gas customers |
+| `gas_indexed_price` | §41 Abs. 3 EnWG | B2B TTF/NCG indexed price (alias: `indexed_price`) |
 
 ---
 
@@ -184,17 +272,35 @@ pub struct MeterInput {
 
 ```rust
 // Old tariff: Jan 1–14
-let inv_old = old_engine.bill(ctx_jan1_14, &meter_old)?;
+let inv_old = old_product.build_engine(&grid, &rates).bill(ctx_jan1_14, &meter_old)?;
 // New tariff: Jan 15–31
-let inv_new = new_engine.bill(ctx_jan15_31, &meter_new)?;
-// Combined January invoice via billing::merge_period_documents semantics
+let inv_new = new_product.build_engine(&grid, &rates).bill(ctx_jan15_31, &meter_new)?;
+// Combined January invoice
 let merged = inv_old.merge(inv_new);
+```
+
+### Portfolio billing
+
+```rust
+let engine = product.build_engine(&grid, &rates);
+let results: Vec<Result<Invoice, BillingError>> = engine.bill_batch(
+    customers.into_iter().map(|(ctx, quantities)| (ctx, quantities)).collect()
+);
+```
+
+### Regulatory pre-flight
+
+```rust
+let engine = product.build_engine(&grid, &rates);
+let warnings = engine.validate(&ctx, &quantities);
+if invoice.has_errors() {
+    // Block dispatch — Error-severity regulatory violation
+}
 ```
 
 ### Proportional cost allocation (B2B shared buildings)
 
 ```rust
-// Split a shared building energy cost by floor area
 let parts = building_invoice.allocate_proportionally(
     &[dec!(0.40), dec!(0.35), dec!(0.25)],
     vec![ctx_tenant_a, ctx_tenant_b, ctx_tenant_c],
@@ -219,28 +325,44 @@ let comparison = Sect41aAnnualComparison::compute(
 
 ```toml
 energy-billing = { path = "…", features = ["eeg"] }   # full eeg-billing accuracy
-energy-billing = { path = "…", features = ["bo4e"] }  # Invoice::to_bo4e_rechnung()
 energy-billing = { path = "…", features = ["full"] }  # all optional features
 ```
 
 | Feature | Enables |
 |---|---|
-| `eeg` | `EegProvider` delegates to `eeg_billing::calculate_settlement()` for §51/§52 |
-| `bo4e` | `Invoice::to_bo4e_rechnung() -> rubo4e::current::Rechnung` |
+| `eeg` | `EegProvider` delegates to `eeg_billing::calculate_settlement()` for §51/§52/§36k |
+
+> **Note:** The `bo4e` / `rubo4e` dependency has been removed from `energy-billing`.
+> `Invoice::to_rechnung_json()` produces BO4E-compatible JSON without any external dependency.
+> For typed `rubo4e::current::Rechnung` output, convert the JSON in `billingd`'s service layer.
 
 ---
 
-## Audit trail
+## Audit trail and explainability
+
+Every `BillingPosition` carries a `PositionTrace` with the full calculation audit:
 
 ```rust
-let ctx = BillingContext {
-    billing_run_id: Some(uuid::Uuid::new_v4().to_string()),
-    ..Default::default()
-};
-// billing_run_id propagates to:
-// - Invoice.billing_run_id
-// - to_rechnung_json() → ZusatzAttribut["billingRunId"]
-// - to_bo4e_rechnung() → Rechnung.id + ZusatzAttribut["billingRunId"]
+pub struct PositionTrace {
+    pub formula: String,              // "500.000 kWh × 0.30000 EUR/kWh = 150.00000 EUR"
+    pub input_quantity: Decimal,
+    pub input_unit_price_eur: Decimal,
+    pub gross_eur: Decimal,
+    pub regulatory_basis: Vec<String>, // ["§3 StromStG", "§41 EnWG"]
+    pub tariff_source: Option<String>, // product sheet ID from tarifbd
+    pub pro_rata_fraction: Option<Decimal>,
+}
+```
+
+The `BillingWarning` field on `Invoice` carries regulatory compliance notices:
+
+```rust
+// Check for dispatch-blocking violations
+if invoice.has_errors() {
+    for w in invoice.warnings.iter().filter(|w| w.severity == WarningSeverity::Error) {
+        // e.g. { code: "SECT41B_IMSYS_REQUIRED", message: "§41b Abs. 2 EnWG: …" }
+    }
+}
 ```
 
 ---
@@ -250,23 +372,23 @@ let ctx = BillingContext {
 | Law | Coverage |
 |---|---|
 | §3 StromStG | Stromsteuer 2.05 ct/kWh; `stromsteuer_for_year(year)` for retroactive corrections |
-| §9 Abs. 1 Nr. 4 StromStG | Industrial Stromsteuer exemption |
-| §9a Nr. 1 StromStG | Eigenverbrauch exemption ≤ 30 kWp |
+| §9 StromStG | All 5 exemption grounds + §9a via typed `StromsteuerBefreiung` enum |
 | §2 EnergieStG | Erdgassteuer 0.55 ct/kWh; `energiesteuer_gas_for_year(year)` (incl. 2022 0-rate) |
-| §54 EnergieStG | KWK / industrial gas Energiesteuer exemption (`gas_energiesteuer_befreiung`) |
-| BEHG §10 | CO₂-Preis gas (65 EUR/t 2026; ETS2 from 2027); `behg_ct_per_kwh_for_year(year)` |
+| §54 EnergieStG | KWK / industrial gas Energiesteuer exemption |
+| BEHG §10 | CO₂-Preis H-Gas (65 EUR/t 2026) + L-Gas factor; `behg_ct_per_kwh_for_year(year)` |
 | §10 GasGVV | Brennwertkorrektur m³ → kWh_Hs |
 | §12 Abs. 2 Nr. 1 UStG | Reduced 7% MwSt for renewable Fernwärme |
 | §12 Abs. 3 UStG | 0% MwSt for PV ≤ 30 kWp (Solarpaket I, since 01.01.2023) |
-| §14a EnWG | Controllable loads Modul 1/3 (BK6-24-174) |
-| §17 Abs. 1 MessZV | Estimated reading notice |
-| §40a / §40b EnWG | All-inclusive ct/kWh; structured price-comparison data |
-| §41 Abs. 1 EnWG | Invoice content (Zählerstand, Netzbetreiber, Preisgarantie) |
+| §14a EnWG | Controllable loads Modul 1/3 (BK6-24-174) via `ControllableLoadProvider` |
+| §17 Abs. 1 MessZV | Estimated reading notice on invoice |
+| §40a / §40b EnWG | Mandatory ct/kWh; structured price-comparison data in JSON |
+| §41 Abs. 1 EnWG | Invoice content (Zählerstand, Netzbetreiber, Preisgarantie, Energiemix) |
 | §41 Abs. 1 Nr. 3 EnWG | Verbrauchshistorie (prior-year + national average) |
-| §41a Abs. 4 EnWG | iMSys requirement for dynamic tariffs |
-| §41a Abs. 6 EnWG | Annual savings comparison |
+| §41a / §41b EnWG | §41a EPEX per-interval; §41b iMSys guard enforced as hard error |
+| §42 Abs. 2 Nr. 2 EnWG | CO₂ emissions label via typed `EnergieQuellen.co2_g_per_kwh` |
 | §42b / §42a EEG 2023 | Mieterstrom / Gemeinschaftliche Gebäudeversorgung |
-| §51 EEG 2023 | Negativpreisregel (contractual LF feature) |
+| §42c EnWG | Energiegemeinschaft sharing credit via `SharingProduct` |
+| §51 EEG 2023 | Negativpreisregel (contractual LF feature via `eeg` feature) |
 
 ---
 
@@ -276,12 +398,12 @@ let ctx = BillingContext {
 cargo test -p energy-billing --all-features
 ```
 
-**148 tests** across five suites:
+**160 tests** across five suites:
 
 | Suite | Tests | Coverage |
 |---|---|---|
-| `calculator_tests` | 108 | All 12 categories, §14a/§41a/GGV, seasonal, indexed, prosumer, block tariffs, RLM demand charge, multi-rate MwSt, cancellation, BO4E JSON, pro-rata, Tarifwechsel, allocation |
-| Unit tests (lib) | 14 | `RegulatoryRates`, `stromsteuer_for_year`, `energiesteuer_gas_for_year`, `prorate_days`, `InvoiceType`, `PricingModel`, bridge helpers |
+| Unit tests (lib) | 18 | `RegulatoryRates`, levy lookups, `prorate_days`, `InvoiceType`, `Product` enum roundtrip, `StromsteuerBefreiung`, tariff deserialization |
+| `calculator_tests` | 108 | All 12 categories, §14a/§41a/§41b, GGV, seasonal, indexed, prosumer, block tariffs, RLM demand charge, multi-rate MwSt, cancellation, BO4E JSON, pro-rata, Tarifwechsel, `bill_batch`, `validate` |
+| `golden_scenarios` | 11 | Golden master: SLP electricity; gas + levies; EEG Gutschrift; RLM demand charge; §54 KWK exemption; 2022 0-rate; §41b rejection; §40a ct/kWh; §41 mandatory fields; §42c sharing; §9 exemption |
 | `proptest_invoice` | 8 | Property-based: `brutto == netto + mwst`, cancellation sign, 0% MwSt, gas arithmetic, demand charge non-negative, StromStG year table |
-| `golden_scenarios` | 6 | Golden master: SLP electricity Jan 2026; Gas + levies; EEG Gutschrift 10 kWp; RLM demand charge; gas KWK Energiesteuer exemption; 2022 historic 0-rate |
-| Doc tests | 12 | Inline usage examples |
+| Doc tests | 15 | Inline usage examples |

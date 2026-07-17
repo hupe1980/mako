@@ -9,6 +9,7 @@ use axum::{
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use sqlx::PgPool;
+use std::sync::Arc;
 
 use crate::{
     config::EinsdConfig,
@@ -30,6 +31,7 @@ use crate::{
 /// Returns `None` when `edmd_url` is not configured or the MaLo has no data.
 pub async fn fetch_einspeisemenge_from_edmd(
     cfg: &EinsdConfig,
+    client: &reqwest::Client,
     malo_id: &str,
     year: i16,
     month: i16,
@@ -40,7 +42,6 @@ pub async fn fetch_einspeisemenge_from_edmd(
     let to = format!("{year:04}-{month:02}-{last_day:02}");
     let url = format!("{edmd_url}/api/v1/billing-period/{malo_id}?from={from}&to={to}");
 
-    let client = reqwest::Client::new();
     let mut req = client.get(&url);
     if let Some(key) = cfg.edmd_api_key.as_deref() {
         req = req.bearer_auth(key);
@@ -87,8 +88,10 @@ fn days_in_month(year: i16, month: i16) -> u8 {
 /// - `de.eeg.verguetung.berechnet` — VERGUETUNG, MIETERSTROM, POST_EEG_SPOT,
 ///   EIGENVERBRAUCH, KWKG_ZUSCHLAG, FLEXIBILITAET
 /// - `de.eeg.marktpraemie.berechnet` — DIREKTVERMARKTUNG, AUSSCHREIBUNG
+#[allow(clippy::too_many_arguments)]
 pub async fn emit_settlement_ce(
     cfg: &EinsdConfig,
+    client: &reqwest::Client,
     ce_type: &str,
     tr_id: &str,
     malo_id: &str,
@@ -120,7 +123,6 @@ pub async fn emit_settlement_ce(
         }
     });
 
-    let client = reqwest::Client::new();
     let body = serde_json::to_string(&payload).unwrap_or_default();
     let mut req = client
         .post(webhook_url)
@@ -152,6 +154,7 @@ pub async fn emit_settlement_ce(
 /// Emit `de.eeg.anlage.foerderung_auslaufend` for a plant about to expire.
 pub async fn emit_foerderung_alert_ce(
     cfg: &EinsdConfig,
+    client: &reqwest::Client,
     tr_id: &str,
     malo_id: &str,
     foerderendedatum: time::Date,
@@ -178,7 +181,6 @@ pub async fn emit_foerderung_alert_ce(
         }
     });
 
-    let client = reqwest::Client::new();
     let _ = client
         .post(webhook_url)
         .header("Content-Type", "application/cloudevents+json")
@@ -317,6 +319,7 @@ pub struct SettleTriggerRequest {
 pub async fn post_settle(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path((tr_id, year, month)): Path<(String, i16, i16)>,
     Json(req): Json<SettleTriggerRequest>,
 ) -> impl IntoResponse {
@@ -332,7 +335,9 @@ pub async fn post_settle(
     // Uses arbeitsmenge_kwh from the MeterBillingPeriod response.
     let einspeisemenge_kwh = match req.einspeisemenge_kwh {
         Some(kwh) => Some(kwh),
-        None => fetch_einspeisemenge_from_edmd(&cfg, &anlage.malo_id, year, month).await,
+        None => {
+            fetch_einspeisemenge_from_edmd(&cfg, &http_client, &anlage.malo_id, year, month).await
+        }
     };
 
     // Resolve EPEX price from DB when not supplied in request.
@@ -372,6 +377,7 @@ pub async fn post_settle(
                 };
                 let ce_id = emit_settlement_ce(
                     &cfg,
+                    &http_client,
                     ce_type,
                     &tr_id,
                     &anlage.malo_id,
@@ -787,6 +793,7 @@ pub struct BatchSettleRequest {
 pub async fn post_batch_settle(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path((year, month)): Path<(i16, i16)>,
     Json(req): Json<BatchSettleRequest>,
 ) -> impl IntoResponse {
@@ -817,9 +824,10 @@ pub async fn post_batch_settle(
     if req.dry_run {
         // Dry-run: count without persisting (no DB writes needed).
         for anlage in &plants {
-            let has_data = fetch_einspeisemenge_from_edmd(&cfg, &anlage.malo_id, year, month)
-                .await
-                .is_some();
+            let has_data =
+                fetch_einspeisemenge_from_edmd(&cfg, &http_client, &anlage.malo_id, year, month)
+                    .await
+                    .is_some();
             if has_data {
                 settled += 1;
             } else {
@@ -843,13 +851,14 @@ pub async fn post_batch_settle(
             let cfg = Arc::clone(&cfg);
             let pool = pool.clone();
             let sem = Arc::clone(&sem);
+            let client = Arc::clone(&http_client);
             let malo_id = anlage.malo_id.clone();
             let tr_id = anlage.tr_id.clone();
             let settlement_model = anlage.settlement_model.clone();
             join_set.spawn(async move {
                 let _permit = sem.acquire().await.expect("semaphore closed");
                 let einspeisemenge_kwh =
-                    fetch_einspeisemenge_from_edmd(&cfg, &malo_id, year, month).await;
+                    fetch_einspeisemenge_from_edmd(&cfg, &client, &malo_id, year, month).await;
                 let input = build_settle_input(
                     &cfg.tenant,
                     &anlage,
@@ -876,7 +885,10 @@ pub async fn post_batch_settle(
                         }
                         _ => "de.eeg.verguetung.berechnet",
                     };
-                    emit_settlement_ce(&cfg, ce_type, &tr_id, &malo_id, result, year, month).await;
+                    emit_settlement_ce(
+                        &cfg, &client, ce_type, &tr_id, &malo_id, result, year, month,
+                    )
+                    .await;
                 }
                 (tr_id, settlement_model, res)
             });
@@ -1027,6 +1039,7 @@ pub struct VeraeusserungsformWechselRequest {
 pub async fn post_switch_veraeusserungsform(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path(tr_id): Path<String>,
     Json(req): Json<VeraeusserungsformWechselRequest>,
 ) -> impl IntoResponse {
@@ -1120,8 +1133,14 @@ pub async fn post_switch_veraeusserungsform(
             // §21c: operator must notify the NB of the switch by end of the calendar month.
             // We emit de.eeg.veraeusserungsform.gewechselt to the ERP webhook which is
             // expected to forward it to the GPKE process handler (makod PID 55022/55023).
-            let ce_id =
-                emit_veraeusserungsform_ce(&cfg, &tr_id, new_model, &req.effective_date).await;
+            let ce_id = emit_veraeusserungsform_ce(
+                &cfg,
+                &http_client,
+                &tr_id,
+                new_model,
+                &req.effective_date,
+            )
+            .await;
             // Record the notification timestamp (best-effort — failure does not block the switch).
             if ce_id.is_some() {
                 let _ = sqlx::query(
@@ -1162,6 +1181,7 @@ pub async fn post_switch_veraeusserungsform(
 /// (makod, PID 55022 Wechsel Marktrollen / PID 55023 Wechselbestätigung).
 async fn emit_veraeusserungsform_ce(
     cfg: &EinsdConfig,
+    client: &reqwest::Client,
     tr_id: &str,
     new_model: &str,
     effective_date: &str,
@@ -1185,7 +1205,6 @@ async fn emit_veraeusserungsform_ce(
             "deadline": "End of calendar month of effective_date"
         }
     });
-    let client = reqwest::Client::new();
     let body = serde_json::to_string(&payload).unwrap_or_default();
     let mut req = client
         .post(webhook_url)

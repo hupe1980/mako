@@ -1049,6 +1049,28 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
             for deadline in result.deadlines {
                 let id = deadline.deadline_id();
                 let label = deadline.label().to_owned();
+
+                // Detect late-fired APERAK deadlines — any deadline whose label starts
+                // with "aperak-" that fires after its due_at is a regulatory violation
+                // under APERAK AHB 1.0 §2.4.1 (Strom 45 min) / §2.3.1 (Gas 1 Werktag).
+                // Increment `makod_aperak_missed_total` so Alertmanager can page on-call.
+                if label.starts_with("aperak-") {
+                    let now = time::OffsetDateTime::now_utc();
+                    if now > deadline.due_at() {
+                        crate::metrics::EngineMetrics::global().aperak_missed(&label);
+                        tracing::error!(
+                            deadline_id = %id,
+                            label       = %label,
+                            due_at      = %deadline.due_at(),
+                            fired_at    = %now,
+                            overdue_secs = (now - deadline.due_at()).whole_seconds(),
+                            "APERAK deadline fired LATE — regulatory violation \
+                             (APERAK AHB 1.0 §2.4.1 Strom / §2.3.1 Gas). \
+                             Counter: makod_aperak_missed_total",
+                        );
+                    }
+                }
+
                 let should_cancel = match (self.dispatch)(deadline).await {
                     Ok(()) => true,
                     Err(ref e) if e.is_version_conflict() => {

@@ -42,6 +42,24 @@ pub struct EinsdConfig {
     /// How often (in seconds) the background alert worker checks for plants
     /// whose `foerderendedatum` is within 180 days.  Defaults to 21600 (6 h).
     pub alert_interval_secs: Option<u64>,
+
+    /// URL template for auto-importing §20 Abs. 2 technology-specific Jahresmarktwert.
+    ///
+    /// When set, `einsd` auto-fetches technology-specific Marktwert values from the
+    /// ÜNB publication (netztransparenz.de or a custom aggregator) on the 5th of each
+    /// month. The URL must return a JSON array of `{ erzeugungsart, avg_ct_kwh }` objects
+    /// for the given billing period.
+    ///
+    /// Example: `"https://api.netztransparenz.de/eeg/marktwert/{year}/{month}"`
+    /// (The `{year}` and `{month}` placeholders are replaced with the billing period.)
+    ///
+    /// When absent, operators must import values manually via
+    /// `PUT /api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}`.
+    pub jahresmarktwert_url: Option<String>,
+
+    /// Interval in seconds between Jahresmarktwert auto-import runs (default: 86400, once/day).
+    /// On startup, the worker runs once after a 60-second delay.
+    pub jahresmarktwert_import_interval_secs: Option<u64>,
     /// MCP server authentication. Supports API-key, OIDC, or dev mode.
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:EINSD_MCP_API_KEY"`.
     #[serde(default)]

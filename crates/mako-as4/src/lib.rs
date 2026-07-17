@@ -5,7 +5,6 @@
 //!
 //! - [`constants`] — BDEW-specific URIs and algorithm identifiers
 //! - [`pmode`] — [`BdewAction`] enum, [`bdew_pmode`] / [`bdew_pmode_sign_only`],
-//!   [`WsSecOutboundKeyInfoProfile`] (X509PKIPathv1 for BDEW)
 //! - [`profile`] — [`BdewAs4Profile`], [`bdew_mako_profile_stack`],
 //!   [`bdew_push_policy`] (inbound policy with `require_encrypted_inbound`)
 //! - [`testing`] *(feature)* — [`BdewTestPki`], [`MockAs4Endpoint`],
@@ -63,8 +62,8 @@ pub mod testing;
 pub use asx_rs::as4::InsecureBypassAs4Verifier;
 pub use partner_directory::{PartnerDirectory, PartnerDirectoryParseError};
 pub use pmode::{
-    BdewAction, PModeRegistry, bdew_pmode, bdew_pmode_encrypted,
-    bdew_pmode_encrypted_with_endpoint, bdew_pmode_sign_only, bdew_pmode_with_endpoint,
+    BdewAction, PModeRegistry, ParseBdewActionError, bdew_action_from_str, bdew_pmode,
+    bdew_pmode_sign_only, bdew_pmode_with_endpoint,
 };
 pub use profile::{As4PushPolicy, BdewAs4Profile, bdew_mako_profile_stack, bdew_push_policy};
 #[cfg(feature = "server")]

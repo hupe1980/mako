@@ -536,6 +536,8 @@ fn map_message_type_to_erp_event(msg_type: &str) -> Option<mako_engine::erp::Erp
         "ProcessCompleted" | "ProcessComplete" => ErpEventType::ProcessCompleted,
         "ProcessInitiated" => ErpEventType::ProcessInitiated,
         "MaloIdentified" => ErpEventType::MaloIdentified,
+        // WiM Steuerungsauftrag positive Endantwort (PID 55168) — triggers VPP billing.
+        "DispatchConfirmed" => ErpEventType::VppDispatchConfirmed,
         _ => return None,
     })
 }

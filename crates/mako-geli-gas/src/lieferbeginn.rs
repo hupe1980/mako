@@ -465,6 +465,18 @@ pub enum GasSupplierChangeCommand {
         /// Only set for Gas RLM MaLos. Propagated to `ProcessInitiated` outbox
         /// so `marktd` can update `malo.fallgruppe`.
         fallgruppe: Option<String>,
+        /// Gas quality type from UTILMD G `STS` segment (L1/N1).
+        ///
+        /// Normalized to canonical BO4E / BNetzA MaStR form before storage:
+        /// `"H_GAS"` | `"L_GAS"` | `"H2_BLEND"` | `"BIOGAS"` | `"FLUESSIGGAS"`.
+        ///
+        /// Propagated to `ProcessInitiated` outbox so `marktd` can update
+        /// `malo.gasqualitaet` atomically with the supplier-change event.
+        ///
+        /// `None` when the UTILMD G message does not carry a gas quality qualifier
+        /// (e.g. before the DVGW/BNetzA H2-blend AHBs are published).
+        /// In that case `marktd` preserves the existing `gasqualitaet` value.
+        gasqualitaet: Option<String>,
     },
     /// Send the outbound UTILMD G Antwort (responder role).
     ///
@@ -693,6 +705,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 received_at,
                 bilanzierungsmethode,
                 fallgruppe,
+                gasqualitaet,
             } => {
                 if !matches!(state, GasSupplierChangeState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
@@ -764,6 +777,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                                     "process_date":         process_date_clone,
                                     "bilanzierungsmethode": bilanzierungsmethode,
                                     "fallgruppe":           fallgruppe,
+                                    "gasqualitaet":         gasqualitaet,
                                 }),
                             )
                             .caused_by(1),
@@ -1226,6 +1240,7 @@ mod tests {
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsmethode: None,
             fallgruppe: None,
+            gasqualitaet: None,
         }
     }
 

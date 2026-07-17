@@ -193,6 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsmethode: None,
             fallgruppe: None,
+            gasqualitaet: None,
         })
         .await?;
 
@@ -386,6 +387,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsmethode: None,
             fallgruppe: None,
+            gasqualitaet: None,
         })
         .await
         .unwrap_err();

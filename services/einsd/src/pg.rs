@@ -105,6 +105,37 @@ pub struct AnlageUpsertRequest {
     /// Required for §53b Regionalnachweise reductions to apply.
     /// Example: `"DE-TN-001"` (BNetzA Netzgebiet format).
     pub grid_area: Option<String>,
+
+    // ── §§42–44 EEG 2023 — Biomass fuel composition (migration 0010) ──────────
+    /// Primary fuel type fed into the plant.
+    ///
+    /// Matches [`eeg_billing::biomasse::BiomassBrennstoff`] DB variants:
+    /// `PFLANZLICHE_BIOMASSE | BIOMETHAN_AUS_BIOMASSE | GUELLE | FESTMIST |
+    /// HOLZBIOMASSE | KLAEGAS | DEPONIEGAS | GRUBENGAS | BIOABFALL`
+    ///
+    /// `None` for non-biomass plants (solar, wind, KWKG, hydro …).
+    /// When set, the settlement engine enforces §43 substrate cap and §44
+    /// Güllekleinanlage bonus at every billing period.
+    pub biomasse_hauptbrennstoff: Option<String>,
+
+    /// §44 EEG 2023 — fraction of energy input from liquid/solid manure (0.0–1.0).
+    ///
+    /// When `biomasse_guelle_anteil ≥ 0.80` **and** `leistung_kwp ≤ 75 kW`,
+    /// the plant qualifies as a **Güllekleinanlage** and receives the higher
+    /// §44 bonus rate. Use [`eeg_billing::rates::guellekleinanlage_rate`] to
+    /// look up the applicable gross AW; subtract §53 deduction (−0.2 ct/kWh)
+    /// before storing in `verguetungssatz_ct`.
+    pub biomasse_guelle_anteil: Option<rust_decimal::Decimal>,
+
+    /// §43 Abs. 1 Nr. 2 EEG 2023 — fraction of energy input from Energiepflanzen
+    /// vom Acker (arable energy crops, 0.0–1.0).
+    ///
+    /// When `> 0.40`, the substrate cap is exceeded and EEG Vergütung is
+    /// **suspended for that billing period** (`Sanctioned`, EUR 0).
+    ///
+    /// `None` is treated as 0.00 at settlement time — the cap is not applied
+    /// for plants that have not submitted fuel composition data.
+    pub biomasse_energiepflanzen_anteil: Option<rust_decimal::Decimal>,
 }
 
 fn default_verguetung() -> String {
@@ -175,6 +206,10 @@ pub struct AnlageRow {
     pub capacity_blocks: Option<serde_json::Value>,
     // §53b grid area for regional reduction lookups (migration 0007)
     pub grid_area: Option<String>,
+    // §§42–44 EEG 2023 biomass fuel composition (migration 0010)
+    pub biomasse_hauptbrennstoff: Option<String>,
+    pub biomasse_guelle_anteil: Option<Decimal>,
+    pub biomasse_energiepflanzen_anteil: Option<Decimal>,
     // §44b Biogas annual quota tracking (migration 0009)
     pub biogas_quota_kwh_ytd: Decimal,
     pub biogas_quota_ytd_year: Option<i16>,
@@ -269,7 +304,9 @@ pub async fn upsert_anlage(
                flex_leistung_kw, flex_praemie_ct_kwh,
                mastr_registriert, mastr_nummer, mastr_datum,
                bank_iban, bank_bic, zahlungsempfaenger,
-               notes, is_biogas_sect51b, grid_area, updated_at
+               notes, is_biogas_sect51b, grid_area,
+               biomasse_hauptbrennstoff, biomasse_guelle_anteil, biomasse_energiepflanzen_anteil,
+               updated_at
            ) VALUES (
                $1, $2, $3, $4, $5, $6,
                $7, $8, $9, $10,
@@ -280,7 +317,7 @@ pub async fn upsert_anlage(
                $23, $24,
                $25, $26, $27,
                $28, $29, $30,
-               $31, $32, $33, now()
+               $31, $32, $33, $34, $35, $36, now()
            )
            ON CONFLICT (tr_id, tenant) DO UPDATE SET
                malo_id                   = EXCLUDED.malo_id,
@@ -314,6 +351,9 @@ pub async fn upsert_anlage(
                notes                     = EXCLUDED.notes,
                is_biogas_sect51b         = EXCLUDED.is_biogas_sect51b,
                grid_area                 = EXCLUDED.grid_area,
+               biomasse_hauptbrennstoff  = EXCLUDED.biomasse_hauptbrennstoff,
+               biomasse_guelle_anteil    = EXCLUDED.biomasse_guelle_anteil,
+               biomasse_energiepflanzen_anteil = EXCLUDED.biomasse_energiepflanzen_anteil,
                updated_at                = now()",
     )
     .bind(&req.tr_id)
@@ -349,6 +389,9 @@ pub async fn upsert_anlage(
     .bind(&req.notes)
     .bind(req.is_biogas_sect51b)
     .bind(&req.grid_area)
+    .bind(&req.biomasse_hauptbrennstoff)
+    .bind(req.biomasse_guelle_anteil)
+    .bind(req.biomasse_energiepflanzen_anteil)
     .execute(pool)
     .await
     .context("upsert eeg_anlage")?;
@@ -547,6 +590,17 @@ pub struct SettleInput {
     /// §3 EEG 2023: plant lifecycle type (Erstinbetriebnahme / Wiederinbetriebnahme / Repowering …).
     /// Stored as TEXT in `eeg_anlagen.inbetriebnahme_typ`; `None` = Erstinbetriebnahme.
     pub inbetriebnahme_typ: Option<String>,
+
+    /// §§42–44 EEG 2023 — Biomass fuel composition for settlement enforcement.
+    ///
+    /// Derived from the three typed columns in `eeg_anlagen` (migration 0010).
+    /// `None` for non-biomass plants (solar, wind, KWKG, hydro …).
+    ///
+    /// When `Some`, the settlement engine passes this directly to
+    /// [`eeg_billing::calculate_settlement`], which enforces:
+    /// - **§43 Abs. 1 Nr. 2**: substrate cap >40 % Energiepflanzen → `Sanctioned` (EUR 0)
+    /// - **§44 Güllekleinanlage**: `ist_guellebonusanlage` recorded in audit positions
+    pub biomasse: Option<eeg_billing::biomasse::BiomassSettlementData>,
 }
 
 #[derive(Debug, Serialize)]
@@ -635,6 +689,68 @@ async fn update_biogas_quota_ytd(
     .await
     .context("update biogas §44b YTD counter")?;
     Ok(())
+}
+
+// ── §§42–44 EEG 2023 Biomass fuel composition ────────────────────────────────
+
+/// Derive [`eeg_billing::biomasse::BiomassSettlementData`] from the typed columns
+/// stored in `eeg_anlagen` (migration 0010).
+///
+/// Returns `None` when the plant is not a biomass/biogas plant
+/// (`biomasse_hauptbrennstoff` is NULL), so the settlement engine skips
+/// §43/§44 enforcement entirely for non-biomass plants.
+///
+/// ## Settlement-engine rules driven by the returned struct
+///
+/// - **§43 Abs. 1 Nr. 2 EEG 2023**: `substrate_cap_ok = false`
+///   (energiepflanzen_anteil > 40 %) → settlement returns `Sanctioned` (EUR 0).
+/// - **§44 EEG 2023 Güllekleinanlage**: `ist_guellebonusanlage = true` is
+///   recorded in the audit position label. The correct Güllekleinanlage
+///   `verguetungssatz_ct` must be stored at registration time (use
+///   [`eeg_billing::rates::guellekleinanlage_rate`]).
+///
+/// ## NULL fraction semantics
+///
+/// NULL fractions in the DB are treated as `0.0`:
+/// - `biomasse_guelle_anteil IS NULL` → 0.0 Gülle share → no bonus
+/// - `biomasse_energiepflanzen_anteil IS NULL` → 0.0 energy-crop share → cap not applied
+///
+/// This is the conservative/safe direction: operators who have not yet
+/// submitted fuel composition data are neither penalised nor granted the
+/// Güllekleinanlage bonus until they do.
+fn derive_biomasse(anlage: &AnlageRow) -> Option<eeg_billing::biomasse::BiomassSettlementData> {
+    use eeg_billing::biomasse::BiomassBrennstoff;
+
+    let hauptbrennstoff_str = anlage.biomasse_hauptbrennstoff.as_deref()?;
+
+    // Parse DB string → typed enum; any unrecognised value → conservatively
+    // treat as PflanzlicheBiomasse (subject to §43 substrate cap, no §44 bonus).
+    let hauptbrennstoff = match hauptbrennstoff_str {
+        "GUELLE" => BiomassBrennstoff::Guelle,
+        "FESTMIST" => BiomassBrennstoff::Festmist,
+        "HOLZBIOMASSE" => BiomassBrennstoff::Holzbiomasse,
+        "KLAEGAS" => BiomassBrennstoff::Klaegas,
+        "DEPONIEGAS" => BiomassBrennstoff::Deponiegas,
+        "GRUBENGAS" => BiomassBrennstoff::Grubengas,
+        "BIOMETHAN_AUS_BIOMASSE" => BiomassBrennstoff::BiomethanAusBiomasse,
+        // PFLANZLICHE_BIOMASSE + BIOABFALL + any unrecognised value
+        _ => BiomassBrennstoff::PflanzlicheBiomasse,
+    };
+
+    // NULL fractions → 0.0 (conservative: neither substrate cap nor bonus applies)
+    let guelle_anteil = anlage
+        .biomasse_guelle_anteil
+        .unwrap_or(rust_decimal::Decimal::ZERO);
+    let energiepflanzen_anteil = anlage
+        .biomasse_energiepflanzen_anteil
+        .unwrap_or(rust_decimal::Decimal::ZERO);
+
+    Some(eeg_billing::biomasse::BiomassSettlementData::new(
+        hauptbrennstoff,
+        guelle_anteil,
+        energiepflanzen_anteil,
+        anlage.leistung_kwp,
+    ))
 }
 
 // ── §20 Abs. 2 Jahresmarktwert fetch ──────────────────────────────────────────
@@ -778,6 +894,9 @@ pub fn build_settle_input(
         biogas_quota_ytd_year: anlage.biogas_quota_ytd_year,
         imesys_rollout_datum: anlage.imesys_rollout_datum,
         inbetriebnahme_typ: anlage.inbetriebnahme_typ.clone(),
+        // §§42–44 EEG 2023: derive biomass fuel composition from the three typed
+        // DB columns (migration 0010). `None` for non-biomass plants.
+        biomasse: derive_biomasse(anlage),
     }
 }
 
@@ -1140,6 +1259,10 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
             .as_deref()
             .and_then(|s| eeg_billing::InbetriebnahmeTyp::from_db_str(s).ok())
             .unwrap_or_default(),
+        // §§42–44 EEG 2023: biomass fuel composition from migration 0010.
+        // `None` for non-biomass plants; `Some` enforces §43 substrate cap and
+        // §44 Güllekleinanlage bonus detection at every billing period.
+        biomasse: input.biomasse.clone(),
     });
 
     let status = match output.status {

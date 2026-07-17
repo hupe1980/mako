@@ -183,6 +183,18 @@ pub enum ErpEventType {
         /// Human-readable failure description.
         reason: Box<str>,
     },
+    /// A WiM Steuerungsauftrag (PID 55168) dispatch was positively confirmed by
+    /// the MSB (`EndantwortPositiv`). Triggers downstream VPP settlement billing
+    /// in `billingd` via `POST /api/v1/webhooks/vpp-dispatch`.
+    ///
+    /// Only emitted for `Konfiguration` (load-reduction) commands — not for
+    /// `InitialZustand` (reset) commands, which restore normal operation.
+    ///
+    /// The CE `data` payload carries:
+    /// `tx_id`, `location_id`, `location_type`, `execution_time_from`,
+    /// `execution_time_until`, `max_power_kw`, `command_type`, `sender_mp_id`,
+    /// `produkt_code`.
+    VppDispatchConfirmed,
 }
 
 impl ErpEventType {
@@ -198,6 +210,7 @@ impl ErpEventType {
             Self::ProcessCompleted => "process_completed",
             Self::MaloIdentified => "malo_identified",
             Self::ProcessFailed { .. } => "process_failed",
+            Self::VppDispatchConfirmed => "vpp_dispatch_confirmed",
         }
     }
 
@@ -217,6 +230,7 @@ impl ErpEventType {
             Self::ProcessCompleted => "de.mako.process.completed",
             Self::MaloIdentified => "de.mako.malo.identified",
             Self::ProcessFailed { .. } => "de.mako.process.failed",
+            Self::VppDispatchConfirmed => "de.vpp.dispatch.confirmed",
         }
     }
 }

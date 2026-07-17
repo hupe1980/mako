@@ -165,6 +165,80 @@ impl Default for InvoiceType {
     }
 }
 
+// ── CustomerKategorie ─────────────────────────────────────────────────────────
+
+/// Customer category for the delivery point.
+///
+/// Determines applicable tariff categories, regulatory exemptions, and invoice
+/// disclosure requirements. Affects Stromsteuer (§9 Nr. 1 StromStG industrial
+/// exemption threshold), Preisangabenverordnung, and §41 EnWG disclosure depth.
+///
+/// ## Legal basis
+///
+/// - §2 Nr. 4 StromStG — definition of "Unternehmen des produzierenden Gewerbes"
+/// - §4 MessZV / §14 NAV — RLM metering thresholds
+/// - §41 Abs. 1 EnWG — invoice disclosure requirements vary by customer type
+/// - StromGVV vs. StromNZV — different contract law for B2C vs B2B
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CustomerKategorie {
+    /// Household customer (Haushaltskunde, §2 Nr. 25 EnWG).
+    ///
+    /// B2C. StromGVV / GasGVV apply. §40 EnWG Kilowattstundenpreis mandatory.
+    /// Invoice must include Verbrauchshistorie (§41 Abs. 1 Nr. 3 EnWG).
+    #[default]
+    Haushalt,
+
+    /// Small commercial customer (Gewerbekunde, not a household but not RLM-obligated).
+    ///
+    /// B2B < 100 MWh/year. StromGVV / GasGVV still apply in most cases.
+    /// May be on SLP or transitioning to iMSys.
+    Gewerbe,
+
+    /// Industrial / large commercial customer (Sonderkunde).
+    ///
+    /// B2B ≥ 100 MWh/year electricity (§4 MessZV), RLM mandatory.
+    /// StromNZV applies (not StromGVV). Eligible for §9 Nr. 1–3 StromStG
+    /// industrial exemption, KWKG Selbstbehaltsgrenze, and capacity pricing.
+    Industrie,
+
+    /// Agricultural customer (Landwirtschaft).
+    ///
+    /// Special BEHG/Energiesteuer treatment may apply for agricultural use.
+    /// §2 Abs. 1 Nr. 4 UStG (7% reduced VAT on certain agricultural inputs).
+    Landwirtschaft,
+
+    /// Public authority / public transport (öffentliche Einrichtung).
+    ///
+    /// May qualify for Konzessionsabgabe exemption (§2 Abs. 7 KAV).
+    OeffentlicheEinrichtung,
+}
+
+impl CustomerKategorie {
+    /// Whether this customer category typically uses SLP billing.
+    #[must_use]
+    pub fn is_slp_customer(self) -> bool {
+        matches!(self, Self::Haushalt | Self::Gewerbe)
+    }
+
+    /// Whether the annual Verbrauchshistorie (§41 Abs. 1 Nr. 3 EnWG) applies.
+    ///
+    /// Mandatory for household customers (B2C). Recommended for Gewerbe.
+    /// Not required for industrial / RLM customers.
+    #[must_use]
+    pub fn requires_verbrauchshistorie(self) -> bool {
+        matches!(self, Self::Haushalt)
+    }
+
+    /// Whether the §40a EnWG Kilowattstundenpreis must appear on the invoice.
+    ///
+    /// Mandatory for all non-RLM electricity customers.
+    #[must_use]
+    pub fn requires_kilowattstundenpreis(self) -> bool {
+        !matches!(self, Self::Industrie)
+    }
+}
+
 // ── AbschlagDeduction ─────────────────────────────────────────────────────────
 
 /// An advance payment (Abschlag) previously collected from the customer.
@@ -352,6 +426,20 @@ pub struct BillingContext {
     /// database record (`billing_records.id`) with calculation outputs.
     #[serde(default)]
     pub billing_run_id: Option<String>,
+
+    /// Customer category — drives regulatory exemptions and invoice disclosure.
+    ///
+    /// | Category | SLP | Verbrauchshistorie | §40a kWh-Preis |
+    /// |---|---|---|---|
+    /// | `Haushalt` | ✅ | Mandatory | Mandatory |
+    /// | `Gewerbe` | ✅ | Recommended | Mandatory |
+    /// | `Industrie` | ❌ (RLM) | — | — |
+    /// | `Landwirtschaft` | ✅ | Recommended | Mandatory |
+    /// | `OeffentlicheEinrichtung` | ✅/❌ | — | Mandatory |
+    ///
+    /// Defaults to `Haushalt` — always set explicitly for B2B customers.
+    #[serde(default)]
+    pub kundenkategorie: CustomerKategorie,
 }
 
 impl Default for BillingContext {
@@ -374,6 +462,7 @@ impl Default for BillingContext {
             minimum_invoice_eur_brutto: None,
             nb_mp_id: None,
             billing_run_id: None,
+            kundenkategorie: CustomerKategorie::default(),
         }
     }
 }

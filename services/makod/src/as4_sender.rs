@@ -55,7 +55,7 @@ use asx_rs::core::SessionContext;
 use asx_rs::observability::EventBus;
 use asx_rs::transport::{As4HttpTransport, TransportConfig};
 use edi_energy::EdiEnergyMessage as _;
-use mako_as4::BdewAction;
+use mako_as4::bdew_action_from_str;
 use mako_engine::builder::As4Sender;
 use mako_engine::error::EngineError;
 use mako_engine::metrics::EngineMetrics;
@@ -301,7 +301,7 @@ impl BdewAs4Sender {
     }
 }
 
-// action_uri_for is now BdewAction::from_message_type_str in mako-as4.
+// action_uri_for is now bdew_action_from_str() in mako-as4.
 
 impl As4Sender for BdewAs4Sender {
     fn send(
@@ -463,7 +463,7 @@ impl As4Sender for BdewAs4Sender {
             // BdewAs4Profile::register_partner_all_actions.
             // Use PartnerUnknown (permanent error) so the outbox worker
             // dead-letters immediately rather than retrying indefinitely.
-            let bdew_action = BdewAction::from_message_type_str(&message_type);
+            let bdew_action = bdew_action_from_str(&message_type);
             let Some(pm) = profile.resolve_pmode_by_action(&recipient, &bdew_action) else {
                 tracing::warn!(
                     message_id   = %message_id_str,

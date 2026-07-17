@@ -146,6 +146,7 @@ impl MetricVec {
 /// | [`outbox_delivery_attempted`] | `makod_outbox_delivery_attempts_total` | `result` |
 /// | [`deadline_fired`] | `makod_deadline_fired_total` | `family` |
 /// | [`dead_letter_recorded`] | `makod_dead_letter_recorded_total` | `reason` |
+/// | [`aperak_missed`] | `makod_aperak_missed_total` | `label` |
 ///
 /// For `makod_dead_letter_recorded_total`, the `reason` label is:
 /// - `unknown_pid:<N>` when `DeadLetterReason::UnknownPid { pid: N, .. }` — one label per
@@ -159,6 +160,7 @@ impl MetricVec {
 /// [`outbox_delivery_attempted`]: EngineMetrics::outbox_delivery_attempted
 /// [`deadline_fired`]: EngineMetrics::deadline_fired
 /// [`dead_letter_recorded`]: EngineMetrics::dead_letter_recorded
+/// [`aperak_missed`]: EngineMetrics::aperak_missed
 pub struct EngineMetrics {
     /// `makod_process_initiated_total{family}` — incremented when a new
     /// process is spawned via `Process::execute(InitiateXxx)`.
@@ -190,6 +192,14 @@ pub struct EngineMetrics {
     /// - `pid`: the 5-digit EDIFACT Prüfidentifikator (e.g. `"55001"`)
     /// - `result`: `"dispatched"`, `"skipped"`, or `"error"`
     inbound_received: MetricVec,
+
+    /// `makod_aperak_missed_total{label}` — incremented when the deadline
+    /// scheduler fires an APERAK deadline after its due-at time has passed.
+    ///
+    /// A non-zero value means an APERAK was dispatched late; this is a
+    /// regulatory violation under APERAK AHB 1.0 §2.4.1 (Strom) / §2.3.1
+    /// (Gas). Alert on `makod_aperak_missed_total > 0` in Alertmanager.
+    aperak_missed: MetricVec,
 }
 
 impl EngineMetrics {
@@ -202,6 +212,7 @@ impl EngineMetrics {
             deadline_fired: MetricVec::default(),
             dead_letter_recorded: MetricVec::default(),
             inbound_received: MetricVec::default(),
+            aperak_missed: MetricVec::default(),
         }
     }
 
@@ -271,6 +282,16 @@ impl EngineMetrics {
         self.dead_letter_recorded.increment(reason);
     }
 
+    /// Increment `makod_aperak_missed_total{label=<label>}`.
+    ///
+    /// Call in the deadline scheduler when an APERAK deadline fires **after** its
+    /// `due_at` timestamp has already passed, indicating a late dispatch.
+    /// `label` should be the APERAK deadline label constant from `fristen::`
+    /// (e.g. `APERAK_STROM_WINDOW_LABEL`, `APERAK_GAS_FOLGEPROZESS_LABEL`).
+    pub fn aperak_missed(&self, label: &str) {
+        self.aperak_missed.increment(label);
+    }
+
     /// Increment `makod_inbound_messages_total{pid=<pid>,result=<result>}`.
     ///
     /// Call once per inbound EDIFACT message after the dispatch pipeline
@@ -300,6 +321,7 @@ impl EngineMetrics {
             deadline_fired: self.deadline_fired.snapshot(),
             dead_letter_recorded: self.dead_letter_recorded.snapshot(),
             inbound_received: self.inbound_received.snapshot(),
+            aperak_missed: self.aperak_missed.snapshot(),
         }
     }
 }
@@ -332,6 +354,8 @@ pub struct MetricsSnapshot {
     pub dead_letter_recorded: Vec<(Box<str>, u64)>,
     /// `("pid,result", count)` pairs for `makod_inbound_messages_total`.
     pub inbound_received: Vec<(Box<str>, u64)>,
+    /// `(label, count)` pairs for `makod_aperak_missed_total`.
+    pub aperak_missed: Vec<(Box<str>, u64)>,
 }
 
 impl MetricsSnapshot {
@@ -399,6 +423,15 @@ impl MetricsSnapshot {
              by PID and outcome.",
             &["pid", "result"],
             &self.inbound_received,
+        );
+        Self::write_counter_vec(
+            &mut out,
+            "makod_aperak_missed_total",
+            "Total number of APERAK deadlines fired after their due-at time — a regulatory \
+             violation under APERAK AHB 1.0 §2.4.1 (Strom) / §2.3.1 (Gas). \
+             Alert when this counter is non-zero.",
+            &["label"],
+            &self.aperak_missed,
         );
 
         out

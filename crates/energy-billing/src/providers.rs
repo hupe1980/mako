@@ -12,12 +12,15 @@ use rust_decimal_macros::dec;
 
 use crate::context::BillingContext;
 use crate::position::{
-    BillingPosition, PositionCategory, arbeitspreis_position, grundpreis_position, levy_position,
-    validated_eur,
+    BillingPosition, BillingWarning, PositionCategory, WarningSeverity, arbeitspreis_position,
+    grundpreis_position, levy_position, validated_eur,
 };
 use crate::provider::BillingProvider;
 use crate::quantities::{GridInput, Quantities};
-use crate::tariff::TariffInput;
+use crate::tariff::{
+    ControllableLoadProduct, EegProduct, EinspeisungProduct, ElectricityProduct, EmobilityProduct,
+    GasProduct, HeatProduct, HemsProduct, ServiceProduct, SharingProduct, SolarProduct,
+};
 
 // ── ElectricityProvider ───────────────────────────────────────────────────────
 
@@ -27,21 +30,32 @@ use crate::tariff::TariffInput;
 /// Does NOT include MwSt — add `MwStProvider` to the engine.
 /// Stromsteuer is included as a levy position.
 pub struct ElectricityProvider {
-    tariff: TariffInput,
+    product: ElectricityProduct,
     grid: GridInput,
 }
 
 impl ElectricityProvider {
-    /// Build from a `TariffInput` product definition.
     #[must_use]
-    pub fn new(tariff: TariffInput, grid: GridInput) -> Self {
-        Self { tariff, grid }
+    pub fn new(product: ElectricityProduct, grid: GridInput) -> Self {
+        Self { product, grid }
     }
 
-    pub fn from_tariff(tariff: &TariffInput, grid: &GridInput) -> Self {
-        Self {
-            tariff: tariff.clone(),
-            grid: grid.clone(),
+    /// Construct from a [`Product`](crate::Product) by extracting the electricity variant.
+    /// Accepts `Strom`, `Waermepumpe`, `Wallbox` (uses `.base`), and `Sharing` (uses `.electricity`).
+    ///
+    /// # Panics
+    /// Panics when the `Product` variant is not electricity-compatible.
+    #[must_use]
+    pub fn from_product(product: &crate::tariff::Product, grid: GridInput) -> Self {
+        use crate::tariff::Product;
+        match product {
+            Product::Strom(p) => Self::new(p.clone(), grid),
+            Product::Waermepumpe(c) | Product::Wallbox(c) => Self::new(c.base.clone(), grid),
+            Product::Sharing(s) => Self::new(s.electricity.clone(), grid),
+            other => panic!(
+                "ElectricityProvider::from_product: incompatible product category '{}'",
+                other.category_str()
+            ),
         }
     }
 }
@@ -56,7 +70,7 @@ impl BillingProvider for ElectricityProvider {
         let meter = quantities.electricity.as_ref().cloned().unwrap_or_default();
         let kwh = meter.arbeitsmenge_kwh;
         let days = ctx.days();
-        let tariff = &self.tariff;
+        let product = &self.product;
         let grid = &self.grid;
         let rates = &ctx.regulatory_rates;
         let mut positions: Vec<BillingPosition> = Vec::new();
@@ -65,7 +79,7 @@ impl BillingProvider for ElectricityProvider {
         // When seasonal_prices is set, the price for the billing month is looked up.
         // Uses ctx.period_from month as the representative month for the period.
         let billing_month = ctx.period_from.month() as u8;
-        let seasonal_arbeitspreis = tariff.seasonal_prices.as_ref().and_then(|seasons| {
+        let seasonal_arbeitspreis = product.seasonal_prices.as_ref().and_then(|seasons| {
             seasons
                 .iter()
                 .find(|s| s.contains_month(billing_month))
@@ -77,11 +91,11 @@ impl BillingProvider for ElectricityProvider {
         // Self-consumed electricity is Stromsteuer-exempt (§9a Nr. 1 StromStG)
         // and does NOT attract NNE charges.
         if let Some(p) = &quantities.prosumer {
-            return self.bill_prosumer(ctx, p, tariff, grid, rates, seasonal_arbeitspreis);
+            return self.bill_prosumer(ctx, p, product, grid, rates, seasonal_arbeitspreis);
         }
 
         // ── Grundpreis ─────────────────────────────────────────────────────────
-        if let Some(gp_ct_day) = tariff.grundpreis_ct_per_day {
+        if let Some(gp_ct_day) = product.grundpreis_ct_per_day {
             positions.push(
                 grundpreis_position(
                     "Grundpreis",
@@ -96,7 +110,7 @@ impl BillingProvider for ElectricityProvider {
 
         // ── Arbeitspreis ───────────────────────────────────────────────────────
         if kwh > Decimal::ZERO {
-            if let Some(tiers) = tariff.block_tiers.as_ref().filter(|t| !t.is_empty()) {
+            if let Some(tiers) = product.block_tiers.as_ref().filter(|t| !t.is_empty()) {
                 // Delegate to billing::TariffSchedule for correct graduated pricing.
                 // Replaces manual tier iteration — gains contiguous-band validation
                 // and exact Amount<5> arithmetic. Legal basis: §41 EnWG.
@@ -107,14 +121,14 @@ impl BillingProvider for ElectricityProvider {
                 // Zweitarif (HT/NT) — billing::TimeOfUsePricing for validated band arithmetic.
                 // Negative quantities return Err; zero quantities are skipped silently.
                 let mut bands = Vec::new();
-                if let Some(ap_ht) = tariff.arbeitspreis_ht_ct_per_kwh {
+                if let Some(ap_ht) = product.arbeitspreis_ht_ct_per_kwh {
                     let price = billing::Amount::<5>::try_from((ap_ht / dec!(100)).round_dp(5))
                         .map_err(|_| BillingError::InvalidInput {
                             reason: "HT price out of range".into(),
                         })?;
                     bands.push(TouBand::new("HT", price));
                 }
-                if let Some(ap_nt) = tariff.arbeitspreis_nt_ct_per_kwh {
+                if let Some(ap_nt) = product.arbeitspreis_nt_ct_per_kwh {
                     let price = billing::Amount::<5>::try_from((ap_nt / dec!(100)).round_dp(5))
                         .map_err(|_| BillingError::InvalidInput {
                             reason: "NT price out of range".into(),
@@ -144,10 +158,10 @@ impl BillingProvider for ElectricityProvider {
                         positions.push(pos);
                     }
                 }
-            } else if let Some(ap_ct) = seasonal_arbeitspreis.or(tariff.arbeitspreis_ct_per_kwh) {
+            } else if let Some(ap_ct) = seasonal_arbeitspreis.or(product.arbeitspreis_ct_per_kwh) {
                 // Use seasonal price when available, otherwise base tariff price.
                 let label = if seasonal_arbeitspreis.is_some() {
-                    tariff
+                    product
                         .seasonal_prices
                         .as_ref()
                         .and_then(|s| s.iter().find(|p| p.contains_month(billing_month)))
@@ -161,7 +175,7 @@ impl BillingProvider for ElectricityProvider {
                     arbeitspreis_position(label, kwh, ap_ct, "kWh", "§41 EnWG", &["strom"])
                         .with_tag("strom"),
                 );
-            } else if let Some(idx) = &tariff.indexed_price {
+            } else if let Some(idx) = &product.indexed_price {
                 // ── Indexed price (B2B, §41 Abs. 3 EnWG) ──────────────────────
                 // Effective price = base + spread + index_value × factor.
                 // When index_value is not available, no arbeitspreis position is added.
@@ -272,7 +286,7 @@ impl BillingProvider for ElectricityProvider {
         // No pro-rating: the peak demand represents the contracted capacity
         // for the full period (§41 EnWG, standard C&I supply contracts).
         if let (Some(lp_ct_per_kw_month), Some(kw)) = (
-            tariff.leistungspreis_strom_ct_per_kw_month,
+            product.leistungspreis_strom_ct_per_kw_month,
             meter.spitzenleistung_kw.filter(|kw| *kw > Decimal::ZERO),
         ) {
             positions.push(
@@ -290,23 +304,36 @@ impl BillingProvider for ElectricityProvider {
         }
 
         // ── Stromsteuer ────────────────────────────────────────────────────────
-        let st_rate = rates.effective_stromsteuer(tariff);
-        if tariff.industrie_stromsteuer_befreiung {
-            // §9 Abs. 1 Nr. 4 StromStG — industrial customer full exemption.
-            // Applies to "Unternehmen des produzierenden Gewerbes" (§2 Nr. 4 StromStG)
-            // consuming > 2 GWh/year. Operator must verify the exemption certificate.
-            positions.push(BillingPosition {
-                description: "Stromsteuer: befreit gemäß §9 Abs. 1 Nr. 4 StromStG".to_owned(),
-                legal_basis: Some("§9 Abs. 1 Nr. 4 StromStG".to_owned()),
-                quantity: kwh,
-                unit: "kWh".to_owned(),
-                unit_price_eur: Decimal::ZERO,
-                net_eur: Decimal::ZERO,
-                category: PositionCategory::Info,
-                tags: vec!["stromsteuer_befreiung".to_owned()],
-                applicable_tax_rate: None,
-            });
-        } else if st_rate > Decimal::ZERO && kwh > Decimal::ZERO && tariff.category != "SOLAR" {
+        let st_rate = rates.effective_stromsteuer(product.stromsteuer_ct_per_kwh_override);
+        // Resolve effective exemption: typed enum takes priority; boolean flag is legacy.
+        let effective_befreiung = if product.stromsteuer_befreiung.is_exempt() {
+            product.stromsteuer_befreiung
+        } else if product.industrie_stromsteuer_befreiung {
+            crate::tariff::StromsteuerBefreiung::IndustrieProduktionesGewerbe
+        } else {
+            crate::tariff::StromsteuerBefreiung::Keine
+        };
+        if effective_befreiung.is_exempt() {
+            if kwh > Decimal::ZERO {
+                positions.push(BillingPosition {
+                    description: effective_befreiung.description().to_owned(),
+                    legal_basis: Some(effective_befreiung.citation().to_owned()),
+                    quantity: kwh,
+                    unit: "kWh".to_owned(),
+                    unit_price_eur: Decimal::ZERO,
+                    net_eur: Decimal::ZERO,
+                    category: PositionCategory::Info,
+                    tags: vec!["stromsteuer_befreiung".to_owned()],
+                    applicable_tax_rate: None,
+                    trace: crate::position::PositionTrace::commodity(
+                        kwh,
+                        "kWh",
+                        Decimal::ZERO,
+                        effective_befreiung.citation(),
+                    ),
+                });
+            }
+        } else if st_rate > Decimal::ZERO && kwh > Decimal::ZERO {
             positions.push(
                 levy_position(
                     "Stromsteuer",
@@ -320,101 +347,10 @@ impl BillingProvider for ElectricityProvider {
             );
         }
 
-        // ── §14a EnWG — Steuerbare Verbrauchseinrichtungen ─────────────────────
-        // WAERMEPUMPE and WALLBOX: Modul 1 (capacity reduction) + Modul 3 (EV compensation)
-        if matches!(tariff.category.as_str(), "WAERMEPUMPE" | "WALLBOX") {
-            if let Some(sect14a_m1_ct) = tariff.sect14a_modul1_nne_reduktion_ct_per_kwh
-                && sect14a_m1_ct > Decimal::ZERO
-                && kwh > Decimal::ZERO
-            {
-                positions.push(
-                    BillingPosition::credit(
-                        "§14a EnWG Modul 1 — NNE Reduktion",
-                        kwh,
-                        "kWh",
-                        sect14a_m1_ct / dec!(100),
-                        PositionCategory::Credit,
-                    )
-                    .with_legal_basis("§14a EnWG")
-                    .with_tag("§14a")
-                    .with_tag("sect14a_modul1"),
-                );
-            }
-            // Annual capacity-based NNE reduction (steuerungsrabatt_modul1_eur_per_kw_year)
-            if let (Some(m1_year), Some(kw)) = (
-                tariff.steuerungsrabatt_modul1_eur_per_kw_year,
-                meter.spitzenleistung_kw,
-            ) && m1_year > Decimal::ZERO
-                && kw > Decimal::ZERO
-            {
-                let months_frac = Decimal::from(days) / dec!(30.4375);
-                let monthly_per_kw = m1_year / dec!(12);
-                positions.push(
-                    BillingPosition::credit(
-                        "§14a EnWG Modul 1 — Steuerungsrabatt NNE",
-                        kw,
-                        "kW",
-                        monthly_per_kw * months_frac,
-                        PositionCategory::Credit,
-                    )
-                    .with_legal_basis("§14a EnWG")
-                    .with_tag("§14a")
-                    .with_tag("sect14a_modul1"),
-                );
-            }
-            // Annual capacity-based Modul 3 Entschädigung (steuerungsrabatt_modul3_eur_per_kw_year)
-            // Compensation for each kW-hour of remote steuerung
-            if let (Some(m3_year), Some(kw), Some(steuerung_h)) = (
-                tariff.steuerungsrabatt_modul3_eur_per_kw_year,
-                meter.spitzenleistung_kw,
-                meter.steuerung_stunden,
-            ) && m3_year > Decimal::ZERO
-                && kw > Decimal::ZERO
-                && steuerung_h > Decimal::ZERO
-            {
-                // compensation = rate × kW × (steuerung_h / 8760h per year)
-                let rate = m3_year * kw * (steuerung_h / dec!(8760));
-                positions.push(
-                    BillingPosition::credit(
-                        "§14a EnWG Modul 3 — Steuerungsentschädigung",
-                        kw,
-                        "kW",
-                        m3_year * (steuerung_h / dec!(8760)),
-                        PositionCategory::Credit,
-                    )
-                    .with_legal_basis("§14a EnWG")
-                    .with_tag("§14a")
-                    .with_tag("sect14a_modul3"),
-                );
-                let _ = rate;
-            }
-            if let (Some(modul3_ct), Some(steuerung_h)) = (
-                tariff.sect14a_modul3_entschaedigung_ct_per_kwh,
-                meter.steuerung_stunden,
-            ) {
-                let kw = meter.spitzenleistung_kw.unwrap_or(dec!(0));
-                if modul3_ct > Decimal::ZERO && steuerung_h > Decimal::ZERO && kw > Decimal::ZERO {
-                    let steuerung_kwh = kw * steuerung_h;
-                    positions.push(
-                        BillingPosition::credit(
-                            "§14a EnWG Modul 3 — Steuerungsentschädigung",
-                            steuerung_kwh,
-                            "kWh",
-                            modul3_ct / dec!(100),
-                            PositionCategory::Credit,
-                        )
-                        .with_legal_basis("§14a EnWG")
-                        .with_tag("§14a")
-                        .with_tag("sect14a_modul3"),
-                    );
-                }
-            }
-        }
-
         // ── AufAbschlag / Rabatt ───────────────────────────────────────────────
         // Per-unit discount or surcharge applied after all commodity positions.
         // Negative value = customer discount; positive = surcharge.
-        if let Some(aa_ct) = tariff
+        if let Some(aa_ct) = product
             .auf_abschlag_ct_per_kwh
             .filter(|v| *v != Decimal::ZERO)
             && kwh > Decimal::ZERO
@@ -435,7 +371,7 @@ impl BillingProvider for ElectricityProvider {
                 .with_tag("auf_abschlag"),
             );
         }
-        if let Some(aa_month) = tariff
+        if let Some(aa_month) = product
             .auf_abschlag_eur_per_month
             .filter(|v| *v != Decimal::ZERO)
         {
@@ -465,13 +401,17 @@ impl BillingProvider for ElectricityProvider {
                 category: cat,
                 tags: vec!["auf_abschlag".to_owned()],
                 applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
             });
         }
 
         // ── MSB Grundgebühr ────────────────────────────────────────────────────
         // Messstellenbetreiber fee bundled into the retail invoice (MsbG 2016).
         // Itemised separately per §41 EnWG.
-        if let Some(msb_ct_day) = tariff.msb_gebuehr_ct_per_day.filter(|v| *v > Decimal::ZERO) {
+        if let Some(msb_ct_day) = product
+            .msb_gebuehr_ct_per_day
+            .filter(|v| *v > Decimal::ZERO)
+        {
             positions.push(
                 BillingPosition::debit(
                     "Messstellenbetrieb Grundgebühr",
@@ -513,6 +453,7 @@ impl BillingProvider for ElectricityProvider {
                 category: PositionCategory::Info,
                 tags: vec!["zaehlerstand".to_owned(), zid.to_owned()],
                 applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
             });
         }
 
@@ -532,6 +473,7 @@ impl BillingProvider for ElectricityProvider {
                     category: PositionCategory::Info,
                     tags: vec!["verbrauchshistorie".to_owned(), "vorjahr".to_owned()],
                     applicable_tax_rate: None,
+                    trace: crate::position::PositionTrace::default(),
                 });
             }
             if let Some(avg_kwh) = vh.bundesdurchschnitt_kwh {
@@ -549,14 +491,15 @@ impl BillingProvider for ElectricityProvider {
                         "bundesdurchschnitt".to_owned(),
                     ],
                     applicable_tax_rate: None,
+                    trace: crate::position::PositionTrace::default(),
                 });
             }
         }
 
-        // ── Wire per-position applicable_tax_rate from tariff.mwst_rate_override ──
+        // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
         // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
-        if let Some(rate) = tariff.mwst_rate_override {
+        if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
                     && !matches!(
@@ -582,6 +525,7 @@ impl BillingProvider for ElectricityProvider {
                 category: PositionCategory::Info,
                 tags: vec!["schatzwert".to_owned(), "messZV".to_owned()],
                 applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
             });
         }
 
@@ -597,11 +541,12 @@ impl BillingProvider for ElectricityProvider {
                 category: PositionCategory::Info,
                 tags: vec!["zaehlerwechsel".to_owned()],
                 applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
             });
         }
 
         // ── Preisgarantie notice (§41 Abs. 1 Nr. 4 EnWG) ─────────────────────
-        if let Some(pg_bis) = tariff.preisgarantie_bis.filter(|d| *d >= ctx.period_to) {
+        if let Some(pg_bis) = product.preisgarantie_bis.filter(|d| *d >= ctx.period_to) {
             positions.push(BillingPosition {
                 description: format!("Preisgarantie gültig bis {pg_bis}"),
                 legal_basis: Some("§41 Abs. 1 Nr. 4 EnWG".to_owned()),
@@ -612,6 +557,7 @@ impl BillingProvider for ElectricityProvider {
                 category: PositionCategory::Info,
                 tags: vec!["preisgarantie".to_owned()],
                 applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
             });
         }
 
@@ -628,7 +574,7 @@ impl ElectricityProvider {
         &self,
         ctx: &BillingContext,
         prosumer: &crate::quantities::ProsumerMeterInput,
-        tariff: &TariffInput,
+        product: &ElectricityProduct,
         grid: &GridInput,
         rates: &crate::rates::RegulatoryRates,
         seasonal_arbeitspreis: Option<Decimal>,
@@ -639,7 +585,7 @@ impl ElectricityProvider {
         let self_kwh = prosumer.self_consumption_kwh;
 
         // Grundpreis on the full billing period (independent of consumption split)
-        if let Some(gp_ct_day) = tariff.grundpreis_ct_per_day {
+        if let Some(gp_ct_day) = product.grundpreis_ct_per_day {
             positions.push(
                 grundpreis_position(
                     "Grundpreis",
@@ -654,7 +600,7 @@ impl ElectricityProvider {
 
         // Arbeitspreis on grid consumption only
         if grid_kwh > Decimal::ZERO {
-            if let Some(ap_ct) = seasonal_arbeitspreis.or(tariff.arbeitspreis_ct_per_kwh) {
+            if let Some(ap_ct) = seasonal_arbeitspreis.or(product.arbeitspreis_ct_per_kwh) {
                 let label = if seasonal_arbeitspreis.is_some() {
                     "Arbeitspreis Strom Netzbezug (Saisontarif)".to_owned()
                 } else {
@@ -681,7 +627,7 @@ impl ElectricityProvider {
                 );
             }
             // Stromsteuer on grid consumption only (§9a Nr. 1 StromStG: self-consumption exempt)
-            let st_rate = rates.effective_stromsteuer(tariff);
+            let st_rate = rates.effective_stromsteuer(product.stromsteuer_ct_per_kwh_override);
             if st_rate > Decimal::ZERO {
                 positions.push(
                     levy_position(
@@ -712,6 +658,7 @@ impl ElectricityProvider {
                 category: PositionCategory::Info,
                 tags: vec!["eigenverbrauch".to_owned(), "prosumer".to_owned()],
                 applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
             });
         }
         if let Some(export) = prosumer.export_kwh.filter(|&e| e > Decimal::ZERO) {
@@ -725,11 +672,12 @@ impl ElectricityProvider {
                 category: PositionCategory::Info,
                 tags: vec!["einspeisung".to_owned(), "prosumer".to_owned()],
                 applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
             });
         }
 
         // Wire tax rate (same as normal path)
-        if let Some(rate) = tariff.mwst_rate_override {
+        if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
                     && !matches!(
@@ -745,6 +693,149 @@ impl ElectricityProvider {
     }
 }
 
+// ── ControllableLoadProvider ──────────────────────────────────────────────────
+
+/// §14a EnWG controllable load billing provider (WAERMEPUMPE / WALLBOX).
+///
+/// Delegates standard electricity billing to [`ElectricityProvider`] and then
+/// appends §14a Steuerungsrabatt (Modul 1 NNE reduction + Modul 3 Entschädigung)
+/// credit positions.
+///
+/// ## Legal basis
+///
+/// §14a Abs. 1 EnWG (BK6-22-024 §2.13): DSOs must offer controllable load
+/// (Steuerbare Verbrauchseinrichtungen) customers a reduced NNE (Modul 1 or 3).
+/// The LF reflects this reduction as a credit on the retail invoice.
+pub struct ControllableLoadProvider {
+    product: ControllableLoadProduct,
+    grid: GridInput,
+}
+
+impl ControllableLoadProvider {
+    #[must_use]
+    pub fn new(product: ControllableLoadProduct, grid: GridInput) -> Self {
+        Self { product, grid }
+    }
+}
+
+impl BillingProvider for ControllableLoadProvider {
+    fn validate_warnings(
+        &self,
+        ctx: &BillingContext,
+        quantities: &Quantities,
+    ) -> Vec<BillingWarning> {
+        // Delegate to base ElectricityProvider for §41b and other validation.
+        ElectricityProvider::new(self.product.base.clone(), self.grid.clone())
+            .validate_warnings(ctx, quantities)
+    }
+
+    fn bill(
+        &self,
+        ctx: &BillingContext,
+        quantities: &Quantities,
+        prior: &[BillingPosition],
+    ) -> Result<Vec<BillingPosition>, BillingError> {
+        // ── Pass 1: standard electricity billing ─────────────────────────────
+        let ep = ElectricityProvider::new(self.product.base.clone(), self.grid.clone());
+        let mut positions = ep.bill(ctx, quantities, prior)?;
+
+        // ── Pass 2: §14a credit positions ────────────────────────────────────
+        let meter = quantities.electricity.as_ref().cloned().unwrap_or_default();
+        let kwh = meter.arbeitsmenge_kwh;
+        let days = ctx.days();
+        let p = &self.product;
+
+        // Modul 1 per-kWh NNE reduction (ct/kWh)
+        if let Some(sect14a_m1_ct) = p.sect14a_modul1_nne_reduktion_ct_per_kwh
+            && sect14a_m1_ct > Decimal::ZERO
+            && kwh > Decimal::ZERO
+        {
+            positions.push(
+                BillingPosition::credit(
+                    "§14a EnWG Modul 1 — NNE Reduktion",
+                    kwh,
+                    "kWh",
+                    sect14a_m1_ct / dec!(100),
+                    PositionCategory::Credit,
+                )
+                .with_legal_basis("§14a EnWG")
+                .with_tag("§14a")
+                .with_tag("sect14a_modul1"),
+            );
+        }
+
+        // Modul 1 annual capacity-based NNE reduction (EUR/kW/year)
+        if let (Some(m1_year), Some(kw)) = (
+            p.steuerungsrabatt_modul1_eur_per_kw_year,
+            meter.spitzenleistung_kw,
+        ) && m1_year > Decimal::ZERO
+            && kw > Decimal::ZERO
+        {
+            let months_frac = Decimal::from(days) / dec!(30.4375);
+            positions.push(
+                BillingPosition::credit(
+                    "§14a EnWG Modul 1 — Steuerungsrabatt NNE",
+                    kw,
+                    "kW",
+                    (m1_year / dec!(12)) * months_frac,
+                    PositionCategory::Credit,
+                )
+                .with_legal_basis("§14a EnWG")
+                .with_tag("§14a")
+                .with_tag("sect14a_modul1"),
+            );
+        }
+
+        // Modul 3 annual capacity × steuerung hours (EUR/kW/year rate)
+        if let (Some(m3_year), Some(kw), Some(steuerung_h)) = (
+            p.steuerungsrabatt_modul3_eur_per_kw_year,
+            meter.spitzenleistung_kw,
+            meter.steuerung_stunden,
+        ) && m3_year > Decimal::ZERO
+            && kw > Decimal::ZERO
+            && steuerung_h > Decimal::ZERO
+        {
+            positions.push(
+                BillingPosition::credit(
+                    "§14a EnWG Modul 3 — Steuerungsentschädigung",
+                    kw,
+                    "kW",
+                    m3_year * (steuerung_h / dec!(8760)),
+                    PositionCategory::Credit,
+                )
+                .with_legal_basis("§14a EnWG")
+                .with_tag("§14a")
+                .with_tag("sect14a_modul3"),
+            );
+        }
+
+        // Modul 3 per-kWh steuerung compensation
+        if let (Some(modul3_ct), Some(steuerung_h)) = (
+            p.sect14a_modul3_entschaedigung_ct_per_kwh,
+            meter.steuerung_stunden,
+        ) {
+            let kw = meter.spitzenleistung_kw.unwrap_or(Decimal::ZERO);
+            if modul3_ct > Decimal::ZERO && steuerung_h > Decimal::ZERO && kw > Decimal::ZERO {
+                let steuerung_kwh = kw * steuerung_h;
+                positions.push(
+                    BillingPosition::credit(
+                        "§14a EnWG Modul 3 — Steuerungsentschädigung",
+                        steuerung_kwh,
+                        "kWh",
+                        modul3_ct / dec!(100),
+                        PositionCategory::Credit,
+                    )
+                    .with_legal_basis("§14a EnWG")
+                    .with_tag("§14a")
+                    .with_tag("sect14a_modul3"),
+                );
+            }
+        }
+
+        Ok(positions)
+    }
+}
+
 // ── GasProvider ───────────────────────────────────────────────────────────────
 
 /// GAS billing provider.
@@ -752,15 +843,21 @@ impl ElectricityProvider {
 /// Includes Brennwertkorrektur info, commodity positions, gas NNE,
 /// Energiesteuer and BEHG CO₂ levy. Does NOT include MwSt.
 pub struct GasProvider {
-    tariff: TariffInput,
+    product: GasProduct,
     grid: GridInput,
 }
 
 impl GasProvider {
-    pub fn from_tariff(tariff: &TariffInput, grid: &GridInput) -> Self {
-        Self {
-            tariff: tariff.clone(),
-            grid: grid.clone(),
+    pub fn new(product: GasProduct, grid: GridInput) -> Self {
+        Self { product, grid }
+    }
+    pub fn from_product(product: &crate::tariff::Product, grid: GridInput) -> Self {
+        match product {
+            crate::tariff::Product::Gas(p) => Self::new(p.clone(), grid),
+            other => panic!(
+                "GasProvider::from_product: got '{}', expected Gas",
+                other.category_str()
+            ),
         }
     }
 }
@@ -774,13 +871,13 @@ impl BillingProvider for GasProvider {
     ) -> Result<Vec<BillingPosition>, BillingError> {
         let meter = quantities.gas.as_ref().cloned().unwrap_or_default();
         let days = ctx.days();
-        let tariff = &self.tariff;
+        let product = &self.product;
         let grid = &self.grid;
         let rates = &ctx.regulatory_rates;
 
         // ── Seasonal gas price lookup ──────────────────────────────────────────
         let billing_month = ctx.period_from.month() as u8;
-        let seasonal_gas_ap = tariff.seasonal_prices.as_ref().and_then(|seasons| {
+        let seasonal_gas_ap = product.seasonal_prices.as_ref().and_then(|seasons| {
             seasons
                 .iter()
                 .find(|s| s.contains_month(billing_month))
@@ -815,6 +912,7 @@ impl BillingProvider for GasProvider {
                 category: PositionCategory::Info,
                 tags: vec!["brennwertkorrektur".to_owned(), "info".to_owned()],
                 applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
             });
         }
 
@@ -834,11 +932,12 @@ impl BillingProvider for GasProvider {
                 category: PositionCategory::Info,
                 tags: vec!["gasqualitaet".to_owned(), "info".to_owned()],
                 applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
             });
         }
 
         // ── Grundpreis ─────────────────────────────────────────────────────────
-        if let Some(gp_ct_day) = tariff.gas_grundpreis_ct_per_day {
+        if let Some(gp_ct_day) = product.gas_grundpreis_ct_per_day {
             positions.push(
                 grundpreis_position(
                     "Grundpreis Gas",
@@ -853,21 +952,25 @@ impl BillingProvider for GasProvider {
 
         // ── Arbeitspreis ───────────────────────────────────────────────────────
         if kwh_hs > Decimal::ZERO {
-            // Resolve effective gas price: indexed > seasonal > direct
-            let gas_ap_ct = if let Some(idx) = &tariff.indexed_price {
-                // Indexed gas price (TTF/TTF-linked, §41 Abs. 3 EnWG)
+            // Resolve effective gas price: gas_indexed_price > seasonal > direct.
+            // gas_indexed_price (gas-specific TTF/NCG index) takes priority.
+            // Falls back to legacy indexed_price for backward compat.
+            let active_indexed = product
+                .gas_indexed_price
+                .as_ref()
+                .or(product.gas_indexed_price.as_ref());
+            let gas_ap_ct = if let Some(idx) = active_indexed {
+                // Gas indexed price (TTF/NCG-linked, §41 Abs. 3 EnWG)
                 idx.effective_ct_per_kwh()
                     .or(seasonal_gas_ap)
-                    .or(tariff.gas_arbeitspreis_ct_per_kwh_hs)
+                    .or(product.gas_arbeitspreis_ct_per_kwh_hs)
             } else {
-                seasonal_gas_ap.or(tariff.gas_arbeitspreis_ct_per_kwh_hs)
+                seasonal_gas_ap.or(product.gas_arbeitspreis_ct_per_kwh_hs)
             };
             if let Some(ap_ct) = gas_ap_ct {
-                let (label, legal_basis) = if tariff.indexed_price.is_some() {
+                let (label, legal_basis) = if active_indexed.is_some() {
                     (
-                        tariff
-                            .indexed_price
-                            .as_ref()
+                        active_indexed
                             .and_then(|idx| {
                                 if idx.index_value.is_some() {
                                     Some(idx.position_description())
@@ -879,7 +982,7 @@ impl BillingProvider for GasProvider {
                         "§41 Abs. 3 EnWG",
                     )
                 } else if seasonal_gas_ap.is_some() {
-                    let season_label = tariff
+                    let season_label = product
                         .seasonal_prices
                         .as_ref()
                         .and_then(|s| s.iter().find(|p| p.contains_month(billing_month)))
@@ -893,13 +996,35 @@ impl BillingProvider for GasProvider {
                 positions.push(
                     arbeitspreis_position(label, kwh_hs, ap_ct, "kWh_Hs", legal_basis, &["gas"])
                         .with_tag("gas")
-                        .with_tag(if tariff.indexed_price.is_some() {
+                        .with_tag(if active_indexed.is_some() {
                             "indexed_price"
                         } else if seasonal_gas_ap.is_some() {
                             "seasonal"
                         } else {
                             "gas"
                         }),
+                );
+            }
+
+            // ── RLM Leistungspreis Gas (demand charge for large gas customers) ────
+            // Applicable to RLM gas metering points with a capacity-based supply contract.
+            // Triggered by gas_leistungspreis_ct_per_kw_month + GasMeterInput::spitzenleistung_kw.
+            if let (Some(lp_ct_per_kw_month), Some(kw)) = (
+                product.gas_leistungspreis_ct_per_kw_month,
+                meter.spitzenleistung_kw.filter(|kw| *kw > Decimal::ZERO),
+            ) {
+                positions.push(
+                    BillingPosition::debit(
+                        "Leistungspreis Gas",
+                        kw,
+                        "kW",
+                        lp_ct_per_kw_month / dec!(100),
+                        PositionCategory::Commodity,
+                    )
+                    .with_legal_basis("§41 EnWG")
+                    .with_tag("gas_leistungspreis")
+                    .with_tag("gas")
+                    .with_tag("rlm"),
                 );
             }
 
@@ -963,8 +1088,9 @@ impl BillingProvider for GasProvider {
             }
 
             // ── Energiesteuer ──────────────────────────────────────────────────
-            let est_rate = rates.effective_energiesteuer_gas(tariff);
-            if tariff.gas_energiesteuer_befreiung {
+            let est_rate =
+                rates.effective_energiesteuer_gas(product.energiesteuer_gas_ct_per_kwh_override);
+            if product.gas_energiesteuer_befreiung {
                 // §54 EnergieStG — KWK / industrial exemption.
                 // Plant operator holds formal exemption certificate (Bestimmungserklärung).
                 // Operator must verify the certificate is current before enabling this flag.
@@ -978,6 +1104,7 @@ impl BillingProvider for GasProvider {
                     category: PositionCategory::Info,
                     tags: vec!["energiesteuer_gas_befreiung".to_owned(), "gas".to_owned()],
                     applicable_tax_rate: None,
+                    trace: crate::position::PositionTrace::default(),
                 });
             } else if est_rate > Decimal::ZERO {
                 positions.push(
@@ -994,7 +1121,7 @@ impl BillingProvider for GasProvider {
             }
 
             // ── BEHG CO₂ ───────────────────────────────────────────────────────
-            let behg_rate = rates.effective_behg_gas(tariff);
+            let behg_rate = rates.effective_behg_gas(product.behg_gas_ct_per_kwh_override);
             if behg_rate > Decimal::ZERO {
                 positions.push(
                     levy_position(
@@ -1011,7 +1138,7 @@ impl BillingProvider for GasProvider {
         }
 
         // ── AufAbschlag / Rabatt (Gas) ─────────────────────────────────────────
-        if let Some(aa_ct) = tariff
+        if let Some(aa_ct) = product
             .auf_abschlag_ct_per_kwh
             .filter(|v| *v != Decimal::ZERO)
         {
@@ -1033,7 +1160,7 @@ impl BillingProvider for GasProvider {
                 );
             }
         }
-        if let Some(aa_month) = tariff
+        if let Some(aa_month) = product
             .auf_abschlag_eur_per_month
             .filter(|v| *v != Decimal::ZERO)
         {
@@ -1054,13 +1181,14 @@ impl BillingProvider for GasProvider {
                 category: cat,
                 tags: vec!["auf_abschlag".to_owned(), "gas".to_owned()],
                 applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
             });
         }
 
-        // ── Wire per-position applicable_tax_rate from tariff.mwst_rate_override ──
+        // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
         // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
-        if let Some(rate) = tariff.mwst_rate_override {
+        if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
                     && !matches!(
@@ -1080,13 +1208,20 @@ impl BillingProvider for GasProvider {
 
 /// WAERME (Fernwärme) billing provider.
 pub struct HeatProvider {
-    tariff: TariffInput,
+    product: HeatProduct,
 }
 
 impl HeatProvider {
-    pub fn from_tariff(tariff: &TariffInput) -> Self {
-        Self {
-            tariff: tariff.clone(),
+    pub fn new(product: HeatProduct) -> Self {
+        Self { product }
+    }
+    pub fn from_product(product: &crate::tariff::Product) -> Self {
+        match product {
+            crate::tariff::Product::Waerme(p) => Self::new(p.clone()),
+            other => panic!(
+                "HeatProvider::from_product: got '{}', expected Waerme",
+                other.category_str()
+            ),
         }
     }
 }
@@ -1100,11 +1235,11 @@ impl BillingProvider for HeatProvider {
     ) -> Result<Vec<BillingPosition>, BillingError> {
         let meter = quantities.heat.as_ref().cloned().unwrap_or_default();
         let days = ctx.days();
-        let tariff = &self.tariff;
+        let product = &self.product;
         let mut positions: Vec<BillingPosition> = Vec::new();
         let months = meter.months.unwrap_or(dec!(1));
 
-        if let Some(gp) = tariff.waerme_grundpreis_eur_per_month {
+        if let Some(gp) = product.waerme_grundpreis_eur_per_month {
             positions.push(
                 BillingPosition::debit(
                     "Grundpreis Fernwärme",
@@ -1118,8 +1253,8 @@ impl BillingProvider for HeatProvider {
             );
         }
         if let (Some(lp), Some(kw)) = (
-            tariff.waerme_leistungspreis_eur_per_kw_year.or_else(|| {
-                tariff
+            product.waerme_leistungspreis_eur_per_kw_year.or_else(|| {
+                product
                     .waerme_leistungspreis_eur_per_kw_month
                     .map(|m| m * dec!(12))
             }),
@@ -1141,7 +1276,7 @@ impl BillingProvider for HeatProvider {
                 .with_tag("waerme"),
             );
         }
-        if let Some(ap_ct) = tariff.waerme_arbeitspreis_ct_per_kwh
+        if let Some(ap_ct) = product.waerme_arbeitspreis_ct_per_kwh
             && meter.kwh_waerme > Decimal::ZERO
         {
             positions.push(
@@ -1159,9 +1294,9 @@ impl BillingProvider for HeatProvider {
         // ── Auto-7% MwSt for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG) ──────
         // waerme_is_renewable = true → automatic 7% tax rate on heat positions.
         // mwst_rate_override still wins if explicitly set (for edge-case overrides).
-        let heat_tax_rate = if tariff.mwst_rate_override.is_some() {
-            tariff.mwst_rate_override
-        } else if tariff.waerme_is_renewable {
+        let heat_tax_rate = if product.mwst_rate_override.is_some() {
+            product.mwst_rate_override
+        } else if product.waerme_is_renewable {
             Some(dec!(0.07))
         } else {
             None
@@ -1186,14 +1321,12 @@ impl BillingProvider for HeatProvider {
 
 /// SOLAR (Eigenverbrauch / Mieterstrom §38a / §42a GGV) billing provider.
 pub struct SolarProvider {
-    tariff: TariffInput,
+    product: SolarProduct,
 }
 
 impl SolarProvider {
-    pub fn from_tariff(tariff: &TariffInput) -> Self {
-        Self {
-            tariff: tariff.clone(),
-        }
+    pub fn new(product: SolarProduct) -> Self {
+        Self { product }
     }
 }
 
@@ -1204,7 +1337,7 @@ impl BillingProvider for SolarProvider {
         quantities: &Quantities,
         _prior: &[BillingPosition],
     ) -> Result<Vec<BillingPosition>, BillingError> {
-        let tariff = &self.tariff;
+        let product = &self.product;
         let mut positions: Vec<BillingPosition> = Vec::new();
 
         // ── §42b EEG 2023 (Solarpaket I) GGV hybrid billing ──────────────────
@@ -1217,7 +1350,7 @@ impl BillingProvider for SolarProvider {
 
             // ── PV portion ──────────────────────────────────────────────────────
             if pv_kwh > Decimal::ZERO {
-                if let Some(ap_ct) = tariff.solar_arbeitspreis_ct_per_kwh {
+                if let Some(ap_ct) = product.solar_arbeitspreis_ct_per_kwh {
                     positions.push(
                         arbeitspreis_position(
                             format!("Arbeitspreis Solarstrom GGV ({pv_kwh:.3}\u{202f}kWh)"),
@@ -1232,7 +1365,7 @@ impl BillingProvider for SolarProvider {
                     );
                 }
                 // GGV Rabatt applies to the PV portion only
-                if let Some(rabatt_ct) = tariff.gemeinschaft_rabatt_ct_per_kwh {
+                if let Some(rabatt_ct) = product.gemeinschaft_rabatt_ct_per_kwh {
                     positions.push(
                         BillingPosition::credit(
                             "GGV-Rabatt Solarstrom (\u{a7}42b EEG 2023)",
@@ -1248,8 +1381,8 @@ impl BillingProvider for SolarProvider {
                     );
                 }
                 // Stromsteuer on PV portion (only when solar_include_stromsteuer)
-                if tariff.solar_include_stromsteuer {
-                    let st_rate = ctx.regulatory_rates.effective_stromsteuer(tariff);
+                if product.solar_include_stromsteuer {
+                    let st_rate = ctx.regulatory_rates.effective_stromsteuer(None);
                     if st_rate > Decimal::ZERO {
                         positions.push(
                             levy_position(
@@ -1268,10 +1401,14 @@ impl BillingProvider for SolarProvider {
             }
 
             // ── Grid portion ────────────────────────────────────────────────────
-            // Billed at the standard electricity rate (arbeitspreis_ct_per_kwh).
-            // Stromsteuer always applies to grid electricity.
+            // Billed at the grid remainder rate (arbeitspreis_ct_per_kwh).
+            // Falls back to solar_arbeitspreis_ct_per_kwh if not separately configured.
+            // Stromsteuer always applies to grid electricity (§3 StromStG).
             if grid_kwh > Decimal::ZERO {
-                if let Some(ap_ct) = tariff.arbeitspreis_ct_per_kwh {
+                let grid_rate = product
+                    .arbeitspreis_ct_per_kwh
+                    .or(product.solar_arbeitspreis_ct_per_kwh);
+                if let Some(ap_ct) = grid_rate {
                     positions.push(
                         arbeitspreis_position(
                             format!("Arbeitspreis Reststrom Netz ({grid_kwh:.3}\u{202f}kWh)"),
@@ -1286,7 +1423,7 @@ impl BillingProvider for SolarProvider {
                     );
                 }
                 // Stromsteuer on grid portion
-                let st_rate = ctx.regulatory_rates.effective_stromsteuer(tariff);
+                let st_rate = ctx.regulatory_rates.effective_stromsteuer(None);
                 if st_rate > Decimal::ZERO {
                     positions.push(
                         levy_position(
@@ -1318,10 +1455,11 @@ impl BillingProvider for SolarProvider {
                 category: PositionCategory::Info,
                 tags: vec!["ggv_coverage".to_owned(), "solar".to_owned()],
                         applicable_tax_rate: None,
+                        trace: crate::position::PositionTrace::default(),
             });
 
             // Wire tax rate for GGV hybrid positions too
-            if let Some(rate) = tariff.mwst_rate_override {
+            if let Some(rate) = product.mwst_rate_override {
                 for pos in &mut positions {
                     if pos.applicable_tax_rate.is_none()
                         && !matches!(
@@ -1342,7 +1480,7 @@ impl BillingProvider for SolarProvider {
         let meter = quantities.solar.as_ref().cloned().unwrap_or_default();
         let kwh = meter.eigenverbrauch_kwh;
 
-        if let Some(ap_ct) = tariff.solar_arbeitspreis_ct_per_kwh {
+        if let Some(ap_ct) = product.solar_arbeitspreis_ct_per_kwh {
             positions.push(
                 arbeitspreis_position(
                     "Arbeitspreis Solarstrom (Eigenverbrauch)",
@@ -1355,7 +1493,7 @@ impl BillingProvider for SolarProvider {
                 .with_tag("solar"),
             );
         }
-        if let Some(ms_ct) = tariff.mieterstrom_aufschlag_ct_per_kwh {
+        if let Some(ms_ct) = product.mieterstrom_aufschlag_ct_per_kwh {
             positions.push(
                 arbeitspreis_position(
                     "Mieterstrom-Aufschlag (\u{a7}38a EEG 2023)",
@@ -1368,7 +1506,7 @@ impl BillingProvider for SolarProvider {
                 .with_tag("mieterstrom_aufschlag"),
             );
         }
-        if let Some(rabatt_ct) = tariff.gemeinschaft_rabatt_ct_per_kwh {
+        if let Some(rabatt_ct) = product.gemeinschaft_rabatt_ct_per_kwh {
             positions.push(
                 BillingPosition::credit(
                     "Rabatt Gemeinschaftliche Geb\u{e4}udeversorgung (\u{a7}42b EEG)",
@@ -1382,10 +1520,10 @@ impl BillingProvider for SolarProvider {
                 .with_tag("solar"),
             );
         }
-        // ── Wire per-position applicable_tax_rate from tariff.mwst_rate_override ──
+        // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
         // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
-        if let Some(rate) = tariff.mwst_rate_override {
+        if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
                     && !matches!(
@@ -1419,14 +1557,12 @@ impl BillingProvider for SolarProvider {
 /// - **LF-side credit notes** (monthly Gutschrift to generator): use `EegProvider`
 ///   with `eeg_full` when plant parameters are available, `eeg` otherwise
 pub struct EegProvider {
-    tariff: TariffInput,
+    product: EegProduct,
 }
 
 impl EegProvider {
-    pub fn from_tariff(tariff: &TariffInput) -> Self {
-        Self {
-            tariff: tariff.clone(),
-        }
+    pub fn new(product: EegProduct) -> Self {
+        Self { product }
     }
 }
 
@@ -1446,7 +1582,7 @@ impl BillingProvider for EegProvider {
 
         // ── Fallback: simplified EEG credit note ──────────────────────────────
         let meter = quantities.eeg.as_ref().cloned().unwrap_or_default();
-        let tariff = &self.tariff;
+        let product = &self.product;
         let kwh = meter.einspeisung_kwh;
 
         let billable_kwh = meter
@@ -1468,9 +1604,10 @@ impl BillingProvider for EegProvider {
                 category: PositionCategory::Info,
                 tags: vec!["eeg_negativpreis_suspension".to_owned(), "info".to_owned()],
                 applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
             });
         }
-        if let Some(vg_ct) = tariff.eeg_verguetungssatz_ct_per_kwh {
+        if let Some(vg_ct) = product.eeg_verguetungssatz_ct_per_kwh {
             positions.push(
                 BillingPosition::debit(
                     "EEG Einspeisevergütung",
@@ -1484,7 +1621,7 @@ impl BillingProvider for EegProvider {
                 .with_tag("eeg"),
             );
         }
-        if let Some(mp_ct) = tariff.eeg_marktpraemie_ct_per_kwh {
+        if let Some(mp_ct) = product.eeg_marktpraemie_ct_per_kwh {
             positions.push(
                 BillingPosition::debit(
                     "EEG Marktprämie",
@@ -1498,7 +1635,7 @@ impl BillingProvider for EegProvider {
                 .with_tag("eeg"),
             );
         }
-        if let Some(mgp_ct) = tariff.eeg_managementpraemie_ct_per_kwh {
+        if let Some(mgp_ct) = product.eeg_managementpraemie_ct_per_kwh {
             positions.push(
                 BillingPosition::debit(
                     "Managementprämie Direktvermarktung",
@@ -1512,7 +1649,7 @@ impl BillingProvider for EegProvider {
                 .with_tag("eeg"),
             );
         }
-        if let Some(kwkg_ct) = tariff.kwkg_zuschlag_ct_per_kwh {
+        if let Some(kwkg_ct) = product.kwkg_zuschlag_ct_per_kwh {
             positions.push(
                 BillingPosition::debit(
                     "KWKG Zuschlag",
@@ -1526,10 +1663,10 @@ impl BillingProvider for EegProvider {
                 .with_tag("kwkg"),
             );
         }
-        // ── Wire per-position applicable_tax_rate from tariff.mwst_rate_override ──
+        // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
         // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
-        if let Some(rate) = tariff.mwst_rate_override {
+        if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
                     && !matches!(
@@ -1570,6 +1707,7 @@ fn bill_eeg_full(
             category: PositionCategory::Credit,
             tags: vec!["eeg".to_owned(), "eeg_full".to_owned()],
             applicable_tax_rate: None,
+            trace: crate::position::PositionTrace::default(),
         })
         .collect();
     Ok(positions)
@@ -1579,14 +1717,12 @@ fn bill_eeg_full(
 
 /// Non-EEG Direktvermarktung feed-in settlement (EINSPEISUNG).
 pub struct EinspeisungProvider {
-    tariff: TariffInput,
+    product: EinspeisungProduct,
 }
 
 impl EinspeisungProvider {
-    pub fn from_tariff(tariff: &TariffInput) -> Self {
-        Self {
-            tariff: tariff.clone(),
-        }
+    pub fn new(product: EinspeisungProduct) -> Self {
+        Self { product }
     }
 }
 
@@ -1598,11 +1734,11 @@ impl BillingProvider for EinspeisungProvider {
         _prior: &[BillingPosition],
     ) -> Result<Vec<BillingPosition>, BillingError> {
         let meter = quantities.einspeisung.as_ref().cloned().unwrap_or_default();
-        let tariff = &self.tariff;
+        let product = &self.product;
         let kwh = meter.einspeisung_kwh;
         let mut positions: Vec<BillingPosition> = Vec::new();
 
-        if let Some(mv_ct) = tariff.marktwert_ct_per_kwh {
+        if let Some(mv_ct) = product.marktwert_ct_per_kwh {
             positions.push(
                 BillingPosition::debit(
                     "Marktwert Strom (EPEX Spot Monatsmarktwert)",
@@ -1616,7 +1752,7 @@ impl BillingProvider for EinspeisungProvider {
                 .with_tag("einspeisung"),
             );
         }
-        if let Some(vm_ct) = tariff.vermarktungsgebuehr_ct_per_kwh {
+        if let Some(vm_ct) = product.vermarktungsgebuehr_ct_per_kwh {
             // Vermarktungsgebühr is a cost for the generator (reduces net payment)
             positions.push(
                 BillingPosition::debit(
@@ -1630,10 +1766,10 @@ impl BillingProvider for EinspeisungProvider {
                 .with_tag("einspeisung"),
             );
         }
-        // ── Wire per-position applicable_tax_rate from tariff.mwst_rate_override ──
+        // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
         // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
-        if let Some(rate) = tariff.mwst_rate_override {
+        if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
                     && !matches!(
@@ -1653,14 +1789,12 @@ impl BillingProvider for EinspeisungProvider {
 
 /// HEMS subscription + event billing provider.
 pub struct HemsProvider {
-    tariff: TariffInput,
+    product: HemsProduct,
 }
 
 impl HemsProvider {
-    pub fn from_tariff(tariff: &TariffInput) -> Self {
-        Self {
-            tariff: tariff.clone(),
-        }
+    pub fn new(product: HemsProduct) -> Self {
+        Self { product }
     }
 }
 
@@ -1672,11 +1806,11 @@ impl BillingProvider for HemsProvider {
         _prior: &[BillingPosition],
     ) -> Result<Vec<BillingPosition>, BillingError> {
         let usage = quantities.hems.as_ref().cloned().unwrap_or_default();
-        let tariff = &self.tariff;
+        let product = &self.product;
         let months = usage.months.unwrap_or(dec!(1));
         let mut positions: Vec<BillingPosition> = Vec::new();
 
-        let sub_eur = tariff.hems_subscription_eur_per_month;
+        let sub_eur = product.hems_subscription_eur_per_month;
 
         if let Some(sub_eur) = sub_eur {
             positions.push(
@@ -1693,7 +1827,7 @@ impl BillingProvider for HemsProvider {
         }
         if let (Some(events), Some(event_eur)) = (
             usage.optimization_events,
-            tariff.hems_optimization_event_eur,
+            product.hems_optimization_event_eur,
         ) && events > 0
         {
             positions.push(
@@ -1708,7 +1842,8 @@ impl BillingProvider for HemsProvider {
                 .with_tag("hems"),
             );
         }
-        if let (Some(reads), Some(read_eur)) = (usage.readout_events, tariff.hems_readout_event_eur)
+        if let (Some(reads), Some(read_eur)) =
+            (usage.readout_events, product.hems_readout_event_eur)
             && reads > 0
         {
             positions.push(
@@ -1723,10 +1858,10 @@ impl BillingProvider for HemsProvider {
                 .with_tag("hems"),
             );
         }
-        // ── Wire per-position applicable_tax_rate from tariff.mwst_rate_override ──
+        // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
         // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
-        if let Some(rate) = tariff.mwst_rate_override {
+        if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
                     && !matches!(
@@ -1746,14 +1881,12 @@ impl BillingProvider for HemsProvider {
 
 /// E-Mobility CPO/EMSP billing provider.
 pub struct EmobilityProvider {
-    tariff: TariffInput,
+    product: EmobilityProduct,
 }
 
 impl EmobilityProvider {
-    pub fn from_tariff(tariff: &TariffInput) -> Self {
-        Self {
-            tariff: tariff.clone(),
-        }
+    pub fn new(product: EmobilityProduct) -> Self {
+        Self { product }
     }
 }
 
@@ -1765,12 +1898,12 @@ impl BillingProvider for EmobilityProvider {
         _prior: &[BillingPosition],
     ) -> Result<Vec<BillingPosition>, BillingError> {
         let usage = quantities.emobility.as_ref().cloned().unwrap_or_default();
-        let tariff = &self.tariff;
+        let product = &self.product;
         let months = usage.months.unwrap_or(dec!(1));
         let mut positions: Vec<BillingPosition> = Vec::new();
 
-        let svc_eur = tariff.emobility_service_fee_eur;
-        let kwh_price = tariff.emobility_kwh_price_ct;
+        let svc_eur = product.emobility_service_fee_eur;
+        let kwh_price = product.emobility_kwh_price_ct;
 
         if let Some(svc_eur) = svc_eur {
             positions.push(
@@ -1801,7 +1934,7 @@ impl BillingProvider for EmobilityProvider {
             );
         }
         if let (Some(sessions), Some(session_eur)) =
-            (usage.sessions, tariff.emobility_session_fee_eur)
+            (usage.sessions, product.emobility_session_fee_eur)
             && sessions > 0
         {
             positions.push(
@@ -1817,7 +1950,7 @@ impl BillingProvider for EmobilityProvider {
             );
         }
         if let (Some(roaming), Some(roaming_eur)) =
-            (usage.roaming_sessions, tariff.emobility_roaming_fee_eur)
+            (usage.roaming_sessions, product.emobility_roaming_fee_eur)
             && roaming > 0
         {
             positions.push(
@@ -1832,10 +1965,10 @@ impl BillingProvider for EmobilityProvider {
                 .with_tag("emobility"),
             );
         }
-        // ── Wire per-position applicable_tax_rate from tariff.mwst_rate_override ──
+        // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
         // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
-        if let Some(rate) = tariff.mwst_rate_override {
+        if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
                     && !matches!(
@@ -1855,14 +1988,12 @@ impl BillingProvider for EmobilityProvider {
 
 /// Energiedienstleistung (MSB, EMS, maintenance) billing provider.
 pub struct ServiceProvider {
-    tariff: TariffInput,
+    product: ServiceProduct,
 }
 
 impl ServiceProvider {
-    pub fn from_tariff(tariff: &TariffInput) -> Self {
-        Self {
-            tariff: tariff.clone(),
-        }
+    pub fn new(product: ServiceProduct) -> Self {
+        Self { product }
     }
 }
 
@@ -1874,11 +2005,11 @@ impl BillingProvider for ServiceProvider {
         _prior: &[BillingPosition],
     ) -> Result<Vec<BillingPosition>, BillingError> {
         let usage = quantities.service.as_ref().cloned().unwrap_or_default();
-        let tariff = &self.tariff;
+        let product = &self.product;
         let months = usage.months.unwrap_or(dec!(1));
         let mut positions: Vec<BillingPosition> = Vec::new();
 
-        if let Some(fee_eur) = tariff.service_fee_eur {
+        if let Some(fee_eur) = product.service_fee_eur {
             positions.push(
                 BillingPosition::debit(
                     "Energiedienstleistung Grundgebühr",
@@ -1890,7 +2021,7 @@ impl BillingProvider for ServiceProvider {
                 .with_tag("service"),
             );
         }
-        let event_price = usage.event_price_eur.or(tariff.service_event_price_eur);
+        let event_price = usage.event_price_eur.or(product.service_event_price_eur);
         if let (Some(events), Some(event_eur)) = (usage.event_count, event_price)
             && events > 0
         {
@@ -1906,10 +2037,10 @@ impl BillingProvider for ServiceProvider {
                 .with_tag("service"),
             );
         }
-        // ── Wire per-position applicable_tax_rate from tariff.mwst_rate_override ──
+        // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
         // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
-        if let Some(rate) = tariff.mwst_rate_override {
+        if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
                     && !matches!(
@@ -1932,31 +2063,31 @@ impl BillingProvider for ServiceProvider {
 /// Accepts any `SpotPriceSource` implementation, not just EPEX.
 /// Also includes NNE and Stromsteuer positions.
 pub struct DynamicElectricityProvider {
-    tariff: TariffInput,
+    product: ElectricityProduct,
     grid: GridInput,
     spot_price_source: Box<dyn crate::provider::SpotPriceSource>,
 }
 
 impl DynamicElectricityProvider {
     pub fn new(
-        tariff: TariffInput,
+        product: ElectricityProduct,
         grid: GridInput,
         spot_source: impl crate::provider::SpotPriceSource + 'static,
     ) -> Self {
         Self {
-            tariff,
+            product,
             grid,
             spot_price_source: Box::new(spot_source),
         }
     }
 
     pub fn with_epex_map(
-        tariff: TariffInput,
+        product: ElectricityProduct,
         grid: GridInput,
         epex_prices: std::collections::HashMap<(i32, u8, u8, u8), Decimal>,
     ) -> Self {
         Self::new(
-            tariff,
+            product,
             grid,
             crate::provider::EpexSpotSource {
                 prices: epex_prices,
@@ -1966,46 +2097,48 @@ impl DynamicElectricityProvider {
 }
 
 impl BillingProvider for DynamicElectricityProvider {
+    fn validate_warnings(
+        &self,
+        _ctx: &BillingContext,
+        quantities: &Quantities,
+    ) -> Vec<BillingWarning> {
+        // §41b Abs. 2 EnWG — dynamic tariffs require iMSys (Smart Meter Gateway).
+        // If the metering mode is explicitly set to SLP or RLM, this is a definite
+        // regulatory violation that must block the billing run.
+        let is_non_imsys = quantities
+            .electricity
+            .as_ref()
+            .is_some_and(|m| m.metering_mode != crate::quantities::MeteringMode::Imsys);
+        if is_non_imsys {
+            return vec![BillingWarning {
+                code: "SECT41B_IMSYS_REQUIRED",
+                severity: WarningSeverity::Error,
+                message: "§41b Abs. 2 EnWG: dynamic tariffs (§41a) require an intelligent \
+                     metering system (iMSys / Smart Meter Gateway). The meter point \
+                     has MeteringMode::Slp or MeteringMode::Rlm. Update metering mode \
+                     to MeteringMode::Imsys or switch the customer to a fixed-price product."
+                    .to_owned(),
+            }];
+        }
+        vec![]
+    }
+
     fn bill(
         &self,
         ctx: &BillingContext,
         quantities: &Quantities,
         _prior: &[BillingPosition],
     ) -> Result<Vec<BillingPosition>, BillingError> {
-        let tariff = &self.tariff;
+        let product = &self.product;
         let grid = &self.grid;
         let rates = &ctx.regulatory_rates;
         let days = ctx.days();
-        let floor_ct = tariff.dynamic_epex_floor_ct_kwh;
+        let floor_ct = product.dynamic_epex_floor_ct_kwh;
         let source_name = self.spot_price_source.source_name().to_owned();
         let mut positions: Vec<BillingPosition> = Vec::new();
 
-        // ── §41a Abs. 4 EnWG — iMSys requirement ──────────────────────────────
-        // Dynamic tariffs require an intelligent metering system (Smart Meter
-        // Gateway / iMSys). Billing is not blocked — the operator is responsible
-        // for verifying metering compliance — but a regulatory notice is appended.
-        if quantities
-            .electricity
-            .as_ref()
-            .is_some_and(|m| m.metering_mode != crate::quantities::MeteringMode::Imsys)
-        {
-            positions.push(BillingPosition {
-                description: "Hinweis: §41a Abs. 4 EnWG erfordert iMSys (Smart Meter) \
-                     für dynamische Tarife. Bitte Messsystem prüfen."
-                    .to_owned(),
-                legal_basis: Some("§41a Abs. 4 EnWG".to_owned()),
-                quantity: Decimal::ZERO,
-                unit: String::new(),
-                unit_price_eur: Decimal::ZERO,
-                net_eur: Decimal::ZERO,
-                category: PositionCategory::Info,
-                tags: vec!["sect41a_imsys_warning".to_owned()],
-                applicable_tax_rate: None,
-            });
-        }
-
         // Grundpreis
-        if let Some(gp_ct_day) = tariff.grundpreis_ct_per_day {
+        if let Some(gp_ct_day) = product.grundpreis_ct_per_day {
             positions.push(
                 grundpreis_position(
                     "Grundpreis Strom (§41a)",
@@ -2109,6 +2242,7 @@ impl BillingProvider for DynamicElectricityProvider {
                     "§41a".to_owned(),
                 ],
                 applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
             });
 
             // NNE + KA
@@ -2142,7 +2276,7 @@ impl BillingProvider for DynamicElectricityProvider {
             }
 
             // Stromsteuer
-            let st_rate = rates.effective_stromsteuer(tariff);
+            let st_rate = rates.effective_stromsteuer(product.stromsteuer_ct_per_kwh_override);
             if st_rate > Decimal::ZERO {
                 positions.push(
                     levy_position(
@@ -2175,10 +2309,10 @@ impl BillingProvider for DynamicElectricityProvider {
             );
         }
 
-        // ── Wire per-position applicable_tax_rate from tariff.mwst_rate_override ──
+        // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
         // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
-        if let Some(rate) = tariff.mwst_rate_override {
+        if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
                     && !matches!(
@@ -2211,6 +2345,7 @@ impl BillingProvider for DynamicElectricityProvider {
                 category: PositionCategory::Info,
                 tags: vec!["sect41a_annual_comparison".to_owned()],
                 applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
             });
         }
 
@@ -2305,6 +2440,7 @@ impl BillingProvider for MwStProvider {
                 category: PositionCategory::Tax,
                 tags: vec!["mwst".to_owned(), "tax".to_owned()],
                 applicable_tax_rate: Some(rate),
+                trace: crate::position::PositionTrace::tax(rate, net_base, "§12 UStG"),
             });
         }
 
@@ -2349,6 +2485,7 @@ fn billing_item_to_position(
         category,
         tags: tags.iter().map(|s| s.to_string()).collect(),
         applicable_tax_rate: None,
+        trace: crate::position::PositionTrace::default(),
     }
 }
 
@@ -2402,4 +2539,98 @@ fn build_block_tariff_positions(
         .into_iter()
         .map(|item| billing_item_to_position(item, PositionCategory::Commodity, "§41 EnWG", &tags))
         .collect())
+}
+
+// ── EnergyShareProvider ───────────────────────────────────────────────────────
+
+/// §42c EnWG Energy Sharing — community energy allocation credit provider.
+///
+/// Generates a credit position for the customer's share of locally produced
+/// electricity from the community energy pool (Energiegemeinschaft). The credit
+/// reduces the effective energy cost without affecting the grid-consumption billing
+/// (which is handled by the `ElectricityProvider` in the same engine).
+///
+/// ## Legal basis
+///
+/// §42c EnWG (Energiegemeinschaften, effective 01.01.2024): participants in a
+/// registered Energiegemeinschaft may receive allocated shares of local generation.
+/// The Lieferant bills full grid consumption (§41 EnWG) and separately credits the
+/// sharing allocation at the contracted sharing rate.
+///
+/// ## §41a intersection
+///
+/// If the sharing tariff is combined with a dynamic tariff (`STROM` + dynamic EPEX
+/// overlay), the credit is applied as a flat per-kWh reduction on the allocated amount.
+/// For interval-resolved sharing under §42c, use `DynamicElectricityProvider` instead.
+///
+/// ## Integration
+///
+/// ```text
+/// ElectricityProvider → full grid consumption (Arbeitspreis + Grundpreis + Stromsteuer)
+/// EnergyShareProvider → credit for sharing allocation (negative net_eur)
+/// MwStProvider        → MwSt on netto sum (sharing credit reduces the MwSt base)
+/// ```
+pub struct EnergyShareProvider {
+    product: SharingProduct,
+}
+
+impl EnergyShareProvider {
+    pub fn new(product: SharingProduct) -> Self {
+        Self { product }
+    }
+}
+
+impl BillingProvider for EnergyShareProvider {
+    fn bill(
+        &self,
+        _ctx: &crate::context::BillingContext,
+        quantities: &crate::quantities::Quantities,
+        _prior: &[BillingPosition],
+    ) -> Result<Vec<BillingPosition>, BillingError> {
+        let product = &self.product;
+        let mut positions: Vec<BillingPosition> = Vec::new();
+
+        // Sharing credit rate from tariff sheet.
+        let credit_rate_ct = product.sharing_credit_ct_per_kwh.unwrap_or(Decimal::ZERO);
+        if credit_rate_ct.is_zero() {
+            return Ok(positions);
+        }
+        let credit_rate_eur = credit_rate_ct / dec!(100);
+
+        // Allocated kWh from quantities.
+        let allocated_kwh = quantities
+            .energy_share
+            .as_ref()
+            .map(|s| s.allocated_kwh)
+            .unwrap_or(Decimal::ZERO);
+        if allocated_kwh <= Decimal::ZERO {
+            return Ok(positions);
+        }
+
+        let description = product
+            .sharing_description
+            .clone()
+            .unwrap_or_else(|| "Energiegemeinschaft Gutschrift (§42c EnWG)".to_owned());
+
+        let mut pos = BillingPosition::credit(
+            description,
+            allocated_kwh,
+            "kWh",
+            credit_rate_eur,
+            PositionCategory::EnergyShare,
+        )
+        .with_legal_basis("§42c EnWG")
+        .with_tag("sharing")
+        .with_tag("strom");
+        pos.trace = crate::position::PositionTrace::commodity(
+            allocated_kwh,
+            "kWh",
+            -credit_rate_eur,
+            "§42c EnWG",
+        )
+        .with_basis("Energiegemeinschaft-Liefervertrag");
+        positions.push(pos);
+
+        Ok(positions)
+    }
 }

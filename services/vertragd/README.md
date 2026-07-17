@@ -8,20 +8,26 @@ MaLo IDs.
 | Feature | Detail |
 |---|---|
 | **HTTP port** | `:9780` |
-| **Database** | PostgreSQL (sqlx 0.8, dynamic queries) |
-| **Auth** | OIDC/JWT + Cedar ABAC |
+| **Database** | PostgreSQL (3 migrations, sqlx 0.8 dynamic queries) |
+| **Auth** | OIDC/JWT + Cedar ABAC (MCP: API-key bearer) |
 | **Kunden** | B2C persons + B2B companies; `Geschaeftspartner` schema-validated on PUT |
 | **B2C Person** | `PUT/GET /api/v1/kunden/{id}/person` — `rubo4e::current::Person` BO (GDPR Art. 15) |
+| **Zahlungsinformation** | `PUT/GET /api/v1/kunden/{id}/zahlungsinformation` — typed `Zahlungsinformation` COM; IBAN mod-97 validated |
+| **GDPR Art. 17** | `POST /api/v1/kunden/{id}/anonymize` — irreversible pseudonymization; immutable `anonymization_log` audit trail |
+| **GDPR Art. 15/20** | `GET /api/v1/kunden/{id}/export` — complete PII export (Kunde + Person + IBAN + identities + contracts) |
 | **B2B portal access** | `kunden_identitaeten` — N OIDC logins per company; role-based + site-scoped (`standort_filter`) |
 | **Rahmenverträge** | B2B framework contracts with Sammelrechnung, indexation, `angebot_id` (CPQ) |
-| **Versorgungsverträge** | Per-site/commodity; status machine ANGELEGT→AKTIV→ABGELAUFEN |
+| **Versorgungsverträge** | Per-site/commodity; status machine ANGELEGT→AKTIV→ABGELAUFEN; idempotent on `erp_contract_id` |
 | **MaKo triggering** | `POST processd /start-supply` per commodity on contract creation |
-| **Tarifwechsel** | `POST /api/v1/vertraege/{id}/tarifwechsel` — changes product without new UTILMD; **blocked within `preisgarantie_bis` window** |
-| **Preisgarantie** | `PUT/GET /api/v1/vertraege/{id}/preisgarantie` — typed `rubo4e::current::Preisgarantie` COM; guard prevents price-lock violations |
-| **Kündigung** | Coordinated Lieferende + Schlussablesung across all commodities |
+| **Tarifwechsel** | `POST /api/v1/vertraege/{id}/tarifwechsel` — changes product without new UTILMD; **blocked within `preisgarantie_bis` window**; override logged to `preisgarantie_override_log` |
+| **Preisgarantie** | `PUT/GET /api/v1/vertraege/{id}/preisgarantie` — typed `rubo4e::current::Preisgarantie` COM |
+| **Kündigung** | Coordinated Lieferende + Schlussablesung across all commodities; §14 StromGVV / §13 GasGVV notice period enforced |
+| **Stornierung** | `POST /api/v1/vertraege/{id}/stornieren` — pre-activation cancel (ANGELEGT/IN_BEARBEITUNG only) |
 | **OIDC→MaLo auth** | `GET /kunden/authenticate?malo_id=` — used by `portald` to scope all portal requests |
-| **Preisanpassungsbenachrichtigung** | Background worker emits `de.vertrag.preisaenderung.ankuendigung` 42 days before Tarifwechsel (§41 Abs. 3 EnWG ≥ 6 weeks notice) |
+| **Preisanpassungsbenachrichtigung** | Daily worker emits `de.vertrag.preisaenderung.ankuendigung` 42 days before Tarifwechsel (§41 Abs. 3 EnWG ≥ 6 weeks notice) |
+| **Auto-renewal** | Daily worker extends `vertragsende` + emits 30-day advance notice (§13 GasGVV / §14 StromGVV) |
 | **Health** | `GET /health/live`, `GET /health/ready` |
+| **MCP** | 9 read-only tools + 2 prompts at `/mcp` |
 
 ## Tarifwechsel + Preisgarantie
 
@@ -37,10 +43,28 @@ curl -X POST http://vertragd:9780/api/v1/vertraege/{id}/tarifwechsel \
   -d '{"komp_id":"...","new_product_code":"STROM-PREMIUM-2027","wirksamkeit":"2026-08-01"}'
 # → 422 {"error":"Tarifwechsel blocked by Preisgarantie","preisgarantie_bis":"2027-06-30",...}
 
-# Operator bypass (requires documented customer consent)
+# Operator bypass (requires documented customer consent; logged to preisgarantie_override_log)
 curl -X POST http://vertragd:9780/api/v1/vertraege/{id}/tarifwechsel \
   -d '{"komp_id":"...","new_product_code":"STROM-PREMIUM-2027","wirksamkeit":"2026-08-01","override_preisgarantie":true}'
 ```
+
+## GDPR erasure
+
+```bash
+# Pseudonymize all PII (irreversible; retains contract records for §147 AO)
+curl -X POST http://vertragd:9780/api/v1/kunden/{id}/anonymize \
+  -H "Content-Type: application/json" \
+  -d '{"requested_by": "operator-dpo"}'
+# → 200 {"anonymized": true, "audit_log": "anonymization_log Eintrag erstellt"}
+```
+
+## Database migrations
+
+| Migration | Contents |
+|---|---|
+| `0001_initial.sql` | `kunden`, `kunden_identitaeten`, `rahmenvertraege`, `versorgungsvertraege`, `vertragskomponenten`, `received_events`; `person` column; pending Tarifwechsel columns |
+| `0002_zahlungsinformation.sql` | `kunden.zahlungsinformation JSONB` for IBAN/SEPA |
+| `0003_correctness_gdpr.sql` | Unique partial index for `upsert_kunde` idempotency; `anonymization_log`; `preisgarantie_override_log` |
 
 ## Configuration
 
@@ -57,5 +81,5 @@ edmd_url       = "http://edmd:8380"
 
 [erp]
 webhook_url  = "http://erp:8000/events"
-hmac_secret  = "${ERP_HMAC_SECRET}"
+hmac_secret  = "${ERP_HMAC_SECRET}"   # HMAC-SHA256 X-Mako-Signature on all CloudEvents
 ```

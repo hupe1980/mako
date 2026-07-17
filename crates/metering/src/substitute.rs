@@ -390,6 +390,16 @@ fn synthesise_value(
         SubstituteMethod::ZeroFill => Decimal::ZERO,
 
         SubstituteMethod::PriorPeriodAverage => {
+            // F-16: §17 Abs. 2 MessZV requires "same time slot from the prior reference period
+            // (prior calendar week)". Callers must supply exactly 7 days of prior data;
+            // averaging across multiple weeks produces a multi-week average, not the prior-week
+            // value. This assertion guards against mis-use at the call site.
+            debug_assert!(
+                prior_period.len() <= 7 * 24 * 4,
+                "PriorPeriodAverage: prior_period should contain ≤ 7 days of data \
+                 per §17 Abs. 2 MessZV (got {} intervals — caller must pass only prior-week data)",
+                prior_period.len()
+            );
             // §17 Abs. 2 MessZV: use the same time slot from the prior reference period.
             // Match by time-of-day (hour, minute, second) — period-independent.
             let target_time = (from.hour(), from.minute(), from.second());

@@ -809,6 +809,44 @@ async fn get_zahlungsstatus(
 
 // ── BO4E conversion (service-layer concern) ───────────────────────────────────
 
+/// Map `BillingPositionKind` → `BdewArtikelnummer` per BDEW Codeliste v5.6 (valid 01.09.2025).
+///
+/// NNE Strom positions (PIDs 31001/31006) return `None` — their `artikel_id` comes
+/// from `PreisblattNetznutzung` (BK6-20-160: classic artikelnummer replaced by artikel_id
+/// from BNetzA Netznutzungspreisblatt for GPKE Strom).
+fn kind_to_artikelnummer(
+    kind: grid_billing::BillingPositionKind,
+    settlement_type: grid_billing::SettlementType,
+) -> Option<rubo4e::current::BdewArtikelnummer> {
+    use grid_billing::{BillingPositionKind as K, SettlementType as ST};
+    use rubo4e::current::BdewArtikelnummer as A;
+    match (kind, settlement_type) {
+        (K::NneArbeit | K::NneArbeitHt | K::NneArbeitNt | K::NneArbeitModul1, ST::NneGas) => {
+            Some(A::Wirkarbeit)
+        }
+        // §14a Modul 3 Spotpreis-NNE: same article (Wirkarbeit) as other Arbeit positions
+        (K::NneArbeitModul3, ST::NneGas) => Some(A::Wirkarbeit),
+        (K::NneLeistung, ST::NneGas) => Some(A::Leistung),
+        (K::NneGasGrundpreis, _) => Some(A::Grundpreis),
+        (
+            K::NneArbeit
+            | K::NneArbeitHt
+            | K::NneArbeitNt
+            | K::NneArbeitModul1
+            | K::NneArbeitModul3
+            | K::NneLeistung,
+            _,
+        ) => None,
+        (K::Konzessionsabgabe, _) => Some(A::Konzessionsabgabe),
+        (K::Mehrmenge, _) => Some(A::Mehrmenge),
+        (K::Mindermenge, _) => Some(A::Mindermenge),
+        (K::MsbGrundgebuehr, _) => Some(A::EntgeltEinbauBetriebWartungMesstechnik),
+        (K::Messdienstleistung, _) => Some(A::EntgeltMessungAblesung),
+        (K::GasAwhSperrung | K::GasAwhEntsprrung | K::GasAwhSonstige, _) => None,
+        (K::Blindmehrarbeit, _) => Some(A::Blindmehrarbeit),
+    }
+}
+
 /// Convert a `GridInvoice` domain result into a BO4E `Rechnung`.
 ///
 /// `grid-billing` has no rubo4e dependency; this function owns the mapping.
@@ -828,11 +866,15 @@ fn grid_billing_into_rechnung(invoice: &grid_billing::GridInvoice) -> rubo4e::cu
             let einheit = match p.unit {
                 grid_billing::QuantityUnit::Kwh => Some(Mengeneinheit::Kwh),
                 grid_billing::QuantityUnit::Kw => Some(Mengeneinheit::Kw),
+                grid_billing::QuantityUnit::Kvarh => Some(Mengeneinheit::Kwh), // reactive energy — map to kWh bucket
+                grid_billing::QuantityUnit::Kvar => Some(Mengeneinheit::Kw), // reactive power — map to kW bucket
                 grid_billing::QuantityUnit::Monat => Some(Mengeneinheit::Monat),
             };
             Rechnungsposition {
                 positionsnummer: Some(p.number as i64),
                 positionstext: Some(p.text.clone()),
+                artikelnummer: kind_to_artikelnummer(p.kind, invoice.settlement_type),
+                artikel_id: p.artikel_id.clone(),
                 lieferungszeitraum: Some(lz.clone()),
                 positions_menge: Some(Menge {
                     wert: Some(p.quantity),
@@ -1099,9 +1141,13 @@ async fn post_selbstausstellen(
             None
         },
         ka_satz_ct_per_kwh: None, // KA lookup not implemented; ERP can add via COMDIS
+        sect14a_modul1_reduction_factor: None,
+        nne_grundpreis_eur_per_month: None,
+        nne_grundpreis_months: None,
         tariff_sheet_id: None,
         sparte: grid_billing::Sparte::Strom,
         ka_klasse: None,
+        sect14a_modul3_intervals: vec![],
     };
 
     let billing_result = match grid_billing::calculate_nne_invoice(&input) {

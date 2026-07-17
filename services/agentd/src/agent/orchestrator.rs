@@ -1,12 +1,24 @@
 //! Orchestrator agent — routes events to specialists via pattern matching + LLM triage.
 //!
-//! Routing logic (in order):
-//! 1. **Direct match**: if an event type matches a specialist's `trigger_patterns`, skip
+//! ## Routing logic (in order)
+//!
+//! 1. **Direct match**: if an event type matches specialist `trigger_patterns`, skip
 //!    orchestrator and run specialist directly.
-//! 2. **LLM triage**: orchestrator analyses the event and calls a `transfer_to_{specialist}`
-//!    tool to route to the correct agent.
+//! 2. **LLM triage**: orchestrator calls a `transfer_to_{specialist}` tool to route.
 //! 3. **Fallback**: if no specialist is invoked within `max_turns`, orchestrator handles
 //!    it directly.
+//!
+//! ## Dispatch modes
+//!
+//! Controlled by `[orchestrator] dispatch_mode` in `agentd.toml`:
+//!
+//! - `sequential` (default): route to the first matching specialist.
+//! - `parallel`: fan out to ALL matching specialists concurrently; aggregate results.
+//! - `race`: fan out; return the first specialist to complete; cancel the rest.
+//!
+//! `parallel` is best for compliance events that need multiple independent checks
+//! simultaneously (e.g. `de.billing.rechnung.erstellt` triggering both
+//! `billing-anomaly-agent` AND `billing-regulatory-guard-agent`).
 
 use std::sync::Arc;
 
@@ -15,7 +27,7 @@ use tracing::{info, instrument, warn};
 
 use super::registry::AgentRegistry;
 use super::session::{AgentDecision, AgentSession};
-use crate::config::{AgentdConfig, OrchestratorConfig};
+use crate::config::{AgentdConfig, DispatchMode, OrchestratorConfig};
 use crate::llm::{
     CompletionConfig, CompletionResult, LlmProvider, Message, build_provider, handoff_tools,
     parse_handoff,
@@ -52,8 +64,12 @@ impl OrchestratorAgent {
         })
     }
 
-    /// Entry point: route an event to the correct agent and run it.
-    /// Follows handoffs up to 3 hops before giving up.
+    /// Entry point: route an event to the correct agent(s) and run them.
+    ///
+    /// Respects `dispatch_mode`:
+    /// - `sequential`: first matching specialist only.
+    /// - `parallel`: all matching specialists concurrently, results merged.
+    /// - `race`: all matching specialists concurrently, first wins.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip(self, registry, mcp, rag))]
     pub async fn dispatch(
@@ -66,7 +82,57 @@ impl OrchestratorAgent {
         rag: Option<&RagEngine>,
         tenant: &str,
     ) -> AgentDecision {
-        // ── 1. Direct match ──────────────────────────────────────────────────
+        // ── Parallel / Race dispatch ──────────────────────────────────────────
+        // When multiple specialists match the same event type AND parallel/race mode
+        // is configured, run them concurrently.
+        let all_specialists = registry.find_all_specialists(&event_type);
+        let limit = self.cfg.parallel_limit.max(1);
+
+        if all_specialists.len() > 1 {
+            match self.cfg.dispatch_mode {
+                DispatchMode::Parallel => {
+                    info!(
+                        count = all_specialists.len(),
+                        "parallel dispatch: running all matching specialists"
+                    );
+                    return self
+                        .dispatch_parallel(
+                            all_specialists,
+                            event_id,
+                            event_type,
+                            event_data,
+                            registry,
+                            mcp,
+                            rag,
+                            limit,
+                        )
+                        .await;
+                }
+                DispatchMode::Race => {
+                    info!(
+                        count = all_specialists.len(),
+                        "race dispatch: returning first specialist to complete"
+                    );
+                    return self
+                        .dispatch_race(
+                            all_specialists,
+                            event_id,
+                            event_type,
+                            event_data,
+                            registry,
+                            mcp,
+                            rag,
+                            limit,
+                        )
+                        .await;
+                }
+                DispatchMode::Sequential => {
+                    // Fall through to direct-match logic below
+                }
+            }
+        }
+
+        // ── 1. Direct match (sequential) ──────────────────────────────────────
         if let Some(specialist) = registry.find_specialist(&event_type) {
             info!(agent = %specialist.name, "direct route (trigger_patterns match)");
             return self
@@ -76,7 +142,7 @@ impl OrchestratorAgent {
                 .await;
         }
 
-        // ── 2. LLM triage ────────────────────────────────────────────────────
+        // ── 2. LLM triage ─────────────────────────────────────────────────────
         let agent_descriptions: Vec<String> = registry
             .agent_names
             .iter()
@@ -114,7 +180,6 @@ impl OrchestratorAgent {
                     break;
                 }
                 Ok(CompletionResult::Text(text)) => {
-                    // Orchestrator answered directly
                     return AgentDecision {
                         agent_name: "orchestrator".into(),
                         event_id,
@@ -174,7 +239,6 @@ impl OrchestratorAgent {
             }
         }
 
-        // Fallback: no routing achieved
         AgentDecision {
             agent_name: "orchestrator".into(),
             event_id,
@@ -183,6 +247,149 @@ impl OrchestratorAgent {
             summary: "Orchestrator could not route the event to a specialist.".into(),
             tool_calls: 0,
             turns: self.cfg.max_turns,
+            handoff_to: None,
+        }
+    }
+
+    /// Fan out to all specialists concurrently; merge all results.
+    ///
+    /// Returns a synthetic `AgentDecision` with a combined summary of all agent outcomes.
+    /// All specialists run to completion. Use for compliance checks where you need
+    /// all specialists to report independently.
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_parallel(
+        &self,
+        specialists: Vec<Arc<super::registry::Agent>>,
+        event_id: String,
+        event_type: String,
+        event_data: Value,
+        registry: &AgentRegistry,
+        mcp: &McpPool,
+        rag: Option<&RagEngine>,
+        limit: usize,
+    ) -> AgentDecision {
+        use futures::stream::{FuturesUnordered, StreamExt};
+
+        let take = specialists.len().min(limit);
+        let mut futs: FuturesUnordered<_> = specialists
+            .into_iter()
+            .take(take)
+            .map(|specialist| {
+                let eid = event_id.clone();
+                let etype = event_type.clone();
+                let edata = event_data.clone();
+                let peers: Vec<String> = registry
+                    .agent_names
+                    .iter()
+                    .filter(|n| *n != &specialist.name)
+                    .cloned()
+                    .collect();
+                async move {
+                    AgentSession::new(Arc::clone(&specialist), eid, etype)
+                        .run(edata, mcp, &peers, rag)
+                        .await
+                }
+            })
+            .collect();
+
+        let mut results: Vec<AgentDecision> = Vec::new();
+        while let Some(decision) = futs.next().await {
+            results.push(decision);
+        }
+
+        // Merge: pick the most severe outcome, aggregate summaries
+        let has_error = results.iter().any(|d| d.outcome == "error");
+        let has_action = results.iter().any(|d| {
+            d.summary.to_uppercase().contains("VIOLATION")
+                || d.summary.to_uppercase().contains("CRITICAL")
+        });
+
+        let merged_summary = results
+            .iter()
+            .map(|d| format!("[{}] {}", d.agent_name, d.summary))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let total_tools: usize = results.iter().map(|d| d.tool_calls).sum();
+        let max_turns = results.iter().map(|d| d.turns).max().unwrap_or(0);
+        let agent_names = results
+            .iter()
+            .map(|d| d.agent_name.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        AgentDecision {
+            agent_name: format!("parallel[{agent_names}]"),
+            event_id,
+            event_type,
+            outcome: if has_error {
+                "error"
+            } else if has_action {
+                "action_required"
+            } else {
+                "completed"
+            }
+            .into(),
+            summary: merged_summary,
+            tool_calls: total_tools,
+            turns: max_turns,
+            handoff_to: None,
+        }
+    }
+
+    /// Fan out to all specialists concurrently; return the first to complete.
+    ///
+    /// Best for latency-sensitive events where any specialist can handle it.
+    /// Remaining specialist tasks are abandoned when the first completes.
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_race(
+        &self,
+        specialists: Vec<Arc<super::registry::Agent>>,
+        event_id: String,
+        event_type: String,
+        event_data: Value,
+        registry: &AgentRegistry,
+        mcp: &McpPool,
+        rag: Option<&RagEngine>,
+        limit: usize,
+    ) -> AgentDecision {
+        use futures::stream::{FuturesUnordered, StreamExt};
+
+        let take = specialists.len().min(limit);
+        let mut futs: FuturesUnordered<_> = specialists
+            .into_iter()
+            .take(take)
+            .map(|specialist| {
+                let eid = event_id.clone();
+                let etype = event_type.clone();
+                let edata = event_data.clone();
+                let peers: Vec<String> = registry
+                    .agent_names
+                    .iter()
+                    .filter(|n| *n != &specialist.name)
+                    .cloned()
+                    .collect();
+                async move {
+                    AgentSession::new(Arc::clone(&specialist), eid, etype)
+                        .run(edata, mcp, &peers, rag)
+                        .await
+                }
+            })
+            .collect();
+
+        // Return the first result; drop the rest
+        if let Some(first) = futs.next().await {
+            return first;
+        }
+
+        AgentDecision {
+            agent_name: "orchestrator".into(),
+            event_id,
+            event_type,
+            outcome: "no_route".into(),
+            summary: "No specialist completed in race mode.".into(),
+            tool_calls: 0,
+            turns: 0,
             handoff_to: None,
         }
     }
@@ -212,7 +419,6 @@ impl OrchestratorAgent {
                 handoff_to: None,
             };
         }
-        // Build peer list: all agents except the current one
         let peers: Vec<String> = registry
             .agent_names
             .iter()
@@ -224,7 +430,6 @@ impl OrchestratorAgent {
             .run(event_data.clone(), mcp, &peers, rag)
             .await;
 
-        // Follow handoff if requested
         if let Some(ref next_name) = decision.handoff_to
             && let Some(next_agent) = registry.get(next_name)
         {

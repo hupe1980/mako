@@ -587,14 +587,21 @@ Both static auth keys and OIDC tokens are accepted, whichever is configured.
 
 ### Tools
 
-| Tool | Description |
-|---|---|
-| `list_commands` | List all commands available for this instance's configured Marktrollen |
-| `submit_command` | Trigger a MaKo process command — same semantic as `POST /api/v1/commands` |
-| `get_malo` | Read a cached Marktlokation (MaLo) record by its 11-digit ID |
-| `list_partners` | List all registered trading partners for this tenant |
-| `get_partner` | Get a specific trading partner by 13-digit GLN |
-| `get_health` | Query daemon version, tenant ID, Marktrollen, and MaLo cache stats |
+`makod` ships **11 MCP tools** covering process management, operational monitoring, and incident response:
+
+| Tool | Annotations | Description |
+|---|---|---|
+| `list_commands` | `read_only` | All commands for this instance's configured Marktrollen |
+| `submit_command` | `destructive` | Trigger a MaKo process command — same as `POST /api/v1/commands` (with progress notifications) |
+| `get_malo` | `read_only` | Read a cached Marktlokation by 11-digit ID |
+| `list_partners` | `read_only` | List all registered trading partners for this tenant |
+| `get_partner` | `read_only` | Get a trading partner by 13-digit MP-ID (BDEW `99…`, DVGW `98…`) |
+| `get_health` | `read_only` | Daemon version, tenant ID, Marktrollen, MaLo cache stats |
+| `get_process` | `read_only` | Business-key lookup (malo_id/melo_id/vorgang) → active process identity |
+| `list_overdue_deadlines` | `read_only` | All APERAK/response deadlines currently overdue — alert if non-empty |
+| **`list_active_processes`** | `read_only` | **Total count of registered process instances (capacity planning)** |
+| **`get_outbox_status`** | `read_only` | **Pending outbox count + oldest message age — alert when stuck > 5 min** |
+| **`list_dead_letters`** | `read_only` | **20 most recent permanently dead-lettered messages (§22 MessZV — requires investigation)** |
 
 Call `list_commands` first — it returns every command name, its Marktrolle(n),
 primary Prüfidentifikator, and whether a `marktrolle` override is required at
@@ -1354,6 +1361,27 @@ Every significant operation carries a trace context:
 | **Metrics** | `mako.deadline.fired` counter (by workflow, label) |
 | **Metrics** | `mako.process.duration_ms` histogram |
 
+`makod` also exports a Prometheus-format counter endpoint at `GET /metrics`:
+
+| Counter | Labels | Alert condition |
+|---|---|---|
+| `makod_process_initiated_total` | `family` | Baseline for process volume |
+| `makod_process_completed_total` | `family`, `result` | `result != "accepted"` for NB-STP compliance |
+| `makod_outbox_delivery_attempts_total` | `result` | `result = "transport_error"` spikes |
+| `makod_deadline_fired_total` | `family` | Missed APERAK windows |
+| `makod_dead_letter_recorded_total` | `reason` | Any dead-letter = regulatory risk |
+| `makod_inbound_messages_total` | `pid`, `result` | `result = "error"` for unknown PIDs |
+| **`makod_aperak_missed_total`** | `label` | **Alert when > 0** — late APERAK = regulatory violation (APERAK AHB 1.0 §2.4.1 Strom / §2.3.1 Gas) |
+
+### AS4 inbound rate limiting
+
+The AS4 inbound endpoint (`/as4/inbox`) is protected by a **GCRA token-bucket rate limiter**:
+- Sustained: 100 requests/second
+- Burst: 50 requests  
+- Response on exhaustion: `HTTP 429 Too Many Requests` + `Retry-After: 1`
+
+Protects the event store from capacity exhaustion by misconfigured or malicious counterparties (OWASP A05).
+
 ### Configuration
 
 ```toml
@@ -1372,6 +1400,72 @@ makod --data-dir /var/lib/makod ...
 ```
 
 Omit the `[otel]` section entirely to disable telemetry with zero overhead — the instrumentation compiles to a no-op when the feature is off.
+
+---
+
+## Outbox Auto-Integrations
+
+`makod` emits several CloudEvents from its outbox that downstream services consume
+automatically — no manual ERP triggering required.
+
+### WiM Stammdaten — ZAK+ZE register auto-population
+
+When `makod` receives a WiM Stammdaten ORDERS response (PIDs **17102–17133**) from the MSB,
+the `wim_stammdaten_uebermittlung_registry()` adapter automatically:
+
+1. Parses **ZAK+ZE+ZD** EDIFACT segments into structured `zaehlwerke` JSON
+2. Emits a `de.mako.process.completed` outbox entry carrying `melo_id` + parsed register data
+
+`marktd` receives the event and upserts the `ZaehlzeitRegister` + `ZaehlzeitSaison` rows.
+This feeds `billingd`'s §14a Modul 2 HT/NT tariff-zone resolution without manual setup.
+
+| ZAK/ZE segment | Parsed field | Values |
+|---|---|---|
+| `ZAK` element 0 | `obis_kennzahl` | OBIS code (e.g. `"1-1:1.8.0"`) |
+| `ZAK` element 1 | `zaehlerauspraegung` | `Z01`→`HT`, `Z02`→`NT`, `Z03`→`EINZEL` |
+| `ZAK` element 2 | `bezeichnung` | Human-readable label |
+| `ZE` element 0 | `saison` | `Z01`→`SOMMER`, `Z02`→`WINTER`, `Z03`→`GESAMT` |
+| `ZD` element 0 | `tagtyp` | `Z01`→`WERKTAG`, `Z02`→`SAMSTAG`, `Z03`→`SONNTAG_FEIERTAG` |
+| `ZD` elements 1..N | time windows | `"HHMM:RegisterCode"` switch-point pairs |
+
+No additional configuration is required — the pipeline activates whenever `wim-stammdaten`
+is registered in the PID router (role `role-msb-strom` or `role-nb-strom`).
+
+### WiM Steuerungsauftrag — VPP dispatch auto-billing
+
+When an MSB confirms a **Konfiguration** command via `wim.steuerungsauftrag.bestaetigen`
+(PID 55168 positive Endantwort), `makod` emits a `de.vpp.dispatch.confirmed` CloudEvent
+(CE type `de.vpp.dispatch.confirmed`) via the `DispatchConfirmed` outbox message.
+
+The payload carries all data needed for downstream billing:
+
+```json
+{
+  "tx_id":               "abc123",
+  "location_id":         "C0001234567890",
+  "location_type":       "sr",
+  "execution_time_from": "2026-01-15T10:00:00Z",
+  "execution_time_until": "2026-01-15T10:15:00Z",
+  "max_power_kw":        "11.0",
+  "command_type":        "Konfiguration",
+  "sender_mp_id":        "9900123456789",
+  "produkt_code":        "TX-MODUL2-HT"
+}
+```
+
+`billingd` subscribes to this CloudEvent at `POST /api/v1/webhooks/vpp-dispatch` and
+automatically generates a VPP settlement `Rechnung`:
+
+```
+flexibility_kwh = max_power_kw × (execution_time_until − execution_time_from) / 3600
+netto_eur       = flexibility_kwh × capacity_price_eur_per_kwh   (from vpp_contracts)
+```
+
+The `vpp-billing-agent` in `agentd` monitors settlement completeness and performs
+RED III Article 17 audit-field checks.
+
+> **`InitialZustand` resets** (command_type = "InitialZustand") do **not** emit a
+> `DispatchConfirmed` event — only load-reduction Konfiguration commands generate billing.
 
 ---
 

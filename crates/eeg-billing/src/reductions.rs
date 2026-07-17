@@ -279,6 +279,14 @@ pub struct ReductionPipeline {
     pub sect53b_ct_kwh: Option<Decimal>,
 
     /// §53c area reduction (BNetzA certificate required).
+    ///
+    /// ⚠️ **PLACEHOLDER — not yet operational (2026):**
+    /// BNetzA has not issued any §53c area certificates as of July 2026.
+    /// The calculation formula is implemented correctly but will never apply
+    /// until BNetzA publishes the first structural-oversupply certifications.
+    /// Keep `sect53c: None` for all live settlements until further notice.
+    ///
+    /// Tracking: <https://www.bundesnetzagentur.de> (§53c EEG 2023 Festlegungsverfahren)
     pub sect53c: Option<Sect53cReduction>,
 
     /// §54 Ausschreibungsreduzierung.

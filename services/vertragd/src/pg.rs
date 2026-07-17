@@ -239,12 +239,14 @@ pub async fn upsert_kunde(pool: &PgPool, tenant: &str, input: &CreateKundeInput)
     let id = Uuid::new_v4();
     // Use RETURNING id so ON CONFLICT returns the *existing* row's id,
     // not the freshly generated UUID that was never inserted.
+    // The WHERE clause matches the unique partial index kunden_erp_unique
+    // created in migration 0003 (erp_kunde_id IS NOT NULL rows only).
     let row = sqlx::query(
         "INSERT INTO kunden
          (id,tenant,kunden_nr,kundentyp,geschaeftspartner,
           organisations_id,umsatzsteuer_id,zahlungsziel_tage,sepa_erlaubt,erp_kunde_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-         ON CONFLICT (tenant, erp_kunde_id) DO UPDATE
+         ON CONFLICT (tenant, erp_kunde_id) WHERE erp_kunde_id IS NOT NULL DO UPDATE
            SET geschaeftspartner=EXCLUDED.geschaeftspartner, updated_at=now()
          RETURNING id",
     )
@@ -1422,4 +1424,112 @@ pub async fn apply_auto_renewal(pool: &PgPool, id: Uuid, new_end: Date) -> anyho
     .execute(pool)
     .await?;
     Ok(())
+}
+
+// ── GDPR Art. 17 — Anonymization (right to erasure) ──────────────────────────
+
+/// Pseudonymize all PII for a customer (GDPR Art. 17 — right to erasure).
+///
+/// Retains contract records for the legal retention period (§147 AO: 10 years)
+/// but replaces all personal data with non-reversible pseudonyms.
+///
+/// Fields anonymized:
+/// - `kunden.geschaeftspartner` — company name / address replaced with pseudonym
+/// - `kunden.person` — natural-person details nulled
+/// - `kunden.zahlungsinformation` — IBAN/BIC replaced with pseudonym token
+/// - `kunden.umsatzsteuer_id` — VAT ID nulled
+/// - `kunden_identitaeten.oidc_sub` — replaced with `anon:{hash}` token
+/// - `kunden_identitaeten.email` / `display_name` — nulled
+/// - `kunden_identitaeten.aktiv` — set false (prevents portal access)
+///
+/// An immutable log entry is created in `anonymization_log` (migration 0003).
+pub async fn anonymize_kunde(
+    pool: &PgPool,
+    kunden_id: Uuid,
+    tenant: &str,
+    requested_by: &str,
+) -> anyhow::Result<bool> {
+    // Verify the customer exists and belongs to this tenant.
+    let exists: bool = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM kunden WHERE id=$1 AND tenant=$2)",
+    )
+    .bind(kunden_id)
+    .bind(tenant)
+    .fetch_one(pool)
+    .await?;
+
+    if !exists {
+        return Ok(false);
+    }
+
+    // Generate a stable opaque token for cross-field consistency.
+    let anon_token = format!("anon:{}", uuid::Uuid::new_v4().simple());
+
+    // Pseudonymize kunden PII.
+    sqlx::query(
+        r"UPDATE kunden
+          SET geschaeftspartner  = jsonb_build_object(
+                  '_typ', 'GESCHAEFTSPARTNER',
+                  'name1', $3,
+                  'anrede', 'INDIVIDUELL'
+              ),
+              person             = NULL,
+              zahlungsinformation = jsonb_build_object(
+                  '_typ', 'ZAHLUNGSINFORMATION',
+                  'iban', 'ANONYMIZED',
+                  'zahlungsart', 'UEBERWEISUNG'
+              ),
+              umsatzsteuer_id    = NULL,
+              kunden_nr          = NULL,
+              updated_at         = now()
+          WHERE id = $1 AND tenant = $2",
+    )
+    .bind(kunden_id)
+    .bind(tenant)
+    .bind(&anon_token)
+    .execute(pool)
+    .await?;
+
+    // Pseudonymize / deactivate all portal identities.
+    sqlx::query(
+        r"UPDATE kunden_identitaeten
+          SET oidc_sub     = $3,
+              email        = NULL,
+              display_name = NULL,
+              aktiv        = FALSE,
+              updated_at   = now()
+          WHERE kunden_id = $1 AND tenant = $2",
+    )
+    .bind(kunden_id)
+    .bind(tenant)
+    .bind(format!("anon:{}", uuid::Uuid::new_v4().simple()))
+    .execute(pool)
+    .await?;
+
+    // Write immutable audit log entry (migration 0003).
+    sqlx::query(
+        r"INSERT INTO anonymization_log
+          (tenant, kunden_id, anonymized_fields, requested_by, retention_basis)
+          VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(tenant)
+    .bind(kunden_id)
+    .bind(
+        &[
+            "geschaeftspartner",
+            "person",
+            "zahlungsinformation",
+            "umsatzsteuer_id",
+            "kunden_nr",
+            "oidc_sub",
+            "email",
+            "display_name",
+        ][..],
+    )
+    .bind(requested_by)
+    .bind("\u{00a7}147 AO: Handels- und Steuerb\u{00fc}cher 10 Jahre Aufbewahrungspflicht")
+    .execute(pool)
+    .await?;
+
+    Ok(true)
 }

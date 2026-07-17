@@ -292,6 +292,66 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
 /// assert_eq!(out.settlement_eur, Some(d("8.11")));
 /// ```
 pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
+    // ── §42a EEG 2023 — Holzbiomasse restriction from 2026-01-01 ─────────────
+    // §42a EEG 2023: new Holzbiomasse plants commissioned from 01.01.2026 may
+    // not use fresh wood for primary energy production and lose EEG eligibility.
+    // Plants commissioned before that date retain Bestandsschutz.
+    if input
+        .erzeugungsart
+        .is_some_and(|a| a == crate::technology::ErzeugungsArt::BiomassHolz)
+        && input
+            .inbetriebnahme
+            .is_some_and(|d| d >= time::macros::date!(2026 - 01 - 01))
+    {
+        return SettleOutput {
+            settlement_eur: Some(Decimal::ZERO),
+            eligible_kwh: input.einspeisemenge_kwh,
+            positions: vec![crate::model::SettlePosition {
+                description: "§42a EEG 2023: Holzbiomasse-Anlage ab 2026-01-01 nicht förderfähig"
+                    .to_owned(),
+                legal_basis: "§42a EEG 2023".to_owned(),
+                kwh: input.einspeisemenge_kwh.unwrap_or(Decimal::ZERO),
+                rate_ct_kwh: Decimal::ZERO,
+                eur: Decimal::ZERO,
+            }],
+            status: SettlementStatus::Sanctioned,
+            pflichtzahlung_eur: None,
+            pflichtzahlung_faelligkeitsdatum: None,
+            verlaengerungsanspruch_qh: 0,
+            dezentrale_einspeisung_anspruch_verloren: false,
+            billing_days_fraction_applied: None,
+            faelligkeitsdatum: None,
+        };
+    }
+
+    // ── §43 Abs. 1 Nr. 2 EEG 2023 — Biomass substrate cap ────────────────────
+    // Plants with >40 % Energiepflanzen vom Acker in the energy input lose EEG
+    // support for the billing period (substrate_cap_ok = false).
+    if let Some(biomasse) = &input.biomasse
+        && !biomasse.substrate_cap_ok
+    {
+        return SettleOutput {
+            settlement_eur: Some(Decimal::ZERO),
+            eligible_kwh: input.einspeisemenge_kwh,
+            positions: vec![crate::model::SettlePosition {
+                description: "§43 Abs. 1 Nr. 2 EEG 2023: Substratdeckel überschritten — \
+                     Energiepflanzen-Anteil > 40 %"
+                    .to_owned(),
+                legal_basis: "§43 Abs. 1 Nr. 2 EEG 2023".to_owned(),
+                kwh: input.einspeisemenge_kwh.unwrap_or(Decimal::ZERO),
+                rate_ct_kwh: Decimal::ZERO,
+                eur: Decimal::ZERO,
+            }],
+            status: SettlementStatus::Sanctioned,
+            pflichtzahlung_eur: None,
+            pflichtzahlung_faelligkeitsdatum: None,
+            verlaengerungsanspruch_qh: 0,
+            dezentrale_einspeisung_anspruch_verloren: false,
+            billing_days_fraction_applied: None,
+            faelligkeitsdatum: None,
+        };
+    }
+
     // ── §52 EEG 2023 Pflichtzahlungen (multiple violations, §52 Abs. 5 cap) ────
     // All violations are summed. The §52 Abs. 5 monthly cap (€10/kW/month max) is
     // applied based on the largest leistung_kw across violations.

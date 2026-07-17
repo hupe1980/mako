@@ -389,6 +389,16 @@ UTILTS is used by the NB to distribute tariff formula structures and meter-readi
 time-zone definitions to all connected suppliers. The LF stores these for billing
 calculation and pass-through to the ERP system.
 
+**§42b EnWG Solarpaket I — GGV community solar allocation formulas (CCI+ZG6):**
+UTILTS PID 25001 is also used to transmit the community solar allocation fractions
+for Gemeinschaftliche Gebäudeversorgung (GGV) under §42b Abs. 5 EnWG (Solarpaket I,
+2024). The segment `CCI+ZG6` (Aufteilungsfaktor Energiemenge) carries the fraction
+parameter for each tenant MaLo. `edmd` evaluates these formulas via the
+`metering::AggregationRule::GgvConstantAllocation` and
+`metering::AggregationRule::GgvProportionalAllocation` variants — see the
+[edmd operator guide](../edmd#virtual-meters-42b-engw-ggv--solarpaket-i) for details
+on the computation and the §42b Abs. 5 `Pos()` cap.
+
 ---
 
 ### MSCONS — Zählerstandsübermittlung

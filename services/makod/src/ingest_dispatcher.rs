@@ -1371,7 +1371,7 @@ impl EdifactIngestDispatcher {
                 }
             }
 
-            // ── WiM Stammdaten ORDERS (PID 17132) ─────────────────────────────
+            // ── WiM Stammdaten ORDERS (PID 17132 inbound, 17102–17133 inbound) ──────
             "wim-stammdaten" => match pid {
                 17132 => {
                     let cmd = adapters::wim_stammdaten_registry().dispatch(raw, &fv)?;
@@ -1396,6 +1396,23 @@ impl EdifactIngestDispatcher {
                             ),
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
                         ],
+                    )
+                    .await
+                }
+                // PIDs 17102–17133: Stammdatenübermittlung response (MSB → NB).
+                // Extract ZAK+ZE+ZD register definitions and resume the existing
+                // wim-stammdaten process started by PID 17132.
+                // No new deadline — this message resolves the 5-Werktage window.
+                17102..=17133 => {
+                    let cmd =
+                        adapters::wim_stammdaten_uebermittlung_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_orders(msg);
+                    self.spawn_or_resume::<WimStammdatenWorkflow>(
+                        &melo_id,
+                        "wim-stammdaten",
+                        cmd,
+                        &fv,
+                        &[], // no new deadlines — resolves the existing 5WT window
                     )
                     .await
                 }

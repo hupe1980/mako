@@ -345,3 +345,143 @@ pub async fn check_billing_anomaly(
         threshold_pct: threshold,
     })
 }
+
+// ── VPP Contract Registry (migration 0002) ───────────────────────────────────
+
+/// Stored VPP contract record.
+///
+/// Maps a `SteuerbareRessource` (SR-ID) to the billing parameters for
+/// automatic VPP settlement triggered by `de.vpp.dispatch.confirmed` events.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
+pub struct VppContractRow {
+    pub id: Uuid,
+    pub sr_id: String,
+    pub vpp_id: String,
+    pub malo_id: String,
+    pub lf_mp_id: String,
+    pub capacity_price_eur_per_kwh: Decimal,
+    pub valid_from: Date,
+    pub valid_to: Option<Date>,
+    pub mwst_rate_override: Option<Decimal>,
+    pub tenant: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+/// Upsert a VPP contract (idempotent on `sr_id + tenant + valid_from`).
+pub async fn upsert_vpp_contract(pool: &PgPool, row: &VppContractRow) -> anyhow::Result<Uuid> {
+    let r = sqlx::query(
+        r"INSERT INTO vpp_contracts
+              (id, sr_id, vpp_id, malo_id, lf_mp_id, capacity_price_eur_per_kwh,
+               valid_from, valid_to, mwst_rate_override, tenant)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          ON CONFLICT (sr_id, tenant, valid_from) DO UPDATE
+          SET vpp_id                      = EXCLUDED.vpp_id,
+              malo_id                     = EXCLUDED.malo_id,
+              lf_mp_id                    = EXCLUDED.lf_mp_id,
+              capacity_price_eur_per_kwh  = EXCLUDED.capacity_price_eur_per_kwh,
+              valid_to                    = EXCLUDED.valid_to,
+              mwst_rate_override          = EXCLUDED.mwst_rate_override,
+              updated_at                  = now()
+          RETURNING id",
+    )
+    .bind(row.id)
+    .bind(&row.sr_id)
+    .bind(&row.vpp_id)
+    .bind(&row.malo_id)
+    .bind(&row.lf_mp_id)
+    .bind(row.capacity_price_eur_per_kwh)
+    .bind(row.valid_from)
+    .bind(row.valid_to)
+    .bind(row.mwst_rate_override)
+    .bind(&row.tenant)
+    .fetch_one(pool)
+    .await
+    .context("upsert_vpp_contract")?;
+    Ok(r.try_get("id")?)
+}
+
+/// Find the active VPP contract for an SR-ID on a given date.
+///
+/// Returns the most-recently-started contract that is still valid
+/// (`valid_from ≤ on_date` AND `valid_to IS NULL OR valid_to > on_date`).
+pub async fn find_active_vpp_contract(
+    pool: &PgPool,
+    sr_id: &str,
+    tenant: &str,
+    on_date: Date,
+) -> anyhow::Result<Option<VppContractRow>> {
+    sqlx::query_as::<_, VppContractRow>(
+        r"SELECT id, sr_id, vpp_id, malo_id, lf_mp_id,
+                 capacity_price_eur_per_kwh, valid_from, valid_to,
+                 mwst_rate_override, tenant, updated_at
+          FROM vpp_contracts
+          WHERE sr_id = $1
+            AND tenant = $2
+            AND valid_from <= $3
+            AND (valid_to IS NULL OR valid_to > $3)
+          ORDER BY valid_from DESC
+          LIMIT 1",
+    )
+    .bind(sr_id)
+    .bind(tenant)
+    .bind(on_date)
+    .fetch_optional(pool)
+    .await
+    .context("find_active_vpp_contract")
+}
+
+/// List all VPP contracts for a tenant.
+pub async fn list_vpp_contracts(
+    pool: &PgPool,
+    tenant: &str,
+) -> anyhow::Result<Vec<VppContractRow>> {
+    sqlx::query_as::<_, VppContractRow>(
+        r"SELECT id, sr_id, vpp_id, malo_id, lf_mp_id,
+                 capacity_price_eur_per_kwh, valid_from, valid_to,
+                 mwst_rate_override, tenant, updated_at
+          FROM vpp_contracts
+          WHERE tenant = $1
+          ORDER BY sr_id, valid_from DESC",
+    )
+    .bind(tenant)
+    .fetch_all(pool)
+    .await
+    .context("list_vpp_contracts")
+}
+
+/// Check if a `tx_id` has already been processed (idempotency guard).
+pub async fn is_vpp_dispatch_processed(
+    pool: &PgPool,
+    tx_id: &str,
+    tenant: &str,
+) -> anyhow::Result<bool> {
+    let row = sqlx::query("SELECT 1 FROM vpp_dispatch_ledger WHERE tx_id = $1 AND tenant = $2")
+        .bind(tx_id)
+        .bind(tenant)
+        .fetch_optional(pool)
+        .await
+        .context("is_vpp_dispatch_processed")?;
+    Ok(row.is_some())
+}
+
+/// Record a processed VPP dispatch for idempotency.
+pub async fn record_vpp_dispatch(
+    pool: &PgPool,
+    tx_id: &str,
+    tenant: &str,
+    record_id: Option<Uuid>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r"INSERT INTO vpp_dispatch_ledger (tx_id, tenant, record_id)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (tx_id, tenant) DO NOTHING",
+    )
+    .bind(tx_id)
+    .bind(tenant)
+    .bind(record_id)
+    .execute(pool)
+    .await
+    .context("record_vpp_dispatch")?;
+    Ok(())
+}

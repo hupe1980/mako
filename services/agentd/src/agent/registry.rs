@@ -1,11 +1,19 @@
 //! Agent registry — holds all named specialists + the orchestrator.
+//!
+//! Agents come from two sources, merged at startup:
+//!
+//! 1. **Built-in agents** (`crate::builtin`) — compiled into the binary, activated
+//!    via `[bundled_agents]` in `agentd.toml`. Ship in the container image.
+//! 2. **Custom agents** (`[[agents]]` sections) — operator-defined, fully flexible.
+//!    Can override built-in prompts by using the same `name`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::config::{AgentConfig, AgentdConfig};
+use crate::builtin;
+use crate::config::{AgentConfig, AgentOverride, AgentdConfig};
 use crate::llm::{CompletionConfig, LlmProvider, build_provider};
 
 /// A fully resolved, ready-to-run agent definition.
@@ -19,6 +27,8 @@ pub struct Agent {
     pub trigger_patterns: Vec<String>,
     pub max_turns: u32,
     pub use_rag: bool,
+    /// `true` when this agent came from the built-in catalog.
+    pub is_builtin: bool,
 }
 
 impl Agent {
@@ -38,13 +48,90 @@ pub struct AgentRegistry {
 }
 
 impl AgentRegistry {
+    /// Build the registry by merging built-in agents with operator-defined agents.
+    ///
+    /// Merge order:
+    /// 1. Built-in agents enabled via `[bundled_agents]` (system prompts from binary)
+    /// 2. Custom `[[agents]]` entries — can override a built-in by using the same `name`
+    ///    (custom entry takes precedence when names collide)
     pub fn build(cfg: &AgentdConfig) -> Result<Self> {
-        let mut agents = HashMap::new();
-        let mut agent_names = Vec::new();
+        let mut agents: HashMap<String, Arc<Agent>> = HashMap::new();
+        let mut agent_names: Vec<String> = Vec::new();
 
+        // ── Step 1: Built-in agents ──────────────────────────────────────────
+        let bundled = &cfg.bundled_agents;
+        let should_activate =
+            |name: &str| -> bool { bundled.enable_all || bundled.enable.iter().any(|e| e == name) };
+
+        let default_provider_name = bundled
+            .default_provider
+            .as_deref()
+            .unwrap_or(&cfg.orchestrator.provider);
+        let default_model = bundled
+            .default_model
+            .as_deref()
+            .unwrap_or(&cfg.orchestrator.model);
+
+        for def in builtin::all() {
+            if !should_activate(def.name) {
+                continue;
+            }
+            let ovr = bundled.overrides.get(def.name).cloned().unwrap_or_default();
+
+            let provider_name = ovr.provider.as_deref().unwrap_or(default_provider_name);
+            let provider_cfg = cfg.providers.get(provider_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "bundled agent '{}' references unknown provider '{}'",
+                    def.name,
+                    provider_name
+                )
+            })?;
+            let provider = build_provider(provider_name, provider_cfg);
+
+            let model = ovr.model.as_deref().unwrap_or(default_model);
+            let max_turns = ovr.max_turns.unwrap_or(def.default_max_turns);
+            let mcp_servers = ovr.mcp_servers.clone().unwrap_or_else(|| {
+                def.default_mcp_servers
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            });
+            let system_prompt = match &ovr.system_prompt_prefix {
+                Some(prefix) => format!("{prefix}\n\n{}", def.system_prompt),
+                None => def.system_prompt.to_string(),
+            };
+
+            let agent = Agent {
+                name: def.name.to_string(),
+                specialty: def.specialty.to_string(),
+                system_prompt,
+                provider,
+                completion_cfg: CompletionConfig {
+                    model: model.to_string(),
+                    max_tokens: 4096,
+                },
+                mcp_servers,
+                trigger_patterns: def
+                    .default_trigger_patterns
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                max_turns,
+                use_rag: def.default_use_rag,
+                is_builtin: true,
+            };
+
+            agent_names.push(def.name.to_string());
+            agents.insert(def.name.to_string(), Arc::new(agent));
+        }
+
+        // ── Step 2: Custom / override agents ────────────────────────────────
         for ac in &cfg.agents {
-            let agent = build_agent(ac, cfg)?;
-            agent_names.push(ac.name.clone());
+            let agent = build_agent(ac, cfg, &AgentOverride::default())?;
+            // Custom agents override built-ins with the same name
+            if !agents.contains_key(&ac.name) {
+                agent_names.push(ac.name.clone());
+            }
             agents.insert(ac.name.clone(), Arc::new(agent));
         }
 
@@ -70,9 +157,48 @@ impl AgentRegistry {
         }
         None
     }
+
+    /// Find ALL specialists matching `ce_type` — used for parallel dispatch.
+    pub fn find_all_specialists(&self, ce_type: &str) -> Vec<Arc<Agent>> {
+        self.agent_names
+            .iter()
+            .filter_map(|n| self.agents.get(n))
+            .filter(|a| a.matches_trigger(ce_type))
+            .cloned()
+            .collect()
+    }
+
+    /// Summary of all registered agents for the `/api/v1/agents` endpoint.
+    pub fn list_agents(&self) -> Vec<AgentInfo> {
+        self.agent_names
+            .iter()
+            .filter_map(|n| self.agents.get(n))
+            .map(|a| AgentInfo {
+                name: a.name.clone(),
+                specialty: a.specialty.clone(),
+                trigger_patterns: a.trigger_patterns.clone(),
+                mcp_servers: a.mcp_servers.clone(),
+                model: a.completion_cfg.model.clone(),
+                max_turns: a.max_turns,
+                is_builtin: a.is_builtin,
+            })
+            .collect()
+    }
 }
 
-fn build_agent(ac: &AgentConfig, cfg: &AgentdConfig) -> Result<Agent> {
+/// Public agent information for `/api/v1/agents` and A2A agent cards.
+#[derive(Debug, serde::Serialize)]
+pub struct AgentInfo {
+    pub name: String,
+    pub specialty: String,
+    pub trigger_patterns: Vec<String>,
+    pub mcp_servers: Vec<String>,
+    pub model: String,
+    pub max_turns: u32,
+    pub is_builtin: bool,
+}
+
+fn build_agent(ac: &AgentConfig, cfg: &AgentdConfig, _ovr: &AgentOverride) -> Result<Agent> {
     let provider_cfg = cfg.providers.get(&ac.provider).ok_or_else(|| {
         anyhow::anyhow!(
             "agent '{}' references unknown provider '{}'",
@@ -103,6 +229,7 @@ fn build_agent(ac: &AgentConfig, cfg: &AgentdConfig) -> Result<Agent> {
         trigger_patterns: ac.trigger_patterns.clone(),
         max_turns: ac.max_turns,
         use_rag: ac.use_rag,
+        is_builtin: false,
     })
 }
 
@@ -211,6 +338,7 @@ mod tests {
             trigger_patterns: vec![],
             max_turns: 5,
             use_rag: false,
+            is_builtin: false,
         };
         assert!(!agent.matches_trigger("de.mako.process.initiated"));
         assert!(!agent.matches_trigger("de.invoic.receipt.disputed"));
@@ -245,6 +373,7 @@ mod tests {
             ],
             max_turns: 10,
             use_rag: false,
+            is_builtin: false,
         };
         assert!(agent.matches_trigger("de.eeg.anlage.foerderung_auslaufend"));
         assert!(agent.matches_trigger("de.mako.process.initiated"));

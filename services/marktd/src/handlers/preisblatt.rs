@@ -17,7 +17,9 @@ use mako_markt::{
     },
 };
 use mako_service::cedar::CedarEnforcer;
-use rubo4e::current::{PreisblattMessung, PreisblattNetznutzung, ZeitvariablePreisposition};
+use rubo4e::current::{
+    LastvariablePreisposition, PreisblattMessung, PreisblattNetznutzung, ZeitvariablePreisposition,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use utoipa::{IntoParams, ToSchema};
@@ -90,6 +92,23 @@ pub struct PreisblattResponse {
     /// `null` / empty = no ToU bands configured (pure static NNE tariff).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub zeitvariable_preispositionen: Vec<serde_json::Value>,
+    /// §14a Modul 3 load-variable NNE pricing formula (BNetzA BK6-22-300 Anlage 2 §3).
+    ///
+    /// Extracted from `data.lastvariablePreispositionen` for typed ERP consumption.
+    /// Each element is a `LastvariablePreisposition` BO4E COM describing the
+    /// spot-price-linked NNE formula for one pricing band:
+    /// - `tarifkalkulationsmethode = SPOTPREIS`
+    /// - `preisreferenz = ENERGIEMENGE`
+    /// - `preisBezugseinheit = KWH`
+    /// - `preisstaffeln` — formula parameters (multiplier, floor/ceiling rates)
+    ///
+    /// Used by `netzbilanzd` Modul-3 billing to build per-interval `NneArbeitModul3`
+    /// positions in `GridSettlement`. `billingd` embeds these in `Rechnungsposition.
+    /// zusatzAttribute` for portal display.
+    ///
+    /// `null` / empty = Modul 3 not offered by this NB (most deployments pre-2025).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lastvariable_preispositionen: Vec<serde_json::Value>,
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -140,12 +159,22 @@ pub async fn get_preisblatt(
                 .cloned()
                 .unwrap_or_default();
 
+            // Extract §14a Modul 3 load-variable NNE pricing formula positions.
+            // Validated as `rubo4e::current::LastvariablePreisposition` on PUT.
+            let lastvariable = record
+                .data
+                .get("lastvariablePreispositionen")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
             Json(PreisblattResponse {
                 data: record.data,
                 source: record.source.to_string(),
                 bo4e_version: record.bo4e_version,
                 updated_at: record.updated_at,
                 zeitvariable_preispositionen: zeitvariable,
+                lastvariable_preispositionen: lastvariable,
             })
             .into_response()
         }
@@ -209,6 +238,70 @@ pub async fn put_preisblatt(
         )
             .into_response();
     }
+
+    // ── M7: Validate lastvariablePreispositionen (§14a Modul 3, BK6-22-300 Anlage 2 §3) ──
+    //
+    // Validates each element against `rubo4e::current::LastvariablePreisposition`.
+    // Rules enforced beyond the BO4E schema:
+    //   1. Each element must deserialize as `LastvariablePreisposition`.
+    //   2. `tarifkalkulationsmethode` must be `SPOTPREIS` for §14a Modul 3.
+    //      Other methods (STAFFELN, INDEXIERT, …) are not Modul-3-compliant.
+    //   3. `preisBezugseinheit` must be `KWH` (NNE is always per kWh for controllable loads).
+    //
+    // Unlike `zeitvariablePreispositionen`, `lastvariablePreispositionen` is an extension
+    // field not in the standard BO4E schema — stored in `_additional` extension map.
+    if let Some(lvp_arr) = req
+        .data
+        .get("lastvariablePreispositionen")
+        .and_then(|v| v.as_array())
+    {
+        for (i, item) in lvp_arr.iter().enumerate() {
+            if let Err(e) = serde_json::from_value::<LastvariablePreisposition>(item.clone()) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": format!(
+                            "lastvariablePreispositionen[{i}] is not a valid LastvariablePreisposition: {e}"
+                        )
+                    })),
+                )
+                    .into_response();
+            }
+            // M7.2: tarifkalkulationsmethode must be SPOTPREIS for §14a Modul 3 NNE
+            if let Some(method) = item
+                .get("tarifkalkulationsmethode")
+                .and_then(|v| v.as_str())
+                && method != "SPOTPREIS"
+            {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": format!(
+                            "lastvariablePreispositionen[{i}].tarifkalkulationsmethode must be \
+                             \"SPOTPREIS\" for §14a Modul 3 NNE (got \"{method}\")"
+                        )
+                    })),
+                )
+                    .into_response();
+            }
+            // M7.3: preisBezugseinheit must be KWH
+            if let Some(unit) = item.get("preisBezugseinheit").and_then(|v| v.as_str())
+                && unit != "KWH"
+            {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": format!(
+                            "lastvariablePreispositionen[{i}].preisBezugseinheit must be \
+                             \"KWH\" for §14a Modul 3 (got \"{unit}\")"
+                        )
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     let data = req.data;
     let bo4e_version = req.bo4e_version;
     match repo

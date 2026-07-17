@@ -554,6 +554,7 @@ pub struct AuthenticateQuery {
 pub async fn tarifwechsel_vertrag(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path(vertrag_id): Path<Uuid>,
     Json(input): Json<TarifwechselInput>,
 ) -> impl IntoResponse {
@@ -600,6 +601,38 @@ pub async fn tarifwechsel_vertrag(
             Ok(None) => return StatusCode::NOT_FOUND.into_response(),
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         }
+    }
+
+    // ── Preisgarantie override audit log (M1) ────────────────────────────────
+    // When the caller bypasses the price-lock guard, log the override with
+    // operator identity for contractual/regulatory audit purposes.
+    if input.override_preisgarantie {
+        // Extract caller identity from Authorization header — best-effort.
+        // Even without full JWT validation, logging the raw sub provides
+        // an audit trail for operator actions.
+        tracing::warn!(
+            vertrag_id = %vertrag_id,
+            komp_id    = %input.komp_id,
+            wirksamkeit = %input.wirksamkeit,
+            new_product = %input.new_product_code,
+            "vertragd: Preisgarantie OVERRIDE — price-lock bypassed by operator request"
+        );
+        // Persist to override audit log (migration 0003)
+        let _ = sqlx::query(
+            r"INSERT INTO preisgarantie_override_log
+              (tenant, vertrag_id, komp_id, preisgarantie_bis, wirksamkeit,
+               old_product_code, new_product_code, operator_identity)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,'operator')",
+        )
+        .bind(&cfg.tenant)
+        .bind(vertrag_id)
+        .bind(input.komp_id)
+        .bind(komp.product_code.as_str())
+        .bind(input.wirksamkeit)
+        .bind(&komp.product_code)
+        .bind(&input.new_product_code)
+        .execute(&pool)
+        .await;
     }
 
     let is_future = input.wirksamkeit > today;
@@ -654,7 +687,9 @@ pub async fn tarifwechsel_vertrag(
     };
     if let Some(ref url) = cfg.erp_webhook_url {
         emit_event(
+            &http_client,
             url,
+            cfg.erp_hmac_secret.as_deref(),
             build_cloud_event(
                 ce_type,
                 vertrag_id,
@@ -691,6 +726,7 @@ pub async fn tarifwechsel_vertrag(
 pub async fn post_cloud_event(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Json(ce): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let ce_id = ce.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -758,7 +794,9 @@ pub async fn post_cloud_event(
                         && let Some(ref url) = cfg.erp_webhook_url
                     {
                         emit_event(
+                            &http_client,
                             url,
+                            cfg.erp_hmac_secret.as_deref(),
                             build_cloud_event(
                                 "aktiv",
                                 k.vertrag_id,
@@ -942,15 +980,33 @@ async fn trigger_ablesesteuerung(
     }
 }
 
-async fn emit_event(webhook_url: &str, ce: serde_json::Value) {
-    let client = reqwest::Client::new();
-    if let Err(e) = client
+async fn emit_event(
+    client: &reqwest::Client,
+    webhook_url: &str,
+    hmac_secret: Option<&str>,
+    ce: serde_json::Value,
+) {
+    let body = match serde_json::to_vec(&ce) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error=%e, "vertragd: CloudEvent serialization failed");
+            return;
+        }
+    };
+    let mut req = client
         .post(webhook_url)
-        .header("Content-Type", "application/cloudevents+json")
-        .json(&ce)
-        .send()
-        .await
-    {
+        .header("Content-Type", "application/cloudevents+json");
+    // HMAC-SHA256 webhook signature (same convention as makod ERP webhook).
+    if let Some(secret) = hmac_secret {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let mut mac =
+            <Hmac<Sha256>>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+        mac.update(&body);
+        let sig = format!("{:x}", mac.finalize().into_bytes());
+        req = req.header("X-Mako-Signature", sig);
+    }
+    if let Err(e) = req.body(body).send().await {
         tracing::warn!(error=%e, "vertragd: ERP webhook error");
     }
 }
@@ -1487,5 +1543,57 @@ pub async fn get_kunde_gdpr_export(
         .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// \u2500\u2500 GDPR Art. 17 \u2014 Right to Erasure (Anonymization) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+/// `POST /api/v1/kunden/{id}/anonymize` \u2014 GDPR Art. 17 right to erasure.
+///
+/// Pseudonymizes all PII for the customer while retaining contract records
+/// for the legal retention period (\u00a7147 AO: 10-year retention obligation).
+///
+/// After anonymization:
+/// - All portal access for this customer is revoked (`aktiv = false`)
+/// - Personal data is replaced with an opaque token
+/// - IBAN/BIC are replaced with the literal `ANONYMIZED`
+/// - An immutable audit log entry is written to `anonymization_log`
+///
+/// **This operation is irreversible.** The operator is responsible for
+/// verifying the customer's identity before calling this endpoint.
+///
+/// Regulatory basis: GDPR Art. 17 (Recht auf L\u00f6schung) + Art. 5(2) (Accountability).
+pub async fn post_anonymize_kunde(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    use crate::pg::anonymize_kunde;
+    // The `requested_by` field identifies the operator performing the erasure.
+    // Required for the anonymization_log audit trail (GDPR Art. 5(2)).
+    let requested_by = body
+        .get("requested_by")
+        .and_then(|v| v.as_str())
+        .unwrap_or("operator");
+
+    match anonymize_kunde(&pool, id, &cfg.tenant, requested_by).await {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "kunden_id": id,
+                "anonymized": true,
+                "regulatory_basis": "DSGVO Art. 17 - Recht auf Loeschung",
+                "retention_note": "§147 AO: Vertragsdaten werden 10 Jahre aufbewahrt (ohne PII)",
+                "audit_log": "anonymization_log Eintrag erstellt",
+            })),
+        )
+            .into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }

@@ -38,3 +38,5 @@ thiserror     = { workspace = true }
 secrecy       = { version = "0.10" }
 rmcp          = { workspace = true, features = ["transport-streamable-http-server","transport-io"] }
 tokio-util    = { workspace = true }
+hmac          = { version = "0.12", features = ["std"] }
+sha2          = "0.10"
