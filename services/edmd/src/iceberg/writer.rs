@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array, StringArray, TimestampMicrosecondArray};
+use arrow::array::{ArrayRef, Decimal128Array, Int32Array, StringArray, TimestampMicrosecondArray};
 use arrow::record_batch::RecordBatch;
 use iceberg::io::FileIO;
 use iceberg::spec::DataFile;
@@ -36,8 +36,9 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use mako_edm::domain::MeterRead;
-use parquet::basic::Compression;
+use parquet::basic::{Compression, Encoding, ZstdLevel};
 use parquet::file::properties::WriterProperties;
+use parquet::schema::types::ColumnPath;
 use time::OffsetDateTime;
 use tracing::debug;
 use uuid::Uuid;
@@ -61,7 +62,7 @@ pub async fn write_data_files(
     let location_gen = DefaultLocationGenerator::new(table.metadata().clone())
         .map_err(|e| anyhow::anyhow!("location generator: {e}"))?;
 
-    // F-05: Use a per-sink UUID prefix to avoid duplicate Parquet paths on restart.
+    // Use a per-sink UUID prefix to avoid duplicate Parquet paths on restart.
     // A fixed prefix ("edmd-archive-") would regenerate the same paths after restart
     // because the internal counter resets to 0, causing Iceberg catalog commit failures
     // or silent data corruption on re-committed files.
@@ -70,7 +71,27 @@ pub async fn write_data_files(
         DefaultFileNameGenerator::new(format!("edmd-{}-", sink_id), None, DataFileFormat::Parquet);
 
     let props = WriterProperties::builder()
-        .set_compression(Compression::ZSTD(Default::default()))
+        // ZSTD level 3 — best ratio for archival data; decompression is rare
+        .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap_or_default()))
+        // Bloom filter on malo_id: probabilistic MaLo presence test (1% FPR)
+        // eliminates ~99% of Parquet file reads for single-MaLo cold-tier queries
+        .set_column_bloom_filter_enabled(ColumnPath::from("malo_id"), true)
+        .set_column_bloom_filter_ndv(ColumnPath::from("malo_id"), 100_000)
+        .set_column_bloom_filter_fpp(ColumnPath::from("malo_id"), 0.01)
+        // DELTA_BINARY_PACKED on timestamps: regular 15-min intervals have
+        // delta-of-delta = 0 → ~1 bit per timestamp (Gorilla §5.2 principle)
+        .set_column_encoding(ColumnPath::from("dtm_from"), Encoding::DELTA_BINARY_PACKED)
+        .set_column_encoding(ColumnPath::from("dtm_to"), Encoding::DELTA_BINARY_PACKED)
+        // RLE_DICTIONARY on low-cardinality string columns (quality: 8 values,
+        // sparte: 2 values, obis_code: typically <20 per tenant)
+        .set_column_encoding(ColumnPath::from("quality"), Encoding::RLE_DICTIONARY)
+        .set_column_encoding(ColumnPath::from("sparte"), Encoding::RLE_DICTIONARY)
+        .set_column_encoding(ColumnPath::from("malo_id"), Encoding::RLE_DICTIONARY)
+        .set_column_encoding(ColumnPath::from("obis_code"), Encoding::RLE_DICTIONARY)
+        .set_column_encoding(
+            ColumnPath::from("allocation_version"),
+            Encoding::RLE_DICTIONARY,
+        )
         .build();
 
     // ParquetWriterBuilder takes (properties, schema) — FileIO/location are in rolling writer.
@@ -144,9 +165,24 @@ fn rows_to_record_batch(rows: &[MeterRead], table: &Table) -> anyhow::Result<Rec
         )
         .with_timezone("UTC"),
     );
-    let qty: ArrayRef = Arc::new(StringArray::from_iter_values(
-        rows.iter().map(|r| r.quantity_kwh.to_string()),
-    ));
+    let qty: ArrayRef = {
+        // Convert NUMERIC(18,5) Decimal to i128 scaled by 10^5 for Arrow Decimal128.
+        // Arrow Decimal128 stores the value as (significand * 10^-scale) where scale=5.
+        let values: Vec<i128> = rows
+            .iter()
+            .map(|r| {
+                use rust_decimal::prelude::ToPrimitive;
+                // Multiply by 10^5 to get the integer representation
+                let scaled = r.quantity_kwh * rust_decimal::Decimal::from(100_000u32);
+                scaled.to_i128().unwrap_or(0)
+            })
+            .collect();
+        Arc::new(
+            Decimal128Array::from(values)
+                .with_precision_and_scale(18, 5)
+                .expect("Decimal128 precision=18 scale=5"),
+        )
+    };
     let quality: ArrayRef = Arc::new(StringArray::from_iter_values(
         rows.iter()
             .map(|r| format!("{:?}", r.quality).to_uppercase()),
@@ -164,14 +200,29 @@ fn rows_to_record_batch(rows: &[MeterRead], table: &Table) -> anyhow::Result<Rec
     ));
     let tenant: ArrayRef = Arc::new(StringArray::from(
         rows.iter()
-            .map(|r| r.tenant_id.map(|u| u.to_string()))
+            .map(|r| Some(r.tenant.as_str()))
+            .collect::<Vec<_>>(),
+    ));
+    let allocation_version: ArrayRef = Arc::new(StringArray::from(
+        rows.iter()
+            .map(|r| Some(r.allocation_version.as_str()))
             .collect::<Vec<_>>(),
     ));
 
     Ok(RecordBatch::try_new(
         arrow_schema,
         vec![
-            malo_id, melo_id, dtm_from, dtm_to, qty, quality, pid, sparte, obis, tenant,
+            malo_id,
+            melo_id,
+            dtm_from,
+            dtm_to,
+            qty,
+            quality,
+            pid,
+            sparte,
+            obis,
+            tenant,
+            allocation_version,
         ],
     )?)
 }

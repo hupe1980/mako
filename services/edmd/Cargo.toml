@@ -41,7 +41,7 @@ schemars           = { workspace = true }
 secrecy            = "0.10"
 subtle             = "2"
 reqwest            = { workspace = true }
-sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json"] }
+sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "rust_decimal"] }
 rust_decimal       = { workspace = true }
 url                = "2"
 bytes              = "1"

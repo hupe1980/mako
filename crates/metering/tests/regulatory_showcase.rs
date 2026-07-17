@@ -899,9 +899,9 @@ fn sect42b_proportional_zero_division_guard_all_tenants_off() {
     );
 }
 
-// ── F-15: Missing regulatory tests ───────────────────────────────────────────
+// ── Regulatory tests ─────────────────────────────────────────────────────────
 
-/// F-15: DST spring-forward (2026-03-29 CET→CEST).
+/// DST spring-forward (2026-03-29 CET→CEST).
 ///
 /// On this day only 23 hours exist: 00:00–01:00 CET, then clock jumps to
 /// 03:00 CEST. A correctly UTC-stored 15-min series has 92 intervals (not 96).
@@ -942,7 +942,7 @@ fn dst_spring_forward_2026_03_29_utc_series_no_gap() {
     );
 }
 
-/// F-15: DST fall-back (2026-10-25 CEST→CET) — extended to 25 hours.
+/// DST fall-back (2026-10-25 CEST→CET) — extended to 25 hours.
 ///
 /// On this day 100 quarter-hour intervals exist (25h × 4 = 100).
 /// A correctly UTC-stored series has no duplicates and no gaps.
@@ -981,7 +981,7 @@ fn dst_fall_back_2026_10_25_utc_100_intervals_clean() {
     );
 }
 
-/// F-15: Leap year — 2024-02-29 exists and has exactly 96 intervals.
+/// Leap year — 2024-02-29 exists and has exactly 96 intervals.
 ///
 /// Ensures the validation engine does not treat 2024-02-29 as an invalid
 /// date (regression guard — some buggy implementations deny Feb 29).
@@ -1018,7 +1018,7 @@ fn leap_year_2024_02_29_96_intervals_clean() {
     );
 }
 
-/// F-15: §17 MessZV prior-period substitution uses only same-slot values.
+/// §17 MessZV prior-period substitution uses only same-slot values.
 ///
 /// Given 5 prior-week intervals at time 07:00 UTC and 5 at 07:15 UTC,
 /// `fill_gaps_with_config` using `PriorPeriodAverage` must:
@@ -1131,7 +1131,7 @@ fn sect17_prior_period_average_uses_matching_time_slot() {
     );
 }
 
-/// F-15: Billing guard — FAULTY intervals must not contribute to energy totals.
+/// Billing guard — FAULTY intervals must not contribute to energy totals.
 ///
 /// A batch with 3 MEASURED intervals (1.0 kWh each) and 1 FAULTY interval
 /// (99.9 kWh) must sum to 3.0 kWh — the FAULTY value is excluded.

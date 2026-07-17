@@ -390,7 +390,7 @@ fn synthesise_value(
         SubstituteMethod::ZeroFill => Decimal::ZERO,
 
         SubstituteMethod::PriorPeriodAverage => {
-            // F-16: §17 Abs. 2 MessZV requires "same time slot from the prior reference period
+            // §17 Abs. 2 MessZV requires "same time slot from the prior reference period
             // (prior calendar week)". Callers must supply exactly 7 days of prior data;
             // averaging across multiple weeks produces a multi-week average, not the prior-week
             // value. This assertion guards against mis-use at the call site.

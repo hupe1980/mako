@@ -5,16 +5,20 @@
 | Feature | Detail |
 |---|---|
 | HTTP port | `:8380` |
-| Database | PostgreSQL 15+ (sqlx 0.8, `meter_reads` + `meter_billing_periods` + `ablese_auftraege` + `direct_push_sessions` + `archive_batches` tables) |
-| Inbound | CloudEvents from `marktd` — `de.mako.process.completed` (MSCONS PIDs), `de.mako.process.initiated` (PID 23001 INSRPT → auto reading order) |
+| Database | PostgreSQL 15+ (sqlx 0.8, schema from `migrations/0001_schema.sql`) |
+| Schema | `meter_reads` — `quantity_kwh NUMERIC(18,5)`, `tenant TEXT NOT NULL`; `meter_billing_periods` — NUMERIC aggregates, `tenant TEXT NOT NULL`; `gdpr_deletions`, `ablese_auftraege`, `direct_push_sessions`, `archive_batches`, `iceberg_catalog_entries` |
+| Inbound | CloudEvents from `marktd` — `de.mako.process.completed` (MSCONS PIDs 13005–13027), `de.mako.process.initiated` (PID 23001 INSRPT → auto reading order) |
 | Direct push | `POST /api/v1/meter-reads/rlm/{malo_id}` (Strom), `POST /api/v1/meter-reads/gas/{malo_id}` (Gas m³→kWh_Hs) — idempotent on `session_id` |
-| Quality scoring | Hampel filter (k=3, t=3.0, MAD×1.4826 σ); grades A/B/C/F; retroactive: `POST /api/v1/quality-score/{malo_id}` |
+| Quality scoring | `metering::score_intervals_f64` — Hampel filter (k=3, t=3.0, MAD×1.4826σ), auto-vectorises to AVX2/NEON; grades A/B/C/F; retroactive: `POST /api/v1/quality-score/{malo_id}` |
 | Reading orders | `POST/GET /api/v1/reading-orders` — Ablesesteuerung for LF/MSB/NB; auto-creates `INSRPT_STOERUNG` on INSRPT PID 23001 (§18 MessZV) |
 | REST API | `GET /api/v1/deliveries/{malo_id}` → `Vec<Energiemenge>` · `GET /api/v1/lastgang/{malo_id}` · `GET /api/v1/zeitreihe/{malo_id}` · `GET /api/v1/billing-period/{malo_id}` · `GET /api/v1/imbalance/{malo_id}/{year}/{month}` |
-| Archive OLAP | `GET /api/v1/archive/status` · `GET /api/v1/archive/olap/{malo_id}` · `GET /api/v1/archive/portfolio` · `GET /api/v1/archive/timeseries/{malo_id}` |
+| Arrow IPC | `Accept: application/vnd.apache.arrow.stream` on `GET /api/v1/lastgang` + `GET /api/v1/zeitreihe` — 10–50× throughput vs JSON for bulk reads |
+| Archive OLAP | `GET /api/v1/archive/status` · `GET /api/v1/archive/olap/{malo_id}` · `GET /api/v1/archive/portfolio` · `GET /api/v1/archive/timeseries/{malo_id}` · `POST /api/v1/query/sql` (DataFusion) |
+| Iceberg REST | `GET /api/v1/iceberg/v1/...` — Iceberg REST catalog for DuckDB/Snowflake/Databricks direct attach |
+| GDPR | `DELETE /api/v1/gdpr/erasure/{malo_id}` — Art. 17 DSGVO hot-tier erasure + read-time cold-tier exclusion |
 | Auth | OIDC/JWT + Cedar ABAC (`read-timeseries`, `write-quality-rescore`, `read-archive-olap`); webhook HMAC-SHA256 (`X-Mako-Signature`) |
 | Health | `GET /health/live`, `GET /health/ready` (PostgreSQL ping) |
-| MCP | `POST\|GET /mcp` — tools: `get_timeseries`, `get_imbalance`, `get_billing_period`, `get_device_history`, `get_quality_warnings` |
+| MCP | `POST\|GET /mcp` — 10 tools including `get_timeseries`, `get_imbalance`, `get_billing_period`, `validate_timeseries`, `trigger_jahresablesung` |
 | CloudEvents emitted | `de.edmd.reading.direct.stored`, `de.edmd.reading.quality.warning` (grade C/F) |
 
 ---
@@ -22,13 +26,11 @@
 ## Quick Start
 
 ```bash
-edmd \
-  --database-url postgres://edmd:secret@localhost/edmd \
-  --webhook-url  http://edmd:8380/webhook \
-  --marktd-url   http://marktd:8180
+edmd --config edmd.toml
 ```
 
-Migrations run automatically at startup.
+Migrations run automatically at startup from `migrations/0001_schema.sql`.
+The schema is designed for a fresh install — no incremental migration state is maintained.
 
 ---
 
@@ -60,12 +62,17 @@ region                 = "eu-central-1"
 retention_months       = 12      # keep in PostgreSQL for this many months
 batch_size             = 100000  # rows per archival run
 interval_secs          = 3600    # run every hour
-iceberg_catalog_schema = "iceberg_catalog"   # PostgreSQL schema — created automatically
+iceberg_catalog_schema = "iceberg_catalog"
 iceberg_catalog_name   = "edmd"
 ```
 
-Table metadata is stored in the same PostgreSQL database (in the `iceberg_catalog` schema) —
-no external catalog service (Nessie, Apache Polaris, AWS Glue) required.
+**Storage layout.** Parquet files are written with ZSTD level 3, `DELTA_BINARY_PACKED`
+encoding on timestamps (exploits delta-of-delta = 0 for 15-min intervals),
+`RLE_DICTIONARY` on `malo_id`/`quality`/`sparte`/`obis_code`, and Bloom filters
+on `malo_id` (1 % FPR) for fast single-MaLo lookup from cold tier.
+
+The PostgreSQL database stores the Iceberg SQL catalog — no external catalog
+service (Nessie, Apache Polaris, AWS Glue) required.
 
 ---
 

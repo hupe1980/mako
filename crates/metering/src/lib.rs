@@ -108,7 +108,8 @@ pub use measurement_series::{
 pub use obis::{ObisCode, ObisParseError};
 pub use power_quality::PowerQualityInterval;
 pub use quality::{
-    QualityConfig, QualityGrade, QualityReport, hampel_filter, score_intervals, score_intervals_raw,
+    QualityConfig, QualityGrade, QualityReport, hampel_filter, score_intervals,
+    score_intervals_f64, score_intervals_raw,
 };
 pub use register::{EnergyDirection, MeterRegister, RegisterUnit};
 pub use resample::{ResampleConfig, ResampledBucket, resample};

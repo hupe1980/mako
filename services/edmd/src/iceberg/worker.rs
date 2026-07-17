@@ -25,8 +25,10 @@
 //! operation).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
+use crate::config::ArchiveConfig;
 use iceberg::Catalog;
 use iceberg::CatalogBuilder; // brings .load() into scope for SqlCatalogBuilder
 use iceberg::NamespaceIdent;
@@ -34,7 +36,6 @@ use iceberg::TableCreation;
 use iceberg::io::FileIO;
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg_catalog_sql::{SqlBindStyle, SqlCatalog, SqlCatalogBuilder};
-use mako_edm::archive::ArchiveConfig;
 use mako_edm::domain::{MeterRead, QualityFlag, Sparte as EdmSparte};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
@@ -114,7 +115,7 @@ impl ArchiveWorker {
         // a future hardening item (H8 from the security audit).
         let rows = sqlx::query_as::<_, RawMeterRead>(
             r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh,
-                     quality, pid, sparte, obis_code, tenant_id
+                     quality, pid, sparte, obis_code, tenant
               FROM   meter_reads
               WHERE  archived = false
                 AND  dtm_from < $1
@@ -340,17 +341,14 @@ async fn build_catalog(cfg: &ArchiveConfig, database_url: &str) -> anyhow::Resul
 pub async fn load_table_for_olap(
     cfg: &ArchiveConfig,
     database_url: &str,
+    pool: PgPool,
+    tenant: String,
 ) -> anyhow::Result<OlapEngine> {
-    let catalog = build_catalog(cfg, database_url).await?;
+    let catalog = Arc::new(build_catalog(cfg, database_url).await?);
     let ns = NamespaceIdent::new(cfg.iceberg_catalog_name.clone());
     let table_ident = iceberg::TableIdent::new(ns, ICEBERG_TABLE_NAME.to_owned());
 
-    let table = catalog
-        .load_table(&table_ident)
-        .await
-        .map_err(|e| anyhow::anyhow!("load_table: {e}"))?;
-
-    OlapEngine::new(table).await
+    OlapEngine::new(catalog, table_ident, pool, tenant).await
 }
 
 // ── Archival statistics ───────────────────────────────────────────────────────
@@ -405,13 +403,13 @@ pub async fn recent_batches(
         status: String,
         error_msg: Option<String>,
         committed_at: Option<OffsetDateTime>,
-        tenant_id: Option<Uuid>,
+        tenant: String,
     }
     use mako_edm::archive::ArchiveBatchStatus as S;
     let rows = sqlx::query_as::<_, Row>(
         r"SELECT batch_id, created_at, cutoff_before, dtm_from_min, dtm_from_max,
                  row_count, malo_count, s3_prefix, file_count, bytes_written,
-                 status, error_msg, committed_at, tenant_id
+                 status, error_msg, committed_at, tenant
           FROM   archive_batches
           ORDER BY created_at DESC
           LIMIT $1",
@@ -441,7 +439,7 @@ pub async fn recent_batches(
             },
             error_msg: r.error_msg,
             committed_at: r.committed_at,
-            tenant_id: r.tenant_id,
+            tenant: r.tenant,
         })
         .collect())
 }
@@ -459,7 +457,7 @@ struct RawMeterRead {
     pid: i32,
     sparte: String,
     obis_code: Option<String>,
-    tenant_id: Option<Uuid>,
+    tenant: String,
     #[sqlx(default)]
     source: Option<String>,
     #[sqlx(default)]
@@ -487,8 +485,7 @@ fn raw_to_read(r: &RawMeterRead) -> MeterRead {
             EdmSparte::Strom
         },
         obis_code: r.obis_code.clone(),
-        tenant_id: r.tenant_id,
-        // Provenance fields: populate from raw data when available
+        tenant: r.tenant.clone(),
         source: mako_edm::domain::IngestionSource::from_db_str(
             r.source.as_deref().unwrap_or("MSCONS"),
         ),

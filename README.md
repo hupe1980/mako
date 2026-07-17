@@ -164,7 +164,7 @@ The workspace covers the full BDEW MaKo stack across four layers:
 
 ```toml
 [dependencies]
-edi-energy = "0.11"
+edi-energy = "0.12"
 ```
 
 ```rust
@@ -182,8 +182,8 @@ println!("Valid: {}", report.is_valid());
 
 ```toml
 [dependencies]
-mako-engine = { version = "0.11", features = ["testing"] }
-mako-gpke   = "0.11"
+mako-engine = { version = "0.12", features = ["testing"] }
+mako-gpke   = "0.12"
 ```
 
 ```rust
@@ -213,7 +213,7 @@ let state = process.state().await?;
 
 ```toml
 [dependencies]
-dvgw-edi = "0.11"
+dvgw-edi = "0.12"
 ```
 
 ```rust
@@ -240,7 +240,7 @@ let pid = msg.detect_pid(Some("Z01"));
 
 ```toml
 [dependencies]
-redispatch-xml = "0.11"
+redispatch-xml = "0.12"
 ```
 
 ```rust
@@ -267,7 +267,7 @@ let out = serialize(&doc)?;
 
 ```toml
 [dependencies]
-mako-markt = { version = "0.11", features = ["testing"] }
+mako-markt = { version = "0.12", features = ["testing"] }
 ```
 
 ```rust
@@ -571,7 +571,7 @@ By default UTILMD, MSCONS, APERAK, and CONTRL are compiled in:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.11", features = ["invoic", "remadv", "orders"] }
+edi-energy = { version = "0.12", features = ["invoic", "remadv", "orders"] }
 ```
 
 | Flag | Default | Enables |
@@ -603,7 +603,7 @@ edi-energy = { version = "0.11", features = ["invoic", "remadv", "orders"] }
 All 8 format parsers are compiled in by default. Disable unused formats to reduce binary size:
 
 ```toml
-dvgw-edi = { version = "0.11", default-features = false, features = ["nomint", "nomres"] }
+dvgw-edi = { version = "0.12", default-features = false, features = ["nomint", "nomres"] }
 ```
 
 | Flag | Default | Enables |

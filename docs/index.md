@@ -207,17 +207,24 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">📡</div>
     <h3>Smart Meter &amp; Energy Data</h3>
     <p>
-      <code>edmd</code> accepts 15-min iMSys/SMGW data directly — no MSCONS round-trip required.
-      Hampel-filter quality scorer (grades A/B/C/F) runs on every batch; grade F blocks billing.
-      §17 MessZV substitute value generation, resampling, and Iceberg/S3 OLAP.
-      BSI TR-03109 <code>SmgwSession</code> + <code>ClsChannel</code> track §14a CLS certificate health.
+      <code>edmd</code> accepts 15-min iMSys/SMGW data directly via JSON push — no MSCONS round-trip.
+      Quality scoring via <code>metering::score_intervals_f64</code> (Hampel filter, grades A/B/C/F)
+      auto-vectorises to AVX2/NEON on every batch; grade F blocks billing.
+      GDPR Art. 17 erasure endpoint with cold-tier read-time exclusion.
+    </p>
+    <p>
+      <strong>Apache Iceberg V2 cold tier:</strong> automatic archival to S3/GCS/Azure with
+      ZSTD+<code>DELTA_BINARY_PACKED</code> encoding (20–60× timestamp compression), Bloom filters on
+      <code>malo_id</code>, and a built-in <strong>Iceberg REST catalog</strong> so DuckDB, Snowflake,
+      and Databricks can <code>ATTACH</code> directly — no ETL pipeline.
+      Arrow IPC bulk export (<code>Accept: application/vnd.apache.arrow.stream</code>) delivers
+      10–50× throughput vs JSON for mabis-syncd and billingd batch reads.
     </p>
     <p>
       <strong>§42b EnWG Solarpaket I (GGV community solar):</strong>
-      Two formula-correct allocation modes per BDEW Anwendungshilfe —
-      <code>GgvConstantAllocation</code> (CCI+ZG6, static fraction, <em>Beispiel 1</em>)
-      and <code>GgvProportionalAllocation</code> (variable consumption ratio, <em>Beispiel 3</em>).
-      The <code>Pos()</code> operator enforces the §42b Abs. 5 per-tenant cap in every 15-min interval.
+      <code>GgvConstantAllocation</code> (CCI+ZG6, <em>Beispiel 1</em>) and
+      <code>GgvProportionalAllocation</code> (<em>Beispiel 3</em>). The <code>Pos()</code>
+      operator enforces the §42b Abs. 5 per-tenant cap per 15-min interval.
     </p>
     <a href="{{ '/edmd' | relative_url }}">edmd guide →</a>
   </div>
@@ -316,7 +323,9 @@ IFTSTA 21039 auto-dispatch"]
         direction LR
         edmd["edmd :8380
 MSCONS · iMSys push
-Hampel quality · Iceberg"]
+Hampel AVX2/NEON
+Iceberg REST catalog
+Arrow IPC · GDPR Art. 17"]
         einsd["einsd :9180
 EEG/KWKG settlement
 9 schemes · 324 tests"]
@@ -384,9 +393,9 @@ parallel/race dispatch · LanceDB RAG · MCP"]
 
 ```toml
 [dependencies]
-edi-energy  = { version = "0.11", features = ["utilmd", "mscons", "aperak"] }
-mako-engine = { version = "0.11", features = ["testing"] }
-mako-gpke   = "0.11"
+edi-energy  = { version = "0.12", features = ["utilmd", "mscons", "aperak"] }
+mako-engine = { version = "0.12", features = ["testing"] }
+mako-gpke   = "0.12"
 ```
 
 **Parse and validate a UTILMD Lieferbeginn:**
@@ -474,7 +483,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/edmd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">edmd</span>
     <span class="mako-service-card__port">:8380</span>
-    <span class="mako-service-card__desc">MSCONS meter readings. iMSys direct push (§41a). Hampel quality scoring (A/B/C/F). Virtual meters (§42b GGV). §17 MessZV forecasting. Resampling. Ablesesteuerung. Iceberg/S3 OLAP archive.</span>
+    <span class="mako-service-card__desc">MSCONS meter readings (PIDs 13005–13027). iMSys direct push (§41a). Hampel quality scoring (A/B/C/F, AVX2/NEON). Virtual meters (§42b GGV Solarpaket I). §17 MessZV forecasting &amp; substitution. Ablesesteuerung. Iceberg/S3 OLAP archive with Parquet Bloom filters. Arrow IPC bulk export. Iceberg REST catalog (DuckDB/Snowflake/Databricks). GDPR Art. 17 erasure.</span>
   </a>
   <a href="{{ '/mabis-syncd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">mabis-syncd</span>

@@ -66,9 +66,9 @@ participants who are in scope for iMS.
 
 ```toml
 [dependencies]
-edi-energy  = { version = "0.11", features = ["utilmd", "mscons"] }
-mako-engine = { version = "0.11", features = ["slatedb"] }
-mako-gpke   = "0.11"   # or mako-wim / mako-geli-gas / mako-mabis
+edi-energy  = { version = "0.12", features = ["utilmd", "mscons"] }
+mako-engine = { version = "0.12", features = ["slatedb"] }
+mako-gpke   = "0.12"   # or mako-wim / mako-geli-gas / mako-mabis
 ```
 
 Use these crates for:
@@ -83,8 +83,8 @@ See the [Process Engine Guide](./engine.md) for `mako-engine` architecture and t
 
 ```toml
 [dependencies]
-energy-api = { version = "0.11", features = ["client"] }   # HTTP client
-energy-api = { version = "0.11", features = ["server"] }   # Axum server handler
+energy-api = { version = "0.12", features = ["client"] }   # HTTP client
+energy-api = { version = "0.12", features = ["server"] }   # Axum server handler
 ```
 
 Use this crate for:

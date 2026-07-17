@@ -59,16 +59,17 @@ graph TB
     edmd["edmd :8380\n(this service)"]
 
     subgraph hot["Hot tier — PostgreSQL"]
-        pg["meter_reads\nmeter_billing_periods\nablese_auftraege\ndirect_push_sessions\narchive_batches"]
+        pg["meter_reads NUMERIC(18,5)\nmeter_billing_periods\nablese_auftraege\ndirect_push_sessions\narchive_batches\ngdpr_deletions"]
     end
 
     subgraph cold["Cold tier — S3 / GCS / AzureDLS"]
-        iceberg["Iceberg V2 table\nParquet data files\nPostgreSQL SQL catalog"]
+        iceberg["Iceberg V2 table\nParquet — ZSTD+DELTA_BINARY_PACKED\nBloom filter on malo_id\nPostgreSQL SQL catalog"]
     end
 
-    erp["ERP / netzbilanzd"]
+    erp["ERP / netzbilanzd\nmabis-syncd"]
+    duckdb["DuckDB / Snowflake\nDatabricks\n(Iceberg REST)"]
     worker["Archive worker\n(hourly)"]
-    qa["Hampel quality scorer\n(k=3, t=3.0, MAD σ)"]
+    qa["quality engine\nscore_intervals_f64\nAVX2/NEON auto-vectorise"]
 
     marktd -->|"de.mako.process.initiated (23001 INSRPT)\nde.mako.edifact.inbound (MSCONS)\nHMAC POST /webhook"| edmd
     smgw -->|"POST /api/v1/meter-reads/rlm/{malo_id}\nPOST /api/v1/meter-reads/gas/{malo_id}"| edmd
@@ -77,11 +78,10 @@ graph TB
     edmd --> hot
     hot -->|"rows > 12 months"| worker
     worker -->|"write Parquet\ncommit snapshot"| cold
-    erp -->|"GET /api/v1/deliveries/{malo_id}\n→ Vec<Energiemenge>"| edmd
+    erp -->|"GET /api/v1/lastgang Accept: arrow.stream\n→ Arrow IPC (10× faster than JSON)"| edmd
     erp -->|"GET /api/v1/billing-period/{malo_id}"| edmd
-    erp -->|"GET /api/v1/imbalance/{malo_id}/{year}/{month}"| edmd
-    erp -->|"GET /api/v1/lastgang/{malo_id}"| edmd
-    erp -->|"GET /api/v1/archive/olap/{malo_id}\n→ MMM aggregation"| edmd
+    erp -->|"GET /api/v1/archive/olap/{malo_id}"| edmd
+    duckdb -->|"GET /api/v1/iceberg/v1/...\nIceberg REST catalog"| cold
 ```
 
 ---
@@ -95,9 +95,17 @@ graph TB
 │  POST /webhook                              ← marktd CloudEvents          │
 │  GET  /api/v1/deliveries/{malo_id}          ← BO4E Energiemenge           │
 │  GET  /api/v1/billing-period/{malo_id}      ← MeterBillingPeriod          │
+│  GET  /api/v1/billing-periods               ← collection (mabis-syncd)    │
 │  GET  /api/v1/imbalance/{malo_id}/{y}/{m}   ← Mehr-/Mindermengen          │
 │  GET  /api/v1/lastgang/{malo_id}            ← BO4E Lastgang               │
 │  GET  /api/v1/zeitreihe/{malo_id}           ← BO4E Zeitreihe              │
+│  GET  /api/v1/lastgang/{malo_id}/resampled  ← hourly/daily/monthly        │
+│  GET  /api/v1/summenzeitreihe/{malo_id}     ← MaBiS monthly aggregate     │
+│  GET  /api/v1/forecast/{malo_id}            ← §17 MessZV Jahresprognose   │
+│  GET  /api/v1/gas-quality/{malo_id}         ← Brennwert + Zustandszahl    │
+│  GET  /api/v1/corrections/{malo_id}         ← bitemporal audit trail      │
+│  GET  /api/v1/quality-assessments/{malo_id} ← Hampel rescore history      │
+│  GET  /api/v1/sharing/{community_id}/alloc  ← §42c Energy Sharing VZW     │
 │                                                                            │
 │  ── iMSys direct push ────────────────────────────────────────────────── │
 │  POST /api/v1/meter-reads/rlm/{malo_id}     ← Strom 15-min direct push   │
@@ -118,6 +126,14 @@ graph TB
 │  GET  /api/v1/archive/olap/{malo_id}        ← MMM aggregation (OLAP)     │
 │  GET  /api/v1/archive/portfolio             ← portfolio-level OLAP        │
 │  GET  /api/v1/archive/timeseries/{malo_id}  ← historical time-series      │
+│  POST /api/v1/query/sql                     ← arbitrary DataFusion SQL    │
+│                                                                            │
+│  ── Iceberg REST catalog (DuckDB / Snowflake / Databricks) ──────────── │
+│  GET  /api/v1/iceberg/v1/config                                           │
+│  GET  /api/v1/iceberg/v1/namespaces[/{ns}/tables[/{table}]]              │
+│                                                                            │
+│  ── GDPR ─────────────────────────────────────────────────────────────── │
+│  DELETE /api/v1/gdpr/erasure/{malo_id}      ← Art. 17 DSGVO erasure      │
 │                                                                            │
 │  GET  /metrics                              ← Prometheus metrics          │
 │  GET  /health/live  /health/ready                                         │
@@ -139,10 +155,18 @@ graph TB
 
 | PID | Description | Direction |
 |-----|-------------|-----------|
-| 13005, 13006 | Strom Messwerte / Lastgang | NB → LF |
-| 13007 | **Gas Datenabruf: Abrechnungsbrennwert + Zustandszahl** | NB → LF |
-| 13008, 13009 | Gas Lastgang / Energiemenge | NB → LF |
-| 13015–13027 | Strom / Gas various delivery confirmations | NB → LF |
+| 13005 | Lastgang Messwerte Strom | NB → LF |
+| 13006 | Zählerstand / Ersatzwert Strom | NB → LF |
+| 13007 | **Gasbeschaffenheitsdaten — Brennwert + Zustandszahl** | NB → LF |
+| 13013 | Allokationsliste Gas MMMA (GaBi Gas 2.0) | NB → LF |
+| 13015 | Lastgang Summenzeitreihe SLP Strom | NB → LF |
+| 13016 | Ausfallarbeit Strom | NB → LF |
+| 13017 | Zählerstand Strom — Ablese-Übermittlung | NB → LF |
+| 13018 | Messwerte Strom — korrigierte Werte | NB → LF |
+| 13019 | Netzverluste Strom | NB → LF |
+| 13020–13023, 13026 | Redispatch 2.0 Zeitreihen | NB / ÜNB → LF |
+| 13025 | Lastgang Gas — Zustandsmengen / Energiemengen | NB → LF |
+| 13027 | Zählerstand Gas | NB → LF |
 
 **PID 13007 (Gasbeschaffenheitsdaten):** When a `de.mako.process.completed` event
 arrives for PID 13007, `edmd` automatically extracts `brennwert_kwh_per_m3` (from
@@ -185,7 +209,17 @@ Idempotent on `session_id` — re-submitting the same key returns 200 with the o
 
 ## Hampel-filter quality scoring
 
-`edmd` runs a **Hampel filter** (window k=3, threshold t=3.0, MAD × 1.4826 robust σ) on every inbound interval batch. This is state-of-the-art for time-series meter data quality assessment (IEEE 1459-2010, IEC 61968-9).
+`edmd` runs the **Hampel filter** (window k=3, threshold t=3.0, MAD × 1.4826 robust σ)
+on every inbound interval batch via `metering::score_intervals_f64`. This function:
+
+- Converts Decimal quantities to f64 once per batch — lossless for kWh ≤ 10¹³
+- Uses tight loops over contiguous f64 slices that **auto-vectorise to AVX2
+  (4×f64/cycle)** on x86-64 and **NEON (2×f64/cycle)** on AArch64 at `opt-level = 2`
+- Returns a full `QualityReport` with gap positions, outlier timestamps, zero-run
+  length, coverage %, and grade A/B/C/F — not just a scalar score
+
+The Decimal path is kept for exact billing arithmetic; quality scoring uses f64
+because outlier detection doesn't require accounting precision.
 
 ### Quality checks
 
@@ -871,6 +905,147 @@ Response:
 | `iceberg-catalog-sql` | 0.9.1 | PostgreSQL-backed Iceberg catalog |
 | `datafusion` | 52 | SQL query engine + partition pruning |
 | MSRV | **1.94** | Required by iceberg 0.9.1 |
+
+---
+
+## Arrow IPC bulk export
+
+For high-throughput bulk reads — such as `mabis-syncd` fetching a month of
+15-min data for 50 000 MaLos — `edmd` supports the
+**Apache Arrow IPC stream** binary format as an alternative to JSON.
+Set the `Accept` header to request Arrow IPC; the response carries the same
+data as the JSON endpoint but serialised as a self-describing columnar stream.
+This delivers **10–50× higher throughput** and eliminates the JSON parsing
+overhead in the consumer.
+
+```bash
+# Request Arrow IPC stream from the Lastgang endpoint
+curl -s "http://edmd:8380/api/v1/lastgang/10001234567?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z" \
+  -H "Authorization: Bearer <token>" \
+  -H "Accept: application/vnd.apache.arrow.stream" \
+  > reads.arrows
+
+# Consume directly in DuckDB (no conversion needed)
+duckdb -c "SELECT SUM(quantity_kwh), quality FROM read_ipc_stream('reads.arrows') GROUP BY quality"
+
+# Consume in Python / Polars
+python3 -c "
+import pyarrow.ipc as ipc
+with open('reads.arrows', 'rb') as f:
+    reader = ipc.open_stream(f)
+    tbl = reader.read_all()
+    print(tbl.schema)
+    print(f'{len(tbl)} intervals')
+"
+```
+
+**Endpoints supporting Arrow IPC:**
+
+| Endpoint | JSON response | Arrow IPC available |
+|---|---|---|
+| `GET /api/v1/lastgang/{malo_id}` | BO4E `Lastgang` | ✓ |
+| `GET /api/v1/zeitreihe/{malo_id}` | BO4E `Zeitreihe` | ✓ |
+
+**Arrow schema** (per response row):
+
+| Column | Type | Notes |
+|---|---|---|
+| `malo_id` | `Utf8` | 11-digit Marktlokations-ID |
+| `dtm_from` | `Timestamp(µs, UTC)` | Interval start |
+| `dtm_to` | `Timestamp(µs, UTC)` | Interval end |
+| `quantity_kwh` | `Float64` | Energy in kWh |
+| `quality` | `Utf8` | `MEASURED` / `ESTIMATED` / … |
+| `sparte` | `Utf8` | `STROM` / `GAS` |
+| `obis_code` | `Utf8?` | nullable |
+| `pid` | `Int32` | Source MSCONS PID |
+
+---
+
+## DataFusion SQL endpoint
+
+`POST /api/v1/query/sql` executes an arbitrary SQL query via **Apache DataFusion**
+over the Iceberg cold tier. This is the power-user interface for ad-hoc OLAP
+analysis — the Iceberg REST catalog endpoints enable tool-native access, while
+this endpoint allows programmatic SQL without a database client.
+
+```bash
+# Aggregate annual consumption per MaLo from the cold archive
+curl -s -X POST http://edmd:8380/api/v1/query/sql \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" -d '{
+    "sql": "SELECT malo_id, CAST(SUM(quantity_kwh) AS DOUBLE) AS kwh_total FROM meter_reads_archive WHERE dtm_from >= TIMESTAMP '\'2025-01-01T00:00:00Z\'' GROUP BY malo_id ORDER BY kwh_total DESC LIMIT 20",
+    "limit": 20
+  }' | jq .
+```
+
+**Access control:** requires Cedar action `read-archive-olap`.
+Only `SELECT` and `WITH` statements are accepted; `INSERT`/`UPDATE`/`DROP` are rejected.
+
+---
+
+## Iceberg REST catalog — external OLAP
+
+`edmd` exposes the Iceberg REST catalog protocol (ICEBERG-89 spec) so that
+**DuckDB**, **Snowflake**, and **Databricks** can attach directly to the cold archive
+without any ETL pipeline.
+
+```sql
+-- DuckDB: attach edmd's Iceberg catalog and query the cold archive directly
+ATTACH 'http://edmd:8380/api/v1/iceberg/v1'
+    AS mako (TYPE ICEBERG, ENDPOINT_TYPE REST);
+
+-- Annual energy by MaLo — full partition pruning + Bloom filter
+SELECT
+    malo_id,
+    DATE_TRUNC('month', dtm_from) AS month,
+    SUM(quantity_kwh)              AS arbeitsmenge_kwh
+FROM mako.edmd.meter_reads_archive
+WHERE dtm_from BETWEEN TIMESTAMP '2025-01-01' AND TIMESTAMP '2025-12-31'
+  AND quality NOT IN ('FAULTY', 'UNKNOWN')
+GROUP BY 1, 2
+ORDER BY 1, 2;
+```
+
+DuckDB executes this with full four-level pruning:
+1. Iceberg month-partition pruning
+2. Manifest `lower_bound`/`upper_bound` (TimeIndex)
+3. Parquet row-group min/max statistics (ZoneMap)
+4. Parquet Bloom filter on `malo_id` (1 % FPR, eliminates ~99 % of files for single-MaLo queries)
+
+**Authorization.** All catalog endpoint responses are gated by OIDC/Cedar.
+Snowflake or Databricks must present a valid bearer token in the `CATALOG INTEGRATION`
+config. Unauthenticated requests receive `403 Forbidden`.
+
+---
+
+## GDPR Art. 17 erasure
+
+`DELETE /api/v1/gdpr/erasure/{malo_id}` implements the
+[GDPR right to erasure](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A32016R0679#d1e2606-1-1)
+for meter data. This endpoint:
+
+1. Deletes all rows for the MaLo from `meter_reads` (hot tier) and related tables.
+2. Logs the erasure in `gdpr_deletions` (audit trail with `authorized_by`, timestamp).
+3. All subsequent cold-tier (Iceberg) queries automatically exclude the erased MaLo
+   via a `AND malo_id NOT IN (...)` filter injected at DataFusion query time.
+
+```bash
+curl -X DELETE "http://edmd:8380/api/v1/gdpr/erasure/10001234567" \
+  -H "Authorization: Bearer <token>" \
+  -H "X-Authorized-By: gdpr-officer@example.com" \
+  -H "X-Erasure-Reason: Customer right-to-erasure request #2026-42"
+```
+
+Response `200 OK`:
+```json
+{ "malo_id": "10001234567", "rows_deleted": 35040, "archived_pending": true }
+```
+
+> **Note:** Physical deletion of Parquet data files from S3 requires an
+> asynchronous compaction job (Iceberg copy-on-write). Until the job runs,
+> the data is excluded from all query results but physically still present in
+> object storage. The `archived_pending: true` field signals that the
+> Parquet-level rewrite is outstanding.
 
 ---
 

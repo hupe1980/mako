@@ -43,9 +43,97 @@
 //! # endpoint = "http://otel-collector:4317"
 //! ```
 
-use mako_edm::archive::ArchiveConfig;
 use serde::Deserialize;
 use std::path::Path;
+
+// ── Archive config (formerly in mako-edm::archive) ───────────────────────────
+
+/// Iceberg/S3 archival configuration.
+///
+/// Set via the `[archive]` section of `edmd.toml`.
+///
+/// ```toml
+/// [archive]
+/// enabled                = true
+/// storage_uri            = "s3://my-bucket/edmd/meter_reads"
+/// access_key_id          = "env:AWS_ACCESS_KEY_ID"
+/// secret_access_key      = "env:AWS_SECRET_ACCESS_KEY"
+/// region                 = "eu-central-1"
+/// retention_months       = 12
+/// batch_size             = 100000
+/// interval_secs          = 3600
+/// ```
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveConfig {
+    /// Enable archival worker.  Default: `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Root URI for Parquet/Iceberg data files.
+    /// Supported schemes: `s3://`, `gs://`, `abfss://`, `file://`.
+    pub storage_uri: String,
+    /// Months of hot-tier retention.  Reads older than this are archived.
+    #[serde(default = "archive_default_retention_months")]
+    pub retention_months: u32,
+    /// Maximum rows per archival batch.
+    #[serde(default = "archive_default_batch_size")]
+    pub batch_size: u32,
+    /// Archival worker interval in seconds.
+    #[serde(default = "archive_default_interval_secs")]
+    pub interval_secs: u64,
+    /// PostgreSQL schema for the Iceberg SQL-catalog tables.
+    #[serde(default = "archive_default_catalog_schema")]
+    pub iceberg_catalog_schema: String,
+    /// Logical catalog name registered in the SQL catalog.
+    #[serde(default = "archive_default_catalog_name")]
+    pub iceberg_catalog_name: String,
+    /// AWS access key ID.  Use `"env:AWS_ACCESS_KEY_ID"`.
+    pub access_key_id: Option<String>,
+    /// AWS secret access key.  Use `"env:AWS_SECRET_ACCESS_KEY"`.
+    pub secret_access_key: Option<String>,
+    /// AWS region.
+    #[serde(default = "archive_default_aws_region")]
+    pub region: String,
+    /// S3-compatible endpoint override (MinIO, LocalStack, Ceph RGW).
+    pub endpoint_url: Option<String>,
+}
+
+fn archive_default_retention_months() -> u32 {
+    12
+}
+fn archive_default_batch_size() -> u32 {
+    100_000
+}
+fn archive_default_interval_secs() -> u64 {
+    3_600
+}
+fn archive_default_catalog_schema() -> String {
+    "iceberg_catalog".to_owned()
+}
+fn archive_default_catalog_name() -> String {
+    "edmd".to_owned()
+}
+fn archive_default_aws_region() -> String {
+    "eu-central-1".to_owned()
+}
+
+impl Default for ArchiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            storage_uri: String::new(),
+            retention_months: archive_default_retention_months(),
+            batch_size: archive_default_batch_size(),
+            interval_secs: archive_default_interval_secs(),
+            iceberg_catalog_schema: archive_default_catalog_schema(),
+            iceberg_catalog_name: archive_default_catalog_name(),
+            access_key_id: None,
+            secret_access_key: None,
+            region: archive_default_aws_region(),
+            endpoint_url: None,
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -20,11 +20,11 @@ pub mod writer;
 
 use std::sync::Arc;
 
+use crate::config::ArchiveConfig;
 use iceberg::io::{
     FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY,
 };
 use iceberg_storage_opendal::OpenDalStorageFactory;
-use mako_edm::archive::ArchiveConfig;
 
 /// Build an [`iceberg::io::FileIO`] from the archive configuration.
 pub fn build_file_io(cfg: &ArchiveConfig) -> anyhow::Result<FileIO> {

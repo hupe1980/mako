@@ -409,6 +409,11 @@ pub async fn handle_webhook(
                     ..ValidationConfig::default()
                 };
                 let result = validate_intervals(&intervals, &config);
+
+                // Persist validation results as quality_warnings on the affected reads.
+                // This ensures MSCONS-ingested reads have the same §22 MessZV audit trail
+                // as direct-push reads. Without this, quality_warnings is always NULL
+                // for MSCONS data even when V01–V10 issues were detected.
                 if !result.is_clean() {
                     warn!(
                         process_id = %process_id, pid, malo_id = %malo_id,
@@ -416,10 +421,47 @@ pub async fn handle_webhook(
                         billing_block_count = result.billing_block_count(),
                         "edmd: MSCONS ingest validation issues (§17 MessZV — substitute values may be required)"
                     );
+
+                    let warnings_json = serde_json::json!({
+                        "has_warnings": true,
+                        "issue_count": result.issues.len(),
+                        "billing_block_count": result.billing_block_count(),
+                        "has_errors": result.has_errors(),
+                        "issues": result.issues.iter().map(|i| serde_json::json!({
+                            "rule": i.rule_id.to_string(),
+                            "message": i.message,
+                            "blocks_billing": i.blocks_billing(),
+                        })).collect::<Vec<_>>(),
+                        "source": "MSCONS_VALIDATION",
+                        "pid": pid,
+                    });
+
+                    // Update quality_warnings for the affected MaLo in the ingest window.
+                    // Use a soft update: only rows without existing quality_warnings are updated
+                    // to avoid overwriting operator-set warnings.
+                    let pool = state.repo.pool();
+                    let _ = sqlx::query(
+                        r"UPDATE meter_reads
+                          SET quality_warnings = $1
+                          WHERE malo_id = $2
+                            AND tenant  = $3
+                            AND quality_warnings IS NULL
+                            AND dtm_from >= now() - INTERVAL '7 days'",
+                    )
+                    .bind(&warnings_json)
+                    .bind(&malo_id)
+                    .bind(&state.tenant)
+                    .execute(pool)
+                    .await;
+
                     if let Some(ref webhook_url) = state.erp_webhook_url {
                         let payload = serde_json::json!({
-                            "specversion": "1.0", "type": "de.edmd.reading.quality.warning",
-                            "source": "edmd", "id": uuid::Uuid::new_v4().to_string(),
+                            "specversion": "1.0",
+                            "type": "de.edmd.reading.quality.warning",
+                            "source": format!("urn:edmd:tenant:{}:{}", state.tenant, malo_id),
+                            "id": uuid::Uuid::new_v4().to_string(),
+                            "subject": malo_id,
+                            "tenant": state.tenant,
                             "datacontenttype": "application/json",
                             "data": {
                                 "malo_id": malo_id, "pid": pid,
@@ -429,11 +471,28 @@ pub async fn handle_webhook(
                                 "has_errors": result.has_errors(),
                             }
                         });
-                        let _ = reqwest::Client::new()
-                            .post(webhook_url)
-                            .json(&payload)
-                            .send()
-                            .await;
+                        // Retry up to 3 times with exponential backoff.
+                        let client = mako_service::http::default_client();
+                        for attempt in 0u32..3 {
+                            match client.post(webhook_url).json(&payload).send().await {
+                                Ok(r) if r.status().is_success() => break,
+                                Ok(r) => {
+                                    tracing::warn!(
+                                        attempt, status = %r.status(),
+                                        "edmd: quality warning webhook non-success"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(attempt, error = %e, "edmd: quality warning webhook failed");
+                                }
+                            }
+                            if attempt < 2 {
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    200 * (1 << attempt),
+                                ))
+                                .await;
+                            }
+                        }
                     }
                 }
             }

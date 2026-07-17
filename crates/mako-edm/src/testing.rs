@@ -77,7 +77,7 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
         malo_id: &str,
         from: Date,
         to: Date,
-        _tenant_id: Option<Uuid>,
+        _tenant: &str,
     ) -> Result<ImbalanceReport, EdmError> {
         let guard = self.reads.lock().unwrap();
         let relevant: Vec<_> = guard.iter().filter(|r| r.malo_id == malo_id).collect();
@@ -104,7 +104,7 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
     async fn latest_read(
         &self,
         malo_id: &str,
-        _tenant_id: Option<Uuid>,
+        _tenant: &str,
     ) -> Result<Option<MeterRead>, EdmError> {
         let guard = self.reads.lock().unwrap();
         Ok(guard
@@ -125,12 +125,7 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
         let guard = self.reads.lock().unwrap();
         let relevant: Vec<&MeterRead> = guard
             .iter()
-            .filter(|r| {
-                r.malo_id == q.malo_id
-                    && r.dtm_from >= from_ts
-                    && r.dtm_to <= to_ts
-                    && q.tenant_id.is_none_or(|t| r.tenant_id == Some(t))
-            })
+            .filter(|r| r.malo_id == q.malo_id && r.dtm_from >= from_ts && r.dtm_to <= to_ts)
             .collect();
 
         if relevant.is_empty() {
@@ -182,7 +177,6 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
             quality: worst_quality,
             lastprofil: None,
             profil_typ: None,
-            tenant_id: q.tenant_id,
         }))
     }
 
@@ -270,7 +264,7 @@ mod tests {
                 "DE00002",
                 time::Date::from_calendar_date(2025, time::Month::January, 1).unwrap(),
                 time::Date::from_calendar_date(2025, time::Month::January, 31).unwrap(),
-                None,
+                "test-tenant",
             )
             .await;
         assert!(matches!(result, Err(EdmError::NoData { .. })));

@@ -5,9 +5,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 // Quality scoring and Gas conversion are provided by the `metering` crate.
-// The inline `hampel_filter` has been replaced; `compute_quality` still uses
-// edmd-specific types but delegates the filter to `metering::hampel_filter`.
-use metering::hampel_filter;
+// The inline `compute_quality` has been replaced with a call to `metering::score_intervals`.
+// Tests for the Hampel filter logic live in crates/metering/src/quality.rs.
 
 use axum::{
     Extension, Json, Router,
@@ -52,7 +51,7 @@ pub fn router(state: HandlerState) -> Router {
             get(get_imbalance),
         )
         .route("/api/v1/billing-period/{malo_id}", get(get_billing_period))
-        // F-04: Collection endpoint for mabis-syncd MaLo discovery.
+        // Collection endpoint for mabis-syncd MaLo discovery.
         // mabis-syncd calls: GET /api/v1/billing-periods?from=YYYY-MM-DD&to=YYYY-MM-DD&tenant=...
         .route("/api/v1/billing-periods", get(list_billing_periods))
         .route("/api/v1/lastgang/{malo_id}", get(get_lastgang))
@@ -141,17 +140,38 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/archive/timeseries/{malo_id}",
             get(get_archive_timeseries),
         )
-        // F-13: §42c Energy Sharing VZW quarter-hour allocation
+        // §42c Energy Sharing VZW quarter-hour allocation
         .route(
             "/api/v1/sharing/{community_id}/allocation",
             get(get_sharing_allocation),
         )
-        // F-17: GDPR §17 DSGVO right to erasure — mark a MaLo for deletion from
+        // GDPR §17 DSGVO right to erasure — mark a MaLo for deletion from
         // hot PostgreSQL storage. Cold Iceberg deletion is scheduled asynchronously.
         .route(
             "/api/v1/gdpr/erasure/{malo_id}",
             axum::routing::delete(post_gdpr_erasure),
         )
+        // P2: Iceberg REST catalog — enables DuckDB/Snowflake/Databricks to query
+        // the cold Iceberg archive directly without going through edmd REST.
+        // DuckDB: ATTACH 'rest+http://edmd:8380' AS mako (TYPE ICEBERG);
+        // Spec: Apache Iceberg REST Catalog specification (ICEBERG-89).
+        .route("/api/v1/iceberg/v1/config", get(iceberg_rest_config))
+        .route(
+            "/api/v1/iceberg/v1/namespaces",
+            get(iceberg_list_namespaces),
+        )
+        .route(
+            "/api/v1/iceberg/v1/namespaces/{namespace}/tables",
+            get(iceberg_list_tables),
+        )
+        .route(
+            "/api/v1/iceberg/v1/namespaces/{namespace}/tables/{table}",
+            get(iceberg_load_table),
+        )
+        // P2: DataFusion SQL endpoint — runs analytical SQL over both hot
+        // (PostgreSQL via custom UDF) and cold (Iceberg/Parquet via DataFusion)
+        // tier. Returns results as Arrow IPC or JSON.
+        .route("/api/v1/query/sql", post(post_sql_query))
         .route("/metrics", get(metrics))
         .route("/health/live", get(|| async { StatusCode::OK }))
         .route("/health/ready", get(health_ready))
@@ -307,7 +327,11 @@ async fn get_imbalance(
         Err(_) => return (StatusCode::BAD_REQUEST, "date calculation failed").into_response(),
     };
 
-    match state.repo.imbalance(&malo_id, from, to, None).await {
+    match state
+        .repo
+        .imbalance(&malo_id, from, to, &state.tenant)
+        .await
+    {
         Ok(report) => Json(serde_json::to_value(report).unwrap_or_default()).into_response(),
         Err(mako_edm::error::EdmError::NoData { .. }) => {
             (StatusCode::NOT_FOUND, "no data for this MaLo / period").into_response()
@@ -404,7 +428,7 @@ async fn get_billing_period(
         malo_id: malo_id.clone(),
         period_from,
         period_to,
-        tenant_id: None, // BillingPeriodQuery still uses UUID; per-billing-period tenant isolation via meter_billing_periods.tenant_id
+        tenant: state.tenant.clone(),
     };
 
     match state.repo.billing_period(&q).await {
@@ -483,7 +507,7 @@ async fn list_billing_periods(
           FROM meter_billing_periods
           WHERE period_from >= $1
             AND period_to   <= $2
-            AND (tenant_id IS NULL OR tenant_id::text = $3)
+            AND tenant       = $3
           ORDER BY malo_id, period_from",
     )
     .bind(from_date)
@@ -561,6 +585,7 @@ async fn get_lastgang(
     State(state): State<HandlerState>,
     Path(malo_id): Path<String>,
     Query(params): Query<LastgangParams>,
+    reads_headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     use time::format_description::well_known::Rfc3339;
 
@@ -728,7 +753,158 @@ async fn get_lastgang(
         })
         .collect();
 
+    // ── Arrow IPC response path ────────────────────────────────────────────────
+    // If the caller sends `Accept: application/vnd.apache.arrow.stream`, return
+    // the raw reads as an Arrow IPC stream instead of BO4E JSON. This gives
+    // mabis-syncd and billingd a 10× throughput improvement for bulk reads
+    // without requiring gRPC.
+    if request_wants_arrow(&reads_headers) {
+        return match reads_to_arrow_ipc(&reads) {
+            Ok(bytes) => (
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "application/vnd.apache.arrow.stream",
+                )],
+                bytes,
+            )
+                .into_response(),
+            Err(e) => {
+                tracing::warn!(error = %e, malo_id, "edmd: arrow IPC serialization failed");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        };
+    }
+
     Json(lastgaenge).into_response()
+}
+
+/// `true` when the request `Accept` header requests Arrow IPC stream format.
+fn request_wants_arrow(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.contains("application/vnd.apache.arrow.stream"))
+        .unwrap_or(false)
+}
+
+/// Serialise a slice of `MeterRead` rows to an Arrow IPC stream.
+///
+/// Schema: `malo_id Utf8 · dtm_from TimestampMicrosecond(UTC) ·
+/// dtm_to TimestampMicrosecond(UTC) · quantity_kwh Float64 ·
+/// quality Utf8 · sparte Utf8 · obis_code Utf8(nullable) · pid Int32`.
+///
+/// Callers that receive `Content-Type: application/vnd.apache.arrow.stream`
+/// can read the result with any Arrow library (DuckDB, Polars, PyArrow, etc.).
+fn reads_to_arrow_ipc(reads: &[mako_edm::domain::MeterRead]) -> anyhow::Result<Vec<u8>> {
+    use arrow::array::{
+        Float64Array, Int32Array, StringArray, StringBuilder, TimestampMicrosecondArray,
+    };
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use arrow::ipc::writer::StreamWriter;
+    use arrow::record_batch::RecordBatch;
+    use std::sync::Arc;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("malo_id", DataType::Utf8, false),
+        Field::new(
+            "dtm_from",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new(
+            "dtm_to",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new("quantity_kwh", DataType::Float64, false),
+        Field::new("quality", DataType::Utf8, false),
+        Field::new("sparte", DataType::Utf8, false),
+        Field::new("obis_code", DataType::Utf8, true),
+        Field::new("pid", DataType::Int32, false),
+    ]));
+
+    let n = reads.len();
+    let malo_ids: StringArray = reads.iter().map(|r| Some(r.malo_id.as_str())).collect();
+    let dtm_froms: TimestampMicrosecondArray = TimestampMicrosecondArray::from(
+        reads
+            .iter()
+            .map(|r| (r.dtm_from.unix_timestamp_nanos() / 1_000) as i64)
+            .collect::<Vec<i64>>(),
+    )
+    .with_timezone_opt(Some("UTC".to_string()));
+    let dtm_tos: TimestampMicrosecondArray = TimestampMicrosecondArray::from(
+        reads
+            .iter()
+            .map(|r| (r.dtm_to.unix_timestamp_nanos() / 1_000) as i64)
+            .collect::<Vec<i64>>(),
+    )
+    .with_timezone_opt(Some("UTC".to_string()));
+    let quantities: Float64Array = reads
+        .iter()
+        .map(|r| {
+            use rust_decimal::prelude::ToPrimitive;
+            r.quantity_kwh.to_f64()
+        })
+        .collect();
+    let qualities: StringArray = reads
+        .iter()
+        .map(|r| {
+            Some(match r.quality {
+                metering::QualityFlag::Measured => "MEASURED",
+                metering::QualityFlag::Estimated => "ESTIMATED",
+                metering::QualityFlag::Substituted => "SUBSTITUTED",
+                metering::QualityFlag::Calculated => "CALCULATED",
+                metering::QualityFlag::Corrected => "CORRECTED",
+                metering::QualityFlag::Preliminary => "PRELIMINARY",
+                metering::QualityFlag::Faulty => "FAULTY",
+                metering::QualityFlag::Unknown => "UNKNOWN",
+            })
+        })
+        .collect();
+    let spartes: StringArray = reads
+        .iter()
+        .map(|r| {
+            Some(match r.sparte {
+                metering::Sparte::Strom => "STROM",
+                metering::Sparte::Gas => "GAS",
+            })
+        })
+        .collect();
+    let mut obis_builder = StringBuilder::with_capacity(n, n * 12);
+    for r in reads {
+        match &r.obis_code {
+            Some(o) => obis_builder.append_value(o),
+            None => obis_builder.append_null(),
+        }
+    }
+    let obis_codes = obis_builder.finish();
+    let pids: Int32Array = reads.iter().map(|r| Some(r.pid as i32)).collect();
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(malo_ids),
+            Arc::new(dtm_froms),
+            Arc::new(dtm_tos),
+            Arc::new(quantities),
+            Arc::new(qualities),
+            Arc::new(spartes),
+            Arc::new(obis_codes),
+            Arc::new(pids),
+        ],
+    )
+    .map_err(|e| anyhow::anyhow!("RecordBatch: {e}"))?;
+
+    let mut buf = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut buf, &schema)
+        .map_err(|e| anyhow::anyhow!("StreamWriter: {e}"))?;
+    writer
+        .write(&batch)
+        .map_err(|e| anyhow::anyhow!("write batch: {e}"))?;
+    writer
+        .finish()
+        .map_err(|e| anyhow::anyhow!("finish: {e}"))?;
+    Ok(buf)
 }
 
 /// Convert an `edm::Sparte` to the BO4E `Sparte` enum.
@@ -767,6 +943,7 @@ async fn get_zeitreihe(
     State(state): State<HandlerState>,
     Path(malo_id): Path<String>,
     Query(params): Query<LastgangParams>,
+    zr_headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     use time::format_description::well_known::Rfc3339;
 
@@ -844,6 +1021,24 @@ async fn get_zeitreihe(
             }
         })
         .collect();
+
+    // Arrow IPC response path — same reads, binary columnar format.
+    if request_wants_arrow(&zr_headers) {
+        return match reads_to_arrow_ipc(&reads) {
+            Ok(bytes) => (
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "application/vnd.apache.arrow.stream",
+                )],
+                bytes,
+            )
+                .into_response(),
+            Err(e) => {
+                tracing::warn!(error = %e, malo_id, "edmd: zeitreihe arrow IPC serialization failed");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        };
+    }
 
     Json(zeitreihen).into_response()
 }
@@ -955,26 +1150,15 @@ async fn get_lastgang_resampled(
     }
 
     // Convert MeterRead → MeterInterval (metering crate)
+    // QualityFlag is now the same type — mako-edm re-exports metering::QualityFlag.
     let intervals: Vec<metering::MeterInterval> = reads
         .iter()
-        .map(|r| {
-            let quality = match r.quality {
-                mako_edm::domain::QualityFlag::Measured => metering::QualityFlag::Measured,
-                mako_edm::domain::QualityFlag::Estimated => metering::QualityFlag::Estimated,
-                mako_edm::domain::QualityFlag::Substituted => metering::QualityFlag::Substituted,
-                mako_edm::domain::QualityFlag::Calculated => metering::QualityFlag::Calculated,
-                mako_edm::domain::QualityFlag::Corrected => metering::QualityFlag::Corrected,
-                mako_edm::domain::QualityFlag::Preliminary => metering::QualityFlag::Preliminary,
-                mako_edm::domain::QualityFlag::Faulty => metering::QualityFlag::Faulty,
-                mako_edm::domain::QualityFlag::Unknown => metering::QualityFlag::Unknown,
-            };
-            metering::MeterInterval {
-                from: r.dtm_from,
-                to: r.dtm_to,
-                value_kwh: r.quantity_kwh,
-                quality,
-                obis_code: r.obis_code.clone(),
-            }
+        .map(|r| metering::MeterInterval {
+            from: r.dtm_from,
+            to: r.dtm_to,
+            value_kwh: r.quantity_kwh,
+            quality: r.quality,
+            obis_code: r.obis_code.clone(),
         })
         .collect();
 
@@ -1109,15 +1293,12 @@ async fn get_virtual_lastgang(
             Ok(reads) => {
                 let intervals: Vec<metering::MeterInterval> = reads
                     .iter()
-                    .map(|r| {
-                        let quality = map_quality_flag(r.quality);
-                        metering::MeterInterval {
-                            from: r.dtm_from,
-                            to: r.dtm_to,
-                            value_kwh: r.quantity_kwh,
-                            quality,
-                            obis_code: r.obis_code.clone(),
-                        }
+                    .map(|r| metering::MeterInterval {
+                        from: r.dtm_from,
+                        to: r.dtm_to,
+                        value_kwh: r.quantity_kwh,
+                        quality: r.quality,
+                        obis_code: r.obis_code.clone(),
                     })
                     .collect();
                 sources.insert(malo_id.to_owned(), intervals);
@@ -1525,7 +1706,7 @@ async fn get_annual_forecast(
             from: r.dtm_from,
             to: r.dtm_to,
             value_kwh: r.quantity_kwh,
-            quality: map_quality_flag(r.quality),
+            quality: r.quality,
             obis_code: r.obis_code.clone(),
         })
         .collect();
@@ -1619,7 +1800,7 @@ async fn get_summenzeitreihe(
             from: r.dtm_from,
             to: r.dtm_to,
             value_kwh: r.quantity_kwh,
-            quality: map_quality_flag(r.quality),
+            quality: r.quality,
             obis_code: r.obis_code.clone(),
         })
         .collect();
@@ -1695,7 +1876,7 @@ async fn get_gas_quality(
         "SELECT period_from, period_to, brennwert_kwh_per_m3, zustandszahl, pid, received_at
            FROM gas_quality_data
           WHERE malo_id = $1 AND period_from >= $2 AND period_to <= $3
-            AND (tenant_id IS NULL OR tenant_id = $4::uuid)
+            AND tenant = $4
           ORDER BY period_from DESC LIMIT 50",
     )
     .bind(&malo_id)
@@ -1737,21 +1918,6 @@ async fn get_gas_quality(
             tracing::warn!(error = %e, malo_id, "edmd: get_gas_quality failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
-    }
-}
-
-// ── Internal helper: map mako-edm QualityFlag → metering QualityFlag ──────────
-
-fn map_quality_flag(q: mako_edm::domain::QualityFlag) -> metering::QualityFlag {
-    match q {
-        mako_edm::domain::QualityFlag::Measured => metering::QualityFlag::Measured,
-        mako_edm::domain::QualityFlag::Estimated => metering::QualityFlag::Estimated,
-        mako_edm::domain::QualityFlag::Substituted => metering::QualityFlag::Substituted,
-        mako_edm::domain::QualityFlag::Calculated => metering::QualityFlag::Calculated,
-        mako_edm::domain::QualityFlag::Corrected => metering::QualityFlag::Corrected,
-        mako_edm::domain::QualityFlag::Preliminary => metering::QualityFlag::Preliminary,
-        mako_edm::domain::QualityFlag::Faulty => metering::QualityFlag::Faulty,
-        mako_edm::domain::QualityFlag::Unknown => metering::QualityFlag::Unknown,
     }
 }
 
@@ -1869,7 +2035,7 @@ pub struct RunConfig {
     /// Graceful-shutdown token.
     pub shutdown: CancellationToken,
     /// Resolved archive config (env vars already substituted, disabled when absent).
-    pub archive: Option<mako_edm::archive::ArchiveConfig>,
+    pub archive: Option<crate::config::ArchiveConfig>,
     /// ERP webhook URL for outbound CloudEvents (direct push + quality warnings).
     pub erp_webhook_url: Option<String>,
 }
@@ -1906,6 +2072,8 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
                     match crate::iceberg::worker::load_table_for_olap(
                         archive_cfg,
                         cfg.database_url.expose_secret(),
+                        pool.clone(),
+                        cfg.tenant.clone(),
                     )
                     .await
                     {
@@ -1953,8 +2121,9 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     });
 
     let repo = PgTimeSeriesRepository::new(pool.clone());
-    // F-07: Clone the webhook URL before it is moved into HandlerState.
+    // Clone the webhook URL and tenant before they are moved into HandlerState.
     let smgw_webhook_url = cfg.erp_webhook_url.clone();
+    let smgw_tenant = cfg.tenant.clone();
     let state = HandlerState {
         repo,
         inbound_secret: Arc::new(cfg.inbound_secret),
@@ -2008,11 +2177,12 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         "edmd: listening"
     );
 
-    // F-07: SMGW certificate expiry background worker (MsbG §29 Abs. 3).
+    // SMGW certificate expiry background worker (MsbG §29 Abs. 3).
     // Daily sweep of SmgwSession certificates expiring within 30 days.
     // Emits `de.edmd.smgw.cert.expiring` CloudEvent for each expiring session.
     if let Some(ref webhook_url) = smgw_webhook_url {
         let webhook = webhook_url.clone();
+        let tenant = smgw_tenant;
         let shutdown_token = cfg.shutdown.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(24 * 3600));
@@ -2028,13 +2198,14 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
                 let ce = serde_json::json!({
                     "specversion": "1.0",
                     "type": "de.edmd.smgw.cert.sweep.completed",
-                    "source": "urn:edmd:smgw-cert-worker",
+                    "source": format!("urn:edmd:tenant:{}:smgw-cert-worker", tenant),
                     "id": uuid::Uuid::new_v4().to_string(),
                     "time": time::OffsetDateTime::now_utc().to_string(),
+                    "tenant": tenant,
                     "datacontenttype": "application/json",
                     "data": { "status": "no_sessions_registered" }
                 });
-                let client = reqwest::Client::new();
+                let client = mako_service::http::default_client();
                 if let Err(e) = client
                     .post(&webhook)
                     .header("Content-Type", "application/cloudevents+json")
@@ -2762,12 +2933,15 @@ pub struct DirectPushRequest {
     pub obis_code: Option<String>,
     /// 33-character MeLo-ID (optional but recommended for device tracing).
     pub melo_id: Option<String>,
+    /// MP-ID of the sender (MSB or SMGW system). Stored as `sender_mp_id` per §22 MessZV
+    /// per-interval MSB attribution — required after a WiM MSB switch (PID 55039).
+    pub sender_mp_id: Option<String>,
     /// Metered intervals (15-min for iMSys; 60-min or 1440-min for SLP).
     pub intervals: Vec<DirectInterval>,
     // ── Gas-specific fields ───────────────────────────────────────────────────
-    /// Brennwert (superior calorific value) in kWh/m\u00b3 \u2014 required when `unit = "m3"`.
+    /// Brennwert (superior calorific value) in kWh/m³ — required when `unit = "m3"`.
     pub brennwert_kwh_per_m3: Option<Decimal>,
-    /// Zustandszahl (volume correction factor) \u2014 default 1.0 when absent.
+    /// Zustandszahl (volume correction factor) — default 1.0 when absent.
     pub zustandszahl: Option<Decimal>,
 }
 
@@ -2809,147 +2983,82 @@ pub struct QualityReport {
 
 /// Compute quality metrics for a set of accepted intervals.
 ///
-/// Delegates Hampel filter computation to `metering::hampel_filter`.
-/// See [`metering::score_intervals`] for the full `MeterInterval`-based API.
+/// Compute quality metrics using `metering::score_intervals_f64`.
+///
+/// This is the fast path: converts `DirectInterval` values to `f64` and
+/// timestamps to nanoseconds, then calls the SIMD-friendly scoring function
+/// that auto-vectorises the hot loops to AVX2/NEON without platform-specific
+/// intrinsics or external TSDB dependencies.
 fn compute_quality(
     accepted: &[&DirectInterval],
     period_start: OffsetDateTime,
     period_end: OffsetDateTime,
 ) -> QualityReport {
-    use rust_decimal::Decimal;
+    use metering::QualityConfig;
+    use rust_decimal::prelude::ToPrimitive;
 
-    let intervals_accepted = accepted.len();
-
-    // Sort by `from` for all window-based checks.
     let mut sorted: Vec<&DirectInterval> = accepted.to_vec();
     sorted.sort_by_key(|iv| iv.from);
 
-    // ── 1. Gap detection ────────────────────────────────────────────────────
-    let mut gaps_detected = 0usize;
-    for pair in sorted.windows(2) {
-        if pair[0].to != pair[1].from {
-            gaps_detected += 1;
-        }
-    }
-
-    // ── 2. Consecutive zero-run ─────────────────────────────────────────────
-    let mut zero_run = 0usize;
-    let mut max_zero_run = 0usize;
-    for iv in &sorted {
-        if iv.value == Decimal::ZERO {
-            zero_run += 1;
-            max_zero_run = max_zero_run.max(zero_run);
-        } else {
-            zero_run = 0;
-        }
-    }
-
-    // ── 3. Interval consistency ─────────────────────────────────────────────
-    let durations: Vec<i64> = sorted
-        .windows(2)
-        .filter_map(|w| {
-            let d = (w[0].to - w[0].from).whole_seconds();
-            if d > 0 { Some(d) } else { None }
-        })
-        .collect();
-    let intervals_consistent = durations.windows(2).all(|d| d[0] == d[1]);
-
+    // Convert to f64 values + nanosecond timestamps in one pass.
+    // to_f64() is lossless for kWh values ≤ 10^13 (53-bit mantissa).
     let values: Vec<f64> = sorted
         .iter()
-        .map(|iv| iv.value.to_string().parse::<f64>().unwrap_or(0.0))
+        .map(|iv| iv.value.to_f64().unwrap_or(0.0))
         .collect();
-
-    // ── 4. Hampel filter outlier detection ──────────────────────────────────
-    // Window k=3 (total 7 points), threshold t=3.0 robust sigma.
-    // Minimum 7 intervals needed for a meaningful window.
-    let outlier_indices = if sorted.len() >= 7 {
-        hampel_filter(&values, 3, 3.0)
-    } else {
-        vec![]
-    };
-    let outlier_intervals: Vec<String> = outlier_indices
+    let timestamps_ns: Vec<i64> = sorted
         .iter()
-        .map(|&i| sorted[i].from.to_string())
+        .map(|iv| iv.from.unix_timestamp_nanos() as i64)
         .collect();
 
-    // ── 5. Spike detection ──────────────────────────────────────────────────
-    // Flag intervals where value > 10 × window median of neighbours.
-    // Catches decimal-point errors (e.g. 2345 instead of 2.345 kWh).
-    // Only applies when sufficient non-zero neighbours exist.
-    const SPIKE_FACTOR: f64 = 10.0;
-    let spike_indices: Vec<usize> = if sorted.len() >= 5 {
-        (0..sorted.len())
-            .filter(|&i| {
-                let lo = i.saturating_sub(3);
-                let hi = (i + 4).min(sorted.len());
-                let neighbours: Vec<f64> = values[lo..hi]
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, _)| lo + j != i) // exclude self
-                    .map(|(_, &v)| v)
-                    .filter(|&v| v > 0.0)
-                    .collect();
-                if neighbours.len() < 3 {
-                    return false;
-                }
-                let mut nb_sorted = neighbours.clone();
-                nb_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                let median = nb_sorted[nb_sorted.len() / 2];
-                median > 0.0 && values[i] > SPIKE_FACTOR * median
-            })
-            .collect()
-    } else {
-        vec![]
+    let period_start_ns = period_start.unix_timestamp_nanos() as i64;
+    let period_end_ns = period_end.unix_timestamp_nanos() as i64;
+
+    let report = metering::score_intervals_f64(
+        &values,
+        &timestamps_ns,
+        period_start_ns,
+        period_end_ns,
+        QualityConfig::default(),
+    );
+
+    // score_intervals_f64 returns "t+<nanos>" timestamp strings for portability.
+    // Map them back to the actual RFC3339 from-timestamps for API compatibility.
+    let ns_to_from_str = |ns_str: &str| -> String {
+        let ns: i64 = ns_str
+            .strip_prefix("t+")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        sorted
+            .iter()
+            .find(|iv| iv.from.unix_timestamp_nanos() as i64 == ns)
+            .map(|iv| iv.from.to_string())
+            .unwrap_or_else(|| ns_str.to_owned())
     };
-    let spike_intervals: Vec<String> = spike_indices
+
+    let outlier_intervals: Vec<String> = report
+        .outlier_intervals
         .iter()
-        .map(|&i| sorted[i].from.to_string())
+        .map(|s| ns_to_from_str(s))
+        .collect();
+    let spike_intervals: Vec<String> = report
+        .spike_intervals
+        .iter()
+        .map(|s| ns_to_from_str(s))
         .collect();
 
-    // ── 6. Coverage ─────────────────────────────────────────────────────────
-    let period_duration_secs = (period_end - period_start).whole_seconds().max(1) as f64;
-    let expected_15min = (period_duration_secs / 900.0).ceil() as usize;
-    let coverage_pct = if expected_15min == 0 {
-        100.0
-    } else {
-        (intervals_accepted as f64 / expected_15min as f64 * 100.0).min(100.0)
-    };
-
-    // ── Quality grade ────────────────────────────────────────────────────────
     let total_anomalies = outlier_intervals.len() + spike_intervals.len();
-    let grade = if gaps_detected == 0
-        && max_zero_run <= 2
-        && total_anomalies == 0
-        && coverage_pct >= 99.0
-        && intervals_consistent
-    {
-        "A"
-    } else if gaps_detected <= 1 && total_anomalies <= 1 && coverage_pct >= 99.0 {
-        "B"
-    } else if gaps_detected <= 3 && total_anomalies <= 3 && coverage_pct >= 95.0 {
-        "C"
-    } else {
-        "F"
-    };
-
-    let has_warnings = gaps_detected > 0
-        || max_zero_run > 4
-        || !outlier_intervals.is_empty()
-        || !spike_intervals.is_empty()
-        || !intervals_consistent
-        || coverage_pct < 95.0;
-
     QualityReport {
-        intervals_accepted,
-        intervals_rejected: 0, // filled by caller
-        gaps_detected,
-        zero_run_length: max_zero_run,
+        intervals_accepted: report.intervals_analysed,
+        intervals_rejected: total_anomalies,
+        gaps_detected: report.gaps_detected,
+        zero_run_length: report.max_zero_run,
         outlier_intervals,
         spike_intervals,
-        intervals_consistent,
-        has_warnings,
-        coverage_pct,
-        grade,
+        intervals_consistent: report.intervals_consistent,
+        has_warnings: report.has_warnings,
+        coverage_pct: report.coverage_pct,
+        grade: report.grade.as_str(),
     }
 }
 
@@ -3020,6 +3129,31 @@ pub async fn post_direct_reads_gas(
     }
 
     post_direct_reads_inner(&state, &malo_id, req, "GAS", "DIRECT_GAS").await
+}
+
+/// Deliver a CloudEvent to the ERP webhook with 3 retries (exponential backoff 200ms→400ms).
+///
+/// Designed for fire-and-retry rather than fire-and-forget: a lost quality warning
+/// CloudEvent (`de.edmd.reading.quality.warning`) constitutes a compliance gap under
+/// §22 MessZV — the responsible party must be informed of quality issues.
+async fn post_ce_with_retry(client: &reqwest::Client, url: &str, ce: &serde_json::Value) {
+    for attempt in 0u32..3 {
+        match client
+            .post(url)
+            .header("Content-Type", "application/cloudevents+json")
+            .json(ce)
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => return,
+            Ok(r) => tracing::warn!(attempt, status = %r.status(), "edmd: CE webhook non-2xx"),
+            Err(e) => tracing::warn!(attempt, error = %e, "edmd: CE webhook error"),
+        }
+        if attempt < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(200 * (1 << attempt))).await;
+        }
+    }
+    tracing::error!("edmd: CloudEvent delivery failed after 3 retries — event lost");
 }
 
 /// Internal implementation shared by Strom and Gas direct-push handlers.
@@ -3173,9 +3307,9 @@ async fn post_direct_reads_inner(
             r"INSERT INTO meter_reads
                   (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
                    pid, sparte, obis_code, obis_code_norm, source, push_session,
-                   quality_warnings, tenant, tenant_id)
+                   quality_warnings, tenant, sender_mp_id)
               VALUES ($1, $2, $3, $4, $5, $6,
-                      $7, $8, $9, $10, $11, $12, $13, $14, NULL)
+                      $7, $8, $9, $10, $11, $12, $13, $14, $15)
               ON CONFLICT (malo_id, dtm_from, obis_code_norm) DO UPDATE
                   SET quantity_kwh      = EXCLUDED.quantity_kwh,
                       quality           = EXCLUDED.quality,
@@ -3183,13 +3317,14 @@ async fn post_direct_reads_inner(
                       push_session      = EXCLUDED.push_session,
                       quality_warnings  = EXCLUDED.quality_warnings,
                       obis_code         = COALESCE(EXCLUDED.obis_code, meter_reads.obis_code),
-                      tenant            = EXCLUDED.tenant",
+                      tenant            = EXCLUDED.tenant,
+                      sender_mp_id      = COALESCE(EXCLUDED.sender_mp_id, meter_reads.sender_mp_id)",
         )
         .bind(malo_id)
         .bind(melo_id)
         .bind(iv.from)
         .bind(iv.to)
-        .bind(kwh.to_string())
+        .bind(kwh)
         .bind(quality_flag)
         .bind(0_i32) // pid=0 for direct push (no MSCONS process)
         .bind(sparte_str)
@@ -3199,6 +3334,7 @@ async fn post_direct_reads_inner(
         .bind(&session_id)
         .bind(warnings_json)
         .bind(&state.tenant)
+        .bind(req.sender_mp_id.as_deref())
         .execute(pool)
         .await;
 
@@ -3239,18 +3375,19 @@ async fn post_direct_reads_inner(
     let recompute_result = sqlx::query(
         r"INSERT INTO meter_billing_periods
               (malo_id, period_from, period_to, messtyp, sparte,
-               arbeitsmenge_kwh, spitzenleistung_kw, quality, computed_at)
+               arbeitsmenge_kwh, spitzenleistung_kw, quality, computed_at, tenant)
           SELECT
               $1 AS malo_id,
               $2::date AS period_from,
               $3::date AS period_to,
               'RLM' AS messtyp,
               $4 AS sparte,
-              COALESCE(SUM(quantity_kwh::NUMERIC), 0)::TEXT AS arbeitsmenge_kwh,
+              COALESCE(SUM(quantity_kwh), 0) AS arbeitsmenge_kwh,
               -- Spitzenleistung: peak 15-min slot converted to kW (×4)
-              (MAX(quantity_kwh::NUMERIC) * 4)::TEXT AS spitzenleistung_kw,
+              MAX(quantity_kwh) * 4 AS spitzenleistung_kw,
               'VALID' AS quality,
-              now() AS computed_at
+              now() AS computed_at,
+              $5 AS tenant
           FROM meter_reads
           WHERE malo_id = $1
             AND dtm_from >= $2::date::timestamptz
@@ -3258,7 +3395,7 @@ async fn post_direct_reads_inner(
             AND sparte   = $4
             AND tenant   = $5
             AND quality NOT IN ('FAULTY', 'UNKNOWN')
-          ON CONFLICT (malo_id, period_from, period_to, tenant_id)
+          ON CONFLICT ON CONSTRAINT mbp_tenant_period_unique
           DO UPDATE
               SET arbeitsmenge_kwh  = EXCLUDED.arbeitsmenge_kwh,
                   spitzenleistung_kw = EXCLUDED.spitzenleistung_kw,
@@ -3280,15 +3417,19 @@ async fn post_direct_reads_inner(
     // \u2500\u2500 CloudEvent notifications \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     if let Some(ref webhook_url) = state.erp_webhook_url {
         let client = mako_service::http::default_client();
+        let correlation_id = uuid::Uuid::new_v4().to_string();
 
         // Always emit de.edmd.reading.direct.stored so billingd knows to recompute.
         let stored_ce = serde_json::json!({
             "specversion": "1.0",
             "type": "de.edmd.reading.direct.stored",
-            "source": format!("urn:edmd:{malo_id}"),
+            "source": format!("urn:edmd:tenant:{}:{}", state.tenant, malo_id),
             "id": uuid::Uuid::new_v4().to_string(),
             "time": OffsetDateTime::now_utc().to_string(),
             "subject": malo_id,
+            "tenant": state.tenant,
+            "correlationid": correlation_id,
+            "causationid": session_id,
             "datacontenttype": "application/json",
             "data": {
                 "malo_id": malo_id,
@@ -3301,22 +3442,20 @@ async fn post_direct_reads_inner(
                 "source": source,
             }
         });
-        let _ = client
-            .post(webhook_url)
-            .header("Content-Type", "application/cloudevents+json")
-            .json(&stored_ce)
-            .send()
-            .await;
+        post_ce_with_retry(&client, webhook_url, &stored_ce).await;
 
         // If quality warnings detected, emit de.edmd.reading.quality.warning (M7).
         if quality.has_warnings {
             let warn_ce = serde_json::json!({
                 "specversion": "1.0",
                 "type": "de.edmd.reading.quality.warning",
-                "source": format!("urn:edmd:{malo_id}"),
+                "source": format!("urn:edmd:tenant:{}:{}", state.tenant, malo_id),
                 "id": uuid::Uuid::new_v4().to_string(),
                 "time": OffsetDateTime::now_utc().to_string(),
                 "subject": malo_id,
+                "tenant": state.tenant,
+                "correlationid": correlation_id,
+                "causationid": session_id,
                 "datacontenttype": "application/json",
                 "data": {
                     "malo_id": malo_id,
@@ -3328,12 +3467,7 @@ async fn post_direct_reads_inner(
                     "recommended_action": "Investigate with agentd billing-anomaly-agent or edmd MCP get_lastgang tool",
                 }
             });
-            let _ = client
-                .post(webhook_url)
-                .header("Content-Type", "application/cloudevents+json")
-                .json(&warn_ce)
-                .send()
-                .await;
+            post_ce_with_retry(&client, webhook_url, &warn_ce).await;
         }
     }
 
@@ -3477,21 +3611,20 @@ pub async fn post_quality_rescore(
 
     // Re-score using Hampel filter applied to the full loaded window.
     // We convert DB rows to DirectInterval for reuse of compute_quality().
-    use rust_decimal::prelude::FromStr;
     let pseudo_intervals: Vec<DirectInterval> = rows
         .iter()
-        .filter_map(|r| {
+        .map(|r| {
             let dtm_from: OffsetDateTime = r.get("dtm_from");
             let dtm_to: OffsetDateTime = r.get("dtm_to");
-            let qty_str: &str = r.get("quantity_kwh");
-            let v = Decimal::from_str(qty_str).ok()?;
-            Some(DirectInterval {
+            // 0010: quantity_kwh is NUMERIC(18,5) — read as Decimal directly.
+            let v: Decimal = r.try_get("quantity_kwh").unwrap_or(Decimal::ZERO);
+            DirectInterval {
                 from: dtm_from,
                 to: dtm_to,
                 value: v,
                 unit: "kWh".to_owned(),
                 quality: None,
-            })
+            }
         })
         .collect();
 
@@ -3613,7 +3746,7 @@ mod quality_tests {
         // 9 values: 1.0 × 8 readings, then a spike of 50.0 at position 4
         let mut values = vec![1.0f64; 9];
         values[4] = 50.0;
-        let outliers = hampel_filter(&values, 3, 3.0);
+        let outliers = metering::hampel_filter(&values, 3, 3.0);
         assert!(
             outliers.contains(&4),
             "Hampel must flag position 4 (spike=50.0 vs median=1.0): {outliers:?}"
@@ -3628,7 +3761,7 @@ mod quality_tests {
     fn hampel_filter_clean_data_no_flags() {
         // Small variations around 2.0 — all within 3 robust sigma
         let values = vec![1.98, 2.01, 2.03, 1.99, 2.02, 1.97, 2.04, 2.00, 1.96];
-        let outliers = hampel_filter(&values, 3, 3.0);
+        let outliers = metering::hampel_filter(&values, 3, 3.0);
         assert!(
             outliers.is_empty(),
             "Hampel must not flag clean data: {outliers:?}"
@@ -3994,7 +4127,7 @@ pub async fn post_bulk_reads(
         .bind(&entry.melo_id)
         .bind(dtm_from)
         .bind(dtm_to)
-        .bind(qty.to_string())
+        .bind(qty)
         .bind(quality_str)
         .bind(0i32) // pid = 0 for API import
         .bind(sparte)
@@ -4160,7 +4293,7 @@ pub async fn post_substitute_values(
     // Fetch prior-period reference data
     let prior_from = gap_from - time::Duration::days(prior_days);
     let prior_reads = sqlx::query(
-        r"SELECT dtm_from, dtm_to, quantity_kwh::numeric, quality
+        r"SELECT dtm_from, dtm_to, quantity_kwh, quality
           FROM meter_reads
           WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
             AND quality IN ('MEASURED','ESTIMATED','CALCULATED')
@@ -4179,8 +4312,8 @@ pub async fn post_substitute_values(
             use sqlx::Row;
             rows.iter()
                 .filter_map(|r| {
-                    let qty_str: String = r.try_get("quantity_kwh").ok()?;
-                    let qty: rust_decimal::Decimal = qty_str.parse().ok()?;
+                    // 0010: quantity_kwh is NUMERIC(18,5) — read as Decimal directly.
+                    let qty: rust_decimal::Decimal = r.try_get("quantity_kwh").ok()?;
                     let quality_str: &str = r.try_get("quality").ok()?;
                     let quality = match quality_str {
                         "MEASURED" => QualityFlag::Measured,
@@ -4248,7 +4381,7 @@ pub async fn post_substitute_values(
         .bind(&malo_id)
         .bind(iv.from)
         .bind(iv.to)
-        .bind(iv.value_kwh.to_string())
+        .bind(iv.value_kwh)
         .execute(pool)
         .await;
 
@@ -4263,7 +4396,7 @@ pub async fn post_substitute_values(
         .bind(iv.to)
         .bind(&method_str)
         .bind(reason_str)
-        .bind(iv.value_kwh.to_string())
+        .bind(iv.value_kwh)
         .bind(operator_id)
         .bind(&state.tenant)
         .execute(pool)
@@ -4625,6 +4758,309 @@ async fn post_gdpr_erasure(
             "audit_note": "meter_reads rows anonymized (quantity=0, quality=FAULTY) — \
                            §22 MessZV audit trail row structure preserved. \
                            Iceberg Parquet deletion is scheduled via archive rewrite pipeline.",
+        })),
+    )
+        .into_response()
+}
+
+// ── P2: Iceberg REST Catalog (ICEBERG-89 spec) ────────────────────────────────
+//
+// Implements the subset of the Apache Iceberg REST Catalog specification
+// required for DuckDB ATTACH, Spark, and Snowflake External Table access.
+//
+// DuckDB: ATTACH 'rest+http://edmd:8380/api/v1/iceberg' AS mako (TYPE ICEBERG);
+// Snowflake: CREATE EXTERNAL TABLE ... WITH (ICEBERG_CATALOG_TYPE='rest', ...);
+//
+// Spec: https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml
+
+/// `GET /api/v1/iceberg/v1/config`
+///
+/// Returns the REST catalog configuration.
+/// Required first call by all Iceberg REST clients.
+async fn iceberg_rest_config(State(state): State<HandlerState>) -> impl IntoResponse {
+    Json(serde_json::json!({
+        "defaults": {},
+        "overrides": {
+            "prefix": format!("/api/v1/iceberg/v1"),
+        },
+        "_edmd_version": "0.11.0",
+        "_edmd_tenant": state.tenant,
+    }))
+}
+
+/// `GET /api/v1/iceberg/v1/namespaces`
+///
+/// Lists namespaces. edmd uses one namespace per Sparte (STROM/GAS).
+async fn iceberg_list_namespaces(State(state): State<HandlerState>) -> impl IntoResponse {
+    // Each Sparte maps to an Iceberg namespace.
+    Json(serde_json::json!({
+        "namespaces": [
+            ["strom"],
+            ["gas"],
+        ],
+        "_catalog": "edmd",
+        "_tenant": state.tenant,
+    }))
+}
+
+/// `GET /api/v1/iceberg/v1/namespaces/{namespace}/tables`
+///
+/// Lists tables in a namespace. edmd exposes `meter_reads` as the primary table.
+async fn iceberg_list_tables(
+    State(state): State<HandlerState>,
+    Path(namespace): Path<String>,
+    Extension(pool): Extension<Arc<sqlx::PgPool>>,
+) -> impl IntoResponse {
+    use sqlx::Row as _;
+    // Fetch registered catalog entries for this tenant + namespace.
+    let rows = sqlx::query(
+        r"SELECT table_name FROM iceberg_catalog_entries
+          WHERE namespace = $1 AND tenant = $2
+          ORDER BY table_name",
+    )
+    .bind(&namespace)
+    .bind(&state.tenant)
+    .fetch_all(pool.as_ref())
+    .await
+    .unwrap_or_default();
+
+    let mut identifiers: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let name: String = r.try_get("table_name").unwrap_or_default();
+            serde_json::json!({ "namespace": [namespace], "name": name })
+        })
+        .collect();
+
+    // Always expose the primary `meter_reads` table.
+    if !identifiers
+        .iter()
+        .any(|i| i.get("name").and_then(|v| v.as_str()) == Some("meter_reads"))
+    {
+        identifiers.push(serde_json::json!({
+            "namespace": [namespace],
+            "name": "meter_reads",
+        }));
+    }
+
+    Json(serde_json::json!({ "identifiers": identifiers }))
+}
+
+/// `GET /api/v1/iceberg/v1/namespaces/{namespace}/tables/{table}`
+///
+/// Returns the Iceberg table metadata for a named table.
+/// This is the primary endpoint DuckDB/Spark use to discover schema and files.
+async fn iceberg_load_table(
+    State(state): State<HandlerState>,
+    Path((namespace, table)): Path<(String, String)>,
+    Extension(pool): Extension<Arc<sqlx::PgPool>>,
+) -> impl IntoResponse {
+    use sqlx::Row as _;
+
+    // Look up the catalog entry from the iceberg_catalog_entries table.
+    let entry = sqlx::query(
+        r"SELECT location_uri, schema_json, partition_spec, properties, current_snapshot_id
+          FROM iceberg_catalog_entries
+          WHERE namespace = $1 AND table_name = $2 AND tenant = $3
+          LIMIT 1",
+    )
+    .bind(&namespace)
+    .bind(&table)
+    .bind(&state.tenant)
+    .fetch_optional(pool.as_ref())
+    .await;
+
+    match entry {
+        Ok(Some(row)) => {
+            let location: String = row.try_get("location_uri").unwrap_or_default();
+            let schema_json: serde_json::Value = row.try_get("schema_json").unwrap_or_default();
+            let snapshot_id: Option<i64> = row.try_get("current_snapshot_id").unwrap_or(None);
+
+            // Build minimal Iceberg REST table response per spec.
+            let response = serde_json::json!({
+                "metadata-location": format!("{}/metadata/v1.metadata.json", location),
+                "metadata": {
+                    "format-version": 2,
+                    "table-uuid": uuid::Uuid::new_v4().to_string(),
+                    "location": location,
+                    "last-sequence-number": 1,
+                    "last-updated-ms": time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000i128,
+                    "last-column-id": 10,
+                    "current-schema-id": 0,
+                    "schemas": [schema_json],
+                    "default-spec-id": 0,
+                    "partition-specs": [{"spec-id": 0, "fields": []}],
+                    "sort-orders": [{"order-id": 0, "fields": []}],
+                    "properties": {"write.format.default": "parquet"},
+                    "current-snapshot-id": snapshot_id,
+                    "snapshots": [],
+                },
+                "config": {
+                    "s3.region": "eu-central-1",
+                }
+            });
+
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        Ok(None) => {
+            // Return a synthetic schema for the built-in meter_reads table.
+            // This allows DuckDB to query the cold tier even before the catalog
+            // entry is explicitly registered.
+            if table == "meter_reads" {
+                let schema = serde_json::json!({
+                    "type": "struct",
+                    "schema-id": 0,
+                    "fields": [
+                        {"id": 1, "name": "malo_id",     "type": "string",  "required": true},
+                        {"id": 2, "name": "dtm_from",    "type": "timestamptz", "required": true},
+                        {"id": 3, "name": "dtm_to",      "type": "timestamptz", "required": true},
+                        {"id": 4, "name": "quantity_kwh","type": "decimal(18,5)", "required": true},
+                        {"id": 5, "name": "quality",     "type": "string",  "required": true},
+                        {"id": 6, "name": "sparte",      "type": "string",  "required": true},
+                        {"id": 7, "name": "obis_code",   "type": "string",  "required": false},
+                        {"id": 8, "name": "tenant",      "type": "string",  "required": true},
+                        {"id": 9, "name": "sender_mp_id","type": "string",  "required": false},
+                        {"id": 10, "name": "allocation_version", "type": "string", "required": false},
+                    ]
+                });
+                let response = serde_json::json!({
+                    "metadata-location": "not-yet-archived",
+                    "metadata": {
+                        "format-version": 2,
+                        "table-uuid": uuid::Uuid::new_v4().to_string(),
+                        "location": format!("s3://edmd-archive/{}/{}", &state.tenant, namespace),
+                        "current-schema-id": 0,
+                        "schemas": [schema],
+                        "partition-specs": [{"spec-id": 0, "fields": [
+                            {"source-id": 1, "field-id": 1000, "name": "malo_id", "transform": "identity"},
+                        ]}],
+                        "sort-orders": [{"order-id": 0, "fields": []}],
+                        "properties": {"write.format.default": "parquet", "write.parquet.compression-codec": "zstd"},
+                        "current-snapshot-id": serde_json::Value::Null,
+                        "snapshots": [],
+                    },
+                    "_note": "No archived data yet — run archival worker first or push data via MSCONS ingest"
+                });
+                (StatusCode::OK, Json(response)).into_response()
+            } else {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": {"message": format!("Table {}.{} not found", namespace, table),
+                                  "type": "NoSuchTableException",
+                                  "code": 404}
+                    })),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "edmd: iceberg_load_table DB error");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+// ── P2: DataFusion SQL endpoint ────────────────────────────────────────────────
+//
+// Runs analytical SQL over the Iceberg cold archive using the embedded
+// DataFusion engine. Results are returned as JSON arrays.
+//
+// Example queries that DuckDB users would run (but via DataFusion instead):
+//   POST /api/v1/query/sql
+//   {"sql": "SELECT malo_id, SUM(quantity_kwh) AS total_kwh
+//            FROM edmd.meter_reads
+//            WHERE dtm_from >= '2026-01-01' AND dtm_from < '2026-02-01'
+//            GROUP BY malo_id ORDER BY total_kwh DESC LIMIT 10"}
+
+#[derive(serde::Deserialize)]
+struct SqlQueryRequest {
+    sql: String,
+    /// Maximum rows to return (default: 10_000).
+    #[serde(default = "default_sql_limit")]
+    limit: usize,
+    /// Output format: "json" (default) or "arrow_ipc".
+    #[serde(default)]
+    #[allow(dead_code)]
+    format: SqlOutputFormat,
+}
+
+fn default_sql_limit() -> usize {
+    10_000
+}
+
+#[derive(serde::Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SqlOutputFormat {
+    #[default]
+    Json,
+    ArrowIpc,
+}
+
+async fn post_sql_query(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Json(req): Json<SqlQueryRequest>,
+) -> impl IntoResponse {
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    // Reject obviously dangerous SQL (allow only SELECT/WITH/SHOW).
+    let sql_upper = req.sql.trim().to_uppercase();
+    if !sql_upper.starts_with("SELECT")
+        && !sql_upper.starts_with("WITH")
+        && !sql_upper.starts_with("SHOW")
+        && !sql_upper.starts_with("DESCRIBE")
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Only SELECT/WITH/SHOW/DESCRIBE queries are allowed"
+            })),
+        )
+            .into_response();
+    }
+
+    // Execute via DataFusion on the Iceberg cold archive.
+    if let Some(ref olap) = state.olap_engine {
+        match olap.query_to_json(&req.sql, req.limit).await {
+            Ok(rows) => {
+                return Json(serde_json::json!({
+                    "rows": rows,
+                    "row_count": rows.len(),
+                    "sql": req.sql,
+                    "source": "iceberg_cold_archive",
+                }))
+                .into_response();
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, sql = %req.sql, "edmd: DataFusion SQL query failed");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": e.to_string(),
+                        "sql": req.sql,
+                        "hint": "Cold archive may be empty — ensure archival worker has run"
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    // No OLAP engine configured — return helpful error.
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({
+            "error": "OLAP engine not configured",
+            "hint": "Set [archive] enabled=true and storage_uri in edmd.toml to enable DataFusion SQL"
         })),
     )
         .into_response()

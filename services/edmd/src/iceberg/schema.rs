@@ -4,6 +4,22 @@ use iceberg::spec::{NestedField, PrimitiveType, Schema, Transform, Type, Unbound
 use std::sync::Arc;
 
 /// Build the Iceberg V2 schema for `meter_reads_archive`.
+///
+/// ## Field types
+///
+/// | # | Name | Type | Notes |
+/// |---|------|------|-------|
+/// | 1 | malo_id | String | Marktlokations-ID |
+/// | 2 | melo_id | String? | Messlokations-ID |
+/// | 3 | dtm_from | Timestamptz | Interval start (UTC) |
+/// | 4 | dtm_to | Timestamptz | Interval end (UTC) |
+/// | 5 | quantity_kwh | Decimal(18,5) | §22 MessZV 5-decimal precision |
+/// | 6 | quality | String | MEASURED/ESTIMATED/… |
+/// | 7 | pid | Int | Source MSCONS PID |
+/// | 8 | sparte | String | STROM/GAS |
+/// | 9 | obis_code | String? | OBIS-Kennzahl |
+/// | 10 | tenant | String | Mandatory data-isolation key |
+/// | 11 | allocation_version | String? | INITIAL/CORRECTION/FINAL (BK6-22-024 §6.4) |
 pub fn meter_reads_schema() -> anyhow::Result<Arc<Schema>> {
     let schema = Schema::builder()
         .with_schema_id(0)
@@ -13,12 +29,31 @@ pub fn meter_reads_schema() -> anyhow::Result<Arc<Schema>> {
             NestedField::required(3, "dtm_from", Type::Primitive(PrimitiveType::Timestamptz))
                 .into(),
             NestedField::required(4, "dtm_to", Type::Primitive(PrimitiveType::Timestamptz)).into(),
-            NestedField::required(5, "quantity_kwh", Type::Primitive(PrimitiveType::String)).into(),
+            // Decimal(18,5) — preserves §22 MessZV 5-decimal-place precision.
+            // Avoids the TRY_CAST overhead that STRING would require in DataFusion.
+            NestedField::required(
+                5,
+                "quantity_kwh",
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 18,
+                    scale: 5,
+                }),
+            )
+            .into(),
             NestedField::required(6, "quality", Type::Primitive(PrimitiveType::String)).into(),
             NestedField::required(7, "pid", Type::Primitive(PrimitiveType::Int)).into(),
             NestedField::required(8, "sparte", Type::Primitive(PrimitiveType::String)).into(),
             NestedField::optional(9, "obis_code", Type::Primitive(PrimitiveType::String)).into(),
-            NestedField::optional(10, "tenant_id", Type::Primitive(PrimitiveType::String)).into(),
+            // "tenant" — mandatory data-isolation key (renamed from legacy "tenant_id").
+            NestedField::required(10, "tenant", Type::Primitive(PrimitiveType::String)).into(),
+            // "allocation_version" — INITIAL / CORRECTION / FINAL per BK6-22-024 §6.4.
+            // Allows mabis-syncd to distinguish day-3 INITIAL from day-8 FINAL data.
+            NestedField::optional(
+                11,
+                "allocation_version",
+                Type::Primitive(PrimitiveType::String),
+            )
+            .into(),
         ])
         .build()
         .map_err(|e| anyhow::anyhow!("iceberg schema error: {e}"))?;
@@ -52,8 +87,20 @@ mod tests {
     #[test]
     fn schema_builds() {
         let schema = meter_reads_schema().unwrap();
-        assert_eq!(schema.as_ref().highest_field_id(), 10);
+        // Fields: malo_id melo_id dtm_from dtm_to quantity_kwh quality pid sparte obis_code tenant allocation_version
+        assert_eq!(schema.as_ref().highest_field_id(), 11);
         assert!(schema.field_by_name("malo_id").is_some());
+        assert!(schema.field_by_name("tenant").is_some());
+        assert!(schema.field_by_name("allocation_version").is_some());
+        // quantity_kwh must be Decimal, not String
+        let qty_field = schema.field_by_name("quantity_kwh").unwrap();
+        assert!(
+            matches!(
+                qty_field.field_type.as_ref(),
+                iceberg::spec::Type::Primitive(iceberg::spec::PrimitiveType::Decimal { .. })
+            ),
+            "quantity_kwh must be Decimal(18,5), not String"
+        );
     }
 
     #[test]

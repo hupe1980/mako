@@ -58,49 +58,51 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         if reads.is_empty() {
             return Ok(());
         }
-        // F-01 fix: ON CONFLICT (malo_id, dtm_from, obis_code_norm) matches PK from migration 0006.
-        // F-06 fix: unnest() batch INSERT eliminates O(n) round-trips — one query per batch.
+        // Batch INSERT via unnest() — one round-trip per batch.
+        // ON CONFLICT (malo_id, dtm_from, obis_code_norm) is the primary key.
         let malo_ids: Vec<&str> = reads.iter().map(|r| r.malo_id.as_str()).collect();
         let melo_ids: Vec<Option<&str>> = reads.iter().map(|r| r.melo_id.as_deref()).collect();
         let dtm_froms: Vec<OffsetDateTime> = reads.iter().map(|r| r.dtm_from).collect();
         let dtm_tos: Vec<OffsetDateTime> = reads.iter().map(|r| r.dtm_to).collect();
-        let quantities: Vec<String> = reads.iter().map(|r| r.quantity_kwh.to_string()).collect();
+        let quantities: Vec<Decimal> = reads.iter().map(|r| r.quantity_kwh).collect();
         let qualities: Vec<&str> = reads.iter().map(|r| quality_to_str(r.quality)).collect();
         let pids: Vec<i32> = reads.iter().map(|r| r.pid as i32).collect();
         let spartes: Vec<&str> = reads.iter().map(|r| sparte_to_str(r.sparte)).collect();
         let obis_codes: Vec<Option<&str>> = reads.iter().map(|r| r.obis_code.as_deref()).collect();
-        // obis_code_norm: empty string sentinel for single-register meters (migration 0006 PK).
         let obis_norms: Vec<String> = reads
             .iter()
             .map(|r| r.obis_code.clone().unwrap_or_default())
             .collect();
         let sources: Vec<&str> = reads.iter().map(|_| "MSCONS").collect();
+        let tenants: Vec<&str> = reads.iter().map(|r| r.tenant.as_str()).collect();
 
         sqlx::query(
             r"INSERT INTO meter_reads
                   (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
-                   pid, sparte, obis_code, obis_code_norm, source)
+                   pid, sparte, obis_code, obis_code_norm, source, tenant)
               SELECT * FROM unnest(
                   $1::text[], $2::text[], $3::timestamptz[], $4::timestamptz[],
-                  $5::text[], $6::text[], $7::int4[], $8::text[],
-                  $9::text[], $10::text[], $11::text[]
+                  $5::numeric[], $6::text[], $7::int4[], $8::text[],
+                  $9::text[], $10::text[], $11::text[], $12::text[]
               )
               ON CONFLICT (malo_id, dtm_from, obis_code_norm) DO UPDATE
                   SET quantity_kwh = EXCLUDED.quantity_kwh,
                       quality     = EXCLUDED.quality,
-                      obis_code   = COALESCE(EXCLUDED.obis_code, meter_reads.obis_code)",
+                      obis_code   = COALESCE(EXCLUDED.obis_code, meter_reads.obis_code),
+                      tenant      = EXCLUDED.tenant",
         )
         .bind(&malo_ids as &[&str])
         .bind(&melo_ids as &[Option<&str>])
         .bind(&dtm_froms)
         .bind(&dtm_tos)
-        .bind(&quantities as &[String])
+        .bind(&quantities as &[Decimal])
         .bind(&qualities as &[&str])
         .bind(&pids)
         .bind(&spartes as &[&str])
         .bind(&obis_codes as &[Option<&str>])
         .bind(&obis_norms as &[String])
         .bind(&sources as &[&str])
+        .bind(&tenants as &[&str])
         .execute(&self.pool)
         .await
         .map_err(|e| EdmError::Database(e.to_string()))?;
@@ -108,9 +110,6 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
     }
 
     async fn query(&self, q: &TimeSeriesQuery) -> Result<Vec<MeterRead>, EdmError> {
-        // F-03 / F-08: use TEXT tenant column (added in migration 0007) instead of the
-        // nullable UUID. The old `($N::uuid IS NULL OR tenant_id = $N)` guard returned ALL
-        // tenants' data when the UUID was NULL — a GDPR Art. 32 data leak.
         let rows = sqlx::query(
             r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
                      pid, sparte, obis_code, source, push_session, quality_warnings,
@@ -142,7 +141,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         to: OffsetDateTime,
         tenant_id: Option<Uuid>,
     ) -> Result<Vec<MeterDataReceipt>, EdmError> {
-        // F-08: meter_data_receipts uses tenant_id UUID (not TEXT); keep UUID guard but
+        // meter_data_receipts uses tenant_id UUID (not TEXT); keep UUID guard but
         // require non-NULL — empty string tenant is never stored as NULL UUID.
         let rows = sqlx::query(
             r"SELECT process_id, pid, malo_id, sender_mp_id, message_ref, received_at, tenant_id
@@ -171,23 +170,23 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         malo_id: &str,
         from: Date,
         to: Date,
-        tenant_id: Option<Uuid>,
+        tenant: &str,
     ) -> Result<ImbalanceReport, EdmError> {
         let row = sqlx::query(
             r"SELECT
-                  COALESCE(SUM(quantity_kwh::numeric), 0) AS total_kwh,
+                  COALESCE(SUM(quantity_kwh), 0) AS total_kwh,
                   COUNT(*) AS read_count
               FROM meter_reads
               WHERE malo_id    = $1
                 AND dtm_from::date >= $2
                 AND dtm_to::date   <= $3
                 AND quality NOT IN ('FAULTY', 'UNKNOWN')
-                AND (tenant_id = $4 OR $4 IS NULL)",
+                AND tenant = $4",
         )
         .bind(malo_id)
         .bind(from)
         .bind(to)
-        .bind(tenant_id)
+        .bind(tenant)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| EdmError::Database(e.to_string()))?;
@@ -201,10 +200,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             });
         }
 
-        let total_str: String = row
-            .try_get::<String, _>("total_kwh")
-            .unwrap_or_else(|_| "0".into());
-        let total_kwh: Decimal = total_str.parse().unwrap_or(Decimal::ZERO);
+        let total_kwh: Decimal = row.try_get("total_kwh").unwrap_or(Decimal::ZERO);
 
         Ok(ImbalanceReport {
             malo_id: malo_id.to_owned(),
@@ -221,7 +217,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
     async fn latest_read(
         &self,
         malo_id: &str,
-        tenant_id: Option<Uuid>,
+        tenant: &str,
     ) -> Result<Option<MeterRead>, EdmError> {
         let row = sqlx::query(
             r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
@@ -229,12 +225,12 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
                      sender_mp_id, allocation_version, valid_from_tx
               FROM meter_reads
               WHERE malo_id = $1
-                AND (tenant_id = $2 OR $2 IS NULL)
+                AND tenant  = $2
               ORDER BY dtm_from DESC
               LIMIT 1",
         )
         .bind(malo_id)
-        .bind(tenant_id)
+        .bind(tenant)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| EdmError::Database(e.to_string()))?;
@@ -261,19 +257,20 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         // aggregation worker after each MSCONS ingest).
         let pre = sqlx::query(
             r"SELECT malo_id, period_from, period_to, messtyp, sparte,
-                     arbeitsmenge_kwh, arbeitsmenge_ht_kwh, arbeitsmenge_nt_kwh,
-                     spitzenleistung_kw, brennwert_kwh_per_m3, zustandszahl,
-                     zaehlerstand_anfang, zaehlerstand_ende, quality, tenant_id
+                     arbeitsmenge_kwh, spitzenleistung_kw,
+                     arbeitsmenge_ht_kwh, arbeitsmenge_nt_kwh,
+                     brennwert_kwh_per_m3, zustandszahl,
+                     zaehlerstand_anfang, zaehlerstand_ende, quality
               FROM meter_billing_periods
               WHERE malo_id = $1
                 AND period_from = $2
                 AND period_to = $3
-                AND (tenant_id = $4 OR $4 IS NULL)",
+                AND tenant = $4",
         )
         .bind(&q.malo_id)
         .bind(q.period_from)
         .bind(q.period_to)
-        .bind(q.tenant_id)
+        .bind(&q.tenant)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| EdmError::Database(e.to_string()))?;
@@ -288,19 +285,20 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             let sparte_str: String = row.try_get("sparte").unwrap_or_else(|_| "STROM".into());
             let messtyp_str: String = row.try_get("messtyp").unwrap_or_else(|_| "SLP".into());
             let quality_str: String = row.try_get("quality").unwrap_or_else(|_| "UNKNOWN".into());
-            let total: String = row
-                .try_get("arbeitsmenge_kwh")
-                .map_err(|e| EdmError::Database(e.to_string()))?;
+            let arbeitsmenge_kwh: Decimal =
+                row.try_get("arbeitsmenge_kwh").unwrap_or(Decimal::ZERO);
+            let spitzenleistung_kw: Option<Decimal> =
+                row.try_get("spitzenleistung_kw").unwrap_or(None);
             return Ok(Some(MeterBillingPeriod {
                 malo_id: q.malo_id.clone(),
                 period_from: q.period_from,
                 period_to: q.period_to,
                 messtyp: messtyp_str.parse().unwrap_or(Messtyp::Slp),
                 sparte: str_to_sparte(&sparte_str),
-                arbeitsmenge_kwh: total.parse().unwrap_or(Decimal::ZERO),
+                arbeitsmenge_kwh,
                 arbeitsmenge_ht_kwh: parse_dec("arbeitsmenge_ht_kwh"),
                 arbeitsmenge_nt_kwh: parse_dec("arbeitsmenge_nt_kwh"),
-                spitzenleistung_kw: parse_dec("spitzenleistung_kw"),
+                spitzenleistung_kw,
                 brennwert_kwh_per_m3: parse_dec("brennwert_kwh_per_m3"),
                 zustandszahl: parse_dec("zustandszahl"),
                 zaehlerstand_anfang: parse_dec("zaehlerstand_anfang"),
@@ -308,7 +306,6 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
                 quality: str_to_quality(&quality_str),
                 lastprofil: None,
                 profil_typ: None,
-                tenant_id: row.try_get("tenant_id").unwrap_or(None),
             }));
         }
 
@@ -321,14 +318,14 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
               WHERE malo_id = $1
                 AND dtm_from >= $2
                 AND dtm_to   <= $3
-                AND (tenant_id = $4 OR $4 IS NULL)
+                AND tenant = $4
                 AND quality NOT IN ('FAULTY', 'UNKNOWN')
               ORDER BY dtm_from ASC",
         )
         .bind(&q.malo_id)
         .bind(from_ts)
         .bind(to_ts)
-        .bind(q.tenant_id)
+        .bind(&q.tenant)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EdmError::Database(e.to_string()))?;
@@ -372,7 +369,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             .max_by_key(|q| *q as u8)
             .unwrap_or_default();
 
-        Ok(Some(MeterBillingPeriod {
+        let result = MeterBillingPeriod {
             malo_id: q.malo_id.clone(),
             period_from: q.period_from,
             period_to: q.period_to,
@@ -382,15 +379,37 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             arbeitsmenge_ht_kwh: None,
             arbeitsmenge_nt_kwh: None,
             spitzenleistung_kw,
-            brennwert_kwh_per_m3: None, // populated from Gas receipts
-            zustandszahl: None,         // populated from Gas receipts
+            brennwert_kwh_per_m3: None,
+            zustandszahl: None,
             zaehlerstand_anfang: None,
             zaehlerstand_ende: None,
             quality: worst_quality,
             lastprofil: None,
             profil_typ: None,
-            tenant_id: q.tenant_id,
-        }))
+        };
+
+        // Cache the computed result so repeat calls don't re-aggregate.
+        let _ = sqlx::query(
+            r"INSERT INTO meter_billing_periods
+                  (malo_id, period_from, period_to, messtyp, sparte,
+                   arbeitsmenge_kwh, spitzenleistung_kw, quality, tenant)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+              ON CONFLICT ON CONSTRAINT mbp_tenant_period_unique
+              DO NOTHING",
+        )
+        .bind(&result.malo_id)
+        .bind(result.period_from)
+        .bind(result.period_to)
+        .bind(result.messtyp.to_string())
+        .bind(sparte_to_str(result.sparte))
+        .bind(result.arbeitsmenge_kwh)
+        .bind(result.spitzenleistung_kw)
+        .bind(quality_to_str(result.quality))
+        .bind(&q.tenant)
+        .execute(&self.pool)
+        .await;
+
+        Ok(Some(result))
     }
 
     async fn update_gas_quality(
@@ -444,23 +463,23 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
                 r"INSERT INTO meter_read_corrections
                       (malo_id, dtm_from, dtm_to,
                        original_kwh, original_quality, corrected_kwh, corrected_quality,
-                       reason, source, corrected_by, process_id, pid, tenant_id)
+                       reason, source, corrected_by, process_id, pid, tenant)
                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
                   RETURNING correction_id",
             )
             .bind(&rec.malo_id)
             .bind(rec.dtm_from)
             .bind(rec.dtm_to)
-            .bind(rec.original_kwh.to_string())
+            .bind(rec.original_kwh)
             .bind(quality_to_str(rec.original_quality))
-            .bind(rec.corrected_kwh.to_string())
+            .bind(rec.corrected_kwh)
             .bind(quality_to_str(rec.corrected_quality))
             .bind(&rec.reason)
             .bind(source_str)
             .bind(&rec.corrected_by)
             .bind(rec.process_id)
             .bind(rec.pid.map(|p| p as i32))
-            .bind(rec.tenant_id)
+            .bind(&rec.tenant)
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| mako_edm::error::EdmError::Database(e.to_string()))?;
@@ -484,7 +503,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             .bind(&rec.malo_id)
             .bind(rec.dtm_from)
             .bind(rec.dtm_to)
-            .bind(rec.corrected_kwh.to_string())
+            .bind(rec.corrected_kwh) // 0010: NUMERIC(18,5)
             .bind(quality_to_str(rec.corrected_quality))
             .execute(&mut *tx)
             .await
@@ -502,23 +521,19 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
 // ── Row mapping helpers ───────────────────────────────────────────────────────
 
 fn row_to_read(row: &sqlx::postgres::PgRow) -> Result<MeterRead, EdmError> {
-    let qty_str: String = row
-        .try_get::<String, _>("quantity_kwh")
-        .map_err(|e| EdmError::Database(e.to_string()))?;
+    let quantity_kwh: Decimal = row.try_get("quantity_kwh").unwrap_or(Decimal::ZERO);
     Ok(MeterRead {
         malo_id: row
             .try_get("malo_id")
             .map_err(|e| EdmError::Database(e.to_string()))?,
-        melo_id: row
-            .try_get("melo_id")
-            .map_err(|e| EdmError::Database(e.to_string()))?,
+        melo_id: row.try_get("melo_id").unwrap_or(None),
         dtm_from: row
             .try_get("dtm_from")
             .map_err(|e| EdmError::Database(e.to_string()))?,
         dtm_to: row
             .try_get("dtm_to")
             .map_err(|e| EdmError::Database(e.to_string()))?,
-        quantity_kwh: qty_str.parse().unwrap_or(Decimal::ZERO),
+        quantity_kwh,
         quality: str_to_quality(
             row.try_get::<&str, _>("quality")
                 .map_err(|e| EdmError::Database(e.to_string()))?,
@@ -531,9 +546,9 @@ fn row_to_read(row: &sqlx::postgres::PgRow) -> Result<MeterRead, EdmError> {
                 .map_err(|e| EdmError::Database(e.to_string()))?,
         ),
         obis_code: row.try_get("obis_code").unwrap_or(None),
-        tenant_id: row
-            .try_get("tenant_id")
-            .map_err(|e| EdmError::Database(e.to_string()))?,
+        tenant: row
+            .try_get("tenant")
+            .unwrap_or_else(|_| "default".to_owned()),
         source: mako_edm::domain::IngestionSource::from_db_str(
             row.try_get::<Option<&str>, _>("source")
                 .unwrap_or(None)
@@ -541,7 +556,6 @@ fn row_to_read(row: &sqlx::postgres::PgRow) -> Result<MeterRead, EdmError> {
         ),
         push_session: row.try_get("push_session").unwrap_or(None),
         quality_warnings: row.try_get("quality_warnings").unwrap_or(None),
-        // F-12: provenance fields added in migrations 0006-0007 — returned by all queries.
         sender_mp_id: row.try_get("sender_mp_id").unwrap_or(None),
         allocation_version: row
             .try_get::<Option<String>, _>("allocation_version")

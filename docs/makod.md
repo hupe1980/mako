@@ -1094,13 +1094,13 @@ the GitHub Container Registry:
 docker pull ghcr.io/hupe1980/makod:latest
 
 # Pin to a specific version
-docker pull ghcr.io/hupe1980/makod:0.11.0
+docker pull ghcr.io/hupe1980/makod:0.12.0
 
 # Smoke-test the image
-docker run --rm ghcr.io/hupe1980/makod:0.11.0 --check
+docker run --rm ghcr.io/hupe1980/makod:0.12.0 --check
 ```
 
-Images are tagged with the semver version (`0.11.0`), major.minor (`0.11`), and `latest`.
+Images are tagged with the semver version (`0.12.0`), major.minor (`0.12`), and `latest`.
 
 ### Building locally
 
@@ -1169,7 +1169,7 @@ spec:
     spec:
       containers:
         - name: makod
-          image: ghcr.io/hupe1980/makod:0.11.0
+          image: ghcr.io/hupe1980/makod:0.12.0
           ports:
             - containerPort: 4080    # AS4
             - containerPort: 8080    # HTTP REST
@@ -1268,7 +1268,7 @@ Enable the `tracing` feature in `edi-energy` to get per-message parse/validate
 spans:
 
 ```toml
-edi-energy = { version = "0.11", features = ["tracing"] }
+edi-energy = { version = "0.12", features = ["tracing"] }
 ```
 
 These integrate with OpenTelemetry exporters when a global subscriber is

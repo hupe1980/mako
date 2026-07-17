@@ -314,7 +314,7 @@ pub fn validate_intervals(
         return ValidationResult { issues };
     }
 
-    // F-10: compute rolling mean using Decimal arithmetic to avoid f64 precision loss.
+    // Compute rolling mean using Decimal arithmetic to avoid f64 precision loss.
     // spike_factor is config (f64, set at construction time, not a billing amount),
     // so the comparison is done in f64 after converting from Decimal.
     let total_kwh: Decimal = intervals.iter().map(|iv| iv.value_kwh).sum();

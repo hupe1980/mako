@@ -1432,8 +1432,10 @@ impl crate::projection::ProjectionCheckpointStore for SlateDbStore {
                 batch.put(key.as_bytes(), seq.to_le_bytes().as_slice());
             }
         }
-        // WriteBatch::write is a no-op if the batch is empty, so this is
-        // always safe to call even when nothing changed.
+        // Only write if there is at least one changed cursor — SlateDB rejects empty batches.
+        if batch.is_empty() {
+            return Ok(());
+        }
         self.db.write(batch).await.map_err(to_store_err)?;
         Ok(())
     }

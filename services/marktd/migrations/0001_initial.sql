@@ -14,7 +14,7 @@
 
 -- ── Marktlokation ─────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS malo (
+CREATE TABLE malo (
     malo_id      TEXT        PRIMARY KEY,           -- 11-digit BDEW alternating-weight ID
     sparte       TEXT        NOT NULL CHECK (sparte IN ('STROM', 'GAS')),
     -- Typed columns extracted from BO4E Marktlokation JSONB at write time.
@@ -34,15 +34,15 @@ CREATE TABLE IF NOT EXISTS malo (
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS malo_netzebene ON malo (netzebene) WHERE netzebene IS NOT NULL;
-CREATE INDEX IF NOT EXISTS malo_big ON malo (bilanzierungsgebiet) WHERE bilanzierungsgebiet IS NOT NULL;
-CREATE INDEX IF NOT EXISTS malo_bilanzierungsmethode ON malo (bilanzierungsmethode) WHERE bilanzierungsmethode IS NOT NULL;
-CREATE INDEX IF NOT EXISTS malo_regelzone ON malo (regelzone) WHERE regelzone IS NOT NULL;
-CREATE INDEX IF NOT EXISTS malo_fallgruppe ON malo (fallgruppe) WHERE fallgruppe IS NOT NULL;
+CREATE INDEX malo_netzebene ON malo (netzebene) WHERE netzebene IS NOT NULL;
+CREATE INDEX malo_big ON malo (bilanzierungsgebiet) WHERE bilanzierungsgebiet IS NOT NULL;
+CREATE INDEX malo_bilanzierungsmethode ON malo (bilanzierungsmethode) WHERE bilanzierungsmethode IS NOT NULL;
+CREATE INDEX malo_regelzone ON malo (regelzone) WHERE regelzone IS NOT NULL;
+CREATE INDEX malo_fallgruppe ON malo (fallgruppe) WHERE fallgruppe IS NOT NULL;
 
 -- ── Lokationszuordnung (role assignments, temporal) ───────────────────────────
 
-CREATE TABLE IF NOT EXISTS lokationszuordnung (
+CREATE TABLE lokationszuordnung (
     malo_id          TEXT  NOT NULL REFERENCES malo (malo_id) ON DELETE CASCADE,
     zuordnungstyp    TEXT  NOT NULL,                -- NB | GNB | MSB | GMSB | LF | LFG | …
     rollencodenummer TEXT  NOT NULL,                -- 13-digit BDEW/DVGW GLN
@@ -51,14 +51,14 @@ CREATE TABLE IF NOT EXISTS lokationszuordnung (
     PRIMARY KEY (malo_id, zuordnungstyp, valid_from)
 );
 
-CREATE INDEX IF NOT EXISTS lokationszuordnung_malo_id
+CREATE INDEX lokationszuordnung_malo_id
     ON lokationszuordnung (malo_id);
-CREATE INDEX IF NOT EXISTS lokationszuordnung_rollencodenummer
+CREATE INDEX lokationszuordnung_rollencodenummer
     ON lokationszuordnung (rollencodenummer);
 
 -- ── Messlokation ──────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS melo (
+CREATE TABLE melo (
     melo_id      TEXT        PRIMARY KEY,           -- DE + 31 alphanumeric chars
     malo_id      TEXT        REFERENCES malo (malo_id) ON DELETE SET NULL,
     -- Typed columns extracted from BO4E Messlokation JSONB at write time.
@@ -75,15 +75,15 @@ CREATE TABLE IF NOT EXISTS melo (
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS melo_malo_id ON melo (malo_id);
-CREATE INDEX IF NOT EXISTS melo_regelzone ON melo (regelzone) WHERE regelzone IS NOT NULL;
-CREATE INDEX IF NOT EXISTS melo_standorteigenschaften_gin
+CREATE INDEX melo_malo_id ON melo (malo_id);
+CREATE INDEX melo_regelzone ON melo (regelzone) WHERE regelzone IS NOT NULL;
+CREATE INDEX melo_standorteigenschaften_gin
     ON melo USING GIN (standorteigenschaften jsonb_path_ops)
     WHERE standorteigenschaften IS NOT NULL;
 
 -- ── Contracts (LF supply contracts) ──────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS contracts (
+CREATE TABLE contracts (
     contract_id  TEXT        PRIMARY KEY,           -- ERP contract number or UUID
     malo_id      TEXT        REFERENCES malo (malo_id) ON DELETE SET NULL,
     sparte       TEXT        NOT NULL CHECK (sparte IN ('STROM', 'GAS')),
@@ -97,13 +97,13 @@ CREATE TABLE IF NOT EXISTS contracts (
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS contracts_malo_id
+CREATE INDEX contracts_malo_id
     ON contracts (malo_id);
-CREATE INDEX IF NOT EXISTS contracts_data_gin
+CREATE INDEX contracts_data_gin
     ON contracts USING GIN (data jsonb_path_ops);
-CREATE INDEX IF NOT EXISTS contracts_malo_valid_from
+CREATE INDEX contracts_malo_valid_from
     ON contracts (malo_id, valid_from DESC NULLS LAST);
-CREATE INDEX IF NOT EXISTS contracts_malo_open_ended
+CREATE INDEX contracts_malo_open_ended
     ON contracts (malo_id, valid_from DESC NULLS LAST)
     WHERE valid_to IS NULL;
 
@@ -113,7 +113,7 @@ CREATE INDEX IF NOT EXISTS contracts_malo_open_ended
 -- Stored as typed columns + full BO4E Vertrag JSONB for ERP digital LRV exchange (L1).
 -- Typed columns remain for fast SQL-level queries by invoicd and processd.
 
-CREATE TABLE IF NOT EXISTS nb_contracts (
+CREATE TABLE nb_contracts (
     contract_id           TEXT        PRIMARY KEY,
     malo_id               TEXT        NOT NULL REFERENCES malo (malo_id) ON DELETE CASCADE,
     nb_mp_id              TEXT        NOT NULL,
@@ -141,13 +141,13 @@ CREATE TABLE IF NOT EXISTS nb_contracts (
     tenant                TEXT        NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS nb_contracts_malo_nb_from
+CREATE UNIQUE INDEX nb_contracts_malo_nb_from
     ON nb_contracts (malo_id, nb_mp_id, valid_from, tenant);
-CREATE INDEX IF NOT EXISTS nb_contracts_nb_gln
+CREATE INDEX nb_contracts_nb_gln
     ON nb_contracts (nb_mp_id, tenant);
-CREATE INDEX IF NOT EXISTS nb_contracts_malo_id
+CREATE INDEX nb_contracts_malo_id
     ON nb_contracts (malo_id);
-CREATE INDEX IF NOT EXISTS nb_contracts_vertragsart
+CREATE INDEX nb_contracts_vertragsart
     ON nb_contracts (vertragsart, tenant) WHERE vertragsart IS NOT NULL;
 
 -- ── VersorgungsStatus per MaLo ────────────────────────────────────────────────
@@ -159,7 +159,7 @@ CREATE INDEX IF NOT EXISTS nb_contracts_vertragsart
 -- Optimistic concurrency via version: UPDATE ... WHERE malo_id=$1 AND tenant=$2
 -- AND version=$3. Zero rows → conflict → caller retries after re-read.
 
-CREATE TABLE IF NOT EXISTS versorgungsstatus (
+CREATE TABLE versorgungsstatus (
     malo_id           TEXT        NOT NULL,
     tenant            TEXT        NOT NULL,
     lieferstatus      TEXT        NOT NULL CHECK (lieferstatus IN (
@@ -184,12 +184,12 @@ CREATE TABLE IF NOT EXISTS versorgungsstatus (
     PRIMARY KEY (malo_id, tenant)
 );
 
-CREATE INDEX IF NOT EXISTS versorgungsstatus_tenant_status
+CREATE INDEX versorgungsstatus_tenant_status
     ON versorgungsstatus (tenant, lieferstatus);
-CREATE INDEX IF NOT EXISTS versorgungsstatus_tenant_lf
+CREATE INDEX versorgungsstatus_tenant_lf
     ON versorgungsstatus (tenant, lf_mp_id)
     WHERE lf_mp_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS versorgungsstatus_tenant_nb
+CREATE INDEX versorgungsstatus_tenant_nb
     ON versorgungsstatus (tenant, nb_mp_id);
 
 -- ── NB price sheets (PreisblattNetznutzung) ───────────────────────────────────
@@ -201,7 +201,7 @@ CREATE INDEX IF NOT EXISTS versorgungsstatus_tenant_nb
 --                 overwrite unless forced).
 -- source='mako' — ingested automatically from a PRICAT 27003 message.
 
-CREATE TABLE IF NOT EXISTS preisblaetter (
+CREATE TABLE preisblaetter (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     nb_mp_id       TEXT        NOT NULL,
     valid_from   DATE,                              -- gueltigkeit.startdatum; NULL = open-started
@@ -215,11 +215,11 @@ CREATE TABLE IF NOT EXISTS preisblaetter (
     UNIQUE (nb_mp_id, valid_from)
 );
 
-CREATE INDEX IF NOT EXISTS preisblaetter_nb_gln_valid_from
+CREATE INDEX preisblaetter_nb_gln_valid_from
     ON preisblaetter (nb_mp_id, valid_from DESC NULLS LAST);
-CREATE INDEX IF NOT EXISTS preisblaetter_data_gin
+CREATE INDEX preisblaetter_data_gin
     ON preisblaetter USING GIN (data jsonb_path_ops);
-CREATE INDEX IF NOT EXISTS preisblaetter_api_source
+CREATE INDEX preisblaetter_api_source
     ON preisblaetter (nb_mp_id)
     WHERE source = 'api';
 
@@ -232,7 +232,7 @@ CREATE INDEX IF NOT EXISTS preisblaetter_api_source
 -- source='api'  — operator REST upload.
 -- source='mako' — ingested automatically from a PRICAT message (future).
 
-CREATE TABLE IF NOT EXISTS preisblaetter_messung (
+CREATE TABLE preisblaetter_messung (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     msb_mp_id    TEXT        NOT NULL,
     valid_from   DATE,                              -- gueltigkeit.startdatum; NULL = open-started
@@ -246,11 +246,11 @@ CREATE TABLE IF NOT EXISTS preisblaetter_messung (
     UNIQUE (msb_mp_id, valid_from)
 );
 
-CREATE INDEX IF NOT EXISTS preisblaetter_messung_msb_valid_from
+CREATE INDEX preisblaetter_messung_msb_valid_from
     ON preisblaetter_messung (msb_mp_id, valid_from DESC NULLS LAST);
-CREATE INDEX IF NOT EXISTS preisblaetter_messung_data_gin
+CREATE INDEX preisblaetter_messung_data_gin
     ON preisblaetter_messung USING GIN (data jsonb_path_ops);
-CREATE INDEX IF NOT EXISTS preisblaetter_messung_api_source
+CREATE INDEX preisblaetter_messung_api_source
     ON preisblaetter_messung (msb_mp_id)
     WHERE source = 'api';
 
@@ -264,7 +264,7 @@ CREATE INDEX IF NOT EXISTS preisblaetter_messung_api_source
 -- source='api'  — operator REST upload.
 -- source='mako' — ingested automatically (future).
 
-CREATE TABLE IF NOT EXISTS preisblaetter_konzessionsabgabe (
+CREATE TABLE preisblaetter_konzessionsabgabe (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     nb_mp_id        TEXT        NOT NULL,
     sparte          TEXT        NOT NULL DEFAULT 'STROM' CHECK (sparte IN ('STROM', 'GAS')),
@@ -280,11 +280,11 @@ CREATE TABLE IF NOT EXISTS preisblaetter_konzessionsabgabe (
     UNIQUE (nb_mp_id, sparte, kundengruppe_ka, valid_from)
 );
 
-CREATE INDEX IF NOT EXISTS preisblaetter_ka_nb_valid_from
+CREATE INDEX preisblaetter_ka_nb_valid_from
     ON preisblaetter_konzessionsabgabe (nb_mp_id, sparte, valid_from DESC NULLS LAST);
-CREATE INDEX IF NOT EXISTS preisblaetter_ka_data_gin
+CREATE INDEX preisblaetter_ka_data_gin
     ON preisblaetter_konzessionsabgabe USING GIN (data jsonb_path_ops);
-CREATE INDEX IF NOT EXISTS preisblaetter_ka_api_source
+CREATE INDEX preisblaetter_ka_api_source
     ON preisblaetter_konzessionsabgabe (nb_mp_id)
     WHERE source = 'api';
 
@@ -294,7 +294,7 @@ CREATE INDEX IF NOT EXISTS preisblaetter_ka_api_source
 -- invoic-checker uses this for INVOIC 31009 service position plausibility.
 -- REQOTE/QUOTES (PIDs 35001–35005) use this as the basis for Messentgelte offers.
 
-CREATE TABLE IF NOT EXISTS preisblaetter_dienstleistung (
+CREATE TABLE preisblaetter_dienstleistung (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     msb_mp_id    TEXT        NOT NULL,
     valid_from   DATE,
@@ -307,8 +307,8 @@ CREATE TABLE IF NOT EXISTS preisblaetter_dienstleistung (
     UNIQUE (msb_mp_id, valid_from)
 );
 
-CREATE INDEX IF NOT EXISTS preisblaetter_dl_msb ON preisblaetter_dienstleistung (msb_mp_id, valid_from DESC NULLS LAST);
-CREATE INDEX IF NOT EXISTS preisblaetter_dl_gin ON preisblaetter_dienstleistung USING GIN (data jsonb_path_ops);
+CREATE INDEX preisblaetter_dl_msb ON preisblaetter_dienstleistung (msb_mp_id, valid_from DESC NULLS LAST);
+CREATE INDEX preisblaetter_dl_gin ON preisblaetter_dienstleistung USING GIN (data jsonb_path_ops);
 
 -- ── PreisblattHardware — MSB hardware rental price sheets (M3/MSB) ───────────
 --
@@ -316,7 +316,7 @@ CREATE INDEX IF NOT EXISTS preisblaetter_dl_gin ON preisblaetter_dienstleistung 
 -- Required for NB → MSB settlement INVOIC 31009 hardware positions.
 -- invoic-checker check 5 cannot validate hardware without a typed tariff.
 
-CREATE TABLE IF NOT EXISTS preisblaetter_hardware (
+CREATE TABLE preisblaetter_hardware (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     msb_mp_id    TEXT        NOT NULL,
     valid_from   DATE,
@@ -329,8 +329,8 @@ CREATE TABLE IF NOT EXISTS preisblaetter_hardware (
     UNIQUE (msb_mp_id, valid_from)
 );
 
-CREATE INDEX IF NOT EXISTS preisblaetter_hw_msb ON preisblaetter_hardware (msb_mp_id, valid_from DESC NULLS LAST);
-CREATE INDEX IF NOT EXISTS preisblaetter_hw_gin ON preisblaetter_hardware USING GIN (data jsonb_path_ops);
+CREATE INDEX preisblaetter_hw_msb ON preisblaetter_hardware (msb_mp_id, valid_from DESC NULLS LAST);
+CREATE INDEX preisblaetter_hw_gin ON preisblaetter_hardware USING GIN (data jsonb_path_ops);
 
 -- ── PRICAT version history + dispatch log ─────────────────────────────────────
 --
@@ -348,7 +348,7 @@ CREATE INDEX IF NOT EXISTS preisblaetter_hw_gin ON preisblaetter_hardware USING 
 --   3. On de.markt.partner.activated { role: "LF" }, latest pricat_version for
 --      the NB is dispatched to the new partner only.
 
-CREATE TABLE IF NOT EXISTS pricat_versions (
+CREATE TABLE pricat_versions (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     nb_mp_id              TEXT        NOT NULL,
     tenant              TEXT        NOT NULL,
@@ -365,13 +365,13 @@ CREATE TABLE IF NOT EXISTS pricat_versions (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS pricat_versions_nb_tenant_from
+CREATE UNIQUE INDEX pricat_versions_nb_tenant_from
     ON pricat_versions (nb_mp_id, tenant, valid_from);
-CREATE INDEX IF NOT EXISTS pricat_versions_undispatched
+CREATE INDEX pricat_versions_undispatched
     ON pricat_versions (tenant, nb_mp_id, valid_from DESC)
     WHERE dispatch_done_at IS NULL;
 
-CREATE TABLE IF NOT EXISTS pricat_dispatch_log (
+CREATE TABLE pricat_dispatch_log (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     pricat_version_id   UUID        NOT NULL REFERENCES pricat_versions (id) ON DELETE CASCADE,
     nb_mp_id              TEXT        NOT NULL,
@@ -384,14 +384,14 @@ CREATE TABLE IF NOT EXISTS pricat_dispatch_log (
     error_detail        TEXT
 );
 
-CREATE INDEX IF NOT EXISTS pricat_dispatch_log_version
+CREATE INDEX pricat_dispatch_log_version
     ON pricat_dispatch_log (pricat_version_id);
-CREATE INDEX IF NOT EXISTS pricat_dispatch_log_lf
+CREATE INDEX pricat_dispatch_log_lf
     ON pricat_dispatch_log (tenant, lf_mp_id, dispatched_at DESC);
 
 -- ── Process correlation index ──────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS process_correlation (
+CREATE TABLE process_correlation (
     process_id       UUID        PRIMARY KEY,       -- makod WorkflowId
     workflow_name    TEXT,                          -- e.g. "gpke-supplier-change"
     pid              INTEGER,                       -- BDEW Prüfidentifikator
@@ -408,19 +408,19 @@ CREATE TABLE IF NOT EXISTS process_correlation (
     completed_at     TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS process_correlation_erp_order_id
+CREATE INDEX process_correlation_erp_order_id
     ON process_correlation (erp_order_id);
-CREATE INDEX IF NOT EXISTS process_correlation_malo_id_status
+CREATE INDEX process_correlation_malo_id_status
     ON process_correlation (malo_id, status);
-CREATE INDEX IF NOT EXISTS process_correlation_edifact_conv_id
+CREATE INDEX process_correlation_edifact_conv_id
     ON process_correlation (edifact_conv_id);
-CREATE INDEX IF NOT EXISTS process_correlation_running
+CREATE INDEX process_correlation_running
     ON process_correlation (malo_id, initiated_at)
     WHERE status = 'RUNNING';
 
 -- ── Webhook subscriptions ─────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS subscriptions (
+CREATE TABLE subscriptions (
     subscriber_id  TEXT        PRIMARY KEY,
     webhook_url    TEXT        NOT NULL,
     webhook_secret TEXT,                            -- AES-256-GCM encrypted (base64); NULL = no HMAC
@@ -435,7 +435,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 
 -- ── Trading partners ──────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS partners (
+CREATE TABLE partners (
     mp_id          TEXT        PRIMARY KEY,           -- 13-digit BDEW/DVGW/GS1 MP-ID
     display_name   TEXT,
     marktrolle     TEXT,
@@ -448,22 +448,22 @@ CREATE TABLE IF NOT EXISTS partners (
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS partners_rollencodetyp ON partners (rollencodetyp) WHERE rollencodetyp IS NOT NULL;
-CREATE INDEX IF NOT EXISTS partners_makoadresse   ON partners USING GIN (makoadresse) WHERE makoadresse IS NOT NULL;
+CREATE INDEX partners_rollencodetyp ON partners (rollencodetyp) WHERE rollencodetyp IS NOT NULL;
+CREATE INDEX partners_makoadresse   ON partners USING GIN (makoadresse) WHERE makoadresse IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS malo_data_gin         ON malo     USING GIN (data jsonb_path_ops);
-CREATE INDEX IF NOT EXISTS melo_data_gin         ON melo     USING GIN (data jsonb_path_ops);
-CREATE INDEX IF NOT EXISTS partners_channels_gin ON partners USING GIN (channels jsonb_path_ops);
+CREATE INDEX malo_data_gin         ON malo     USING GIN (data jsonb_path_ops);
+CREATE INDEX melo_data_gin         ON melo     USING GIN (data jsonb_path_ops);
+CREATE INDEX partners_channels_gin ON partners USING GIN (channels jsonb_path_ops);
 
 -- ── Idempotency dedup for inbound makod events ────────────────────────────────
 -- Purge entries older than 7 days via a scheduled DELETE in background worker.
 
-CREATE TABLE IF NOT EXISTS processed_events (
+CREATE TABLE processed_events (
     event_id     TEXT        PRIMARY KEY,           -- CloudEvents "id" (UUID v4)
     processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS processed_events_processed_at
+CREATE INDEX processed_events_processed_at
     ON processed_events (processed_at);
 
 
@@ -482,7 +482,7 @@ CREATE INDEX IF NOT EXISTS processed_events_processed_at
 --     AND (valid_from AT TIME ZONE 'Europe/Berlin')::date <= $at_date
 --   ORDER BY valid_from DESC LIMIT 1
 
-CREATE TABLE IF NOT EXISTS versorgungsstatus_history (
+CREATE TABLE versorgungsstatus_history (
     id               BIGSERIAL   PRIMARY KEY,
     malo_id          TEXT        NOT NULL,
     tenant           TEXT        NOT NULL,
@@ -500,11 +500,11 @@ CREATE TABLE IF NOT EXISTS versorgungsstatus_history (
 );
 
 -- Primary query pattern: most-recent state for a MaLo up to an instant.
-CREATE INDEX IF NOT EXISTS versorgungsstatus_history_at
+CREATE INDEX versorgungsstatus_history_at
     ON versorgungsstatus_history (malo_id, tenant, valid_from DESC);
 
 -- Lookup by version for audit / correlation.
-CREATE INDEX IF NOT EXISTS versorgungsstatus_history_version
+CREATE INDEX versorgungsstatus_history_version
     ON versorgungsstatus_history (malo_id, tenant, version);
 
 -- ── Netz-Element-Lokation (NeLo) — Redispatch 2.0 ────────────────────────────
@@ -515,7 +515,7 @@ CREATE INDEX IF NOT EXISTS versorgungsstatus_history_version
 --
 -- Source: BDEW Redispatch 2.0 Implementierungsleitfaden v2.x.
 
-CREATE TABLE IF NOT EXISTS nelo (
+CREATE TABLE nelo (
     nelo_id      TEXT        NOT NULL,                        -- EIC or BDEW Codenummer
     tenant       TEXT        NOT NULL,
     name         TEXT,                                        -- human-readable Bezeichnung
@@ -536,9 +536,9 @@ CREATE TABLE IF NOT EXISTS nelo (
     PRIMARY KEY (nelo_id, tenant)
 );
 
-CREATE INDEX IF NOT EXISTS nelo_nb_gln      ON nelo (tenant, nb_mp_id);
-CREATE INDEX IF NOT EXISTS nelo_tenant     ON nelo (tenant);
-CREATE INDEX IF NOT EXISTS nelo_steuerkanal ON nelo (tenant) WHERE steuerkanal = true;
+CREATE INDEX nelo_nb_gln      ON nelo (tenant, nb_mp_id);
+CREATE INDEX nelo_tenant     ON nelo (tenant);
+CREATE INDEX nelo_steuerkanal ON nelo (tenant) WHERE steuerkanal = true;
 
 -- ── Lokationszuordnung graph (B5) ─────────────────────────────────────────────
 --
@@ -556,7 +556,7 @@ CREATE INDEX IF NOT EXISTS nelo_steuerkanal ON nelo (tenant) WHERE steuerkanal =
 --
 -- Source: BO4E Lokationszuordnung; BK6-24-174 §6 (iMS); Redispatch 2.0 BDEW.
 
-CREATE TABLE IF NOT EXISTS lokationszuordnungen (
+CREATE TABLE lokationszuordnungen (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant       TEXT        NOT NULL,
     von_id       TEXT        NOT NULL,   -- source node ID (MaLo/MeLo/NeLo/SR/TR)
@@ -572,22 +572,22 @@ CREATE TABLE IF NOT EXISTS lokationszuordnungen (
 -- Unique: one open-ended edge per (tenant, von_id, nach_id) where valid_from IS NULL.
 -- Unique: one dated edge per (tenant, von_id, nach_id, valid_from) where valid_from IS NOT NULL.
 -- Together these allow temporal succession while preventing duplicates.
-CREATE UNIQUE INDEX IF NOT EXISTS lz_unique_open   ON lokationszuordnungen (tenant, von_id, nach_id)
+CREATE UNIQUE INDEX lz_unique_open   ON lokationszuordnungen (tenant, von_id, nach_id)
     WHERE valid_from IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS lz_unique_dated  ON lokationszuordnungen (tenant, von_id, nach_id, valid_from)
+CREATE UNIQUE INDEX lz_unique_dated  ON lokationszuordnungen (tenant, von_id, nach_id, valid_from)
     WHERE valid_from IS NOT NULL;
 
 -- Traversal indexes
-CREATE INDEX IF NOT EXISTS lz_von  ON lokationszuordnungen (tenant, von_id);
-CREATE INDEX IF NOT EXISTS lz_nach ON lokationszuordnungen (tenant, nach_id);
+CREATE INDEX lz_von  ON lokationszuordnungen (tenant, von_id);
+CREATE INDEX lz_nach ON lokationszuordnungen (tenant, nach_id);
 -- Partial index for currently-active open-ended edges (most frequent query pattern)
-CREATE INDEX IF NOT EXISTS lz_active ON lokationszuordnungen (tenant, von_id) WHERE valid_to IS NULL;
+CREATE INDEX lz_active ON lokationszuordnungen (tenant, von_id) WHERE valid_to IS NULL;
 
 
 -- ── MaLo grid topology (N7) ─────────────────────────────────────────────────────
 -- (merged from 0003_malo_grid.sql)
 
-CREATE TABLE IF NOT EXISTS malo_grid (
+CREATE TABLE malo_grid (
     malo_id              TEXT        NOT NULL,
     tenant               TEXT        NOT NULL,
     nb_mp_id               TEXT        NOT NULL,
@@ -601,11 +601,11 @@ CREATE TABLE IF NOT EXISTS malo_grid (
 );
 
 -- Index by NB MP-ID for bulk export (nis-syncd uses this)
-CREATE INDEX IF NOT EXISTS malo_grid_nb_gln
+CREATE INDEX malo_grid_nb_gln
     ON malo_grid (nb_mp_id, tenant);
 
 -- Index by Bilanzierungsgebiet for NB area queries
-CREATE INDEX IF NOT EXISTS malo_grid_big
+CREATE INDEX malo_grid_big
     ON malo_grid (bilanzierungsgebiet, tenant)
     WHERE bilanzierungsgebiet IS NOT NULL;
 
@@ -618,7 +618,7 @@ CREATE INDEX IF NOT EXISTS malo_grid_big
 -- §22 MessZV: silent drop of an `de.mako.process.initiated` event to invoicd
 -- would cause the INVOIC plausibility check never to run, violating the
 -- 3-year receipt retention obligation. This table provides the recovery path.
-CREATE TABLE IF NOT EXISTS fanout_dlq (
+CREATE TABLE fanout_dlq (
     id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     subscriber_id  TEXT        NOT NULL,
     webhook_url    TEXT        NOT NULL,
@@ -630,8 +630,8 @@ CREATE TABLE IF NOT EXISTS fanout_dlq (
     resolved_at    TIMESTAMPTZ             -- set when retried successfully or discarded
 );
 
-CREATE INDEX IF NOT EXISTS fanout_dlq_subscriber ON fanout_dlq (subscriber_id, failed_at DESC);
-CREATE INDEX IF NOT EXISTS fanout_dlq_unresolved  ON fanout_dlq (failed_at DESC) WHERE resolved_at IS NULL;
+CREATE INDEX fanout_dlq_subscriber ON fanout_dlq (subscriber_id, failed_at DESC);
+CREATE INDEX fanout_dlq_unresolved  ON fanout_dlq (failed_at DESC) WHERE resolved_at IS NULL;
 
 -- ── SteuerbareRessource (B4b) ─────────────────────────────────────────────────
 --
@@ -641,7 +641,7 @@ CREATE INDEX IF NOT EXISTS fanout_dlq_unresolved  ON fanout_dlq (failed_at DESC)
 -- sr_id: 11-char BDEW Steuerbarer-Ressource-ID (format: C[A-Z0-9]{9}[0-9]).
 -- Source: WiM AHB BK6-24-174; BDEW Identifikatoren AWH V1.2.
 
-CREATE TABLE IF NOT EXISTS steuerbare_ressourcen (
+CREATE TABLE steuerbare_ressourcen (
     sr_id        TEXT        NOT NULL,
     tenant       TEXT        NOT NULL,
     malo_id      TEXT,                   -- associated MaLo (optional at registration)
@@ -658,9 +658,9 @@ CREATE TABLE IF NOT EXISTS steuerbare_ressourcen (
     PRIMARY KEY (sr_id, tenant)
 );
 
-CREATE INDEX IF NOT EXISTS sr_tenant        ON steuerbare_ressourcen (tenant);
-CREATE INDEX IF NOT EXISTS sr_malo          ON steuerbare_ressourcen (tenant, malo_id) WHERE malo_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS sr_konfigurationsprodukte_gin
+CREATE INDEX sr_tenant        ON steuerbare_ressourcen (tenant);
+CREATE INDEX sr_malo          ON steuerbare_ressourcen (tenant, malo_id) WHERE malo_id IS NOT NULL;
+CREATE INDEX sr_konfigurationsprodukte_gin
     ON steuerbare_ressourcen USING GIN (konfigurationsprodukte jsonb_path_ops)
     WHERE konfigurationsprodukte IS NOT NULL;
 
@@ -672,7 +672,7 @@ CREATE INDEX IF NOT EXISTS sr_konfigurationsprodukte_gin
 -- Both store full BO4E objects in JSONB (Zaehler / Geraet).
 -- Source: WiM AHB BK6-24-174; BO4E Zaehler / Geraet schemas.
 
-CREATE TABLE IF NOT EXISTS zaehler (
+CREATE TABLE zaehler (
     zaehler_id   TEXT        NOT NULL,   -- manufacturer serial or UUID
     tenant       TEXT        NOT NULL,
     melo_id      TEXT        NOT NULL,   -- owning MeLo
@@ -686,9 +686,9 @@ CREATE TABLE IF NOT EXISTS zaehler (
     PRIMARY KEY (zaehler_id, tenant)
 );
 
-CREATE INDEX IF NOT EXISTS zaehler_melo ON zaehler (tenant, melo_id);
+CREATE INDEX zaehler_melo ON zaehler (tenant, melo_id);
 
-CREATE TABLE IF NOT EXISTS geraete (
+CREATE TABLE geraete (
     geraet_id    TEXT        NOT NULL,   -- manufacturer serial or UUID
     tenant       TEXT        NOT NULL,
     zaehler_id   TEXT        NOT NULL,   -- owning Zähler
@@ -701,7 +701,7 @@ CREATE TABLE IF NOT EXISTS geraete (
     PRIMARY KEY (geraet_id, tenant)
 );
 
-CREATE INDEX IF NOT EXISTS geraete_zaehler ON geraete (tenant, zaehler_id);
+CREATE INDEX geraete_zaehler ON geraete (tenant, zaehler_id);
 
 -- ── TechnischeRessource (B9) ──────────────────────────────────────────────────
 --
@@ -713,7 +713,7 @@ CREATE INDEX IF NOT EXISTS geraete_zaehler ON geraete (tenant, zaehler_id);
 -- tr_id: TrId format (Technische-Ressource-ID per rubo4e::identifiers::TrId).
 -- Source: BK6-24-174 §6 (iMS); Redispatch 2.0 BDEW Implementierungsleitfaden.
 
-CREATE TABLE IF NOT EXISTS technische_ressourcen (
+CREATE TABLE technische_ressourcen (
     tr_id             TEXT        NOT NULL,
     tenant            TEXT        NOT NULL,
     malo_id           TEXT,                   -- linked MaLo (zugeordnete_marktlokation_id)
@@ -728,10 +728,10 @@ CREATE TABLE IF NOT EXISTS technische_ressourcen (
     PRIMARY KEY (tr_id, tenant)
 );
 
-CREATE INDEX IF NOT EXISTS tr_tenant  ON technische_ressourcen (tenant);
-CREATE INDEX IF NOT EXISTS tr_malo    ON technische_ressourcen (tenant, malo_id)  WHERE malo_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS tr_melo    ON technische_ressourcen (tenant, melo_id)  WHERE melo_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS tr_typ     ON technische_ressourcen (tenant, tr_typ)   WHERE tr_typ IS NOT NULL;
+CREATE INDEX tr_tenant  ON technische_ressourcen (tenant);
+CREATE INDEX tr_malo    ON technische_ressourcen (tenant, malo_id)  WHERE malo_id IS NOT NULL;
+CREATE INDEX tr_melo    ON technische_ressourcen (tenant, melo_id)  WHERE melo_id IS NOT NULL;
+CREATE INDEX tr_typ     ON technische_ressourcen (tenant, tr_typ)   WHERE tr_typ IS NOT NULL;
 
 -- ── CloudEvent replay log (B11) ───────────────────────────────────────────────
 --
@@ -743,7 +743,7 @@ CREATE INDEX IF NOT EXISTS tr_typ     ON technische_ressourcen (tenant, tr_typ) 
 -- Read via GET /admin/events?from=&to=&type=&limit=
 -- Retention: operator-managed; can be partitioned or archived by received_at.
 
-CREATE TABLE IF NOT EXISTS event_log (
+CREATE TABLE event_log (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     event_id    TEXT        NOT NULL UNIQUE,    -- CloudEvents "id" field
     ce_type     TEXT        NOT NULL,
@@ -753,8 +753,8 @@ CREATE TABLE IF NOT EXISTS event_log (
     received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS event_log_type_time ON event_log (ce_type, received_at DESC);
-CREATE INDEX IF NOT EXISTS event_log_time      ON event_log (received_at DESC);
+CREATE INDEX event_log_type_time ON event_log (ce_type, received_at DESC);
+CREATE INDEX event_log_time      ON event_log (received_at DESC);
 
 -- Migration 0002: MMMA / MMM settlement price store
 --
@@ -769,7 +769,7 @@ CREATE INDEX IF NOT EXISTS event_log_time      ON event_log (received_at DESC);
 
 -- ── Gas MMM Abrechnungspreise (THE / MGV) ────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS mmma_preise_gas (
+CREATE TABLE mmma_preise_gas (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     -- First day of the billing month (German local time).
     price_month     DATE        NOT NULL,
@@ -787,12 +787,12 @@ CREATE TABLE IF NOT EXISTS mmma_preise_gas (
     UNIQUE (price_month, marktgebiet)
 );
 
-CREATE INDEX IF NOT EXISTS mmma_gas_month
+CREATE INDEX mmma_gas_month
     ON mmma_preise_gas (price_month DESC, marktgebiet);
 
 -- ── Strom MMM Ausgleichsenergie prices (ÜNB per §22 StromNZV) ────────────────
 
-CREATE TABLE IF NOT EXISTS mmm_preise_strom (
+CREATE TABLE mmm_preise_strom (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     -- First day of the billing month (German local time).
     price_month     DATE        NOT NULL,
@@ -809,7 +809,7 @@ CREATE TABLE IF NOT EXISTS mmm_preise_strom (
     UNIQUE (price_month, unb_mp_id)
 );
 
-CREATE INDEX IF NOT EXISTS mmm_strom_month
+CREATE INDEX mmm_strom_month
     ON mmm_preise_strom (price_month DESC, unb_mp_id);
 
 -- ── marktd migration 0003 — ZaehlzeitRegister + ZaehlzeitSaison ─────────────
@@ -825,7 +825,7 @@ CREATE INDEX IF NOT EXISTS mmm_strom_month
 
 -- ── ZaehlzeitRegister: one metering register per Zähler ─────────────────────
 
-CREATE TABLE IF NOT EXISTS zaehler_register (
+CREATE TABLE zaehler_register (
     id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     zaehler_id       TEXT        NOT NULL,    -- owning Zähler serial number
     tenant           TEXT        NOT NULL,    -- operator GLN
@@ -844,15 +844,15 @@ CREATE TABLE IF NOT EXISTS zaehler_register (
     UNIQUE (zaehler_id, tenant, bezeichnung, valid_from)
 );
 
-CREATE INDEX IF NOT EXISTS zr_zaehler_tenant ON zaehler_register (zaehler_id, tenant);
-CREATE INDEX IF NOT EXISTS zr_obis           ON zaehler_register (obis_kennzahl, tenant)
+CREATE INDEX zr_zaehler_tenant ON zaehler_register (zaehler_id, tenant);
+CREATE INDEX zr_obis           ON zaehler_register (obis_kennzahl, tenant)
     WHERE obis_kennzahl IS NOT NULL;
-CREATE INDEX IF NOT EXISTS zr_active         ON zaehler_register (zaehler_id, tenant)
+CREATE INDEX zr_active         ON zaehler_register (zaehler_id, tenant)
     WHERE valid_to IS NULL;
 
 -- ── ZaehlzeitSaison: time-of-use windows per register ───────────────────────
 
-CREATE TABLE IF NOT EXISTS zaehler_saisons (
+CREATE TABLE zaehler_saisons (
     id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     register_id      UUID        NOT NULL REFERENCES zaehler_register (id) ON DELETE CASCADE,
     -- Season key: SOMMER | WINTER | GESAMT (year-round)
@@ -868,7 +868,7 @@ CREATE TABLE IF NOT EXISTS zaehler_saisons (
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS zs_register ON zaehler_saisons (register_id);
+CREATE INDEX zs_register ON zaehler_saisons (register_id);
 
 -- marktd migration 0004: NB Energiemix authority table
 --
@@ -881,7 +881,7 @@ CREATE INDEX IF NOT EXISTS zs_register ON zaehler_saisons (register_id);
 -- One row per (tenant, nb_mp_id, gueltig_fuer) with the most recent being the
 -- active disclosure.
 
-CREATE TABLE IF NOT EXISTS nb_energiemix (
+CREATE TABLE nb_energiemix (
     nb_mp_id        TEXT        NOT NULL,
     tenant          TEXT        NOT NULL,
     -- Calendar year this Energiemix is valid for (§42 EnWG annual disclosure).
@@ -896,8 +896,8 @@ CREATE TABLE IF NOT EXISTS nb_energiemix (
     PRIMARY KEY (tenant, nb_mp_id, gueltig_fuer)
 );
 
-CREATE INDEX IF NOT EXISTS nb_energiemix_nb    ON nb_energiemix (nb_mp_id, gueltig_fuer DESC);
-CREATE INDEX IF NOT EXISTS nb_energiemix_year  ON nb_energiemix (tenant, gueltig_fuer DESC);
+CREATE INDEX nb_energiemix_nb    ON nb_energiemix (nb_mp_id, gueltig_fuer DESC);
+CREATE INDEX nb_energiemix_year  ON nb_energiemix (tenant, gueltig_fuer DESC);
 
 COMMENT ON TABLE nb_energiemix IS
     'Annual grid-area Energiemix published by the NB per §42 EnWG. '

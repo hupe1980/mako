@@ -256,7 +256,7 @@ impl EdmdMcpHandler {
             (
                 time::OffsetDateTime,
                 time::OffsetDateTime,
-                String,
+                rust_decimal::Decimal,
                 String,
                 Option<String>,
             ),
@@ -266,12 +266,14 @@ impl EdmdMcpHandler {
                   WHERE malo_id = $1
                     AND dtm_from >= $2
                     AND dtm_to   <= $3
+                    AND tenant    = $4
                   ORDER BY dtm_from
                   LIMIT 5000",
         )
         .bind(&p.malo_id)
         .bind(from)
         .bind(to)
+        .bind(&self.state.tenant)
         .fetch_all(&self.state.pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -282,7 +284,7 @@ impl EdmdMcpHandler {
                 serde_json::json!({
                     "dtm_from": dtm_from,
                     "dtm_to": dtm_to,
-                    "quantity_kwh": quantity_kwh,
+                    "quantity_kwh": quantity_kwh.to_string(),
                     "quality": quality,
                     "obis_code": obis_code,
                 })
@@ -334,19 +336,28 @@ impl EdmdMcpHandler {
         let from_ts = time::OffsetDateTime::new_utc(from, time::Time::MIDNIGHT);
         let to_ts = time::OffsetDateTime::new_utc(to, time::Time::MIDNIGHT);
 
-        let row = sqlx::query_as::<_, (Option<f64>, Option<f64>, i64)>(
+        let row = sqlx::query_as::<
+            _,
+            (
+                Option<rust_decimal::Decimal>,
+                Option<rust_decimal::Decimal>,
+                i64,
+            ),
+        >(
             r"SELECT
-                SUM(CASE WHEN quantity_kwh::numeric > 0 THEN quantity_kwh::numeric ELSE 0 END),
-                SUM(CASE WHEN quantity_kwh::numeric < 0 THEN ABS(quantity_kwh::numeric) ELSE 0 END),
+                SUM(CASE WHEN quantity_kwh > 0 THEN quantity_kwh ELSE 0 END),
+                SUM(CASE WHEN quantity_kwh < 0 THEN ABS(quantity_kwh) ELSE 0 END),
                 COUNT(*)
               FROM meter_reads
               WHERE malo_id = $1
                 AND dtm_from >= $2
-                AND dtm_to   <= $3",
+                AND dtm_to   <= $3
+                AND tenant    = $4",
         )
         .bind(&p.malo_id)
         .bind(from_ts)
         .bind(to_ts)
+        .bind(&self.state.tenant)
         .fetch_one(&self.state.pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -363,8 +374,8 @@ impl EdmdMcpHandler {
             "malo_id": p.malo_id,
             "year": p.year,
             "month": p.month,
-            "mehrmengen_kwh": mehr.unwrap_or(0.0),
-            "mindermengen_kwh": minder.unwrap_or(0.0),
+            "mehrmengen_kwh": mehr.map(|d| d.to_string()).unwrap_or_else(|| "0".to_owned()),
+            "mindermengen_kwh": minder.map(|d| d.to_string()).unwrap_or_else(|| "0".to_owned()),
             "reading_count": count,
         }))
         .map(|b| CallToolResult::success(vec![b]))
@@ -410,25 +421,32 @@ impl EdmdMcpHandler {
             r"SELECT arbeitsmenge_kwh, spitzenleistung_kw, brennwert_kwh_per_m3,
                      zustandszahl, messtyp, sparte, quality, computed_at
               FROM meter_billing_periods
-              WHERE malo_id = $1 AND period_from = $2 AND period_to = $3",
+              WHERE malo_id = $1 AND period_from = $2 AND period_to = $3
+                AND tenant = $4",
         )
         .bind(&p.malo_id)
         .bind(period_from)
         .bind(period_to)
+        .bind(&self.state.tenant)
         .fetch_optional(&self.state.pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         if let Some(row) = pre {
             use sqlx::Row as _;
+            // arbeitsmenge_kwh and spitzenleistung_kw are NUMERIC(18,5) in the schema.
+            let arbeitsmenge: Option<rust_decimal::Decimal> =
+                row.try_get("arbeitsmenge_kwh").unwrap_or(None);
+            let spitzenleistung: Option<rust_decimal::Decimal> =
+                row.try_get("spitzenleistung_kw").unwrap_or(None);
             ContentBlock::json(serde_json::json!({
                 "malo_id": p.malo_id,
                 "period_from": period_from.to_string(),
                 "period_to": period_to.to_string(),
                 "messtyp": row.try_get::<String, _>("messtyp").ok(),
                 "sparte": row.try_get::<String, _>("sparte").ok(),
-                "arbeitsmenge_kwh": row.try_get::<String, _>("arbeitsmenge_kwh").ok(),
-                "spitzenleistung_kw": row.try_get::<Option<String>, _>("spitzenleistung_kw").ok().flatten(),
+                "arbeitsmenge_kwh": arbeitsmenge.map(|d| d.to_string()),
+                "spitzenleistung_kw": spitzenleistung.map(|d| d.to_string()),
                 "brennwert_kwh_per_m3": row.try_get::<Option<String>, _>("brennwert_kwh_per_m3").ok().flatten(),
                 "zustandszahl": row.try_get::<Option<String>, _>("zustandszahl").ok().flatten(),
                 "quality": row.try_get::<String, _>("quality").ok(),
@@ -443,18 +461,28 @@ impl EdmdMcpHandler {
             .map_err(|e| McpError::internal_error(e.message, None))
         } else {
             // On-the-fly aggregation from meter_reads.
-            let row = sqlx::query_as::<_, (Option<f64>, Option<f64>, i64)>(
-                r#"SELECT
-                    SUM(quantity_kwh::numeric)::float,
+            let row = sqlx::query_as::<
+                _,
+                (
+                    Option<rust_decimal::Decimal>,
+                    Option<rust_decimal::Decimal>,
+                    i64,
+                ),
+            >(
+                r"SELECT
+                    SUM(quantity_kwh),
                     MAX(CASE WHEN EXTRACT(EPOCH FROM (dtm_to - dtm_from)) = 900
-                              THEN (quantity_kwh::numeric * 4)::float END),
+                              THEN quantity_kwh * 4 END),
                     COUNT(*)
                 FROM meter_reads
-                WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3"#,
+                WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
+                  AND quality NOT IN ('FAULTY','UNKNOWN')
+                  AND tenant = $4",
             )
             .bind(&p.malo_id)
             .bind(from_ts)
             .bind(to_ts)
+            .bind(&self.state.tenant)
             .fetch_one(&self.state.pool)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -474,8 +502,8 @@ impl EdmdMcpHandler {
                 "malo_id": p.malo_id,
                 "period_from": period_from.to_string(),
                 "period_to": period_to.to_string(),
-                "arbeitsmenge_kwh": total_kwh,
-                "spitzenleistung_kw": spitzenleistung_kw,
+                "arbeitsmenge_kwh": total_kwh.map(|d| d.to_string()),
+                "spitzenleistung_kw": spitzenleistung_kw.map(|d| d.to_string()),
                 "read_count": count,
                 "source": "on_the_fly",
                 "note": "Pre-aggregated summary not available — computed from raw reads. Brennwert/Zustandszahl not yet available.",
@@ -512,11 +540,13 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
             r"SELECT id, anlass, geplant_am, ausfuehrt_bis, status, notiz
               FROM ablese_auftraege
               WHERE malo_id = $1 AND geplant_am >= $2::timestamptz
+                AND tenant = $3
               ORDER BY geplant_am DESC
               LIMIT 50",
         )
         .bind(&p.malo_id)
         .bind(since)
+        .bind(&self.state.tenant)
         .fetch_all(&self.state.pool)
         .await
         .unwrap_or_default();
@@ -527,11 +557,13 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
                      period_from, period_to, quality_summary, created_at
               FROM direct_push_sessions
               WHERE malo_id = $1 AND created_at >= $2
+                AND tenant = $3
               ORDER BY created_at DESC
               LIMIT 20",
         )
         .bind(&p.malo_id)
         .bind(since)
+        .bind(&self.state.tenant)
         .fetch_all(&self.state.pool)
         .await
         .unwrap_or_default();
@@ -542,12 +574,14 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
               FROM meter_reads
               WHERE malo_id = $1
                 AND dtm_from >= $2
+                AND tenant = $3
                 AND quality_warnings IS NOT NULL
               ORDER BY dtm_from DESC
               LIMIT 20",
         )
         .bind(&p.malo_id)
         .bind(since)
+        .bind(&self.state.tenant)
         .fetch_all(&self.state.pool)
         .await
         .unwrap_or_default();
@@ -640,7 +674,7 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
             doc.push_str("## Meter Data Quality Warnings\n\n");
             for r in &warn_reads {
                 let dtm_from: Option<time::OffsetDateTime> = r.try_get("dtm_from").ok();
-                let qty: String = r.try_get("quantity_kwh").unwrap_or_default();
+                let qty: rust_decimal::Decimal = r.try_get("quantity_kwh").unwrap_or_default();
                 let quality: String = r.try_get("quality").unwrap_or_default();
                 let warnings: Option<serde_json::Value> =
                     r.try_get("quality_warnings").ok().flatten();
@@ -721,6 +755,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
                WHERE malo_id = $1
                  AND dtm_from >= $2
                  AND dtm_from < $3
+                 AND tenant = $4
                  AND quality_warnings IS NOT NULL
                  AND (quality_warnings->>'has_warnings')::boolean = true
                ORDER BY dtm_from
@@ -729,6 +764,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
         .bind(&p.malo_id)
         .bind(from_dt)
         .bind(to_dt)
+        .bind(&self.state.tenant)
         .fetch_all(&self.state.pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1152,7 +1188,8 @@ impl EdmdMcpHandler {
         name = "get_correction_history",
         description = "§22 MessZV audit: list all retroactive corrections applied to a MaLo's \
                        meter reads. Each entry shows original value, corrected value, reason, \
-                       source (MSCONS_UPDATE/OPERATOR/AUTO_SUBSTITUTE), and timestamp."
+                       source (MSCONS_UPDATE/OPERATOR/AUTO_SUBSTITUTE), and timestamp.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_correction_history(
         &self,
@@ -1182,6 +1219,7 @@ impl EdmdMcpHandler {
               WHERE malo_id = $1
                 AND corrected_at >= $2
                 AND corrected_at <= $3
+                AND tenant = $5
               ORDER BY corrected_at DESC
               LIMIT $4",
         )
@@ -1189,6 +1227,7 @@ impl EdmdMcpHandler {
         .bind(from_ts)
         .bind(to_ts)
         .bind(limit_val)
+        .bind(&self.state.tenant)
         .fetch_all(pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1238,7 +1277,8 @@ impl EdmdMcpHandler {
                        impossible spikes (V04), zero-runs (V05), inconsistent intervals (V06), \
                        DST ambiguity (V07), future timestamps (V08), non-billable quality (V09), \
                        and register rollover (V10, §14 MessZV). Use before billing to detect \
-                       intervals requiring §17 MessZV substitute values."
+                       intervals requiring §17 MessZV substitute values.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn validate_timeseries(
         &self,
@@ -1259,11 +1299,13 @@ impl EdmdMcpHandler {
             r"SELECT dtm_from, dtm_to, quantity_kwh, quality, obis_code
               FROM meter_reads
               WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
+                AND tenant = $4
               ORDER BY dtm_from ASC",
         )
         .bind(&malo_id)
         .bind(from_ts)
         .bind(to_ts)
+        .bind(&self.state.tenant)
         .fetch_all(pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1271,8 +1313,7 @@ impl EdmdMcpHandler {
         let intervals: Vec<MeterInterval> = rows
             .iter()
             .filter_map(|r| {
-                let qty_str: String = r.try_get("quantity_kwh").ok()?;
-                let qty = qty_str.parse().ok()?;
+                let qty: rust_decimal::Decimal = r.try_get("quantity_kwh").ok()?;
                 let quality_str: &str = r.try_get("quality").ok()?;
                 let quality = match quality_str {
                     "MEASURED" => QualityFlag::Measured,
@@ -1370,11 +1411,13 @@ impl EdmdMcpHandler {
                      coverage_pct, gaps_detected, billing_blocked, pid
               FROM quality_assessments
               WHERE malo_id = $1 AND assessed_at BETWEEN $2 AND $3
+                AND tenant = $4
               ORDER BY assessed_at DESC LIMIT 100",
         )
         .bind(&p.malo_id)
         .bind(from)
         .bind(to)
+        .bind(&self.state.tenant)
         .fetch_all(&self.state.pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1431,29 +1474,32 @@ impl EdmdMcpHandler {
                 .map_err(|e| McpError::invalid_params(format!("invalid to: {e}"), None))?
                 .unwrap_or_else(time::OffsetDateTime::now_utc);
 
-        // Use DATE_TRUNC to aggregate per calendar month
+        // Use DATE_TRUNC to aggregate per calendar month — quantity_kwh is NUMERIC(18,5)
         let rows = sqlx::query(
             r"SELECT DATE_TRUNC('month', dtm_from) AS month_start,
-                     SUM(quantity_kwh::numeric) AS total_kwh,
+                     SUM(quantity_kwh) AS total_kwh,
                      COUNT(*) AS interval_count,
                      MIN(quality) AS worst_quality
               FROM meter_reads
               WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
+                AND tenant = $4
               GROUP BY month_start
               ORDER BY month_start ASC",
         )
         .bind(&p.malo_id)
         .bind(from)
         .bind(to)
+        .bind(&self.state.tenant)
         .fetch_all(&self.state.pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         use sqlx::Row;
         let months: Vec<serde_json::Value> = rows.iter().map(|r| {
+            let kwh: Option<rust_decimal::Decimal> = r.try_get("total_kwh").unwrap_or(None);
             serde_json::json!({
                 "month": r.try_get::<time::OffsetDateTime, _>("month_start").ok().map(|t| t.date().to_string()),
-                "total_kwh": r.try_get::<String, _>("total_kwh").unwrap_or_default(),
+                "total_kwh": kwh.map(|d| d.to_string()).unwrap_or_default(),
                 "interval_count": r.try_get::<i64, _>("interval_count").unwrap_or(0),
                 "worst_quality": r.try_get::<String, _>("worst_quality").unwrap_or_default(),
             })
@@ -1461,8 +1507,11 @@ impl EdmdMcpHandler {
 
         let total_kwh: rust_decimal::Decimal = rows
             .iter()
-            .filter_map(|r| r.try_get::<String, _>("total_kwh").ok())
-            .filter_map(|s| s.parse::<rust_decimal::Decimal>().ok())
+            .filter_map(|r| {
+                r.try_get::<Option<rust_decimal::Decimal>, _>("total_kwh")
+                    .ok()
+                    .flatten()
+            })
             .sum();
 
         serde_json::to_string_pretty(&serde_json::json!({
@@ -1508,14 +1557,17 @@ impl EdmdMcpHandler {
                 .unwrap_or_else(time::OffsetDateTime::now_utc);
 
         let rows = sqlx::query(
-            r"SELECT dtm_from, dtm_to, quantity_kwh::numeric, quality
+            r"SELECT dtm_from, dtm_to, quantity_kwh, quality
               FROM meter_reads
               WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
+                AND tenant = $4
+                AND quality NOT IN ('FAULTY', 'UNKNOWN')
               ORDER BY dtm_from ASC LIMIT 200000",
         )
         .bind(&p.malo_id)
         .bind(from)
         .bind(to)
+        .bind(&self.state.tenant)
         .fetch_all(&self.state.pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1525,8 +1577,7 @@ impl EdmdMcpHandler {
         let intervals: Vec<MeterInterval> = rows
             .iter()
             .filter_map(|r| {
-                let qty_str: String = r.try_get::<String, _>("quantity_kwh").ok()?;
-                let qty: rust_decimal::Decimal = qty_str.parse().ok()?;
+                let qty: rust_decimal::Decimal = r.try_get("quantity_kwh").ok()?;
                 let quality_str: &str = r.try_get("quality").ok()?;
                 let quality = match quality_str {
                     "MEASURED" => QualityFlag::Measured,
@@ -1582,9 +1633,11 @@ impl EdmdMcpHandler {
             r"SELECT period_from, period_to, brennwert_kwh_per_m3, zustandszahl, pid, received_at
               FROM gas_quality_data
               WHERE malo_id = $1
+                AND tenant = $2
               ORDER BY period_from DESC LIMIT 20",
         )
         .bind(&p.malo_id)
+        .bind(&self.state.tenant)
         .fetch_all(&self.state.pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;

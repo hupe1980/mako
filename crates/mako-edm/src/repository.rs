@@ -40,20 +40,22 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
     ) -> Result<Vec<MeterDataReceipt>, EdmError>;
 
     /// Compute Mehr-/Mindermengen imbalance for one MaLo in one billing period.
+    ///
+    /// `tenant` is mandatory — passing an empty string is rejected at the SQL layer
+    /// by the `AND tenant = $N` guard.
     async fn imbalance(
         &self,
         malo_id: &str,
         from: Date,
         to: Date,
-        tenant_id: Option<Uuid>,
+        tenant: &str,
     ) -> Result<ImbalanceReport, EdmError>;
 
     /// Return the most recent typed read for a MaLo.
-    async fn latest_read(
-        &self,
-        malo_id: &str,
-        tenant_id: Option<Uuid>,
-    ) -> Result<Option<MeterRead>, EdmError>;
+    ///
+    /// `tenant` is mandatory.
+    async fn latest_read(&self, malo_id: &str, tenant: &str)
+    -> Result<Option<MeterRead>, EdmError>;
 
     /// Return the aggregated billing-period summary for a MaLo.
     ///

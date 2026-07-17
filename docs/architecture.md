@@ -326,7 +326,7 @@ All **seventeen** daemons share a common operational model:
 | `portald` | `:9480` | Customer Portal read-model gateway (LF role, stateless) — aggregates Lastgang, invoices, account balance, VersorgungsStatus, EEG settlement; `/dashboard` parallel aggregation; `/events` SSE stream; OIDC-gated | `portald.toml` |
 | `vertragd` | `:9780` | Contract & Customer Management (LF role) — `Kunden` (B2C + B2B) with `kunden_identitaeten` (N OIDC logins per company, rolle=VOLLZUGRIFF/ADMIN/FINANZEN/TECHNIK/READONLY, optional `standort_filter` for site-scoped B2B access); `Rahmenverträge` (B2B portfolio: Sammelrechnung, indexation, volume discount, `angebot_id` CPQ); `Versorgungsverträge` per site/commodity (ANGELEGT→IN_BEARBEITUNG→TEILERFUELLUNG→AKTIV→GEKÜNDIGT→ABGELAUFEN); triggers GPKE/GeLi Gas Lieferbeginn/-ende via `processd`; Tarifwechsel + Preisgarantie guard (§41 EnWG); Kündigung with coordinated Schlussablesung; auto-renewal worker; Preisanpassungsbenachrichtigung worker (§41 Abs. 3 EnWG); OIDC sub → MaLo authorization gateway (`GET /kunden/authenticate`) for `portald`; **GDPR Art. 15 export** (`/export`); **GDPR Art. 17 pseudonymization** (`/anonymize`) with immutable audit log; `Zahlungsinformation` typed IBAN/SEPA; 3 DB migrations; 9-tool MCP server | `vertragd.toml` |
 | `mabis-syncd` | `:8880` | MaBiS UTILTS synchronisation daemon (ÜNB/NB role) — aggregates per-MaLo Lastgang from `edmd` via `mako-mabis::SummenzeitreiheBuilder`, submits monthly Summenzeitreihen to BIKO; vorlaeufig day 3 + endgueltig day 8 per BK6-22-024 Anlage 3 MaBiS; `submission_runs` + `submission_malo_log` tables; automatic MaLo discovery; retry with attempt_count guard | `mabis-syncd.toml` |
-| `agentd` | `:9580` | Multi-agent LLM orchestration daemon — Orchestrator + Specialist Mesh; OpenAI / Anthropic / AWS Bedrock SigV4; ReAct loop with MCP tool calls across all 17 services; LanceDB RAG (persistent ANN, S3/GCS/local); WASM plugins via `mako-plugin` (Extism); **26 bundled specialists** incl. `billing-regulatory-guard-agent` (§41/§41b compliance), `jahresabrechnung-agent` (annual settlement), replacement-value-agent (§17 MessZV), mabis-syncd-agent (UTILTS deadlines), smgw-diagnostics-agent (BSI TR-03109 + §14a CLS) | `agentd.toml` |
+| `agentd` | `:9580` | Multi-agent LLM orchestration daemon — Orchestrator + Specialist Mesh; OpenAI / Anthropic / AWS Bedrock SigV4; ReAct loop with MCP tool calls across all 17 services; LanceDB RAG (persistent ANN, S3/GCS/local); WASM plugins via `mako-plugin` (Extism); **27 bundled specialists** incl. `billing-regulatory-guard-agent` (§41/§41b compliance), `jahresabrechnung-agent` (annual settlement), `replacement-value-agent` (§17 MessZV), `mabis-syncd-agent` (UTILTS deadlines), `smgw-diagnostics-agent` (BSI TR-03109 + §14a CLS) | [agentd guide](agentd) |
 
 ### `marktd` — Market Data Hub (`:8180`)
 
@@ -706,14 +706,14 @@ to enable efficient range scans per tenant and stream.
 
 | Prefix | Content | Key pattern |
 |--------|---------|-------------|
-| `e/` | Event log | `e/<tenant_id>/<stream_id>/<seq_u64_big_endian>` |
-| `sv/` | Stream version (optimistic lock) | `sv/<tenant_id>/<stream_id>` |
-| `om/` | Outbox messages | `om/<tenant_id>/<ulid>` |
-| `dl/` | Deadlines | `dl/<tenant_id>/<due_timestamp_secs>/<id>` |
-| `pr/` | Process registry | `pr/<tenant_id>/<conversation_id>` |
-| `pt/` | Partner directory | `pt/<tenant_id>/<gln>` |
-| `ib/` | Inbox dedup | `ib/<tenant_id>/<message_ref>` |
-| `sn/` | Snapshots | `sn/<tenant_id>/<stream_id>` |
+| `e/` | Event log | `e/<tenant>/<stream_id>/<seq_u64_big_endian>` |
+| `sv/` | Stream version (optimistic lock) | `sv/<tenant>/<stream_id>` |
+| `om/` | Outbox messages | `om/<tenant>/<ulid>` |
+| `dl/` | Deadlines | `dl/<tenant>/<due_timestamp_secs>/<id>` |
+| `pr/` | Process registry | `pr/<tenant>/<conversation_id>` |
+| `pt/` | Partner directory | `pt/<tenant>/<mp_id>` |
+| `ib/` | Inbox dedup | `ib/<tenant>/<message_ref>` |
+| `sn/` | Snapshots | `sn/<tenant>/<stream_id>` |
 
 The `dl/` prefix sorts by due timestamp, so `range_scan(prefix, now_key)` is
 the entire scheduler implementation.

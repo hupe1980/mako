@@ -213,7 +213,7 @@ prompt, default trigger patterns, and default MCP server requirements.
 
 All 27 specialist definitions are compiled into the `agentd` binary. Activate them via
 `[bundled_agents]` in `agentd.toml` — no system prompt copy-paste required.
-See `demo/agentd.toml` for a working example.
+See the [Configuration](#configuration) section below for a full example.
 
 ---
 

@@ -7,7 +7,7 @@ description: >
   Run the full mako NB STP demo stack — makod, marktd, processd, and a webhook
   receiver — in under 5 minutes. Submit a UTILMD 55001, watch processd
   auto-accept via netz-checker, and receive the UTILMD 55003 confirmation.
-  Version 0.11.0, BDEW FV2026-10-01 compliant.
+  Version 0.12.0, BDEW FV2026-10-01 compliant.
 ---
 
 # Getting Started
@@ -243,15 +243,17 @@ Output ends with:
 
 ```
 ✓ processd NB auto-responder dispatched bestaetigen → UTILMD 55003 already arrived
-✓ POST /api/v1/commands → HTTP 409 (auto-responder already accepted — idempotency confirmed)
-✓ UTILMD 55003 Bestätigung Lieferbeginn delivered to LFN
+✓ POST /api/v1/commands → HTTP 409 (duplicate bestaetigen correctly rejected — AntwortGesendet guard confirmed)
+✓ UTILMD 55003 was already verified in step 6c (auto-responder path)
 All smoke tests passed.
   Wechselprozess auto-responder: ENABLED
   Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55003
 ```
 
-The `HTTP 409` is the **idempotency proof** — `processd` already dispatched
-`bestaetigen` automatically before the manual ERP call arrived.
+The `HTTP 409` confirms the **workflow state guard** — `processd` already advanced
+the workflow to `AntwortGesendet`, so the later manual command is correctly rejected
+with `invalid_state: expected ValidationPassed, found AntwortGesendet`. This is not
+idempotency: it is the state machine rejecting an out-of-order command.
 
 ---
 

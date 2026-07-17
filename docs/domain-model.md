@@ -3,6 +3,7 @@ layout: default
 title: Domain Model
 nav_order: 13
 parent: Architecture
+mermaid: true
 description: >
   BDEW market role model, market objects (MaLo, MeLo, NeLo, NeBe), territory
   definitions, identifier formats with check-digit rules, and EDIFACT encoding
@@ -24,6 +25,38 @@ behalf of the LF, and how to parse a `9900357000004` out of a NAD segment.
 | Rollenmodell für die Marktkommunikation im deutschen Energiemarkt | **V2.2** | 2026-01-08 |
 | Identifikatoren in der Marktkommunikation | **V1.2** | 2025-02-07 |
 | Allgemeine Festlegungen zu den EDIFACT- und XML-Nachrichten | **6.1d** | 2026-04-01 |
+
+---
+
+## Market Role Interaction Map
+
+The following diagram shows how the core Marktrollen interact via the key MaKo processes.
+Gas-only roles (MGV, KN) and the BIKO are omitted for clarity — see the party role table below.
+
+```mermaid
+graph LR
+    LF["LF\nLieferant"]
+    NB["NB\nNetzbetreiber"]
+    MSB["MSB\nMessstellenbetreiber"]
+    BKV["BKV\nBilanzkreisverantwortlicher"]
+    UNB["ÜNB\nÜbertragungsnetzbetreiber"]
+    BIKO["BIKO\nBilanzkoordinator"]
+    EIV["EIV\nEinsatzverantwortlicher"]
+
+    LF -->|"GPKE: Lieferbeginn / Lieferende\nUTILMD 55001–55018"| NB
+    NB -->|"GPKE: Bestätigung / Ablehnung\nUTILMD 55003/55004"| LF
+    LF -->|"GeLi Gas: Anmeldung\nUTILMD 44001–44021"| NB
+    NB -->|"WiM: MSB-Wechsel\nUTILMD 55039/55042"| MSB
+    MSB -->|"WiM: Stammdaten\nUTILMD 55168"| NB
+    MSB -->|"INSRPT: Ablesesteuerung\nINSRPT 23001/23003"| NB
+    NB -->|"MSCONS: Messwerte\n(MSCONS 13xxx)"| BKV
+    NB -->|"INVOIC: NNE/MMM\n31001/31002/31005"| LF
+    LF -->|"INVOIC: Sperrung AWH Gas\n31011"| NB
+    NB -->|"MABIS: Summenzeitreihe\nUTILTS 13003"| BIKO
+    BIKO -->|"MABIS: Abrechnungsdaten"| BKV
+    BIKO ---|"settlement"| UNB
+    EIV -->|"Redispatch 2.0\nORDERS/ORDRSP"| NB
+```
 
 ---
 

@@ -427,7 +427,7 @@ else
             pass "processd NB auto-responder dispatched bestaetigen → UTILMD 55003 already arrived:"
             echo
             printf '%s' "$AUTO_UTILMD" | jq '.[] | .body | {type, makomessagetype, makorecipient, edifact: .data.edifact}'
-            echo "      Step 7 will confirm idempotency (process already accepted — expect 202 or 409)."
+            echo "      Step 7 will confirm duplicate-command rejection (process already accepted — expect 409/422)."
             echo
         else
             echo -e "${YELLOW}▶${NC}  UTILMD 55003 not yet visible — auto-responder may still be processing."
@@ -439,15 +439,16 @@ else
     curl -sS -o /dev/null -X DELETE "$WEBHOOK_URL/events" 2>/dev/null || true
 fi
 
-# ── 7. NB ERP: bestaetigen (manual fallback / idempotency check) ──────────────
+# ── 7. NB ERP: bestaetigen (manual fallback / duplicate-command guard check) ───
 #
 # If processd NB auto-responder (step 6c) already dispatched bestaetigen,
-# calling it again verifies idempotency: makod returns 202 if the process is
-# still open, or a graceful error if already accepted.
+# the workflow is now in AntwortGesendet state.  Calling bestaetigen again
+# must be rejected — the state guard enforces "expected ValidationPassed".
+# makod returns 409 (invalid_state) or 422 (validation failure).
 #
-# Without processd: this is the primary ERP bestaetigen call.
+# Without processd: this is the primary ERP bestaetigen call (returns 202).
 
-info "[7/9] NB ERP: bestaetigen (manual / idempotency check)"
+info "[7/9] NB ERP: bestaetigen (manual fallback / duplicate-command guard)"
 CMD_PAYLOAD=$(jq -n --arg mid "$SMOKE_MALO_ID" '{"command":"gpke.lieferbeginn.bestaetigen","payload":{"malo_id":$mid}}')
 resp=$(post_command "$CMD_PAYLOAD")
 code=$(status "$resp")
@@ -457,8 +458,8 @@ if [[ "$code" == "202" ]]; then
     pass "POST /api/v1/commands → HTTP 202  process_id=$PROCESS_ID"
     echo "$BODY" | jq '.'
     echo
-elif [[ -n "${MARKTD_URL:-}" && ("$code" == "409" || "$code" == "422" || "$code" == "404") ]]; then
-    pass "POST /api/v1/commands → HTTP $code (auto-responder already accepted — idempotency confirmed)"
+elif [[ -n "${MARKTD_URL:-}" && ("$code" == "409" || "$code" == "422") ]]; then
+    pass "POST /api/v1/commands → HTTP $code (duplicate bestaetigen correctly rejected — AntwortGesendet guard confirmed)"
     echo "      $BODY"
     echo
 else
