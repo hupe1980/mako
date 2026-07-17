@@ -90,11 +90,13 @@ graph TB
     OPS["Alertmanager · Grafana<br/>BNetzA KPI reports"]
     NIS["nis-syncd :9680<br/>grid topology import (stateless)"]
     EEG["einsd :9180<br/>EEG settlement (NB)"]
-    subgraph o2c ["Contract & Customer (LF)"]
-        AUF["vertragd :9780<br/>Kunden (B2C+B2B) · Rahmenverträge<br/>Versorgungsverträge · Tarifwechsel<br/>kunden_identitaeten · portald auth"]
+    TARIFBD["tarifbd :9080<br/>product catalog"]
+    ACCTD["accountingd :9380<br/>customer ledger"]
+    subgraph o2c ["Contract + Customer (LF)"]
+        AUF["vertragd :9780<br/>Kunden B2C+B2B<br/>Rahmenvertraege<br/>Versorgungsvertraege"]
     end
     subgraph ai ["AI layer"]
-        AGT["agentd :9580\n27 built-in specialists (compiled into binary)\nOrchestrator + Specialist Mesh\nsequential | parallel | race dispatch\nLanceDB RAG · MCP tools · WASM plugins\nA2A agent cards · builtin catalog API"]
+        AGT["agentd :9580<br/>27 built-in specialists<br/>Orchestrator + Specialist Mesh<br/>LanceDB RAG · MCP · WASM"]
     end
 
     NB <-->|AS4/SOAP+MTOM| AS4
@@ -102,35 +104,35 @@ graph TB
     NB <-->|iMS REST/WS| API
     AS4 & REST & API --> EDI
 
-    SLATE -->|"CloudEvents 1.0<br/>HMAC-signed POST"| marktd
+    SLATE -->|"CloudEvents 1.0 HMAC POST"| marktd
     FANOUT -->|de.mako.process.initiated| processd
     FANOUT -->|de.mako.process.initiated| invoicd
     FANOUT -->|de.mako.*| edmd
     FANOUT -->|de.mako.*| obsd
-    FANOUT -->|"CloudEvents 1.0<br/>HMAC-signed"| ERP
+    FANOUT -->|"CloudEvents 1.0 HMAC"| ERP
 
-    NB_MOD -->|"GET /api/v1/versorgung<br/>GET /api/v1/malo/{id}/grid"| marktd
-    LF_MOD -->|GET /api/v1/versorgung| marktd
-    NB_MOD & LF_MOD -->|POST /api/v1/commands| makod
+    NB_MOD -->|"GET /versorgung, /malo/id/grid"| marktd
+    LF_MOD -->|GET /versorgung| marktd
+    NB_MOD -->|POST /api/v1/commands| makod
+    LF_MOD -->|POST /api/v1/commands| makod
 
     CHK -->|GET /api/v1/preisblaetter| marktd
     CHK -->|GET /api/v1/billing-period| edmd
     CHK -->|POST /api/v1/commands| makod
 
     NNE -->|POST /api/v1/commands| makod
-    SPR -->|"POST /api/v1/commands<br/>IFTSTA 21039"| makod
-    NIS -->|PUT /api/v1/malo/{id}/grid| marktd
-    EEG -->|"GET /api/v1/billing-period
-(Einspeisemenge)"| edmd
+    SPR -->|"POST /commands IFTSTA 21039"| makod
+    NIS -->|PUT /api/v1/malo/id/grid| marktd
+    EEG -->|"GET /api/v1/billing-period"| edmd
 
     PROJ --> OPS
-    AUF -->|"POST start-supply"| processd
-    AUF -->|"POST reading-orders<br/>(Ablesesteuerung)"| edmd
-    AUF -->|"PUT customer product"| tarifbd
-    AUF -->|"POST accounts"| accountingd
+    AUF -->|POST start-supply| processd
+    AUF -->|POST reading-orders| edmd
+    AUF -->|PUT customer product| TARIFBD
+    AUF -->|POST accounts| ACCTD
     processd -->|"de.mako.*.bestaetigt"| AUF
     AGT -->|"MCP tools (all services)"| makod
-    AGT -->|"MCP tools"| marktd
+    AGT -->|MCP tools| marktd
 ```
 
 ---
