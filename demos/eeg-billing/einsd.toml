@@ -1,0 +1,20 @@
+# einsd.toml — EEG billing demo (EEG/KWKG settlement, auth disabled)
+# DO NOT use in production.
+#
+# einsd manages the EEG/KWKG plant register and computes monthly settlements.
+# It queries edmd for Einspeisemenge (energy fed into the grid) and emits
+# de.eeg.verguetung.berechnet CloudEvents to the ERP webhook.
+
+database_url = "postgres://demo:demo-secret@postgres/einsd"
+port         = 9180
+tenant       = "9900357000004"
+
+# edmd base URL — einsd auto-fetches Einspeisemenge from edmd billing-period API
+edmd_url     = "http://edmd:8380"
+edmd_api_key = ""
+
+# ERP webhook — receives de.eeg.verguetung.berechnet / de.eeg.marktpraemie.berechnet
+erp_webhook_url = "http://webhook:8000/events"
+
+# Alert worker: checks for plants whose foerderendedatum is within 180 days (6h interval)
+alert_interval_secs = 21600

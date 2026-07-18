@@ -1,0 +1,19 @@
+{
+  "tr_id": "TR0000000001",
+  "malo_id": "17835382035",
+  "melo_id": "DE000000000000000000000000000001",
+  "eeg_gesetz": 2023,
+  "inbetriebnahme": "2024-03-15",
+  "leistung_kwp": 9.8,
+  "erzeugungsart": "SOLAR_AUFDACH",
+  "verguetungssatz_ct": 8.11,
+  "foerderendedatum": "2044-03-31",
+  "settlement_model": "FEED_IN_TARIFF",
+  "status": "aktiv",
+  "mastr_registriert": true,
+  "mastr_nummer": "SEE912345678901",
+  "mastr_datum": "2024-04-01",
+  "bank_iban": "DE89370400440532013000",
+  "bank_bic": "COBADEFFXXX",
+  "zahlungsempfaenger": "Max Mustermann"
+}

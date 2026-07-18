@@ -1,6 +1,6 @@
 #!/bin/bash
 # dev/init-db.sh — PostgreSQL init for local development.
-# Identical schema to demo/init-db.sh; credentials use POSTGRES_USER (dev/dev).
+# Identical schema to demos/nb-stp/init-db.sh; credentials use POSTGRES_USER (dev/dev).
 set -e
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL

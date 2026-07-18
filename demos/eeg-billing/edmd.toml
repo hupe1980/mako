@@ -1,0 +1,27 @@
+# edmd.toml — EEG billing demo (energy data management, auth disabled)
+# DO NOT use in production.
+#
+# edmd stores MSCONS meter readings and direct iMSys/MSB pushes.
+# einsd queries edmd to auto-fetch Einspeisemenge for EEG settlement.
+
+[http]
+addr = "0.0.0.0:8380"
+
+[database]
+url = "postgres://demo:demo-secret@postgres/edmd"
+
+[identity]
+tenant = "9900357000004"
+
+[marktd]
+url     = "http://marktd:8180"
+api_key = ""
+
+[subscription]
+# edmd subscribes to marktd for process completion events (MSCONS delivery)
+webhook_url   = "http://edmd:8380/webhook"
+subscriber_id = "edmd-demo"
+
+[webhook]
+# ERP webhook: edmd emits de.edmd.reading.direct.stored when meter data is pushed
+erp_webhook_url = "http://webhook:8000/events"

@@ -1350,7 +1350,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
                is_correction, correction_of)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
                   $10, $11, $12, $13, $14, $15, $16)
-          ON CONFLICT ON CONSTRAINT sr_unique_initial DO UPDATE
+          ON CONFLICT (tr_id, tenant, billing_year, billing_month) WHERE is_correction = false DO UPDATE
           SET settlement_model          = EXCLUDED.settlement_model,
               einspeisemenge_kwh        = EXCLUDED.einspeisemenge_kwh,
               settlement_eur            = EXCLUDED.settlement_eur,

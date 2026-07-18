@@ -75,7 +75,11 @@ async fn main() -> anyhow::Result<()> {
         auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
     });
 
-    // Schema must be applied manually — see migrations/0001_initial.sql for DDL.
+    // Run database migrations at startup.
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .context("run einsd migrations")?;
 
     // Background worker: emit de.eeg.anlage.foerderung_auslaufend every 6 h.
     let alert_pool = pool.clone();
@@ -311,58 +315,58 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::get_foerderung_auslaufend),
         )
         .route(
-            "/api/v1/anlagen/:tr_id",
+            "/api/v1/anlagen/{tr_id}",
             get(handlers::get_anlage)
                 .put(handlers::put_anlage)
                 .delete(handlers::delete_anlage),
         )
         // ── Settlement ─────────────────────────────────────────────────────────
         .route(
-            "/api/v1/anlagen/:tr_id/settle/:year/:month",
+            "/api/v1/anlagen/{tr_id}/settle/{year}/{month}",
             post(handlers::post_settle),
         )
         .route(
-            "/api/v1/anlagen/:tr_id/settlements",
+            "/api/v1/anlagen/{tr_id}/settlements",
             get(handlers::get_settlements),
         )
         // ── Repowering (§22 EEG 2023) ──────────────────────────────────────────
         .route(
-            "/api/v1/anlagen/:tr_id/repowering",
+            "/api/v1/anlagen/{tr_id}/repowering",
             post(handlers::post_repowering),
         )
         // ── MaStR registration confirmation ────────────────────────────────────
         .route(
-            "/api/v1/anlagen/:tr_id/mastr-registrierung",
+            "/api/v1/anlagen/{tr_id}/mastr-registrierung",
             post(handlers::post_mastr_registrierung),
         )
         // ── Zusammenlegung (§24 EEG 2023) ─────────────────────────────────────
         .route(
-            "/api/v1/anlagen/:tr_id/zusammenlegen",
+            "/api/v1/anlagen/{tr_id}/zusammenlegen",
             post(handlers::post_zusammenlegen),
         )
         // ── §21b EEG 2023 — Veräußerungsform switch ───────────────────────────
         .route(
-            "/api/v1/anlagen/:tr_id/switch-veraeusserungsform",
+            "/api/v1/anlagen/{tr_id}/switch-veraeusserungsform",
             post(handlers::post_switch_veraeusserungsform),
         )
         // ── §22 MessZV — Correction settlement ────────────────────────────────
         .route(
-            "/api/v1/anlagen/:tr_id/settlements/:year/:month/correction",
+            "/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction",
             post(handlers::post_correction_settle),
         )
         // ── Batch settlement ───────────────────────────────────────────────────
         .route(
-            "/api/v1/settle/:year/:month",
+            "/api/v1/settle/{year}/{month}",
             post(handlers::post_batch_settle),
         )
         // ── EPEX monthly prices ────────────────────────────────────────────────
         .route(
-            "/api/v1/epex-monthly/:year/:month",
+            "/api/v1/epex-monthly/{year}/{month}",
             put(handlers::put_epex_price).get(handlers::get_epex_price),
         )
         // ── §20 Abs. 2 Jahresmarktwert prices (ÜNB-published) ─────────────────
         .route(
-            "/api/v1/jahresmarktwert/:year/:month/:erzeugungsart",
+            "/api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}",
             put(handlers::put_jahresmarktwert).get(handlers::get_jahresmarktwert),
         )
         // ── EEG tariff rate lookup ─────────────────────────────────────────────

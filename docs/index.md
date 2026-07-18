@@ -425,7 +425,7 @@ just dev makod
 git clone https://github.com/hupe1980/mako
 cd mako
 docker buildx bake makod marktd processd
-cd demo
+cd demos/nb-stp
 docker compose up -d
 MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 bash smoke.sh
 ```

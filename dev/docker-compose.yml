@@ -9,7 +9,7 @@
 #   just infra-down   # tear down
 #
 # One PostgreSQL instance with a separate database per service.
-# Connection strings (same credentials as demo/ for config parity):
+# Connection strings (same credentials as demos/nb-stp/ for config parity):
 #
 #   marktd:      postgres://dev:dev@localhost:5432/marktd
 #   processd:    postgres://dev:dev@localhost:5432/processd

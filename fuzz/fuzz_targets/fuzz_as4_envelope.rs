@@ -33,7 +33,7 @@
 //! Seed the corpus from real AS4 fixtures:
 //!
 //! ```text
-//! cp demo/fixtures/utilmd-55001.edi fuzz/corpus/fuzz_as4_envelope/
+//! cp demos/nb-stp/fixtures/utilmd-55001.edi fuzz/corpus/fuzz_as4_envelope/
 //! ```
 
 #![no_main]

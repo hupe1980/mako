@@ -83,7 +83,7 @@ docker build --target processd-runtime -t processd:dev  .
 ## Step 2 — Start the demo stack
 
 ```bash
-cd demo
+cd demos/nb-stp
 docker compose up -d
 docker compose ps   # wait until all containers are running
 ```
@@ -131,7 +131,7 @@ decision.
 ```bash
 curl -s -X PUT http://localhost:8180/api/v1/preisblaetter/9900357000004 \
   -H "Content-Type: application/json" \
-  --data-binary @demo/fixtures/preisblatt-nb.json \
+  --data-binary @demos/nb-stp/fixtures/preisblatt-nb.json \
   -w "\nHTTP %{http_code}\n"
 # → HTTP 204
 ```
@@ -144,7 +144,7 @@ MALO_ID=17835382035
 # MaLo (NB=9900357000004, no active LF)
 curl -s -X PUT "http://localhost:8180/api/v1/malo/$MALO_ID" \
   -H "Content-Type: application/json" \
-  --data-binary "$(jq --arg m "$MALO_ID" '.data.marktlokations_id=$m' demo/fixtures/malo-nb.json)" \
+  --data-binary "$(jq --arg m "$MALO_ID" '.data.marktlokations_id=$m' demos/nb-stp/fixtures/malo-nb.json)" \
   -w "\nHTTP %{http_code}\n"
 # → HTTP 201
 
@@ -170,7 +170,7 @@ curl -s -X PUT http://localhost:8180/api/v1/partners/4012345000023 \
 curl -s -X PUT http://localhost:8080/admin/partners/4012345000023 \
   -H "Authorization: Bearer demo-secret-change-me" \
   -H "Content-Type: application/json" \
-  --data-binary @demo/fixtures/partner-lf.json | jq '.version'
+  --data-binary @demos/nb-stp/fixtures/partner-lf.json | jq '.version'
 ```
 
 ---
@@ -181,7 +181,7 @@ curl -s -X PUT http://localhost:8080/admin/partners/4012345000023 \
 curl -s -X POST http://localhost:8080/edifact \
   -H "Authorization: Bearer demo-secret-change-me" \
   -H "Content-Type: text/plain; charset=utf-8" \
-  --data-binary @demo/fixtures/utilmd-55001.edi | jq .
+  --data-binary @demos/nb-stp/fixtures/utilmd-55001.edi | jq .
 ```
 
 Expected response:
@@ -235,7 +235,7 @@ The demo ships `smoke.sh` which runs all of the above automatically and asserts
 every step passes, including the auto-accept timing:
 
 ```bash
-cd demo
+cd demos/nb-stp
 MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 bash smoke.sh
 ```
 

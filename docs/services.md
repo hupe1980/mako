@@ -128,9 +128,13 @@ All services are available as multi-stage Docker images built with `cargo-chef`:
 # Single all-in-one daemon (makod only)
 docker pull ghcr.io/hupe1980/makod:latest
 
-# Full stack via Docker Compose
+# NB STP demo — UTILMD 55001 Lieferbeginn end-to-end
 git clone https://github.com/hupe1980/mako
-cd mako/demo
+cd mako/demos/nb-stp
+docker compose up
+
+# EEG billing demo — solar plant registration + §21 EEG 2023 settlement
+cd mako/demos/eeg-billing
 docker compose up
 ```
 

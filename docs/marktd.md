@@ -109,7 +109,7 @@ The clean separation of concerns:
 
 ### With Docker Compose (full stack)
 
-See `demo/docker-compose.yml` for the complete 8-service stack (postgres + webhook +
+See `demos/nb-stp/docker-compose.yml` for the complete 8-service stack (postgres + webhook +
 marktd + processd + makod + invoicd + edmd + obsd).
 
 Minimal compose snippet for marktd alone:

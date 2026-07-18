@@ -1,0 +1,99 @@
+# EEG billing demo — Docker Compose
+#
+# Showcases the complete EEG feed-in settlement flow:
+#   1. Register a solar PV plant in einsd
+#   2. Push 15-min Einspeisemenge readings to edmd (direct iMSys push)
+#   3. Trigger monthly settlement in einsd
+#   4. einsd auto-fetches Einspeisemenge from edmd, computes EEG Vergütung
+#   5. ERP receives de.eeg.verguetung.berechnet CloudEvent
+#
+# Services:
+#   postgres     — PostgreSQL (marktd + edmd + einsd databases)
+#   webhook :8000 — ERP CloudEvent receiver (in-memory)
+#   marktd  :8180 — Market Data Hub (MaLo master data)
+#   edmd    :8380 — Energy Data Management (meter readings + billing periods)
+#   einsd   :9180 — EEG/KWKG settlement (plant register + monthly settlement)
+#
+# Build images first:
+#   docker build --target marktd-runtime  -t marktd:dev  .
+#   docker build --target edmd-runtime    -t edmd:dev    .
+#   docker build --target einsd-runtime   -t einsd:dev   .
+#
+# Run:
+#   cd demos/eeg-billing
+#   docker compose up -d
+#   bash smoke.sh
+#   docker compose down -v
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER:     demo
+      POSTGRES_PASSWORD: demo-secret
+    volumes:
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "demo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── ERP webhook receiver ────────────────────────────────────────────────────
+  webhook:
+    image: python:3.12-alpine
+    volumes:
+      - ./webhook-receiver.py:/app/webhook-receiver.py:ro
+    working_dir: /app
+    command: python webhook-receiver.py
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  # ── marktd — Market Data Hub ────────────────────────────────────────────────
+  marktd:
+    image: marktd:dev
+    volumes:
+      - ./marktd.toml:/etc/marktd/marktd.toml:ro
+    environment:
+      MARKTD_CONFIG: /etc/marktd/marktd.toml
+    ports:
+      - "8180:8180"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── edmd — Energy Data Management ───────────────────────────────────────────
+  edmd:
+    image: edmd:dev
+    volumes:
+      - ./edmd.toml:/etc/edmd/edmd.toml:ro
+    environment:
+      EDMD_CONFIG: /etc/edmd/edmd.toml
+    ports:
+      - "8380:8380"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      marktd:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── einsd — EEG/KWKG Settlement ─────────────────────────────────────────────
+  einsd:
+    image: einsd:dev
+    volumes:
+      - ./einsd.toml:/etc/einsd/einsd.toml:ro
+    environment:
+      EINSD_CONFIG: /etc/einsd/einsd.toml
+    ports:
+      - "9180:9180"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      edmd:
+        condition: service_started
+    restart: unless-stopped

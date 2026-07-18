@@ -2049,7 +2049,11 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     )
     .await?;
 
-    // Schema must be applied manually — see migrations/0001_initial.sql for DDL.
+    // Run database migrations at startup.
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("run edmd migrations: {e}"))?;
 
     // ── Iceberg/S3 archive setup ───────────────────────────────────────────────
     let olap_engine: Option<Arc<OlapEngine>> = if let Some(ref archive_cfg) = cfg.archive {
@@ -2879,8 +2883,10 @@ async fn jahresablesung_campaign(
 #[derive(Debug, serde::Deserialize)]
 pub struct DirectInterval {
     /// Interval start (RFC 3339 UTC).  Must be an exact quarter-hour for iMSys.
+    #[serde(with = "time::serde::rfc3339")]
     pub from: OffsetDateTime,
     /// Interval end (RFC 3339 UTC).
+    #[serde(with = "time::serde::rfc3339")]
     pub to: OffsetDateTime,
     /// Energy quantity.  For Strom: kWh.  For Gas: m\u00b3 (converted to kWh inside).
     pub value: Decimal,
