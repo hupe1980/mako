@@ -174,6 +174,7 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
     && cp "${BIN_DIR}/obsd"        /usr/local/bin/obsd        && strip /usr/local/bin/obsd \
     && cp "${BIN_DIR}/netzbilanzd" /usr/local/bin/netzbilanzd && strip /usr/local/bin/netzbilanzd \
     && cp "${BIN_DIR}/sperrd"      /usr/local/bin/sperrd      && strip /usr/local/bin/sperrd \
+    && cp "${BIN_DIR}/nis-syncd"   /usr/local/bin/nis-syncd   && strip /usr/local/bin/nis-syncd \
     && cp "${BIN_DIR}/einsd"       /usr/local/bin/einsd       && strip /usr/local/bin/einsd \
     && cp "${BIN_DIR}/tarifbd"     /usr/local/bin/tarifbd     && strip /usr/local/bin/tarifbd \
     && cp "${BIN_DIR}/billingd"    /usr/local/bin/billingd    && strip /usr/local/bin/billingd \
