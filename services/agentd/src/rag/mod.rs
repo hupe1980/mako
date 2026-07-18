@@ -43,23 +43,27 @@ pub struct RagEngine {
     embedder: Arc<dyn LlmProvider>,
     embed_model: String,
     top_k: usize,
+    /// Minimum cosine similarity score to include a result (0.0-1.0).
+    /// Internally converted to `max_distance = 1.0 - score_threshold`.
+    score_threshold: f32,
+    /// Tenant for all queries/inserts — data-isolation boundary.
+    tenant: String,
 }
 
 impl RagEngine {
     /// Build and initialise the RAG engine.
-    ///
-    /// On first run: indexes all configured `[[rag.sources]]`.
-    /// On restart: opens the existing LanceDB table and skips already-indexed sources.
-    pub async fn new(cfg: &RagConfig, embedder: Arc<dyn LlmProvider>) -> Result<Self> {
+    pub async fn new(cfg: &RagConfig, embedder: Arc<dyn LlmProvider>, tenant: &str) -> Result<Self> {
         let store = Arc::new(RagStore::open(&cfg.storage_uri, cfg.embedding_dim).await?);
         let engine = Self {
             store,
             embedder,
             embed_model: cfg.embedding_model.clone(),
             top_k: cfg.top_k,
+            score_threshold: cfg.score_threshold,
+            tenant: tenant.to_owned(),
         };
 
-        // Index all configured sources at startup
+        // Index all configured sources at startup (tenant-scoped)
         for src in &cfg.sources {
             if let Err(e) = engine
                 .index_source(src, cfg.chunk_size, cfg.chunk_overlap)
@@ -73,12 +77,14 @@ impl RagEngine {
             uri = %cfg.storage_uri,
             sources = cfg.sources.len(),
             top_k = cfg.top_k,
+            score_threshold = cfg.score_threshold,
+            tenant = %tenant,
             "RAG engine ready"
         );
         Ok(engine)
     }
 
-    /// Query the knowledge base for chunks relevant to `query`.
+    /// Query the knowledge base for chunks relevant to `query` (tenant-scoped).
     /// Returns formatted context string ready for injection into the system prompt.
     pub async fn query(&self, query: &str) -> String {
         match self.query_chunks(query).await {
@@ -86,7 +92,13 @@ impl RagEngine {
                 let formatted: Vec<String> = chunks
                     .iter()
                     .enumerate()
-                    .map(|(i, c)| format!("[{}] **{}**\n{}", i + 1, c.source, c.text))
+                    .map(|(i, c)| {
+                        let score_info = c
+                            .distance
+                            .map(|d| format!(" (sim={:.2})", 1.0 - d))
+                            .unwrap_or_default();
+                        format!("[{}] **{}**{}\n{}", i + 1, c.source, score_info, c.text)
+                    })
                     .collect();
                 format!(
                     "## Background Knowledge (from RAG knowledge base)\n\n{}\n",
@@ -102,17 +114,22 @@ impl RagEngine {
     }
 
     async fn query_chunks(&self, query: &str) -> Result<Vec<RagChunk>> {
-        let vecs = self.embedder.embed(&self.embed_model, &[query]).await?;
+        let vecs: Vec<Vec<f32>> = self.embedder.embed(&self.embed_model, &[query]).await?;
         let query_vec = vecs.into_iter().next().unwrap_or_default();
         if query_vec.is_empty() {
-            // No embedding available (e.g. Anthropic provider) — BM25 text search fallback
-            return self.store.bm25_search(query, self.top_k).await;
+            // No embedding available (e.g. Anthropic provider) — BM25 text search fallback.
+            return self.store.bm25_search(query, self.top_k, &self.tenant).await;
         }
-        self.store.vector_search(&query_vec, self.top_k).await
+        // Convert similarity threshold to cosine distance threshold:
+        // cosine_similarity = 1 - cosine_distance  →  max_distance = 1 - score_threshold
+        let max_distance = 1.0_f32 - self.score_threshold;
+        self.store
+            .vector_search(&query_vec, self.top_k, &self.tenant, max_distance)
+            .await
     }
 
     async fn index_source(&self, src: &RagSource, chunk_size: usize, overlap: usize) -> Result<()> {
-        if self.store.source_indexed(&src.name).await? {
+        if self.store.source_indexed(&src.name, &self.tenant).await? {
             tracing::debug!(source = %src.name, "RAG: already indexed — skipping");
             return Ok(());
         }
@@ -124,7 +141,6 @@ impl RagEngine {
             return Ok(());
         }
 
-        // Batch embed all chunks
         let texts: Vec<&str> = chunks.iter().map(|s| s.as_str()).collect();
         let vecs = self.embedder.embed(&self.embed_model, &texts).await?;
         let rag_chunks: Vec<RagChunk> = chunks
@@ -132,9 +148,11 @@ impl RagEngine {
             .zip(vecs)
             .map(|(text, vec)| RagChunk {
                 id: uuid::Uuid::new_v4().to_string(),
+                tenant: self.tenant.clone(),
                 source: src.name.clone(),
                 text,
                 embedding: vec,
+                distance: None,
             })
             .collect();
 
@@ -143,15 +161,7 @@ impl RagEngine {
         Ok(())
     }
 
-    /// Index a live text document (M9: MSB device history RAG).
-    ///
-    /// Accepts pre-formatted text (e.g. from `edmd.get_device_history`) and
-    /// chunks + embeds it into the LanceDB store.  The `source` string identifies
-    /// the document in search results (e.g. `"msb-51238696781"`).
-    ///
-    /// This is the write-through path for the MSB service history RAG:
-    /// events arrive via CloudEvent → `agentd` POST `/api/v1/rag/ingest` →
-    /// `index_live_text` → LanceDB → available for natural-language queries.
+    /// Index a live text document (tenant-scoped).
     pub async fn index_live_text(
         &self,
         source: &str,
@@ -176,9 +186,11 @@ impl RagEngine {
             .zip(vecs)
             .map(|(chunk_text, vec)| RagChunk {
                 id: uuid::Uuid::new_v4().to_string(),
+                tenant: self.tenant.clone(),
                 source: source.to_owned(),
                 text: chunk_text,
                 embedding: vec,
+                distance: None,
             })
             .collect();
 

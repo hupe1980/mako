@@ -146,7 +146,8 @@ CREATE TABLE versorgungsvertraege (
                                 'STORNIERT'
                             )),
     vertragsbeginn          DATE        NOT NULL,
-    vertragsende            DATE,
+    vertragsende            DATE
+                        CHECK (vertragsende IS NULL OR vertragsbeginn <= vertragsende),
     kundentyp               TEXT        NOT NULL,
     -- §41 EnWG Preisgarantie
     preisgarantie_bis       DATE,
@@ -216,7 +217,7 @@ COMMENT ON COLUMN vertragskomponenten.preisanpassung_notif_sent IS
     '(de.vertrag.preisaenderung.ankuendigung) was dispatched.';
 
 CREATE INDEX komp_vertrag  ON vertragskomponenten (vertrag_id);
-CREATE INDEX komp_malo     ON vertragskomponenten (malo_id) WHERE malo_id IS NOT NULL;
+CREATE INDEX komp_malo     ON vertragskomponenten (tenant, malo_id) WHERE malo_id IS NOT NULL;
 CREATE INDEX komp_status   ON vertragskomponenten (tenant, status, sparte)
     WHERE status IN ('ANGELEGT','ANGEMELDET');
 CREATE INDEX komp_prozess  ON vertragskomponenten (mako_process_id)

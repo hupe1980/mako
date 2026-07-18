@@ -30,6 +30,22 @@ pub struct VertragdConfig {
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:VERTRAGD_MCP_API_KEY"`.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
+    /// OIDC/JWT authentication for all operator-facing REST endpoints.
+    ///
+    /// When absent the service starts in dev mode (OidcVerifier::disabled).
+    /// Must be configured in production; all write endpoints require a valid
+    /// Bearer token from the configured issuer.
+    pub oidc: Option<mako_service::oidc::OidcConfig>,
     /// Operator escalation after N Werktage without MaKo response.
     pub mako_timeout_werktage: Option<u32>,
+    /// Maximum active portal identities per Kunde (prevents resource exhaustion).
+    /// Default: 50.
+    #[serde(default = "VertragdConfig::default_max_identitaeten")]
+    pub max_identitaeten_per_kunde: u32,
+}
+
+impl VertragdConfig {
+    fn default_max_identitaeten() -> u32 {
+        50
+    }
 }

@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use tracing::{info, instrument, warn};
+use uuid::Uuid;
 
 use super::registry::AgentRegistry;
 use super::session::{AgentDecision, AgentSession};
@@ -182,6 +183,7 @@ impl OrchestratorAgent {
                 Ok(CompletionResult::Text(text)) => {
                     return AgentDecision {
                         agent_name: "orchestrator".into(),
+                        session_id: Uuid::new_v4().to_string(),
                         event_id,
                         event_type,
                         outcome: "completed".into(),
@@ -241,6 +243,7 @@ impl OrchestratorAgent {
 
         AgentDecision {
             agent_name: "orchestrator".into(),
+            session_id: uuid::Uuid::new_v4().to_string(),
             event_id,
             event_type,
             outcome: "no_route".into(),
@@ -271,6 +274,15 @@ impl OrchestratorAgent {
         use futures::stream::{FuturesUnordered, StreamExt};
 
         let take = specialists.len().min(limit);
+        if take < specialists.len() {
+            warn!(
+                available = specialists.len(),
+                limit,
+                dropped = specialists.len() - take,
+                "parallel dispatch: parallel_limit truncating specialist set — \
+                 increase [orchestrator] parallel_limit or use race mode"
+            );
+        }
         let mut futs: FuturesUnordered<_> = specialists
             .into_iter()
             .take(take)
@@ -320,6 +332,7 @@ impl OrchestratorAgent {
 
         AgentDecision {
             agent_name: format!("parallel[{agent_names}]"),
+            session_id: uuid::Uuid::new_v4().to_string(),
             event_id,
             event_type,
             outcome: if has_error {
@@ -384,6 +397,7 @@ impl OrchestratorAgent {
 
         AgentDecision {
             agent_name: "orchestrator".into(),
+            session_id: uuid::Uuid::new_v4().to_string(),
             event_id,
             event_type,
             outcome: "no_route".into(),
@@ -410,6 +424,7 @@ impl OrchestratorAgent {
         if hop > 3 {
             return AgentDecision {
                 agent_name: agent.name.clone(),
+                session_id: uuid::Uuid::new_v4().to_string(),
                 event_id,
                 event_type,
                 outcome: "max_hops".into(),

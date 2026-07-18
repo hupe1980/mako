@@ -88,6 +88,9 @@ fn days_in_month(year: i16, month: i16) -> u8 {
 /// - `de.eeg.verguetung.berechnet` — VERGUETUNG, MIETERSTROM, POST_EEG_SPOT,
 ///   EIGENVERBRAUCH, KWKG_ZUSCHLAG, FLEXIBILITAET
 /// - `de.eeg.marktpraemie.berechnet` — DIREKTVERMARKTUNG, AUSSCHREIBUNG
+///
+/// `bank_iban` and `bank_bic` are included when present so `accountingd` can
+/// generate a SEPA Credit Transfer pain.001 without a secondary DB lookup.
 #[allow(clippy::too_many_arguments)]
 pub async fn emit_settlement_ce(
     cfg: &EinsdConfig,
@@ -98,6 +101,9 @@ pub async fn emit_settlement_ce(
     result: &crate::pg::SettleResult,
     year: i16,
     month: i16,
+    bank_iban: Option<&str>,
+    bank_bic: Option<&str>,
+    zahlungsempfaenger: Option<&str>,
 ) -> Option<uuid::Uuid> {
     let webhook_url = cfg.erp_webhook_url.as_deref()?;
     let ce_id = uuid::Uuid::new_v4();
@@ -120,6 +126,11 @@ pub async fn emit_settlement_ce(
             "einspeisemenge_kwh": result.einspeisemenge_kwh,
             "settlement_eur": result.settlement_eur,
             "status": result.status,
+            // Bank routing fields — enables accountingd SCT Inst auto-payout
+            // without a secondary DB lookup. Absent for EIGENVERBRAUCH (no payout).
+            "bank_iban": bank_iban,
+            "bank_bic": bank_bic,
+            "zahlungsempfaenger": zahlungsempfaenger,
         }
     });
 
@@ -384,6 +395,9 @@ pub async fn post_settle(
                     &result,
                     year,
                     month,
+                    anlage.bank_iban.as_deref(),
+                    anlage.bank_bic.as_deref(),
+                    anlage.zahlungsempfaenger.as_deref(),
                 )
                 .await;
                 // Update ce_id in DB (best-effort — failure doesn't affect settlement result).
@@ -887,6 +901,7 @@ pub async fn post_batch_settle(
                     };
                     emit_settlement_ce(
                         &cfg, &client, ce_type, &tr_id, &malo_id, result, year, month,
+                        None, None, None,
                     )
                     .await;
                 }

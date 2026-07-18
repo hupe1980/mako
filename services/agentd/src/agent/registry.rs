@@ -63,6 +63,20 @@ impl AgentRegistry {
         let should_activate =
             |name: &str| -> bool { bundled.enable_all || bundled.enable.iter().any(|e| e == name) };
 
+        // Warn on unknown names in the explicit `enable` list
+        if !bundled.enable_all {
+            let builtin_names: std::collections::HashSet<&str> =
+                builtin::all().map(|d| d.name).collect();
+            for name in &bundled.enable {
+                if !builtin_names.contains(name.as_str()) {
+                    tracing::warn!(
+                        name = %name,
+                        "bundled_agents.enable references unknown built-in agent — check spelling"
+                    );
+                }
+            }
+        }
+
         let default_provider_name = bundled
             .default_provider
             .as_deref()
@@ -324,7 +338,7 @@ mod tests {
                 &crate::config::ProviderConfig {
                     backend: "openai".into(),
                     api_base: None,
-                    api_key: String::new(),
+                    api_key: String::new().into(),
                     aws_region: None,
                     aws_access_key_id: None,
                     aws_secret_access_key: None,
@@ -355,7 +369,7 @@ mod tests {
                 &crate::config::ProviderConfig {
                     backend: "openai".into(),
                     api_base: None,
-                    api_key: String::new(),
+                    api_key: String::new().into(),
                     aws_region: None,
                     aws_access_key_id: None,
                     aws_secret_access_key: None,

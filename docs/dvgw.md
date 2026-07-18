@@ -262,10 +262,37 @@ Nominations use a two-message round-trip correlated by document reference:
 Correlate `nomres.nomination_ref == nomint.nomination_ref` to route the response
 to the correct outbound nomination workflow via `ProcessRegistry::lookup_by_correlation`.
 
+#### KoV deadline enforcement
+
 Nomination window deadlines are gas-day-specific per the Kooperationsvereinbarung
-Gas (KoV): submission by **D-1 13:00 CET**, re-nomination by **D+0 10:00 CET**.
+Gas (KoV). `mako-gabi-gas` exposes these as typed helper methods on `GasDay`:
+
+| Deadline | Per KoV | Helper method |
+|---|---|---|
+| NOMINT submission | D-1 13:00 CET | `GasDay::nomination_deadline_utc()` |
+| NOMRES response window | D-1 15:00 CET | `GasDay::nomres_deadline_utc()` |
+| Initial ALOCAT | D+3 12:00 CET (KoV §6.4) | `GasDay::initial_alocat_deadline_utc()` |
+| Final ALOCAT | M+2 last day (KoV §6.4) | `GasDay::final_alocat_deadline_utc()` |
+
 These are enforced in `mako-gabi-gas` by the workflow deadline layer, not by
 the parser.
+
+### 5.4 Decimal-safe quantity parsing
+
+ALOCAT messages carry gas energy quantities that require high precision (DVGW
+G 685 §7 mandates ≥ 3 decimal places). `AlocatQuantity` provides two accessors:
+
+```rust
+// ✅ Preferred for billing: returns Option<Decimal> (no float rounding)
+if let Some(kwh) = qty.quantity_decimal() { ... }
+
+// ⚠️  Legacy/diagnostics only: returns Option<f64> (potential precision loss)
+if let Some(kwh) = qty.quantity_f64() { ... }
+```
+
+The `decimal` feature (enabled by default) provides `quantity_decimal()`. Always
+use it when calculating gas allocation quantities or feeding values into
+`GasQuantity` or `GasBeschaffenheit::to_kwh_hs()`.
 
 ---
 
@@ -273,11 +300,13 @@ the parser.
 
 ### 6.1 INVOIC billing (live)
 
-`GaBiGasInvoicWorkflow` in `mako-gabi-gas` handles PID 31010:
+`GaBiGasInvoicWorkflow` in `mako-gabi-gas` handles the INVOIC PIDs:
 
 | PID | Process | Direction | Crate |
 |---|---|---|---|
 | 31010 | Kapazitätsrechnung (capacity billing) | FNB/VNB → BKV | `mako-gabi-gas` |
+| 31007 | Aggreg. MMM-Rechnung Gas | NB → MGV | `mako-gabi-gas` |
+| 31008 | MMM-Rechnung Gas selbst ausgestellt | NB → MGV | `mako-gabi-gas` |
 
 > **PID 31011 is NOT a GaBi Gas billing.** PID 31011 (Rechnung sonstige Leistung,
 > AWH Sperrprozesse Gas, NB → LF) is the GeLi Gas billing for grid operator
@@ -286,10 +315,24 @@ the parser.
 > and balancing between FNB/MGV/BKV; GeLi Gas (BK7-24-01-009) covers retail gas
 > market communication between LFG/GNB.
 
-PID 31010 uses the standard BDEW INVOIC format handled by `edi-energy`'s INVOIC
-profile. It is independent of the DVGW formats (ALOCAT, NOMINT, NOMRES, etc.).
+### 6.2 Gas domain model (`mako-gabi-gas`)
 
-### 6.2 Implementation patterns
+The `mako-gabi-gas` crate exposes a rich, regulation-accurate domain vocabulary:
+
+| Type | Purpose |
+|---|---|
+| `GasDay` | Typed gas market day (DST-aware, 06:00 CET start, 23/25-hour DST days) |
+| `GasQuantity` | Decimal-precision kWh_Hs with m³ + conversion metadata |
+| `GasBeschaffenheit` | Brennwert (Hs/Hu) + Zustandszahl; `.validate()` checks DVGW G 260 ranges |
+| `GasQualityFlag` | 7-state quality flag (Measured/Estimated/Substituted/Calculated/Corrected/Rejected/Unknown) per §17 MessZV |
+| `AllocationVersion` | Initial/Correction(n)/Final per KoV §6.4 |
+| `GasMarketRole` | 9-role typed enum (LF, NB, FNB, VNB, BKV, MGV, MSB, Händler, TNB) |
+| `GasImbalanceSaldo` | Mehr/Minder/Balanced with `ausgleichsenergie_price_ct_per_kwh` per KoV §9 |
+| `GasPortfolioBalance` | BKV portfolio across Bilanzkreise; `conservation_check()` per GasNZV §24 |
+| `cloud_events` | Typed `de.gabi.*` CloudEvent constants for all 12 domain events |
+| `dvgw_versions` | Biannual DVGW format version tracking (ALOCAT 5.11a / NOMINT 4.6 FK / …) |
+
+### 6.3 Implementation patterns
 
 The `dvgw-edi` / `mako-gabi-gas` crates follow the same conventions as all
 other domain workflow crates in this workspace:

@@ -1481,6 +1481,7 @@ impl DeviceRepository for InMemoryDeviceRepository {
                 zaehler_id: zaehler_id.to_owned(),
                 geraet_typ: geraet_typ.map(std::borrow::ToOwned::to_owned),
                 data,
+                konfigurationen: Vec::new(),
                 bo4e_version: bo4e_version.to_owned(),
                 version,
                 updated_at: time::OffsetDateTime::now_utc(),
@@ -1502,6 +1503,37 @@ impl DeviceRepository for InMemoryDeviceRepository {
             .filter(|r| r.tenant == tenant && r.zaehler_id == zaehler_id)
             .cloned()
             .collect())
+    }
+
+    async fn find_geraet(
+        &self,
+        geraet_id: &str,
+        tenant: &str,
+    ) -> Result<Option<GeraetRecord>, crate::error::MdmError> {
+        Ok(self
+            .geraete
+            .read()
+            .await
+            .get(&(geraet_id.to_owned(), tenant.to_owned()))
+            .cloned())
+    }
+
+    async fn upsert_geraet_konfigurationen(
+        &self,
+        geraet_id: &str,
+        tenant: &str,
+        konfigurationen: Vec<crate::repository::GeraetKonfiguration>,
+    ) -> Result<bool, crate::error::MdmError> {
+        let key = (geraet_id.to_owned(), tenant.to_owned());
+        let mut geraete = self.geraete.write().await;
+        if let Some(record) = geraete.get_mut(&key) {
+            record.konfigurationen = konfigurationen;
+            record.version += 1;
+            record.updated_at = time::OffsetDateTime::now_utc();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 

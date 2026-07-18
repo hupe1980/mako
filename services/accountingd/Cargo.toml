@@ -29,6 +29,7 @@ serde_json   = { workspace = true }
 time         = { workspace = true }
 uuid         = { workspace = true, features = ["v4", "serde"] }
 rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
 rubo4e       = { workspace = true }
 reqwest      = { workspace = true }
 sepa         = { workspace = true, features = ["json"] }
@@ -37,4 +38,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower-http   = { version = "0.6" }
 tokio-util   = { workspace = true }
 anyhow       = "1"
-secrecy      = { version = "0.10" }
+secrecy      = { version = "0.10", features = ["serde"] }
+
+[features]
+# Enable integration tests that require a live PostgreSQL database.
+# Usage: cargo test -p accountingd --test integration_tests --features integration-tests
+# Requires: DATABASE_URL env var pointing to a PostgreSQL admin connection.
+integration-tests = []
+
+[dev-dependencies]
+# Required by sqlx::test macro for per-test database provisioning
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal", "migrate", "macros"] }
+tokio = { version = "1", features = ["full", "test-util"] }
+rust_decimal_macros = { workspace = true }

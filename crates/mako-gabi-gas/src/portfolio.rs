@@ -255,7 +255,119 @@ impl GasPortfolioBalance {
     pub fn open_imbalance_count(&self) -> usize {
         self.positions.iter().filter(|p| !p.is_balanced()).count()
     }
+
+    /// Check energy conservation for this portfolio snapshot.
+    ///
+    /// Per KoV and DVGW G 685 / GasNZV §24, the total allocated quantity
+    /// across all BKVs in a VNB exit zone must equal the VNB's total measured
+    /// offtake. This method verifies that the BKV's own portfolio sums are
+    /// internally consistent.
+    ///
+    /// ## Return value
+    ///
+    /// Returns `Ok(total_allocated_kwh)` when all positions have allocations
+    /// and the total matches `expected_total_kwh` within `tolerance_kwh`.
+    ///
+    /// Returns `Err(ConservationViolation)` when:
+    /// - Any position lacks an allocation (incomplete data)
+    /// - The total deviates from `expected_total_kwh` beyond `tolerance_kwh`
+    ///
+    /// ## Usage
+    ///
+    /// ```rust,no_run
+    /// # use mako_gabi_gas::portfolio::*;
+    /// # use mako_gabi_gas::domain::GasDay;
+    /// # use rust_decimal_macros::dec;
+    /// # use time::macros::date;
+    /// # let balance = GasPortfolioBalance { bkv_eic: "E".to_owned(), gas_day: GasDay::new(date!(2026-01-01)), positions: vec![], computed_at: time::OffsetDateTime::now_utc() };
+    /// let expected_kwh = dec!(5000.0); // from VNB measurement data
+    /// let tolerance_kwh = dec!(1.0);   // 1 kWh tolerance per GasNZV §24
+    /// match balance.conservation_check(expected_kwh, tolerance_kwh) {
+    ///     Ok(total) => println!("Conservation OK: {} kWh allocated", total),
+    ///     Err(e) => println!("Conservation violation: {e}"),
+    /// }
+    /// ```
+    pub fn conservation_check(
+        &self,
+        expected_total_kwh: Decimal,
+        tolerance_kwh: Decimal,
+    ) -> Result<Decimal, ConservationViolation> {
+        let positions_without_allocation: Vec<&str> = self
+            .positions
+            .iter()
+            .filter(|p| p.allocated_kwh.is_none())
+            .map(|p| p.bilanzkreis_eic.as_str())
+            .collect();
+
+        if !positions_without_allocation.is_empty() {
+            return Err(ConservationViolation::IncompleteAllocations {
+                missing_bilanzkreise: positions_without_allocation
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            });
+        }
+
+        let actual_total = self.total_allocated_kwh();
+        let deviation = (actual_total - expected_total_kwh).abs();
+        if deviation > tolerance_kwh {
+            Err(ConservationViolation::EnergyImbalance {
+                expected_kwh: expected_total_kwh,
+                actual_kwh: actual_total,
+                deviation_kwh: deviation,
+                tolerance_kwh,
+            })
+        } else {
+            Ok(actual_total)
+        }
+    }
 }
+
+/// Error returned by [`GasPortfolioBalance::conservation_check`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConservationViolation {
+    /// One or more Bilanzkreise have no allocation data yet.
+    IncompleteAllocations {
+        /// EIC codes of Bilanzkreise without an allocation.
+        missing_bilanzkreise: Vec<String>,
+    },
+    /// Total allocated energy deviates from expected by more than the tolerance.
+    EnergyImbalance {
+        /// Expected total (from VNB measurement).
+        expected_kwh: Decimal,
+        /// Actual total (sum of all BKV allocations).
+        actual_kwh: Decimal,
+        /// Absolute deviation.
+        deviation_kwh: Decimal,
+        /// Accepted tolerance (per GasNZV §24).
+        tolerance_kwh: Decimal,
+    },
+}
+
+impl std::fmt::Display for ConservationViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IncompleteAllocations { missing_bilanzkreise } => write!(
+                f,
+                "Conservation check requires complete allocations; \
+                 missing for Bilanzkreise: {}",
+                missing_bilanzkreise.join(", ")
+            ),
+            Self::EnergyImbalance {
+                expected_kwh,
+                actual_kwh,
+                deviation_kwh,
+                tolerance_kwh,
+            } => write!(
+                f,
+                "Conservation violation: expected {expected_kwh} kWh_Hs, \
+                 got {actual_kwh} kWh_Hs, deviation {deviation_kwh} > tolerance {tolerance_kwh}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConservationViolation {}
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
@@ -355,5 +467,88 @@ mod tests {
         assert!(!AllocationVersion::Initial.is_revision());
         assert!(AllocationVersion::Correction(1).is_revision());
         assert!(AllocationVersion::Final.is_revision());
+    }
+
+    // ── GasPortfolioBalance::conservation_check ────────────────────────────────
+
+    #[test]
+    fn conservation_check_passes_within_tolerance() {
+        let balance = GasPortfolioBalance {
+            bkv_eic: "EIC_BKV".to_owned(),
+            gas_day: gas_day(),
+            positions: vec![
+                PortfolioPosition {
+                    bilanzkreis_eic: "BK1".to_owned(),
+                    gas_day: gas_day(),
+                    nominated_kwh: Some(dec!(1000.0)),
+                    allocated_kwh: Some(dec!(600.0)),
+                    imbalance_kwh: Some(dec!(400.0)),
+                    is_final: true,
+                },
+                PortfolioPosition {
+                    bilanzkreis_eic: "BK2".to_owned(),
+                    gas_day: gas_day(),
+                    nominated_kwh: Some(dec!(400.0)),
+                    allocated_kwh: Some(dec!(400.5)), // slight measurement deviation
+                    imbalance_kwh: Some(dec!(-0.5)),
+                    is_final: true,
+                },
+            ],
+            computed_at: time::OffsetDateTime::now_utc(),
+        };
+        // Expected total from VNB: 1000 kWh; actual = 600 + 400.5 = 1000.5
+        let result = balance.conservation_check(dec!(1000.0), dec!(1.0));
+        assert!(result.is_ok(), "deviation 0.5 < tolerance 1.0");
+        assert_eq!(result.unwrap(), dec!(1000.5));
+    }
+
+    #[test]
+    fn conservation_check_fails_when_deviation_exceeds_tolerance() {
+        let balance = GasPortfolioBalance {
+            bkv_eic: "EIC_BKV".to_owned(),
+            gas_day: gas_day(),
+            positions: vec![PortfolioPosition {
+                bilanzkreis_eic: "BK1".to_owned(),
+                gas_day: gas_day(),
+                nominated_kwh: Some(dec!(1000.0)),
+                allocated_kwh: Some(dec!(990.0)), // 10 kWh short
+                imbalance_kwh: Some(dec!(10.0)),
+                is_final: true,
+            }],
+            computed_at: time::OffsetDateTime::now_utc(),
+        };
+        let result = balance.conservation_check(dec!(1000.0), dec!(1.0));
+        assert!(result.is_err(), "deviation 10 > tolerance 1.0");
+        match result.unwrap_err() {
+            ConservationViolation::EnergyImbalance { deviation_kwh, .. } => {
+                assert_eq!(deviation_kwh, dec!(10.0));
+            }
+            other => panic!("unexpected violation type: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conservation_check_fails_when_allocation_missing() {
+        let balance = GasPortfolioBalance {
+            bkv_eic: "EIC_BKV".to_owned(),
+            gas_day: gas_day(),
+            positions: vec![PortfolioPosition {
+                bilanzkreis_eic: "BK_MISSING".to_owned(),
+                gas_day: gas_day(),
+                nominated_kwh: Some(dec!(500.0)),
+                allocated_kwh: None, // initial allocation not yet received
+                imbalance_kwh: None,
+                is_final: false,
+            }],
+            computed_at: time::OffsetDateTime::now_utc(),
+        };
+        let result = balance.conservation_check(dec!(500.0), dec!(1.0));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ConservationViolation::IncompleteAllocations { missing_bilanzkreise } => {
+                assert_eq!(missing_bilanzkreise, vec!["BK_MISSING"]);
+            }
+            other => panic!("unexpected violation type: {other:?}"),
+        }
     }
 }

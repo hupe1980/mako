@@ -24,6 +24,9 @@ pub struct ProductUpsertRequest {
     pub data: serde_json::Value,
     #[serde(default = "default_bo4e")]
     pub bo4e_version: String,
+    /// `DRAFT` = staged/preview; `PUBLISHED` (default) = active for billing.
+    #[serde(default = "default_published")]
+    pub product_status: String,
     /// Optional \u00a742 EnWG `Energiemix` payload (camelCase BO4E COM JSON).
     /// If supplied here it is stored in the dedicated `energiemix` column
     /// and also exposed via `GET /energiemix`.
@@ -36,6 +39,10 @@ pub struct ProductUpsertRequest {
 
 fn default_bo4e() -> String {
     "v202607.0.0".to_owned()
+}
+
+fn default_published() -> String {
+    "PUBLISHED".to_owned()
 }
 
 /// Stored product row returned by GET endpoints.
@@ -54,6 +61,8 @@ pub struct ProductRow {
     pub valid_to: Option<Date>,
     pub data: serde_json::Value,
     pub bo4e_version: String,
+    /// `DRAFT` or `PUBLISHED`.
+    pub product_status: String,
     /// \u00a742 EnWG `Energiemix` COM payload. `None` = no green certification.
     pub energiemix: Option<serde_json::Value>,
     /// Active `Oekolabel` certification codes.
@@ -71,10 +80,10 @@ pub async fn upsert_product(
     let valid_from = parse_date_opt(&req.valid_from).context("parse valid_from")?;
     let valid_to = parse_date_opt(&req.valid_to).context("parse valid_to")?;
 
-    // Archive previous version before upsert.
+    // Archive previous version before upsert (includes energiemix for §42 audit trail).
     let _ = sqlx::query(
-        r"INSERT INTO product_history (lf_mp_id, product_code, data, bo4e_version)
-          SELECT lf_mp_id, product_code, data, bo4e_version
+        r"INSERT INTO product_history (lf_mp_id, product_code, data, energiemix, bo4e_version)
+          SELECT lf_mp_id, product_code, data, energiemix, bo4e_version
           FROM products
           WHERE lf_mp_id = $1 AND product_code = $2 AND (valid_from = $3 OR $3 IS NULL)
           ORDER BY updated_at DESC
@@ -89,8 +98,9 @@ pub async fn upsert_product(
     let row = sqlx::query(
         r"INSERT INTO products
               (lf_mp_id, product_code, category, name, sparte, register_count, kundentyp,
-               dyn_source, valid_from, valid_to, data, bo4e_version, energiemix, oekolabel, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
+               dyn_source, valid_from, valid_to, data, bo4e_version, product_status,
+               energiemix, oekolabel, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
           ON CONFLICT (lf_mp_id, product_code, valid_from) DO UPDATE
           SET category      = EXCLUDED.category,
               name          = EXCLUDED.name,
@@ -101,6 +111,7 @@ pub async fn upsert_product(
               valid_to      = EXCLUDED.valid_to,
               data          = EXCLUDED.data,
               bo4e_version  = EXCLUDED.bo4e_version,
+              product_status= EXCLUDED.product_status,
               energiemix    = COALESCE(EXCLUDED.energiemix, products.energiemix),
               oekolabel     = COALESCE(EXCLUDED.oekolabel, products.oekolabel),
               updated_at    = now()
@@ -118,6 +129,7 @@ pub async fn upsert_product(
     .bind(valid_to)
     .bind(&req.data)
     .bind(&req.bo4e_version)
+    .bind(&req.product_status)
     .bind(&req.energiemix)
     .bind(&req.oekolabel)
     .fetch_one(pool)
@@ -143,13 +155,43 @@ pub async fn fetch_product(
     .context("fetch product")
 }
 
+/// Soft-delete a product by setting `valid_to = today`.
+///
+/// Only touches `valid_to` and `updated_at` — the product remains in the
+/// database for historical billing lookups and the audit log.  Billing engines
+/// should call `fetch_product` and check `valid_to` when deciding whether a
+/// product is still applicable for a given billing period.
+///
+/// Returns `true` if a row was found and updated, `false` if the product did
+/// not exist.
+pub async fn soft_delete_product(
+    pool: &PgPool,
+    lf_mp_id: &str,
+    product_code: &str,
+) -> anyhow::Result<bool> {
+    let today = time::OffsetDateTime::now_utc().date();
+    let res = sqlx::query(
+        r"UPDATE products
+          SET valid_to = $3, updated_at = now()
+          WHERE lf_mp_id = $1 AND product_code = $2
+            AND (valid_to IS NULL OR valid_to > $3)",
+    )
+    .bind(lf_mp_id)
+    .bind(product_code)
+    .bind(today)
+    .execute(pool)
+    .await
+    .context("soft_delete_product")?;
+    Ok(res.rows_affected() > 0)
+}
+
 pub async fn fetch_product_history(
     pool: &PgPool,
     lf_mp_id: &str,
     product_code: &str,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let rows = sqlx::query(
-        "SELECT id, lf_mp_id, product_code, data, bo4e_version, changed_at
+        "SELECT id, lf_mp_id, product_code, data, energiemix, bo4e_version, changed_at
          FROM product_history WHERE lf_mp_id = $1 AND product_code = $2
          ORDER BY changed_at DESC LIMIT 100",
     )
@@ -167,6 +209,7 @@ pub async fn fetch_product_history(
                 "lf_mp_id": r.try_get::<String,_>("lf_mp_id").ok(),
                 "product_code": r.try_get::<String,_>("product_code").ok(),
                 "data": r.try_get::<serde_json::Value,_>("data").ok(),
+                "energiemix": r.try_get::<Option<serde_json::Value>,_>("energiemix").ok().flatten(),
                 "bo4e_version": r.try_get::<String,_>("bo4e_version").ok(),
                 "changed_at": r.try_get::<OffsetDateTime,_>("changed_at").ok().map(|t| t.to_string()),
             })
@@ -294,6 +337,10 @@ pub struct ProductListQuery {
     pub category: Option<String>,
     pub sparte: Option<String>,
     pub kundentyp: Option<String>,
+    /// Include DRAFT products.  Default: `false` (only PUBLISHED).
+    pub include_drafts: Option<bool>,
+    /// Include products whose `valid_to < today`.  Default: `false`.
+    pub include_expired: Option<bool>,
     pub limit: Option<i64>,
 }
 
@@ -302,6 +349,8 @@ pub async fn list_products(
     lf_mp_id: &str,
     q: &ProductListQuery,
 ) -> anyhow::Result<Vec<ProductRow>> {
+    let include_drafts = q.include_drafts.unwrap_or(false);
+    let include_expired = q.include_expired.unwrap_or(false);
     sqlx::query_as::<_, ProductRow>(
         r"SELECT DISTINCT ON (product_code) *
           FROM products
@@ -309,13 +358,17 @@ pub async fn list_products(
             AND ($2::text IS NULL OR category = $2)
             AND ($3::text IS NULL OR sparte = $3)
             AND ($4::text IS NULL OR kundentyp = $4)
+            AND ($5::bool IS TRUE OR product_status = 'PUBLISHED')
+            AND ($6::bool IS TRUE OR valid_to IS NULL OR valid_to >= CURRENT_DATE)
           ORDER BY product_code, valid_from DESC NULLS LAST
-          LIMIT $5",
+          LIMIT $7",
     )
     .bind(lf_mp_id)
     .bind(&q.category)
     .bind(&q.sparte)
     .bind(&q.kundentyp)
+    .bind(include_drafts)
+    .bind(include_expired)
     .bind(q.limit.unwrap_or(100).min(1000))
     .fetch_all(pool)
     .await
@@ -383,6 +436,55 @@ pub async fn assign_product(
     use time::format_description::well_known::Iso8601;
     let assigned_from =
         Date::parse(&req.assigned_from, &Iso8601::DEFAULT).context("parse assigned_from")?;
+
+    // Guard: product must exist and be PUBLISHED.
+    let product = sqlx::query(
+        r"SELECT valid_from, valid_to, sparte, product_status
+          FROM products
+          WHERE lf_mp_id = $1 AND product_code = $2
+          ORDER BY valid_from DESC NULLS LAST
+          LIMIT 1",
+    )
+    .bind(lf_mp_id)
+    .bind(&req.product_code)
+    .fetch_optional(pool)
+    .await
+    .context("check product exists")?;
+
+    let product = product.ok_or_else(|| {
+        anyhow::anyhow!(
+            "product {}/{} not found",
+            lf_mp_id,
+            req.product_code
+        )
+    })?;
+
+    // Reject DRAFT products — operators must publish before assigning.
+    let status: String = product.try_get("product_status").unwrap_or_default();
+    if status == "DRAFT" {
+        anyhow::bail!(
+            "product {} is DRAFT; publish it before assigning to a MaLo",
+            req.product_code
+        );
+    }
+
+    // Guard: assigned_from must not predate the product's valid_from.
+    let prod_valid_from: Option<Date> = product.try_get("valid_from").ok().flatten();
+    if let Some(vf) = prod_valid_from.filter(|&vf| assigned_from < vf) {
+        anyhow::bail!(
+            "assigned_from ({assigned_from}) is before product valid_from ({vf}); \
+             retroactive assignment is not allowed"
+        );
+    }
+
+    // Guard: product must not be expired at the assignment date.
+    let prod_valid_to: Option<Date> = product.try_get("valid_to").ok().flatten();
+    if let Some(vt) = prod_valid_to.filter(|&vt| assigned_from > vt) {
+        anyhow::bail!(
+            "product {} expired on {vt}; cannot assign after expiry",
+            req.product_code
+        );
+    }
 
     // Close previous assignment if active.
     sqlx::query(
@@ -575,6 +677,9 @@ pub struct AngebotRow {
     pub laufzeit_monate: i16,
     pub positionen: serde_json::Value,
     pub varianten: serde_json::Value,
+    /// Pre-computed per-variant cost breakdown.  Populated on write;
+    /// consumed by `GET /api/v1/angebote/{id}/comparison`.
+    pub angebot_varianten_enriched: serde_json::Value,
     pub jahreskosten_netto_eur: Option<Decimal>,
     pub jahreskosten_brutto_eur: Option<Decimal>,
     pub gewaehlte_variante: Option<i16>,
@@ -672,6 +777,7 @@ pub async fn insert_angebot(
     req: &CreateAngebotRequest,
     positionen_json: &serde_json::Value,
     varianten_json: &serde_json::Value,
+    varianten_enriched_json: &serde_json::Value,
     netto: Option<Decimal>,
     brutto: Option<Decimal>,
     gueltig_bis: Date,
@@ -682,10 +788,10 @@ pub async fn insert_angebot(
         r"INSERT INTO angebote
               (tenant, lf_mp_id, kunden_id, interessent_name, contact_email, contact_phone,
                angebotsnummer, gueltig_bis, lieferbeginn, laufzeit_monate,
-               positionen, varianten,
+               positionen, varianten, angebot_varianten_enriched,
                jahreskosten_netto_eur, jahreskosten_brutto_eur,
                erp_angebot_id, notizen)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
           RETURNING id",
     )
     .bind(tenant)
@@ -700,6 +806,7 @@ pub async fn insert_angebot(
     .bind(laufzeit)
     .bind(positionen_json)
     .bind(varianten_json)
+    .bind(varianten_enriched_json)
     .bind(netto)
     .bind(brutto)
     .bind(&req.erp_angebot_id)
@@ -1000,6 +1107,25 @@ pub struct ComparisonFeedEntry {
     /// Full validated BO4E `Tarifpreisblatt` payload.
     /// Portal integrators may use this for deep tariff analysis.
     pub tarifpreisblatt: serde_json::Value,
+    /// §42d EnWG: Full BO4E `Tarifinfo` Business Object envelope.
+    ///
+    /// Ready for direct schema-validated import by Verivox, Check24, and the
+    /// BNetzA Markttransparenzstelle.  Eliminates the manual ETL step for portal
+    /// integration: the portal receives a standard BO4E object, not a custom JSON.
+    ///
+    /// Fields mapped:
+    /// - `bezeichnung` ← product `name`
+    /// - `sparte` ← product `sparte` → `rubo4e::Sparte`
+    /// - `kundentypen` ← product `kundentyp` → `[rubo4e::Kundentyp]`
+    /// - `registeranzahl` ← product `register_count` → `rubo4e::Registeranzahl`
+    /// - `tariftyp` ← `data.tariftyp` → `rubo4e::Tariftyp`
+    /// - `tarifmerkmale` ← derived from preisgarantie, category, dyn_source
+    /// - `energiemix` ← product `energiemix` → `rubo4e::Energiemix`
+    /// - `zeitlicheGueltigkeit` ← product `valid_from/valid_to`
+    /// - `vertragskonditionen` ← `data.vertragskonditionen`
+    /// - `anbietername` ← `lf_mp_id`
+    /// - `_id` ← `product_code`
+    pub tarifinfo: serde_json::Value,
     /// RFC 3339 timestamp of the last product update.
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
@@ -1096,6 +1222,7 @@ pub async fn fetch_comparison_feed(
             AND ($5::bool IS FALSE OR dyn_source IS NOT NULL)
             AND ($6::bool IS FALSE OR dyn_source IS NULL)
             AND ($7::text[] IS NULL OR oekolabel @> $7)
+            AND product_status = 'PUBLISHED'
             AND (
                 $8::timestamptz IS NULL
                 OR updated_at < $8

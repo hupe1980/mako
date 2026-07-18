@@ -140,6 +140,8 @@ pub struct CreateRahmenvertragInput {
     pub rechnungsstellung: Option<String>, // EINZEL | SAMMEL | POSITIONEN
     pub sammelrechnung_intervall: Option<String>,
     pub erp_rahmenvertrag_id: Option<String>,
+    /// Traceability link to the B2B Angebot that led to this Rahmenvertrag (CPQ pipeline).
+    pub angebot_id: Option<Uuid>,
     #[allow(dead_code)]
     pub notizen: Option<String>,
 }
@@ -433,14 +435,16 @@ pub async fn insert_rahmenvertrag(
     input: &CreateRahmenvertragInput,
 ) -> Result<Uuid> {
     let id = Uuid::new_v4();
-    sqlx::query(
+    let row = sqlx::query(
         "INSERT INTO rahmenvertraege
          (id,kunden_id,tenant,rahmenvertrag_nr,gueltig_von,gueltig_bis,
           kuendigungsfrist_monate,auto_renewal,renewal_monate,
           preisanpassungsformel,portfolio_rabatt_prozent,
-          rechnungsstellung,sammelrechnung_intervall,erp_rahmenvertrag_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-         ON CONFLICT (tenant,erp_rahmenvertrag_id) DO UPDATE SET updated_at=now()",
+          rechnungsstellung,sammelrechnung_intervall,erp_rahmenvertrag_id,angebot_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         ON CONFLICT (tenant,erp_rahmenvertrag_id) WHERE erp_rahmenvertrag_id IS NOT NULL
+           DO UPDATE SET updated_at=now()
+         RETURNING id",
     )
     .bind(id)
     .bind(kunden_id)
@@ -456,9 +460,10 @@ pub async fn insert_rahmenvertrag(
     .bind(input.rechnungsstellung.as_deref().unwrap_or("EINZEL"))
     .bind(&input.sammelrechnung_intervall)
     .bind(&input.erp_rahmenvertrag_id)
-    .execute(pool)
+    .bind(input.angebot_id) // $15 — CPQ traceability
+    .fetch_one(pool)
     .await?;
-    Ok(id)
+    Ok(row.try_get("id")?)
 }
 
 /// Compute the earliest legally valid Kündigung date given a contract start and
@@ -508,14 +513,16 @@ pub async fn insert_versorgungsvertrag(
     input: &CreateVersorgungsvertragInput,
 ) -> Result<Uuid> {
     let id = Uuid::new_v4();
-    sqlx::query(
+    let row = sqlx::query(
         "INSERT INTO versorgungsvertraege
          (id,kunden_id,rahmenvertrag_id,tenant,kundentyp,bundle_code,
           vertragsbeginn,vertragsende,kuendigungsfrist_monate,
           preisgarantie_bis,auto_renewal,standort_bezeichnung,erp_contract_id,
           naechste_moegliche_kuendigung)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-         ON CONFLICT (tenant,erp_contract_id) DO UPDATE SET updated_at=now()",
+         ON CONFLICT (tenant,erp_contract_id) WHERE erp_contract_id IS NOT NULL
+           DO UPDATE SET updated_at=now()
+         RETURNING id, id = $1 AS is_new_insert",
     )
     .bind(id)
     .bind(kunden_id)
@@ -534,13 +541,18 @@ pub async fn insert_versorgungsvertrag(
         input.vertragsbeginn,
         input.kuendigungsfrist_monate.unwrap_or(1),
     ))
-    .execute(pool)
+    .fetch_one(pool)
     .await?;
-    // Insert components
-    for komp in &input.komponenten {
-        insert_komponente(pool, id, lf_mp_id, komp).await?;
+    let actual_id: Uuid = row.try_get("id")?;
+    // Only insert components for fresh inserts (not on idempotent conflict replay).
+    // id = $1 is true only when the row was genuinely inserted; false on conflict.
+    let is_new_insert: bool = row.try_get("is_new_insert").unwrap_or(true);
+    if is_new_insert {
+        for komp in &input.komponenten {
+            insert_komponente(pool, actual_id, lf_mp_id, komp).await?;
+        }
     }
-    Ok(id)
+    Ok(actual_id)
 }
 
 pub async fn insert_komponente(
@@ -1223,6 +1235,248 @@ pub async fn gdpr_export(
     }))
 }
 
+
+// ── Additional query helpers for MCP tools ────────────────────────────────────
+
+/// Fetch a single Rahmenvertrag by UUID.
+pub async fn fetch_rahmenvertrag(
+    pool: &PgPool,
+    id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Option<RahmenvertragRow>> {
+    Ok(sqlx::query_as("SELECT * FROM rahmenvertraege WHERE id=$1 AND tenant=$2")
+        .bind(id)
+        .bind(tenant)
+        .fetch_optional(pool)
+        .await?)
+}
+
+/// List all Rahmenverträge for a tenant (operator CRM view).
+pub async fn list_all_rahmenvertraege(
+    pool: &PgPool,
+    tenant: &str,
+    status: Option<&str>,
+    limit: i64,
+) -> anyhow::Result<Vec<RahmenvertragRow>> {
+    Ok(sqlx::query_as(
+        r"SELECT * FROM rahmenvertraege
+          WHERE tenant = $1
+            AND ($2::text IS NULL OR status = $2)
+          ORDER BY gueltig_von DESC
+          LIMIT $3",
+    )
+    .bind(tenant)
+    .bind(status)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// List contracts with GEKÜNDIGT status (active Kündigung, lieferende in future).
+/// Used by MCP tool `list_pending_kuendigungen`.
+pub async fn list_pending_kuendigungen(
+    pool: &PgPool,
+    tenant: &str,
+    limit: i64,
+) -> anyhow::Result<Vec<VersorgungsvertragRow>> {
+    Ok(sqlx::query_as(
+        r"SELECT * FROM versorgungsvertraege
+          WHERE tenant = $1
+            AND status = 'GEKÜNDIGT'
+            AND (vertragsende IS NULL OR vertragsende >= CURRENT_DATE)
+          ORDER BY vertragsende ASC NULLS LAST
+          LIMIT $2",
+    )
+    .bind(tenant)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Fetch Zahlungsinformation JSONB for a customer (SEPA/IBAN details).
+pub async fn fetch_zahlungsinformation(
+    pool: &PgPool,
+    kunden_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let row = sqlx::query(
+        "SELECT zahlungsinformation FROM kunden WHERE id=$1 AND tenant=$2",
+    )
+    .bind(kunden_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|r| {
+        r.try_get::<Option<serde_json::Value>, _>("zahlungsinformation")
+            .ok()
+            .flatten()
+    }))
+}
+
+/// Check whether a Tarifwechsel is currently blocked by an active Preisgarantie.
+/// Returns (is_blocked, preisgarantie_bis) for the given contract.
+pub async fn check_preisgarantie_for_mcp(
+    pool: &PgPool,
+    vertrag_id: Uuid,
+    tenant: &str,
+    wirksamkeit: time::Date,
+) -> anyhow::Result<(bool, Option<time::Date>)> {
+    let row = sqlx::query(
+        "SELECT preisgarantie_bis FROM versorgungsvertraege WHERE id=$1 AND tenant=$2",
+    )
+    .bind(vertrag_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await?;
+
+    let garantie_bis: Option<time::Date> = row
+        .and_then(|r| r.try_get::<Option<time::Date>, _>("preisgarantie_bis").ok().flatten());
+    let blocked = garantie_bis.is_some_and(|g| wirksamkeit <= g);
+    Ok((blocked, garantie_bis))
+}
+
+/// Summary of MaKo trigger status for a Versorgungsvertrag.
+/// Returns count of components by status for quick health check.
+pub async fn mako_trigger_status(
+    pool: &PgPool,
+    vertrag_id: Uuid,
+) -> anyhow::Result<serde_json::Value> {
+    let komps: Vec<VertragskomponenteRow> =
+        sqlx::query_as("SELECT * FROM vertragskomponenten WHERE vertrag_id=$1")
+            .bind(vertrag_id)
+            .fetch_all(pool)
+            .await?;
+
+    let mut by_status: std::collections::HashMap<&str, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
+    for k in &komps {
+        let entry = serde_json::json!({
+            "komp_id": k.id,
+            "sparte": k.sparte,
+            "malo_id": k.malo_id,
+            "mako_process_id": k.mako_process_id,
+            "abgelehnt_erc": k.abgelehnt_erc,
+        });
+        by_status.entry(k.status.as_str()).or_default().push(entry);
+    }
+
+    let lieferbeginn_dispatched = komps
+        .iter()
+        .any(|k| k.mako_process_id.is_some() || k.status != "ANGELEGT");
+
+    Ok(serde_json::json!({
+        "vertrag_id": vertrag_id,
+        "komponenten_count": komps.len(),
+        "by_status": by_status,
+        "lieferbeginn_dispatched": lieferbeginn_dispatched,
+        "all_confirmed": komps.iter().all(|k| matches!(k.status.as_str(), "AKTIV" | "BESTAETIGT")),
+        "any_rejected": komps.iter().any(|k| k.status == "ABGELEHNT"),
+        "any_stuck": komps.iter().any(|k| k.status == "ANGEMELDET"),
+    }))
+}
+
+// ── Portal identity helpers ───────────────────────────────────────────────────
+
+/// Update `letzter_login` timestamp for a KundenIdentitaet after successful authentication.
+/// Called by `get_authenticate` on every successful MaLo ownership check.
+pub async fn update_letzter_login(pool: &PgPool, oidc_sub: &str, tenant: &str) -> Result<()> {
+    sqlx::query(
+        "UPDATE kunden_identitaeten SET letzter_login = now(), updated_at = now()
+         WHERE oidc_sub = $1 AND tenant = $2 AND aktiv = true",
+    )
+    .bind(oidc_sub)
+    .bind(tenant)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Count active KundenIdentitaeten for a Kunde.
+/// Used to enforce `max_identitaeten_per_kunde` limit.
+pub async fn count_active_identitaeten(pool: &PgPool, kunden_id: Uuid, tenant: &str) -> Result<i64> {
+    let row = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM kunden_identitaeten
+         WHERE kunden_id = $1 AND tenant = $2 AND aktiv = true",
+    )
+    .bind(kunden_id)
+    .bind(tenant)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+// ── Kündigung Widerruf (withdrawal before effective date) ─────────────────────
+
+/// Revert a GEKÜNDIGT contract back to AKTIV (Kündigung Widerruf).
+///
+/// Valid only when:
+/// 1. The contract is in GEKÜNDIGT status.
+/// 2. The `lieferende` has not yet passed (i.e., today < min(lieferende) across components).
+///
+/// Sets all BEENDET components back to AKTIV. Callers must separately cancel
+/// the in-flight Lieferende UTILMD via processd.
+pub async fn widerruf_kuendigung(pool: &PgPool, id: Uuid, tenant: &str) -> Result<()> {
+    // Verify contract is in GEKÜNDIGT state
+    let vertrag: Option<(String,)> = sqlx::query_as(
+        "SELECT status FROM versorgungsvertraege WHERE id = $1 AND tenant = $2",
+    )
+    .bind(id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await?;
+
+    let status = vertrag
+        .ok_or_else(|| anyhow::anyhow!("Vertrag {id} not found"))?
+        .0;
+    if status != "GEKÜNDIGT" {
+        anyhow::bail!(
+            "Kündigung Widerruf only allowed for GEKÜNDIGT contracts, current status: {status}"
+        );
+    }
+
+    // Revert components from BEENDET → AKTIV
+    sqlx::query(
+        "UPDATE vertragskomponenten
+         SET status = 'AKTIV', lieferende = NULL, updated_at = now()
+         WHERE vertrag_id = $1 AND status = 'BEENDET'",
+    )
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    // Revert contract status to AKTIV
+    sqlx::query(
+        "UPDATE versorgungsvertraege
+         SET status = 'AKTIV', updated_at = now()
+         WHERE id = $1 AND tenant = $2",
+    )
+    .bind(id)
+    .bind(tenant)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+// ── Rahmenvertrag helpers ─────────────────────────────────────────────────────
+
+/// List all Versorgungsverträge belonging to a Rahmenvertrag.
+pub async fn list_versorgungsvertraege_by_rahmenvertrag(
+    pool: &PgPool,
+    rahmenvertrag_id: Uuid,
+    tenant: &str,
+) -> Result<Vec<VersorgungsvertragRow>> {
+    Ok(sqlx::query_as(
+        "SELECT * FROM versorgungsvertraege
+         WHERE rahmenvertrag_id = $1 AND tenant = $2
+           AND status IN ('AKTIV', 'TEILERFUELLUNG', 'GEKÜNDIGT')
+         ORDER BY vertragsbeginn",
+    )
+    .bind(rahmenvertrag_id)
+    .bind(tenant)
+    .fetch_all(pool)
+    .await?)
+}
 // ── Expiring contracts (contract lifecycle monitoring) ─────────────────────────
 
 /// Summary row for the expiring-contracts endpoint and MCP tool.

@@ -87,7 +87,18 @@ async fn main() -> anyhow::Result<()> {
             .context("build HTTP client")?,
     );
 
+    // ── OIDC/JWT authentication ───────────────────────────────────────────────
+    // Disabled in dev (OidcVerifier::disabled) when `oidc` section is absent.
+    // All write endpoints require a valid Bearer token in production.
     let ct = mako_service::shutdown::token();
+    let oidc = mako_service::oidc::OidcConfig::build_verifier(
+        cfg.oidc.as_ref(),
+        &http_client,
+        &cfg.tenant,
+        ct.clone(),
+    )
+    .await
+    .context("OIDC setup")?;
     let mcp_state = Arc::new(mcp_server::VertragdMcpState {
         pool: pool.clone(),
         tenant: cfg.tenant.clone(),
@@ -143,6 +154,15 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::get_zahlungsinformation_kunde)
                 .put(handlers::put_zahlungsinformation_kunde),
         )
+        // Rahmenverträge — list all (operator CRM) and single fetch
+        .route(
+            "/api/v1/rahmenvertraege",
+            get(handlers::list_rahmenvertraege_handler),
+        )
+        .route(
+            "/api/v1/rahmenvertraege/:id",
+            get(handlers::get_rahmenvertrag_handler),
+        )
         // Rahmenvertrag MaLo enumeration for Sammelrechnung (L2)
         .route(
             "/api/v1/rahmenvertraege/:id/malos",
@@ -174,6 +194,16 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/vertraege/:id/stornieren",
             post(handlers::stornieren_vertrag),
         )
+        // Kündigung Widerruf (GPKE §20 EnWG: LF may withdraw Lieferende before effective date)
+        .route(
+            "/api/v1/vertraege/:id/widerruf-kuendigung",
+            post(handlers::widerruf_kuendigung_handler),
+        )
+        // B2B Rahmenvertrag cascade Kündigung (terminates all child Versorgungsverträge)
+        .route(
+            "/api/v1/rahmenvertraege/:id/kuendigen",
+            post(handlers::kuendige_rahmenvertrag_handler),
+        )
         .route(
             "/api/v1/vertraege/:id/tarifwechsel",
             post(handlers::tarifwechsel_vertrag),
@@ -190,7 +220,13 @@ async fn main() -> anyhow::Result<()> {
         )
         // CloudEvent webhook
         .route("/api/v1/events", post(handlers::post_cloud_event))
+        // CPQ: de.angebot.angenommen → auto-create Rahmenvertrag + Versorgungsverträge
+        .route(
+            "/api/v1/webhooks/angebot",
+            axum::routing::post(handlers::post_angebot_webhook),
+        )
         .merge(mcp_server::router(mcp_state, ct.clone()))
+        .layer(Extension(oidc))
         .layer(Extension(Arc::clone(&cfg)))
         .layer(Extension(Arc::clone(&http_client)))
         .layer(Extension(pool.clone()));
@@ -390,6 +426,71 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 // Run daily; 23h interval is DST-safe.
+                tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
+            }
+        });
+    }
+
+    // ── §41 EnWG / §13 GasGVV expiry notification worker ─────────────────────
+    // Runs daily. Finds contracts expiring within 30 days and emits
+    // `de.vertrag.ablauf.ankuendigung` per contract so the ERP can trigger
+    // proactive renewal or churn-prevention workflows.
+    {
+        let pool_exp = pool.clone();
+        let cfg_exp = Arc::clone(&cfg);
+        let client_exp = Arc::clone(&http_client);
+        tokio::spawn(async move {
+            // Initial delay: stagger workers to avoid DB contention at startup.
+            tokio::time::sleep(tokio::time::Duration::from_secs(45)).await;
+            loop {
+                match pg::find_expiring_vertraege(&pool_exp, &cfg_exp.tenant, 30).await {
+                    Ok(rows) => {
+                        if !rows.is_empty() {
+                            tracing::info!(count = rows.len(), "vertragd: dispatching expiry notifications");
+                        }
+                        for row in &rows {
+                            if let Some(ref url) = cfg_exp.erp_webhook_url {
+                                let ce = serde_json::json!({
+                                    "specversion": "1.0",
+                                    "type": "de.vertrag.ablauf.ankuendigung",
+                                    "source": format!("urn:vertragd:lf:{}", cfg_exp.lf_mp_id),
+                                    "id": uuid::Uuid::new_v4().to_string(),
+                                    "time": time::OffsetDateTime::now_utc().to_string(),
+                                    "datacontenttype": "application/json",
+                                    "data": {
+                                        "vertrag_id": row.id.to_string(),
+                                        "kunden_id": row.kunden_id.to_string(),
+                                        "vertrags_nr": row.vertrags_nr,
+                                        "vertragsende": row.vertragsende.map(|d| d.to_string()),
+                                        "preisgarantie_bis": row.preisgarantie_bis.map(|d| d.to_string()),
+                                        "auto_renewal": row.auto_renewal,
+                                        "kundentyp": row.kundentyp,
+                                        "standort_bezeichnung": row.standort_bezeichnung,
+                                        "regulatory_basis": "§13 GasGVV / §14 StromGVV / §41 EnWG",
+                                    }
+                                });
+                                let body = match serde_json::to_vec(&ce) {
+                                    Ok(b) => b,
+                                    Err(_) => continue,
+                                };
+                                let mut req = client_exp
+                                    .post(url)
+                                    .header("Content-Type", "application/cloudevents+json");
+                                if let Some(ref secret) = cfg_exp.erp_hmac_secret {
+                                    let sig = format!("sha256={}", mako_service::webhook::hmac_hex(
+                                        secret.as_bytes(), &body,
+                                    ));
+                                    req = req.header("X-Mako-Signature", sig);
+                                }
+                                let _ = req.body(body).send().await;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "vertragd: find_expiring_vertraege failed");
+                    }
+                }
+                // 23h interval is DST-safe.
                 tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
             }
         });

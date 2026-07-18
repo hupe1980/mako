@@ -34,6 +34,10 @@ use crate::{
     handler::{HandlerState, handle_webhook},
     iceberg::query::OlapEngine,
     pg::PgTimeSeriesRepository,
+    smgw::{
+        get_smgw_compliance, get_smgw_session, list_smgw_sessions, post_smgw_compliance_scan,
+        put_smgw_session,
+    },
 };
 use mako_edm::{
     domain::{BillingPeriodQuery, QualityFlag, Sparte as EdmSparte, TimeSeriesQuery},
@@ -172,6 +176,18 @@ pub fn router(state: HandlerState) -> Router {
         // (PostgreSQL via custom UDF) and cold (Iceberg/Parquet via DataFusion)
         // tier. Returns results as Arrow IPC or JSON.
         .route("/api/v1/query/sql", post(post_sql_query))
+        // ── §14a SMGW session registry (MsbG §21c / BSI TR-03109) ────────────
+        // `compliance` is a static segment and takes priority over {malo_id} in Axum 0.8.
+        .route("/api/v1/smgw", get(list_smgw_sessions))
+        .route("/api/v1/smgw/compliance", get(get_smgw_compliance))
+        .route(
+            "/api/v1/smgw/compliance/scan",
+            axum::routing::post(post_smgw_compliance_scan),
+        )
+        .route(
+            "/api/v1/smgw/{malo_id}",
+            get(get_smgw_session).put(put_smgw_session),
+        )
         .route("/metrics", get(metrics))
         .route("/health/live", get(|| async { StatusCode::OK }))
         .route("/health/ready", get(health_ready))
@@ -2167,10 +2183,12 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             .await;
     }
 
+    let pool_arc = Arc::new(pool);
+
     let app = router(state)
         .layer(Extension(cfg.cedar))
         .layer(Extension(cfg.oidc))
-        .layer(Extension(Arc::new(pool)))
+        .layer(Extension(pool_arc.clone()))
         .merge(crate::mcp_server::router(mcp_state, cfg.shutdown.clone()));
 
     let listener = TcpListener::bind(cfg.listen).await?;
@@ -2181,46 +2199,21 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         "edmd: listening"
     );
 
-    // SMGW certificate expiry background worker (MsbG §29 Abs. 3).
-    // Daily sweep of SmgwSession certificates expiring within 30 days.
-    // Emits `de.edmd.smgw.cert.expiring` CloudEvent for each expiring session.
-    if let Some(ref webhook_url) = smgw_webhook_url {
-        let webhook = webhook_url.clone();
-        let tenant = smgw_tenant;
-        let shutdown_token = cfg.shutdown.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(24 * 3600));
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {}
-                    _ = shutdown_token.cancelled() => break,
-                }
-                // Note: full SmgwSession sweep would require a `smgw_sessions` table query.
-                // This stub emits a readiness heartbeat and is extended when BSI TR-03109
-                // session tracking is wired to the database (see F-07 NBA).
-                tracing::debug!("edmd: SMGW cert expiry sweep (daily)");
-                let ce = serde_json::json!({
-                    "specversion": "1.0",
-                    "type": "de.edmd.smgw.cert.sweep.completed",
-                    "source": format!("urn:edmd:tenant:{}:smgw-cert-worker", tenant),
-                    "id": uuid::Uuid::new_v4().to_string(),
-                    "time": time::OffsetDateTime::now_utc().to_string(),
-                    "tenant": tenant,
-                    "datacontenttype": "application/json",
-                    "data": { "status": "no_sessions_registered" }
-                });
-                let client = mako_service::http::default_client();
-                if let Err(e) = client
-                    .post(&webhook)
-                    .header("Content-Type", "application/cloudevents+json")
-                    .json(&ce)
-                    .send()
-                    .await
-                {
-                    tracing::warn!(error = %e, "edmd: SMGW cert sweep webhook failed");
-                }
-            }
-        });
+    // §14a Fernsteuerbarkeit compliance background worker (MsbG §21c, BSI TR-03109-4 §6.3).
+    // Daily sweep of all SmgwSessions: checks TLS cert validity, CLS channel §14a
+    // Konfigurationsprodukt, and communication faults.
+    // Emits `de.edmd.cls.compliance_issue` CloudEvents for every detected issue.
+    {
+        use crate::smgw::spawn_cls_compliance_worker;
+        spawn_cls_compliance_worker(
+            pool_arc,
+            smgw_tenant,
+            smgw_webhook_url,
+            30,      // cert_warning_days — warn 30 days before expiry (BSI TR-03109-4 §6.3)
+            2,       // comm_fault_threshold_hours — §17 MessZV: substitute after 2h silence
+            86_400,  // interval_secs — sweep daily
+            cfg.shutdown.clone(),
+        );
     }
 
     axum::serve(listener, app)

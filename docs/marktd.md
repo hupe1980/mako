@@ -349,10 +349,13 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/melos/{melo_id}/zaehler` | `read-device` | List `Zaehler` for a MeLo (typed `Vec<ZaehlerResponse>` with `data: rubo4e::current::Zaehler`) |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/zaehlwerke` | `read-device` | List `Zaehlwerk` registers for a Zaehler (typed `Vec<Zaehlwerk>` from JSONB) |
 | `PUT` | `/api/v1/zaehler/{zaehler_id}` | `write-device` | Upsert a `Zaehler`; validates `_typ = ZAEHLER` and schema (422 on violation) |
-| `GET` | `/api/v1/zaehler/{zaehler_id}/geraete` | `read-device` | List `Geraete` for a `Zaehler` (typed `Vec<GeraetResponse>` with `data: rubo4e::current::Geraet`) |
+| `GET` | `/api/v1/zaehler/{zaehler_id}/geraete` | `read-device` | List `Geraete` for a `Zaehler` (typed `Vec<GeraetResponse>` with `data: rubo4e::current::Geraet` + `konfigurationen: Vec<GeraetKonfiguration>`) |
+| `GET` | `/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}` | `read-device` | Get a single `Geraet` — full BO4E payload + `konfigurationen`; 404 when not found |
+| `GET/PUT` | `/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen` | `read-device` / `write-device` | Get or atomically replace typed `GeraetKonfiguration` entries (MsbG §23); PUT emits `de.markt.geraet.konfiguration.updated` |
 | `GET/PUT` | `/api/v1/zaehler/{zaehler_id}/register` | `read-device` / `write-device` | List/upsert iMSys TOU registers (`ZaehlzeitRegister`) |
 | `GET/PUT` | `/api/v1/zaehler-register/{register_id}/saisons` | `read-device` / `write-device` | List/upsert seasonal TOU windows (`ZaehlzeitSaison`) |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/tariff-zone` | `read-device` | Resolve HT/NT/EINZEL tariff zone for a given local datetime |
+| `GET` | `/api/v1/zaehler/{zaehler_id}/zaehlzeitdefinitionen` | `read-device` | Return typed `rubo4e::current::Zaehlzeitdefinition` assembled from `zaehler_register` + `zaehler_saisons`; `?valid_only=true` filters to current registers |
 | `PUT` | `/api/v1/geraete/{geraet_id}` | `write-device` | Upsert a `Geraet`; validates `_typ = GERAET` and schema (422 on violation) |
 | `GET` | `/api/v1/nb-contracts/{id}` | `read-nb-contract` | Get NB network contract with typed BO4E `Vertrag` payload |
 | `PUT` | `/api/v1/nb-contracts/{id}` | `write-nb-contract` | Upsert NB network contract; validates `Vertrag` `_typ` and enums (422 on violation); emits `de.markt.nb-contract.updated` |
@@ -588,7 +591,7 @@ Migrations run automatically at startup via `sqlx migrate run`.
 | `steuerbare_ressourcen` | WiM iMS controllable resources — keyed by SR-ID (`C[A-Z0-9]{9}[0-9]`), linked to MaLo; `konfigurationsprodukte JSONB` for contracted iMS control products  |
 | `technische_ressourcen` | E-mobility, generation, storage resources — keyed by TrId; `tr_typ`, `ist_fernschaltbar` typed columns; linked to MaLo/MeLo |
 | `zaehler` | Meter registry — linked to MeLo; `zaehler_typ`, `eichung_bis` typed columns; BO4E payload with `zaehlwerke` array |
-| `geraete` | Device registry — linked to Zaehler, stores `geraet_typ`, BO4E payload |
+| `geraete` | Device registry — linked to Zaehler, stores `geraet_typ`, BO4E payload, and `geraet_konfigurationen JSONB` (typed `GeraetKonfiguration[]` per MsbG §23; GIN-indexed for cert-expiry queries) |
 | `event_log` | Durable CloudEvent replay log — keyed by `event_id` (unique); indexed by `ce_type` + `received_at` |
 
 All columns listed below are part of the single **`migrations/0001_initial.sql`** file.
@@ -1424,6 +1427,7 @@ A `Zaehler` carries:
 A `Geraet` carries:
 - `geraet_typ` — e.g. `SMARTMETER_GATEWAY`, `WANDLER`, `MULTIPLEXANLAGE`
 - `data` — full BO4E `Geraet` payload (`_typ` auto-injected to `"Geraet"` if absent)
+- `konfigurationen` — typed `Vec<GeraetKonfiguration>` for MSB device management (see below)
 
 > **BO4E `_typ` discriminator.** All four PUT device endpoints
 > (`zaehler`, `geraete`, `steuerbare-ressourcen`, `technische-ressourcen`) automatically
@@ -1508,7 +1512,164 @@ curl -s "http://marktd:8180/api/v1/zaehler/Z001234567/zaehlwerke" \
 # List devices for a meter
 curl -s "http://marktd:8180/api/v1/zaehler/Z001234567/geraete" \
   -H "Authorization: Bearer <token>" | jq '.[] | {geraet_id, geraet_typ}'
+
+# Get a single Geraet — full BO4E payload + typed konfigurationen
+curl -s "http://marktd:8180/api/v1/zaehler/Z001234567/geraete/SMGW-2026-001" \
+  -H "Authorization: Bearer <token>" | jq '{geraet_id, geraet_typ, konfigurationen}'
 ```
+
+---
+
+## Geraet Konfigurationen — device configuration records (MsbG §23)
+
+`marktd` maintains typed **device-configuration entries** for each `Geraet`, stored in the
+`geraet_konfigurationen` JSONB column (separate from the BO4E `data` payload so they can
+be updated atomically without rewriting the full `Geraet`).
+
+The `geraet_konfigurationen` column has a GIN index, enabling fast SQL queries such as
+"find all devices with SMGW cert expiring within 30 days":
+
+```sql
+SELECT malo_id FROM geraete
+WHERE geraet_konfigurationen @> '[{"parameter":"SMGW_CERT_ABLAUFDATUM"}]'
+  AND tenant = '...'
+```
+
+### `Konfigurationsparameter` enum
+
+| Value | Type | Legal basis | Purpose |
+|---|---|---|---|
+| `FIRMWARE_VERSION` | string | BSI TR-03109-1 §4.3 | Current firmware version (e.g. `"3.1.2"`) |
+| `HARDWARE_REVISION` | string | MsbG §23 | Hardware revision string |
+| `KOMMUNIKATION` | enum string | — | Communication technology: `"GPRS"` / `"PLC"` / `"ETHERNET"` / `"FUNK"` / `"FESTNETZ"` / `"GSM"` |
+| `FERN_UPDATE_FAEHIG` | bool string | BSI TR-03109-4 | Supports OTA firmware update (`"true"` / `"false"`) |
+| `CLS_FAEHIG` | bool string | §14a EnWG BK6-22-300 | CLS channel capable (`"true"` / `"false"`) — checked by `processd` §14a auto-acknowledge |
+| `SMGW_TLS_CERT_FINGERPRINT` | hex string | BSI TR-03109-3 | SHA-256 fingerprint (64 hex chars) of the SMGW TLS cert |
+| `SMGW_CERT_ABLAUFDATUM` | ISO date | BSI TR-03109-4 §6.3 | TLS cert expiry date — monitored by `edmd` cert-expiry worker |
+| `CLS_KANAL_ID` | string | BK6-24-174 §4.3 | CLS channel ID for §14a Steuerungsauftrag routing |
+| `GWA_CODENUMMER` | 13-digit | BDEW | GWA (Gateway-Administrator) BDEW-Codenummer |
+| `HERSTELLER` | string | MsbG §23 | Manufacturer name |
+| `INBETRIEBNAHMEDATUM` | ISO date | §27 MessZV | Commissioning date |
+| `LETZTE_WARTUNG` | ISO date | §27 MessZV | Last maintenance date |
+| `NAECHSTE_WARTUNG` | ISO date | §27 MessZV | Next scheduled maintenance date |
+| `AUSLESEE_PROTOKOLL` | enum string | — | Readout protocol: `"SML"` / `"DLMS"` / `"IEC62056"` |
+| `MSB_VERTRAGSNUMMER` | string | MsbG §23 | MSB contract number for this device |
+| `SONSTIGES` | string | — | Custom parameter — use `notiz` for the actual key name |
+
+### `GeraetKonfiguration` entry shape
+
+```json
+{
+  "parameter":  "SMGW_CERT_ABLAUFDATUM",
+  "wert":       "2027-06-30",
+  "updated_at": "2026-07-18T08:00:00Z",
+  "notiz":      null
+}
+```
+
+`updated_at` is **always set server-side** on write — callers must not include it in PUT requests.
+Duplicate `parameter` values in a single PUT body are deduplicated (last entry wins) before storage.
+
+### Endpoints
+
+```bash
+# Get current configuration entries for a device
+curl -s "http://marktd:8180/api/v1/zaehler/Z001234567/geraete/SMGW-2026-001/konfigurationen" \
+  -H "Authorization: Bearer <token>" | jq '.[] | {parameter, wert, updated_at}'
+
+# Set SMGW configuration after BSI TR-03109-4 Admin session (§14a fleet rollout)
+curl -s -X PUT "http://marktd:8180/api/v1/zaehler/Z001234567/geraete/SMGW-2026-001/konfigurationen" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "konfigurationen": [
+      { "parameter": "FIRMWARE_VERSION",       "wert": "3.1.2"            },
+      { "parameter": "HARDWARE_REVISION",      "wert": "Rev. C"           },
+      { "parameter": "KOMMUNIKATION",          "wert": "GPRS"             },
+      { "parameter": "CLS_FAEHIG",             "wert": "true"             },
+      { "parameter": "CLS_KANAL_ID",           "wert": "CLS-00042"        },
+      { "parameter": "SMGW_TLS_CERT_FINGERPRINT", "wert": "a1b2c3d4..."   },
+      { "parameter": "SMGW_CERT_ABLAUFDATUM",  "wert": "2027-06-30"       },
+      { "parameter": "GWA_CODENUMMER",         "wert": "9900000000099"    },
+      { "parameter": "HERSTELLER",             "wert": "Sagemcom"         },
+      { "parameter": "INBETRIEBNAHMEDATUM",    "wert": "2024-03-15"       }
+    ]
+  }'
+# → 204 No Content + emits de.markt.geraet.konfiguration.updated CloudEvent
+# If CLS_FAEHIG is set, processd auto-acknowledges §14a Steuerungsauftrag for this device.
+# If SMGW_CERT_ABLAUFDATUM is set, edmd cert-expiry worker starts monitoring.
+```
+
+### Integration with `processd` (§14a Steuerungsauftrag)
+
+When `CLS_FAEHIG = "true"` is stored, `processd` **auto-acknowledges** §14a
+`WimSteuerungsauftrag` requests for this device (BK6-24-174 §4.3 rules).
+When `CLS_FAEHIG = "false"` or absent, `processd` rejects with ERC `A97`.
+
+### Integration with `edmd` (SMGW cert-expiry monitoring)
+
+Setting `SMGW_CERT_ABLAUFDATUM` triggers the `edmd` **daily compliance worker** to monitor
+the device. When the expiry date is ≤ 30 days away, `edmd` emits
+`de.edmd.cls.compliance_issue` (severity `WARNING`); after expiry, severity `CRITICAL`.
+
+---
+
+## ZaehlzeitDefinition — typed TOU definition for ERP and portals
+
+`GET /api/v1/zaehler/{zaehler_id}/zaehlzeitdefinitionen` assembles a complete
+`rubo4e::current::Zaehlzeitdefinition` BO4E object from `zaehler_register` + `zaehler_saisons`
+rows and returns it in canonical JSON. This is the endpoint ERP systems and customer portals
+use to **display ToU register schedules** to end customers without custom ETL.
+
+```bash
+curl -s "http://marktd:8180/api/v1/zaehler/Z001234567/zaehlzeitdefinitionen" \
+  -H "Authorization: Bearer <token>" | jq .
+```
+
+Response shape (BO4E `Zaehlzeitdefinition`):
+
+```json
+{
+  "_typ": "ZAEHLZEITDEFINITION",
+  "_id": "Z001234567",
+  "saisons": [
+    {
+      "_typ": "ZAEHLZEITSAISON",
+      "bezeichnung": "WINTER",
+      "tagtypen": [
+        {
+          "_typ": "ZAEHLZEITTAGTYP",
+          "tagtyp": "WERKTAGS",
+          "umschaltzeiten": [
+            { "_typ": "UMSCHALTZEIT", "registercode": "HT", "umschaltzeit": "07:00" },
+            { "_typ": "UMSCHALTZEIT", "registercode": "NT", "umschaltzeit": "22:00" }
+          ]
+        },
+        {
+          "_typ": "ZAEHLZEITTAGTYP",
+          "tagtyp": "WOCHENENDE",
+          "umschaltzeiten": [
+            { "_typ": "UMSCHALTZEIT", "registercode": "NT", "umschaltzeit": "00:00" }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+The `?valid_only=true` query parameter restricts the response to currently valid registers
+(`valid_to IS NULL OR valid_to >= today`).
+
+**Why this endpoint?** ERP systems (Schleupen, SAP IS-U, powercloud) need the nested
+`Zaehlzeitdefinition` shape for customer portal display. Without it, clients must query
+two endpoints and assemble the hierarchy themselves. The endpoint returns canonical BO4E
+that can be schema-validated client-side.
+
+**§14a Modul 2 context.** Under BK6-22-300, the NB assigns HT/NT registers to controllable
+loads at specific switching times communicated via WiM Stammdaten (ORDERS 17102–17133 ZAK+ZE segments).
+`marktd` auto-populates the underlying data from those events; this endpoint exposes it in
+BO4E form. See also [`billingd`](billingd.md) §14a Modul 2 billing.
 
 ---
 
@@ -1918,6 +2079,44 @@ Response: `Vec<EventLogRow>` ordered by `received_at ASC` (oldest first = determ
 - Post-incident forensics: trace which events were delivered to which subscriber
 
 ---
+
+## CloudEvents — outbound event catalog
+
+`marktd` emits CloudEvents to all registered ERP webhook subscribers for the following
+domain events. Each event carries the `markt*` extension attributes listed below the table.
+
+| `type` | `subject` | Trigger | Consumers |
+|---|---|---|---|
+| `de.markt.malo.updated` | `malo_id` | MaLo PUT | `edmd`, `processd`, ERP |
+| `de.markt.melo.updated` | `melo_id` | MeLo PUT | `edmd`, `processd`, ERP |
+| `de.markt.pricat.published` | `nb_mp_id` | PRICAT 27003 dispatch | `netzbilanzd`, `invoicd`, ERP |
+| `de.markt.nb-contract.updated` | `contract_id` | NB contract PUT | ERP |
+| `de.markt.sr.konfigurationsprodukt.updated` | `sr_id` | SR Konfigurationsprodukt replace | `processd` (§14a eligibility check), ERP |
+| `de.markt.geraet.konfiguration.updated` | `geraet_id` | Geraet konfigurationen PUT | `edmd` cert-expiry worker, `processd` §14a auto-ack check, ERP |
+| `de.markt.mmma.gas.imported` | `year-month` | Monthly Gas MMM price import | `netzbilanzd`, `invoicd` |
+| `de.markt.mmma.strom.imported` | `year-month` | Monthly Strom MMM price import | `netzbilanzd`, `invoicd` |
+
+### `de.markt.geraet.konfiguration.updated` data payload
+
+```json
+{
+  "specversion": "1.0",
+  "type":        "de.markt.geraet.konfiguration.updated",
+  "source":      "urn:markt:tenant:9900000000003",
+  "subject":     "SMGW-2026-001",
+  "id":          "a1b2c3d4-...",
+  "time":        "2026-07-18T08:01:00Z",
+  "data": {
+    "geraet_id":  "SMGW-2026-001",
+    "zaehler_id": "Z001234567",
+    "count":      10
+  }
+}
+```
+
+`edmd` subscribes to this event type and, upon receipt, updates the `smgw_sessions` table
+for the corresponding MaLo if an existing session exists — ensuring the cert-expiry
+compliance worker always has fresh `SMGW_CERT_ABLAUFDATUM` data without polling `marktd`.
 
 ## CloudEvents Extensions
 

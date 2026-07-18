@@ -18,16 +18,21 @@ MaLo IDs.
 | **B2B portal access** | `kunden_identitaeten` — N OIDC logins per company; role-based + site-scoped (`standort_filter`) |
 | **Rahmenverträge** | B2B framework contracts with Sammelrechnung, indexation, `angebot_id` (CPQ) |
 | **Versorgungsverträge** | Per-site/commodity; status machine ANGELEGT→AKTIV→ABGELAUFEN; idempotent on `erp_contract_id` |
-| **MaKo triggering** | `POST processd /start-supply` per commodity on contract creation |
-| **Tarifwechsel** | `POST /api/v1/vertraege/{id}/tarifwechsel` — changes product without new UTILMD; **blocked within `preisgarantie_bis` window**; override logged to `preisgarantie_override_log` |
+| **MaKo triggering** | `POST processd /start-supply` per commodity on contract creation; **3× exponential-backoff retry** (10s, 20s, 40s) — failures detected by `find_stuck_komponents` after 5 WT |
+| **Tarifwechsel** | `POST /api/v1/vertraege/{id}/tarifwechsel` — changes product without new UTILMD; **blocked within `preisgarantie_bis` window**; override logged to `preisgarantie_override_log` with operator JWT sub |
 | **Preisgarantie** | `PUT/GET /api/v1/vertraege/{id}/preisgarantie` — typed `rubo4e::current::Preisgarantie` COM |
 | **Kündigung** | Coordinated Lieferende + Schlussablesung across all commodities; §14 StromGVV / §13 GasGVV notice period enforced |
+| **Kündigung Widerruf** | `POST /api/v1/vertraege/{id}/widerruf-kuendigung` — reverts GEKÜNDIGT → AKTIV before lieferende; §20 EnWG LF right to withdraw |
+| **Rahmenvertrag Cascade** | `POST /api/v1/rahmenvertraege/{id}/kuendigen` — terminates all active child Versorgungsverträge; individual notice periods respected; returns dispatched/skipped summary |
 | **Stornierung** | `POST /api/v1/vertraege/{id}/stornieren` — pre-activation cancel (ANGELEGT/IN_BEARBEITUNG only) |
-| **OIDC→MaLo auth** | `GET /kunden/authenticate?malo_id=` — used by `portald` to scope all portal requests |
+| **OIDC→MaLo auth** | `GET /kunden/authenticate?malo_id=` — used by `portald` to scope all portal requests; updates `letzter_login` on every successful check |
 | **Preisanpassungsbenachrichtigung** | Daily worker emits `de.vertrag.preisaenderung.ankuendigung` 42 days before Tarifwechsel (§41 Abs. 3 EnWG ≥ 6 weeks notice) |
 | **Auto-renewal** | Daily worker extends `vertragsende` + emits 30-day advance notice (§13 GasGVV / §14 StromGVV) |
+| **Expiry notifications** | Daily worker emits `de.vertrag.ablauf.ankuendigung` 30 days before `vertragsende` or `preisgarantie_bis` expiry (§41 EnWG) |
+| **CPQ pipeline** | `POST /api/v1/webhooks/angebot` — `de.angebot.angenommen` → auto-creates Rahmenvertrag with `angebot_id` traceability + N Versorgungsverträge |
+| **Max identities** | `max_identitaeten_per_kunde = 50` (configurable) — prevents resource exhaustion from unbounded portal user creation |
 | **Health** | `GET /health/live`, `GET /health/ready` |
-| **MCP** | 9 read-only tools + 2 prompts at `/mcp` |
+| **MCP** | **16 read-only tools + 4 prompts** at `/mcp` (incl. GDPR erasure workflow, Preisgarantie dispute resolution) |
 
 ## Tarifwechsel + Preisgarantie
 
@@ -56,6 +61,21 @@ curl -X POST http://vertragd:9780/api/v1/kunden/{id}/anonymize \
   -H "Content-Type: application/json" \
   -d '{"requested_by": "operator-dpo"}'
 # → 200 {"anonymized": true, "audit_log": "anonymization_log Eintrag erstellt"}
+```
+
+## Kündigung Widerruf
+
+```bash
+# Revoke a pending Kündigung before lieferende (GPKE §20 EnWG)
+curl -X POST http://vertragd:9780/api/v1/vertraege/{id}/widerruf-kuendigung
+# → 200 {"vertrag_id": "...", "status": "AKTIV", "message": "Kündigung widerrufen"}
+# Note: cancel in-flight Lieferende UTILMD via processd separately
+
+# Cascade Kündigung for a B2B framework contract (all sites)
+curl -X POST http://vertragd:9780/api/v1/rahmenvertraege/{id}/kuendigen \
+  -H "Content-Type: application/json" \
+  -d '{"lieferende": "2026-12-31"}'
+# → 202 {"dispatched": 8, "skipped": 1, "skipped_details": [...]}
 ```
 
 ## Database migrations

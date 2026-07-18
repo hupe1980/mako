@@ -38,6 +38,17 @@ if let AnyDvgwMessage::Nomint(nomint) = msg {
                  qty.unit.as_deref().unwrap_or("?"));
     }
 }
+
+// For ALOCAT — always use quantity_decimal() for gas billing precision
+if let AnyDvgwMessage::Alocat(alocat) = msg {
+    for qty in &alocat.quantities {
+        // Preferred: Decimal arithmetic per DVGW G 685 §7 (≥ 3 dp required)
+        if let Some(kwh) = qty.quantity_decimal() {
+            println!("  {} kWh_Hs (Decimal)", kwh);
+        }
+        // Avoid: quantity_f64() loses precision on large gas quantities
+    }
+}
 ```
 
 ## Message routing
@@ -96,18 +107,24 @@ to the outbound delivery order workflow.
 
 ## Feature flags
 
-| Feature  | Default | Description |
-|----------|---------|-------------|
-| `alocat` | ✅ on   | Enable `AlocatMessage` and ALOCAT parsing |
-| `nomint` | ✅ on   | Enable `NomintMessage` and NOMINT parsing |
-| `nomres` | ✅ on   | Enable `NomresMessage` and NOMRES parsing |
-| `schedl` | ✅ on   | Enable `SchedlMessage` and SCHEDL parsing |
-| `imbnot` | ✅ on   | Enable `ImbalanceMessage` and IMBNOT parsing |
-| `tranot` | ✅ on   | Enable `TransportNotificationMessage` and TRANOT parsing |
-| `delord` | ✅ on   | Enable `DeliveryOrderMessage` and DELORD parsing |
-| `delres` | ✅ on   | Enable `DeliveryResponseMessage` and DELRES parsing |
-| `serde`  | ❌ off  | Add `serde::Serialize` / `Deserialize` to all public value types |
-| `tracing`| ❌ off  | Emit structured tracing spans during parse dispatch |
+| Feature   | Default | Description |
+|-----------|---------|-------------|
+| `alocat`  | ✅ on   | Enable `AlocatMessage` and ALOCAT parsing |
+| `nomint`  | ✅ on   | Enable `NomintMessage` and NOMINT parsing |
+| `nomres`  | ✅ on   | Enable `NomresMessage` and NOMRES parsing |
+| `schedl`  | ✅ on   | Enable `SchedlMessage` and SCHEDL parsing |
+| `imbnot`  | ✅ on   | Enable `ImbalanceMessage` and IMBNOT parsing |
+| `tranot`  | ✅ on   | Enable `TransportNotificationMessage` and TRANOT parsing |
+| `delord`  | ✅ on   | Enable `DeliveryOrderMessage` and DELORD parsing |
+| `delres`  | ✅ on   | Enable `DeliveryResponseMessage` and DELRES parsing |
+| `decimal` | ✅ on   | Add `AlocatQuantity::quantity_decimal()` returning `rust_decimal::Decimal` |
+| `serde`   | ❌ off  | Add `serde::Serialize` / `Deserialize` to all public value types |
+| `tracing` | ❌ off  | Emit structured tracing spans during parse dispatch |
+
+> **`quantity_decimal()` vs `quantity_f64()`** — Always prefer `quantity_decimal()`
+> for gas energy values. DVGW G 685 §7 requires ≥ 3 decimal places of precision;
+> `f64` cannot represent all gas quantities exactly. `quantity_f64()` is retained
+> for legacy/diagnostic use only.
 
 ## Market roles
 

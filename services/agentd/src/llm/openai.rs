@@ -1,6 +1,7 @@
 //! OpenAI-compatible LLM provider (GPT-4o, Azure OpenAI, Ollama, LMStudio).
 
 use anyhow::{Context, Result};
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -11,7 +12,7 @@ use crate::config::ProviderConfig;
 pub struct OpenAiProvider {
     name: String,
     base: String,
-    api_key: String,
+    api_key: SecretString,
     client: reqwest::Client,
 }
 
@@ -83,7 +84,7 @@ impl LlmProvider for OpenAiProvider {
         let req = self
             .client
             .post(&url)
-            .bearer_auth(&self.api_key)
+            .bearer_auth(self.api_key.expose_secret())
             .json(&body);
         Box::pin(async move {
             let resp = req.send().await.context("openai request")?;
@@ -130,7 +131,7 @@ impl LlmProvider for OpenAiProvider {
         let req = self
             .client
             .post(&url)
-            .bearer_auth(&self.api_key)
+            .bearer_auth(self.api_key.expose_secret())
             .json(&body);
         Box::pin(async move {
             let resp = req.send().await.context("openai embed")?;

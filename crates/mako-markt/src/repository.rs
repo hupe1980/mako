@@ -1807,6 +1807,85 @@ pub struct ZaehlerRecord {
     pub updated_at: time::OffsetDateTime,
 }
 
+// ── Geraet device-configuration types (MsbG §23) ─────────────────────────────
+
+/// Configuration parameter keys for `GeraetKonfiguration`.
+///
+/// These cover the full spectrum of properties that an MSB must track per device
+/// under **MsbG §23** (device records), **BSI TR-03109-1/3** (SMGW firmware and
+/// TLS certificates), **§14a EnWG BK6-22-300** (CLS remote-control capability),
+/// and **§27 MessZV** (calibration and maintenance intervals).
+///
+/// Values are always strings; use ISO 8601 (`YYYY-MM-DD`) for dates and
+/// `"true"` / `"false"` for booleans.  Custom keys use `Sonstiges` with the
+/// actual key name in `notiz`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Konfigurationsparameter {
+    /// Firmware version string (e.g. `"2.4.1"`) — BSI TR-03109-1 §4.3.
+    FirmwareVersion,
+    /// Hardware revision string (e.g. `"Rev. B"`).
+    HardwareRevision,
+    /// Communication technology used by this device's communication module.
+    ///
+    /// Valid values correspond to `rubo4e::current::Geraetetyp` variants:
+    /// `"GPRS"` (ModemGprs), `"PLC"` (PlcKom), `"ETHERNET"` (EthernetKom),
+    /// `"FUNK"` (ModemFunk), `"FESTNETZ"` (ModemFestnetz), `"GSM"` (ModemGsm).
+    Kommunikation,
+    /// Whether the device supports remote (over-the-air) firmware update.
+    /// String value `"true"` or `"false"`.
+    FernUpdateFaehig,
+    /// Whether the device supports §14a EnWG remote control via a CLS channel.
+    /// String value `"true"` or `"false"`.
+    ClsFaehig,
+    /// BSI TR-03109-3 SMGW TLS certificate SHA-256 fingerprint (64 lowercase hex chars).
+    ///
+    /// Used by the `edmd` certificate-expiry background worker to emit
+    /// `de.edmd.cls.compliance_issue` before expiry.
+    SmgwTlsCertFingerprint,
+    /// SMGW TLS certificate expiry date (`YYYY-MM-DD`).
+    ///
+    /// The `edmd` worker alerts when `SmgwCertAblaufdatum ≤ today + 30 days`.
+    SmgwCertAblaufdatum,
+    /// CLS channel identifier for §14a Steuerungsauftrag routing (opaque string).
+    ClsKanalId,
+    /// GWA (Gateway-Administrator) BDEW-Codenummer — routes WAN traffic to the
+    /// correct GWA for SMGW reconfiguration.
+    GwaCodenummer,
+    /// Manufacturer name (Hersteller).
+    Hersteller,
+    /// Commissioning date (`YYYY-MM-DD`).
+    Inbetriebnahmedatum,
+    /// Last maintenance visit date (`YYYY-MM-DD`) — §27 MessZV Kalibrierpflicht.
+    LetzteWartung,
+    /// Next scheduled maintenance date (`YYYY-MM-DD`).
+    NaechsteWartung,
+    /// Readout protocol for EDL21/EDL40 meters: `"SML"` | `"DLMS"` | `"IEC62056"`.
+    AusleseProtokoll,
+    /// MSB contract number (Vertragsnummer) for this device.
+    MsbVertragsnummer,
+    /// Custom / proprietary parameter.  Use the `notiz` field for the actual key name.
+    Sonstiges,
+}
+
+/// A single device-configuration entry stored per `Geraet` under MsbG §23.
+///
+/// Configuration entries are stored in an ordered, deduplicated list keyed by
+/// `parameter` (last-write-wins within the same `parameter` value).
+/// The list is replaced atomically on `PUT .../konfigurationen`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GeraetKonfiguration {
+    /// Configuration key.
+    pub parameter: Konfigurationsparameter,
+    /// Configuration value (string-typed; ISO 8601 for dates, `"true"`/`"false"` for booleans).
+    pub wert: String,
+    /// Server-side timestamp of the last write (UTC).
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: time::OffsetDateTime,
+    /// Free-text note or sub-key for `Konfigurationsparameter::Sonstiges` entries.
+    pub notiz: Option<String>,
+}
+
 /// A stored `Geraet` record.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GeraetRecord {
@@ -1820,6 +1899,12 @@ pub struct GeraetRecord {
     pub geraet_typ: Option<String>,
     /// Full BO4E `Geraet` payload.
     pub data: serde_json::Value,
+    /// Typed device configuration entries per MsbG §23.
+    ///
+    /// Stored in the `geraet_konfigurationen` JSONB column (separate from `data`)
+    /// so they can be updated without rewriting the full BO4E payload.  GIN-indexed
+    /// for fast queries such as "all devices with `SMGW_CERT_ABLAUFDATUM ≤ 30 days"`.
+    pub konfigurationen: Vec<GeraetKonfiguration>,
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
     pub version: i64,
@@ -1878,6 +1963,28 @@ pub trait DeviceRepository: Send + Sync {
         zaehler_id: &str,
         tenant: &str,
     ) -> Result<Vec<GeraetRecord>, MdmError>;
+
+    /// Return a single `Geraet` by its `geraet_id`, or `None` if not found.
+    async fn find_geraet(
+        &self,
+        geraet_id: &str,
+        tenant: &str,
+    ) -> Result<Option<GeraetRecord>, MdmError>;
+
+    /// Atomically replace all `GeraetKonfiguration` entries for a `Geraet`.
+    ///
+    /// Returns `true` if the Geraet was found and updated, `false` if not found.
+    ///
+    /// The `updated_at` timestamp on each entry is set server-side; callers
+    /// should not set it in the request (it is overwritten).
+    ///
+    /// Emits `de.markt.geraet.konfiguration.updated` via the EventBus fan-out.
+    async fn upsert_geraet_konfigurationen(
+        &self,
+        geraet_id: &str,
+        tenant: &str,
+        konfigurationen: Vec<GeraetKonfiguration>,
+    ) -> Result<bool, MdmError>;
 }
 
 // ── iMSys TOU registers: ZaehlzeitRegister + ZaehlzeitSaison ─────────────────

@@ -51,17 +51,17 @@ graph TB
     end
 
     subgraph lf_billing ["Retail Billing (LF)"]
-        tarifbd[":9080 tarifbd\nproduct catalog · EPEX §41a\nB2B Angebote"]
+        tarifbd[":9080 tarifbd\n13 categories · §42d feed\nEPEX §41a · B2B Angebote"]
         billingd[":9280 billingd\n12 categories · XRechnung 3.0\nRLM demand · §54 exemption"]
-        accountingd[":9380 accountingd\nMassenkontokorrent\nSEPA · auto-dunning · GDPR"]
+        accountingd[":9380 accountingd\nMassenkontokorrent\nSEPA FRST/RCUR · GLN ID · Aging · §288 BGB"]
     end
 
     subgraph b2c ["Contract & Customer (LF)"]
-        vertragd[":9780 vertragd\nKunden B2C+B2B\nRahmenverträge · OIDC→MaLo"]
+        vertragd[":9780 vertragd\nKunden B2C+B2B · Rahmenverträge\nOIDC→MaLo · 16 MCP tools"]
         portald[":9480 portald\ncustomer portal read-model\nSSE · §41 self-service"]
     end
 
-    agentd[":9580 agentd\n27 built-in specialists (binary)\nsequential|parallel|race dispatch\nLanceDB RAG · A2A cards\nMCP tools · OpenAI/Anthropic/Bedrock"]
+    agentd[":9580 agentd\n29 built-in specialists (binary)\nsequential|parallel|race dispatch\nLanceDB RAG (tenant-isolated) · A2A cards\nOIDC · HMAC · DLQ · OpenAI/Anthropic/Bedrock"]
 
     ext -->|AS4 / REST| makod
     makod <-->|CloudEvents| marktd
@@ -108,7 +108,7 @@ graph TB
 |---|---|---|---|
 | [tarifbd](./tarifbd) | `:9080` | LF | Product & Tariff Catalog — user-defined energy products, EPEX Spot for §41a, B2B Angebote/quotations |
 | [billingd](./billingd) | `:9280` | LF | Energy Billing Engine — 12 categories, §41a dynamic, §42a GGV community solar, XRechnung 3.0 / ZUGFeRD 2.3 |
-| [accountingd](./accountingd) | `:9380` | LF | Customer Account Ledger — Massenkontokorrent, SEPA pain.008+pain.001 (sepa 0.3.0, typed `SequenceType`, hard IBAN validation), N-5 pre-notification scheduler, FIFO open-item management (`/open-items`), auto-dunning rule engine (Mahnstufe 1–3), GDPR Art. 17 pseudonymization (`/anonymize`), balance reconciliation (`/reconcile`), **71 tests** |
+| [accountingd](./accountingd) | `:9380` | LF | Customer Account Ledger — double-entry SKR 03/04; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung; SEPA pain.008 (FRST/RCUR separated, Gläubiger-ID EPC AT-02); CAMT.054 dedup; IBAN hash (pgcrypto); OIDC/JWT + inbound HMAC; auto-dunning; GDPR Art. 17; **107 tests** |
 
 ## B2C & AI
 
@@ -116,7 +116,7 @@ graph TB
 |---|---|---|---|
 | [vertragd](./vertragd) | `:9780` | LF | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, kunden_identitaeten (N portal users per company), Tarifwechsel, Kündigung, OIDC→MaLo auth gateway for portald |
 | [portald](./portald) | `:9480` | LF | Customer Portal gateway — aggregates all LF services, REST + SSE, §41 EnWG self-service write API (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16), 8-tool MCP server |
-| [agentd](./agentd) | `:9580` | All | Multi-agent LLM orchestration — **27 built-in specialists compiled into binary**, activated via `[bundled_agents]`; `sequential`/`parallel`/`race` dispatch modes; A2A agent cards at `/.well-known/agents/{name}`; builtin catalog at `GET /api/v1/agents/catalog`; LanceDB RAG; MCP tools across all 17 services |
+| [agentd](./agentd) | `:9580` | All | Multi-agent LLM orchestration — **29 built-in specialists compiled into binary**, activated via `[bundled_agents]`; `sequential`/`parallel`/`race` dispatch; OIDC auth on `/api/v1/run`; inbound HMAC; DLQ with exponential-backoff retry; LanceDB RAG (tenant-isolated, cosine distance score filtering); A2A agent cards; MCP tools across all 17 services |
 
 ---
 

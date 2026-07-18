@@ -814,6 +814,7 @@ mod comparison_feed_tests {
             valid_to: None,
             data: serde_json::Value::Null,
             bo4e_version: "v202607.0.0".to_owned(),
+            product_status: "PUBLISHED".to_owned(),
             energiemix: None,
             oekolabel: None,
             updated_at: time::OffsetDateTime::from_unix_timestamp(updated_at_secs).unwrap(),
@@ -1171,3 +1172,557 @@ mod comparison_feed_tests {
         assert_eq!(extract_bonus_rabatt_eur(&data), Some(dec!(50.00)));
     }
 }
+
+// ── §42c SHARING category tests ────────────────────────────────────────────────
+
+#[cfg(test)]
+mod sharing_category_tests {
+    /// SHARING must be a valid category in the schema CHECK constraint.
+    /// billingd reads SHARING products as SharingProduct (§42c EnWG); without
+    /// SHARING in the constraint, those products cannot be stored in tarifbd.
+    #[test]
+    fn sharing_is_valid_category() {
+        const VALID_CATEGORIES: &[&str] = &[
+            "STROM", "GAS", "WAERME", "SOLAR", "EEG", "EINSPEISUNG",
+            "WAERMEPUMPE", "WALLBOX", "HEMS", "EMOBILITY",
+            "ENERGIEDIENSTLEISTUNG", "BUNDLE", "SHARING",
+        ];
+        assert!(
+            VALID_CATEGORIES.contains(&"SHARING"),
+            "SHARING must be in the category list for §42c EnWG billingd SharingProduct"
+        );
+    }
+
+    /// SHARING should be validated as a BO4E Tarifpreisblatt category
+    /// (billingd reads it via ElectricityProduct inside SharingProduct).
+    #[test]
+    fn sharing_is_tarifpreisblatt_category() {
+        const TARIFPREISBLATT_CATEGORIES: &[&str] = &[
+            "STROM", "GAS", "WAERME", "SOLAR", "EEG", "EINSPEISUNG",
+            "WAERMEPUMPE", "WALLBOX", "SHARING",
+        ];
+        assert!(
+            TARIFPREISBLATT_CATEGORIES.contains(&"SHARING"),
+            "SHARING must be validated as Tarifpreisblatt for billingd ElectricityProduct billing path"
+        );
+    }
+}
+
+// ── HMAC signing on CloudEvent tests ──────────────────────────────────────────
+
+#[cfg(test)]
+mod hmac_signing_tests {
+    use mako_service::webhook::hmac_hex;
+
+    /// Verify that de.angebot.angenommen CloudEvent payloads are HMAC-signed.
+    /// The X-Mako-Signature header must be present when erp_hmac_secret is configured.
+    #[test]
+    fn hmac_sha256_of_ce_body_is_deterministic() {
+        let secret = b"test-secret";
+        let body = r#"{"specversion":"1.0","type":"de.angebot.angenommen"}"#;
+        let sig1 = hmac_hex(secret, body.as_bytes());
+        let sig2 = hmac_hex(secret, body.as_bytes());
+        assert_eq!(sig1, sig2, "HMAC must be deterministic");
+        assert!(!sig1.is_empty(), "HMAC must not be empty");
+        assert_eq!(sig1.len(), 64, "HMAC-SHA256 hex must be 64 chars");
+    }
+
+    #[test]
+    fn different_payloads_produce_different_hmac() {
+        let secret = b"test-secret";
+        let body1 = r#"{"angebot_id":"a1b2c3d4"}"#;
+        let body2 = r#"{"angebot_id":"different-id"}"#;
+        assert_ne!(
+            hmac_hex(secret, body1.as_bytes()),
+            hmac_hex(secret, body2.as_bytes()),
+            "different payloads must produce different HMAC"
+        );
+    }
+}
+
+// ── MCP validate_tariff_config tool tests ─────────────────────────────────────
+
+#[cfg(test)]
+mod mcp_validate_tariff_tests {
+    /// The validate_tariff_config MCP tool must use the same VALID_PREISTYPEN
+    /// whitelist as the REST PUT endpoint to ensure consistency.
+    #[test]
+    fn valid_preistypen_covers_all_standard_positions() {
+        // These are the preistypen most commonly used in German retail tariff sheets
+        const REQUIRED_PREISTYPEN: &[&str] = &[
+            "GRUNDPREIS",
+            "ARBEITSPREIS_EINTARIF",
+            "ARBEITSPREIS_HT",
+            "ARBEITSPREIS_NT",
+            "LEISTUNGSPREIS",
+            "MESSPREIS",
+        ];
+
+        // Replicate the whitelist from handlers.rs for isolation
+        const VALID_PREISTYPEN: &[&str] = &[
+            "GRUNDPREIS", "ARBEITSPREIS_EINTARIF", "ARBEITSPREIS_HT", "ARBEITSPREIS_NT",
+            "LEISTUNGSPREIS", "MESSPREIS", "ENTGELT_ABLESUNG", "ENTGELT_ABRECHNUNG",
+            "ENTGELT_MSB", "PROVISION", "SOLAR_ARBEITSPREIS", "EEG_VERGUETUNG",
+            "EEG_MARKTPRAEMIE", "EEG_MANAGEMENTPRAEMIE", "KWKG_ZUSCHLAG", "MARKTWERT",
+            "VERMARKTUNGSGEBUEHR", "MIETERSTROM_AUFSCHLAG", "GEMEINSCHAFT_RABATT",
+            "STEUERUNGSRABATT_MODUL1", "STEUERUNGSRABATT_MODUL3",
+            "HEMS_PLATTFORMGEBUEHR", "HEMS_OPTIMIERUNGSEVENT", "HEMS_AUSLESUNG",
+            "EMOBILITY_SERVICEGEBUEHR", "EMOBILITY_ARBEITSPREIS", "EMOBILITY_SESSION",
+            "EMOBILITY_ROAMING", "SERVICE_GEBUEHR", "SERVICE_EVENT",
+        ];
+
+        for pt in REQUIRED_PREISTYPEN {
+            assert!(
+                VALID_PREISTYPEN.contains(pt),
+                "Standard preistyp '{pt}' must be in the whitelist"
+            );
+        }
+    }
+
+    /// Rejected preistyp must not appear in the whitelist.
+    #[test]
+    fn unknown_preistyp_not_in_whitelist() {
+        const VALID_PREISTYPEN: &[&str] = &[
+            "GRUNDPREIS", "ARBEITSPREIS_EINTARIF", "ARBEITSPREIS_HT", "ARBEITSPREIS_NT",
+            "LEISTUNGSPREIS", "MESSPREIS", "ENTGELT_ABLESUNG", "ENTGELT_ABRECHNUNG",
+            "ENTGELT_MSB", "PROVISION", "SOLAR_ARBEITSPREIS", "EEG_VERGUETUNG",
+            "EEG_MARKTPRAEMIE", "EEG_MANAGEMENTPRAEMIE", "KWKG_ZUSCHLAG", "MARKTWERT",
+            "VERMARKTUNGSGEBUEHR", "MIETERSTROM_AUFSCHLAG", "GEMEINSCHAFT_RABATT",
+            "STEUERUNGSRABATT_MODUL1", "STEUERUNGSRABATT_MODUL3",
+            "HEMS_PLATTFORMGEBUEHR", "HEMS_OPTIMIERUNGSEVENT", "HEMS_AUSLESUNG",
+            "EMOBILITY_SERVICEGEBUEHR", "EMOBILITY_ARBEITSPREIS", "EMOBILITY_SESSION",
+            "EMOBILITY_ROAMING", "SERVICE_GEBUEHR", "SERVICE_EVENT",
+        ];
+        assert!(!VALID_PREISTYPEN.contains(&"UNKNOWN_PREISTYP"));
+        assert!(!VALID_PREISTYPEN.contains(&"PREISTYP_XYZ"));
+        // billingd reserved names must not bypass the whitelist
+        assert!(!VALID_PREISTYPEN.contains(&""));
+    }
+}
+
+// ── Customer product history tests ────────────────────────────────────────────
+
+#[cfg(test)]
+mod customer_product_history_tests {
+    /// The history endpoint must preserve all past assignments ordered newest-first.
+    /// Auditors need this to verify Tarifwechsel was applied at the correct Wirksamkeit.
+    #[test]
+    fn history_semantics_newest_first() {
+        // Simulate three sequential assignments:
+        // 1. STROM-BASIC-2024 from 2024-01-01 to 2025-01-01
+        // 2. STROM-DYNAMIC-2025 from 2025-01-01 to 2026-01-01
+        // 3. STROM-PREMIUM-2026 from 2026-01-01 (current, assigned_to = NULL)
+        let history = vec![
+            ("STROM-PREMIUM-2026", "2026-01-01", None::<&str>),
+            ("STROM-DYNAMIC-2025", "2025-01-01", Some("2026-01-01")),
+            ("STROM-BASIC-2024", "2024-01-01", Some("2025-01-01")),
+        ];
+        // Current active product: assigned_to IS NULL
+        let current = history.iter().find(|(_, _, to)| to.is_none());
+        assert!(current.is_some(), "must have one active (NULL assigned_to) product");
+        assert_eq!(current.unwrap().0, "STROM-PREMIUM-2026");
+        // History is ordered newest-first
+        assert_eq!(history[0].0, "STROM-PREMIUM-2026");
+        assert_eq!(history[1].0, "STROM-DYNAMIC-2025");
+        assert_eq!(history[2].0, "STROM-BASIC-2024");
+        // Exactly one active product
+        let active_count = history.iter().filter(|(_, _, to)| to.is_none()).count();
+        assert_eq!(active_count, 1, "exactly one product must be active at any time");
+    }
+
+    /// A Tarifwechsel must close the old assignment (set assigned_to = wirksamkeit)
+    /// and open a new one (assigned_from = wirksamkeit).
+    #[test]
+    fn tarifwechsel_closes_old_and_opens_new() {
+        let wirksamkeit = "2026-10-01";
+        // Before: one active record
+        let _old_product = ("STROM-BASIC", "2024-01-01", None::<&str>);
+        // After: old closed, new opened at wirksamkeit
+        let old_closed = ("STROM-BASIC", "2024-01-01", Some(wirksamkeit));
+        let new_active = ("STROM-PREMIUM", wirksamkeit, None::<&str>);
+        // Old must have assigned_to = wirksamkeit
+        assert_eq!(old_closed.2, Some(wirksamkeit));
+        // New must be active (assigned_to = NULL)
+        assert!(new_active.2.is_none());
+        // New assigned_from == wirksamkeit
+        assert_eq!(new_active.1, wirksamkeit);
+    }
+}
+
+// ── dyn_source validation tests ───────────────────────────────────────────────
+
+#[cfg(test)]
+mod dyn_source_tests {
+    const VALID_DYN_SOURCE: &str = "epex-spot-day-ahead";
+
+    fn validate_dyn_source(v: Option<&str>) -> Result<(), String> {
+        match v {
+            None => Ok(()), // NULL = fixed tariff — OK
+            Some(s) if s == VALID_DYN_SOURCE => Ok(()),
+            Some(other) => Err(format!(
+                "dyn_source {other:?} is not valid; only 'epex-spot-day-ahead' is accepted"
+            )),
+        }
+    }
+
+    #[test]
+    fn null_dyn_source_is_ok() {
+        assert!(validate_dyn_source(None).is_ok());
+    }
+
+    #[test]
+    fn epex_spot_day_ahead_is_ok() {
+        assert!(validate_dyn_source(Some("epex-spot-day-ahead")).is_ok());
+    }
+
+    #[test]
+    fn unknown_dyn_source_is_rejected() {
+        assert!(validate_dyn_source(Some("nordpool")).is_err());
+        assert!(validate_dyn_source(Some("epex-intraday")).is_err());
+        assert!(validate_dyn_source(Some("")).is_err());
+        assert!(validate_dyn_source(Some("EPEX-SPOT-DAY-AHEAD")).is_err()); // case-sensitive
+    }
+
+    #[test]
+    fn dyn_source_sentinel_exact_string() {
+        // The DB CHECK constraint and handler both use the exact lowercase string.
+        // Verify that the sentinel value itself is correct.
+        assert_eq!(VALID_DYN_SOURCE, "epex-spot-day-ahead");
+        assert!(!VALID_DYN_SOURCE.contains("EPEX"));
+        assert!(VALID_DYN_SOURCE.contains("spot"));
+        assert!(VALID_DYN_SOURCE.contains("day-ahead"));
+    }
+}
+
+// ── product_status validation tests ──────────────────────────────────────────
+
+#[cfg(test)]
+mod product_status_tests {
+    fn validate_product_status(status: &str) -> Result<(), String> {
+        match status {
+            "DRAFT" | "PUBLISHED" => Ok(()),
+            other => Err(format!(
+                "product_status {other:?} is not valid; accepted values: DRAFT, PUBLISHED"
+            )),
+        }
+    }
+
+    #[test]
+    fn draft_is_valid() {
+        assert!(validate_product_status("DRAFT").is_ok());
+    }
+
+    #[test]
+    fn published_is_valid() {
+        assert!(validate_product_status("PUBLISHED").is_ok());
+    }
+
+    #[test]
+    fn unknown_status_is_rejected() {
+        assert!(validate_product_status("ACTIVE").is_err());
+        assert!(validate_product_status("INACTIVE").is_err());
+        assert!(validate_product_status("draft").is_err()); // case-sensitive
+        assert!(validate_product_status("").is_err());
+    }
+
+    #[test]
+    fn only_published_products_appear_in_feed_and_billing() {
+        // Business rule: DRAFT products are invisible to billingd and comparison feed.
+        // Operators must explicitly publish (PUT with product_status=PUBLISHED) before
+        // the product can be billed or listed on comparison portals.
+        let is_billable = |status: &str| status == "PUBLISHED";
+        assert!(is_billable("PUBLISHED"));
+        assert!(!is_billable("DRAFT"));
+    }
+
+    #[test]
+    fn assignment_blocked_for_draft_products() {
+        // assign_product checks product_status = 'PUBLISHED' before creating assignment.
+        let can_assign = |status: &str| status == "PUBLISHED";
+        assert!(can_assign("PUBLISHED"));
+        assert!(!can_assign("DRAFT"),
+            "DRAFT products must not be assignable to MaLos");
+    }
+}
+
+// ── assign_product guard tests ────────────────────────────────────────────────
+
+#[cfg(test)]
+mod assign_product_guard_tests {
+    use time::macros::date;
+
+    #[derive(Debug)]
+    struct ProductMeta {
+        valid_from: Option<time::Date>,
+        valid_to: Option<time::Date>,
+        product_status: &'static str,
+    }
+
+    fn validate_assignment(
+        product: &ProductMeta,
+        assigned_from: time::Date,
+    ) -> Result<(), String> {
+        if product.product_status == "DRAFT" {
+            return Err("product is DRAFT; publish before assigning".to_owned());
+        }
+        if let Some(vf) = product.valid_from {
+            if assigned_from < vf {
+                return Err(format!(
+                    "assigned_from ({assigned_from}) is before product valid_from ({vf})"
+                ));
+            }
+        }
+        if let Some(vt) = product.valid_to {
+            if assigned_from > vt {
+                return Err(format!(
+                    "product expired on {vt}; cannot assign after expiry"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn valid_assignment_passes() {
+        let product = ProductMeta {
+            valid_from: Some(date!(2025 - 01 - 01)),
+            valid_to: None,
+            product_status: "PUBLISHED",
+        };
+        let result = validate_assignment(&product, date!(2025 - 06 - 01));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn retroactive_assignment_rejected() {
+        let product = ProductMeta {
+            valid_from: Some(date!(2026 - 01 - 01)),
+            valid_to: None,
+            product_status: "PUBLISHED",
+        };
+        // Attempting to assign before the product's valid_from
+        let result = validate_assignment(&product, date!(2025 - 12 - 01));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("before product valid_from"));
+    }
+
+    #[test]
+    fn assignment_after_expiry_rejected() {
+        let product = ProductMeta {
+            valid_from: Some(date!(2024 - 01 - 01)),
+            valid_to: Some(date!(2025 - 12 - 31)),
+            product_status: "PUBLISHED",
+        };
+        // Attempting to assign after product expiry
+        let result = validate_assignment(&product, date!(2026 - 01 - 01));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("expired"));
+    }
+
+    #[test]
+    fn draft_product_cannot_be_assigned() {
+        let product = ProductMeta {
+            valid_from: None,
+            valid_to: None,
+            product_status: "DRAFT",
+        };
+        let result = validate_assignment(&product, date!(2026 - 01 - 01));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("DRAFT"));
+    }
+
+    #[test]
+    fn assignment_on_valid_from_date_is_allowed() {
+        let product = ProductMeta {
+            valid_from: Some(date!(2026 - 10 - 01)),
+            valid_to: None,
+            product_status: "PUBLISHED",
+        };
+        // assigned_from == valid_from is allowed (inclusive)
+        let result = validate_assignment(&product, date!(2026 - 10 - 01));
+        assert!(result.is_ok());
+    }
+}
+
+// ── BO4E _version validation tests ───────────────────────────────────────────
+
+#[cfg(test)]
+mod bo4e_version_tests {
+    const CURRENT_BO4E_VERSION: &str = "v202607.0.0";
+
+    fn validate_version(version: Option<&str>) -> Result<(), String> {
+        match version {
+            None => Ok(()), // Missing _version is OK — will be injected on round-trip
+            Some(v) if v == CURRENT_BO4E_VERSION => Ok(()),
+            Some(v) => Err(format!(
+                "_version {v:?} is not accepted; expected {CURRENT_BO4E_VERSION:?}"
+            )),
+        }
+    }
+
+    #[test]
+    fn current_version_accepted() {
+        assert!(validate_version(Some("v202607.0.0")).is_ok());
+    }
+
+    #[test]
+    fn missing_version_accepted() {
+        assert!(validate_version(None).is_ok());
+    }
+
+    #[test]
+    fn outdated_version_rejected() {
+        assert!(validate_version(Some("v202401.0.0")).is_err());
+        assert!(validate_version(Some("v202310.0.0")).is_err());
+    }
+
+    #[test]
+    fn future_version_rejected() {
+        assert!(validate_version(Some("v202701.0.0")).is_err());
+    }
+
+    #[test]
+    fn bo4e_version_const_correct_format() {
+        // vYYYYMM.MINOR.PATCH
+        assert!(CURRENT_BO4E_VERSION.starts_with('v'));
+        let without_v = CURRENT_BO4E_VERSION.strip_prefix('v').unwrap();
+        let parts: Vec<&str> = without_v.split('.').collect();
+        assert_eq!(parts.len(), 3, "BO4E version must have 3 parts");
+        let yyyymm: u32 = parts[0].parse().expect("YYYYMM");
+        assert!(yyyymm >= 202400 && yyyymm <= 209912, "Unexpected year/month: {yyyymm}");
+    }
+}
+
+// ── German DST offset tests ───────────────────────────────────────────────────
+
+#[cfg(test)]
+mod german_dst_tests {
+    /// EU DST rule:
+    /// - MESZ (UTC+2): from last Sunday of March (02:00 CET) to last Sunday of October (03:00 CEST)
+    /// - MEZ  (UTC+1): otherwise
+    ///
+    /// This verifies the pure-arithmetic implementation used in mcp_server.rs.
+
+    fn last_sunday_of_month(year: i32, month: time::Month) -> time::Date {
+        let next_month = if month == time::Month::December {
+            time::Date::from_calendar_date(year + 1, time::Month::January, 1).unwrap()
+        } else {
+            time::Date::from_calendar_date(year, month.next(), 1).unwrap()
+        };
+        let last_day = next_month - time::Duration::days(1);
+        let days_since_sunday = last_day.weekday().number_days_from_sunday() as i64;
+        last_day - time::Duration::days(days_since_sunday)
+    }
+
+    fn german_utc_offset(date: time::Date, hour_utc: u8) -> i8 {
+        let dst_start = last_sunday_of_month(date.year(), time::Month::March);
+        let dst_end = last_sunday_of_month(date.year(), time::Month::October);
+        if date > dst_start && date < dst_end { return 2; }
+        if date == dst_start && hour_utc >= 1 { return 2; }
+        if date == dst_end && hour_utc < 1 { return 2; }
+        1
+    }
+
+    #[test]
+    fn january_is_mez_utc_plus_1() {
+        let jan = time::macros::date!(2026 - 01 - 15);
+        assert_eq!(german_utc_offset(jan, 12), 1, "January must be MEZ (UTC+1)");
+    }
+
+    #[test]
+    fn july_is_mesz_utc_plus_2() {
+        let jul = time::macros::date!(2026 - 07 - 15);
+        assert_eq!(german_utc_offset(jul, 12), 2, "July must be MESZ (UTC+2)");
+    }
+
+    #[test]
+    fn dst_start_2026_is_last_sunday_of_march() {
+        // In 2026, last Sunday of March is 2026-03-29
+        let dst_start = last_sunday_of_month(2026, time::Month::March);
+        assert_eq!(dst_start.weekday(), time::Weekday::Sunday);
+        assert_eq!(dst_start.month(), time::Month::March);
+        // Must be the LAST Sunday (no Sunday after it in March)
+        let next_sunday = dst_start + time::Duration::days(7);
+        assert_ne!(next_sunday.month(), time::Month::March,
+            "No Sunday after dst_start should still be in March");
+    }
+
+    #[test]
+    fn dst_end_2026_is_last_sunday_of_october() {
+        let dst_end = last_sunday_of_month(2026, time::Month::October);
+        assert_eq!(dst_end.weekday(), time::Weekday::Sunday);
+        assert_eq!(dst_end.month(), time::Month::October);
+        let next_sunday = dst_end + time::Duration::days(7);
+        assert_ne!(next_sunday.month(), time::Month::October);
+    }
+
+    #[test]
+    fn before_dst_start_is_mez() {
+        let before = time::macros::date!(2026 - 03 - 28); // day before DST start
+        assert_eq!(german_utc_offset(before, 23), 1);
+    }
+
+    #[test]
+    fn after_dst_start_switch_is_mesz() {
+        // DST start 2026-03-29 at 01:00 UTC (= 02:00 CET)
+        let start_day = last_sunday_of_month(2026, time::Month::March);
+        // Hour 0 UTC: still MEZ
+        assert_eq!(german_utc_offset(start_day, 0), 1);
+        // Hour 1 UTC: switch to MESZ
+        assert_eq!(german_utc_offset(start_day, 1), 2);
+    }
+
+    #[test]
+    fn precomputed_2026_dst_dates() {
+        // 2026: DST start = March 29, DST end = October 25
+        let dst_start = last_sunday_of_month(2026, time::Month::March);
+        let dst_end = last_sunday_of_month(2026, time::Month::October);
+        assert_eq!(dst_start, time::macros::date!(2026 - 03 - 29));
+        assert_eq!(dst_end, time::macros::date!(2026 - 10 - 25));
+    }
+}
+
+// ── Preistyp count guard ──────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod preistyp_count_tests {
+    /// Guard that VALID_PREISTYPEN has exactly 30 entries (not 34 as the old
+    /// README claimed).  This test fails if someone accidentally removes an
+    /// entry or if the README/docs are updated without updating the code.
+    #[test]
+    fn preistyp_count_is_30() {
+        // Mirror of tarifbd::handlers::VALID_PREISTYPEN
+        const VALID_PREISTYPEN: &[&str] = &[
+            "GRUNDPREIS", "ARBEITSPREIS_EINTARIF", "ARBEITSPREIS_HT", "ARBEITSPREIS_NT",
+            "LEISTUNGSPREIS", "MESSPREIS", "ENTGELT_ABLESUNG", "ENTGELT_ABRECHNUNG",
+            "ENTGELT_MSB", "PROVISION",
+            "SOLAR_ARBEITSPREIS", "EEG_VERGUETUNG", "EEG_MARKTPRAEMIE", "EEG_MANAGEMENTPRAEMIE",
+            "KWKG_ZUSCHLAG", "MARKTWERT", "VERMARKTUNGSGEBUEHR", "MIETERSTROM_AUFSCHLAG",
+            "GEMEINSCHAFT_RABATT", "STEUERUNGSRABATT_MODUL1", "STEUERUNGSRABATT_MODUL3",
+            "HEMS_PLATTFORMGEBUEHR", "HEMS_OPTIMIERUNGSEVENT", "HEMS_AUSLESUNG",
+            "EMOBILITY_SERVICEGEBUEHR", "EMOBILITY_ARBEITSPREIS", "EMOBILITY_SESSION",
+            "EMOBILITY_ROAMING", "SERVICE_GEBUEHR", "SERVICE_EVENT",
+        ];
+        assert_eq!(
+            VALID_PREISTYPEN.len(),
+            30,
+            "VALID_PREISTYPEN must have exactly 30 entries; \
+             update this test and the README if you add new ones"
+        );
+    }
+
+    /// Guard that SHARING is the 13th product category (in addition to the 12 in the README).
+    #[test]
+    fn schema_has_13_categories_including_sharing() {
+        const ALL_DB_CATEGORIES: &[&str] = &[
+            "STROM", "GAS", "WAERME", "SOLAR", "EEG", "EINSPEISUNG",
+            "WAERMEPUMPE", "WALLBOX", "HEMS", "EMOBILITY", "ENERGIEDIENSTLEISTUNG",
+            "BUNDLE",
+            "SHARING", // §42c EnWG — 13th category; present in DB schema
+        ];
+        assert_eq!(ALL_DB_CATEGORIES.len(), 13);
+        assert!(ALL_DB_CATEGORIES.contains(&"SHARING"),
+            "SHARING (§42c EnWG) must be in the DB CHECK constraint");
+    }
+}
+

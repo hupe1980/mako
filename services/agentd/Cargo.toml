@@ -29,7 +29,7 @@ tracing      = "0.1"
 anyhow       = "1"
 reqwest      = { workspace = true }
 tokio-util   = { workspace = true }
-secrecy      = { version = "0.10" }
+secrecy      = { version = "0.10", features = ["serde"] }
 # RAG vector store — LanceDB (persistent, S3/GCS/Azure/local)
 lancedb      = { workspace = true }
 # arrow 58 — matches lancedb 0.31 transitive dep. Declared explicitly here so

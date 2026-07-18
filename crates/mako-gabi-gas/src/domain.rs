@@ -5,11 +5,15 @@
 //! - [`GasDay`] — typed gas market day (starts 06:00 CET per DVGW G 2000)
 //! - [`GasQuantity`] — Decimal-precise energy in kWh_Hs with m³ conversion
 //! - [`GasBeschaffenheit`] — Brennwert (Hs/Hu) and Zustandszahl from DVGW G 685
+//! - [`GasBeschaffenheitValidationError`] — DVGW G 260 range check results
+//! - [`GasQualityFlag`] — measurement quality state per §17 MessZV / GasNZV
 //! - [`Bilanzkreis`] — BKV balance group with period and status
 //! - [`DeliveryPoint`] — entry/exit point (Einspeise- / Ausspeisepunkt)
-//! - [`GasImbalanceSaldo`] — nomination vs. allocation deviation
+//! - [`GasImbalanceSaldo`] — nomination vs. allocation deviation with Ausgleichsenergie price
 //! - [`NominationQuantity`] — submitted / accepted / curtailed breakdown
 //! - [`GasQualityClass`] — H-Gas / L-Gas designation per DVGW G 260
+//! - [`DvgwFormatVersion`] — DVGW biannual release version management
+//! - [`GABI_GAS_CLOUD_EVENTS`] — typed `de.gabi.*` CloudEvent type constants
 //!
 //! ## No float money rule
 //!
@@ -148,13 +152,296 @@ impl GasBeschaffenheit {
     pub fn is_valid_on(&self, date: Date) -> bool {
         date >= self.valid_from && self.valid_to.is_none_or(|end| date <= end)
     }
+    /// Validate gas quality parameters against DVGW G 260 / G 685 physical limits.
+    ///
+    /// Returns `Ok(())` when all parameters are within acceptable ranges, or a
+    /// [`GasBeschaffenheitValidationError`] listing all violated constraints.
+    ///
+    /// ## Checked constraints
+    ///
+    /// | Parameter | H-Gas range | L-Gas range | Source |
+    /// |---|---|---|---|
+    /// | Hs (kWh/m³) | 9.5–13.1 | 7.5–10.3 | DVGW G 260 §5.2 |
+    /// | Hu (kWh/m³) | 8.5–11.8 | 6.8–9.3 | DVGW G 260 §5.2 |
+    /// | Zustandszahl | 0.80–1.20 | 0.80–1.20 | DVGW G 685 §8 |
+    ///
+    /// For Biogas, a wider tolerance of Hs 7.0–13.5 kWh/m³ is applied.
+    ///
+    /// ## Usage
+    ///
+    /// ```rust,no_run
+    /// # use mako_gabi_gas::domain::*;
+    /// # use rust_decimal_macros::dec;
+    /// # use time::macros::date;
+    /// let b = GasBeschaffenheit {
+    ///     brennwert_hs_kwh_per_m3: dec!(15.0), // invalid: too high for H-Gas
+    ///     zustandszahl: dec!(1.0),
+    ///     brennwert_hu_kwh_per_m3: None,
+    ///     quality_class: GasQualityClass::HGas,
+    ///     valid_from: date!(2026-01-01),
+    ///     valid_to: None,
+    ///     source: "test".into(),
+    /// };
+    /// assert!(b.validate().is_err());
+    /// ```
+    pub fn validate(&self) -> Result<(), GasBeschaffenheitValidationError> {
+        let mut violations = Vec::new();
+
+        let (hs_min, hs_max) = self.quality_class.hs_range_kwh_per_m3();
+        if self.brennwert_hs_kwh_per_m3 < hs_min || self.brennwert_hs_kwh_per_m3 > hs_max {
+            violations.push(format!(
+                "Brennwert Hs {:.3} kWh/m³ is outside DVGW G 260 range [{:.1}–{:.1}] for {:?}",
+                self.brennwert_hs_kwh_per_m3, hs_min, hs_max, self.quality_class
+            ));
+        }
+
+        // Zustandszahl physical range per DVGW G 685 §8 (typical German networks: 0.94–1.06)
+        let z_min = Decimal::new(80, 2); // 0.80
+        let z_max = Decimal::new(120, 2); // 1.20
+        if self.zustandszahl < z_min || self.zustandszahl > z_max {
+            violations.push(format!(
+                "Zustandszahl {:.4} is outside physical range [{z_min}–{z_max}] per DVGW G 685 §8",
+                self.zustandszahl
+            ));
+        }
+
+        // Hu range check when present
+        if let Some(hu) = self.brennwert_hu_kwh_per_m3 {
+            let (hu_min, hu_max) = match self.quality_class {
+                GasQualityClass::HGas => (Decimal::new(85, 1), Decimal::new(118, 1)), // 8.5–11.8
+                GasQualityClass::LGas => (Decimal::new(68, 1), Decimal::new(93, 1)),  // 6.8–9.3
+                GasQualityClass::Biogas => (Decimal::new(70, 1), Decimal::new(120, 1)),
+            };
+            if hu < hu_min || hu > hu_max {
+                violations.push(format!(
+                    "Brennwert Hu {hu:.3} kWh/m³ is outside DVGW G 260 range [{hu_min:.1}–{hu_max:.1}]"
+                ));
+            }
+            // Sanity: Hu must be < Hs (lower heating value definition)
+            if hu >= self.brennwert_hs_kwh_per_m3 {
+                violations.push(format!(
+                    "Brennwert Hu {hu:.3} must be < Hs {:.3} (Hu is lower heating value)",
+                    self.brennwert_hs_kwh_per_m3
+                ));
+            }
+        }
+
+        if violations.is_empty() {
+            Ok(())
+        } else {
+            Err(GasBeschaffenheitValidationError { violations })
+        }
+    }}
+
+// ── GasBeschaffenheitValidationError ─────────────────────────────────────────
+
+/// Validation result when checking `GasBeschaffenheit` against DVGW G 260 / G 685.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GasBeschaffenheitValidationError {
+    /// List of violated constraints with human-readable descriptions.
+    pub violations: Vec<String>,
+}
+
+impl std::fmt::Display for GasBeschaffenheitValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GasBeschaffenheit validation failed: {}", self.violations.join("; "))
+    }
+}
+
+impl std::error::Error for GasBeschaffenheitValidationError {}
+
+// ── GasQualityFlag ────────────────────────────────────────────────────────────
+
+/// Quality flag for a gas measurement interval per §17 MessZV and GasNZV.
+///
+/// Gas measurements can originate from direct measurement (MSCONS), be estimated
+/// by a standard load profile (SLP), or be replaced by a substitute value when
+/// the primary measurement is unavailable.
+///
+/// The flag determines whether an interval is billable and which regulatory
+/// handling applies (§17 MessZV Ersatzwertbildung for Gas RLM).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum GasQualityFlag {
+    /// Directly measured RLM Gas value (MSCONS Gas interval, highest reliability).
+    Measured,
+    /// Value estimated using SLP Gas standard load profile (G0, H0, G1–G6).
+    Estimated,
+    /// Value substituted per §17 MessZV (prior-period average, SLP scaling, or linear).
+    Substituted,
+    /// Value calculated from a DVGW G 685 conversion (m³ × Hs × Z).
+    Calculated,
+    /// Corrected value superseding a previous Measured/Substituted value.
+    /// Per §22 MessZV: corrections are stored immutably, not overwriting originals.
+    Corrected,
+    /// Value rejected by quality validation (outside physical bounds, duplicate, etc.).
+    /// Rejected intervals are NOT billable and trigger an Ersatzwertbildung process.
+    Rejected,
+    /// Quality state not yet determined (waiting for DVGW G 685 data or validation).
+    Unknown,
+}
+
+impl GasQualityFlag {
+    /// `true` when this interval is billable under GasNZV §24.
+    ///
+    /// Rejected intervals are never billable. Unknown intervals require
+    /// resolution before billing can proceed.
+    #[must_use]
+    pub fn is_billable(self) -> bool {
+        matches!(
+            self,
+            Self::Measured | Self::Substituted | Self::Calculated | Self::Corrected
+        )
+    }
+
+    /// `true` when this interval originates from a direct measurement.
+    #[must_use]
+    pub fn is_measured(self) -> bool {
+        matches!(self, Self::Measured)
+    }
+}
+
+// ── CloudEvent type constants ─────────────────────────────────────────────────
+
+/// CloudEvent type constants for GaBi Gas domain events (`de.gabi.*`).
+///
+/// Use `de.gabi.*` as a single glob in `agentd.toml` `trigger_event_types`
+/// to activate the `gabi-gas-agent` on all GaBi Gas events.
+pub mod cloud_events {
+    /// MSCONS gas measurement received and ingested (PID 13007 or 13013).
+    pub const MEASUREMENT_RECEIVED: &str = "de.gabi.measurement.received";
+    /// ALOCAT allocation list processed — new allocation version available.
+    pub const ALLOCATION_COMPLETED: &str = "de.gabi.allocation.completed";
+    /// NOMINT nomination submitted by BKV to FNB or MGV.
+    pub const NOMINATION_CREATED: &str = "de.gabi.nomination.created";
+    /// NOMRES nomination response received — confirmed, curtailed, or rejected.
+    pub const NOMINATION_CONFIRMED: &str = "de.gabi.nomination.confirmed";
+    /// IMBNOT processed — `GasImbalanceSaldo` calculated for a gas day.
+    pub const IMBALANCE_CALCULATED: &str = "de.gabi.imbalance.calculated";
+    /// Allocation correction record created (Initial → Correction or → Final).
+    pub const CORRECTION_CREATED: &str = "de.gabi.correction.created";
+    /// INVOIC 31007/31008 (MMM-Rechnung Gas) received from NB.
+    pub const INVOIC_MMM_RECEIVED: &str = "de.gabi.invoic.mmm.received";
+    /// INVOIC 31010 (Kapazitätsrechnung) received from FNB/VNB.
+    pub const INVOIC_KAPAZITAET_RECEIVED: &str = "de.gabi.invoic.kapazitaet.received";
+    /// ALOCAT Initial allocation missing beyond D+3 12:00 CET deadline.
+    pub const ALOCAT_MISSING: &str = "de.gabi.alocat.missing";
+    /// GaBi Gas IMBNOT imbalance notification received from FNB/MGV.
+    pub const IMBNOT_RECEIVED: &str = "de.gabi.imbnot.received";
+    /// Gas quality parameters outside DVGW G 260 valid ranges.
+    pub const GAS_QUALITY_VIOLATION: &str = "de.gabi.quality.violation";
+    /// KoV §6.4 Final allocation deadline M+2 approaching or missed.
+    pub const FINAL_ALOCAT_DEADLINE: &str = "de.gabi.alocat.final.deadline";
+}
+
+// ── DVGW format version management ───────────────────────────────────────────
+
+/// DVGW message type discriminant for format version tables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DvgwMessageType {
+    /// Allokationsnachricht.
+    Alocat,
+    /// Nominierungsintegration.
+    Nomint,
+    /// Nominierungsantwort.
+    Nomres,
+    /// Schedulingnachricht.
+    Schedl,
+    /// Imbalance Notification.
+    Imbnot,
+    /// Transport Notification.
+    Tranot,
+    /// Delivery Order.
+    Delord,
+    /// Delivery Response.
+    Delres,
+}
+
+/// A DVGW EDIFACT format version with its biannual validity window.
+///
+/// DVGW formats follow a biannual release schedule (April 1 + October 1 at
+/// 06:00 CET = start of a gas day). During the 3-month overlap window before
+/// a new version becomes mandatory, both versions must be accepted by the
+/// `dvgw-edi` parser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DvgwFormatVersion {
+    /// Short version identifier (e.g. `"5.11a"`, `"4.6 FK"`).
+    pub version: &'static str,
+    /// First gas day from which this version is valid (06:00 CET on this date).
+    pub valid_from: Date,
+    /// Last gas day this version is supported (None = current/open).
+    pub valid_to: Option<Date>,
+    /// Which DVGW message type this version applies to.
+    pub message_type: DvgwMessageType,
+}
+
+/// Current DVGW format versions (as of 2026-07-18 — update each April/October).
+pub mod dvgw_versions {
+    use time::macros::date;
+    use super::{Date, DvgwFormatVersion, DvgwMessageType};
+
+    /// ALOCAT 5.11a — valid from 2024-10-01 (current).
+    pub const ALOCAT: DvgwFormatVersion = DvgwFormatVersion {
+        version: "5.11a",
+        valid_from: date!(2024-10-01),
+        valid_to: None,
+        message_type: DvgwMessageType::Alocat,
+    };
+    /// NOMINT 4.6 FK — valid from 2026-02-01 (current).
+    pub const NOMINT: DvgwFormatVersion = DvgwFormatVersion {
+        version: "4.6 FK",
+        valid_from: date!(2026-02-01),
+        valid_to: None,
+        message_type: DvgwMessageType::Nomint,
+    };
+    /// NOMRES 4.7 FK — valid from 2026-02-01 (current).
+    pub const NOMRES: DvgwFormatVersion = DvgwFormatVersion {
+        version: "4.7 FK",
+        valid_from: date!(2026-02-01),
+        valid_to: None,
+        message_type: DvgwMessageType::Nomres,
+    };
+    /// SCHEDL 4.4 FK — valid from 2026-02-01 (current).
+    pub const SCHEDL: DvgwFormatVersion = DvgwFormatVersion {
+        version: "4.4 FK",
+        valid_from: date!(2026-02-01),
+        valid_to: None,
+        message_type: DvgwMessageType::Schedl,
+    };
+    /// IMBNOT 5.7a — valid from 2023-10-01 (current).
+    pub const IMBNOT: DvgwFormatVersion = DvgwFormatVersion {
+        version: "5.7a",
+        valid_from: date!(2023-10-01),
+        valid_to: None,
+        message_type: DvgwMessageType::Imbnot,
+    };
+    /// TRANOT 5.8b — valid from 2023-10-01 (current).
+    pub const TRANOT: DvgwFormatVersion = DvgwFormatVersion {
+        version: "5.8b",
+        valid_from: date!(2023-10-01),
+        valid_to: None,
+        message_type: DvgwMessageType::Tranot,
+    };
+    /// DELORD 4.5 FK — valid from 2026-02-01 (current).
+    pub const DELORD: DvgwFormatVersion = DvgwFormatVersion {
+        version: "4.5 FK",
+        valid_from: date!(2026-02-01),
+        valid_to: None,
+        message_type: DvgwMessageType::Delord,
+    };
+    /// DELRES 4.6 FK — valid from 2026-02-01 (current).
+    pub const DELRES: DvgwFormatVersion = DvgwFormatVersion {
+        version: "4.6 FK",
+        valid_from: date!(2026-02-01),
+        valid_to: None,
+        message_type: DvgwMessageType::Delres,
+    };
 }
 
 // ── GasQuantity ───────────────────────────────────────────────────────────────
 
 /// A gas energy quantity with optional m³ volume and conversion metadata.
-///
-/// Stores the canonical billing energy in kWh_Hs alongside optional source
 /// volume (m³) and the conversion parameters used. This allows full audit of
 /// any quantity from raw measurement to billed energy.
 ///
@@ -410,6 +697,110 @@ impl GasDay {
         }
     }
 
+    /// NOMRES response deadline for this gas day: D-1 15:00 CET in UTC.
+    ///
+    /// Per the Kooperationsvereinbarung Gas: the FNB/MGV must respond to
+    /// the BKV's nomination (NOMINT) by **15:00 CET on gas day D-1** — i.e.
+    /// ~2 hours after the NOMINT submission deadline.
+    ///
+    /// Register a [`mako_engine::deadline::Deadline`] with
+    /// [`crate::nomination::NOMRES_DEADLINE_LABEL`] using this timestamp
+    /// immediately after the `NominationSent` event is persisted.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic in practice.
+    #[must_use]
+    pub fn nomres_deadline_utc(&self) -> OffsetDateTime {
+        use time_tz::{OffsetDateTimeExt, timezones};
+        let berlin = timezones::db::europe::BERLIN;
+        let d_minus_1 = self.date - Duration::days(1);
+        // 14:00 UTC = 15:00 CET; 13:00 UTC = 15:00 CEST
+        let candidate_winter =
+            OffsetDateTime::new_utc(d_minus_1, Time::from_hms(14, 0, 0).unwrap());
+        let candidate_summer =
+            OffsetDateTime::new_utc(d_minus_1, Time::from_hms(13, 0, 0).unwrap());
+        if candidate_winter.to_timezone(berlin).hour() == 15 {
+            candidate_winter
+        } else {
+            candidate_summer
+        }
+    }
+
+    /// Initial ALOCAT deadline: gas day D+3 at 12:00 CET in UTC.
+    ///
+    /// Per KoV §6.4: the FNB must issue the **initial** (preliminary) allocation
+    /// to the BKV by **D+3 at 12:00 CET** (D = gas day date).
+    ///
+    /// Register a deadline with label `"gabi-gas-alocat-initial-deadline"` to
+    /// monitor compliance.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic in practice.
+    #[must_use]
+    pub fn initial_alocat_deadline_utc(&self) -> OffsetDateTime {
+        use time_tz::{OffsetDateTimeExt, timezones};
+        let berlin = timezones::db::europe::BERLIN;
+        let d_plus_3 = self.date + Duration::days(3);
+        // 11:00 UTC = 12:00 CET; 10:00 UTC = 12:00 CEST
+        let candidate_winter =
+            OffsetDateTime::new_utc(d_plus_3, Time::from_hms(11, 0, 0).unwrap());
+        let candidate_summer =
+            OffsetDateTime::new_utc(d_plus_3, Time::from_hms(10, 0, 0).unwrap());
+        if candidate_winter.to_timezone(berlin).hour() == 12 {
+            candidate_winter
+        } else {
+            candidate_summer
+        }
+    }
+
+    /// Final ALOCAT deadline: M+2 (end of the second calendar month after the
+    /// gas day) at 12:00 CET in UTC.
+    ///
+    /// Per KoV §6.4: the FNB/MGV must issue the **final** (binding) allocation
+    /// by the end of month M+2. The exact day is the last day of month+2 at
+    /// 12:00 CET. All corrections must be complete by this date.
+    ///
+    /// Used to alert agentd's `gabi-gas-agent` to trigger compliance checks.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic in practice.
+    #[must_use]
+    pub fn final_alocat_deadline_utc(&self) -> OffsetDateTime {
+        use time_tz::{OffsetDateTimeExt, timezones};
+        let berlin = timezones::db::europe::BERLIN;
+
+        // M+2: month of gas day + 2, last day of that month
+        let month_num = self.date.month() as u8;
+        let year = self.date.year();
+        let (target_year, target_month) = if month_num >= 11 {
+            // Nov → Jan+1, Dec → Feb+1
+            (year + 1, time::Month::try_from((month_num + 2) % 12).unwrap_or(time::Month::January))
+        } else {
+            (year, time::Month::try_from(month_num + 2).unwrap_or(time::Month::January))
+        };
+        // Last day of target month
+        let last_day = Date::from_calendar_date(
+            target_year,
+            target_month,
+            time::util::days_in_year_month(target_year, target_month),
+        )
+        .unwrap_or_else(|_| self.date + Duration::days(60));
+
+        // 11:00 UTC = 12:00 CET (winter); 10:00 UTC = 12:00 CEST (summer)
+        let candidate_winter =
+            OffsetDateTime::new_utc(last_day, Time::from_hms(11, 0, 0).unwrap());
+        let candidate_summer =
+            OffsetDateTime::new_utc(last_day, Time::from_hms(10, 0, 0).unwrap());
+        if candidate_winter.to_timezone(berlin).hour() == 12 {
+            candidate_winter
+        } else {
+            candidate_summer
+        }
+    }
+
     /// Format as `YYYY-MM-DD` (DVGW standard gas day identifier).
     #[must_use]
     pub fn to_iso8601(&self) -> String {
@@ -541,6 +932,15 @@ pub struct GasImbalanceSaldo {
 
     /// `true` when the imbalance requires settlement via Ausgleichsenergie.
     pub requires_settlement: bool,
+
+    /// Ausgleichsenergie price from MGV per KoV §9 (EUR-cent per kWh_Hs).
+    ///
+    /// Set when the MGV publishes the Ausgleichsenergiepreis for this gas day.
+    /// `None` when not yet published (settlement is pending).
+    ///
+    /// Stored as `i64` EUR-cent to avoid float precision issues.
+    /// Example: 500 = 5.00 EUR/MWh = 0.50 ct/kWh.
+    pub ausgleichsenergie_price_ct_per_kwh: Option<Decimal>,
 }
 
 impl GasImbalanceSaldo {
@@ -564,6 +964,7 @@ impl GasImbalanceSaldo {
             allocated_kwh,
             imbalance_kwh,
             requires_settlement,
+            ausgleichsenergie_price_ct_per_kwh: None,
         }
     }
 
@@ -575,6 +976,18 @@ impl GasImbalanceSaldo {
             std::cmp::Ordering::Less => ImbalanceDirection::Minder,
             std::cmp::Ordering::Equal => ImbalanceDirection::Balanced,
         }
+    }
+
+    /// Calculate the Ausgleichsenergie cost / revenue per KoV §9.
+    ///
+    /// Returns `None` when the Ausgleichsenergiepreis has not yet been published.
+    ///
+    /// - Positive imbalance (Mehr): BKV owes this amount to MGV.
+    /// - Negative imbalance (Minder): MGV owes this amount to BKV.
+    #[must_use]
+    pub fn settlement_amount_ct(&self) -> Option<Decimal> {
+        self.ausgleichsenergie_price_ct_per_kwh
+            .map(|price| self.imbalance_kwh * price)
     }
 }
 
@@ -817,4 +1230,194 @@ mod tests {
         };
         assert!(!bk.is_active_on(GasDay::new(date!(2026 - 01 - 15))));
     }
+
+    // ── GasDay deadline helpers ────────────────────────────────────────────────
+
+    #[test]
+    fn nomres_deadline_is_d_minus_1_15_00_cet_winter() {
+        // Gas day 2026-01-15 → NOMRES deadline = 2026-01-14 15:00 CET = 14:00 UTC
+        let d = GasDay::new(date!(2026 - 01 - 15));
+        let dl = d.nomres_deadline_utc();
+        assert_eq!(dl.date(), date!(2026 - 01 - 14));
+        assert_eq!(dl.hour(), 14, "15:00 CET = 14:00 UTC in winter");
+        // NOMRES deadline must be > NOMINT deadline (D-1 13:00 CET)
+        assert!(dl > d.nomination_deadline_utc(), "NOMRES deadline must be after NOMINT deadline");
+    }
+
+    #[test]
+    fn nomres_deadline_is_d_minus_1_15_00_cest_summer() {
+        // Gas day 2026-07-15 → NOMRES deadline = 2026-07-14 15:00 CEST = 13:00 UTC
+        let d = GasDay::new(date!(2026 - 07 - 15));
+        let dl = d.nomres_deadline_utc();
+        assert_eq!(dl.date(), date!(2026 - 07 - 14));
+        assert_eq!(dl.hour(), 13, "15:00 CEST = 13:00 UTC in summer");
+    }
+
+    #[test]
+    fn initial_alocat_deadline_is_d_plus_3_12_00_cet_winter() {
+        // Gas day 2026-01-15 → Initial ALOCAT deadline = 2026-01-18 12:00 CET = 11:00 UTC
+        let d = GasDay::new(date!(2026 - 01 - 15));
+        let dl = d.initial_alocat_deadline_utc();
+        assert_eq!(dl.date(), date!(2026 - 01 - 18), "D+3 date");
+        assert_eq!(dl.hour(), 11, "12:00 CET = 11:00 UTC in winter");
+    }
+
+    #[test]
+    fn final_alocat_deadline_is_end_of_month_plus_2() {
+        // Gas day 2026-01-15 → Final ALOCAT deadline = end of 2026-03 at 12:00 CET
+        let d = GasDay::new(date!(2026 - 01 - 15));
+        let dl = d.final_alocat_deadline_utc();
+        assert_eq!(dl.date().month(), time::Month::March, "M+2 = March for January gas day");
+        assert_eq!(dl.date().year(), 2026);
+        assert_eq!(dl.date().day(), 31, "last day of March");
+    }
+
+    #[test]
+    fn final_alocat_deadline_november_wraps_to_january_next_year() {
+        // Gas day 2026-11-15 → Final ALOCAT deadline = end of 2027-01
+        let d = GasDay::new(date!(2026 - 11 - 15));
+        let dl = d.final_alocat_deadline_utc();
+        assert_eq!(dl.date().year(), 2027, "M+2 from November wraps to next year");
+        assert_eq!(dl.date().month(), time::Month::January);
+    }
+
+    // ── GasBeschaffenheit validation ───────────────────────────────────────────
+
+    #[test]
+    fn beschaffenheit_valid_h_gas_passes_validation() {
+        let b = GasBeschaffenheit {
+            brennwert_hs_kwh_per_m3: dec!(10.55),
+            zustandszahl: dec!(0.9764),
+            brennwert_hu_kwh_per_m3: Some(dec!(9.55)),
+            quality_class: GasQualityClass::HGas,
+            valid_from: date!(2026 - 01 - 01),
+            valid_to: None,
+            source: "MSCONS PID 13007".to_owned(),
+        };
+        assert!(b.validate().is_ok(), "typical H-Gas values should pass");
+    }
+
+    #[test]
+    fn beschaffenheit_hs_too_high_fails_validation() {
+        let b = GasBeschaffenheit {
+            brennwert_hs_kwh_per_m3: dec!(15.0), // > 13.1 kWh/m³ H-Gas max
+            zustandszahl: dec!(1.0),
+            brennwert_hu_kwh_per_m3: None,
+            quality_class: GasQualityClass::HGas,
+            valid_from: date!(2026 - 01 - 01),
+            valid_to: None,
+            source: "test".to_owned(),
+        };
+        let err = b.validate().unwrap_err();
+        assert!(!err.violations.is_empty());
+        assert!(err.violations[0].contains("Hs"), "error should mention Hs");
+    }
+
+    #[test]
+    fn beschaffenheit_zustandszahl_out_of_range_fails() {
+        let b = GasBeschaffenheit {
+            brennwert_hs_kwh_per_m3: dec!(10.55),
+            zustandszahl: dec!(1.5), // > 1.20 physical maximum
+            brennwert_hu_kwh_per_m3: None,
+            quality_class: GasQualityClass::HGas,
+            valid_from: date!(2026 - 01 - 01),
+            valid_to: None,
+            source: "test".to_owned(),
+        };
+        let err = b.validate().unwrap_err();
+        assert!(!err.violations.is_empty());
+        assert!(err.violations[0].contains("Zustandszahl"));
+    }
+
+    #[test]
+    fn beschaffenheit_hu_must_be_less_than_hs() {
+        let b = GasBeschaffenheit {
+            brennwert_hs_kwh_per_m3: dec!(10.55),
+            zustandszahl: dec!(1.0),
+            brennwert_hu_kwh_per_m3: Some(dec!(10.55)), // Hu = Hs, physically impossible
+            quality_class: GasQualityClass::HGas,
+            valid_from: date!(2026 - 01 - 01),
+            valid_to: None,
+            source: "test".to_owned(),
+        };
+        let err = b.validate().unwrap_err();
+        assert!(err.violations.iter().any(|v| v.contains("Hu")));
+    }
+
+    #[test]
+    fn beschaffenheit_l_gas_valid_range() {
+        let b = GasBeschaffenheit {
+            brennwert_hs_kwh_per_m3: dec!(8.5), // L-Gas range 7.5–10.3
+            zustandszahl: dec!(0.98),
+            brennwert_hu_kwh_per_m3: None,
+            quality_class: GasQualityClass::LGas,
+            valid_from: date!(2026 - 01 - 01),
+            valid_to: None,
+            source: "MSCONS".to_owned(),
+        };
+        assert!(b.validate().is_ok(), "8.5 kWh/m³ is valid for L-Gas");
+    }
+
+    // ── GasQualityFlag ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn gas_quality_flag_billable_states() {
+        assert!(GasQualityFlag::Measured.is_billable());
+        assert!(GasQualityFlag::Substituted.is_billable());
+        assert!(GasQualityFlag::Corrected.is_billable());
+        assert!(!GasQualityFlag::Rejected.is_billable());
+        assert!(!GasQualityFlag::Unknown.is_billable());
+    }
+
+    // ── CloudEvent constants ───────────────────────────────────────────────────
+
+    #[test]
+    fn cloud_event_constants_have_correct_prefix() {
+        assert!(cloud_events::MEASUREMENT_RECEIVED.starts_with("de.gabi."));
+        assert!(cloud_events::ALLOCATION_COMPLETED.starts_with("de.gabi."));
+        assert!(cloud_events::NOMINATION_CREATED.starts_with("de.gabi."));
+        assert!(cloud_events::IMBALANCE_CALCULATED.starts_with("de.gabi."));
+        assert!(cloud_events::INVOIC_MMM_RECEIVED.starts_with("de.gabi."));
+    }
+
+    // ── DVGW version constants ─────────────────────────────────────────────────
+
+    #[test]
+    fn dvgw_alocat_version_is_5_11a() {
+        assert_eq!(dvgw_versions::ALOCAT.version, "5.11a");
+    }
+
+    #[test]
+    fn dvgw_nomint_version_is_4_6_fk() {
+        assert_eq!(dvgw_versions::NOMINT.version, "4.6 FK");
+    }
+
+    // ── GasImbalanceSaldo with Ausgleichsenergie ───────────────────────────────
+
+    #[test]
+    fn settlement_amount_computed_when_price_available() {
+        let mut saldo = GasImbalanceSaldo::calculate(
+            GasDay::new(date!(2026 - 01 - 15)),
+            "BKV",
+            "BK",
+            dec!(1000.0),
+            dec!(900.0), // 100 kWh Mehr (over-nominated)
+        );
+        saldo.ausgleichsenergie_price_ct_per_kwh = Some(dec!(5.0)); // 5 ct/kWh
+        let amount = saldo.settlement_amount_ct().unwrap();
+        assert_eq!(amount, dec!(500.0), "100 kWh × 5 ct = 500 ct (5 EUR)");
+    }
+
+    #[test]
+    fn settlement_amount_none_when_price_not_yet_published() {
+        let saldo = GasImbalanceSaldo::calculate(
+            GasDay::new(date!(2026 - 01 - 15)),
+            "BKV",
+            "BK",
+            dec!(1000.0),
+            dec!(900.0),
+        );
+        assert!(saldo.settlement_amount_ct().is_none());
+    }
 }
+

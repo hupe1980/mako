@@ -410,7 +410,83 @@ CREATE TABLE gdpr_deletions (
 CREATE INDEX gd_archive_pending ON gdpr_deletions (archive_deletion_pending)
     WHERE archive_deletion_pending = true;
 
--- ── TimescaleDB (optional, install before first data load) ────────────────────
+-- ── BSI TR-03109 SMGW session registry (MsbG §21c / §14a EnWG) ──────────────
+--
+-- One row per SMGW device (by malo_id + tenant).  The full `SmgwSession` is
+-- stored as JSONB so the `metering::SmgwSession` struct can be round-tripped
+-- without splitting across many relational tables.
+--
+-- The GIN index enables fast certificate-expiry queries without a full table scan:
+--   WHERE session -> 'certificates' @> '[{"cert_type":"TLS","is_revoked":false}]'
+--
+-- Column extraction: `status` and `device_id` are promoted to dedicated columns
+-- so the compliance worker can do initial filtering without JSONB extraction.
+
+CREATE TABLE smgw_sessions (
+    malo_id         TEXT        NOT NULL,
+    tenant          TEXT        NOT NULL,
+    device_id       TEXT        NOT NULL,   -- SmgwSession.device_id (SMGW serial)
+    msb_mp_id       TEXT        NOT NULL,   -- responsible MSB BDEW-Codenummer
+    gateway_status  TEXT        NOT NULL DEFAULT 'OPERATIONAL'
+                        CHECK (gateway_status IN (
+                            'PROVISIONED','COMMISSIONED','OPERATIONAL',
+                            'REVOKED','REPLACED','COMMUNICATION_FAULT'
+                        )),
+    session         JSONB       NOT NULL,   -- serialized SmgwSession (all fields)
+    last_contact_at TIMESTAMPTZ,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (malo_id, tenant)
+);
+
+CREATE INDEX smgw_tenant_status  ON smgw_sessions (tenant, gateway_status);
+CREATE INDEX smgw_last_contact   ON smgw_sessions (tenant, last_contact_at DESC)
+    WHERE last_contact_at IS NOT NULL;
+-- GIN index enables fast queries on certificates array and CLS channels:
+--   SELECT ... WHERE session @> '{"status":"OPERATIONAL"}'
+CREATE INDEX smgw_session_gin    ON smgw_sessions USING GIN (session);
+
+-- ── §14a Fernsteuerbarkeit compliance audit log ───────────────────────────────
+--
+-- Append-only log of every compliance issue detected by the background worker
+-- or the on-demand compliance scan (`POST /api/v1/smgw/compliance/scan`).
+-- Each row corresponds to one emitted `de.edmd.cls.compliance_issue` CloudEvent.
+--
+-- `issue_type` maps to the MSB's legal exposure:
+--   CERT_EXPIRED        — BNetzA can impose fines; §14a eligibility lost
+--   CERT_EXPIRING       — 30-day advance warning; MSB must renew
+--   TLS_CERT_MISSING    — SMGW unreachable via SMGW Admin Protocol
+--   CLS_NOT_COMPLIANT   — §14a Konfigurationsprodukt not assigned; DSO control impossible
+--   COMMUNICATION_FAULT — No contact > 2h; §17 MessZV substitute values required
+--   GATEWAY_REVOKED     — Security incident; immediate replacement required (MsbG §29)
+
+CREATE TABLE cls_compliance_log (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    malo_id         TEXT        NOT NULL,
+    device_id       TEXT        NOT NULL,
+    issue_type      TEXT        NOT NULL CHECK (issue_type IN (
+                        'CERT_EXPIRED','CERT_EXPIRING','TLS_CERT_MISSING',
+                        'CLS_NOT_COMPLIANT','COMMUNICATION_FAULT','GATEWAY_REVOKED'
+                    )),
+    severity        TEXT        NOT NULL CHECK (severity IN ('CRITICAL','WARNING')),
+    cert_serial     TEXT,           -- for CERT_* issues
+    cert_type       TEXT,           -- 'TLS', 'SIG', 'ENC', 'KEY_AGREEMENT'
+    days_to_expiry  INTEGER,        -- negative = already expired
+    channel_id      TEXT,           -- for CLS_NOT_COMPLIANT issues
+    details         JSONB,          -- full issue context
+    detected_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    cloud_event_id  TEXT,           -- CloudEvent `id` of emitted event
+    tenant          TEXT        NOT NULL
+);
+
+-- Fast lookups for compliance dashboard and agentd smgw-diagnostics-agent:
+CREATE INDEX ccl_malo_detected  ON cls_compliance_log (malo_id, detected_at DESC);
+CREATE INDEX ccl_tenant_recent  ON cls_compliance_log (tenant, detected_at DESC);
+CREATE INDEX ccl_open_critical  ON cls_compliance_log (tenant, issue_type, detected_at DESC)
+    WHERE severity = 'CRITICAL';
+CREATE INDEX ccl_issue_type     ON cls_compliance_log (issue_type, detected_at DESC);
+
+-- TimescaleDB (optional, install before first data load) ────────────────────
 -- Uncomment and run ONCE after installing the TimescaleDB extension:
 --
 -- SELECT create_hypertable('meter_reads', 'dtm_from',

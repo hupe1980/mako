@@ -14,10 +14,19 @@ pub struct TarifbdConfig {
     /// supplied in the request.
     pub tenant: String,
 
-    /// ERP webhook URL for `de.tarifd.product.updated` notifications.
+    /// OIDC/JWT authentication configuration.
+    ///
+    /// When absent, auth is **disabled** (dev mode only).  Must be set in
+    /// production.  All REST management endpoints require a valid Bearer
+    /// token; only the public comparison feed is unauthenticated.
+    pub oidc: Option<mako_service::oidc::OidcConfig>,
+
+    /// ERP webhook URL for `de.tarifbd.product.updated` notifications.
     pub erp_webhook_url: Option<String>,
 
     /// HMAC-SHA256 secret for outbound webhook signing.
+    /// When absent, the `X-Mako-Signature` header is omitted from outbound
+    /// CloudEvent webhooks.  Required in production.
     pub erp_hmac_secret: Option<String>,
 
     /// MCP server authentication. Supports API-key, OIDC, or dev mode.

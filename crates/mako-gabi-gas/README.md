@@ -67,10 +67,22 @@ The German gas day starts and ends at **06:00 CET** (DVGW G 2000 §3.2):
 
 ```rust
 let day = GasDay::new(date!(2026-01-15));
-println!("Start UTC: {}", day.start_utc());          // 05:00 UTC
-println!("Duration: {} hours", day.duration_hours()); // 24
-println!("NOMINT deadline: {}", day.nomination_deadline_utc()); // 2026-01-14 12:00 UTC
+println!("Start UTC:           {}", day.start_utc());             // 05:00 UTC (winter)
+println!("Duration:            {} hours", day.duration_hours());  // 24
+println!("NOMINT deadline:     {}", day.nomination_deadline_utc()); // D-1 13:00 CET → 12:00 UTC
+println!("NOMRES deadline:     {}", day.nomres_deadline_utc());     // D-1 15:00 CET → 14:00 UTC
+println!("Initial ALOCAT due:  {}", day.initial_alocat_deadline_utc()); // D+3 12:00 CET (KoV §6.4)
+println!("Final ALOCAT due:    {}", day.final_alocat_deadline_utc());   // M+2 last day 12:00 CET
 ```
+
+#### KoV deadline summary
+
+| Deadline | Time | Method |
+|---|---|---|
+| NOMINT submission | D-1 13:00 CET | `nomination_deadline_utc()` |
+| NOMRES response window | D-1 15:00 CET | `nomres_deadline_utc()` |
+| Initial ALOCAT | D+3 12:00 CET | `initial_alocat_deadline_utc()` |
+| Final ALOCAT | M+2 last day | `final_alocat_deadline_utc()` |
 
 ### `GasBeschaffenheit` + `GasQuantity` — DVGW G 685 conversion
 
@@ -83,8 +95,41 @@ let beschaffenheit = GasBeschaffenheit {
     valid_from: date!(2026-01-01),
     ..
 };
+
+// Validate against DVGW G 260 physical limits before use
+beschaffenheit.validate()?;   // Err if Hs, Hu, or Zustandszahl outside valid range
+
 let quantity = GasQuantity::from_m3(dec!(100), beschaffenheit);
 assert_eq!(quantity.energy_kwh_hs, dec!(1030.102)); // rounded to 3 dp
+```
+
+#### DVGW G 260 validation ranges
+
+| Parameter | H-Gas valid range | L-Gas valid range |
+|---|---|---|
+| Hs (kWh/m³) | 9.5 – 13.1 | 7.5 – 10.3 |
+| Hu (kWh/m³) | 8.5 – 11.8 | 6.8 – 9.3 |
+| Zustandszahl | 0.80 – 1.20 | 0.80 – 1.20 |
+| Hu < Hs | always | always |
+
+`validate()` returns `Err(GasBeschaffenheitValidationError)` listing all violated constraints.
+
+### `GasQualityFlag` — measurement quality per §17 MessZV / GasNZV §24
+
+```rust
+// Every gas measurement interval carries a quality flag
+match flag {
+    GasQualityFlag::Measured     => /* direct MSCONS Gas reading */,
+    GasQualityFlag::Estimated    => /* SLP Gas profile (G0, H0, G1–G6) */,
+    GasQualityFlag::Substituted  => /* §17 MessZV replacement value */,
+    GasQualityFlag::Calculated   => /* DVGW G 685 m³ → kWh_Hs conversion result */,
+    GasQualityFlag::Corrected    => /* revised value, prior version preserved */,
+    GasQualityFlag::Rejected     => /* failed validation — triggers Ersatzwertbildung */,
+    GasQualityFlag::Unknown      => /* quality not yet determined */,
+}
+
+// Billing gate per GasNZV §24
+if flag.is_billable() { /* includes Measured, Substituted, Calculated, Corrected */ }
 ```
 
 ### `AllocationVersion` — KoV §6.4 correction tracking
@@ -103,30 +148,102 @@ pub enum AllocationVersion {
 ### `GasMarketRole` — typed market role classification
 
 ```rust
-assert!(GasMarketRole::Bkv.submits_nominations());     // BKV submits NOMINT
-assert!(GasMarketRole::Fnb.receives_allocations());    // FNB receives ALOCAT (sub-day)
+assert!(GasMarketRole::Bkv.submits_nominations());      // BKV submits NOMINT
+assert!(GasMarketRole::Fnb.receives_allocations());     // FNB receives ALOCAT (sub-day)
 assert!(GasMarketRole::Bkv.has_imbalance_obligation()); // BKV settles via IMBNOT
-assert!(!GasMarketRole::Lf.receives_allocations());    // LF does not receive ALOCAT
+assert!(!GasMarketRole::Lf.receives_allocations());     // LF does not receive ALOCAT directly
 ```
 
-### `GasPortfolioBalance` + `PortfolioPosition`
+### `GasPortfolioBalance` + `PortfolioPosition` — conservation check
 
 BKV portfolio aggregation across all Bilanzkreise for a gas day:
 
 ```rust
 let balance = GasPortfolioBalance { bkv_eic: "...", gas_day, positions, .. };
-println!("Net: {} kWh", balance.net_imbalance_kwh()); // nominated − allocated
+println!("Net: {} kWh", balance.net_imbalance_kwh());    // nominated − allocated
 println!("Direction: {:?}", balance.portfolio_direction()); // Mehr / Minder / Balanced
 println!("Open positions: {}", balance.open_imbalance_count());
+
+// Verify energy conservation: SUM(BKV allocations) = VNB measured total
+// per GasNZV §24 and DVGW G 685
+match balance.conservation_check(vnb_total_kwh, dec!(1.0) /* tolerance */) {
+    Ok(total) => println!("Conservation OK: {} kWh", total),
+    Err(ConservationViolation::EnergyImbalance { deviation_kwh, .. }) =>
+        println!("Imbalance: {} kWh exceeds tolerance", deviation_kwh),
+    Err(ConservationViolation::IncompleteAllocations { missing_bilanzkreise }) =>
+        println!("Missing allocations for: {:?}", missing_bilanzkreise),
+}
 ```
 
-### `GasImbalanceSaldo` — settlement calculation
+### `GasImbalanceSaldo` — settlement with Ausgleichsenergie price
 
 ```rust
-let saldo = GasImbalanceSaldo::calculate(gas_day, "EIC_BKV", "EIC_BK", nominated, allocated);
+let mut saldo = GasImbalanceSaldo::calculate(gas_day, "EIC_BKV", "EIC_BK",
+                                              nominated, allocated);
 // Mehr-Energie: BKV over-nominated, owes MGV
 // Minder-Energie: BKV under-nominated, MGV owes BKV
+
+// Set Ausgleichsenergie price from IMBNOT / MGV publication (KoV §9)
+saldo.ausgleichsenergie_price_ct_per_kwh = Some(dec!(5.0)); // 5 ct/kWh
+
+// Settlement amount = imbalance × price
+if let Some(amount) = saldo.settlement_amount_ct() {
+    println!("Settlement: {} ct", amount);
+}
 ```
+
+### Nomination correction chain
+
+Re-nominations cite the prior NOMINT via `corrects_nomination_ref`:
+
+```rust
+// Initial day-ahead nomination (D-1, correction_sequence = 0)
+let initial = NominationData {
+    nomination_ref: MessageRef::new("NOMINT-2026-001"),
+    corrects_nomination_ref: None,
+    correction_sequence: 0,
+    ..
+};
+
+// Intraday re-nomination correcting the initial (correction_sequence = 1)
+let correction = NominationData {
+    nomination_ref: MessageRef::new("NOMINT-2026-002"),
+    corrects_nomination_ref: Some(MessageRef::new("NOMINT-2026-001")),
+    correction_sequence: 1,
+    ..
+};
+```
+
+### CloudEvent constants (`de.gabi.*`)
+
+All GaBi Gas domain events use typed constants from the `cloud_events` module:
+
+```rust
+use mako_gabi_gas::gabi_cloud_events;
+
+// Use in agentd.toml trigger_event_types or makod CloudEvent dispatch
+assert_eq!(gabi_cloud_events::NOMINATION_CREATED, "de.gabi.nomination.created");
+assert_eq!(gabi_cloud_events::ALLOCATION_COMPLETED, "de.gabi.allocation.completed");
+assert_eq!(gabi_cloud_events::IMBALANCE_CALCULATED, "de.gabi.imbalance.calculated");
+assert_eq!(gabi_cloud_events::INVOIC_MMM_RECEIVED, "de.gabi.invoic.mmm.received");
+// … 12 typed constants total — use glob "de.gabi.*" to trigger gabi-gas-agent
+```
+
+### DVGW format version management
+
+The `dvgw_versions` module tracks biannual DVGW release versions with validity dates:
+
+```rust
+use mako_gabi_gas::dvgw_versions;
+
+println!("ALOCAT:  {} (valid from {})", dvgw_versions::ALOCAT.version,
+         dvgw_versions::ALOCAT.valid_from); // "5.11a" / 2024-10-01
+println!("NOMINT:  {} (valid from {})", dvgw_versions::NOMINT.version,
+         dvgw_versions::NOMINT.valid_from); // "4.6 FK" / 2026-02-01
+// … NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES
+```
+
+DVGW releases take effect on **1 April** and **1 October at 06:00 CET** (= start of a gas day).
 
 ## Domain background
 

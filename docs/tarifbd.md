@@ -44,9 +44,10 @@ graph LR
     SMART["WAERMEPUMPE / WALLBOX\n§14a Modul 1/3\n(like STROM)"]
     SERV["HEMS / EMOBILITY\nENERGIEDIENSTLEISTUNG\nplatform + event fees"]
     BUNDLE["BUNDLE\nComponent references\nper-position billing"]
+    SHARING["SHARING\n§42c EnWG Energy Sharing\ncommunity allocation"]
     tarifbd["tarifbd :9080"]
     STROM & GAS & WAERME & EEG --> tarifbd
-    SMART & SERV & BUNDLE --> tarifbd
+    SMART & SERV & BUNDLE & SHARING --> tarifbd
     tarifbd -->|"GET customer/{malo_id}/product"| billingd["billingd :9280"]
     tarifbd -->|"GET epex-prices/{date}/hourly"| billingd
 ```
@@ -57,15 +58,20 @@ graph LR
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/api/v1/products/{lf_mp_id}/{product_code}` | Upsert product; archives previous version |
+| `PUT` | `/api/v1/products/{lf_mp_id}/{product_code}` | Upsert product; archives previous version in `product_history`; validates `_typ`, `_version`, enum fields, 30-value `preistyp` whitelist |
 | `GET` | `/api/v1/products/{lf_mp_id}/{product_code}` | Fetch latest product |
-| `GET` | `/api/v1/products/{lf_mp_id}` | List products (`?category=&sparte=&kundentyp=`) |
-| `GET` | `/api/v1/products/{lf_mp_id}/{product_code}/history` | Immutable version audit log |
-| `GET/PUT` | `/api/v1/customer/{malo_id}/product` | Active product for a MaLo / Tarifwechsel |
-| `GET` | `/api/v1/comparison-feed` | **Comparison portal feed** — ETag-cached, paginated tariff listing |
-| `PUT` | `/api/v1/epex-prices/{date}` | Import EPEX day-ahead prices (24-entry array) |
+| `DELETE` | `/api/v1/products/{lf_mp_id}/{product_code}` | **Soft-delete** — sets `valid_to = today`; product retained for billing history; excluded from comparison feed |
+| `GET` | `/api/v1/products/{lf_mp_id}` | List products (`?category=&sparte=&kundentyp=&include_drafts=&include_expired=`) |
+| `GET` | `/api/v1/products/{lf_mp_id}/{product_code}/history` | Immutable version audit log (includes `energiemix` history for §42 audit trail) |
+| `GET/PUT` | `/api/v1/customer/{malo_id}/product` | Active product for a MaLo / Tarifwechsel (PUT validates product exists, is PUBLISHED, not expired, and `assigned_from >= product.valid_from`) |
+| `GET` | `/api/v1/customer/{malo_id}/product/history` | Full product-assignment history — auditors use this to verify Tarifwechsel Wirksamkeit |
+| `PUT/GET/DELETE` | `/api/v1/products/{lf_mp_id}/{product_code}/energiemix` | §42 EnWG Energiemix sub-resource — does NOT archive product or trigger billing-period changes |
+| `GET` | `/api/v1/comparison-feed` | **Comparison portal feed** — ETag-cached, cursor-paginated tariff listing (PUBLISHED non-expired only); `jahreskosten_supply_*` for `verbrauch_kwh` |
+| `GET` | `/api/v1/comparison-feed/bo4e` | **BO4E Tarifinfo array** — §42d EnWG canonical form; direct import by Verivox / Check24 / BNetzA MTS |
+| `PUT` | `/api/v1/epex-prices/{date}` | Import EPEX day-ahead prices (24-entry array, idempotent) |
 | `GET` | `/api/v1/epex-prices/{date}/hourly` | 24-hour ct/kWh array |
 | `GET` | `/api/v1/epex-prices/{year}/{month}/average` | Monthly average — used by `einsd` Direktvermarktung |
+| `POST/GET` | `/api/v1/angebote` | B2B Angebot (quotation) — ANGELEGT→VERSANDT→ANGENOMMEN/ABGELEHNT/ABGELAUFEN |
 | `GET` | `/health` | Liveness |
 | `GET` | `/health/ready` | Readiness |
 
@@ -145,6 +151,61 @@ monthly average used in `max(0, AW − EPEX)`.
 `GET /api/v1/comparison-feed` returns a machine-readable tariff listing for **Verivox,
 Check24**, BNetzA Markttransparenzstelle, and similar integrators. The feed is also
 compliant with §42d EnWG (mandatory machine-readable tariff publication since 2024).
+
+Each entry now includes a `tarifinfo` field — a pre-built **BO4E `Tarifinfo` Business
+Object** that portals can import directly without custom ETL.  For portals that require
+a pure BO4E array, use `GET /api/v1/comparison-feed/bo4e`.
+
+### BO4E Tarifinfo endpoint (§42d EnWG canonical form)
+
+`GET /api/v1/comparison-feed/bo4e` returns the same products but wrapped entirely in
+standard BO4E `Tarifinfo` objects — the format Verivox, Check24, and the BNetzA
+Markttransparenzstelle can import schema-validated without any custom transformation.
+
+```bash
+curl -s "http://tarifbd:9080/api/v1/comparison-feed/bo4e?sparte=STROM&kundentyp=Haushalt" | jq .
+```
+
+```json
+{
+  "meta": { "generated_at": "...", "total_returned": 3 },
+  "tarife": [
+    {
+      "_typ": "TARIFINFO",
+      "_version": "v202607.0.0",
+      "_id": "STROM-PREMIUM-2026",
+      "bezeichnung": "Mako Strom Premium",
+      "anbietername": "9900357000004",
+      "sparte": "STROM",
+      "kundentypen": ["Privat"],
+      "registeranzahl": "Eintarif",
+      "tariftyp": "SONDERTARIF",
+      "tarifmerkmale": ["FESTPREIS"],
+      "energiemix": { "anteilErneuerbareEnergien": 100, "co2Emission": 0 },
+      "zeitlicheGueltigkeit": { "startdatum": "2026-01-01" },
+      "vertragskonditionen": { "laufzeit": { "wert": 12, "einheit": "MONAT" } }
+    }
+  ]
+}
+```
+
+#### TarifInfo field mapping
+
+| BO4E field | Source in tarifbd |
+|---|---|
+| `bezeichnung` | `product.name` |
+| `anbietername` | `lf_mp_id` |
+| `_id` | `product.product_code` |
+| `sparte` | `product.sparte` → `rubo4e::Sparte` |
+| `kundentypen` | `product.kundentyp` → `[rubo4e::Kundentyp]` |
+| `registeranzahl` | `product.register_count` → `rubo4e::Registeranzahl` |
+| `tariftyp` | `data.tariftyp` → `rubo4e::Tariftyp` |
+| `tarifmerkmale` | Derived: `FESTPREIS` if preisgarantie set; `PAKET` if BUNDLE; `ONLINE` if dynamic |
+| `energiemix` | `product.energiemix` → `rubo4e::Energiemix` |
+| `zeitlicheGueltigkeit` | `product.valid_from/valid_to` → `rubo4e::Zeitraum` |
+| `vertragskonditionen` | `data.vertragskonditionen` → `rubo4e::Vertragskonditionen` |
+
+Both endpoints accept identical query parameters and return the same ETag/caching headers.
 
 ### Query parameters
 
@@ -261,15 +322,18 @@ curl "http://tarifbd:9080/api/v1/comparison-feed?limit=2&cursor=2026-07-17T10:00
 | `id` | UUID | Primary key |
 | `lf_mp_id` | TEXT | Operator BDEW-Codenummer |
 | `product_code` | TEXT | Operator-assigned product identifier |
-| `category` | TEXT | `STROM`/`GAS`/`WAERME`/`SOLAR`/`EEG`/`EINSPEISUNG`/`WAERMEPUMPE`/`WALLBOX`/`HEMS`/`EMOBILITY`/`ENERGIEDIENSTLEISTUNG`/`BUNDLE` |
+| `category` | TEXT | 13 values: `STROM`/`GAS`/`WAERME`/`SOLAR`/`EEG`/`EINSPEISUNG`/`WAERMEPUMPE`/`WALLBOX`/`HEMS`/`EMOBILITY`/`ENERGIEDIENSTLEISTUNG`/`BUNDLE`/`SHARING` |
+| `product_status` | TEXT | `PUBLISHED` (default) — visible to billingd and portals; `DRAFT` — staged, invisible until published |
 | `name` | TEXT | Human-readable name |
 | `sparte` | TEXT | `STROM` / `GAS` / `WAERME` / NULL |
 | `register_count` | TEXT | `Eintarif` / `Zweitarif` / `Mehrtarif` |
 | `kundentyp` | TEXT | `Haushalt` / `Gewerbe` / `Waermepumpe` / `Ladesaeule` |
-| `dyn_source` | TEXT | `"epex-spot-day-ahead"` for §41a; NULL for fixed |
+| `dyn_source` | TEXT | `"epex-spot-day-ahead"` for §41a; NULL for fixed. Only this value is accepted — all others are rejected with 422 |
 | `valid_from` | DATE | Tariff validity start |
-| `valid_to` | DATE | Tariff validity end |
-| `data` | JSONB | `Tarifpreisblatt` / `Preisblatt` BO4E payload |
+| `valid_to` | DATE | Tariff validity end (soft-delete via `DELETE` sets this to today) |
+| `data` | JSONB | `Tarifpreisblatt` / `Preisblatt` BO4E payload (validated on PUT: `_typ`, `_version = v202607.0.0`, enum fields, 30-value `preistyp` whitelist) |
+| `energiemix` | JSONB | §42 EnWG `Energiemix` COM — CO₂ emissions, fuel mix, certification labels |
+| `oekolabel` | TEXT[] | Extracted from energiemix for GIN `@>` filter queries |
 
 ### `customer_products`
 
@@ -282,6 +346,61 @@ One row per `(price_date, hour)`. 24-entry array per day. Indexed on `price_date
 
 ---
 
+---
+
+## Product lifecycle — DRAFT vs. PUBLISHED
+
+Products support a two-stage publishing workflow:
+
+| `product_status` | Visible to | Use case |
+|---|---|---|
+| `DRAFT` | Operators only | Stage a price change before go-live; `billingd` never sees DRAFT products |
+| `PUBLISHED` (default) | billingd, portald, comparison feed, customer assignments | Live tariff |
+
+```http
+# Stage a new price version (operator-only preview)
+PUT /api/v1/products/9910000000002/STROM-PREMIUM-2027
+Content-Type: application/json
+
+{ "category": "STROM", "product_status": "DRAFT", "name": "...", "data": {...} }
+
+# Publish when ready (makes it live instantly)
+PUT /api/v1/products/9910000000002/STROM-PREMIUM-2027
+Content-Type: application/json
+
+{ "category": "STROM", "product_status": "PUBLISHED", "name": "...", "data": {...} }
+```
+
+---
+
+## MCP tools
+
+`tarifbd` ships a built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25) with
+**14 read-only tools** and **3 prompts**.
+
+| Tool | Description |
+|---|---|
+| `list_products` | List products for an LF MP-ID (filter by category / sparte) |
+| `get_product` | Full Tarifpreisblatt JSONB including Preisstaffeln and Energiemix |
+| `get_product_history` | Version history including Energiemix changes (§42 audit trail) |
+| `get_customer_product` | Currently active product for a MaLo |
+| `get_epex_price` | Hourly EPEX day-ahead prices for a date (§41a compliance check) |
+| `list_expiring_contracts` | MaLo→product assignments ending within N days (churn prevention) |
+| `list_angebote` | B2B quotations by status (ANGELEGT/VERSANDT/ANGENOMMEN/…) |
+| `get_angebot` | Full Angebot with enriched positions and variant comparisons |
+| `get_angebot_summary` | Plain-text Angebot summary for sales staff review |
+| `check_41a_epex_status` | §41a compliance: are tomorrow's EPEX prices imported? CRITICAL/WARNING/OK |
+| `get_product_energiemix` | §42 EnWG Energiemix disclosure (CO₂, fuel mix, certification) |
+| `validate_tariff_config` | Validate Tarifpreisblatt JSONB before PUT (same logic as REST) |
+| `explain_invoice_position` | How a `preistyp` maps to a billingd invoice output + formula |
+| `get_comparison_feed` | Retrieve the §42d comparison portal feed (proxies the REST endpoint) |
+
+**Prompts:**
+- `configure-41a-tariff` — Step-by-step: configure a §41a EPEX dynamic tariff product (iMSys requirement, §41b guard)
+- `assign-product` — Step-by-step: assign a tariff to a MaLo and verify the assignment
+- `create-b2b-quotation` — Step-by-step: create a formal B2B Angebot for a C&I customer
+
+---
 ## Configuration
 
 ```toml

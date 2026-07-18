@@ -3,13 +3,23 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    body::Bytes,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+};
+use mako_service::oidc::{Claims, OidcVerifier};
+use secrecy::ExposeSecret;
 use serde_json::Value;
+use tokio::sync::Semaphore;
 
 use crate::{
     agent::registry::glob_match,
     agent::{AgentDecision, AgentRegistry, OrchestratorAgent},
     config::AgentdConfig,
+    dlq::{DlqEntry, DlqStore},
     mcp::McpPool,
     rag::RagEngine,
 };
@@ -64,12 +74,46 @@ pub struct AppState {
     pub rag: Option<RagEngine>,
     /// In-memory ring buffer of the last 100 agent decisions (best-effort; not persisted).
     pub sessions: SessionStore,
+    /// OIDC verifier (None = dev mode, all requests accepted with warning).
+    pub oidc: Option<Arc<OidcVerifier>>,
+    /// Semaphore limiting concurrent agent sessions to `cfg.max_sessions`.
+    pub session_sem: Arc<Semaphore>,
+    /// Dead-letter queue for failed sessions.
+    pub dlq: DlqStore,
 }
 
 pub async fn webhook(
     State(state): State<Arc<AppState>>,
-    Json(event): Json<Value>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
+    // ── Inbound HMAC verification ────────────────────────────────────────
+    if let Some(ref secret) = state.cfg.inbound_hmac_secret {
+        let expected = format!(
+            "sha256={}",
+            mako_service::webhook::hmac_hex(secret.expose_secret().as_bytes(), &body)
+        );
+        let provided = headers
+            .get("x-mako-signature")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+            tracing::warn!("agentd: inbound webhook HMAC mismatch — rejected");
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    } else {
+        tracing::warn!("agentd: inbound_hmac_secret not set — accepting all webhooks (dev mode)");
+    }
+
+    // ── Parse CloudEvent ─────────────────────────────────────────────────
+    let event: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "agentd: malformed CloudEvent body");
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+    };
+
     let event_type = event["type"].as_str().unwrap_or("unknown").to_owned();
     let event_id = event["id"].as_str().unwrap_or("unknown").to_owned();
     let data = event["data"].clone();
@@ -83,46 +127,155 @@ pub async fn webhook(
         tracing::debug!(event_type, "agentd: ignoring non-trigger event");
         return StatusCode::NO_CONTENT.into_response();
     }
+
+    // ── Session concurrency cap ──────────────────────────────────────────
+    let permit = match Arc::clone(&state.session_sem).try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            tracing::warn!(
+                max_sessions = state.cfg.max_sessions,
+                "agentd: max_sessions reached — dropping webhook event"
+            );
+            return StatusCode::TOO_MANY_REQUESTS.into_response();
+        }
+    };
+
     tracing::info!(event_type, event_id, "agentd: trigger received");
     let state2 = Arc::clone(&state);
+    let timeout_secs = state.cfg.session_timeout_secs;
+    let event_data_for_dlq = data.clone(); // capture for DLQ
     tokio::spawn(async move {
-        let decision = state2
-            .orchestrator
-            .dispatch(
-                event_id,
-                event_type,
-                data,
-                &state2.registry,
-                &state2.mcp,
-                state2.rag.as_ref(),
-                &state2.cfg.tenant,
-            )
-            .await;
+        let _permit = permit; // released when task completes
+        let dispatch = state2.orchestrator.dispatch(
+            event_id.clone(),
+            event_type.clone(),
+            data,
+            &state2.registry,
+            &state2.mcp,
+            state2.rag.as_ref(),
+            &state2.cfg.tenant,
+        );
+        let decision = match tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            dispatch,
+        )
+        .await
+        {
+            Ok(d) => d,
+            Err(_) => {
+                tracing::warn!(timeout_secs, "agentd: session timed out");
+                AgentDecision {
+                    agent_name: "timeout".into(),
+                    session_id: uuid::Uuid::new_v4().to_string(),
+                    event_id: event_id.clone(),
+                    event_type: event_type.clone(),
+                    outcome: "timeout".into(),
+                    summary: format!("Session exceeded {timeout_secs}s wall-clock limit."),
+                    tool_calls: 0,
+                    turns: 0,
+                    handoff_to: None,
+                }
+            }
+        };
+
+        // Push to DLQ if session failed so it can be retried
+        if matches!(decision.outcome.as_str(), "error" | "timeout") {
+            let entry = DlqEntry::new(
+                &event_type,
+                &event_id,
+                event_data_for_dlq,
+                &decision.summary,
+                state2.cfg.dlq.max_retries,
+                state2.cfg.dlq.base_backoff_secs,
+            );
+            state2.dlq.push(entry);
+        }
+
         emit_audit(&state2, &decision).await;
     });
     StatusCode::ACCEPTED.into_response()
 }
 
+/// Constant-time comparison (timing-safe).
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 pub async fn manual_run(
     State(state): State<Arc<AppState>>,
+    _claims: Claims,
     Json(req): Json<Value>,
 ) -> impl IntoResponse {
+    // ── Session concurrency cap ──────────────────────────────────────────
+    let _permit = match Arc::clone(&state.session_sem).try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!({"error": "max_sessions reached"}))
+            ).into_response();
+        }
+    };
+
+    let agent_name = req["agent"].as_str().map(|s| s.to_owned());
     let event_type = req["event_type"].as_str().unwrap_or("manual").to_owned();
     let event_id = uuid::Uuid::new_v4().to_string();
-    let data = req["context"].clone();
-    tracing::info!(event_type, event_id, "agentd: manual run");
-    let decision = state
-        .orchestrator
-        .dispatch(
-            event_id,
-            event_type,
-            data,
-            &state.registry,
-            &state.mcp,
-            state.rag.as_ref(),
-            &state.cfg.tenant,
-        )
-        .await;
+    // Accept both "context" (legacy) and "input" (A2A standard field)
+    let data = req.get("input").or_else(|| req.get("context")).cloned().unwrap_or_default();
+    tracing::info!(event_type, event_id, ?agent_name, "agentd: manual run");
+
+    let dispatch = if let Some(ref name) = agent_name
+        && let Some(specialist) = state.registry.get(name)
+    {
+        // Direct invocation of a named specialist (bypass orchestrator)
+        use crate::agent::session::AgentSession;
+        let peers: Vec<String> = state
+            .registry
+            .agent_names
+            .iter()
+            .filter(|n| *n != name)
+            .cloned()
+            .collect();
+        let session = AgentSession::new(specialist, event_id.clone(), event_type.clone());
+        session.run(data, &state.mcp, &peers, state.rag.as_ref()).await
+    } else {
+        state
+            .orchestrator
+            .dispatch(
+                event_id,
+                event_type,
+                data,
+                &state.registry,
+                &state.mcp,
+                state.rag.as_ref(),
+                &state.cfg.tenant,
+            )
+            .await
+    };
+
+    let timeout_secs = state.cfg.session_timeout_secs;
+    let decision = match tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        std::future::ready(dispatch),
+    )
+    .await
+    {
+        Ok(d) => d,
+        Err(_) => AgentDecision {
+            agent_name: "timeout".into(),
+            session_id: uuid::Uuid::new_v4().to_string(),
+            event_id: "timeout".into(),
+            event_type: "timeout".into(),
+            outcome: "timeout".into(),
+            summary: format!("Session exceeded {timeout_secs}s wall-clock limit."),
+            tool_calls: 0,
+            turns: 0,
+            handoff_to: None,
+        },
+    };
     emit_audit(&state, &decision).await;
     (StatusCode::OK, Json(decision)).into_response()
 }
@@ -135,14 +288,26 @@ async fn emit_audit(state: &AppState, decision: &crate::agent::AgentDecision) {
         return;
     };
     let ce = decision.to_cloud_event(&state.cfg.tenant);
-    let mut req = mako_service::http::default_client()
+    let body = match serde_json::to_vec(&ce) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "audit webhook: failed to serialise CloudEvent");
+            return;
+        }
+    };
+    let mut req_builder = mako_service::http::default_client()
         .post(url)
         .header("Content-Type", "application/cloudevents+json")
-        .json(&ce);
+        .body(body.clone());
     if let Some(ref secret) = state.cfg.audit_hmac_secret {
-        req = req.bearer_auth(secret);
+        // sha256= prefix per workspace standard (not bearer_auth)
+        let sig = format!(
+            "sha256={}",
+            mako_service::webhook::hmac_hex(secret.expose_secret().as_bytes(), &body)
+        );
+        req_builder = req_builder.header("X-Mako-Signature", sig);
     }
-    if let Err(e) = req.send().await {
+    if let Err(e) = req_builder.send().await {
         tracing::warn!(error = %e, "audit webhook failed");
     }
 }
@@ -406,4 +571,15 @@ pub async fn rag_search(
         })),
     )
         .into_response()
+}
+
+// ── GET /api/v1/dlq ───────────────────────────────────────────────────────────
+
+/// `GET /api/v1/dlq` — dead-letter queue status.
+///
+/// Returns the current DLQ depth (pending and exhausted) plus up to 20 recent
+/// exhausted entries.  Use this endpoint to detect persistent session failures
+/// that require operator intervention.
+pub async fn get_dlq(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(state.dlq.snapshot()).into_response()
 }

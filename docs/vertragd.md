@@ -68,13 +68,14 @@ erDiagram
         uuid id PK
         uuid kunden_id FK
         text rechnungsstellung "EINZEL|SAMMEL|POSITIONEN"
-        int  portfolio_rabatt_prozent
-        text preisanpassungsformel
+        decimal portfolio_rabatt_prozent "volume discount %"
+        text preisanpassungsformel "index formula e.g. CPI+1%"
         int  kuendigungsfrist_monate
         date gueltig_von
         date gueltig_bis
         bool auto_renewal
-        text angebot_id
+        uuid angebot_id "CPQ traceability → tarifbd.angebote"
+        text erp_rahmenvertrag_id "idempotency key"
     }
     VERSORGUNGSVERTRAEGE {
         uuid id PK
@@ -361,6 +362,58 @@ customer does not exist.
 
 ---
 
+---
+
+## Kündigung Widerruf
+
+When a Kündigung was dispatched but the customer changes their mind before `lieferende`,
+operators can revoke it via `POST /api/v1/vertraege/{id}/widerruf-kuendigung`:
+
+- Contract reverts from `GEKÜNDIGT` → `AKTIV`
+- BEENDET components revert to `AKTIV`
+- Emits `de.vertrag.kuendigung_widerrufen` CloudEvent
+- **Caller must separately cancel the in-flight Lieferende UTILMD via processd** — `vertragd` does not send a UTILMD cancellation automatically
+
+```mermaid
+stateDiagram-v2
+    AKTIV --> GEKÜNDIGT: POST /kuendigen
+(Lieferende dispatched)
+    GEKÜNDIGT --> AKTIV: POST /widerruf-kuendigung
+(before lieferende date)
+    GEKÜNDIGT --> ABGELAUFEN: All Lieferende confirmed
+```
+
+---
+
+## B2B Cascade Kündigung
+
+`POST /api/v1/rahmenvertraege/{id}/kuendigen` terminates all active Versorgungsverträge
+under a Rahmenvertrag in one operation:
+
+- Each child contract's `kuendigungsfrist_monate` is respected individually
+- Contracts that fail the notice-period check are **skipped** (returned in `skipped_details`)
+- Returns a summary: `{ dispatched, skipped, skipped_details }`
+
+This is the standard path for B2B portfolio termination — faster than calling
+`/kuendigen` per site for large C&I customers with 10–100 delivery points.
+
+---
+
+## Background workers
+
+| Worker | Schedule | Emit | Regulatory basis |
+|---|---|---|---|
+| Tarifwechsel apply | Daily | `de.vertrag.tarifwechsel` | §41 Abs. 3 EnWG |
+| Preisanpassungsbenachrichtigung | Daily (42-day window) | `de.vertrag.preisaenderung.ankuendigung` | §41 Abs. 3 EnWG ≥ 6 weeks notice |
+| Auto-renewal | Daily | `de.vertrag.autoerneuerung.ankuendigung` (30 days before) | §13 GasGVV / §14 StromGVV |
+| Expiry notification | Daily | `de.vertrag.ablauf.ankuendigung` (30-day lookahead) | §13 GasGVV / §41 EnWG |
+
+All workers run on a **23-hour DST-safe interval** (not 24h) to prevent phase drift.
+Initial startup delay staggers workers to avoid DB contention.
+
+---
+
+
 ## REST API
 
 | Method | Path | Description |
@@ -388,9 +441,14 @@ customer does not exist.
 | `GET` | `/api/v1/vertraege/{id}` | Contract + Komponenten + status |
 | `POST` | `/api/v1/vertraege/{id}/tarifwechsel` | Change product code; blocked within Preisgarantie window |
 | `POST` | `/api/v1/vertraege/{id}/stornieren` | Cancel pre-activation contract (`ANGELEGT`/`IN_BEARBEITUNG` only) |
-| `POST` | `/api/v1/vertraege/{id}/kuendigen` | Initiate Lieferende for all commodities |
+| `POST` | `/api/v1/vertraege/{id}/kuendigen` | Initiate Lieferende for all commodities (§14 StromGVV / §13 GasGVV notice enforced) |
+| `POST` | `/api/v1/vertraege/{id}/widerruf-kuendigung` | **Revoke Kündigung** — revert to AKTIV before lieferende; caller must cancel in-flight Lieferende UTILMD via processd |
+| `POST` | `/api/v1/rahmenvertraege/{id}/kuendigen` | **Cascade Kündigung** — terminate all child Versorgungsverträge; individual notice periods respected; returns dispatched/skipped summary |
+| `GET` | `/api/v1/rahmenvertraege` | List all Rahmenverträge for tenant (`?status=&limit=`) |
+| `GET` | `/api/v1/rahmenvertraege/{id}` | Single Rahmenvertrag with all child Versorgungsverträge |
 | `GET\|PUT` | `/api/v1/vertraege/{id}/preisgarantie` | Typed `rubo4e::current::Preisgarantie` COM |
 | `POST` | `/api/v1/events` | Inbound CloudEvents from `makod` / `processd` |
+| `POST` | `/api/v1/webhooks/angebot` | CPQ: `de.angebot.angenommen` → auto-create Rahmenvertrag + Versorgungsverträge from Angebot |
 | `GET` | `/health` | Liveness |
 | `GET` | `/health/ready` | Readiness |
 
@@ -409,7 +467,9 @@ All events are delivered as CloudEvents 1.0 JSON to `erp.webhook_url` with an
 | `de.vertrag.tarifwechsel_geplant` | Future Tarifwechsel stored (applied by background worker) |
 | `de.vertrag.preisaenderung.ankuendigung` | 42 days before `wirksamkeit` (§41 Abs. 3 EnWG ≥ 6 weeks notice) |
 | `de.vertrag.autoerneuerung.ankuendigung` | 30 days before auto-renewal (§13 GasGVV / §14 StromGVV) |
+| `de.vertrag.ablauf.ankuendigung` | 30 days before `vertragsende` or `preisgarantie_bis` expiry (§13 GasGVV / §41 EnWG) |
 | `de.vertrag.abgeschlossen` | All Lieferende confirmed; Schlussrechnung trigger |
+| `de.vertrag.kuendigung_widerrufen` | Kündigung revoked via `POST /widerruf-kuendigung`; contract returned to AKTIV |
 | `de.vertrag.position.abgelehnt` | NB rejected a commodity (ERC A02 / A05 / A97) |
 
 ---
@@ -423,14 +483,21 @@ port          = 9780
 tenant        = "9900357000004"   # data-isolation key (operator tenant; value = BDEW-Codenummer in this example)
 lf_mp_id      = "9900357000004"
 
+max_identitaeten_per_kunde = 50   # default; prevents resource exhaustion from unbounded identity creation
+
 processd_url    = "http://processd:8580"
 tarifbd_url     = "http://tarifbd:9080"
 accountingd_url = "http://accountingd:9380"
 edmd_url        = "http://edmd:8380"
 
+# OIDC/JWT — required in production; omit for dev mode (all write endpoints open)
+[oidc]
+issuer   = "https://auth.example.com"
+audience = "vertragd"
+
 [erp]
-webhook_url   = "http://erp:8000/events"   # optional
-hmac_secret   = "${ERP_HMAC_SECRET}"       # env-var interpolation
+webhook_url   = "http://erp:8000/events"   # optional; CloudEvents 1.0 + HMAC-SHA256
+hmac_secret   = "${ERP_HMAC_SECRET}"       # env-var interpolation; omit = header not sent
 
 mako_timeout_werktage = 10   # operator escalation after N Werktage without NB response
 ```
@@ -440,20 +507,29 @@ mako_timeout_werktage = 10   # operator escalation after N Werktage without NB r
 ## MCP tools
 
 `vertragd` ships a built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25) with
-**9 read-only tools** and **2 prompts**.
+**16 read-only tools** and **4 prompts**.
 
 | Tool | Annotations | Description |
 |---|---|---|
 | `get_vertrag_status` | `read_only` | Full contract + Komponenten + pending MaKo process IDs |
 | `list_offene_vertraege` | `read_only` | All AKTIV/IN_BEARBEITUNG/TEILERFUELLUNG/GEKÜNDIGT (`limit` param) |
+| `get_kunde` | `read_only` | Customer profile by UUID (Geschaeftspartner, malo_ids, identities) |
 | `get_kunde_by_sub` | `read_only` | OIDC sub → Kunde + scoped MaLo IDs (portald auth path) |
+| `get_rahmenvertrag` | `read_only` | B2B framework contract with all child Versorgungsverträge |
 | `list_expiring_contracts` | `read_only` | Near-expiry by `vertragsende` or `preisgarantie_bis` (`days` param, default 30) |
 | `list_pending_tarifwechsel` | `read_only` | Upcoming Tarifwechsel + `preisanpassung_notif_sent` flag (§41 Abs. 3 EnWG) |
+| `list_pending_kuendigungen` | `read_only` | GEKÜNDIGT contracts with future lieferende — prep Schlussrechnung |
+| `check_preisgarantie` | `read_only` | Is a Tarifwechsel blocked for this contract on a given `wirksamkeit`? BLOCKED/ALLOWED + `preisgarantie_bis` |
+| `check_mako_trigger_status` | `read_only` | Did Lieferbeginn UTILMD fire? Component breakdown by status; stuck detection |
 | `find_stuck_workflows` | `read_only` | ANGEMELDET > N Werktage — requires operator escalation (§20 EnWG) |
 | `get_customer_portfolio` | `read_only` | B2B portfolio: all active MaLo/Sparte for one Kunde |
+| `get_zahlungsinformation` | `read_only` | SEPA/IBAN payment details for `accountingd` reconciliation |
+| `list_auto_renewal_due` | `read_only` | Contracts eligible for auto-renewal within N days (§13 GasGVV / §14 StromGVV) |
 | `list_alle_kunden` | `read_only` | All Kunden for CRM/ERP sync (`kundentyp` filter, max 500) |
 | `compute_kuendigungsfrist` | `read_only` | Earliest valid Kündigung date (§14 StromGVV / §13 GasGVV) |
 
 **Prompts:**
 - `o2c_review` — full Order-to-Cash pipeline review: stuck contracts, expiring prices, pending Tarifwechsel
 - `b2b_onboarding` — step-by-step Rahmenvertrag + N Versorgungsverträge onboarding guide
+- `gdpr_erasure_workflow` — GDPR Art. 17 right-to-erasure: verify, anonymize PII, document audit trail (§147 AO retention)
+- `preisgarantie_dispute` — §41 EnWG Preisgarantie conflict: wait vs. operator override with customer consent

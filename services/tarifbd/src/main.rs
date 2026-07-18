@@ -68,21 +68,34 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("run migrations")?;
 
+    // ── OIDC/JWT authentication ───────────────────────────────────────────────
+    let http = mako_service::http::default_client();
+    let ct = mako_service::shutdown::token();
+    let oidc = mako_service::oidc::OidcConfig::build_verifier(
+        cfg.oidc.as_ref(),
+        &http,
+        &cfg.tenant,
+        ct.clone(),
+    )
+    .await
+    .context("OIDC setup")?;
+
     // ── MCP server state ──────────────────────────────────────────────────────
     let mcp_state = Arc::new(mcp_server::TarifbdMcpState {
         pool: pool.clone(),
         tenant: cfg.tenant.clone(),
         auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
     });
-    let ct = mako_service::shutdown::token();
 
     let app = Router::new()
         .merge(health_routes(|| async { true }))
         .merge(mcp_server::router(mcp_state, ct.clone()))
-        // ── Product CRUD ──────────────────────────────────────────────────────
+        // ── Product CRUD ────────────────────────────────────────────────
         .route(
             "/api/v1/products/:lf_mp_id/:product_code",
-            put(handlers::put_product).get(handlers::get_product),
+            put(handlers::put_product)
+                .get(handlers::get_product)
+                .delete(handlers::delete_product),
         )
         .route(
             "/api/v1/products/:lf_mp_id/:product_code/history",
@@ -104,6 +117,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/customer/:malo_id/product",
             get(handlers::get_customer_product_handler).put(handlers::put_customer_product_handler),
         )
+        .route(
+            "/api/v1/customer/:malo_id/product/history",
+            get(handlers::get_customer_product_history_handler),
+        )
         // ── EPEX Spot prices ──────────────────────────────────────────────────
         .route("/api/v1/epex-prices/:date", put(handlers::put_epex_prices))
         .route(
@@ -124,6 +141,10 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::post_expire_angebote),
         )
         .route("/api/v1/angebote/:id", get(handlers::get_angebot_handler))
+        .route(
+            "/api/v1/angebote/:id/comparison",
+            get(handlers::get_angebot_comparison),
+        )
         .route(
             "/api/v1/angebote/:id/versenden",
             post(handlers::post_angebot_versenden),
@@ -149,6 +170,13 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/comparison-feed",
             get(handlers::get_comparison_feed),
         )
+        // GET /api/v1/comparison-feed/bo4e — §42d EnWG: full BO4E Tarifinfo array
+        // for direct schema-validated import by Verivox / Check24 / BNetzA MTS.
+        .route(
+            "/api/v1/comparison-feed/bo4e",
+            get(handlers::get_comparison_feed_bo4e),
+        )
+        .layer(Extension(oidc))
         .layer(Extension(Arc::clone(&cfg)))
         .layer(Extension(pool.clone()));
 

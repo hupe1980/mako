@@ -19,7 +19,7 @@ CREATE TABLE products (
     category        TEXT    NOT NULL CHECK (category IN (
                         'STROM', 'GAS', 'WAERME', 'SOLAR', 'EEG', 'EINSPEISUNG',
                         'WAERMEPUMPE', 'WALLBOX', 'HEMS', 'EMOBILITY',
-                        'ENERGIEDIENSTLEISTUNG', 'BUNDLE'
+                        'ENERGIEDIENSTLEISTUNG', 'BUNDLE', 'SHARING'
                     )),
     name            TEXT    NOT NULL,
     sparte          TEXT,   -- STROM | GAS | WAERME | NULL
@@ -30,13 +30,17 @@ CREATE TABLE products (
                         'Haushalt', 'Gewerbe', 'Waermepumpe', 'Ladesaeule',
                         'Einspeiser', 'HEMS', 'Gewerbe_RLM'
                     )),
-    -- §41a EnWG: 'epex-spot-day-ahead' → dynamic pricing; NULL → fixed tariff
-    dyn_source      TEXT,
+    -- §41a EnWG: only 'epex-spot-day-ahead' is accepted; NULL → fixed tariff
+    dyn_source      TEXT    CHECK (dyn_source IS NULL OR dyn_source = 'epex-spot-day-ahead'),
     valid_from      DATE,
     valid_to        DATE,
     -- Full BO4E payload; validated against rubo4e::current on PUT
     data            JSONB   NOT NULL,
     bo4e_version    TEXT    NOT NULL DEFAULT 'v202607.0.0',
+    -- DRAFT = staged/preview — invisible to billingd and comparison feed.
+    -- PUBLISHED = active for billing, portald, and §42d comparison feed.
+    product_status  TEXT    NOT NULL DEFAULT 'PUBLISHED'
+                    CHECK (product_status IN ('DRAFT', 'PUBLISHED')),
     -- BO4E Energiemix COM (§42 EnWG energy source mix disclosure)
     energiemix      JSONB,
     -- Certification labels extracted from energiemix for GIN filtering
@@ -77,18 +81,23 @@ CREATE INDEX products_co2         ON products ((energiemix ->> 'co2Emission'))
     WHERE energiemix IS NOT NULL;
 -- Category + sparte category filter
 CREATE INDEX products_category_sparte ON products (category, sparte, lf_mp_id, valid_from DESC NULLS LAST);
--- Comparison portal feed index (covers pagination ORDER BY)
+-- Product status filter (admin: list drafts; billingd / comparison feed: published only)
+CREATE INDEX products_status      ON products (lf_mp_id, product_status, valid_from DESC NULLS LAST);
+-- Comparison portal feed index (covers pagination ORDER BY) — PUBLISHED only
 CREATE INDEX products_feed_idx    ON products (lf_mp_id, updated_at DESC, product_code ASC)
     WHERE category IN ('STROM','GAS','WAERME','SOLAR','WAERMEPUMPE','WALLBOX')
+      AND product_status = 'PUBLISHED'
       AND (valid_to IS NULL OR valid_to >= CURRENT_DATE);
--- Sparte + kundentyp for portal "show Haushalt Strom tariffs" filter
+-- Sparte + kundentyp for portal "show Haushalt Strom tariffs" filter — PUBLISHED only
 CREATE INDEX products_feed_sparte_idx ON products (lf_mp_id, sparte, kundentyp, updated_at DESC)
     WHERE category IN ('STROM','GAS','WAERME','SOLAR','WAERMEPUMPE','WALLBOX')
+      AND product_status = 'PUBLISHED'
       AND (valid_to IS NULL OR valid_to >= CURRENT_DATE);
--- §41a dynamic tariff portal filter
+-- §41a dynamic tariff portal filter — PUBLISHED only
 CREATE INDEX products_feed_dynamic_idx ON products (lf_mp_id, updated_at DESC)
     WHERE dyn_source IS NOT NULL
       AND category IN ('STROM','WAERMEPUMPE','WALLBOX')
+      AND product_status = 'PUBLISHED'
       AND (valid_to IS NULL OR valid_to >= CURRENT_DATE);
 -- Tenant filter
 CREATE INDEX products_tenant      ON products (tenant, lf_mp_id, valid_from DESC NULLS LAST);
@@ -183,6 +192,11 @@ CREATE TABLE angebote (
     varianten           JSONB       NOT NULL DEFAULT '[]',
     jahreskosten_netto_eur  NUMERIC(16, 2),
     jahreskosten_brutto_eur NUMERIC(16, 2),
+    -- Pre-computed per-variant cost breakdown for GET .../comparison.
+    -- Schema: [{label, laufzeit_monate, ist_basis, jahreskosten_netto_eur,
+    --           jahreskosten_brutto_eur, rabatt_pct, positionen_detail: [{...}]}]
+    -- Populated by POST /angebote and PUT /angebote/{id}; read by GET .../comparison.
+    angebot_varianten_enriched JSONB       NOT NULL DEFAULT '[]',
     gewaehlte_variante  SMALLINT,
     rahmenvertrag_id    UUID,
     accepted_at         TIMESTAMPTZ,

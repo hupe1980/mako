@@ -6,18 +6,18 @@ enabling automated analysis, compliance checking, and workflow orchestration.
 | Feature | Detail |
 |---|---|
 | **HTTP port** | `:9580` |
-| **Built-in agents** | 26 specialists compiled into binary — ship in container image |
+| **Built-in agents** | 29 specialists compiled into binary — ship in container image |
 | **Custom agents** | `[[agents]]` in `agentd.toml` — fully customizable |
 | **LLM providers** | OpenAI · Anthropic Claude · AWS Bedrock SigV4 |
 | **Dispatch modes** | `sequential` · `parallel` (fan-out) · `race` (first wins) |
 | **RAG** | LanceDB vector store (S3/GCS/Azure Blob/local) |
 | **WASM plugins** | Custom extensions via `mako-plugin` (Extism sandbox) |
 | **A2A cards** | `GET /.well-known/agents/{name}` for each specialist |
-| **Catalog** | `GET /api/v1/agents/catalog` — all 26 built-in definitions |
+| **Catalog** | `GET /api/v1/agents/catalog` — all 27 built-in definitions |
 
 ## Built-in specialists (shipped in container)
 
-All 26 specialists are compiled into the binary. Activate them via `[bundled_agents]`:
+All 29 specialists are compiled into the binary. Activate them via `[bundled_agents]`:
 
 ```toml
 [bundled_agents]
@@ -49,9 +49,20 @@ model = "gpt-4o"
 | `replacement-value-agent` | `de.edmd.reading.quality.warning` | edmd, marktd, obsd |
 | `mabis-syncd-agent` | `de.edmd.reading.quality.warning` | edmd, obsd, marktd |
 | `smgw-diagnostics-agent` | `de.edmd.reading.direct.stored` | edmd, marktd, processd |
-| + 9 more | see `GET /api/v1/agents/catalog` | |
+| `invoice-reconciliation-agent` | `de.invoic.receipt.*` | invoicd, billingd |
+| `netzbilanz-agent` | `de.netzbilanz.invoic.*` | netzbilanzd, marktd |
+| `nis-syncd-agent` | `de.markt.grid.drift.detected` | marktd, processd |
+| `portald-agent` | `de.vertrag.*` | portald, vertragd, billingd |
+| `processd-agent` | `de.mako.process.escalated` | processd, obsd, marktd |
+| `regulatory-reporting-agent` | manual | obsd, marktd, processd |
+| `sperrd-agent` | `de.accounting.sperrauftrag` | sperrd, accountingd |
+| `tarifbd-agent` | `de.tarifbd.*` | tarifbd, billingd |
+| `vertragd-agent` | `de.vertrag.*` | vertragd, processd, marktd |
+| `vpp-billing-agent` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` | billingd, marktd, obsd |
+| `gabi-gas-agent` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*` | makod, netzbilanzd, marktd, obsd |
+| `einsd-batch-agent` | `de.eeg.settlement.batch_due`, `de.eeg.compliance.*` | einsd, edmd, tarifbd, obsd |
 
-## Minimal configuration
+## Configuration
 
 ```toml
 # agentd.toml
@@ -59,7 +70,7 @@ tenant = "9900357000004"
 
 [providers.openai]
 backend = "openai"
-api_key = "env:OPENAI_API_KEY"
+api_key = "env:OPENAI_API_KEY"   # SecretString — never logged
 
 [orchestrator]
 provider = "openai"
@@ -70,12 +81,34 @@ enable_all       = true
 default_provider = "openai"
 default_model    = "gpt-4o-mini"
 
+# OIDC (optional — dev mode when absent, all POST /api/v1/run requests accepted)
+[oidc]
+issuer   = "https://keycloak:8080/realms/mako"
+audience = "agentd"
+
+# Inbound HMAC verification (strongly recommended in production)
+inbound_hmac_secret = "env:AGENTD_INBOUND_HMAC_SECRET"
+
+# Dead-letter queue (retries failed sessions with exponential backoff)
+[dlq]
+capacity         = 100
+max_retries      = 4
+base_backoff_secs = 30   # retry delays: 30s, 90s, 270s, 810s
+
 [mcp_servers]
 makod    = "http://makod:8080/mcp"
 marktd   = "http://marktd:8180/mcp"
 billingd = "http://billingd:9280/mcp"
 # ... more services
-mcp_api_key = "env:AGENTD_MCP_API_KEY"
+mcp_api_key = "env:AGENTD_MCP_API_KEY"   # SecretString — never logged
+
+[rag]
+enabled           = true
+storage_uri       = "/var/lib/agentd/rag"
+embedding_provider = "openai"
+embedding_model   = "text-embedding-3-small"
+score_threshold   = 0.3   # min cosine similarity (filters low-quality results)
+top_k             = 5
 ```
 
 ## Research basis

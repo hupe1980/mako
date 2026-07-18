@@ -39,6 +39,25 @@ pub struct ListParams {
     pub limit: Option<i64>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct KundeIdParams {
+    pub kunden_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CheckPreisgarantieParams {
+    /// UUID of the Versorgungsvertrag to check.
+    pub vertrag_id: String,
+    /// Proposed Wirksamkeit date (YYYY-MM-DD) — the day the new tariff should take effect.
+    pub wirksamkeit: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListKuendigungenParams {
+    /// Max results (default 50, max 200).
+    pub limit: Option<i64>,
+}
+
 #[derive(Clone)]
 pub struct VertragdMcpHandler {
     state: Arc<VertragdMcpState>,
@@ -333,6 +352,223 @@ impl VertragdMcpHandler {
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
+
+    /// Get a Kunde profile by UUID (with active MaLo IDs and identities).
+    ///
+    /// Use this to look up customer details when you have a kunden_id from another lookup.
+    #[tool(
+        description = "Get a customer (Kunde) profile by UUID. Returns Geschaeftspartner data, kundentyp, active MaLo IDs, and portal identities. Use after list_alle_kunden or when you have a kunden_id from a contract.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_kunde(
+        &self,
+        Parameters(p): Parameters<KundeIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::{fetch_kunde, list_aktive_malo_ids, list_identitaeten};
+        let id = uuid::Uuid::parse_str(&p.kunden_id)
+            .map_err(|_| McpError::invalid_params("invalid kunden_id UUID", None))?;
+        match fetch_kunde(&self.state.pool, id, &self.state.tenant).await {
+            Ok(Some(k)) => {
+                let (malo_ids, identitaeten) = tokio::join!(
+                    list_aktive_malo_ids(&self.state.pool, id, &self.state.tenant),
+                    list_identitaeten(&self.state.pool, id, &self.state.tenant),
+                );
+                ContentBlock::json(serde_json::json!({
+                    "kunde": k,
+                    "active_malo_ids": malo_ids.unwrap_or_default(),
+                    "identitaeten": identitaeten.unwrap_or_default(),
+                }))
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None))
+            }
+            Ok(None) => Err(McpError::resource_not_found(format!("Kunde {id} not found"), None)),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    /// Get a Rahmenvertrag with all its child Versorgungsverträge.
+    #[tool(
+        description = "Get a B2B Rahmenvertrag (framework contract) by UUID including all active Versorgungsverträge under it. Essential for B2B portfolio management and Sammelrechnung preparation.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_rahmenvertrag(
+        &self,
+        Parameters(p): Parameters<VertragIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::{fetch_rahmenvertrag, list_versorgungsvertraege_by_rahmenvertrag};
+        let id = uuid::Uuid::parse_str(&p.id)
+            .map_err(|_| McpError::invalid_params("invalid UUID", None))?;
+        match fetch_rahmenvertrag(&self.state.pool, id, &self.state.tenant).await {
+            Ok(Some(r)) => {
+                let vertraege =
+                    list_versorgungsvertraege_by_rahmenvertrag(&self.state.pool, id, &self.state.tenant)
+                        .await
+                        .unwrap_or_default();
+                ContentBlock::json(serde_json::json!({
+                    "rahmenvertrag": r,
+                    "versorgungsvertraege": vertraege,
+                    "vertraege_count": vertraege.len(),
+                    "hint": "Use get_customer_portfolio for MaLo/Sparte details. Use compute_kuendigungsfrist per Vertrag for Kündigung dates.",
+                }))
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None))
+            }
+            Ok(None) => Err(McpError::resource_not_found(
+                format!("Rahmenvertrag {id} not found"),
+                None,
+            )),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    /// List contracts in GEKÜNDIGT status (Kündigung dispatched, lieferende in future).
+    #[tool(
+        description = "List Versorgungsverträge with an active Kündigung (status=GEKÜNDIGT, lieferende in future). Use to monitor contracts approaching their end and prepare Schlussabrechnung.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_pending_kuendigungen(
+        &self,
+        Parameters(p): Parameters<ListKuendigungenParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::list_pending_kuendigungen;
+        let limit = p.limit.unwrap_or(50).clamp(1, 200);
+        match list_pending_kuendigungen(&self.state.pool, &self.state.tenant, limit).await {
+            Ok(rows) => ContentBlock::json(serde_json::json!({
+                "count": rows.len(),
+                "hint": "These contracts have lieferende in the future. Use widerruf-kuendigung to revoke if needed.",
+                "vertraege": rows,
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    /// Check whether a Tarifwechsel is blocked by an active Preisgarantie.
+    ///
+    /// Returns the preisgarantie_bis date and whether the proposed wirksamkeit
+    /// falls within the protected window (§41 EnWG price-lock).
+    #[tool(
+        description = "Check if a Tarifwechsel is blocked by an active Preisgarantie for a contract. Provide the target wirksamkeit date to get a clear BLOCKED/ALLOWED result with the guarantee expiry date.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn check_preisgarantie(
+        &self,
+        Parameters(p): Parameters<CheckPreisgarantieParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::check_preisgarantie_for_mcp;
+        let vertrag_id = uuid::Uuid::parse_str(&p.vertrag_id)
+            .map_err(|_| McpError::invalid_params("invalid vertrag_id UUID", None))?;
+        let wirksamkeit = time::Date::parse(
+            &p.wirksamkeit,
+            &time::format_description::well_known::Iso8601::DEFAULT,
+        )
+        .map_err(|_| McpError::invalid_params("wirksamkeit must be YYYY-MM-DD", None))?;
+
+        match check_preisgarantie_for_mcp(
+            &self.state.pool,
+            vertrag_id,
+            &self.state.tenant,
+            wirksamkeit,
+        )
+        .await
+        {
+            Ok((blocked, garantie_bis)) => ContentBlock::json(serde_json::json!({
+                "vertrag_id": vertrag_id,
+                "wirksamkeit": p.wirksamkeit,
+                "status": if blocked { "BLOCKED" } else { "ALLOWED" },
+                "preisgarantie_bis": garantie_bis.map(|d| d.to_string()),
+                "regulatory_basis": "§41 EnWG — price-lock guarantee protects customer from tariff increases",
+                "hint": if blocked {
+                    "Tarifwechsel is blocked. Operator can bypass with override_preisgarantie=true — document customer consent first."
+                } else {
+                    "Tarifwechsel is allowed for this wirksamkeit date."
+                },
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    /// Get SEPA/IBAN payment information for a customer.
+    #[tool(
+        description = "Get the Zahlungsinformation (IBAN/BIC/SEPA details) for a customer. Used for accountingd SEPA reconciliation and payment mandate verification.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_zahlungsinformation(
+        &self,
+        Parameters(p): Parameters<KundeIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::fetch_zahlungsinformation;
+        let id = uuid::Uuid::parse_str(&p.kunden_id)
+            .map_err(|_| McpError::invalid_params("invalid kunden_id UUID", None))?;
+        match fetch_zahlungsinformation(&self.state.pool, id, &self.state.tenant).await {
+            Ok(Some(z)) => ContentBlock::json(serde_json::json!({
+                "kunden_id": id,
+                "zahlungsinformation": z,
+                "hint": "IBAN stored in plaintext JSONB. iban field validated via ISO 13616 mod-97 on PUT.",
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            Ok(None) => ContentBlock::json(serde_json::json!({
+                "kunden_id": id,
+                "zahlungsinformation": null,
+                "hint": "No Zahlungsinformation stored. Use PUT /api/v1/kunden/{id}/zahlungsinformation to store IBAN/BIC.",
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    /// List contracts eligible for auto-renewal within N days.
+    #[tool(
+        description = "List contracts with auto_renewal=true whose vertragsende falls within N days. These need a 30-day advance customer notification (§13 GasGVV / §14 StromGVV) before automatic renewal.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_auto_renewal_due(
+        &self,
+        Parameters(p): Parameters<serde_json::Value>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::find_auto_renewal_due;
+        let days = p.get("days").and_then(|v| v.as_i64()).unwrap_or(30).clamp(1, 90);
+        match find_auto_renewal_due(&self.state.pool, &self.state.tenant, days).await {
+            Ok(rows) => ContentBlock::json(serde_json::json!({
+                "count": rows.len(),
+                "look_ahead_days": days,
+                "contracts": rows,
+                "regulatory_note": "§13 GasGVV / §14 StromGVV: customer must receive 30-day advance notice before auto-renewal extends the contract.",
+                "action_required": !rows.is_empty(),
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    /// Check MaKo trigger status for a Versorgungsvertrag.
+    ///
+    /// Shows whether Lieferbeginn UTILMD was dispatched, how many components
+    /// are confirmed/pending/rejected, and whether any are stuck.
+    #[tool(
+        description = "Check the MaKo Lieferbeginn trigger status for a Versorgungsvertrag. Returns component-level AKTIV/ANGEMELDET/ABGELEHNT breakdown, mako_process_id, and stuck detection. Use to diagnose why a contract is stuck in IN_BEARBEITUNG.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn check_mako_trigger_status(
+        &self,
+        Parameters(p): Parameters<VertragIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::mako_trigger_status;
+        let id = uuid::Uuid::parse_str(&p.id)
+            .map_err(|_| McpError::invalid_params("invalid UUID", None))?;
+        match mako_trigger_status(&self.state.pool, id).await {
+            Ok(status) => ContentBlock::json(status)
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None)),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
 }
 
 #[prompt_router]
@@ -387,6 +623,73 @@ impl VertragdMcpHandler {
             ),
         ]
     }
+
+    #[prompt(
+        description = "GDPR Art. 17 right-to-erasure workflow: verify, anonymize, and document customer PII deletion"
+    )]
+    fn gdpr_erasure_workflow(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "A customer has submitted a DSGVO Art. 17 right-to-erasure request. How do I process it?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "**GDPR Art. 17 — Recht auf Löschung (Erasure) Workflow**\n\n\
+                 **Step 1 — Verify identity and legal basis**\n\
+                 Confirm the request comes from the data subject or their authorized representative.\n\
+                 Check retention obligations: §147 AO requires 10-year retention of contract/financial records.\n\n\
+                 **Step 2 — Look up the customer**\n\
+                 Use `list_alle_kunden` or `get_kunde_by_sub` to find the kunden_id.\n\
+                 Use `get_kunde_gdpr_export` (via REST) to retrieve all PII fields for the record.\n\n\
+                 **Step 3 — Check active contracts**\n\
+                 Use `get_customer_portfolio` — active contracts must end before erasure.\n\
+                 If AKTIV contracts exist: coordinate Kündigung first (§14 StromGVV / §13 GasGVV notice).\n\n\
+                 **Step 4 — Anonymize PII**\n\
+                 `POST /api/v1/kunden/{id}/anonymize` with `requested_by = operator_sub`\n\
+                 This pseudonymizes: geschaeftspartner, person, zahlungsinformation, umsatzsteuer_id, oidc_sub, email.\n\
+                 Contract records are RETAINED (§147 AO legal basis).\n\n\
+                 **Step 5 — Verify the anonymization_log entry**\n\
+                 The immutable `anonymization_log` table records the operator sub, fields anonymized, and timestamp.\n\
+                 This satisfies GDPR Art. 5(2) accountability obligation.\n\n\
+                 **Documentation**: Print the anonymization_log entry as proof for the data subject and DPA.",
+            ),
+        ]
+    }
+
+    #[prompt(
+        description = "Preisgarantie Tarifwechsel conflict resolution: §41 EnWG price-lock bypass workflow"
+    )]
+    fn preisgarantie_dispute(&self) -> Vec<PromptMessage> {
+        vec![
+            PromptMessage::new_text(
+                Role::User,
+                "An operator wants to change the tariff for a contract but it's blocked by a Preisgarantie. What are the options?",
+            ),
+            PromptMessage::new_text(
+                Role::Assistant,
+                "**Preisgarantie Tarifwechsel Conflict — §41 EnWG Resolution**\n\n\
+                 **Step 1 — Understand the restriction**\n\
+                 Use `check_preisgarantie` with the target `wirksamkeit` date.\n\
+                 A BLOCKED result means: `wirksamkeit <= preisgarantie_bis` (price-lock window active).\n\n\
+                 **Legal basis**: §41 EnWG — the LF is contractually obligated to maintain the agreed price until `preisgarantie_bis`.\n\
+                 Breaking a Preisgarantie exposes the LF to customer claims and BNetzA enforcement.\n\n\
+                 **Step 2 — Options**\n\n\
+                 **Option A: Wait** — schedule the Tarifwechsel for `wirksamkeit > preisgarantie_bis`.\n\
+                 This is the legally correct path. Use `store_pending_tarifwechsel` (via API) with future wirksamkeit.\n\
+                 The background worker will apply it automatically and emit §41 Abs. 3 EnWG 42-day notice.\n\n\
+                 **Option B: Operator override with customer consent**\n\
+                 Only if the customer has explicitly consented (written waiver of price-lock rights).\n\
+                 `POST /api/v1/vertraege/{id}/tarifwechsel` with `override_preisgarantie: true`.\n\
+                 REQUIRED: Document customer consent BEFORE calling the API.\n\
+                 Every override writes to `preisgarantie_override_log` with the operator JWT sub.\n\
+                 This log is immutable and may be reviewed by BNetzA.\n\n\
+                 **Step 3 — After the change**\n\
+                 Verify `list_pending_tarifwechsel` — `preisanpassung_notif_sent` must become true.\n\
+                 The §41 Abs. 3 EnWG 42-day advance notice will fire automatically.",
+            ),
+        ]
+    }
 }
 
 #[prompt_handler]
@@ -403,19 +706,28 @@ impl ServerHandler for VertragdMcpHandler {
         .with_instructions(
             "vertragd MCP — B2B + B2C Contract & Customer Management.\n\
              Manages Kunden, Rahmenverträge (B2B framework), and Versorgungsverträge.\n\n\
-             ## Tools (10)\n\
+             ## Tools (16)\n\
              - `get_vertrag_status` — full contract + components by UUID\n\
              - `list_offene_vertraege` — AKTIV/IN_BEARBEITUNG/TEILERFUELLUNG/GEKÜNDIGT\n\
+             - `get_kunde` — customer profile by UUID (MaLo IDs + identities)\n\
              - `get_kunde_by_sub` — OIDC sub → Kunde + active MaLo IDs (portald auth)\n\
+             - `get_rahmenvertrag` — B2B framework contract with all child Versorgungsverträge\n\
              - `list_expiring_contracts` — vertragsende/preisgarantie_bis within N days (§41 EnWG)\n\
              - `list_pending_tarifwechsel` — upcoming Tarifwechsel + §41 Abs. 3 EnWG notification status\n\
+             - `list_pending_kuendigungen` — GEKÜNDIGT contracts with future lieferende\n\
+             - `check_preisgarantie` — check if Tarifwechsel is blocked for a contract (§41 EnWG)\n\
+             - `check_mako_trigger_status` — Lieferbeginn UTILMD dispatch status per contract\n\
              - `find_stuck_workflows` — ANGEMELDET > 5WT (Strom) / 10WT (Gas) — §20 EnWG\n\
              - `get_customer_portfolio` — B2B MaLo/Sparte portfolio overview\n\
+             - `get_zahlungsinformation` — SEPA/IBAN payment details for accountingd reconciliation\n\
+             - `list_auto_renewal_due` — auto-renewal contracts within N days (§13 GasGVV)\n\
              - `list_alle_kunden` — all customers for CRM/ERP sync\n\
              - `compute_kuendigungsfrist` — earliest valid Kündigung date (§14 StromGVV / §13 GasGVV)\n\n\
-             ## Prompts (2)\n\
+             ## Prompts (4)\n\
              - `o2c_review` — full O2C pipeline review + stuck/expiring detection\n\
-             - `b2b_onboarding` — step-by-step Rahmenvertrag + N Versorgungsverträge workflow",
+             - `b2b_onboarding` — step-by-step Rahmenvertrag + N Versorgungsverträge workflow\n\
+             - `gdpr_erasure_workflow` — GDPR Art. 17 right-to-erasure step-by-step\n\
+             - `preisgarantie_dispute` — Preisgarantie Tarifwechsel conflict resolution",
         )
     }
 }

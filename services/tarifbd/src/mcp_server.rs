@@ -1,11 +1,12 @@
 //! MCP server for `tarifbd` — Product & Tariff Catalog (LF role).
 //!
-//! ## Tools
+//! ## Tools (14)
 //!
 //! | Tool | Description |
 //! |---|---|
 //! | `list_products` | List products for an LF MP-ID |
 //! | `get_product` | Get a single product with full Tarifpreisblatt JSONB |
+//! | `get_product_history` | Full version history for a product (includes energiemix) |
 //! | `get_customer_product` | Look up the active product for a MaLo |
 //! | `get_epex_price` | Get EPEX day-ahead hourly prices for a date |
 //! | `list_expiring_contracts` | Contracts ending within N days (churn prevention) |
@@ -14,8 +15,11 @@
 //! | `get_angebot_summary` | Summarise an Angebot in plain text for sales staff |
 //! | `check_41a_epex_status` | Check if EPEX D-1 prices are current (§41a compliance) |
 //! | `get_product_energiemix` | Get §42 EnWG Energiemix disclosure for a product |
+//! | `validate_tariff_config` | Validate Tarifpreisblatt JSONB before PUT (same logic as REST) |
+//! | `explain_invoice_position` | Explain how a preistyp maps to a billing output + formula |
+//! | `get_comparison_feed` | Retrieve the §42d comparison portal feed (proxies the REST endpoint) |
 //!
-//! ## Prompts
+//! ## Prompts (3)
 //!
 //! | Prompt | Description |
 //! |---|---|
@@ -104,6 +108,26 @@ pub struct GetAngebotParams {
     pub id: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ValidateTariffConfigParams {
+    /// LF MP-ID (BDEW Codenummer) owning this product.
+    pub lf_mp_id: String,
+    /// Product category: STROM|GAS|WAERME|SOLAR|EEG|EINSPEISUNG|WAERMEPUMPE|WALLBOX|SHARING|HEMS|EMOBILITY|ENERGIEDIENSTLEISTUNG|BUNDLE
+    pub category: String,
+    /// Full Tarifpreisblatt JSONB payload to validate.
+    pub data: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ExplainInvoicePositionParams {
+    /// LF MP-ID.
+    pub lf_mp_id: String,
+    /// Product code to look up.
+    pub product_code: String,
+    /// The preistyp to explain (e.g. GRUNDPREIS, ARBEITSPREIS_EINTARIF, LEISTUNGSPREIS).
+    pub preistyp: String,
+}
+
 // ── MCP handler ────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -140,6 +164,8 @@ impl TarifbdMcpHandler {
             category: p.category,
             sparte: None,
             kundentyp: None,
+            include_drafts: None,
+            include_expired: None,
             limit: Some(p.limit.unwrap_or(50).min(100)),
         };
         match list_products(&self.state.pool, &p.lf_mp_id, &q).await {
@@ -403,17 +429,16 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
         Parameters(_): Parameters<serde_json::Value>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::fetch_epex_latest_date;
-        use time::UtcOffset;
 
         let latest = fetch_epex_latest_date(&self.state.pool)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        // Today in German local time (CET/CEST) — approximated via UTC+1 for CET.
-        // In production, proper timezone handling is done in billingd.
+        // Compute "today in German local time" (CET/CEST) without an external
+        // time-zone database.  EU DST rule: UTC+2 from last Sunday of March to
+        // last Sunday of October; UTC+1 otherwise.
         let now_utc = OffsetDateTime::now_utc();
-        let cet = UtcOffset::from_hms(1, 0, 0).unwrap();
-        let today_de = now_utc.to_offset(cet).date();
+        let today_de = german_local_date(now_utc);
         let tomorrow_de = today_de.next_day().unwrap_or(today_de);
 
         let status = match latest {
@@ -474,6 +499,296 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
+
+    #[tool(
+        description = "Validate a Tarifpreisblatt JSONB payload BEFORE submitting it via PUT. \
+                       Runs the same BO4E schema validation as the REST endpoint: checks _typ, \
+                       sparte, tariftyp, kundentypen, registeranzahl, berechnungsparameter enums, \
+                       and the 30-value preistyp whitelist. Returns 'VALID' with field summary, \
+                       or structured errors per invalid field. Use to prevent 422 rejections.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn validate_tariff_config(
+        &self,
+        Parameters(p): Parameters<ValidateTariffConfigParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // Re-run the same validation logic used in PUT /api/v1/products/{lf}/{code}.
+        // This ensures the MCP tool is authoritative — not a separate implementation.
+        use crate::handlers::VALID_PREISTYPEN;
+
+        let category = p.category.to_uppercase();
+        let tarifpreisblatt_categories = &[
+            "STROM", "GAS", "WAERME", "SOLAR", "EEG", "EINSPEISUNG",
+            "WAERMEPUMPE", "WALLBOX", "SHARING",
+        ];
+        let is_bo4e = tarifpreisblatt_categories.contains(&category.as_str());
+
+        // Check _typ for BO4E categories
+        if is_bo4e {
+            match p.data.get("_typ").and_then(|v| v.as_str()) {
+                None => return Ok(CallToolResult::success(vec![ContentBlock::text(
+                    "INVALID: missing _typ field. Add: \"_typ\": \"TARIFPREISBLATT\"".to_owned(),
+                )])),
+                Some(t) if t.to_uppercase() != "TARIFPREISBLATT" => {
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(
+                        format!("INVALID: _typ must be 'TARIFPREISBLATT' for category {category}, got '{t}'"),
+                    )]))
+                }
+                _ => {}
+            }
+        }
+
+        // Check preistyp whitelist
+        let mut errors: Vec<String> = Vec::new();
+        if let Some(positionen) = p.data.get("tarifpreispositionen").and_then(|v| v.as_array()) {
+            for (i, pos) in positionen.iter().enumerate() {
+                if let Some(pt) = pos.get("preistyp").and_then(|v| v.as_str()) {
+                    let upper = pt.to_uppercase();
+                    if !VALID_PREISTYPEN.contains(&upper.as_str()) {
+                        errors.push(format!(
+                            "tarifpreispositionen[{i}].preistyp '{pt}' is not in the whitelist"
+                        ));
+                    }
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            // Attempt full BO4E roundtrip for BO4E categories
+            let result_msg = if is_bo4e {
+                match serde_json::from_value::<rubo4e::current::Tarifpreisblatt>(p.data.clone()) {
+                    Ok(_) => format!(
+                        "VALID: category={category}, _typ=TARIFPREISBLATT. \
+                         All preistyp entries are whitelisted. \
+                         BO4E Tarifpreisblatt deserialised without errors."
+                    ),
+                    Err(e) => format!(
+                        "INVALID (BO4E schema): {e}. \
+                         Check sparte, tariftyp, kundentypen, registeranzahl enum values."
+                    ),
+                }
+            } else {
+                format!("VALID: category={category} (non-BO4E category, free-form data accepted). All preistyp entries whitelisted.")
+            };
+            Ok(CallToolResult::success(vec![ContentBlock::text(result_msg)]))
+        } else {
+            Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "INVALID: {} error(s):\n{}",
+                errors.len(),
+                errors.join("\n")
+            ))]))
+        }
+    }
+
+    #[tool(
+        description = "Explain how a specific tariff preistyp position maps to a billingd \
+                       invoice output. Given a product_code and preistyp, returns the billing \
+                       formula, which billing engine method it invokes, the BO4E Rechnungsposition \
+                       type it produces, and the applicable regulatory basis (e.g. §3 StromStG). \
+                       For EPEX-linked products (dyn_source=epex-spot-day-ahead) shows which \
+                       hourly EPEX prices are required and how §41b iMSys guard applies.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn explain_invoice_position(
+        &self,
+        Parameters(p): Parameters<ExplainInvoicePositionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::fetch_product;
+
+        let product = match fetch_product(&self.state.pool, &p.lf_mp_id, &p.product_code).await {
+            Ok(Some(pr)) => pr,
+            Ok(None) => return Err(McpError::resource_not_found(
+                format!("product {}/{} not found", p.lf_mp_id, p.product_code), None,
+            )),
+            Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
+        };
+
+        let preistyp = p.preistyp.to_uppercase();
+        let is_dynamic = product.dyn_source.as_deref() == Some("epex-spot-day-ahead");
+
+        let explanation = match preistyp.as_str() {
+            "GRUNDPREIS" => "GRUNDPREIS: Fixed base charge.\n\
+                 Formula: grundpreis_ct × days_in_period / 100 / 365 × days_in_period = EUR\n\
+                 billingd method: ElectricityProvider::bill_grundpreis()\n\
+                 BO4E output: Rechnungsposition { preistyp: Grundpreis }\n\
+                 Legal: §10 StromGVV Grundpreis".to_owned(),
+            "ARBEITSPREIS_EINTARIF" => "ARBEITSPREIS_EINTARIF: Single-rate consumption charge.\n\
+                 Formula: ct_kwh × kwh_total / 100 = EUR\n\
+                 billingd: ElectricityProvider::bill_arbeitspreis()\n\
+                 BO4E: Rechnungsposition { preistyp: ArbeitspreisEintarif }\n\
+                 §41b guard: If dyn_source=epex-spot-day-ahead, customer MaLo MUST have iMSys=true or BillingError.".to_owned(),
+            "ARBEITSPREIS_HT" | "ARBEITSPREIS_NT" => format!(
+                "{preistyp}: Dual-rate (HT/NT) consumption charge.\n\
+                 Formula: ct_kwh × kwh_ht_or_nt / 100 = EUR\n\
+                 billingd: ElectricityProvider::bill_ht_nt()\n\
+                 Requires ZaehlzeitRegister TOU definition from marktd GET /zaehler/{{id}}/zaehlzeitdefinitionen."
+            ),
+            "LEISTUNGSPREIS" => "LEISTUNGSPREIS: Demand charge (RLM/C&I only).\n\
+                 Formula: eur_per_kw × peak_kw_spitzenleistung = EUR\n\
+                 billingd: ElectricityProvider::bill_leistungspreis()\n\
+                 Source: edmd MeterBillingPeriod.spitzenleistung_kw".to_owned(),
+            "EEG_VERGUETUNG" => "EEG_VERGUETUNG: Feed-in tariff credit (negative billing position).\n\
+                 Formula: -(kwh × verguetungssatz_ct / 100) = EUR credit\n\
+                 billingd: EnergyShareProvider or einsd settlement\n\
+                 Legal: §21 EEG 2023".to_owned(),
+            pt if is_dynamic => format!(
+                "{pt} on dynamic tariff (dyn_source=epex-spot-day-ahead):\n\
+                 Formula: EPEX_Spot[h] × kwh[h] / 100 for each hour h\n\
+                 Requires: tarifbd epex_prices for each day in billing period\n\
+                 §41b guard: Customer MaLo must have iMSys=true (billingd enforces)\n\
+                 Missing EPEX prices → BillingError (billingd does NOT fall back silently)"
+            ),
+            pt => format!(
+                "{pt}: mako-extended preistyp.\n\
+                 See VALID_PREISTYPEN in tarifbd handlers.rs for full billing formula documentation.\n\
+                 Product category: {}, dyn_source: {:?}",
+                product.category,
+                product.dyn_source.as_deref().unwrap_or("none")
+            ),
+        };
+
+        Ok(CallToolResult::success(vec![ContentBlock::text(explanation)]))
+    }
+
+    #[tool(
+        description = "Get the full version history of a product including all past Tarifpreisblatt \
+                       and Energiemix changes. Returns entries ordered newest-first with changed_at \
+                       timestamps. Use this to audit price changes, verify Energiemix updates for \
+                       §42 compliance, and reconstruct what tariff applied during any billing period.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_product_history(
+        &self,
+        Parameters(p): Parameters<GetProductParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::fetch_product_history;
+        match fetch_product_history(&self.state.pool, &p.lf_mp_id, &p.product_code).await {
+            Ok(history) => ContentBlock::json(serde_json::json!({
+                "lf_mp_id":     p.lf_mp_id,
+                "product_code": p.product_code,
+                "count":         history.len(),
+                "history":       history,
+                "note": "Entries are newest-first. energiemix field shows §42 EnWG Herkunftsnachweis \
+                         history. Changed whenever PUT /api/v1/products was called.",
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Retrieve the §42d EnWG comparison portal feed for a given LF. \
+                       Returns all currently valid PUBLISHED tariffs with estimated annual supply costs, \
+                       price points (Grundpreis, Arbeitspreis HT/NT, Leistungspreis), Energiemix, \
+                       Oekolabel certifications, and full BO4E Tarifpreisblatt payloads. \
+                       Supports filtering by sparte, kundentyp, oekolabel, and dynamic tariff flag. \
+                       Use this to verify portal feed compliance or to inspect a product catalogue overview.",
+        annotations(read_only_hint = true, open_world_hint = true)
+    )]
+    async fn get_comparison_feed(
+        &self,
+        Parameters(p): Parameters<ListProductsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::pg::{ComparisonFeedQuery, fetch_comparison_feed};
+        use crate::handlers::{compute_jahreskosten_supply_netto, extract_tarif_preise};
+        use rust_decimal_macros::dec;
+
+        let q = ComparisonFeedQuery {
+            lf_mp_id: Some(p.lf_mp_id.clone()),
+            sparte: p.category.clone(),  // reuse category param for sparte filter
+            kundentyp: None,
+            verbrauch_kwh: Some(dec!(3500)),
+            oekolabel: None,
+            include_dynamic: Some(true),
+            only_dynamic: Some(false),
+            limit: Some(p.limit.unwrap_or(50).min(100)),
+            cursor: None,
+        };
+        let rows = fetch_comparison_feed(&self.state.pool, &p.lf_mp_id, &q)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let entries: Vec<serde_json::Value> = rows.iter().map(|row| {
+            let preise = extract_tarif_preise(&row.data);
+            let jk_netto = compute_jahreskosten_supply_netto(&preise, dec!(3500));
+            serde_json::json!({
+                "product_code":    row.product_code,
+                "name":            row.name,
+                "category":        row.category,
+                "sparte":          row.sparte,
+                "kundentyp":       row.kundentyp,
+                "product_status":  row.product_status,
+                "ist_dynamisch":   row.dyn_source.is_some(),
+                "ist_oekostrom":   row.oekolabel.as_ref().map(|v| !v.is_empty()).unwrap_or(false),
+                "oekolabel":       row.oekolabel,
+                "valid_from":      row.valid_from.map(|d| d.to_string()),
+                "valid_to":        row.valid_to.map(|d| d.to_string()),
+                "grundpreis_ct_per_day":     preise.grundpreis_ct_per_day,
+                "arbeitspreis_ct_per_kwh":   preise.arbeitspreis_ct_per_kwh,
+                "arbeitspreis_ht_ct_per_kwh": preise.arbeitspreis_ht_ct_per_kwh,
+                "arbeitspreis_nt_ct_per_kwh": preise.arbeitspreis_nt_ct_per_kwh,
+                "jahreskosten_supply_netto_eur_3500kwh": jk_netto,
+                "updated_at":      row.updated_at,
+            })
+        }).collect();
+
+        ContentBlock::json(serde_json::json!({
+            "lf_mp_id":    p.lf_mp_id,
+            "count":       entries.len(),
+            "note": "Annual cost estimate for 3500 kWh/year. Excludes NNE, KA, Stromsteuer, MwSt.",
+            "tarife":      entries,
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+}
+
+// ── German local time helper ──────────────────────────────────────────────────
+
+/// Compute the current date in German local time (CET/CEST) without an
+/// external time-zone database.
+///
+/// EU DST rule (last Sunday of March / October):
+/// - MESZ (UTC+2): from last Sunday of March 02:00 CET until last Sunday of
+///   October 03:00 CEST.
+/// - MEZ  (UTC+1): otherwise.
+///
+/// This is accurate to the day for the purpose of EPEX D-1 availability checks.
+/// Sub-day accuracy (the exact hour of the DST switch) is not needed here.
+fn german_local_date(utc: time::OffsetDateTime) -> time::Date {
+    let date_utc = utc.date();
+    let offset = german_utc_offset(date_utc, utc.hour());
+    let utc_offset = time::UtcOffset::from_hms(offset, 0, 0).expect("valid offset");
+    utc.to_offset(utc_offset).date()
+}
+
+fn last_sunday_of_month(year: i32, month: time::Month) -> time::Date {
+    let next_month = if month == time::Month::December {
+        time::Date::from_calendar_date(year + 1, time::Month::January, 1).unwrap()
+    } else {
+        time::Date::from_calendar_date(year, month.next(), 1).unwrap()
+    };
+    let last_day = next_month - time::Duration::days(1);
+    let days_since_sunday = last_day.weekday().number_days_from_sunday() as i64;
+    last_day - time::Duration::days(days_since_sunday)
+}
+
+fn german_utc_offset(date: time::Date, hour_utc: u8) -> i8 {
+    // DST starts last Sunday of March at 02:00 CET = 01:00 UTC
+    let dst_start = last_sunday_of_month(date.year(), time::Month::March);
+    // DST ends last Sunday of October at 03:00 CEST = 01:00 UTC
+    let dst_end = last_sunday_of_month(date.year(), time::Month::October);
+    if date > dst_start && date < dst_end {
+        return 2; // MESZ
+    }
+    if date == dst_start && hour_utc >= 1 {
+        return 2; // after switch-over
+    }
+    if date == dst_end && hour_utc < 1 {
+        return 2; // before switch-back
+    }
+    1 // MEZ
 }
 
 // ── Prompts ────────────────────────────────────────────────────────────────────

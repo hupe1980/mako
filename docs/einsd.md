@@ -1001,11 +1001,38 @@ EPEX Spot monthly averages. Required for `MARKET_PREMIUM` and `POST_EEG`.
 
 | Type | When | Key payload fields |
 |---|---|---|
-| `de.eeg.verguetung.berechnet` | FEED\_IN\_TARIFF / POST\_EEG settled | `tr_id`, `billing_year`, `billing_month`, `settlement_eur`, `pflichtzahlung_eur` |
+| `de.eeg.verguetung.berechnet` | FEED\_IN\_TARIFF / POST\_EEG settled | `tr_id`, `billing_year`, `billing_month`, `settlement_eur`, `pflichtzahlung_eur`, **`bank_iban`**, **`bank_bic`**, **`zahlungsempfaenger`** |
 | `de.eeg.marktpraemie.berechnet` | MARKET\_PREMIUM settled | + `epex_avg_ct_kwh`, `aw_ct`, `effective_aw_ct` |
 | `de.eeg.anlage.mastr_registriert` | MaStR confirmed | `tr_id`, `mastr_nummer` |
 | `de.eeg.anlage.foerderung_auslaufend` | Förderung ending ≤180 days | `tr_id`, `foerderendedatum`, `days_remaining` |
 | `de.eeg.anlage.settlement_state_changed` | State machine transition | `tr_id`, `from_state`, `to_state`, `reason` |
+
+`bank_iban`, `bank_bic`, and `zahlungsempfaenger` are forwarded from the `eeg_anlagen` record
+so `accountingd` can generate a SEPA Credit Transfer pain.001 without a secondary DB lookup.
+They are absent (null) for `EIGENVERBRAUCH` settlements (no payout).
+
+```json
+{
+  "specversion": "1.0",
+  "type":        "de.eeg.verguetung.berechnet",
+  "source":      "urn:einsd:tenant:9910000000002",
+  "id":          "a1b2c3d4-...",
+  "subject":     "TR-SOLAR-001",
+  "data": {
+    "tr_id":           "TR-SOLAR-001",
+    "malo_id":         "51238696780",
+    "billing_year":    2026,
+    "billing_month":   7,
+    "settlement_model": "FEED_IN_TARIFF",
+    "einspeisemenge_kwh": "280.500",
+    "settlement_eur":  "22.736",
+    "status":          "calculated",
+    "bank_iban":       "DE89370400440532013000",
+    "bank_bic":        "COBADEFFXXX",
+    "zahlungsempfaenger": "Franz Huber"
+  }
+}
+```
 
 All events: `application/cloudevents+json` + `X-Mako-Signature` HMAC.
 

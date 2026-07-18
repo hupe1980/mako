@@ -14,6 +14,8 @@ use crate::rag::RagEngine;
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentDecision {
     pub agent_name: String,
+    /// Stable session UUID for correlating parallel/sequential decisions.
+    pub session_id: String,
     pub event_id: String,
     pub event_type: String,
     pub outcome: String, // "completed" | "handoff:{target}" | "max_turns" | "error"
@@ -65,6 +67,9 @@ impl AgentSession {
         peer_agents: &[String],
         rag: Option<&RagEngine>,
     ) -> AgentDecision {
+        // Stable session ID for correlating all decisions in this invocation.
+        let session_id = uuid::Uuid::new_v4().to_string();
+
         // Build available tools = MCP tools + handoff tools
         let mcp_tools: Vec<ToolDef> = mcp.tools_for_servers(&self.agent.mcp_servers);
         let handoffs = handoff_tools(peer_agents);
@@ -109,6 +114,7 @@ impl AgentSession {
                 warn!(agent = %self.agent.name, turns, "max_turns reached");
                 return AgentDecision {
                     agent_name: self.agent.name.clone(),
+                    session_id: session_id.clone(),
                     event_id: self.event_id.clone(),
                     event_type: self.event_type.clone(),
                     outcome: "max_turns".into(),
@@ -132,6 +138,7 @@ impl AgentSession {
                     warn!(error = %e, "LLM error");
                     return AgentDecision {
                         agent_name: self.agent.name.clone(),
+                        session_id: session_id.clone(),
                         event_id: self.event_id.clone(),
                         event_type: self.event_type.clone(),
                         outcome: "error".into(),
@@ -146,6 +153,7 @@ impl AgentSession {
                     info!(agent = %self.agent.name, turns, tool_calls, "session completed");
                     return AgentDecision {
                         agent_name: self.agent.name.clone(),
+                        session_id: session_id.clone(),
                         event_id: self.event_id.clone(),
                         event_type: self.event_type.clone(),
                         outcome: "completed".into(),
@@ -164,6 +172,7 @@ impl AgentSession {
                     info!(agent = %self.agent.name, to = %to_agent, reason = %reason, "handoff");
                     return AgentDecision {
                         agent_name: self.agent.name.clone(),
+                        session_id: session_id.clone(),
                         event_id: self.event_id.clone(),
                         event_type: self.event_type.clone(),
                         outcome: format!("handoff:{to_agent}"),
@@ -199,6 +208,7 @@ impl AgentSession {
                             info!(to = %to_agent, reason = %reason, "handoff via tool");
                             return AgentDecision {
                                 agent_name: self.agent.name.clone(),
+                                session_id: session_id.clone(),
                                 event_id: self.event_id.clone(),
                                 event_type: self.event_type.clone(),
                                 outcome: format!("handoff:{to_agent}"),
@@ -209,11 +219,12 @@ impl AgentSession {
                             };
                         }
 
-                        // Execute MCP tool
+                        // Execute MCP tool — errors are surfaced to the LLM as tool error
+                        // results so the agent can reason about the failure rather than aborting.
                         let result = match mcp.call_tool(&call.name, call.arguments.clone()).await {
                             Ok(r) => r,
                             Err(e) => {
-                                warn!(tool = %call.name, error = %e, "tool call failed");
+                                warn!(tool = %call.name, error = %e, "tool call failed — returning error to LLM");
                                 serde_json::json!({"error": e.to_string()})
                             }
                         };
@@ -234,6 +245,7 @@ mod tests {
     fn make_decision(agent_name: &str, outcome: &str) -> AgentDecision {
         AgentDecision {
             agent_name: agent_name.to_owned(),
+            session_id: uuid::Uuid::new_v4().to_string(),
             event_id: uuid::Uuid::new_v4().to_string(),
             event_type: "de.test.event".into(),
             outcome: outcome.to_owned(),

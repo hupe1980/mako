@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 use reqwest::Client;
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 
 use crate::llm::ToolDef;
@@ -14,12 +15,12 @@ static ID: AtomicU64 = AtomicU64::new(1);
 pub struct McpEndpoint {
     pub name: String,
     base_url: String,
-    api_key: String,
+    api_key: SecretString,
     client: Client,
 }
 
 impl McpEndpoint {
-    pub fn new(name: String, base_url: String, api_key: String) -> Self {
+    pub fn new(name: String, base_url: String, api_key: SecretString) -> Self {
         Self {
             name,
             base_url: base_url.trim_end_matches('/').to_owned(),
@@ -34,7 +35,7 @@ impl McpEndpoint {
         let resp = self
             .client
             .post(format!("{}/mcp", self.base_url))
-            .bearer_auth(&self.api_key)
+            .bearer_auth(self.api_key.expose_secret())
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -103,12 +104,14 @@ pub struct McpPool {
 impl McpPool {
     pub async fn connect(
         servers: &std::collections::HashMap<String, String>,
-        api_key: &str,
+        api_key: &SecretString,
     ) -> Self {
         let mut endpoints = Vec::new();
         let mut all_tools = Vec::new();
         for (name, url) in servers {
-            let ep = McpEndpoint::new(name.clone(), url.clone(), api_key.to_owned());
+            // Clone the SecretString (cheap — Arc-backed internally in secrecy 0.10)
+            let key = SecretString::new(api_key.expose_secret().to_string().into());
+            let ep = McpEndpoint::new(name.clone(), url.clone(), key);
             match ep.list_tools().await {
                 Ok(ts) => {
                     tracing::info!(server = %name, count = ts.len(), "MCP tools");

@@ -6,7 +6,7 @@ parent: Services
 mermaid: true
 description: >
   agentd operator guide: Multi-agent LLM orchestration daemon.
-  27 built-in specialists ship in container image. Orchestrator + Specialist Mesh,
+  29 built-in specialists ship in container image. Orchestrator + Specialist Mesh,
   LanceDB RAG, parallel dispatch, A2A agent cards, OpenAI / Anthropic / AWS Bedrock.
 ---
 
@@ -20,11 +20,12 @@ Port: **`:9580`**
 
 | Endpoint | Description |
 |---|---|
-| `POST /webhook` | Inbound CloudEvent trigger |
-| `POST /api/v1/run` | Manual agent invocation |
+| `POST /webhook` | Inbound CloudEvent trigger (HMAC-verified) |
+| `POST /api/v1/run` | Manual agent invocation (OIDC JWT required) |
 | `GET /api/v1/sessions` | Last 100 agent decisions (in-memory ring buffer) |
+| `GET /api/v1/dlq` | Dead-letter queue: pending retries + recent exhausted entries |
 | `GET /api/v1/agents` | List all active agents (built-in + custom) |
-| `GET /api/v1/agents/catalog` | Full catalog of all 27 built-in definitions |
+| `GET /api/v1/agents/catalog` | Full catalog of all 29 built-in definitions |
 | `GET /.well-known/agents/{name}` | A2A Agent Card for a specialist |
 | `POST /api/v1/rag/ingest` | Index a live text document into LanceDB |
 | `POST /api/v1/rag/search` | Query the RAG knowledge base directly |
@@ -34,7 +35,7 @@ Port: **`:9580`**
 
 ## Key design decisions
 
-### 27 built-in specialists ship in the container image
+### 29 built-in specialists ship in the container image
 
 The most important architectural change from the naive "put prompts in demo config" approach:
 all 27 specialist system prompts are **compiled into the agentd binary** and ship in the
@@ -73,7 +74,7 @@ graph TB
         MODE["DispatchMode:\nsequential | parallel | race"]
     end
 
-    subgraph builtin ["26 Built-in Specialists (compiled into binary)"]
+    subgraph builtin ["29 Built-in Specialists (compiled into binary)"]
         direction LR
         MAKO["mako-agent\nEDIFACT · UTILMD · deadlines"]
         BILLING["billing-agent\nbillingd · invoicd · O2C"]
@@ -199,8 +200,8 @@ prompt, default trigger patterns, and default MCP server requirements.
 | `meter-data-agent` | `de.edmd.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd |
 | `grid-anomaly-agent` | `de.markt.grid.drift.detected`, `de.markt.nb-contract.updated` | marktd, obsd |
 | `tariff-optimization-agent` | `de.billing.rechnung.erstellt`, `de.mako.process.completed` | billingd, tarifbd, edmd, marktd |
-| `vertragd-agent` | `de.vertrag.*`, `de.mako.process.abgelehnt` | vertragd, processd, marktd |
-| `tarifbd-agent` | `de.tarifd.product.updated`, `de.tarifd.angebot.*` | tarifbd, marktd |
+| `vertragd-agent` | `de.vertrag.*`, `de.mako.process.abgelehnt`, `de.mako.process.escalated`, `de.vertrag.ablauf.ankuendigung`, `de.vertrag.preisaenderung.ankuendigung` | vertragd, processd, marktd |
+| `tarifbd-agent` | `de.tarifbd.product.updated`, `de.tarifbd.angebot.abgelaufen`, `de.tarifbd.epex.missing` | tarifbd, marktd |
 | `processd-agent` | `de.mako.process.initiated`, `de.mako.process.rejected` | processd, marktd, obsd |
 | `sperrd-agent` | `de.sperr.*`, `de.mako.process.completed` | sperrd, makod, marktd |
 | `nis-syncd-agent` | `de.markt.grid.drift.detected`, `de.markt.malo.updated` | nis-syncd, processd, marktd, obsd |
@@ -208,10 +209,12 @@ prompt, default trigger patterns, and default MCP server requirements.
 | `regulatory-reporting-agent` | manual / scheduled | obsd, processd, invoicd, marktd |
 | `replacement-value-agent` | `de.edmd.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd, obsd |
 | `mabis-syncd-agent` | `de.edmd.reading.quality.warning` | edmd, obsd, marktd |
-| `smgw-diagnostics-agent` | `de.edmd.reading.quality.warning`, `de.edmd.reading.direct.stored`, `de.mako.process.initiated` | edmd, marktd, obsd, processd |
+| `smgw-diagnostics-agent` | `de.edmd.cls.compliance_issue`, `de.edmd.reading.quality.warning`, `de.edmd.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` | edmd, marktd, obsd, processd |
 | `vpp-billing-agent` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` | billingd, marktd, obsd |
+| `gabi-gas-agent` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*`, `de.netzbilanz.invoic.drafted` | makod, netzbilanzd, marktd, obsd |
+| `einsd-batch-agent` | `de.eeg.settlement.batch_due`, `de.eeg.compliance.*`, `de.eeg.anlage.foerderung_auslaufend` | einsd, edmd, tarifbd, obsd |
 
-All 27 specialist definitions are compiled into the `agentd` binary. Activate them via
+All **29 specialist definitions** are compiled into the `agentd` binary. Activate them via
 `[bundled_agents]` in `agentd.toml` — no system prompt copy-paste required.
 See the [Configuration](#configuration) section below for a full example.
 
@@ -250,11 +253,67 @@ over all stored chunks. Suitable for knowledge bases up to ~50,000 chunks.
 
 **Storage URI examples:**
 ```toml
-storage_uri = "./data/rag"                    # local (dev)
-storage_uri = "s3://my-bucket/rag"            # AWS S3
-storage_uri = "gs://my-bucket/rag"            # Google Cloud Storage
-storage_uri = "az://my-container/rag"         # Azure Blob
+storage_uri       = "./data/rag"              # local (dev)
+storage_uri       = "s3://my-bucket/rag"      # AWS S3
+storage_uri       = "gs://my-bucket/rag"      # Google Cloud Storage
+storage_uri       = "az://my-container/rag"   # Azure Blob
+score_threshold   = 0.3   # min cosine similarity — low-quality chunks filtered out
 ```
+
+All RAG queries are tenant-scoped — documents indexed by Tenant A are never returned
+to Tenant B. The LanceDB schema includes a `tenant` column with a per-query filter.
+
+---
+
+## Dead-letter queue (DLQ)
+
+Agent sessions with outcome `"error"` or `"timeout"` are placed in a bounded in-memory
+DLQ. A background worker retries them with exponential backoff.
+
+```
+de.billing.rechnung.erstellt
+    → agent session fails (DB unavailable)
+    → pushed to DLQ
+    → retry in 30s, 90s, 270s, 810s (base_backoff_secs × 3^attempt)
+    → after 4 failures: EXHAUSTED
+    → emits de.agent.session.dlq.exhausted CloudEvent to audit webhook
+```
+
+```bash
+# Inspect current DLQ
+curl "http://agentd:9580/api/v1/dlq"
+```
+
+Response:
+```json
+{
+  "pending_count": 2,
+  "exhausted_count": 1,
+  "entries": [...],
+  "recent_exhausted": [{ "event_type": "...", "attempts": 4, "last_error": "..." }]
+}
+```
+
+Configure via `[dlq]` in `agentd.toml`:
+```toml
+[dlq]
+capacity         = 100   # max DLQ depth (dropped silently beyond this — log WARN)
+max_retries      = 4     # attempts before EXHAUSTED
+base_backoff_secs = 30   # retry delays: 30s, 90s, 270s, 810s
+```
+
+---
+
+## Security
+
+| Concern | Implementation |
+|---|---|
+| **`POST /api/v1/run` auth** | OIDC/JWT via `Claims` extractor; dev mode emits `[WARN]` |
+| **Inbound webhook HMAC** | `X-Mako-Signature: sha256=...` verified when `inbound_hmac_secret` set; constant-time compare; 403 on mismatch |
+| **Max concurrent sessions** | `max_sessions` semaphore; 429 when exhausted |
+| **Session timeout** | `session_timeout_secs` wall-clock cap (default 300 s) |
+| **API keys** | `api_key`, `mcp_api_key`, `aws_secret_access_key`, `audit_hmac_secret` stored as `SecretString` — never in logs or debug output |
+| **RAG tenant isolation** | Every LanceDB query filtered to `tenant` column |
 
 ---
 
@@ -278,7 +337,7 @@ dispatch_mode = "sequential"  # sequential | parallel | race
 
 # ── Enable built-in specialists ───────────────────────────────────────────────
 [bundled_agents]
-enable_all       = true          # activate all 27 built-in specialists
+enable_all       = true          # activate all 29 built-in specialists
 default_provider = "openai"
 default_model    = "gpt-4o-mini"
 
@@ -305,6 +364,25 @@ trigger_event_types = [
   "de.eeg.*",
   "de.invoic.receipt.disputed",
 ]
+
+# ── Security ──────────────────────────────────────────────────────────────────
+# Inbound webhook HMAC (strongly recommended in production)
+inbound_hmac_secret = "env:AGENTD_INBOUND_HMAC_SECRET"
+
+# OIDC (optional — dev mode when absent, POST /api/v1/run accepts all)
+[oidc]
+issuer   = "https://keycloak:8080/realms/mako"
+audience = "agentd"
+
+# Session limits
+max_sessions        = 20    # concurrent sessions (429 beyond this)
+session_timeout_secs = 300  # 5 minutes per session wall-clock limit
+
+# ── Dead-letter queue ─────────────────────────────────────────────────────────
+[dlq]
+capacity          = 100
+max_retries       = 4
+base_backoff_secs = 30
 ```
 
 ### Custom agents — override or extend built-ins

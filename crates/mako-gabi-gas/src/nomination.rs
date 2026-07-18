@@ -166,6 +166,21 @@ pub struct NominationData {
     /// `None` when the nomination message did not carry an explicit quantity
     /// (e.g. a cancellation or renomination-to-zero).
     pub quantity: Option<NominationQuantity>,
+
+    /// Reference to the prior NOMINT that this re-nomination corrects.
+    ///
+    /// Per KoV §3.2: the BKV may submit corrections within the intraday
+    /// re-nomination window. Each correcting NOMINT references the previous
+    /// NOMINT's `nomination_ref` via this field, creating an auditable
+    /// nomination correction chain.
+    ///
+    /// `None` for the initial (day-ahead D-1 13:00 CET) nomination.
+    pub corrects_nomination_ref: Option<MessageRef>,
+
+    /// Sequence number of this nomination in the correction chain.
+    ///
+    /// 0 = initial day-ahead nomination, 1 = first intraday correction, etc.
+    pub correction_sequence: u32,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -376,6 +391,8 @@ impl Workflow for GaBiGasNominationWorkflow {
                 gas_day: *gas_day,
                 nomination_ref: nomination_ref.clone(),
                 quantity: None, // populated later when quantity is parsed from NOMINT payload
+                corrects_nomination_ref: None, // set by handle() when correcting a prior NOMINT
+                correction_sequence: 0,
             }),
 
             NominationEvent::Accepted { .. } => match state {

@@ -393,11 +393,17 @@ Only generates for MaLo accounts that have an IBAN + signed mandate (sequence_ty
                     .collect();
                 // Use tenant as creditor name fallback; in production creditor_iban comes from config.
                 let creditor = &self.state.tenant;
-                match build_pain_008(creditor, &refs) {
-                    Ok(xml) => ContentBlock::json(serde_json::json!({
+                match build_pain_008(creditor, creditor, None, &refs) {
+                    Ok(batches) => ContentBlock::json(serde_json::json!({
                         "mandate_count": refs.len(),
-                        "pain_008_xml": xml,
-                        "hint": "Submit this XML to your bank / payment gateway for SEPA direct debit execution."
+                        "batch_count": batches.len(),
+                        "batches": batches.iter().map(|b| serde_json::json!({
+                            "sequence_type": format!("{:?}", b.sequence_type),
+                            "entry_count": b.entry_count,
+                            "total_ct": b.total_ct,
+                            "pain_008_xml": &b.xml,
+                        })).collect::<Vec<_>>(),
+                        "hint": "Submit each batch XML to your bank / payment gateway for SEPA direct debit execution."
                     }))
                     .map(|b| CallToolResult::success(vec![b]))
                     .map_err(|e| McpError::internal_error(e.message, None)),

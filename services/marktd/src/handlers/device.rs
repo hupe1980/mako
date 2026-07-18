@@ -14,10 +14,11 @@ use std::sync::Arc;
 
 use axum::{Extension, Json, extract::Path, http::StatusCode, response::IntoResponse};
 use mako_markt::repository::{
-    DeviceRepository, SteuerbareRessourceRepository, TechnischeRessourceRepository,
+    DeviceRepository, GeraetKonfiguration, Konfigurationsparameter, SteuerbareRessourceRepository,
+    TechnischeRessourceRepository,
 };
 use mako_service::cedar::CedarEnforcer;
-use rubo4e::current::{Geraet, SteuerbareRessource, TechnischeRessource, Zaehler};
+use rubo4e::current::{Geraet, SteuerbareRessource, TechnischeRessource, Zaehler, Zaehlzeitdefinition};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -97,6 +98,10 @@ pub struct GeraetResponse {
     /// Validated BO4E `Geraet` payload in canonical form.
     #[schema(value_type = Object)]
     pub data: Geraet,
+    /// Typed device-configuration entries per MsbG §23 / BSI TR-03109 / §14a EnWG.
+    /// Updated atomically via `PUT .../konfigurationen`.
+    #[schema(value_type = Vec<Object>)]
+    pub konfigurationen: Vec<GeraetKonfiguration>,
     pub bo4e_version: String,
     pub version: i64,
 }
@@ -692,6 +697,7 @@ pub async fn list_geraete(
                         zaehler_id: r.zaehler_id,
                         geraet_typ: r.geraet_typ,
                         data: geraet,
+                        konfigurationen: r.konfigurationen,
                         bo4e_version: r.bo4e_version,
                         version: r.version,
                     })
@@ -739,6 +745,225 @@ pub async fn put_geraet(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── Geraet fine-grained konfigurationen API (MsbG §23) ───────────────────────
+
+/// Request body for `PUT /api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen`.
+///
+/// The list **replaces** the entire configuration for the device atomically.
+/// `updated_at` on each entry is overwritten server-side — callers must omit it.
+///
+/// ### Deduplication
+///
+/// Within a single PUT body, duplicate `parameter` values are allowed (last entry wins)
+/// so that callers can include generated lists with overlapping keys.  The server
+/// deduplicates on write: only the **last** occurrence of each `parameter` is stored.
+///
+/// ### Example — SMGW with §14a CLS after BSI TR-03109-3 gateway rollout
+///
+/// ```json
+/// [
+///   { "parameter": "FIRMWARE_VERSION",       "wert": "3.1.2"         },
+///   { "parameter": "HARDWARE_REVISION",      "wert": "Rev. C"        },
+///   { "parameter": "KOMMUNIKATION",          "wert": "GPRS"          },
+///   { "parameter": "CLS_FAEHIG",             "wert": "true"          },
+///   { "parameter": "CLS_KANAL_ID",           "wert": "CLS-00042"     },
+///   { "parameter": "SMGW_TLS_CERT_FINGERPRINT", "wert": "a1b2c3d4..."  },
+///   { "parameter": "SMGW_CERT_ABLAUFDATUM",  "wert": "2027-06-30"    },
+///   { "parameter": "GWA_CODENUMMER",         "wert": "9900000000099" },
+///   { "parameter": "HERSTELLER",             "wert": "Sagemcom"      },
+///   { "parameter": "INBETRIEBNAHMEDATUM",    "wert": "2024-03-15"    }
+/// ]
+/// ```
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PutKonfigurationenRequest {
+    /// Ordered list of configuration entries.  Keys without a value should be
+    /// omitted rather than sent with an empty `wert`.
+    pub konfigurationen: Vec<KonfigurationenEntry>,
+}
+
+/// A single entry in `PutKonfigurationenRequest`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct KonfigurationenEntry {
+    #[schema(value_type = String, example = "FIRMWARE_VERSION")]
+    pub parameter: Konfigurationsparameter,
+    pub wert: String,
+    /// Optional free-text note or sub-key for `Sonstiges` entries.
+    pub notiz: Option<String>,
+}
+
+/// `GET /api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}`
+///
+/// Returns a single `Geraet` record — full BO4E payload + typed `konfigurationen`.
+///
+/// Unlike `GET /api/v1/zaehler/{zaehler_id}/geraete` (list), this endpoint
+/// returns a `404 Not Found` if the device doesn't exist and is suitable for
+/// exact-identity lookup by ERP systems after WiM Geräteübernahme (PIDs 17001–17011).
+pub async fn get_geraet(
+    Extension(repo): Extension<DeviceRepoExt>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    claims: Claims,
+    Path((_zaehler_id, geraet_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-device", &tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+
+    match repo.find_geraet(&geraet_id, &tenant_gln).await {
+        Ok(Some(r)) => {
+            let geraet = match serde_json::from_value::<Geraet>(r.data.clone()) {
+                Ok(g) => g,
+                Err(e) => {
+                    tracing::warn!(geraet_id, error = %e, "schema drift: stored Geraet cannot be deserialised");
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "schema drift — re-PUT to fix").into_response();
+                }
+            };
+            Json(GeraetResponse {
+                geraet_id: r.geraet_id,
+                zaehler_id: r.zaehler_id,
+                geraet_typ: r.geraet_typ,
+                data: geraet,
+                konfigurationen: r.konfigurationen,
+                bo4e_version: r.bo4e_version,
+                version: r.version,
+            })
+            .into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, format!("Geraet {geraet_id} not found")).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen`
+///
+/// Returns **only the typed `konfigurationen` list** for a `Geraet` — suitable for
+/// ERP polling loops that monitor firmware versions or certificate expiry without
+/// fetching the full BO4E payload.
+///
+/// ### Response example
+///
+/// ```json
+/// [
+///   { "parameter": "FIRMWARE_VERSION", "wert": "3.1.2", "updated_at": "2026-07-18T08:00:00Z", "notiz": null },
+///   { "parameter": "CLS_FAEHIG",       "wert": "true",  "updated_at": "2026-07-18T08:00:00Z", "notiz": null }
+/// ]
+/// ```
+pub async fn get_geraet_konfigurationen(
+    Extension(repo): Extension<DeviceRepoExt>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    claims: Claims,
+    Path((_zaehler_id, geraet_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-device", &tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+
+    match repo.find_geraet(&geraet_id, &tenant_gln).await {
+        Ok(Some(r)) => Json(r.konfigurationen).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, format!("Geraet {geraet_id} not found")).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `PUT /api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen`
+///
+/// **Atomically replace** all configuration entries for a `Geraet`.
+///
+/// - Server-side deduplication: last entry wins for duplicate `parameter` values.
+/// - `updated_at` on each stored entry is set server-side (UTC now).
+/// - Emits `de.markt.geraet.konfiguration.updated` via the EventBus fan-out so
+///   `edmd` certificate-expiry worker and `processd` §14a Steuerungsauftrag handler
+///   receive SMGW cert / CLS-capability updates in near-real-time.
+///
+/// ### §14a Steuerungsauftrag integration
+///
+/// When `ClsFaehig = "true"` is set, `processd` auto-acknowledges §14a
+/// `WimSteuerungsauftrag` requests for this device (BK6-24-174 §14a rules).
+/// When `ClsFaehig = "false"` or the entry is absent, `processd` rejects with ERC A97.
+///
+/// ### SMGW certificate expiry monitoring
+///
+/// Setting `SmgwCertAblaufdatum` triggers the `edmd` certificate-expiry background
+/// worker to start monitoring.  When the expiry date is ≤ 30 days away, `edmd`
+/// emits `de.edmd.cls.compliance_issue`.
+pub async fn put_geraet_konfigurationen(
+    Extension(repo): Extension<DeviceRepoExt>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(event_tx): Extension<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>,
+    claims: Claims,
+    Path((zaehler_id, geraet_id)): Path<(String, String)>,
+    Json(req): Json<PutKonfigurationenRequest>,
+) -> impl IntoResponse {
+    use mako_markt::cloudevents::MarktEvent;
+
+    if enforcer
+        .check(&claims.principal(), "write-device", &tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+
+    // ── Deduplication: last occurrence of each parameter wins. ────────────────
+    // Reverse, deduplicate by parameter key keeping the last entry, then re-reverse.
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped: Vec<KonfigurationenEntry> = req
+        .konfigurationen
+        .into_iter()
+        .rev()
+        .filter(|e| {
+            let k = serde_json::to_string(&e.parameter).unwrap_or_default();
+            seen.insert(k)
+        })
+        .collect();
+    deduped.reverse();
+
+    let now = time::OffsetDateTime::now_utc();
+    let konfigurationen: Vec<GeraetKonfiguration> = deduped
+        .into_iter()
+        .map(|e| GeraetKonfiguration {
+            parameter: e.parameter,
+            wert: e.wert,
+            updated_at: now,
+            notiz: e.notiz,
+        })
+        .collect();
+
+    let count = konfigurationen.len();
+    match repo
+        .upsert_geraet_konfigurationen(&geraet_id, &tenant_gln, konfigurationen)
+        .await
+    {
+        Ok(true) => {
+            // Emit CloudEvent so edmd cert-expiry worker + processd §14a handler
+            // receive configuration updates without polling.
+            let evt = MarktEvent::new(
+                &tenant_gln,
+                "de.markt.geraet.konfiguration.updated",
+                geraet_id.clone(),
+                serde_json::json!({
+                    "geraet_id":  geraet_id,
+                    "zaehler_id": zaehler_id,
+                    "count":      count,
+                }),
+            );
+            if let Ok(payload) = serde_json::to_value(&evt) {
+                let _ = event_tx.send(payload);
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, format!("Geraet {geraet_id} not found")).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1023,6 +1248,252 @@ pub async fn list_zaehler_saisons(
     {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/zaehler/{zaehler_id}/zaehlzeitdefinitionen`
+///
+/// Returns a **typed `rubo4e::current::Zaehlzeitdefinition` BO4E object** for the
+/// given Zähler, assembled from the `zaehler_register` + `zaehler_saisons` rows that
+/// were auto-populated from WiM Stammdatenübermittlung (ORDERS PIDs 17102–17133).
+///
+/// ## Why this endpoint?
+///
+/// ERP systems (Schleupen, SAP IS-U, powercloud) need to display Time-of-Use register
+/// definitions to customer portal users for §14a Modul 2 HT/NT tariffs.  Previously,
+/// clients had to query two separate endpoints and assemble the nested structure
+/// themselves.  This endpoint returns the canonical BO4E `Zaehlzeitdefinition` shape
+/// (saisons → tagtypen → umschaltzeiten) that portals can display and validate
+/// schema-first without custom ETL.
+///
+/// ## BO4E mapping
+///
+/// ```
+/// ZaehlzeitSaisonRecord rows (zaehler_register × zaehler_saisons)
+///   ↓
+/// Zaehlzeitdefinition {
+///   _id: zaehler_id,
+///   saisons: [
+///     Zaehlzeitsaison {
+///       bezeichnung: "WINTER" | "SOMMER" | "GESAMT",
+///       tagtypen: [
+///         Zaehlzeittagtyp {
+///           tagtyp: WERKTAGS | WOCHENENDE | ...,
+///           umschaltzeiten: [
+///             Umschaltzeit { registercode: "HT", umschaltzeit: "07:00" },
+///             Umschaltzeit { registercode: "NT", umschaltzeit: "22:00" },
+///           ]
+///         }
+///       ]
+///     }
+///   ]
+/// }
+/// ```
+///
+/// Registers with `valid_to IS NOT NULL` (historical) are included in the response.
+/// Use `?valid_only=true` to restrict to currently valid registers.
+///
+/// ## §14a Modul 2 context
+///
+/// Under BK6-22-300 §14a Modul 2, the NB assigns ToU registers (HT/NT) to
+/// controllable loads at specific switching times.  The MSB must communicate these
+/// definitions to the NB via WiM Stammdaten (ORDERS 17102–17133 ZAK+ZE segments).
+/// This endpoint exposes those definitions in BO4E form for downstream ERP + portal
+/// consumption.
+pub async fn get_zaehlzeitdefinitionen(
+    Extension(repo): Extension<ZaehlzeitRepoExt>,
+    Extension(claims): Extension<Claims>,
+    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    Extension(enforcer): Extension<CedarEnforcer>,
+    Path(zaehler_id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<ZaehlzeitdefinitionQuery>,
+) -> impl IntoResponse {
+    use rubo4e::current::{BoTyp, ComTyp, Umschaltzeit, Zaehlzeitsaison, Zaehlzeittagtyp};
+    use std::collections::BTreeMap;
+
+    if enforcer
+        .check(&claims.principal(), "read-device", &tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+
+    // ── 1. Fetch all registers for this Zähler ────────────────────────────────
+    let registers = match repo.list_registers_by_zaehler(&zaehler_id, &tenant_gln).await {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    // Optionally filter to currently valid registers only.
+    let only_valid = q.valid_only.unwrap_or(false);
+    let today = time::OffsetDateTime::now_utc().date();
+    let registers: Vec<_> = registers
+        .into_iter()
+        .filter(|r| !only_valid || r.valid_to.map(|d| d >= today).unwrap_or(true))
+        .collect();
+
+    if registers.is_empty() {
+        // Return an empty but schema-valid Zaehlzeitdefinition
+        let empty = Zaehlzeitdefinition {
+            id: Some(zaehler_id.clone()),
+            typ: Some(BoTyp::Zaehlzeitdefinition),
+            version: Some("v202607.0.0".to_owned()),
+            saisons: None,
+            saisonprofil: None,
+            feiertagskalender: None,
+            urheber: None,
+            zusatz_attribute: None,
+            _additional: Default::default(),
+        };
+        return Json(empty).into_response();
+    }
+
+    // ── 2. Collect all (saison, wochentage_key, zeit_von, registercode) tuples ─
+    // Key: (saison_name, wochentage_fingerprint) → Vec<(zeit_von, registercode)>
+    type SaisonKey = (String, String); // (saison, wochentage_sorted_str)
+    let mut switch_map: BTreeMap<SaisonKey, Vec<(String, String)>> = BTreeMap::new();
+
+    for reg in &registers {
+        let saisons = match repo.list_saisons_by_register(reg.id, &tenant_gln).await {
+            Ok(s) => s,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+        for saison in saisons {
+            // Normalize wochentage to a sorted fingerprint for grouping.
+            let wochentage_key = normalize_wochentage_key(&saison.wochentage);
+            let key = (saison.saison.clone(), wochentage_key);
+            switch_map
+                .entry(key)
+                .or_default()
+                .push((saison.zeit_von.clone(), reg.zaehlerauspraegung.clone()));
+        }
+    }
+
+    // ── 3. Group switch points by saison name ─────────────────────────────────
+    // saison_name → BTreeMap<wochentage_key, Vec<(zeit_von, registercode)>>
+    let mut by_saison: BTreeMap<String, BTreeMap<String, Vec<(String, String)>>> = BTreeMap::new();
+    for ((saison_name, wochentage_key), entries) in switch_map {
+        by_saison
+            .entry(saison_name)
+            .or_default()
+            .insert(wochentage_key, entries);
+    }
+
+    // ── 4. Build BO4E structure ───────────────────────────────────────────────
+    let saisons: Vec<Zaehlzeitsaison> = by_saison
+        .into_iter()
+        .map(|(saison_name, tagtyp_map)| {
+            let tagtypen: Vec<Zaehlzeittagtyp> = tagtyp_map
+                .into_iter()
+                .map(|(wochentage_key, mut switch_points)| {
+                    // Sort by time so the switch schedule reads chronologically.
+                    switch_points.sort_by(|a, b| a.0.cmp(&b.0));
+                    let umschaltzeiten: Vec<Umschaltzeit> = switch_points
+                        .into_iter()
+                        .map(|(zeit_von, registercode)| Umschaltzeit {
+                            id: None,
+                            registercode: Some(registercode),
+                            umschaltzeit: Some(zeit_von),
+                            typ: Some(ComTyp::Umschaltzeit),
+                            version: Some("v202607.0.0".to_owned()),
+                            zusatz_attribute: None,
+                            _additional: Default::default(),
+                        })
+                        .collect();
+                    Zaehlzeittagtyp {
+                        id: None,
+                        tagtyp: Some(wochentage_key_to_wiederholungstyp(&wochentage_key)),
+                        umschaltzeiten: Some(umschaltzeiten),
+                        typ: Some(ComTyp::Zaehlzeittagtyp),
+                        version: Some("v202607.0.0".to_owned()),
+                        zusatz_attribute: None,
+                        _additional: Default::default(),
+                    }
+                })
+                .collect();
+
+            Zaehlzeitsaison {
+                id: None,
+                bezeichnung: Some(saison_name),
+                tagtypen: Some(tagtypen),
+                typ: Some(ComTyp::Zaehlzeitsaison),
+                version: Some("v202607.0.0".to_owned()),
+                zusatz_attribute: None,
+                _additional: Default::default(),
+            }
+        })
+        .collect();
+
+    let definition = Zaehlzeitdefinition {
+        id: Some(zaehler_id.clone()),
+        typ: Some(BoTyp::Zaehlzeitdefinition),
+        version: Some("v202607.0.0".to_owned()),
+        saisons: Some(saisons),
+        saisonprofil: None,       // could be set to "Sommer/Winter" if seasons detected
+        feiertagskalender: None,  // BDEW standard not encoded in DB rows
+        urheber: None,
+        zusatz_attribute: None,
+        _additional: Default::default(),
+    };
+
+    Json(definition).into_response()
+}
+
+/// Query parameters for `GET /api/v1/zaehler/{id}/zaehlzeitdefinitionen`.
+#[derive(serde::Deserialize)]
+pub struct ZaehlzeitdefinitionQuery {
+    /// When `true`, only currently valid registers are included
+    /// (`valid_to IS NULL OR valid_to >= today`).  Default: `false` (all registers).
+    pub valid_only: Option<bool>,
+}
+
+/// Derive a stable string key from a `wochentage` JSON value for grouping.
+///
+/// Normalises the weekday array to a sorted comma-separated string so that
+/// `[1,2,3,4,5]` and `[3,1,5,2,4]` produce the same key.
+fn normalize_wochentage_key(wochentage: &serde_json::Value) -> String {
+    let mut days: Vec<i64> = wochentage
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default();
+    days.sort_unstable();
+    days.iter()
+        .map(|d| d.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Map a normalised weekday key to a `Wiederholungstyp` enum variant.
+///
+/// ISO weekday numbers: 1 = Monday, 7 = Sunday.
+///
+/// | Key | Variant |
+/// |---|---|
+/// | `1,2,3,4,5` | WERKTAGS |
+/// | `6,7` | WOCHENENDE |
+/// | `1,2,3,4,5,6,7` | TAEGLICH |
+/// | `1` | MONTAGS |
+/// | `2` | DIENSTAGS |
+/// | `3` | MITTWOCHS |
+/// | `4` | DONNERSTAGS |
+/// | `5` | FREITAGS |
+/// | `6` | SAMSTAGS |
+/// | `7` | SONNTAGS |
+/// | other | TAEGLICH (safe fallback) |
+fn wochentage_key_to_wiederholungstyp(key: &str) -> rubo4e::current::Wiederholungstyp {
+    use rubo4e::current::Wiederholungstyp;
+    match key {
+        "1,2,3,4,5"       => Wiederholungstyp::Werktags,
+        "6,7"             => Wiederholungstyp::Wochenende,
+        "1,2,3,4,5,6,7"  => Wiederholungstyp::Taeglich,
+        "1"               => Wiederholungstyp::Montags,
+        "2"               => Wiederholungstyp::Dienstags,
+        "3"               => Wiederholungstyp::Mittwochs,
+        "4"               => Wiederholungstyp::Donnerstags,
+        "5"               => Wiederholungstyp::Freitags,
+        "6"               => Wiederholungstyp::Samstags,
+        "7"               => Wiederholungstyp::Sonntags,
+        _                 => Wiederholungstyp::Taeglich,
     }
 }
 

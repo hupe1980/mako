@@ -6,7 +6,8 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use rubo4e::current::{Energiemix, Tarifpreisblatt};
+use mako_service::oidc::Claims;
+use rubo4e::current::{Energiemix, Tarifinfo, Tarifmerkmal, Tarifpreisblatt, Tariftyp};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -19,12 +20,15 @@ use crate::{
         delete_energiemix, expire_stale_angebote, fetch_angebot, fetch_energiemix, fetch_epex_day,
         fetch_product, fetch_product_history, get_customer_product, insert_angebot,
         link_angebot_rahmenvertrag, list_angebote, list_products, mark_angebot_versandt,
-        monthly_epex_average, next_angebotsnummer, upsert_energiemix, upsert_epex_day,
-        upsert_product,
+        monthly_epex_average, next_angebotsnummer, soft_delete_product, upsert_energiemix,
+        upsert_epex_day, upsert_product,
     },
 };
 
 // ── BO4E Tarifpreisblatt validation ──────────────────────────────────────────
+
+/// Currently accepted BO4E schema version for Tarifpreisblatt payloads.
+pub const BO4E_VERSION: &str = "v202607.0.0";
 
 /// Product categories that store a BO4E `Tarifpreisblatt` payload.
 ///
@@ -42,6 +46,9 @@ const TARIFPREISBLATT_CATEGORIES: &[&str] = &[
     "EINSPEISUNG",
     "WAERMEPUMPE",
     "WALLBOX",
+    // SHARING (§42c EnWG) uses the same Tarifpreisblatt BO4E envelope as STROM;
+    // billingd reads it as a SharingProduct with ElectricityProduct inside.
+    "SHARING",
 ];
 
 /// Whitelist of valid `preistyp` values for mako products.
@@ -50,7 +57,7 @@ const TARIFPREISBLATT_CATEGORIES: &[&str] = &[
 /// check, so `"grundpreis"` is accepted and stored as `"GRUNDPREIS"`.
 ///
 /// **Hard-cut:** any value not in this list is rejected with 422.
-const VALID_PREISTYPEN: &[&str] = &[
+pub const VALID_PREISTYPEN: &[&str] = &[
     // ── Standard BO4E Preistyp (rubo4e v202607) ─────────────────────────────
     "GRUNDPREIS",
     "ARBEITSPREIS_EINTARIF",
@@ -117,6 +124,24 @@ fn normalize_tarifpreisblatt(
     mut data: serde_json::Value,
 ) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
     let is_bo4e_category = TARIFPREISBLATT_CATEGORIES.contains(&category);
+
+    // ── 0. _version: reject mismatched schema versions for BO4E categories ───
+    // Missing _version is accepted — the round-trip injects the current version.
+    if is_bo4e_category
+        && let Some(v) = data
+            .get("_version")
+            .and_then(|v| v.as_str())
+            .filter(|&v| v != BO4E_VERSION)
+    {
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({
+                "error": format!(
+                    "_version {v:?} is not accepted; expected {BO4E_VERSION:?}"
+                )
+            }),
+        ));
+    }
 
     // ── 1. _typ: inject for BO4E categories, reject mismatches ───────────────
     if is_bo4e_category {
@@ -242,10 +267,51 @@ fn normalize_energiemix(
 
 /// `PUT /api/v1/products/{lf_mp_id}/{product_code}`
 pub async fn put_product(
+    claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path((lf_mp_id, product_code)): Path<(String, String)>,
     Json(mut req): Json<ProductUpsertRequest>,
 ) -> impl IntoResponse {
+    // Tenant isolation: each LF operator can only manage their own products.
+    if lf_mp_id != claims.tenant() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": format!(
+                    "cannot manage products for {lf_mp_id:?}: token tenant is {:?}",
+                    claims.tenant()
+                )
+            })),
+        )
+            .into_response();
+    }
+    // dyn_source is validated by the DB CHECK constraint, but we surface a
+    // clear 422 here before hitting the DB.
+    if let Some(ref ds) = req.dyn_source.as_deref().filter(|&ds| ds != "epex-spot-day-ahead") {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!(
+                    "dyn_source {ds:?} is not valid; the only accepted value is \
+                     'epex-spot-day-ahead'"
+                )
+            })),
+        )
+            .into_response();
+    }
+    // product_status validation.
+    if !matches!(req.product_status.as_str(), "DRAFT" | "PUBLISHED") {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!(
+                    "product_status {:?} is not valid; accepted values: DRAFT, PUBLISHED",
+                    req.product_status
+                )
+            })),
+        )
+            .into_response();
+    }
     // Validate + canonicalise product data against BO4E Tarifpreisblatt schema.
     req.data = match normalize_tarifpreisblatt(&req.category, req.data) {
         Ok(v) => v,
@@ -259,6 +325,7 @@ pub async fn put_product(
 
 /// `GET /api/v1/products/{lf_mp_id}/{product_code}`
 pub async fn get_product(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path((lf_mp_id, product_code)): Path<(String, String)>,
 ) -> impl IntoResponse {
@@ -271,6 +338,7 @@ pub async fn get_product(
 
 /// `GET /api/v1/products/{lf_mp_id}`
 pub async fn list_products_handler(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path(lf_mp_id): Path<String>,
     Query(q): Query<ProductListQuery>,
@@ -283,11 +351,42 @@ pub async fn list_products_handler(
 
 /// `GET /api/v1/products/{lf_mp_id}/{product_code}/history`
 pub async fn get_product_history(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path((lf_mp_id, product_code)): Path<(String, String)>,
 ) -> impl IntoResponse {
     match fetch_product_history(&pool, &lf_mp_id, &product_code).await {
         Ok(rows) => Json(rows).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `DELETE /api/v1/products/{lf_mp_id}/{product_code}`
+///
+/// Soft-delete a product by setting `valid_to = today`.
+/// The product remains in the database for historical billing lookups but is
+/// excluded from the comparison feed and `list_products` (unless
+/// `?include_expired=true` is passed).
+pub async fn delete_product(
+    claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Path((lf_mp_id, product_code)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if lf_mp_id != claims.tenant() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": format!(
+                    "cannot delete products for {lf_mp_id:?}: token tenant is {:?}",
+                    claims.tenant()
+                )
+            })),
+        )
+            .into_response();
+    }
+    match soft_delete_product(&pool, &lf_mp_id, &product_code).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -299,6 +398,7 @@ pub async fn get_product_history(
 /// Returns the currently active product for a MaLo, including the full
 /// `data` (Tarifpreisblatt JSONB).  Used by `billingd` to look up pricing.
 pub async fn get_customer_product_handler(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
     Path(malo_id): Path<String>,
@@ -312,8 +412,72 @@ pub async fn get_customer_product_handler(
     }
 }
 
+/// `GET /api/v1/customer/{malo_id}/product/history`
+///
+/// Returns the full product-assignment history for a MaLo — all historical
+/// `customer_products` rows ordered by `assigned_from DESC`.
+///
+/// Auditors and billing engineers use this to verify that price changes were
+/// applied at the correct effective date (Tarifwechsel Wirksamkeit).
+pub async fn get_customer_product_history_handler(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Path(malo_id): Path<String>,
+    Query(q): Query<CustomerProductQuery>,
+) -> impl IntoResponse {
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
+    let rows = sqlx::query(
+        r"SELECT cp.malo_id, cp.lf_mp_id, cp.product_code, cp.assigned_from, cp.assigned_to,
+                 p.name, p.category, p.sparte
+          FROM customer_products cp
+          LEFT JOIN products p
+                 ON p.lf_mp_id = cp.lf_mp_id
+                AND p.product_code = cp.product_code
+          WHERE cp.malo_id = $1 AND cp.lf_mp_id = $2
+          ORDER BY cp.assigned_from DESC",
+    )
+    .bind(&malo_id)
+    .bind(lf_mp_id)
+    .fetch_all(&pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            use sqlx::Row;
+            let history: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "malo_id":       r.get::<String, _>("malo_id"),
+                        "lf_mp_id":      r.get::<String, _>("lf_mp_id"),
+                        "product_code":  r.get::<String, _>("product_code"),
+                        "product_name":  r.try_get::<String, _>("name").ok(),
+                        "category":      r.try_get::<String, _>("category").ok(),
+                        "sparte":        r.try_get::<Option<String>, _>("sparte").ok().flatten(),
+                        "assigned_from": r.get::<time::Date, _>("assigned_from").to_string(),
+                        "assigned_to":   r.try_get::<Option<time::Date>, _>("assigned_to")
+                                          .ok().flatten().map(|d| d.to_string()),
+                        "is_active":     r.try_get::<Option<time::Date>, _>("assigned_to")
+                                          .ok().flatten().is_none(),
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({
+                "malo_id": malo_id,
+                "lf_mp_id": lf_mp_id,
+                "history": history,
+                "count": history.len(),
+            }))
+            .into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 /// `PUT /api/v1/customer/{malo_id}/product`  — Tarifwechsel
 pub async fn put_customer_product_handler(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
     Path(malo_id): Path<String>,
@@ -321,7 +485,15 @@ pub async fn put_customer_product_handler(
 ) -> impl IntoResponse {
     match assign_product(&pool, &malo_id, &cfg.tenant, req).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => {
+            // Distinguish "product not found" (409) from other errors (422).
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                (StatusCode::CONFLICT, msg).into_response()
+            } else {
+                (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response()
+            }
+        }
     }
 }
 
@@ -337,6 +509,7 @@ pub struct CustomerProductQuery {
 /// Import all 24 hourly EPEX day-ahead prices for a date.
 /// Body: `{ "prices": [ct_kwh_h0, ct_kwh_h1, ..., ct_kwh_h23], "source": "..." }`
 pub async fn put_epex_prices(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path(date_str): Path<String>,
     Json(req): Json<EpexImportRequest>,
@@ -359,6 +532,7 @@ pub async fn put_epex_prices(
 /// Returns the 24-hour array of ct/kWh values for `date`.
 /// Used by `billingd` for §41a dynamic tariff billing.
 pub async fn get_epex_prices_hourly(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path(date_str): Path<String>,
 ) -> impl IntoResponse {
@@ -386,6 +560,7 @@ pub async fn get_epex_prices_hourly(
 /// Returns the monthly average ct/kWh for EPEX Spot.
 /// Used by `einsd` for Direktvermarktung Marktprämie calculation.
 pub async fn get_epex_monthly_average(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path((year, month)): Path<(i32, u8)>,
 ) -> impl IntoResponse {
@@ -416,10 +591,23 @@ pub async fn get_epex_monthly_average(
 /// - Does NOT re-archive or change product pricing — only touches the
 ///   `energiemix` / `oekolabel` columns.
 pub async fn put_energiemix(
+    claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path((lf_mp_id, product_code)): Path<(String, String)>,
     Json(mut req): Json<EnergimixUpsertRequest>,
 ) -> impl IntoResponse {
+    if lf_mp_id != claims.tenant() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": format!(
+                    "cannot update energiemix for {lf_mp_id:?}: token tenant is {:?}",
+                    claims.tenant()
+                )
+            })),
+        )
+            .into_response();
+    }
     // Validate and canonicalise the Energiemix COM payload.
     let (_typed_mix, canonical) = match normalize_energiemix(req.energiemix) {
         Ok(v) => v,
@@ -455,6 +643,7 @@ pub async fn put_energiemix(
 ///
 /// Returns 404 if the product has no Energiemix set.
 pub async fn get_energiemix(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path((lf_mp_id, product_code)): Path<(String, String)>,
 ) -> impl IntoResponse {
@@ -474,9 +663,22 @@ pub async fn get_energiemix(
 /// Remove the `Energiemix` and `Oekolabel` from a product (hard cut).
 /// Use when a product transitions from green-certified back to standard.
 pub async fn delete_energiemix_handler(
+    claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path((lf_mp_id, product_code)): Path<(String, String)>,
 ) -> impl IntoResponse {
+    if lf_mp_id != claims.tenant() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": format!(
+                    "cannot delete energiemix for {lf_mp_id:?}: token tenant is {:?}",
+                    claims.tenant()
+                )
+            })),
+        )
+            .into_response();
+    }
     match delete_energiemix(&pool, &lf_mp_id, &product_code).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
@@ -511,19 +713,67 @@ pub async fn delete_energiemix_handler(
 /// `AngebotPositionInput`.  This keeps `tarifbd` stateless with respect to
 /// `marktd`.  For automated quoting workflows, pre-fetch the NNE from
 /// `marktd GET /api/v1/preisblaetter/{nb_mp_id}` and pass it in.
-fn estimate_jahreskosten(
+/// Detailed cost breakdown for one position within one Angebot scenario.
+///
+/// All amounts in EUR with 2 decimal places.  Used by `GET .../comparison`.
+#[derive(Debug, serde::Serialize)]
+pub struct PositionCostBreakdown {
+    pub product_code: String,
+    pub sparte: String,
+    pub standort_bezeichnung: Option<String>,
+    pub jahresverbrauch_kwh: Decimal,
+    /// Supply cost only (Grundpreis + Arbeitspreis + Leistungspreis, after discount).
+    pub supply_netto_eur: Decimal,
+    /// DSO grid fees (NNE Grundpreis + Arbeitspreis + Leistungspreis).
+    pub nne_netto_eur: Decimal,
+    /// Konzessionsabgabe (§17 StromNZV / §7 GasNZV).
+    pub ka_eur: Decimal,
+    /// Statutory levies: Stromsteuer (Strom) or Energiesteuer + BEHG (Gas).
+    pub levies_eur: Decimal,
+    /// Supply + NNE + KA + levies (no MwSt).
+    pub total_netto_eur: Decimal,
+    /// `total_netto_eur × 1.19`.
+    pub total_brutto_eur: Decimal,
+    /// Effective supply Arbeitspreis in ct/kWh (for at-a-glance comparison).
+    pub arbeitspreis_ct_per_kwh: Option<Decimal>,
+    /// Grundpreis in EUR/year.
+    pub grundpreis_eur_per_year: Option<Decimal>,
+}
+
+/// Full cost breakdown for one scenario (base or variant).
+#[derive(Debug, serde::Serialize)]
+pub struct ScenarioCostBreakdown {
+    /// Scenario name (e.g. "Basis (12 Monate)" or "24 Monate Festpreis −5%").
+    pub label: String,
+    pub laufzeit_monate: i16,
+    /// `true` for the base scenario (index −1 in variants array).
+    pub ist_basis: bool,
+    /// `None` for the base scenario; `Some(idx)` for variants.
+    pub variante_index: Option<usize>,
+    pub rabatt_pct: Option<Decimal>,
+    /// Sum of `total_netto_eur` across all positions.
+    pub jahreskosten_netto_eur: Decimal,
+    /// `jahreskosten_netto_eur × 1.19`.
+    pub jahreskosten_brutto_eur: Decimal,
+    /// Saving vs. base scenario in EUR/year (negative = more expensive).
+    pub ersparnis_vs_basis_eur: Option<Decimal>,
+    pub positionen_detail: Vec<PositionCostBreakdown>,
+}
+
+/// Compute a detailed cost breakdown for one position + one scenario's `rabatt_pct`.
+///
+/// Returns `None` only when the product data lacks any price information.
+fn compute_cost_breakdown(
     product_data: &serde_json::Value,
     pos: &crate::pg::AngebotPositionInput,
     rabatt_pct: Option<Decimal>,
-) -> Option<Decimal> {
-    use rust_decimal::prelude::ToPrimitive as _;
+) -> Option<PositionCostBreakdown> {
     use rust_decimal_macros::dec;
 
     let positionen = product_data
         .get("tarifpreispositionen")
         .and_then(|v| v.as_array())?;
 
-    // ── 1. Supply cost from Tarifpreisblatt ──────────────────────────────────
     let mut grundpreis_ct: Option<Decimal> = None;
     let mut arbeitspreis_ct: Option<Decimal> = None;
     let mut leistungspreis_ct: Option<Decimal> = None;
@@ -557,19 +807,15 @@ fn estimate_jahreskosten(
     let supply_gp_eur = grundpreis_ct
         .map(|gp| gp * Decimal::from(365) / Decimal::ONE_HUNDRED)
         .unwrap_or(Decimal::ZERO);
-
     let supply_ap_eur = arbeitspreis_ct
         .map(|ap| ap * rabatt * pos.jahresverbrauch_kwh / Decimal::ONE_HUNDRED)
         .unwrap_or(Decimal::ZERO);
-
     let supply_lp_eur = leistungspreis_ct
         .zip(pos.leistung_kw)
         .map(|(lp, kw)| lp * kw * Decimal::from(12) / Decimal::ONE_HUNDRED)
         .unwrap_or(Decimal::ZERO);
+    let supply_netto_eur = supply_gp_eur + supply_ap_eur + supply_lp_eur;
 
-    let supply_netto = supply_gp_eur + supply_ap_eur + supply_lp_eur;
-
-    // ── 2. NNE pass-through (DSO-specific, caller must supply) ───────────────
     let nne_gp_eur = pos.nne_grundpreis_eur_per_year.unwrap_or(Decimal::ZERO);
     let nne_ap_eur = pos
         .nne_arbeitspreis_ct_per_kwh
@@ -580,36 +826,54 @@ fn estimate_jahreskosten(
         .zip(pos.leistung_kw)
         .map(|(lp, kw)| lp * kw)
         .unwrap_or(Decimal::ZERO);
-    let nne_netto = nne_gp_eur + nne_ap_eur + nne_lp_eur;
+    let nne_netto_eur = nne_gp_eur + nne_ap_eur + nne_lp_eur;
 
-    // ── 3. Konzessionsabgabe (§17 StromNZV / §7 GasNZV) ─────────────────────
     let ka_eur = pos
         .ka_ct_per_kwh
         .map(|ct| ct * pos.jahresverbrauch_kwh / Decimal::ONE_HUNDRED)
         .unwrap_or(Decimal::ZERO);
 
-    // ── 4. Statutory levies ───────────────────────────────────────────────────
     let sparte_upper = pos.sparte.to_uppercase();
     let is_gas = sparte_upper.contains("GAS");
-
-    let levy_eur = if is_gas {
-        // Energiesteuer Gas + BEHG CO₂ levy (§2 EnergieStG, BEHG)
+    let levies_eur = if is_gas {
         let energiesteuer = pos.energiesteuer_gas_ct_per_kwh.unwrap_or(dec!(0.55));
         let behg = pos.behg_gas_ct_per_kwh.unwrap_or(dec!(1.109));
         (energiesteuer + behg) * pos.jahresverbrauch_kwh / Decimal::ONE_HUNDRED
     } else {
-        // Stromsteuer (§3 StromStG; 0 for §9a/§9b relief customers)
         let stromsteuer = pos.stromsteuer_ct_per_kwh.unwrap_or(dec!(2.05));
         stromsteuer * pos.jahresverbrauch_kwh / Decimal::ONE_HUNDRED
     };
 
-    let total_netto = supply_netto + nne_netto + ka_eur + levy_eur;
+    let total_netto_eur = supply_netto_eur + nne_netto_eur + ka_eur + levies_eur;
+    let mwst = Decimal::new(119, 2);
+    let total_brutto_eur = total_netto_eur * mwst;
 
-    if total_netto.to_f64().is_some_and(|f| f > 0.0) {
-        Some(total_netto)
-    } else {
-        None
-    }
+    let _two_dp = Decimal::new(1, 2);
+    Some(PositionCostBreakdown {
+        product_code: pos.product_code.clone(),
+        sparte: pos.sparte.clone(),
+        standort_bezeichnung: pos.standort_bezeichnung.clone(),
+        jahresverbrauch_kwh: pos.jahresverbrauch_kwh,
+        supply_netto_eur: supply_netto_eur.round_dp(2),
+        nne_netto_eur: nne_netto_eur.round_dp(2),
+        ka_eur: ka_eur.round_dp(2),
+        levies_eur: levies_eur.round_dp(2),
+        total_netto_eur: total_netto_eur.round_dp(2),
+        total_brutto_eur: total_brutto_eur.round_dp(2),
+        arbeitspreis_ct_per_kwh: arbeitspreis_ct.map(|ct| (ct * rabatt).round_dp_with_strategy(
+            4, rust_decimal::RoundingStrategy::MidpointAwayFromZero)),
+        grundpreis_eur_per_year: grundpreis_ct
+            .map(|gp| (gp * Decimal::from(365) / Decimal::ONE_HUNDRED).round_dp(2)),
+    })
+}
+
+fn estimate_jahreskosten(
+    product_data: &serde_json::Value,
+    pos: &crate::pg::AngebotPositionInput,
+    rabatt_pct: Option<Decimal>,
+) -> Option<Decimal> {
+    compute_cost_breakdown(product_data, pos, rabatt_pct)
+        .map(|bd| bd.total_netto_eur)
 }
 
 /// Default Angebot validity: today + 10 Werktage (≈ 14 calendar days).
@@ -780,6 +1044,7 @@ pub async fn post_angebot(
         &req,
         &positionen_json,
         &varianten_json,
+        &serde_json::Value::Array(vec![]),  // varianten_enriched populated lazily on GET .../comparison
         total_netto_opt,
         total_brutto_opt,
         gueltig_bis,
@@ -878,6 +1143,195 @@ pub async fn get_angebot_handler(
     }
 }
 
+/// `GET /api/v1/angebote/{id}/comparison`
+///
+/// Side-by-side cost comparison for all scenarios (base + variants) in an Angebot.
+///
+/// Returns a `ComparisonResponse` with one `ScenarioCostBreakdown` per scenario:
+/// - **Basis** — the base quotation (laufzeit from `angebote.laufzeit_monate`, no discount)
+/// - **Variante 0..N** — each `AngebotVariante` with its `rabatt_pct` and/or
+///   alternative products applied
+///
+/// Each scenario includes per-position detail:
+///
+/// | Field | Formula |
+/// |---|---|
+/// | `supply_netto_eur` | Grundpreis × 365/100 + Arbeitspreis × kWh/100 × (1−rabatt/100) + Leistungspreis × kW × 12/100 |
+/// | `nne_netto_eur` | NNE Grundpreis + NNE Arbeitspreis × kWh/100 + NNE Leistungspreis × kW |
+/// | `ka_eur` | KA ct/kWh × kWh/100 |
+/// | `levies_eur` | Stromsteuer (2.05 ct) or Energiesteuer + BEHG (Gas) × kWh/100 |
+/// | `total_netto_eur` | Supply + NNE + KA + Levies |
+/// | `total_brutto_eur` | `total_netto_eur × 1.19` |
+///
+/// The `ersparnis_vs_basis_eur` field shows the annual saving vs. the base scenario —
+/// negative values mean the variant is more expensive (useful for index-linked
+/// price formulas).
+///
+/// ## When is this useful?
+///
+/// C&I/RLM customers request formal Angebote with multiple scenario comparisons
+/// (12M fixed vs. 24M fixed, with/without demand-side flexibility rebate). This
+/// endpoint renders the comparison table that a sales engineer sends to the customer,
+/// or that the B2B portal renders for self-service CPQ.
+///
+/// ## Pre-computed vs. live
+///
+/// Scenarios are re-computed live from the current product data + stored positions.
+/// The `angebot_varianten_enriched` column stores the last computed snapshot for fast
+/// retrieval without DB roundtrips; this endpoint always returns a live recalculation.
+pub async fn get_angebot_comparison(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Path(id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    let angebot = match fetch_angebot(&pool, id, &cfg.tenant).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    let lf_mp_id = &angebot.lf_mp_id;
+    let mwst = Decimal::new(119, 2);
+
+    // Deserialise positions from JSONB.
+    let positionen: Vec<crate::pg::AngebotPositionInput> =
+        match serde_json::from_value(angebot.positionen.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("cannot deserialise positionen: {e}"),
+                )
+                    .into_response();
+            }
+        };
+
+    let varianten: Vec<crate::pg::AngebotVariante> =
+        serde_json::from_value(angebot.varianten.clone()).unwrap_or_default();
+
+    // Build a product cache to avoid redundant DB lookups.
+    let mut product_cache: std::collections::HashMap<String, Option<crate::pg::ProductRow>> =
+        std::collections::HashMap::new();
+    for pos in &positionen {
+        if !product_cache.contains_key(&pos.product_code) {
+            let p = fetch_product(&pool, lf_mp_id, &pos.product_code)
+                .await
+                .unwrap_or(None);
+            product_cache.insert(pos.product_code.clone(), p);
+        }
+        for v in &varianten {
+            if let Some(ref overrides) = v.product_codes_override {
+                for code in overrides.iter().flatten() {
+                    if !product_cache.contains_key(code) {
+                        let p = fetch_product(&pool, lf_mp_id, code)
+                            .await
+                            .unwrap_or(None);
+                        product_cache.insert(code.clone(), p);
+                    }
+                }
+            }
+        }
+    }
+
+    // Helper: compute a scenario from positions + optional overrides + discount.
+    let compute_scenario =
+        |label: String,
+         laufzeit: i16,
+         ist_basis: bool,
+         variante_index: Option<usize>,
+         rabatt_pct: Option<Decimal>,
+         product_overrides: Option<&Vec<Option<String>>>|
+         -> ScenarioCostBreakdown {
+            let mut pos_details: Vec<PositionCostBreakdown> = Vec::new();
+            let mut total_netto = Decimal::ZERO;
+
+            for (i, pos) in positionen.iter().enumerate() {
+                let effective_code = product_overrides
+                    .and_then(|ov| ov.get(i))
+                    .and_then(|c| c.as_ref())
+                    .unwrap_or(&pos.product_code);
+                let product_data = product_cache
+                    .get(effective_code)
+                    .and_then(|p| p.as_ref())
+                    .map(|p| &p.data);
+
+                if let Some(data) = product_data {
+                    let mut effective_pos = pos.clone();
+                    effective_pos.product_code = effective_code.clone();
+                    if let Some(bd) = compute_cost_breakdown(data, &effective_pos, rabatt_pct) {
+                        total_netto += bd.total_netto_eur;
+                        pos_details.push(bd);
+                    }
+                }
+            }
+
+            let total_brutto = (total_netto * mwst).round_dp(2);
+            ScenarioCostBreakdown {
+                label,
+                laufzeit_monate: laufzeit,
+                ist_basis,
+                variante_index,
+                rabatt_pct,
+                jahreskosten_netto_eur: total_netto.round_dp(2),
+                jahreskosten_brutto_eur: total_brutto,
+                ersparnis_vs_basis_eur: None, // filled below
+                positionen_detail: pos_details,
+            }
+        };
+
+    // Compute base scenario.
+    let base_label = format!("Basis ({} Monate)", angebot.laufzeit_monate);
+    let base_scenario = compute_scenario(
+        base_label,
+        angebot.laufzeit_monate,
+        true,
+        None,
+        None,
+        None,
+    );
+    let base_total = base_scenario.jahreskosten_netto_eur;
+
+    // Compute variant scenarios.
+    let mut szenarien: Vec<ScenarioCostBreakdown> = Vec::new();
+    szenarien.push(base_scenario);
+
+    for (i, v) in varianten.iter().enumerate() {
+        let label = if v.label.is_empty() {
+            format!("Variante {}", i + 1)
+        } else {
+            v.label.clone()
+        };
+        let mut s = compute_scenario(
+            label,
+            v.laufzeit_monate,
+            false,
+            Some(i),
+            v.rabatt_pct,
+            v.product_codes_override.as_ref(),
+        );
+        s.ersparnis_vs_basis_eur = Some((base_total - s.jahreskosten_netto_eur).round_dp(2));
+        szenarien.push(s);
+    }
+
+    Json(serde_json::json!({
+        "angebot_id":          angebot.id,
+        "angebotsnummer":      angebot.angebotsnummer,
+        "kunden_id":           angebot.kunden_id,
+        "interessent_name":    angebot.interessent_name,
+        "status":              angebot.status,
+        "gueltig_bis":         angebot.gueltig_bis.to_string(),
+        "lieferbeginn":        angebot.lieferbeginn.map(|d| d.to_string()),
+        "positionen_count":    positionen.len(),
+        "varianten_count":     varianten.len(),
+        "gewaehlte_variante":  angebot.gewaehlte_variante,
+        "szenarien":           szenarien,
+        "hinweis": "Preise sind Schätzungen auf Basis aktueller Tarifpreisblätter. \
+                    NNE und KA werden nur ausgewiesen wenn sie in den Positionen angegeben sind. \
+                    MwSt 19 % wurde aufgeschlagen. Verbindlich ist der unterzeichnete Rahmenvertrag.",
+    }))
+    .into_response()
+}
+
 /// `POST /api/v1/angebote/{id}/versenden`
 ///
 /// Mark an Angebot as VERSANDT (sent to customer).
@@ -908,6 +1362,7 @@ pub struct AnnehmenRequest {
 /// configured ERP webhook.  The ERP or `vertragd` creates the `Rahmenvertrag`
 /// from the CloudEvent payload.
 pub async fn post_angebot_annehmen(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
     Path(id): Path<uuid::Uuid>,
@@ -943,10 +1398,22 @@ pub async fn post_angebot_annehmen(
                 "jahreskosten_brutto_eur": angebot.jahreskosten_brutto_eur,
             }
         });
-        let client = reqwest::Client::new();
-        if let Ok(resp) = client
+        let client = mako_service::http::default_client();
+        let body_str = serde_json::to_string(&ce).unwrap_or_default();
+        // Only add X-Mako-Signature when a secret is configured.
+        // Sending an empty-string signature is worse than omitting the header:
+        // subscribers that verify signatures would accept a trivially forged payload.
+        let mut builder = client
             .post(webhook_url)
-            .header("Content-Type", "application/cloudevents+json")
+            .header("Content-Type", "application/cloudevents+json");
+        if let Some(ref secret) = cfg.erp_hmac_secret {
+            let sig = format!(
+                "sha256={}",
+                mako_service::webhook::hmac_hex(secret.as_bytes(), body_str.as_bytes())
+            );
+            builder = builder.header("X-Mako-Signature", sig);
+        }
+        if let Ok(resp) = builder
             .json(&ce)
             .send()
             .await
@@ -978,6 +1445,7 @@ pub async fn post_angebot_annehmen(
 ///
 /// Mark an Angebot as ABGELEHNT (declined by customer).
 pub async fn post_angebot_ablehnen(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
     Path(id): Path<uuid::Uuid>,
@@ -1401,6 +1869,263 @@ pub fn compute_feed_etag(
     )
 }
 
+/// Build a `rubo4e::current::Tarifinfo` BO4E envelope from a product row.
+///
+/// This is the §42d EnWG canonical form: comparison portals (Verivox, Check24)
+/// and the BNetzA Markttransparenzstelle can import this object directly without
+/// custom ETL, since it conforms to the published BO4E `Tarifinfo` JSON schema.
+///
+/// Mapping:
+///
+/// | BO4E field | Source |
+/// |---|---|
+/// | `bezeichnung` | `product.name` |
+/// | `anbietername` | `lf_mp_id` |
+/// | `_id` | `product.product_code` |
+/// | `sparte` | `product.sparte` → `rubo4e::Sparte` |
+/// | `kundentypen` | `product.kundentyp` → `[rubo4e::Kundentyp]` |
+/// | `registeranzahl` | `product.register_count` → `rubo4e::Registeranzahl` |
+/// | `tariftyp` | `data.tariftyp` → `rubo4e::Tariftyp` |
+/// | `tarifmerkmale` | derived from preisgarantie, category, dyn_source |
+/// | `energiemix` | `product.energiemix` → `rubo4e::Energiemix` |
+/// | `zeitlicheGueltigkeit` | `product.valid_from/valid_to` |
+/// | `vertragskonditionen` | `data.vertragskonditionen` (passed through) |
+pub fn build_tarifinfo(row: &crate::pg::ProductRow, lf_mp_id: &str) -> Tarifinfo {
+    use rubo4e::current::{Kundentyp, Registeranzahl, Sparte, Vertragskonditionen, Zeitraum};
+
+    // ── Sparte ────────────────────────────────────────────────────────────────
+    let sparte: Option<Sparte> = row.sparte.as_deref().and_then(|s| match s {
+        "STROM" => Some(Sparte::Strom),
+        "GAS" => Some(Sparte::Gas),
+        "WAERME" | "FERNWAERME" => Some(Sparte::Fernwaerme),
+        _ => None,
+    });
+
+    // ── Kundentypen ───────────────────────────────────────────────────────────
+    let kundentypen: Option<Vec<Kundentyp>> =
+        row.kundentyp.as_deref().map(|kt| {
+            let variant = match kt {
+                "Haushalt" => Kundentyp::Privat,
+                "Gewerbe" | "Gewerbe_RLM" => Kundentyp::Gewerbe,
+                _ => Kundentyp::Privat,
+            };
+            vec![variant]
+        });
+
+    // ── Registeranzahl ────────────────────────────────────────────────────────
+    let registeranzahl: Option<Registeranzahl> =
+        row.register_count.as_deref().and_then(|r| match r {
+            "Eintarif" => Some(Registeranzahl::Eintarif),
+            "Zweitarif" => Some(Registeranzahl::Zweitarif),
+            "Mehrtarif" => Some(Registeranzahl::Mehrtarif),
+            _ => None,
+        });
+
+    // ── Tariftyp (from data.tariftyp JSONB field) ─────────────────────────────
+    let tariftyp: Option<Tariftyp> = row
+        .data
+        .pointer("/tariftyp")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+    // ── Tarifmerkmale (derived) ────────────────────────────────────────────────
+    // Derive Tarifmerkmale from observable product properties:
+    //   FESTPREIS   — product defines a preisgarantie end date (price-locked)
+    //   PAKET       — category is BUNDLE (multi-commodity package)
+    //   ONLINE      — dyn_source set (§41a dynamic tariffs are typically online-only)
+    //   STANDARD    — fallback when no other merkmal applies
+    let mut merkmale: Vec<Tarifmerkmal> = Vec::new();
+    let has_preisgarantie = extract_preisgarantie_bis(&row.data).is_some();
+    if has_preisgarantie {
+        merkmale.push(Tarifmerkmal::Festpreis);
+    }
+    if row.category == "BUNDLE" {
+        merkmale.push(Tarifmerkmal::Paket);
+    }
+    if row.dyn_source.is_some() {
+        merkmale.push(Tarifmerkmal::Online);
+    }
+    if merkmale.is_empty() {
+        merkmale.push(Tarifmerkmal::Standard);
+    }
+    let tarifmerkmale = if merkmale.is_empty() {
+        None
+    } else {
+        Some(merkmale)
+    };
+
+    // ── Energiemix (deserialise from JSONB) ───────────────────────────────────
+    let energiemix: Option<Energiemix> = row
+        .energiemix
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+    // ── Zeitliche Gültigkeit ──────────────────────────────────────────────────
+    // Map valid_from / valid_to DATE → Zeitraum (uses time::Date, not OffsetDateTime).
+    let zeitliche_gueltigkeit: Option<Zeitraum> =
+        if row.valid_from.is_some() || row.valid_to.is_some() {
+            let mut z = Zeitraum::default();
+            if let Some(d) = row.valid_from {
+                z.startdatum = Some(d);
+            }
+            if let Some(d) = row.valid_to {
+                z.enddatum = Some(d);
+            }
+            Some(z)
+        } else {
+            None
+        };
+
+    // ── Vertragskonditionen (pass through from data JSONB) ────────────────────
+    let vertragskonditionen: Option<Vertragskonditionen> = row
+        .data
+        .pointer("/vertragskonditionen")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+    Tarifinfo {
+        id: Some(row.product_code.clone()),
+        bezeichnung: Some(row.name.clone()),
+        anbietername: Some(lf_mp_id.to_owned()),
+        anbieter: None, // optional: could populate with Marktteilnehmer if marktd URL configured
+        sparte,
+        kundentypen,
+        registeranzahl,
+        tariftyp,
+        tarifmerkmale,
+        energiemix,
+        zeitliche_gueltigkeit,
+        vertragskonditionen,
+        typ: Some(rubo4e::current::BoTyp::Tarifinfo),
+        version: Some("v202607.0.0".to_owned()),
+        website: None,
+        bemerkung: None,
+        anwendung_von: None,
+        zusatz_attribute: None,
+        _additional: Default::default(),
+    }
+}
+
+/// `GET /api/v1/comparison-feed/bo4e`
+///
+/// Returns the same feed as `GET /api/v1/comparison-feed` but wraps every tariff
+/// in a full BO4E `Tarifinfo` Business Object — the format expected by comparison
+/// portals (Verivox, Check24) and the BNetzA Markttransparenzstelle per §42d EnWG.
+///
+/// Unlike the standard feed which returns a mako-specific JSON structure alongside
+/// the BO4E `Tarifpreisblatt`, this endpoint returns a schema-validated BO4E array
+/// that can be imported directly without custom ETL.
+///
+/// ## Query parameters
+///
+/// Identical to `GET /api/v1/comparison-feed`.
+///
+/// ## Response
+///
+/// ```json
+/// {
+///   "meta": { "generated_at": "...", "total_returned": 12, ... },
+///   "tarife": [
+///     {
+///       "_typ": "TARIFINFO",
+///       "_version": "v202607.0.0",
+///       "_id": "STROM_OEKO_2026",
+///       "bezeichnung": "Ökostrom Plus",
+///       "sparte": "STROM",
+///       "kundentypen": ["Privat"],
+///       "registeranzahl": "Eintarif",
+///       "tariftyp": "SONDERTARIF",
+///       "tarifmerkmale": ["FESTPREIS"],
+///       "energiemix": { ... },
+///       "zeitlicheGueltigkeit": { "startdatum": "2026-01-01T00:00:00Z" },
+///       "vertragskonditionen": { ... }
+///     }
+///   ]
+/// }
+/// ```
+pub async fn get_comparison_feed_bo4e(
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Query(q): Query<crate::pg::ComparisonFeedQuery>,
+    req_headers: HeaderMap,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Rfc3339;
+
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
+    let limit = q.limit.unwrap_or(100).clamp(1, 500) as usize;
+
+    let mut rows = match crate::pg::fetch_comparison_feed(&pool, &lf_mp_id, &q).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    };
+
+    // ── ETag / 304 Not Modified ───────────────────────────────────────────────
+    let verbrauch_kwh = q.verbrauch_kwh.unwrap_or(rust_decimal_macros::dec!(3500));
+    let etag = compute_feed_etag(&rows, verbrauch_kwh, q.sparte.as_deref());
+    if let Some(inm) = req_headers
+        .get("if-none-match")
+        .and_then(|v| v.to_str().ok())
+        && inm == etag
+    {
+        return StatusCode::NOT_MODIFIED.into_response();
+    }
+
+    // ── Pagination ────────────────────────────────────────────────────────────
+    let has_next = rows.len() > limit;
+    if has_next {
+        rows.truncate(limit);
+    }
+    let next_cursor: Option<String> = if has_next {
+        rows.last().map(|r| {
+            format!(
+                "{},{}",
+                r.updated_at.format(&Rfc3339).unwrap_or_default(),
+                r.product_code
+            )
+        })
+    } else {
+        None
+    };
+
+    // ── Build BO4E TarifInfo objects ──────────────────────────────────────────
+    let tarife: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            let tarifinfo = build_tarifinfo(row, &lf_mp_id);
+            serde_json::to_value(&tarifinfo).unwrap_or(serde_json::Value::Null)
+        })
+        .collect();
+
+    let meta = crate::pg::ComparisonFeedMeta {
+        generated_at: time::OffsetDateTime::now_utc(),
+        lf_mp_id,
+        verbrauch_kwh,
+        sparte_filter: q.sparte.clone(),
+        kundentyp_filter: q.kundentyp.clone(),
+        total_returned: tarife.len(),
+        next_cursor,
+    };
+
+    (
+        StatusCode::OK,
+        [
+            ("ETag", etag.as_str()),
+            (
+                "Cache-Control",
+                "public, max-age=300",
+            ),
+            ("Content-Type", "application/json"),
+            ("Vary", "Accept-Encoding"),
+            ("X-Content-Type-Options", "nosniff"),
+        ],
+        Json(serde_json::json!({
+            "meta": meta,
+            "tarife": tarife,
+        })),
+    )
+        .into_response()
+}
+
 /// `GET /api/v1/comparison-feed`
 ///
 /// Returns a machine-readable tariff listing suitable for comparison portals
@@ -1528,6 +2253,8 @@ pub async fn get_comparison_feed(
                 energiemix: row.energiemix.clone(),
                 oekolabel: row.oekolabel.clone(),
                 tarifpreisblatt: row.data.clone(),
+                tarifinfo: serde_json::to_value(build_tarifinfo(row, &lf_mp_id))
+                    .unwrap_or(serde_json::Value::Null),
                 updated_at: row.updated_at,
             }
         })

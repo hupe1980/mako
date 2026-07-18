@@ -111,6 +111,13 @@ graph TB
 │  POST /api/v1/meter-reads/rlm/{malo_id}     ← Strom 15-min direct push   │
 │  POST /api/v1/meter-reads/gas/{malo_id}     ← Gas direct push (m³→kWh_Hs)│
 │                                                                            │
+│  ── §14a SMGW session registry (MsbG §21c / BSI TR-03109) ─────────────  │
+│  PUT  /api/v1/smgw/{malo_id}                ← upsert SmgwSession          │
+│  GET  /api/v1/smgw/{malo_id}                ← session + recent issues     │
+│  GET  /api/v1/smgw                          ← fleet list with issue counts│
+│  GET  /api/v1/smgw/compliance               ← read-only compliance scan   │
+│  POST /api/v1/smgw/compliance/scan          ← side-effecting fleet sweep  │
+│                                                                            │
 │  ── Reading order scheduling (Ablesesteuerung) ──────────────────────── │
 │  POST|GET /api/v1/reading-orders            ← schedule / list orders     │
 │  GET  /api/v1/reading-orders/{id}           ← order detail               │
@@ -1015,6 +1022,168 @@ DuckDB executes this with full four-level pruning:
 **Authorization.** All catalog endpoint responses are gated by OIDC/Cedar.
 Snowflake or Databricks must present a valid bearer token in the `CATALOG INTEGRATION`
 config. Unauthenticated requests receive `403 Forbidden`.
+
+---
+
+## §14a Fernsteuerbarkeit compliance — SMGW session registry
+
+`edmd` maintains a **SMGW (Smart Meter Gateway) session registry** and runs a daily
+compliance sweep per **MsbG §21c** and **BSI TR-03109-4 §6.3**.
+
+### Why here?
+
+`edmd` already owns meter-data push sessions (`direct_push_sessions`) and reading-order
+scheduling. SMGW connectivity is a metering-domain concern: when a gateway's TLS cert
+expires or a CLS channel loses its §14a Konfigurationsprodukt, meter data stops flowing
+and substitute values (§17 MessZV) become mandatory. `edmd` detects both conditions and
+emits `de.edmd.cls.compliance_issue` CloudEvents so `agentd`'s `smgw-diagnostics-agent`
+can escalate to the MSB and ERP system automatically.
+
+### Data model
+
+```
+smgw_sessions (1) ──────────────────────────────────► cls_compliance_log (N)
+  malo_id (PK)          append-only audit trail
+  device_id             per issue detected (CRITICAL / WARNING)
+  gateway_status        ← promoted column for fast pre-filtering
+  session (JSONB)       ← full SmgwSession (certs + CLS channels)
+  last_contact_at
+  geraet_konfigurationen (from marktd) drives SMGW_CERT_ABLAUFDATUM here
+```
+
+The `session` JSONB column is GIN-indexed, enabling direct SQL queries on the
+certificate and CLS channel arrays without application-layer deserialization.
+
+### Compliance check logic
+
+The pure function `check_session_compliance()` in `edmd/src/smgw.rs` checks six
+issue types in priority order:
+
+| Priority | `issue_type` | Severity | Legal basis |
+|---|---|---|---|
+| 1 | `GATEWAY_REVOKED` | **CRITICAL** | MsbG §29 — replace immediately |
+| 2 | `COMMUNICATION_FAULT` | **CRITICAL** | §17 MessZV — substitute values required after 2h silence |
+| 3 | `TLS_CERT_MISSING` | **CRITICAL** | BSI TR-03109-4 — SMGW Admin Protocol unreachable |
+| 4 | `CERT_EXPIRED` | **CRITICAL** | BSI TR-03109-4 §6.3 — §14a eligibility lost |
+| 5 | `CERT_EXPIRING` | WARNING | BSI TR-03109-4 §6.3 — 30-day renewal window |
+| 6 | `CLS_NOT_COMPLIANT` | WARNING | BK6-24-174 §4.3 — DSO load control impossible |
+
+### Background worker
+
+`spawn_cls_compliance_worker()` runs daily (configurable), with a 30s startup delay
+and graceful shutdown via `CancellationToken`. On each sweep:
+
+1. Query all `smgw_sessions` for the tenant.
+2. For each session, run `check_session_compliance()` (pure — no I/O).
+3. For each issue found: insert into `cls_compliance_log` + emit `de.edmd.cls.compliance_issue`.
+4. Tracing logs the sweep result (sessions scanned, issue count, `has_critical`).
+
+### SMGW session API
+
+```bash
+# Register or update a SMGW session (after BSI TR-03109-4 Admin session or GWA sync)
+curl -s -X PUT "http://edmd:8380/api/v1/smgw/10001234567" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id":       "SMGW-2026-001",
+    "firmware_version": "3.1.2",
+    "msb_mp_id":       "9900000000003",
+    "malo_id":         "10001234567",
+    "status":          "OPERATIONAL",
+    "certificates": [
+      {
+        "serial_number": "AA:BB:CC:DD",
+        "cert_type":     "TLS",
+        "subject_cn":    "SMGW-2026-001",
+        "issuer_cn":     "BSI-Smart-Meter-CA",
+        "valid_from":    "2025-01-01",
+        "valid_to":      "2027-06-30",
+        "is_revoked":    false
+      }
+    ],
+    "cls_channels": [
+      {
+        "channel_id":     "CLS-00042",
+        "malo_id":        "10001234567",
+        "device_type":    "HEAT_PUMP",
+        "max_power_kw":   "8.50",
+        "channel_status": "ACTIVE",
+        "produktcode":    "FLEX-001",
+        "valid_from":     "2026-01-01"
+      }
+    ],
+    "last_contact_at": "2026-07-18T07:55:00Z",
+    "installed_at":    "2025-06-01"
+  }'
+# → 204 No Content when compliant
+# → 200 { "status": "accepted_with_compliance_issues", "issues": [...] } when issues detected
+
+# Get session + 10 most recent compliance events
+curl -s "http://edmd:8380/api/v1/smgw/10001234567" \
+  -H "Authorization: Bearer <token>" | jq '{gateway_status, recent_issues}'
+
+# Fleet overview (with 24-hour issue counts)
+curl -s "http://edmd:8380/api/v1/smgw?status=OPERATIONAL" \
+  -H "Authorization: Bearer <token>" | jq '.sessions[] | {malo_id, critical_issues_24h}'
+
+# On-demand read-only compliance scan (no CloudEvents emitted, no DB writes)
+curl -s "http://edmd:8380/api/v1/smgw/compliance" \
+  -H "Authorization: Bearer <token>" | jq '{sessions_scanned, has_critical, compliance_pct}'
+
+# Force a full side-effecting sweep (logs + emits CloudEvents)
+curl -s -X POST "http://edmd:8380/api/v1/smgw/compliance/scan" \
+  -H "Authorization: Bearer <token>" | jq '{sessions_scanned, sessions_with_issues}'
+```
+
+### `de.edmd.cls.compliance_issue` CloudEvent
+
+```json
+{
+  "specversion": "1.0",
+  "id":          "a1b2c3d4-...",
+  "type":        "de.edmd.cls.compliance_issue",
+  "source":      "urn:edmd:tenant:9900000000003:cls-compliance-worker",
+  "subject":     "10001234567",
+  "time":        "2026-07-18T05:00:00Z",
+  "data": {
+    "malo_id":        "10001234567",
+    "device_id":      "SMGW-2026-001",
+    "issue_type":     "CERT_EXPIRING",
+    "severity":       "WARNING",
+    "cert_serial":    "AA:BB:CC:DD",
+    "cert_type":      "TLS",
+    "days_to_expiry": 12,
+    "channel_id":     null,
+    "description":    "SMGW SMGW-2026-001 TLS cert AA:BB:CC:DD expires in 12 days — renew now"
+  }
+}
+```
+
+`agentd`'s `smgw-diagnostics-agent` subscribes to `de.edmd.cls.compliance_issue` and
+automatically escalates to the MSB team, suggests remediation steps, and checks whether
+the same device has open §17 MessZV substitute-value orders.
+
+### Mermaid: daily sweep flow
+
+```mermaid
+sequenceDiagram
+    participant Worker as edmd daily worker<br/>(05:00 UTC)
+    participant DB as edmd PostgreSQL<br/>(smgw_sessions)
+    participant Log as cls_compliance_log
+    participant ERP as ERP webhook
+
+    Worker->>DB: SELECT malo_id, session FROM smgw_sessions
+    DB-->>Worker: Vec<SmgwSession>
+    loop for each session
+        Worker->>Worker: check_session_compliance()<br/>(pure — no I/O)
+        alt has issues
+            Worker->>Log: INSERT cls_compliance_log
+            Worker->>ERP: POST de.edmd.cls.compliance_issue<br/>(CloudEvent per issue)
+        end
+    end
+    Worker->>Worker: tracing::info!(sessions_scanned, compliance_pct)
+```
 
 ---
 

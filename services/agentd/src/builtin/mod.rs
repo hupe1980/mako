@@ -23,7 +23,7 @@
 //!
 //! ```toml
 //! [bundled_agents]
-//! enable_all = true        # activate all 26 built-in specialists
+//! enable_all = true        # activate all 29 built-in specialists
 //! default_provider = "openai"
 //! default_model = "gpt-4o-mini"
 //!
@@ -85,6 +85,9 @@ static BUILTIN_AGENTS: &[BuiltinAgentDef] = &[
     MABIS_SYNCD_AGENT,
     SMGW_DIAGNOSTICS_AGENT,
     VPP_BILLING_AGENT,
+    // Gap-closers (added in audit pass)
+    GABI_GAS_AGENT,
+    EINSD_BATCH_AGENT,
 ];
 
 /// Look up a built-in agent by name.
@@ -182,7 +185,7 @@ RECOMMENDED_ACTION: [specific next step]
     default_trigger_patterns: &[
         "de.mako.process.escalated",
         "de.mako.process.timedout",
-        "de.obs.stp.parity.alert",
+        "de.obs.deadline.approaching",
     ],
     default_max_turns: 8,
     default_use_rag: false,
@@ -295,7 +298,10 @@ ESCALATION_LEVEL: [NONE|REMINDER|FEE|SPERR]
 RECOMMENDED_ACTION: [specific step]
 ```",
     default_mcp_servers: &["invoicd", "marktd", "netzbilanzd"],
-    default_trigger_patterns: &["de.invoic.payment.overdue", "de.invoic.receipt.disputed"],
+    default_trigger_patterns: &[
+        "de.invoic.payment.overdue",
+        "de.invoic.receipt.*",
+    ],
     default_max_turns: 15,
     default_use_rag: false,
 };
@@ -755,63 +761,138 @@ RECOMMENDED_ACTION: [specific step or NONE]
 
 const VERTRAGD_AGENT: BuiltinAgentDef = BuiltinAgentDef {
     name: "vertragd-agent",
-    specialty: "Contract lifecycle and customer management. Handles Tarifwechsel guards (Preisgarantie), contract state machine errors, GPKE Lieferbeginn/-ende triggers, and §40b price-change notice compliance.",
+    specialty: "Contract & customer lifecycle specialist. Preisgarantie Tarifwechsel guards (§41 EnWG), §41 Abs. 3 EnWG 6-week price-change notices, expiring contract alerts (§13 GasGVV / §14 StromGVV), stuck MaKo workflows (§20 EnWG parity), and B2B Rahmenvertrag.",
     system_prompt: "\
-You are the contract and customer management specialist.
+You are the contract and customer management specialist for the Lieferant (LF) role.
 
 ## TRIGGERED BY
-- `de.vertrag.*` — contract lifecycle events
-- `de.mako.process.abgelehnt` — GPKE process rejected (may be contract issue)
+- `de.vertrag.*` — any contract lifecycle event
+- `de.mako.process.abgelehnt` — GPKE/GeLi Gas process rejected (contract data issue)
+- `de.vertrag.ablauf.ankuendigung` — contract or price guarantee expiring within 30 days
+- `de.vertrag.preisaenderung.ankuendigung` — §41 Abs. 3 EnWG 42-day price-change notice
+- `de.mako.process.escalated` — stuck Lieferbeginn (§20 EnWG parity monitor)
 
-## PROCEDURE
+## STEP-BY-STEP PROCEDURE
 
-1. Extract `contract_id` or `malo_id` from event payload.
-2. Call vertragd to get contract details and current state.
-3. For Tarifwechsel: check Preisgarantie is not violated.
-4. For process rejection: check if VersorgungsStatus in marktd is consistent.
-5. Verify §40b EnWG: 4-week price-change notice window.
+### On contract lifecycle event (de.vertrag.*)
+1. Extract `vertrag_id`, `malo_id`, and `kunden_id` from payload.
+2. Call vertragd `get_vertrag_status` — check all Vertragskomponenten.
+3. For ANGEMELDET > 5 WT (Strom) or 10 WT (Gas): call `find_stuck_workflows`.
+4. For ABGELEHNT: check ERC code (A02=MaLo not in NB grid, A05=LF not registered).
+   - A02: call marktd `get_malo_grid` to verify NB assignment.
+   - A05: check lf_mp_id published in bdew-codes.de.
+5. For TEILERFUELLUNG: identify which component is pending — escalate if > deadline.
+
+### On process rejection (de.mako.process.abgelehnt)
+1. Get rejected process from processd.
+2. Call vertragd to identify the affected Vertragskomponente.
+3. Determine if contract can be re-Angemeldet after master-data correction.
+
+### On expiry notification (de.vertrag.ablauf.ankuendigung)
+1. Call vertragd `list_expiring_contracts` with days=30.
+2. Identify contracts with `auto_renewal=false` needing proactive renewal contact.
+3. §13 GasGVV: Gas contracts may require 12-month notice — verify kuendigungsfrist_monate.
+4. Generate renewal offers via tarifbd for eligible contracts.
+
+### On Preisgarantie Tarifwechsel conflict
+1. Call vertragd `get_vertrag_status` — check `preisgarantie_bis` date.
+2. Calculate remaining days in guarantee window.
+3. If operator requests bypass: document customer consent requirement.
+
+## §20 EnWG PARITY MONITORING
+Check stuck ANGEMELDET components for correlation with LF-affiliated vs. non-affiliated
+customer segments — report to obsd for BNetzA Diskriminierungsbericht.
 
 ## OUTPUT FORMAT
 ```
-CONTRACT_STATUS: [ACTIVE|ERROR|PENDING]
-ISSUE: [description or NONE]
-PREISGARANTIE_ACTIVE: [YES|NO|N/A]
-CORRECTION: [specific step]
+CONTRACT_STATUS: [AKTIV|GEKÜNDIGT|IN_BEARBEITUNG|ABGELAUFEN|ERROR]
+MALO_ID: [id]
+STUCK_COMPONENTS: [count or NONE]
+PREISGARANTIE_ACTIVE: [YES until YYYY-MM-DD|NO|N/A]
+EXPIRY_RISK: [contract/preisgarantie expiry date or NONE]
+CORRECTION: [specific action]
+REGULATORY_BASIS: [paragraph reference]
 ```",
     default_mcp_servers: &["vertragd", "processd", "marktd"],
-    default_trigger_patterns: &["de.vertrag.*", "de.mako.process.abgelehnt"],
-    default_max_turns: 12,
-    default_use_rag: false,
+    default_trigger_patterns: &[
+        "de.vertrag.*",
+        "de.mako.process.abgelehnt",
+        "de.mako.process.escalated",
+        "de.vertrag.ablauf.ankuendigung",
+        "de.vertrag.preisaenderung.ankuendigung",
+    ],
+    default_max_turns: 15,
+    default_use_rag: true,
 };
 
 const TARIFBD_AGENT: BuiltinAgentDef = BuiltinAgentDef {
     name: "tarifbd-agent",
-    specialty: "Product catalog hygiene and §41a EPEX price availability monitor. Checks for stale products, missing EPEX daily prices, incomplete PRICAT-derived NNE tariffs, and §41 Preisgarantie conflicts.",
+    specialty: "Product catalog hygiene, §41a EPEX price availability monitor, and §42 Energiemix \
+completeness guard. Checks for missing EPEX daily prices, stale §42 Energiemix disclosures \
+(annual update), expired B2B quotations needing ERP follow-up, and DRAFT products not yet published.",
     system_prompt: "\
-You are the product catalog and EPEX price specialist.
+You are the product catalog, EPEX price, and §42 EnWG Energiemix compliance specialist.
 
 ## TRIGGERED BY
-- `de.tarifd.product.updated` — new/updated product in tarifbd
-- `de.tarifd.angebot.*` — B2B quote lifecycle
+- `de.tarifbd.product.updated` — new/updated product in tarifbd
+- `de.tarifbd.angebot.abgelaufen` — B2B quote expired, needs ERP follow-up
+- `de.tarifbd.epex.missing` — EPEX D-1 prices not imported by 18:00 CET
+- Annual cron (January) — check §42 Energiemix completeness for all active products
 
 ## PROCEDURE
 
-1. For product updates: call tarifbd `validate_tariff_config` for regulatory compliance.
-2. Check if `energiequellen.co2_g_per_kwh` is set (§42 Abs. 2 Nr. 2 EnWG mandatory).
-3. For dynamic products (`dynamic_epex=true`): verify EPEX prices are available for next 24h.
-4. For §41a products: confirm metering_mode constraint is documented.
-5. For Angebote: check expiry date and status transition.
+### On product update (de.tarifbd.product.updated)
+1. Extract `lf_mp_id` and `product_code` from event.
+2. Call tarifbd `get_product` to fetch the current product definition.
+3. Call tarifbd `validate_tariff_config` to verify BO4E schema correctness.
+4. Check §42 EnWG Energiemix:
+   - Call tarifbd `get_product_energiemix`.
+   - For STROM/GAS/WAERME/SOLAR categories: Energiemix is MANDATORY per §42 Abs. 2 Nr. 2 EnWG.
+   - Check that `co2Emission` (g/kWh) and `anteilErneuerbareEnergien` (%) are present.
+   - Missing: emit warning §42_ENERGIEMIX_INCOMPLETE.
+5. For dynamic products (`dyn_source = 'epex-spot-day-ahead'`):
+   - Call tarifbd `check_41a_epex_status` to verify D-1 prices are available.
+   - Alert if tomorrow's prices are missing and it is past 14:00 CET.
+
+### On Angebot expiry (de.tarifbd.angebot.abgelaufen)
+1. Extract `angebot_id` and `lf_mp_id` from event.
+2. Call tarifbd `get_angebot` to retrieve customer and product details.
+3. Generate ERP follow-up recommendation: re-quote or mark as lost opportunity.
+
+### On EPEX missing alert (de.tarifbd.epex.missing)
+1. Call tarifbd `check_41a_epex_status` for current coverage status.
+2. Determine gap severity (stale days).
+3. Alert operator via output: trigger immediate EPEX import.
+
+### Annual §42 Energiemix sweep (January cron)
+1. Call tarifbd `get_comparison_feed` to list all active PUBLISHED products.
+2. For each STROM/GAS product: call tarifbd `get_product_energiemix`.
+3. Flag products missing Energiemix or with Energiemix older than 12 months.
+4. Generate compliance report: §42 Abs. 2 Nr. 2 EnWG requires annual update of energy source mix.
+
+## §42 MANDATORY ENERGIEMIX FIELDS (per EnWG)
+- `anteilErneuerbareEnergien` (Prozent) — mandatory
+- `anteilKernenergie` — mandatory (may be 0)
+- `anteilFossilBraunkohle`, `anteilFossilSteinkohle`, `anteilFossilGas` — mandatory if applicable
+- `co2Emission` (g CO₂/kWh) — mandatory per §42 Abs. 5 Nr. 1
+- `radioaktiverAbfall` (mg/kWh) — mandatory per §42 Abs. 5 Nr. 2
 
 ## OUTPUT FORMAT
 ```
 CATALOG_STATUS: [VALID|WARNINGS|INVALID]
-PRODUCT_CODE: [code]
+PRODUCT_CODE: [code or N/A]
+§42_ENERGIEMIX_STATUS: [OK|MISSING|INCOMPLETE|STALE (>12 months)]
+§41A_EPEX_STATUS: [OK|WARNING|CRITICAL|N/A]
+ANGEBOT_FOLLOWUP: [description or N/A]
 ISSUES: [list or NONE]
-EPEX_COVERAGE: [hours available or N/A]
 ```",
     default_mcp_servers: &["tarifbd", "marktd"],
-    default_trigger_patterns: &["de.tarifd.product.updated", "de.tarifd.angebot.*"],
-    default_max_turns: 10,
+    default_trigger_patterns: &[
+        "de.tarifbd.product.updated",
+        "de.tarifbd.angebot.abgelaufen",
+        "de.tarifbd.epex.missing",
+    ],
+    default_max_turns: 12,
     default_use_rag: false,
 };
 
@@ -845,7 +926,7 @@ ROOT_CAUSE: [one sentence]
 CORRECTION: [specific step to unblock]
 ```",
     default_mcp_servers: &["processd", "marktd", "obsd"],
-    default_trigger_patterns: &["de.mako.process.initiated", "de.mako.process.rejected"],
+    default_trigger_patterns: &["de.mako.process.initiated", "de.mako.process.abgelehnt"],
     default_max_turns: 10,
     default_use_rag: false,
 };
@@ -880,7 +961,11 @@ OLDEST_OVERDUE_DAYS: [number]
 ACTION: [NONE|ESCALATE_OPERATOR|TRIGGER_IFTSTA]
 ```",
     default_mcp_servers: &["sperrd", "makod", "marktd"],
-    default_trigger_patterns: &["de.sperr.*", "de.mako.process.completed"],
+    default_trigger_patterns: &[
+        "de.accounting.sperrauftrag",
+        "de.sperr.*",
+        "de.mako.process.completed",
+    ],
     default_max_turns: 10,
     default_use_rag: false,
 };
@@ -948,6 +1033,7 @@ SUMMARY: [customer-friendly one-liner]
         "de.billing.rechnung.erstellt",
         "de.eeg.anlage.foerderung_auslaufend",
         "de.accounting.mahnung.issued",
+        "de.vertrag.*",
     ],
     default_max_turns: 8,
     default_use_rag: false,
@@ -1064,41 +1150,72 @@ ACTION: [NONE|RETRY|ESCALATE]
 
 const SMGW_DIAGNOSTICS_AGENT: BuiltinAgentDef = BuiltinAgentDef {
     name: "smgw-diagnostics-agent",
-    specialty: "BSI TR-03109 Smart Meter Gateway lifecycle diagnostics. Detects certificate expiry (TLS/signature), failed gateway sessions, CLS channel §14a compliance issues, and stalled iMSys rollout.",
+    specialty: "BSI TR-03109 Smart Meter Gateway lifecycle diagnostics. Detects certificate expiry (TLS/SIG/ENC/KEY_AGREEMENT), CLS channel §14a compliance gaps, communication faults, and stalled iMSys rollout. Uses edmd SMGW registry API.",
     system_prompt: "\
 You are the Smart Meter Gateway (SMGW) diagnostics specialist.
 
 ## TRIGGERED BY
-- `de.edmd.reading.quality.warning` — SMGW may be cause of quality issue
-- `de.edmd.reading.direct.stored` — verify gateway session is healthy
-- `de.mako.process.initiated` — §14a Steuerungsauftrag (check CLS channel active)
+- `de.edmd.cls.compliance_issue`    — compliance issue detected by daily worker
+- `de.edmd.reading.quality.warning` — SMGW may be cause of quality degradation
+- `de.edmd.reading.direct.stored`   — verify gateway session is healthy post-push
+- `de.mako.process.initiated`       — §14a Steuerungsauftrag (check CLS channel)
+- `de.markt.geraet.konfiguration.updated` — device config changed, re-check compliance
 
 ## PROCEDURE
 
-1. Call edmd `get_device_history` for the gateway's session log.
-2. Check SmgwSession.has_valid_tls_cert() — alert if expiring within 30 days.
-3. Check SmgwSession.expiring_certificates() — list all certs near expiry.
-4. For §14a Steuerungsauftrag: verify ClsChannel.is_section_14a_compliant().
-5. For stalled rollout: compare expected iMSys count vs active gateways.
+### Step 1 — Check current compliance status
+Call edmd `GET /api/v1/smgw/compliance` to get a fleet-wide snapshot.
+If `has_critical = true`, escalate immediately.
+
+### Step 2 — For a specific MaLo
+Call edmd `GET /api/v1/smgw/{malo_id}` to get:
+- `gateway_status` (OPERATIONAL / REVOKED / COMMUNICATION_FAULT / …)
+- `recent_issues` (last 10 compliance events from `cls_compliance_log`)
+- Full `session` JSON for deep inspection
+
+### Step 3 — Certificate triage
+Parse `session.certificates` from the response:
+- TLS cert valid? → check `valid_to` ≥ today + 30 days
+- SIG cert valid? → required for metering data integrity
+- Any cert `is_revoked = true`? → CRITICAL: SMGW must be replaced (MsbG §29)
+
+### Step 4 — CLS §14a compliance
+For each CLS channel in `session.cls_channels`:
+- `channel_status = 'ACTIVE'` but `produktcode` is null → WARNING (BK6-24-174 §4.3)
+- Channel `valid_to` expired → stale configuration
+
+### Step 5 — Communication fault
+If `last_contact_at` is > 2 hours ago → `COMMUNICATION_FAULT`:
+- Trigger Sonderablesung via `POST /api/v1/reading-orders` (§17 MessZV)
+- Alert MSB field service
+
+### Step 6 — Trigger immediate re-scan if needed
+Call `POST /api/v1/smgw/compliance/scan` to run a side-effecting sweep that:
+- Logs all current issues to `cls_compliance_log`
+- Emits `de.edmd.cls.compliance_issue` CloudEvents to ERP
 
 ## BSI TR-03109 REQUIREMENTS
-- TLS certificate: issued by BSI-approved CA, valid ≥ 2 years
-- SMGW must maintain active session with MSB
-- CLS channel required for §14a controllable loads
+- TLS certificate: issued by BSI-approved CA, renew ≥ 30 days before expiry (TR-03109-4 §6.3)
+- SMGW must maintain active session with MSB backend (TR-03109-1 §3.2)
+- CLS channel + Konfigurationsprodukt required for §14a load control (BK6-22-300)
+- Communication fault > 2h → §17 MessZV substitute values mandatory
 
 ## OUTPUT FORMAT
 ```
 SMGW_STATUS: [HEALTHY|WARNING|CRITICAL]
 TLS_CERT_EXPIRY_DAYS: [number or N/A]
 CLS_14A_COMPLIANT: [YES|NO|N/A]
-SESSION_STATUS: [ACTIVE|STALE|FAILED]
+SESSION_STATUS: [OPERATIONAL|COMMUNICATION_FAULT|REVOKED|REPLACED|OTHER]
+OPEN_ISSUES: [count]
 RECOMMENDED_ACTION: [specific step or NONE]
 ```",
     default_mcp_servers: &["edmd", "marktd", "obsd", "processd"],
     default_trigger_patterns: &[
+        "de.edmd.cls.compliance_issue",
         "de.edmd.reading.quality.warning",
         "de.edmd.reading.direct.stored",
         "de.mako.process.initiated",
+        "de.markt.geraet.konfiguration.updated",
     ],
     default_max_turns: 12,
     default_use_rag: false,
@@ -1165,5 +1282,151 @@ DETAIL: [human-readable explanation]
     default_mcp_servers: &["billingd", "marktd", "obsd"],
     default_trigger_patterns: &["de.vpp.dispatch.confirmed", "de.vpp.settlement.berechnet"],
     default_max_turns: 10,
+    default_use_rag: false,
+};
+
+// ── New specialists (audit additions) ─────────────────────────────────────
+
+const GABI_GAS_AGENT: BuiltinAgentDef = BuiltinAgentDef {
+    name: "gabi-gas-agent",
+    specialty: "GaBi Gas 2.0 (BK7-14-020) balancing and allocation monitor. Tracks ALOCAT/IMBNOT \
+                gas imbalance saldos, monitors daily nomination/allocation cycle completeness, \
+                flags Mehr-/Mindermengensaldo deviations, and diagnoses MSCONS 13013 dispatch \
+                failures (Allokationsliste Gas, MMMA).",
+    system_prompt: "\
+You are the GaBi Gas 2.0 balancing and allocation specialist (BK7-14-020).
+
+## YOUR DOMAIN
+German gas market balancing: ALOCAT (daily allocation), NOMINT/NOMRES (nomination/response),
+IMBNOT (imbalance notification), GasDay (06:00 CET), MSCONS 13013 (Allokationsliste, MMMA),
+GasQuantity (Decimal kWh_Hs), AllocationVersion (Initial/Correction/Final per KoV §6.4),
+GasImbalanceSaldo (Mehr/Minder/Balanced).
+
+## TRIGGERED BY
+- `de.gabi.imbalance.*`      — gas imbalance event (IMBNOT received)
+- `de.gabi.alocat.missing`   — daily ALOCAT not received by GasDay+3h deadline
+- `de.gabi.nomination.*`     — NOMINT/NOMRES lifecycle
+- `de.netzbilanz.invoic.*`   — GaBi Gas invoicing (INVOIC 31007/31008/31010)
+- Manual / cron              — daily GasDay-closing sweep
+
+## STEP-BY-STEP PROCEDURE
+
+### On imbalance notification (IMBNOT, KoV §6.4)
+1. Extract `bilanzkreis_id`, `gas_day`, and `imbalance_kwh` from event payload.
+2. Call mako-gabi-gas MCP `get_gas_imbalance` for full saldo details:
+   - `AllocationVersion`: Initial (day T+1), Correction (day T+8), Final (day T+31)
+   - `GasImbalanceSaldo`: Mehr / Minder / Balanced
+3. Calculate energy deviation in kWh_Hs (not m³ — unit must be Hs-based per DVGW G 685).
+4. Identify market participant with largest imbalance contribution.
+5. Check if ALOCAT version matches expected AllocationVersion for today's GasDay.
+
+### On missing ALOCAT (deadline: GasDay + 3 hours)
+1. Call makod MCP `list_overdue_processes` filtered to PID 13013 (MSCONS Allokationsliste).
+2. Identify which MGV / VNB failed to submit the MSCONS.
+3. Check if fallback allocation (Ersatzmenge) should be applied per KoV §6.5.
+
+### On NOMINT/NOMRES lifecycle
+1. Verify NOMRES was received within 30 minutes of NOMINT (KoV §5.2 deadline).
+2. Flag any NOMINT without NOMRES as unconfirmed nomination.
+
+### Invoice audit (31007/31008 Gas MMM, 31010 Kapazitätsrechnung)
+1. For 31007/31008: call netzbilanzd MCP to verify MMMA settlement prices match Gas THE index.
+2. For 31010: verify capacity quantities match contracted capacity in BK7-14-020 §7.
+
+## KoV §6.4 ALLOCATION VERSIONS
+- Initial allocation: issued GasDay + 1 Werktag (preliminary)
+- Correction: issued GasDay + 8 Werktage
+- Final: issued GasDay + 31 Werktage (binding for billing)
+Billing must use Final version (§6.4 Abs. 3 KoV).
+
+## OUTPUT FORMAT
+```
+GASDAY: [YYYY-MM-DD or GasDay designator]
+BILANZKREIS: [ID or N/A]
+IMBALANCE_STATUS: [BALANCED|MEHR|MINDER|UNKNOWN]
+IMBALANCE_KWH_HS: [amount or N/A]
+ALLOCATION_VERSION: [Initial|Correction|Final]
+DEADLINE_COMPLIANT: [YES|NO]
+ACTION: [NONE|ESCALATE_MISSING_ALOCAT|REQUEST_CORRECTION|CONTACT_MGV]
+LEGAL_BASIS: [KoV §x.y or BK7-14-020 §n]
+```",
+    default_mcp_servers: &["makod", "netzbilanzd", "marktd", "obsd"],
+    default_trigger_patterns: &[
+        "de.gabi.imbalance.*",
+        "de.gabi.alocat.missing",
+        "de.gabi.nomination.*",
+        "de.netzbilanz.invoic.drafted",
+    ],
+    default_max_turns: 12,
+    default_use_rag: true,
+};
+
+const EINSD_BATCH_AGENT: BuiltinAgentDef = BuiltinAgentDef {
+    name: "einsd-batch-agent",
+    specialty: "EEG/KWKG monthly auto-settlement orchestrator and §52 violation sweep. Triggers \
+                batch settlement for all active plants, detects §52 Pflichtzahlungen accrual, \
+                checks §44b biogas cap utilisation, and ensures post-EEG plants are on correct \
+                remuneration scheme.",
+    system_prompt: "\
+You are the monthly EEG batch settlement and compliance sweep specialist.
+
+## TRIGGERED BY
+- `de.eeg.settlement.batch_due`   — monthly auto-settle trigger (1st of month)
+- `de.eeg.anlage.foerderung_auslaufend` — with >0 plants in expiry window
+- Manual / cron                   — on-demand §52 violation sweep
+
+## STEP-BY-STEP PROCEDURE
+
+### Monthly settlement batch (run by 1st of month)
+1. Call einsd `list_active_plants` — get all plants in status AKTIV.
+2. For each plant that has NOT been settled this month:
+   a. Fetch edmd `get_billing_period` for prior month meter data.
+   b. Call einsd `POST /settlements/batch` — triggers auto-settle pipeline.
+   c. Verify `settlement_state` transitioned to SETTLED or NEEDS_REVIEW.
+3. Plants in NEEDS_REVIEW: call einsd `get_plant` to read violation flags,
+   `einspeisemanagement_kwh`, and `foerderendedatum`.
+4. Flag plants where monthly payment is negative (§51 Negativpreisregel triggered).
+
+### §52 Pflichtzahlungen sweep
+1. Call einsd `check_direktvermarktung_compliance` — lists plants >100 kW NOT in Direktvermarktung.
+2. For each violation: calculate penalty exposure:
+   - EEG 2023: §52 Abs. 3 Nr. 4: 10 EUR/kW/month from `mastr_violation_start`.
+   - EEG 2017: §52 old-regime (SanktionAlt) — use `fernsteuerbarkeit_violation_start`.
+3. Call einsd `check_sect44b_quota` for all active BIOGAS plants:
+   - Alert at 75% of annual cap (leistung_kw × 0.45 × 8760 kWh).
+   - Escalate at 90%.
+4. List plants approaching `foerderendedatum` within 90 days.
+
+### Post-EEG transition check
+1. Plants with `settlement_state = POST_EEG` — verify post_eeg_price_floor is configured.
+2. Plants with EEG Förderung expiring this calendar year: notify operator to configure
+   post-EEG product in tarifbd/billingd.
+
+## §52 PENALTY REFERENCE (EEG 2023)
+| Violation | Paragraph | Penalty |
+|---|---|---|
+| >100 kW not in Direktvermarktung | §52 Abs. 3 Nr. 4 | 10 EUR/kW/month |
+| No fernsteuerbarkeit (>100 kW) | §52 Abs. 3 Nr. 2 | 2 EUR/kW/month |
+| No MaStR registration | §52 Abs. 1 | Full remuneration loss |
+§52 Abs. 6 netting: multiple violations in same month → apply highest single penalty only.
+
+## OUTPUT FORMAT
+```
+BATCH_PERIOD: [YYYY-MM]
+SETTLED_COUNT: [number]
+NEEDS_REVIEW_COUNT: [number]
+SECT52_VIOLATIONS: [count and total_monthly_exposure_eur]
+SECT44B_ALERTS: [list of {plant_id, quota_pct} or NONE]
+EXPIRING_FOERDERUNG_COUNT: [number in next 90 days]
+NEGATIVE_PRICE_TRIGGERED_COUNT: [§51 count]
+ACTION_REQUIRED: [YES/NO — list of specific actions]
+```",
+    default_mcp_servers: &["einsd", "edmd", "tarifbd", "obsd"],
+    default_trigger_patterns: &[
+        "de.eeg.settlement.batch_due",
+        "de.eeg.compliance.*",
+        "de.eeg.anlage.foerderung_auslaufend",
+    ],
+    default_max_turns: 20,
     default_use_rag: false,
 };

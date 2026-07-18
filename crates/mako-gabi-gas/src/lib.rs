@@ -101,11 +101,18 @@ pub mod delord;
 // ── Domain re-exports ─────────────────────────────────────────────────────────
 
 pub use domain::{
-    Bilanzkreis, DeliveryPoint, DeliveryPointDirection, GasBeschaffenheit, GasDay,
-    GasImbalanceSaldo, GasQualityClass, GasQuantity, ImbalanceDirection as GasImbalanceDirection,
-    NominationQuantity,
+    Bilanzkreis, DeliveryPoint, DeliveryPointDirection, DvgwFormatVersion, DvgwMessageType,
+    GasBeschaffenheit, GasBeschaffenheitValidationError, GasDay, GasImbalanceSaldo,
+    GasQualityClass, GasQualityFlag, GasQuantity,
+    ImbalanceDirection as GasImbalanceDirection, NominationQuantity,
+    // CloudEvent type constants (de.gabi.*)
+    cloud_events as gabi_cloud_events,
+    // DVGW format versions
+    dvgw_versions,
 };
-pub use portfolio::{GasMarketRole, GasPortfolioBalance, PortfolioPosition};
+pub use portfolio::{
+    ConservationViolation, GasMarketRole, GasPortfolioBalance, PortfolioPosition,
+};
 
 pub use allocation::{
     ALLOCATION_PIDS, AllocationCommand, AllocationData, AllocationEvent, AllocationState,

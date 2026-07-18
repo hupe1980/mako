@@ -18,6 +18,7 @@
 pub mod agent;
 pub mod builtin;
 pub mod config;
+pub mod dlq;
 pub mod handlers;
 pub mod llm;
 pub mod mcp;

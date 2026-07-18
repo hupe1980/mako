@@ -208,6 +208,9 @@ async fn main() -> anyhow::Result<()> {
                             &result,
                             prev_month_year as i16,
                             prev_month,
+                            anlage.bank_iban.as_deref(),
+                            anlage.bank_bic.as_deref(),
+                            anlage.zahlungsempfaenger.as_deref(),
                         )
                         .await;
                     }

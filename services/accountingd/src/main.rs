@@ -29,7 +29,7 @@ use axum::{
     Extension, Router,
     routing::{get, post, put},
 };
-use mako_service::{health::health_routes, load_config};
+use mako_service::{health::health_routes, http::default_client, load_config, oidc::OidcConfig};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::info;
@@ -49,6 +49,18 @@ async fn main() -> anyhow::Result<()> {
         .run(&pool)
         .await
         .map_err(|e| anyhow::anyhow!("run accountingd migrations: {e}"))?;
+
+    // ── OIDC verifier (P0-1: auth on financial REST endpoints) ──────────────
+    let ct = mako_service::shutdown::token();
+    let http = default_client();
+    let oidc = OidcConfig::build_verifier(cfg.oidc.as_ref(), &http, &cfg.tenant, ct.clone())
+        .await
+        .context("OIDC verifier init")?;
+    if oidc.is_disabled() {
+        tracing::warn!(
+            "[WARN] OIDC disabled -- financial write endpoints accept all requests (dev mode)"
+        );
+    }
 
     let app = Router::new()
         .merge(health_routes(|| async { true }))
@@ -110,6 +122,27 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::get_mandate).delete(handlers::delete_mandate),
         )
         .route("/api/v1/sepa/run", post(handlers::run_sepa))
+        // ── §25 EEG 2023 — SEPA Credit Transfer payout pipeline ───────────────
+        // GET  /api/v1/eeg/payouts             — list payout orders (?status=PDNG|ACCP|RJCT|CANC)
+        // GET  /api/v1/eeg/payouts/{id}        — single order with pain.001 XML
+        // POST /api/v1/eeg/payouts/run         — batch-generate for unbatched EEG_GUTSCHRIFT entries
+        // PUT  /api/v1/eeg/payouts/{id}/status — process pain.002 ACCP/RJCT/CANC
+        .route(
+            "/api/v1/eeg/payouts",
+            get(handlers::get_eeg_payouts),
+        )
+        .route(
+            "/api/v1/eeg/payouts/run",
+            post(handlers::post_run_eeg_payouts),
+        )
+        .route(
+            "/api/v1/eeg/payouts/{payout_id}",
+            get(handlers::get_eeg_payout),
+        )
+        .route(
+            "/api/v1/eeg/payouts/{payout_id}/status",
+            axum::routing::put(handlers::put_eeg_payout_status),
+        )
         .route(
             "/api/v1/jahresabschluss/{malo_id}",
             post(handlers::post_jahresabschluss),
@@ -134,9 +167,32 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/accounts/{malo_id}/anonymize",
             post(handlers::post_anonymize),
+        )        // ── Aging analysis ─────────────────────────────────────────────────
+        // GET /api/v1/aging — overdue receivables grouped by age bucket (0-30d/31-60d/61-90d/>90d)
+        .route("/api/v1/aging", get(handlers::get_aging))
+        // ── Verzugszinsen §288 BGB ─────────────────────────────────────────
+        // GET  /api/v1/accounts/{malo_id}/interest-charges
+        // POST /api/v1/accounts/{malo_id}/interest-charges
+        .route(
+            "/api/v1/accounts/{malo_id}/interest-charges",
+            get(handlers::get_interest_charges).post(handlers::post_interest_charge),
         )
-        .layer(Extension(Arc::clone(&cfg)))
-        .layer(Extension(pool.clone()));
+        // ── Payment plans (Zahlungsvereinbarung) ───────────────────────────
+        // GET  /api/v1/accounts/{malo_id}/payment-plans
+        // POST /api/v1/accounts/{malo_id}/payment-plans
+        .route(
+            "/api/v1/accounts/{malo_id}/payment-plans",
+            get(handlers::get_payment_plans).post(handlers::post_payment_plan),
+        )
+        // GET    /api/v1/payment-plans/{id}
+        // DELETE /api/v1/payment-plans/{id}
+        .route(
+            "/api/v1/payment-plans/{plan_id}",
+            get(handlers::get_payment_plan).delete(handlers::delete_payment_plan),
+        )        .layer(Extension(Arc::clone(&cfg)))
+        .layer(Extension(pool.clone()))
+        // P0-1: OIDC verifier extension — enables Claims extractor on write endpoints
+        .layer(Extension(oidc));
 
     // ── MCP server ────────────────────────────────────────────────────────────
     let mcp_state = std::sync::Arc::new(mcp_server::AccountingdMcpState {
@@ -248,7 +304,7 @@ async fn main() -> anyhow::Result<()> {
                             "accountingd: SEPA N-5 — generating pain.008 pre-notifications"
                         );
 
-                        // Build pain.008 XML batch.
+                        // Build pain.008 XML batches (one per SequenceType per SEPA Rulebook §3.8).
                         // P1-2: hard error if creditor_iban is missing/invalid — skip batch with error log.
                         let entries: Vec<(&accountingd::pg::SepaMandateRow, i64)> =
                             pairs.iter().map(|(m, a)| (m, a.abschlag_ct)).collect();
@@ -268,70 +324,96 @@ async fn main() -> anyhow::Result<()> {
                                 continue;
                             }
                         };
-                        let pain_xml =
-                            match accountingd::sepa::build_pain_008(creditor_iban, &entries) {
-                                Ok(xml) => xml,
-                                Err(e) => {
-                                    tracing::error!(
-                                        error = %e,
-                                        "accountingd: SEPA N-5 — pain.008 generation failed"
-                                    );
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600))
-                                        .await;
-                                    continue;
-                                }
-                            };
+                        // Creditor name defaults to tenant if not configured separately
+                        let creditor_name = cfg_sepa.creditor_name.as_deref().unwrap_or(&cfg_sepa.tenant);
+                        let creditor_id = cfg_sepa.creditor_id.as_deref();
 
-                        // Emit `de.accounting.payment.due` CE to ERP webhook
-                        if let Some(ref url) = cfg_sepa.erp_webhook_url {
-                            let ce = serde_json::json!({
-                                "specversion": "1.0",
-                                "type": "de.accounting.payment.due",
-                                "source": format!("urn:accountingd:{}", cfg_sepa.tenant),
-                                "id": uuid::Uuid::new_v4().to_string(),
-                                "time": time::OffsetDateTime::now_utc().to_string(),
-                                "datacontenttype": "application/json",
-                                "data": {
-                                    "due_date": target_date.to_string(),
-                                    "account_count": pairs.len(),
-                                    "total_ct": entries.iter().map(|(_, ct)| ct).sum::<i64>(),
-                                    "pain008_xml": pain_xml,
-                                }
-                            });
-                            let client = mako_service::http::default_client();
-                            match client
-                                .post(url)
-                                .header("Content-Type", "application/cloudevents+json")
-                                .json(&ce)
-                                .send()
-                                .await
-                            {
-                                Ok(resp) if resp.status().is_success() => {
-                                    tracing::info!(
-                                        count = pairs.len(),
-                                        due_date = %target_date,
-                                        "accountingd: SEPA N-5 pain.008 dispatched to ERP"
-                                    );
-                                }
-                                Ok(resp) => {
-                                    tracing::warn!(
-                                        status = %resp.status(),
-                                        "accountingd: SEPA N-5 ERP webhook returned error"
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::error!(
-                                        error = %e,
-                                        "accountingd: SEPA N-5 ERP webhook failed"
-                                    );
-                                }
+                        let batches = match accountingd::sepa::build_pain_008(
+                            creditor_iban,
+                            creditor_name,
+                            creditor_id,
+                            &entries,
+                        ) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                tracing::error!(
+                                    error = %e,
+                                    "accountingd: SEPA N-5 — pain.008 generation failed"
+                                );
+                                tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600))
+                                    .await;
+                                continue;
                             }
-                        } else {
-                            tracing::warn!(
-                                count = pairs.len(),
-                                "accountingd: SEPA N-5 — no erp_webhook_url configured; pain.008 generated but not dispatched"
-                            );
-                        }
+                        };
+
+                        // Dispatch each batch (FRST / RCUR / ...) separately
+                        for batch in &batches {
+                            // Persist pain.008 XML for audit and ERP replay
+                            if let Err(e) = accountingd::pg::persist_sepa_collection(
+                                &pool_sepa,
+                                &cfg_sepa.tenant,
+                                target_date,
+                                &batch.xml,
+                                batch.total_ct,
+                                batch.entry_count,
+                            )
+                            .await
+                            {
+                                tracing::warn!(error = %e, "accountingd: SEPA N-5 — failed to persist sepa_collection_run");
+                            }
+
+                            // Emit `de.accounting.payment.due` CE to ERP webhook
+                            if let Some(ref url) = cfg_sepa.erp_webhook_url {
+                                let ce = serde_json::json!({
+                                    "specversion": "1.0",
+                                    "type": "de.accounting.payment.due",
+                                    "source": format!("urn:accountingd:{}", cfg_sepa.tenant),
+                                    "id": uuid::Uuid::new_v4().to_string(),
+                                    "time": time::OffsetDateTime::now_utc().to_string(),
+                                    "datacontenttype": "application/json",
+                                    "data": {
+                                        "due_date": target_date.to_string(),
+                                        "sequence_type": format!("{:?}", batch.sequence_type),
+                                        "account_count": batch.entry_count,
+                                        "total_ct": batch.total_ct,
+                                        "pain008_xml": &batch.xml,
+                                    }
+                                });
+                                let client = mako_service::http::default_client();
+                                match client
+                                    .post(url)
+                                    .header("Content-Type", "application/cloudevents+json")
+                                    .json(&ce)
+                                    .send()
+                                    .await
+                                {
+                                    Ok(resp) if resp.status().is_success() => {
+                                        tracing::info!(
+                                            count = batch.entry_count,
+                                            due_date = %target_date,
+                                            "accountingd: SEPA N-5 pain.008 dispatched to ERP"
+                                        );
+                                    }
+                                    Ok(resp) => {
+                                        tracing::warn!(
+                                            status = %resp.status(),
+                                            "accountingd: SEPA N-5 ERP webhook returned error"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            error = %e,
+                                            "accountingd: SEPA N-5 ERP webhook failed"
+                                        );
+                                    }
+                                }
+                            } else {
+                                tracing::warn!(
+                                    count = batch.entry_count,
+                                    "accountingd: SEPA N-5 — no erp_webhook_url configured; pain.008 generated but not dispatched"
+                                );
+                            }
+                        } // end for batch in batches
                     }
                     Ok(_) => {
                         tracing::debug!(

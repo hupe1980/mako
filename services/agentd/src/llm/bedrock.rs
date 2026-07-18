@@ -4,6 +4,7 @@
 //! full AWS SDK (~100 crates). Uses `hmac` + `sha2` (already in workspace).
 
 use anyhow::{Context, Result};
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 use std::{future::Future, pin::Pin};
 
@@ -14,7 +15,7 @@ pub struct BedrockProvider {
     name: String,
     region: String,
     access_key: String,
-    secret_key: String,
+    secret_key: SecretString,
     client: reqwest::Client,
 }
 
@@ -24,7 +25,10 @@ impl BedrockProvider {
             name: name.to_owned(),
             region: cfg.aws_region.clone().unwrap_or_else(|| "us-east-1".into()),
             access_key: cfg.aws_access_key_id.clone().unwrap_or_default(),
-            secret_key: cfg.aws_secret_access_key.clone().unwrap_or_default(),
+            secret_key: cfg
+                .aws_secret_access_key
+                .clone()
+                .unwrap_or_else(|| SecretString::new(String::new().into())),
             client: mako_service::http::default_client(),
         }
     }
@@ -85,7 +89,7 @@ impl BedrockProvider {
             mac.finalize().into_bytes().to_vec()
         };
         let k_date = sign(
-            format!("AWS4{}", self.secret_key).as_bytes(),
+            format!("AWS4{}", self.secret_key.expose_secret()).as_bytes(),
             date_str.as_bytes(),
         );
         let k_region = sign(&k_date, self.region.as_bytes());

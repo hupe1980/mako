@@ -32,6 +32,8 @@ use marktd::{
             list_technische_ressourcen_by_malo, list_zaehler, list_zaehler_register,
             list_zaehler_saisons, put_geraet, put_konfigurationsprodukte, put_steuerbare_ressource,
             put_technische_ressource, put_zaehler, put_zaehler_register, put_zaehler_saison,
+            get_zaehlzeitdefinitionen, get_geraet, get_geraet_konfigurationen,
+            put_geraet_konfigurationen,
         },
         dlq::{delete_dlq_entry, list_dlq, retry_dlq_entry},
         event_ingest::{InboundWebhookSecret, ingest_event},
@@ -574,6 +576,14 @@ async fn main() -> anyhow::Result<()> {
             )
             .route("/api/v1/zaehler/{zaehler_id}/geraete", get(list_geraete))
             .route(
+                "/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}",
+                get(get_geraet),
+            )
+            .route(
+                "/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen",
+                get(get_geraet_konfigurationen).put(put_geraet_konfigurationen),
+            )
+            .route(
                 "/api/v1/zaehler/{zaehler_id}/zaehlwerke",
                 get(get_zaehlwerke),
             )
@@ -585,6 +595,10 @@ async fn main() -> anyhow::Result<()> {
             .route(
                 "/api/v1/zaehler/{zaehler_id}/register",
                 get(list_zaehler_register).put(put_zaehler_register),
+            )
+            .route(
+                "/api/v1/zaehler/{zaehler_id}/zaehlzeitdefinitionen",
+                get(get_zaehlzeitdefinitionen),
             )
             .route(
                 "/api/v1/zaehler-register/{register_id}/saisons",

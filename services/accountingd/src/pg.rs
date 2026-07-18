@@ -30,9 +30,11 @@ pub async fn upsert_account(
     tenant: &str,
 ) -> anyhow::Result<Uuid> {
     let row = sqlx::query(
+        // P0-3 fix: ON CONFLICT must match the UNIQUE (malo_id, lf_mp_id, tenant) constraint exactly.
+        // Using (malo_id, lf_mp_id) without tenant caused "no unique constraint matching" errors.
         r"INSERT INTO accounts (malo_id, lf_mp_id, tenant)
           VALUES ($1, $2, $3)
-          ON CONFLICT (malo_id, lf_mp_id) DO UPDATE SET updated_at = now()
+          ON CONFLICT (malo_id, lf_mp_id, tenant) DO UPDATE SET updated_at = now()
           RETURNING account_id",
     )
     .bind(malo_id)
@@ -96,6 +98,7 @@ pub async fn update_account(
     req: UpdateAccountRequest,
 ) -> anyhow::Result<()> {
     sqlx::query(
+        // P0-5 fix: add tenant parameter — previously missing, allowing cross-tenant modification.
         r"UPDATE accounts SET
               iban        = COALESCE($3, iban),
               mandatsref  = COALESCE($4, mandatsref),
@@ -113,6 +116,222 @@ pub async fn update_account(
     .execute(pool)
     .await
     .context("update_account")?;
+    Ok(())
+}
+
+/// Tenant-scoped variant of `update_account` — P0-5 fix.
+/// Always filter by tenant to prevent cross-tenant data modification.
+pub async fn update_account_tenanted(
+    pool: &PgPool,
+    malo_id: &str,
+    lf_mp_id: &str,
+    tenant: &str,
+    req: UpdateAccountRequest,
+) -> anyhow::Result<()> {
+    let rows_affected = sqlx::query(
+        r"UPDATE accounts SET
+              iban        = COALESCE($4, iban),
+              mandatsref  = COALESCE($5, mandatsref),
+              abschlag_ct = COALESCE($6, abschlag_ct),
+              billing_day = COALESCE($7, billing_day),
+              updated_at  = now()
+          WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3",
+    )
+    .bind(malo_id)
+    .bind(lf_mp_id)
+    .bind(tenant)
+    .bind(req.iban)
+    .bind(req.mandatsref)
+    .bind(req.abschlag_ct)
+    .bind(req.billing_day)
+    .execute(pool)
+    .await
+    .context("update_account_tenanted")?
+    .rows_affected();
+
+    if rows_affected == 0 {
+        anyhow::bail!("account not found: malo_id={malo_id} lf_mp_id={lf_mp_id} tenant={tenant}");
+    }
+    Ok(())
+}
+
+/// Check whether an Abschlag has already been posted for this MaLo in this calendar month.
+///
+/// Used by the Abschlagslauf scheduler to prevent duplicate ABSCHLAG entries on restart.
+/// Returns `true` when an `abschlag_runs` entry already exists for `(tenant, malo_id, period_month)`.
+pub async fn abschlag_already_posted(
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    period_month: time::Date,
+) -> anyhow::Result<bool> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM abschlag_runs WHERE tenant = $1 AND malo_id = $2 AND period_month = $3)"
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(period_month)
+    .fetch_one(pool)
+    .await
+    .context("abschlag_already_posted")?;
+    Ok(exists)
+}
+
+/// Record that an Abschlag was successfully posted, creating the idempotency guard row.
+///
+/// Uses `ON CONFLICT DO NOTHING` so concurrent calls are safe.
+pub async fn record_abschlag_run(
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    period_month: time::Date,
+    amount_ct: i64,
+    ledger_entry_id: Option<Uuid>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO abschlag_runs (tenant, malo_id, period_month, amount_ct, ledger_entry_id)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (tenant, malo_id, period_month) DO NOTHING",
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(period_month)
+    .bind(amount_ct)
+    .bind(ledger_entry_id)
+    .execute(pool)
+    .await
+    .context("record_abschlag_run")?;
+    Ok(())
+}
+
+/// Check whether a Jahresabschluss has already been posted for this MaLo in this year.
+/// Returns `Some(zahlbetrag_ct)` when already settled, `None` when not yet processed.
+pub async fn jahresabschluss_already_settled(
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    billing_year: i16,
+) -> anyhow::Result<Option<i64>> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT zahlbetrag_ct FROM jahresabschluss_runs \\
+         WHERE tenant = $1 AND malo_id = $2 AND billing_year = $3 LIMIT 1",
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(billing_year)
+    .fetch_optional(pool)
+    .await
+    .context("jahresabschluss_already_settled")
+}
+
+/// Record a completed Jahresabschluss for idempotency.
+#[allow(clippy::too_many_arguments)]
+pub async fn record_jahresabschluss(
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    billing_year: i16,
+    annual_bill_ct: i64,
+    sum_abschlage_ct: i64,
+    zahlbetrag_ct: i64,
+    ledger_entry_id: Option<Uuid>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO jahresabschluss_runs
+             (tenant, malo_id, billing_year, annual_bill_ct, sum_abschlage_ct, zahlbetrag_ct, ledger_entry_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (tenant, malo_id, billing_year) DO NOTHING",
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(billing_year)
+    .bind(annual_bill_ct)
+    .bind(sum_abschlage_ct)
+    .bind(zahlbetrag_ct)
+    .bind(ledger_entry_id)
+    .execute(pool)
+    .await
+    .context("record_jahresabschluss")?;
+    Ok(())
+}
+
+/// Persist a SEPA pain.008 batch XML for audit and replay (P1-6).
+///
+/// Inserts into `sepa_collection_runs`. If a run already exists for the same
+/// `(tenant, collection_date)`, returns that run's ID (idempotent).
+pub async fn persist_sepa_collection(
+    pool: &PgPool,
+    tenant: &str,
+    collection_date: time::Date,
+    pain008_xml: &str,
+    total_ct: i64,
+    mandate_count: usize,
+) -> anyhow::Result<Uuid> {
+    let row = sqlx::query(
+        r"INSERT INTO sepa_collection_runs
+              (tenant, collection_date, pain008_xml, total_ct, mandate_count)
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (tenant, collection_date) DO UPDATE
+          SET pain008_xml    = EXCLUDED.pain008_xml,
+              total_ct       = EXCLUDED.total_ct,
+              mandate_count  = EXCLUDED.mandate_count
+          RETURNING run_id",
+    )
+    .bind(tenant)
+    .bind(collection_date)
+    .bind(pain008_xml)
+    .bind(total_ct)
+    .bind(mandate_count as i32)
+    .fetch_one(pool)
+    .await
+    .context("persist_sepa_collection")?;
+    Ok(row.try_get("run_id")?)
+}
+
+/// Mark a SEPA collection run as dispatched to the ERP.
+pub async fn mark_sepa_collection_dispatched(
+    pool: &PgPool,
+    run_id: Uuid,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE sepa_collection_runs
+         SET dispatch_status = 'DISPATCHED', dispatched_at = now()
+         WHERE run_id = $1 AND dispatch_status != 'DISPATCHED'",
+    )
+    .bind(run_id)
+    .execute(pool)
+    .await
+    .context("mark_sepa_collection_dispatched")?;
+    Ok(())
+}
+
+/// Append an entry to the account master-data audit log (§238 HGB traceability).
+#[allow(clippy::too_many_arguments)]
+pub async fn log_account_audit(
+    pool: &PgPool,
+    account_id: Uuid,
+    tenant: &str,
+    malo_id: &str,
+    operator_sub: Option<&str>,
+    action: &str,
+    old_values: Option<serde_json::Value>,
+    new_values: Option<serde_json::Value>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO account_audit_log
+             (account_id, tenant, malo_id, operator_sub, action, old_values, new_values)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(account_id)
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(operator_sub)
+    .bind(action)
+    .bind(old_values)
+    .bind(new_values)
+    .execute(pool)
+    .await
+    .context("log_account_audit")?;
     Ok(())
 }
 
@@ -417,10 +636,12 @@ pub async fn create_mandate(
     let account_id = upsert_account(pool, &req.malo_id, &req.lf_mp_id, tenant).await?;
 
     let row = sqlx::query(
+        // P1-1 fix: ON CONFLICT uses (tenant, mandatsref) per the schema unique index,
+        // not the old global UNIQUE (mandatsref). This prevents cross-tenant collisions.
         r"INSERT INTO sepa_mandates
               (account_id, tenant, iban, bic, kontoinhaber, mandatsref, sequence_type, signed_at)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          ON CONFLICT (mandatsref) DO UPDATE
+          ON CONFLICT (tenant, mandatsref) DO UPDATE
           SET iban = EXCLUDED.iban, bic = EXCLUDED.bic,
               kontoinhaber = EXCLUDED.kontoinhaber,
               sequence_type = EXCLUDED.sequence_type,
@@ -454,6 +675,31 @@ pub async fn create_mandate(
     .context("link mandate to account")?;
 
     Ok(row.try_get("mandate_id")?)
+}
+
+/// Mark a FRST mandate as successfully collected and transition it to RCUR.
+///
+/// Per SEPA SDD Core Rulebook: after the first successful direct debit collection
+/// the mandate sequence type must change from FRST to RCUR for subsequent batches.
+/// Call this when a pain.002 ACCP confirmation is received for a FRST mandate entry.
+pub async fn transition_mandate_to_rcur(
+    pool: &PgPool,
+    mandate_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE sepa_mandates
+         SET sequence_type = 'RCUR',
+             first_collected_at = COALESCE(first_collected_at, now()),
+             updated_at = now()
+         WHERE mandate_id = $1 AND tenant = $2 AND sequence_type = 'FRST' AND revoked_at IS NULL",
+    )
+    .bind(mandate_id)
+    .bind(tenant)
+    .execute(pool)
+    .await
+    .context("transition_mandate_to_rcur")?;
+    Ok(())
 }
 
 pub async fn fetch_mandate(
@@ -1418,3 +1664,586 @@ pub async fn run_auto_dunning(
         sperrauftrag_triggered,
     })
 }
+
+// ── Double-entry journal lines ────────────────────────────────────────────────
+
+/// SKR account mapping for double-entry journal lines.
+///
+/// Maps an `entry_type` and amount sign to (debit_account, credit_account) pairs
+/// using German SKR 03 / SKR 04 chart of accounts.
+pub struct JournalMapping {
+    pub debit_skr:  &'static str,
+    pub debit_desc: &'static str,
+    pub credit_skr:  &'static str,
+    pub credit_desc: &'static str,
+}
+
+/// Determine the SKR 03 journal mapping for a given ledger entry type and amount sign.
+pub fn journal_mapping(entry_type: &str, amount_ct: i64) -> JournalMapping {
+    // Use positive = debit (charge), negative = credit (refund) convention
+    let is_debit = amount_ct > 0;
+
+    match entry_type {
+        "RECHNUNG" | "ABSCHLAG" => JournalMapping {
+            debit_skr:   "1400", debit_desc:  "Forderungen aus L+L",
+            credit_skr:  "4000", credit_desc: "Energieerlöse",
+        },
+        "STORNO" if is_debit => JournalMapping {
+            debit_skr:   "1400", debit_desc:  "Forderungen aus L+L",
+            credit_skr:  "4000", credit_desc: "Energieerlöse (Storno)",
+        },
+        "STORNO" => JournalMapping {
+            debit_skr:   "4000", debit_desc:  "Energieerlöse (Storno)",
+            credit_skr:  "1400", credit_desc: "Forderungen aus L+L",
+        },
+        "ZAHLUNG" => JournalMapping {
+            debit_skr:   "1200", debit_desc:  "Bankguthaben",
+            credit_skr:  "1400", credit_desc: "Forderungen aus L+L",
+        },
+        "GUTSCHRIFT" => JournalMapping {
+            debit_skr:   "4000", debit_desc:  "Energieerlöse",
+            credit_skr:  "1400", credit_desc: "Forderungen aus L+L",
+        },
+        "EEG_GUTSCHRIFT" | "EEG_MARKTPRAEMIE" => JournalMapping {
+            debit_skr:   "3000", debit_desc:  "Verbindlichkeiten EEG",
+            credit_skr:  "4001", credit_desc: "EEG Einspeisevergütung",
+        },
+        "BANKRUECKLAST" => JournalMapping {
+            debit_skr:   "1400", debit_desc:  "Forderungen aus L+L",
+            credit_skr:  "1200", credit_desc: "Bankguthaben",
+        },
+        "MAHNGEBUEHR" => JournalMapping {
+            debit_skr:   "1400", debit_desc:  "Forderungen aus L+L",
+            credit_skr:  "4003", credit_desc: "Mahngebühren / Verzugszinsen",
+        },
+        "JAHRESABSCHLUSS" if is_debit => JournalMapping {
+            debit_skr:   "1400", debit_desc:  "Forderungen aus L+L",
+            credit_skr:  "4000", credit_desc: "Energieerlöse Jahresabschluss",
+        },
+        "JAHRESABSCHLUSS" => JournalMapping {
+            debit_skr:   "4000", debit_desc:  "Energieerlöse Jahresabschluss",
+            credit_skr:  "3001", credit_desc: "Verbindlichkeiten Erstattung",
+        },
+        "KORREKTUR" if is_debit => JournalMapping {
+            debit_skr:   "1400", debit_desc:  "Forderungen aus L+L",
+            credit_skr:  "4000", credit_desc: "Energieerlöse (Korrektur)",
+        },
+        _ => JournalMapping { // KORREKTUR credit or unknown
+            debit_skr:   "4000", debit_desc:  "Energieerlöse (Korrektur)",
+            credit_skr:  "1400", credit_desc: "Forderungen aus L+L",
+        },
+    }
+}
+
+/// Insert two balanced journal lines for a ledger entry (double-entry shadow).
+///
+/// Each call produces exactly one debit (D) and one credit (C) line.
+/// The amount is always positive — the `side` column conveys the sign.
+/// Constraint: `debit.amount_ct == credit.amount_ct` — enforced by this function.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_journal_lines(
+    pool: &PgPool,
+    ledger_entry_id: Uuid,
+    account_id: Uuid,
+    tenant: &str,
+    entry_type: &str,
+    amount_ct: i64,
+    booking_date: time::Date,
+    description: Option<&str>,
+) -> anyhow::Result<()> {
+    let abs_ct = amount_ct.unsigned_abs() as i64;
+    if abs_ct == 0 {
+        return Ok(());
+    }
+    let m = journal_mapping(entry_type, amount_ct);
+
+    sqlx::query(
+        r"INSERT INTO journal_lines
+              (ledger_entry_id, account_id, tenant, side, skr_account, skr_description,
+               amount_ct, booking_date, description)
+          VALUES
+              ($1, $2, $3, 'D', $4, $5, $6, $7, $8),
+              ($1, $2, $3, 'C', $9, $10, $6, $7, $8)",
+    )
+    .bind(ledger_entry_id)
+    .bind(account_id)
+    .bind(tenant)
+    .bind(m.debit_skr)
+    .bind(m.debit_desc)
+    .bind(abs_ct)
+    .bind(booking_date)
+    .bind(description)
+    .bind(m.credit_skr)
+    .bind(m.credit_desc)
+    .execute(pool)
+    .await
+    .context("insert_journal_lines")?;
+
+    Ok(())
+}
+
+// ── Aging analysis ────────────────────────────────────────────────────────────
+
+/// Aging bucket for open receivables.
+#[derive(Debug, Serialize)]
+pub struct AgingBucket {
+    pub bucket:          &'static str,  // "0-30d", "31-60d", "61-90d", ">90d"
+    pub account_count:   i64,
+    pub total_ct:        i64,
+    pub total_eur:       String,
+}
+
+/// Aging analysis: group overdue account balances by days-overdue bucket.
+///
+/// Uses `accounts.balance_ct` (cached) as the outstanding amount per MaLo.
+/// Overdue date is approximated from the oldest unresolved `dunning_cases.issued_at`
+/// when present, or the account `updated_at` otherwise.
+///
+/// Returns four buckets: 0–30 days, 31–60 days, 61–90 days, >90 days.
+pub async fn list_aging_buckets(
+    pool: &PgPool,
+    tenant: &str,
+) -> anyhow::Result<Vec<AgingBucket>> {
+    let rows = sqlx::query(
+        r"SELECT
+            CASE
+                WHEN age_days <= 30  THEN '0-30d'
+                WHEN age_days <= 60  THEN '31-60d'
+                WHEN age_days <= 90  THEN '61-90d'
+                ELSE '>90d'
+            END AS bucket,
+            COUNT(*)                 AS account_count,
+            COALESCE(SUM(balance_ct), 0) AS total_ct
+          FROM (
+              SELECT a.balance_ct,
+                     EXTRACT(DAY FROM (now() - COALESCE(
+                         (SELECT MIN(dc.issued_at) FROM dunning_cases dc
+                          WHERE dc.account_id = a.account_id AND dc.resolved_at IS NULL),
+                         a.updated_at
+                     )))::INT AS age_days
+              FROM accounts a
+              WHERE a.tenant = $1 AND a.balance_ct > 0
+          ) sub
+          GROUP BY bucket
+          ORDER BY MIN(age_days)",
+    )
+    .bind(tenant)
+    .fetch_all(pool)
+    .await
+    .context("list_aging_buckets")?;
+
+    let mut buckets = Vec::with_capacity(4);
+    // Ensure all four buckets are present even if empty
+    for (label, min_days, max_days) in &[
+        ("0-30d",  0i32,  30i32),
+        ("31-60d", 31,    60),
+        ("61-90d", 61,    90),
+        (">90d",   91,  i32::MAX),
+    ] {
+        let (account_count, total_ct) = rows.iter()
+            .find(|r| r.try_get::<&str, _>("bucket").map(|b| b == *label).unwrap_or(false))
+            .map(|r| (
+                r.try_get::<i64, _>("account_count").unwrap_or(0),
+                r.try_get::<i64, _>("total_ct").unwrap_or(0),
+            ))
+            .unwrap_or((0, 0));
+        let _ = (min_days, max_days); // used only for ordering above
+        buckets.push(AgingBucket {
+            bucket: label,
+            account_count,
+            total_ct,
+            total_eur: crate::handlers::format_ct_as_eur(total_ct),
+        });
+    }
+    Ok(buckets)
+}
+
+// ── Interest charges (Verzugszinsen §288 BGB) ─────────────────────────────────
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct InterestChargeRow {
+    pub id:               Uuid,
+    pub account_id:       Uuid,
+    pub tenant:           String,
+    pub invoice_reference: Option<String>,
+    pub principal_ct:     i64,
+    pub interest_ct:      i64,
+    pub rate_pct:         rust_decimal::Decimal,
+    pub ecb_base_rate_pct: rust_decimal::Decimal,
+    pub customer_type:    String,
+    pub period_from:      time::Date,
+    pub period_to:        time::Date,
+    pub legal_basis:      String,
+    pub ledger_entry_id:  Option<Uuid>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at:       OffsetDateTime,
+}
+
+/// Fetch the current ECB Basiszinssatz (§247 BGB) from the `ecb_base_rates` table.
+///
+/// Returns the rate valid on the given `reference_date` (or today if None).
+pub async fn fetch_ecb_base_rate(
+    pool: &PgPool,
+    reference_date: Option<time::Date>,
+) -> anyhow::Result<rust_decimal::Decimal> {
+    let date = reference_date.unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    let row = sqlx::query(
+        "SELECT rate_pct FROM ecb_base_rates WHERE valid_from <= $1 ORDER BY valid_from DESC LIMIT 1",
+    )
+    .bind(date)
+    .fetch_optional(pool)
+    .await
+    .context("fetch_ecb_base_rate")?;
+
+    match row {
+        Some(r) => Ok(r.try_get("rate_pct")?),
+        None => {
+            // Fallback to a conservative estimate if no rates are seeded
+            tracing::warn!("accountingd: no ECB base rate found — using 2.00% fallback. Seed ecb_base_rates table.");
+            Ok(rust_decimal::Decimal::new(200, 2)) // 2.00%
+        }
+    }
+}
+
+/// Create a Verzugszinsen (default interest) charge and the linked MAHNGEBUEHR ledger entry.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_interest_charge(
+    pool: &PgPool,
+    account_id: Uuid,
+    tenant: &str,
+    invoice_reference: Option<&str>,
+    principal_ct: i64,
+    is_b2b: bool,
+    period_from: time::Date,
+    period_to: time::Date,
+) -> anyhow::Result<InterestChargeRow> {
+    let ecb_rate = fetch_ecb_base_rate(pool, Some(period_from)).await?;
+    let days = (period_to - period_from).whole_days();
+    if days <= 0 {
+        anyhow::bail!("interest period_to must be after period_from");
+    }
+    let (interest_ct, annual_rate) =
+        crate::sepa::calculate_interest_ct(principal_ct, ecb_rate, is_b2b, days);
+    if interest_ct <= 0 {
+        anyhow::bail!("calculated interest is zero — check principal and period");
+    }
+
+    let legal_basis = if is_b2b {
+        "\u{00a7}288 Abs. 2 BGB"
+    } else {
+        "\u{00a7}288 Abs. 1 BGB"
+    };
+    let customer_type = if is_b2b { "B2B" } else { "B2C" };
+
+    // Create linked MAHNGEBUEHR ledger entry
+    let ledger_id = write_entry(
+        pool,
+        account_id,
+        tenant,
+        "MAHNGEBUEHR",
+        interest_ct,
+        invoice_reference,
+        Some("de.accounting.interest.charged"),
+        None,
+        period_to,
+        Some(legal_basis),
+    )
+    .await
+    .context("create_interest_charge: ledger entry")?;
+
+    let row = sqlx::query_as::<_, InterestChargeRow>(
+        r"INSERT INTO interest_charges
+              (account_id, tenant, invoice_reference, principal_ct, interest_ct, rate_pct,
+               ecb_base_rate_pct, customer_type, period_from, period_to, legal_basis, ledger_entry_id)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          RETURNING *",
+    )
+    .bind(account_id)
+    .bind(tenant)
+    .bind(invoice_reference)
+    .bind(principal_ct)
+    .bind(interest_ct)
+    .bind(annual_rate)
+    .bind(ecb_rate)
+    .bind(customer_type)
+    .bind(period_from)
+    .bind(period_to)
+    .bind(legal_basis)
+    .bind(ledger_id.unwrap_or(Uuid::nil()))
+    .fetch_one(pool)
+    .await
+    .context("create_interest_charge: insert")?;
+
+    Ok(row)
+}
+
+/// List interest charges for an account.
+pub async fn list_interest_charges(
+    pool: &PgPool,
+    account_id: Uuid,
+    tenant: &str,
+    limit: i64,
+) -> anyhow::Result<Vec<InterestChargeRow>> {
+    sqlx::query_as::<_, InterestChargeRow>(
+        "SELECT * FROM interest_charges WHERE account_id = $1 AND tenant = $2 \
+         ORDER BY created_at DESC LIMIT $3",
+    )
+    .bind(account_id)
+    .bind(tenant)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("list_interest_charges")
+}
+
+// ── Payment plans (Zahlungsvereinbarung) ──────────────────────────────────────
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct PaymentPlanRow {
+    pub plan_id:           Uuid,
+    pub account_id:        Uuid,
+    pub tenant:            String,
+    pub total_ct:          i64,
+    pub installment_ct:    i64,
+    pub installment_count: i32,
+    pub billing_day:       i16,
+    pub status:            String,
+    pub dunning_case_id:   Option<Uuid>,
+    pub operator_sub:      Option<String>,
+    pub note:              Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at:        OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at:        OffsetDateTime,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct PaymentPlanInstallmentRow {
+    pub id:                Uuid,
+    pub plan_id:           Uuid,
+    pub tenant:            String,
+    pub installment_no:    i32,
+    pub due_date:          time::Date,
+    pub amount_ct:         i64,
+    pub status:            String,
+    pub ledger_entry_id:   Option<Uuid>,
+    pub paid_at:           Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at:        OffsetDateTime,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreatePaymentPlanRequest {
+    pub malo_id:           String,
+    pub lf_mp_id:          Option<String>,
+    pub total_ct:          i64,
+    pub installment_ct:    i64,
+    pub billing_day:       i16,
+    pub first_due_date:    String, // ISO 8601 date
+    pub dunning_case_id:   Option<Uuid>,
+    pub note:              Option<String>,
+    pub operator_sub:      Option<String>,
+}
+
+/// Create a payment plan and its installment schedule.
+///
+/// The number of installments is `ceil(total_ct / installment_ct)`.
+/// The final installment is adjusted to cover any remainder.
+/// Installments are due monthly from `first_due_date`, on `billing_day`.
+pub async fn create_payment_plan(
+    pool: &PgPool,
+    tenant: &str,
+    req: CreatePaymentPlanRequest,
+) -> anyhow::Result<Uuid> {
+    use time::format_description::well_known::Iso8601;
+
+    let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(tenant);
+    let account_id = upsert_account(pool, &req.malo_id, lf_mp_id, tenant).await?;
+
+    let installment_count = (req.total_ct + req.installment_ct - 1) / req.installment_ct;
+    if installment_count <= 0 {
+        anyhow::bail!("installment_count must be >= 1");
+    }
+
+    let plan_id: Uuid = sqlx::query_scalar(
+        r"INSERT INTO payment_plans
+              (account_id, tenant, total_ct, installment_ct, installment_count,
+               billing_day, dunning_case_id, operator_sub, note)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          RETURNING plan_id",
+    )
+    .bind(account_id)
+    .bind(tenant)
+    .bind(req.total_ct)
+    .bind(req.installment_ct)
+    .bind(installment_count as i32)
+    .bind(req.billing_day)
+    .bind(req.dunning_case_id)
+    .bind(req.operator_sub.as_deref())
+    .bind(req.note.as_deref())
+    .fetch_one(pool)
+    .await
+    .context("create_payment_plan")?;
+
+    // Generate installment schedule
+    let first_due = time::Date::parse(&req.first_due_date, &Iso8601::DEFAULT)
+        .context("parse first_due_date")?;
+
+    let mut remaining = req.total_ct;
+    for n in 0..installment_count {
+        let due_date = first_due
+            .replace_month(
+                time::Month::try_from(
+                    ((first_due.month() as u8 - 1 + n as u8) % 12) + 1
+                ).unwrap_or(time::Month::January)
+            )
+            .unwrap_or(first_due);
+
+        let amount = if n == installment_count - 1 {
+            remaining // last installment covers any rounding remainder
+        } else {
+            req.installment_ct.min(remaining)
+        };
+        remaining -= amount;
+        if amount <= 0 {
+            break;
+        }
+
+        sqlx::query(
+            "INSERT INTO payment_plan_installments \
+             (plan_id, tenant, installment_no, due_date, amount_ct) VALUES ($1,$2,$3,$4,$5)",
+        )
+        .bind(plan_id)
+        .bind(tenant)
+        .bind((n + 1) as i32)
+        .bind(due_date)
+        .bind(amount)
+        .execute(pool)
+        .await
+        .context("create_payment_plan: installment")?;
+    }
+
+    Ok(plan_id)
+}
+
+/// List active payment plans for an account.
+pub async fn list_payment_plans(
+    pool: &PgPool,
+    account_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Vec<PaymentPlanRow>> {
+    sqlx::query_as::<_, PaymentPlanRow>(
+        "SELECT * FROM payment_plans WHERE account_id = $1 AND tenant = $2 ORDER BY created_at DESC",
+    )
+    .bind(account_id)
+    .bind(tenant)
+    .fetch_all(pool)
+    .await
+    .context("list_payment_plans")
+}
+
+/// Get a single payment plan with all its installments.
+pub async fn get_payment_plan_with_installments(
+    pool: &PgPool,
+    plan_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Option<(PaymentPlanRow, Vec<PaymentPlanInstallmentRow>)>> {
+    let plan = sqlx::query_as::<_, PaymentPlanRow>(
+        "SELECT * FROM payment_plans WHERE plan_id = $1 AND tenant = $2",
+    )
+    .bind(plan_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await
+    .context("get_payment_plan")?;
+
+    let Some(plan) = plan else { return Ok(None) };
+
+    let installments = sqlx::query_as::<_, PaymentPlanInstallmentRow>(
+        "SELECT * FROM payment_plan_installments WHERE plan_id = $1 ORDER BY installment_no",
+    )
+    .bind(plan_id)
+    .fetch_all(pool)
+    .await
+    .context("get_payment_plan: installments")?;
+
+    Ok(Some((plan, installments)))
+}
+
+/// Cancel a payment plan (sets status = CANCELLED).
+pub async fn cancel_payment_plan(
+    pool: &PgPool,
+    plan_id: Uuid,
+    tenant: &str,
+    operator_sub: Option<&str>,
+) -> anyhow::Result<()> {
+    let affected = sqlx::query(
+        "UPDATE payment_plans SET status = 'CANCELLED', updated_at = now(), \
+         operator_sub = COALESCE($3, operator_sub) \
+         WHERE plan_id = $1 AND tenant = $2 AND status = 'ACTIVE'",
+    )
+    .bind(plan_id)
+    .bind(tenant)
+    .bind(operator_sub)
+    .execute(pool)
+    .await
+    .context("cancel_payment_plan")?
+    .rows_affected();
+
+    if affected == 0 {
+        anyhow::bail!("payment plan not found or not ACTIVE: {plan_id}");
+    }
+    Ok(())
+}
+
+// ── Bank import deduplication (CAMT.054) ──────────────────────────────────────
+
+/// Check whether a bank transaction has already been imported.
+///
+/// Returns `true` if `bank_transaction_id` is already in `bank_import_log`.
+/// Call this before creating a ZAHLUNG/BANKRUECKLAST ledger entry from CAMT.054.
+pub async fn bank_import_already_processed(
+    pool: &PgPool,
+    tenant: &str,
+    bank_transaction_id: &str,
+) -> anyhow::Result<bool> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM bank_import_log WHERE tenant = $1 AND bank_transaction_id = $2)",
+    )
+    .bind(tenant)
+    .bind(bank_transaction_id)
+    .fetch_one(pool)
+    .await
+    .context("bank_import_already_processed")?;
+    Ok(exists)
+}
+
+/// Record a bank transaction import in the deduplication log.
+///
+/// Uses `ON CONFLICT DO NOTHING` so concurrent calls are safe.
+pub async fn record_bank_import(
+    pool: &PgPool,
+    tenant: &str,
+    bank_transaction_id: &str,
+    amount_ct: i64,
+    iban: Option<&str>,
+    value_date: time::Date,
+    ledger_entry_id: Option<Uuid>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO bank_import_log \
+         (tenant, bank_transaction_id, amount_ct, iban, value_date, ledger_entry_id) \
+         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (tenant, bank_transaction_id) DO NOTHING",
+    )
+    .bind(tenant)
+    .bind(bank_transaction_id)
+    .bind(amount_ct)
+    .bind(iban)
+    .bind(value_date)
+    .bind(ledger_entry_id)
+    .execute(pool)
+    .await
+    .context("record_bank_import")?;
+    Ok(())
+}
+

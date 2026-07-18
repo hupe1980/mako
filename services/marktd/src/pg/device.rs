@@ -4,8 +4,9 @@
 use mako_markt::{
     error::MdmError,
     repository::{
-        DeviceRepository, GeraetRecord, SteuerbareRessourceRecord, SteuerbareRessourceRepository,
-        TechnischeRessourceRecord, TechnischeRessourceRepository, ZaehlerRecord,
+        DeviceRepository, GeraetKonfiguration, GeraetRecord, SteuerbareRessourceRecord,
+        SteuerbareRessourceRepository, TechnischeRessourceRecord, TechnischeRessourceRepository,
+        ZaehlerRecord,
     },
 };
 use sqlx::{PgPool, Row};
@@ -285,7 +286,7 @@ impl DeviceRepository for PgDeviceRepository {
         tenant: &str,
     ) -> Result<Vec<GeraetRecord>, MdmError> {
         let rows = sqlx::query(
-            r"SELECT geraet_id, tenant, zaehler_id, geraet_typ, data, bo4e_version, version, updated_at
+            r"SELECT geraet_id, tenant, zaehler_id, geraet_typ, data, geraet_konfigurationen, bo4e_version, version, updated_at
               FROM geraete
               WHERE zaehler_id = $1 AND tenant = $2
               ORDER BY updated_at DESC",
@@ -297,6 +298,61 @@ impl DeviceRepository for PgDeviceRepository {
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
         Ok(rows.into_iter().map(row_to_geraet).collect())
+    }
+
+    async fn find_geraet(
+        &self,
+        geraet_id: &str,
+        tenant: &str,
+    ) -> Result<Option<GeraetRecord>, MdmError> {
+        let row = sqlx::query(
+            r"SELECT geraet_id, tenant, zaehler_id, geraet_typ, data, geraet_konfigurationen, bo4e_version, version, updated_at
+              FROM geraete
+              WHERE geraet_id = $1 AND tenant = $2",
+        )
+        .bind(geraet_id)
+        .bind(tenant)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        Ok(row.map(row_to_geraet))
+    }
+
+    async fn upsert_geraet_konfigurationen(
+        &self,
+        geraet_id: &str,
+        tenant: &str,
+        konfigurationen: Vec<GeraetKonfiguration>,
+    ) -> Result<bool, MdmError> {
+        let now = time::OffsetDateTime::now_utc();
+        // Set server-side updated_at on every entry (caller value is ignored).
+        let timestamped: Vec<GeraetKonfiguration> = konfigurationen
+            .into_iter()
+            .map(|mut k| {
+                k.updated_at = now;
+                k
+            })
+            .collect();
+        let json = serde_json::to_value(&timestamped)
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        let updated = sqlx::query(
+            r"UPDATE geraete
+              SET geraet_konfigurationen = $1,
+                  version    = version + 1,
+                  updated_at = now()
+              WHERE geraet_id = $2 AND tenant = $3
+              RETURNING geraet_id",
+        )
+        .bind(&json)
+        .bind(geraet_id)
+        .bind(tenant)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        Ok(updated.is_some())
     }
 }
 
@@ -319,12 +375,21 @@ fn row_to_zaehler(r: sqlx::postgres::PgRow) -> ZaehlerRecord {
 }
 
 fn row_to_geraet(r: sqlx::postgres::PgRow) -> GeraetRecord {
+    // Deserialize the JSONB konfigurationen column.  Falls back to empty vec on
+    // schema drift so legacy rows without the column don't break the API.
+    let konfigurationen: Vec<GeraetKonfiguration> = r
+        .try_get::<serde_json::Value, _>("geraet_konfigurationen")
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
     GeraetRecord {
         geraet_id: r.get("geraet_id"),
         tenant: r.get("tenant"),
         zaehler_id: r.get("zaehler_id"),
         geraet_typ: r.try_get("geraet_typ").unwrap_or(None),
         data: r.get("data"),
+        konfigurationen,
         bo4e_version: r
             .try_get("bo4e_version")
             .unwrap_or_else(|_| "v202607.0.0".to_owned()),

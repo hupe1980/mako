@@ -1,6 +1,7 @@
 //! `agentd.toml` — multi-agent configuration.
 
 use serde::Deserialize;
+use secrecy::SecretString;
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
@@ -47,7 +48,8 @@ pub struct AgentdConfig {
     /// MCP server endpoints (name → base URL).
     pub mcp_servers: HashMap<String, String>,
     /// Bearer token for MCP authentication.
-    pub mcp_api_key: String,
+    /// Use `"env:AGENTD_MCP_API_KEY"` to defer to environment; never log this value.
+    pub mcp_api_key: SecretString,
 
     /// RAG knowledge base.
     #[serde(default)]
@@ -59,7 +61,29 @@ pub struct AgentdConfig {
 
     /// Audit CloudEvent webhook (marktd event_log).
     pub audit_webhook_url: Option<String>,
-    pub audit_hmac_secret: Option<String>,
+    /// HMAC-SHA256 secret for signing outbound audit webhook events ("sha256=" prefix).
+    /// When set, every `de.agent.decision.made` POST carries an `X-Mako-Signature` header.
+    pub audit_hmac_secret: Option<SecretString>,
+
+    /// HMAC-SHA256 secret for verifying **inbound** CloudEvent webhook signatures.
+    /// When set, `POST /webhook` rejects requests where the `X-Mako-Signature` header
+    /// does not match `sha256=HMAC(secret, body)`.
+    /// When absent, all inbound webhooks are accepted (dev mode only — log a WARNING).
+    pub inbound_hmac_secret: Option<SecretString>,
+
+    /// Per-session wall-clock timeout in seconds (default: 300 = 5 minutes).
+    /// Applies to every specialist ReAct loop. Prevents hung LLM calls from
+    /// blocking Tokio threads indefinitely.
+    #[serde(default = "default_session_timeout_secs")]
+    pub session_timeout_secs: u64,
+
+    /// OIDC configuration for authenticating `POST /api/v1/run`.
+    /// When absent, all manual run requests are accepted (dev mode — logs a WARNING).
+    pub oidc: Option<mako_service::oidc::OidcConfig>,
+
+    /// Dead-letter queue for failed CloudEvent sessions.
+    #[serde(default)]
+    pub dlq: DlqConfig,
 }
 
 // ── BundledAgentsConfig ────────────────────────────────────────────────────
@@ -147,22 +171,40 @@ pub enum DispatchMode {
 
 // ── Provider config ────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+/// LLM provider configuration.
+///
+/// Intentionally does not derive `Debug` to prevent secrets appearing in logs.
+/// A custom `Debug` impl redacts all secret fields.
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
     /// Backend: "openai" | "anthropic" | "bedrock"
     pub backend: String,
     /// API base URL (optional override).
     pub api_base: Option<String>,
-    /// API key / secret (set via env override).
+    /// API key / secret (never logged).
+    /// Use `"env:OPENAI_API_KEY"` form in TOML to read from environment.
     #[serde(default)]
-    pub api_key: String,
+    pub api_key: SecretString,
     /// AWS region (Bedrock only).
     pub aws_region: Option<String>,
     /// AWS access key ID (Bedrock only; prefer IAM roles in production).
     pub aws_access_key_id: Option<String>,
-    /// AWS secret access key (Bedrock only).
-    pub aws_secret_access_key: Option<String>,
+    /// AWS secret access key (Bedrock only; never logged).
+    pub aws_secret_access_key: Option<SecretString>,
+}
+
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("backend", &self.backend)
+            .field("api_base", &self.api_base)
+            .field("api_key", &"[REDACTED]")
+            .field("aws_region", &self.aws_region)
+            .field("aws_access_key_id", &self.aws_access_key_id)
+            .field("aws_secret_access_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 // ── Orchestrator config ────────────────────────────────────────────────────
@@ -222,6 +264,33 @@ pub struct AgentConfig {
     pub use_rag: bool,
 }
 
+// ── DlqConfig ──────────────────────────────────────────────────────────────
+
+/// Dead-letter queue configuration for failed CloudEvent sessions.
+///
+/// Sessions with outcome `"error"` or `"timeout"` are retried up to `max_retries`
+/// times with exponential backoff. After exhaustion an alert CloudEvent is emitted.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct DlqConfig {
+    /// Maximum DLQ depth (default: 100). Entries beyond this are silently dropped.
+    pub capacity: usize,
+    /// Maximum retry attempts per entry (default: 4).
+    pub max_retries: u32,
+    /// Base backoff in seconds; actual wait = `base_backoff_secs * 3^attempt` (default: 30).
+    pub base_backoff_secs: u64,
+}
+
+impl Default for DlqConfig {
+    fn default() -> Self {
+        Self {
+            capacity: 100,
+            max_retries: 4,
+            base_backoff_secs: 30,
+        }
+    }
+}
+
 // ── RAG config ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Default, Deserialize)]
@@ -255,6 +324,10 @@ pub struct RagConfig {
     /// Chunk overlap in characters (default: 64).
     #[serde(default = "default_chunk_overlap")]
     pub chunk_overlap: usize,
+    /// Minimum cosine similarity score to include a RAG result (0.0–1.0, default: 0.3).
+    /// Low-quality chunks with score < threshold are filtered out before injection.
+    #[serde(default = "default_score_threshold")]
+    pub score_threshold: f32,
     /// Document sources to index at startup.
     #[serde(default)]
     pub sources: Vec<RagSource>,
@@ -305,6 +378,12 @@ fn default_chunk_size() -> usize {
 }
 fn default_chunk_overlap() -> usize {
     64
+}
+fn default_score_threshold() -> f32 {
+    0.3
+}
+fn default_session_timeout_secs() -> u64 {
+    300
 }
 fn default_triggers() -> Vec<String> {
     vec![

@@ -89,7 +89,7 @@ permalink: /
     <span class="mako-kpi__label">MCP tools (AI-ready)</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">27</span>
+    <span class="mako-kpi__value">29</span>
     <span class="mako-kpi__label">built-in AI specialists</span>
   </div>
   <div class="mako-kpi">
@@ -172,9 +172,9 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">🧾</div>
     <h3>Energy Billing Engine</h3>
     <p>
-      <strong>12 product categories</strong> — STROM (SLP/HT/NT/RLM), GAS, WAERME, SOLAR,
+      <strong>13 product categories</strong> — STROM (SLP/HT/NT/RLM), GAS, WAERME, SOLAR,
       EEG/EINSPEISUNG, §14a WAERMEPUMPE/WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG,
-      §42c SHARING.
+      BUNDLE, §42c SHARING.
       `Product` typed enum with per-category structs; `ControllableLoadProvider` for §14a;
       §41b iMSys guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label;
       historic levy lookups (incl. 2022 0-rate); §41a EPEX; §41b enforcement;
@@ -205,12 +205,21 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
 
   <div class="mako-feature">
     <div class="mako-feature__icon">📡</div>
-    <h3>Smart Meter &amp; Energy Data</h3>
+    <h3>Smart Meter, SMGW &amp; Energy Data</h3>
     <p>
       <code>edmd</code> accepts 15-min iMSys/SMGW data directly via JSON push — no MSCONS round-trip.
       Quality scoring via <code>metering::score_intervals_f64</code> (Hampel filter, grades A/B/C/F)
       auto-vectorises to AVX2/NEON on every batch; grade F blocks billing.
       GDPR Art. 17 erasure endpoint with cold-tier read-time exclusion.
+    </p>
+    <p>
+      <strong>§14a Fernsteuerbarkeit compliance (MsbG §21c):</strong>
+      <code>edmd</code> maintains a BSI TR-03109 SMGW session registry (<code>smgw_sessions</code>)
+      and runs a daily compliance sweep — checking TLS cert validity, 30-day expiry warnings,
+      CLS channel §14a Konfigurationsprodukt, and communication faults.
+      All issues are logged to <code>cls_compliance_log</code> and emitted as
+      <code>de.edmd.cls.compliance_issue</code> CloudEvents, triggering the
+      <code>smgw-diagnostics-agent</code> in <code>agentd</code>.
     </p>
     <p>
       <strong>Apache Iceberg V2 cold tier:</strong> automatic archival to S3/GCS/Azure with
@@ -233,12 +242,25 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">🤝</div>
     <h3>Contract &amp; Customer Management</h3>
     <p>
-      <code>vertragd</code> manages B2C and B2B customers with role-based multi-user portal access,
-      B2B Rahmenverträge (portfolio pricing, Sammelrechnung), and Versorgungsverträge per site/commodity.
-      Preisgarantie guard prevents unauthorized tariff changes (§41 EnWG).
-      <strong>GDPR Art. 15/17/20</strong> built-in — full export, irreversible pseudonymization with
-      immutable audit trail, and typed <code>Zahlungsinformation</code> (IBAN mod-97 validated).
-      Serves as the sole OIDC→MaLo authorization gateway for <code>portald</code>.
+      <code>vertragd</code> manages B2C and B2B customers with OIDC/JWT-authenticated write endpoints,
+      role-based multi-user portal access (<code>VOLLZUGRIFF</code>/<code>ADMIN</code>/<code>FINANZEN</code>/<code>TECHNIK</code>/<code>READONLY</code>),
+      B2B Rahmenverträge (portfolio pricing, Sammelrechnung, cascade Kündigung), and
+      Versorgungsverträge per site/commodity.
+    </p>
+    <p>
+      <strong>Regulatory correctness:</strong>
+      Preisgarantie guard blocks tariff changes within price-lock window (§41 EnWG);
+      every bypass is logged to an immutable <code>preisgarantie_override_log</code> with operator JWT sub.
+      Kündigung Widerruf (<code>POST /widerruf-kuendigung</code>) reverts before Lieferende.
+      §41 Abs. 3 EnWG 6-week advance notice dispatched automatically 42 days before <code>wirksamkeit</code>.
+      Proactive expiry alerts emit <code>de.vertrag.ablauf.ankuendigung</code> 30 days before contract end.
+      CPQ pipeline: <code>de.angebot.angenommen</code> → Rahmenvertrag with <code>angebot_id</code> traceability.
+    </p>
+    <p>
+      <strong>GDPR Art. 15/17/20</strong> built-in — full PII export, irreversible pseudonymization
+      with immutable <code>anonymization_log</code>, and typed <code>Zahlungsinformation</code>
+      (IBAN mod-97 validated). Serves as the sole OIDC→MaLo authorization gateway for <code>portald</code>.
+      <strong>16-tool MCP server + 4 prompts</strong> including GDPR erasure workflow and Preisgarantie dispute resolution.
     </p>
     <a href="{{ '/vertragd' | relative_url }}">vertragd guide →</a>
   </div>
@@ -260,14 +282,17 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <h3>AI / LLM Integration</h3>
     <p>
       Every service exposes tools and prompts at <code>/mcp</code> (Streamable HTTP 2025-11-25).
-      <code>agentd</code> ships <strong>27 built-in specialists compiled into the container image</strong>
+    `agentd` ships <strong>29 built-in specialists compiled into the container image</strong>
       — operators activate them via <code>[bundled_agents]</code> without copying system prompts.
       Supports <strong>sequential / parallel / race dispatch</strong> modes;
       A2A agent cards at <code>/.well-known/agents/{name}</code>;
-      OpenAI / Anthropic / AWS Bedrock SigV4; LanceDB RAG; WASM plugin sandboxing.
+      OpenAI / Anthropic / AWS Bedrock SigV4; LanceDB RAG (tenant-isolated, cosine distance score filtering); WASM plugin sandboxing.
       Specialists cover billing anomaly detection, §41b/§42 compliance guard,
       annual settlement orchestration, §20 EnWG parity, SMGW BSI TR-03109 diagnostics,
-      VPP dispatch settlement audit (RED III Art. 17), MaBiS UTILTS monitoring, and more.
+      VPP dispatch settlement audit (RED III Art. 17), MaBiS UTILTS monitoring,
+      GaBi Gas 2.0 ALOCAT/IMBNOT balance monitoring, EEG batch settlement + §52 sweep, and more.
+      OIDC auth on <code>POST /api/v1/run</code>; inbound HMAC verification; max_sessions semaphore;
+      per-session wall-clock timeout; dead-letter queue with exponential-backoff retry worker.
     </p>
     <a href="{{ '/agentd' | relative_url }}">agentd guide →</a>
   </div>
@@ -297,9 +322,10 @@ edi-energy · mako-engine
 ZAK+ZE auto-parse (WiM Stammdaten)
 VPP DispatchConfirmed outbox"]
         marktd["marktd :8180
-MaLo · MeLo · contracts
-VersorgungsStatus · EventBus
-ZaehlzeitRegister auto-update"]
+MaLo · MeLo · Zaehler · Geraet
+GeraetKonfigurationen · Zaehlzeitdefinition
+contracts · ZaehlzeitRegister auto-update
+VersorgungsStatus · EventBus"]
         makod -->|"CloudEvents"| marktd
     end
 
@@ -324,6 +350,8 @@ IFTSTA 21039 auto-dispatch"]
         edmd["edmd :8380
 MSCONS · iMSys push
 Hampel AVX2/NEON
+§14a SMGW compliance worker
+cls_compliance_log · BSI TR-03109
 Iceberg REST catalog
 Arrow IPC · GDPR Art. 17"]
         einsd["einsd :9180
@@ -522,7 +550,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/accountingd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">accountingd</span>
     <span class="mako-service-card__port">:9380</span>
-    <span class="mako-service-card__desc">Massenkontokorrent ledger. FIFO open-item management. CAMT.054 bank import. SEPA pain.008+pain.001 (sepa 0.3). Auto-dunning rule engine (Mahnstufe 1–3). GDPR Art.†17 pseudonymization. Balance reconciliation. IBAN mod-97 validation.</span>
+    <span class="mako-service-card__desc">Massenkontokorrent ledger. Double-entry SKR 03/04. Aging analysis. Verzugszinsen §288 BGB. Zahlungsvereinbarung. FRST/RCUR-separated pain.008 + Gläubiger-ID. CAMT.054 dedup import. IBAN hash encryption. Auto-dunning (Mahnstufe 1–3). OIDC auth + inbound HMAC. GDPR Art. 17. 107 tests.</span>
   </a>
 </div>
 
@@ -654,7 +682,7 @@ Beyond the production services, mako exposes reusable Rust libraries:
 | `mako-wim` | workspace | WiM Strom workflows — MSB-Wechsel, INSRPT, Preisanfrage, INVOIC 31009 |
 | `mako-geli-gas` | workspace | GeLi Gas 3.0 — UTILMD G + ORDERS Sperrung Gas + INVOIC 31011 + PARTIN Gas |
 | `mako-wim-gas` | workspace | WiM Gas — UTILMD G MSB-Wechsel + INVOIC 31003/31004 + INSRPT Gas |
-| `mako-gabi-gas` | workspace | GaBi Gas 2.0 (BK7-14-020) — INVOIC 31007/31008/31010 + MSCONS 13013 MMMA + 8 DVGW workflows (ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES); rich domain model: `GasDay` (DST-aware 06:00 CET), `GasQuantity` (Decimal, DVGW G 685), `GasBeschaffenheit` (Hs/Hu + Zustandszahl), `AllocationVersion` (Initial/Correction/Final per KoV §6.4), `GasMarketRole`, `GasPortfolioBalance` |
+| `mako-gabi-gas` | workspace | GaBi Gas 2.0 (BK7-14-020) — INVOIC 31007/31008/31010 + MSCONS 13013 MMMA + 8 DVGW workflows (ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES); rich domain model: `GasDay` (DST-aware 06:00 CET; `nomres_deadline_utc`, `initial_alocat_deadline_utc`, `final_alocat_deadline_utc` per KoV), `GasQuantity` (Decimal, DVGW G 685), `GasBeschaffenheit` (Hs/Hu + Zustandszahl; `.validate()` per DVGW G 260), `GasQualityFlag` (7 states; billability gate per GasNZV §24), `AllocationVersion` (Initial/Correction/Final per KoV §6.4), `GasMarketRole`, `GasPortfolioBalance` (`conservation_check()`), `GasImbalanceSaldo` (`ausgleichsenergie_price_ct_per_kwh` per KoV §9), `cloud_events` module (`de.gabi.*`), `dvgw_versions` module (biannual release tracking); nomination correction chain; 144 tests |
 | `mako-mabis` | workspace | MABIS — PID 13003 Bilanzkreisabrechnung Strom + `SummenzeitreiheBuilder` + Clearingliste (BKV↔ÜNB) |
 | `dvgw-edi` | workspace | DVGW EDIFACT gas transport — ALOCAT, NOMINT, NOMRES, SCHEDL, … |
 | `redispatch-xml` | workspace | Redispatch 2.0 XML/XSD — all 9 CIM/IEC 62325 document types |

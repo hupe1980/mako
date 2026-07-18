@@ -11,10 +11,11 @@ keywords     = ["dvgw", "edifact", "gas", "alocat", "nomint"]
 categories   = ["parser-implementations", "encoding"]
 
 [dependencies]
-edifact-rs = { workspace = true }
-serde      = { workspace = true, optional = true }
-thiserror  = { workspace = true }
-tracing    = { version = "0.1", default-features = false, features = ["log", "attributes"], optional = true }
+edifact-rs   = { workspace = true }
+rust_decimal = { workspace = true, optional = true }
+serde        = { workspace = true, optional = true }
+thiserror    = { workspace = true }
+tracing      = { version = "0.1", default-features = false, features = ["log", "attributes"], optional = true }
 
 [features]
 ## Enables ALOCAT (Allokationsnachricht) message support.
@@ -35,7 +36,9 @@ delord   = []
 delres   = []
 ## Enables `serde::Serialize` / `Deserialize` on all public value types.
 serde    = ["dep:serde"]
+## Enables `Decimal`-based `quantity_decimal()` on `AlocatQuantity` (preferred for billing).
+decimal  = ["dep:rust_decimal"]
 ## Default: all message types enabled.
-default  = ["alocat", "nomint", "nomres", "schedl", "imbnot", "tranot", "delord", "delres"]
+default  = ["alocat", "nomint", "nomres", "schedl", "imbnot", "tranot", "delord", "delres", "decimal"]
 ## Enables structured tracing spans via the `tracing` crate.
 tracing  = ["dep:tracing"]

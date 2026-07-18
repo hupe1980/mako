@@ -55,10 +55,15 @@ fn rag_schema(dim: i32) -> Arc<Schema> {
 pub struct RagChunk {
     #[allow(dead_code)]
     pub id: String,
+    /// Tenant this chunk belongs to (data-isolation key).
+    pub tenant: String,
     pub source: String,
     pub text: String,
     /// Embedding vector.  Empty when indexed without an embedding provider.
     pub embedding: Vec<f32>,
+    /// Cosine distance from query vector (0.0 = identical, 1.0 = orthogonal).
+    /// `None` for BM25 search results (no geometric distance).
+    pub distance: Option<f32>,
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -122,34 +127,67 @@ impl RagStore {
         Ok(())
     }
 
-    /// ANN vector search.
-    pub async fn vector_search(&self, q: &[f32], top_k: usize) -> Result<Vec<RagChunk>> {
+    /// ANN vector search scoped to `tenant`, using cosine distance.
+    ///
+    /// Returns chunks filtered to `max_distance` (cosine distance: 0 = perfect,
+    /// 1 = orthogonal).  Derive from `score_threshold` as `1.0 - score_threshold`.
+    pub async fn vector_search(
+        &self,
+        q: &[f32],
+        top_k: usize,
+        tenant: &str,
+        max_distance: f32,
+    ) -> Result<Vec<RagChunk>> {
         let table = self.conn.open_table(TABLE).execute().await?;
         if table.count_rows(None).await? == 0 {
             return Ok(Vec::new());
         }
 
+        // SQL-escape tenant for safe filter (tenant GLNs are numeric so safe, but escape anyway)
+        let tenant_sql = tenant.replace('\'', "''");
+
         let batches: Vec<RecordBatch> = table
             .query()
             .nearest_to(q)?
-            .limit(top_k)
+            .distance_type(lancedb::DistanceType::Cosine)
+            .limit(top_k * 2) // fetch extra; filter will reduce count
+            .only_if(format!("tenant = '{tenant_sql}'"))
             .execute()
             .await?
             .try_collect()
             .await?;
 
-        batches_to_chunks(batches)
+        let chunks = batches_to_chunks_with_distance(batches)?;
+        Ok(chunks
+            .into_iter()
+            .filter(|c| c.distance.is_none_or(|d| d <= max_distance))
+            .take(top_k)
+            .collect())
     }
 
-    /// Check if chunks from `source_name` are already in the store.
-    pub async fn source_indexed(&self, source_name: &str) -> Result<bool> {
+    /// Check if chunks from `source_name` scoped to `tenant` are already in the store.
+    pub async fn source_indexed(&self, source_name: &str, tenant: &str) -> Result<bool> {
         let table = self.conn.open_table(TABLE).execute().await?;
-        let filter = format!(r#"source = '{source_name}'"#);
+        let source_sql = source_name.replace('\'', "''");
+        let tenant_sql = tenant.replace('\'', "''");
+        let filter = format!("source = '{source_sql}' AND tenant = '{tenant_sql}'");
         let count = table.count_rows(Some(filter)).await?;
         Ok(count > 0)
     }
-    /// BM25 keyword scan (O(n) — fallback for providers without embeddings).
-    pub async fn bm25_search(&self, query: &str, top_k: usize) -> Result<Vec<RagChunk>> {
+
+    /// Delete all chunks for a given `tenant` (for RAG store purge / tenant offboarding).
+    pub async fn delete_by_tenant(&self, tenant: &str) -> Result<usize> {
+        let table = self.conn.open_table(TABLE).execute().await?;
+        let tenant_sql = tenant.replace('\'', "''");
+        table
+            .delete(&format!("tenant = '{tenant_sql}'"))
+            .await
+            .context("lancedb delete_by_tenant")?;
+        // LanceDB delete doesn't return a count; return 0 as placeholder
+        Ok(0)
+    }
+    /// BM25 keyword scan scoped to `tenant` (O(n) — fallback for providers without embeddings).
+    pub async fn bm25_search(&self, query: &str, top_k: usize, tenant: &str) -> Result<Vec<RagChunk>> {
         let table = self.conn.open_table(TABLE).execute().await?;
         if table.count_rows(None).await? == 0 {
             return Ok(Vec::new());
@@ -157,17 +195,27 @@ impl RagStore {
 
         let query_lower = query.to_lowercase();
         let keywords: Vec<&str> = query_lower.split_whitespace().collect();
+        let tenant_sql = tenant.replace('\'', "''");
 
-        let batches: Vec<RecordBatch> = table.query().execute().await?.try_collect().await?;
+        // Pre-filter by tenant before fetching all rows
+        let batches: Vec<RecordBatch> = table
+            .query()
+            .only_if(format!("tenant = '{tenant_sql}'"))
+            .execute()
+            .await?
+            .try_collect()
+            .await?;
 
         let mut scored: Vec<(usize, RagChunk)> = Vec::new();
         for b in &batches {
-            if let (Some(ids), Some(sources), Some(texts)) = (
+            // Schema: id=0, tenant=1, source=2, text=3, vector=4
+            if let (Some(ids), Some(tenants), Some(sources), Some(texts)) = (
                 b.column(0).as_any().downcast_ref::<StringArray>(),
                 b.column(1).as_any().downcast_ref::<StringArray>(),
                 b.column(2).as_any().downcast_ref::<StringArray>(),
+                b.column(3).as_any().downcast_ref::<StringArray>(),
             ) {
-                let vectors = b.column(3).as_any().downcast_ref::<FixedSizeListArray>();
+                let vectors = b.column(4).as_any().downcast_ref::<FixedSizeListArray>();
                 for i in 0..b.num_rows() {
                     let tl = texts.value(i).to_lowercase();
                     let score = keywords.iter().filter(|k| tl.contains(**k)).count();
@@ -176,9 +224,11 @@ impl RagStore {
                             score,
                             RagChunk {
                                 id: ids.value(i).to_owned(),
+                                tenant: tenants.value(i).to_owned(),
                                 source: sources.value(i).to_owned(),
                                 text: texts.value(i).to_owned(),
                                 embedding: extract_vec(vectors, i),
+                                distance: None,
                             },
                         ));
                     }
@@ -195,6 +245,7 @@ impl RagStore {
 
 fn to_batch(chunks: &[RagChunk], schema: &Arc<Schema>, dim: i32) -> Result<RecordBatch> {
     let ids: StringArray = chunks.iter().map(|c| Some(c.id.as_str())).collect();
+    let tenants: StringArray = chunks.iter().map(|c| Some(c.tenant.as_str())).collect();
     let sources: StringArray = chunks.iter().map(|c| Some(c.source.as_str())).collect();
     let texts: StringArray = chunks.iter().map(|c| Some(c.text.as_str())).collect();
 
@@ -214,6 +265,7 @@ fn to_batch(chunks: &[RagChunk], schema: &Arc<Schema>, dim: i32) -> Result<Recor
         schema.clone(),
         vec![
             Arc::new(ids),
+            Arc::new(tenants),
             Arc::new(sources),
             Arc::new(texts),
             Arc::new(vectors),
@@ -221,21 +273,33 @@ fn to_batch(chunks: &[RagChunk], schema: &Arc<Schema>, dim: i32) -> Result<Recor
     )?)
 }
 
-fn batches_to_chunks(batches: Vec<RecordBatch>) -> Result<Vec<RagChunk>> {
+/// Convert ANN result batches (schema: id, tenant, source, text, vector, _distance) to chunks.
+fn batches_to_chunks_with_distance(batches: Vec<RecordBatch>) -> Result<Vec<RagChunk>> {
     let mut out = Vec::new();
     for b in batches {
-        if let (Some(ids), Some(sources), Some(texts)) = (
-            b.column(0).as_any().downcast_ref::<StringArray>(),
-            b.column(1).as_any().downcast_ref::<StringArray>(),
-            b.column(2).as_any().downcast_ref::<StringArray>(),
-        ) {
-            let vectors = b.column(3).as_any().downcast_ref::<FixedSizeListArray>();
+        // ANN result schema: id=0, tenant=1, source=2, text=3, vector=4, _distance=5
+        let ids = b.column(0).as_any().downcast_ref::<StringArray>();
+        let tenants = b.column(1).as_any().downcast_ref::<StringArray>();
+        let sources = b.column(2).as_any().downcast_ref::<StringArray>();
+        let texts = b.column(3).as_any().downcast_ref::<StringArray>();
+        let vectors = b.column(4).as_any().downcast_ref::<FixedSizeListArray>();
+        // _distance column appended by LanceDB ANN search
+        let distances = b
+            .column_by_name("_distance")
+            .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
+
+        if let (Some(ids), Some(tenants), Some(sources), Some(texts)) =
+            (ids, tenants, sources, texts)
+        {
             for i in 0..b.num_rows() {
+                let distance = distances.map(|d| d.value(i));
                 out.push(RagChunk {
                     id: ids.value(i).to_owned(),
+                    tenant: tenants.value(i).to_owned(),
                     source: sources.value(i).to_owned(),
                     text: texts.value(i).to_owned(),
                     embedding: extract_vec(vectors, i),
+                    distance,
                 });
             }
         }

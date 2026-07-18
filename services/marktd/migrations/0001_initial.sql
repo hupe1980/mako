@@ -689,19 +689,27 @@ CREATE TABLE zaehler (
 CREATE INDEX zaehler_melo ON zaehler (tenant, melo_id);
 
 CREATE TABLE geraete (
-    geraet_id    TEXT        NOT NULL,   -- manufacturer serial or UUID
-    tenant       TEXT        NOT NULL,
-    zaehler_id   TEXT        NOT NULL,   -- owning Zähler
-    geraet_typ   TEXT,                   -- Geraetetyp (e.g. 'WANDLER', 'INTELLIGENTESMESSYSTEM')
-    data         JSONB       NOT NULL DEFAULT '{}',  -- full BO4E Geraet object
-    bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
-    version      BIGINT      NOT NULL DEFAULT 1,
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    geraet_id              TEXT        NOT NULL,   -- manufacturer serial or UUID
+    tenant                 TEXT        NOT NULL,
+    zaehler_id             TEXT        NOT NULL,   -- owning Zähler
+    geraet_typ             TEXT,                   -- Geraetetyp (e.g. 'WANDLER', 'INTELLIGENTESMESSYSTEM')
+    data                   JSONB       NOT NULL DEFAULT '{}',  -- full BO4E Geraet object
+    -- Typed device-configuration entries per MsbG §23 + BSI TR-03109 + §14a EnWG.
+    -- Stored separately from `data` to support atomic partial updates and GIN queries
+    -- (e.g. "all devices with SMGW_CERT_ABLAUFDATUM <= 30 days from now").
+    -- Schema: [{parameter: "FIRMWARE_VERSION", wert: "2.4.1", updated_at: "...", notiz: null}, ...]
+    geraet_konfigurationen JSONB       NOT NULL DEFAULT '[]',
+    bo4e_version           TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    version                BIGINT      NOT NULL DEFAULT 1,
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     PRIMARY KEY (geraet_id, tenant)
 );
 
 CREATE INDEX geraete_zaehler ON geraete (tenant, zaehler_id);
+-- GIN index allows fast JSONB containment queries on configuration entries:
+--   SELECT * FROM geraete WHERE geraet_konfigurationen @> '[{"parameter":"SMGW_CERT_ABLAUFDATUM"}]'
+CREATE INDEX geraete_konfigurationen_gin ON geraete USING GIN (geraet_konfigurationen);
 
 -- ── TechnischeRessource (B9) ──────────────────────────────────────────────────
 --

@@ -1,6 +1,7 @@
 //! Anthropic Claude provider.
 
 use anyhow::{Context, Result};
+use secrecy::ExposeSecret;
 use serde_json::Value;
 use std::{future::Future, pin::Pin};
 
@@ -10,7 +11,7 @@ use crate::config::ProviderConfig;
 pub struct AnthropicProvider {
     name: String,
     base: String,
-    api_key: String,
+    api_key: secrecy::SecretString,
     client: reqwest::Client,
 }
 
@@ -95,7 +96,7 @@ impl LlmProvider for AnthropicProvider {
         let req = self
             .client
             .post(&url)
-            .header("x-api-key", &self.api_key)
+            .header("x-api-key", self.api_key.expose_secret())
             .header("anthropic-version", "2023-06-01")
             .json(&body);
 
