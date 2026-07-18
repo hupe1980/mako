@@ -1423,7 +1423,10 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             .max_connections(cfg.db_max_connections)
             .connect(url)
             .await?;
-        // Schema must be applied manually — see migrations/0001_initial.sql for DDL.
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("run invoicd migrations: {e}"))?;
         tracing::info!("invoicd: database connected");
         Some(pool)
     } else {

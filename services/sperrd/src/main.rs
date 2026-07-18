@@ -46,7 +46,10 @@ async fn main() -> anyhow::Result<()> {
         SecretString::from(cfg.makod_api_key.clone()),
     ));
 
-    // Schema must be applied manually — see migrations/0001_initial.sql for DDL.
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("run sperrd migrations: {e}"))?;
 
     let app = Router::new()
         .merge(health_routes(|| async { true }))
@@ -55,17 +58,17 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/sperr-orders",
             get(handlers::list_orders).post(handlers::create_order),
         )
-        .route("/api/v1/sperr-orders/:id", get(handlers::get_order))
+        .route("/api/v1/sperr-orders/{id}", get(handlers::get_order))
         .route(
-            "/api/v1/sperr-orders/:id/execute",
+            "/api/v1/sperr-orders/{id}/execute",
             axum::routing::put(handlers::execute_order),
         )
         .route(
-            "/api/v1/sperr-orders/:id/fail",
+            "/api/v1/sperr-orders/{id}/fail",
             axum::routing::put(handlers::fail_order),
         )
         .route(
-            "/api/v1/sperr-orders/:id/cancel",
+            "/api/v1/sperr-orders/{id}/cancel",
             axum::routing::put(handlers::cancel_order),
         )
         .layer(Extension(makod))

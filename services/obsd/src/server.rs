@@ -336,7 +336,10 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     )
     .await?;
 
-    // Schema must be applied manually — see migrations/0001_initial.sql for DDL.
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("run obsd migrations: {e}"))?;
 
     let mcp_state = Arc::new(crate::mcp_server::ObsdMcpState {
         pool: pool.clone(),

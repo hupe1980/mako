@@ -45,43 +45,48 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connect PostgreSQL")?;
 
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("run accountingd migrations: {e}"))?;
+
     let app = Router::new()
         .merge(health_routes(|| async { true }))
         // ── CloudEvent ingest ──────────────────────────────────────────────────
         .route("/webhook", post(handlers::ingest_webhook))
         // ── Account endpoints ──────────────────────────────────────────────────
         .route(
-            "/api/v1/accounts/:malo_id",
+            "/api/v1/accounts/{malo_id}",
             get(handlers::get_account).put(handlers::put_account),
         )
         .route(
-            "/api/v1/accounts/:malo_id/balance",
+            "/api/v1/accounts/{malo_id}/balance",
             get(handlers::get_balance),
         )
         .route(
-            "/api/v1/accounts/:malo_id/ledger",
+            "/api/v1/accounts/{malo_id}/ledger",
             get(handlers::get_ledger),
         )
         .route(
-            "/api/v1/accounts/:malo_id/kontoauszug",
+            "/api/v1/accounts/{malo_id}/kontoauszug",
             get(handlers::get_kontoauszug),
         )
         .route(
-            "/api/v1/accounts/:malo_id/abschlag",
+            "/api/v1/accounts/{malo_id}/abschlag",
             put(handlers::put_abschlag),
         )
         .route(
-            "/api/v1/accounts/:malo_id/buchen",
+            "/api/v1/accounts/{malo_id}/buchen",
             post(handlers::post_buchen),
         )
         // Vorauszahlung — BO4E typed advance-payment schedule (L12 — §40 Abs. 1 EnWG)
         .route(
-            "/api/v1/accounts/:malo_id/vorauszahlung",
+            "/api/v1/accounts/{malo_id}/vorauszahlung",
             get(handlers::get_vorauszahlung).put(handlers::put_vorauszahlung),
         )
         // Zahlungsinformation typed BO4E REST (IBAN + BIC + SEPA, rubo4e::current::Zahlungsinformation)
         .route(
-            "/api/v1/accounts/:malo_id/zahlungsinformation",
+            "/api/v1/accounts/{malo_id}/zahlungsinformation",
             get(handlers::get_zahlungsinformation).put(handlers::put_zahlungsinformation),
         )
         // ── Payment import ─────────────────────────────────────────────────────
@@ -91,43 +96,43 @@ async fn main() -> anyhow::Result<()> {
         // ── Dunning ────────────────────────────────────────────────────────────
         .route("/api/v1/dunning", get(handlers::get_dunning))
         .route(
-            "/api/v1/dunning/:account_id/escalate",
+            "/api/v1/dunning/{account_id}/escalate",
             post(handlers::escalate_dunning),
         )
         .route(
-            "/api/v1/dunning/:id/resolve",
+            "/api/v1/dunning/{id}/resolve",
             post(handlers::resolve_dunning),
         )
         // ── SEPA ───────────────────────────────────────────────────────────────
         .route("/api/v1/sepa/mandates", post(handlers::post_mandate))
         .route(
-            "/api/v1/sepa/mandates/:mandate_id",
+            "/api/v1/sepa/mandates/{mandate_id}",
             get(handlers::get_mandate).delete(handlers::delete_mandate),
         )
         .route("/api/v1/sepa/run", post(handlers::run_sepa))
         .route(
-            "/api/v1/jahresabschluss/:malo_id",
+            "/api/v1/jahresabschluss/{malo_id}",
             post(handlers::post_jahresabschluss),
         )
         // ── Balance reconciliation (P1-1) ──────────────────────────────────────
         // POST /api/v1/accounts/{malo_id}/reconcile?repair=true
         // Detects and optionally corrects balance_ct cache drift.
         .route(
-            "/api/v1/accounts/:malo_id/reconcile",
+            "/api/v1/accounts/{malo_id}/reconcile",
             post(handlers::post_reconcile),
         )
         // ── P1-3: Open-item management ─────────────────────────────────────────
         // GET /api/v1/accounts/{malo_id}/open-items
         // FIFO-cleared list of unpaid/partially-paid invoice debits.
         .route(
-            "/api/v1/accounts/:malo_id/open-items",
+            "/api/v1/accounts/{malo_id}/open-items",
             get(handlers::get_open_items),
         )
         // ── P1-4: GDPR Art. 17 anonymization ──────────────────────────────────
         // POST /api/v1/accounts/{malo_id}/anonymize
         // Pseudonymizes PII while preserving ledger records (§238 HGB).
         .route(
-            "/api/v1/accounts/:malo_id/anonymize",
+            "/api/v1/accounts/{malo_id}/anonymize",
             post(handlers::post_anonymize),
         )
         .layer(Extension(Arc::clone(&cfg)))
