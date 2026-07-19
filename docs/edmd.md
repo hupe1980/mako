@@ -40,7 +40,7 @@ The **domain calculation logic** is provided by the [`metering`](https://github.
 
 | Function / Type | §-basis | Used in |
 |---|---|---|
-| `gas_m3_to_kwh_hs(m3, hs, z)` | §24 GasGVV / DVGW G 685 | Gas direct push |
+| `gas_m3_to_kwh_hs(m3, hs, z)` | §25 Nr. 4 MessEV / DVGW G 685 | Gas direct push |
 | `aggregate(intervals, AggregationConfig)` | §2 Nr. 17 MessZV | `MeterBillingPeriod` |
 | `classify_messtyp(intervals, source)` | §3/§4 MessZV, §41a EnWG | iMSys classification |
 | `compute_imbalance(actual, contracted)` | §27 MessZV | Mehr-/Mindermengensaldo |
@@ -106,6 +106,7 @@ graph TB
 │  GET  /api/v1/corrections/{malo_id}         ← bitemporal audit trail      │
 │  GET  /api/v1/quality-assessments/{malo_id} ← Hampel rescore history      │
 │  GET  /api/v1/sharing/{community_id}/alloc  ← §42c Energy Sharing VZW     │
+│  GET  /api/v1/sharing/readiness             ← §42c delivery readiness    │
 │                                                                            │
 │  ── iMSys direct push ────────────────────────────────────────────────── │
 │  POST /api/v1/meter-reads/rlm/{malo_id}     ← Strom 15-min direct push   │
@@ -148,6 +149,34 @@ graph TB
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
+
+### §42c Energy-Sharing readiness
+
+`GET /api/v1/sharing/readiness` answers the **delivery** half of §42c eligibility:
+which delivery points are actually producing the quarter-hour series that
+§42c Abs. 1 EnWG requires.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `from` / `to` | last 30 days | RFC 3339 observation window |
+| `malo_ids` | every MaLo with readings | Comma-separated candidate list |
+| `min_coverage_pct` | 95.0 | Share of expected quarter-hour slots required |
+
+Per point it returns `DELIVERING` · `INSUFFICIENT` · `ABSENT` plus the detected
+interval length, coverage, and a `required_action`.
+
+**Capability and delivery are separate questions.** `marktd`
+`GET /api/v1/melos/{id}/sharing-eligibility` answers whether the *installed
+metering* qualifies; this endpoint answers whether values are *arriving*. The
+distinction is the point — a meter that supports Zählerstandsgangmessung but has
+none configured is *capable but not delivering*, and needs a configuration order
+rather than an iMSys rollout. Collapsing both into one boolean hides exactly the
+state an operator must act on.
+
+Resolution is derived per point from the median of `dtm_to - dtm_from`
+(`metering::classification::detect_interval_length`) — `meter_reads` stores no
+resolution column. The shared rule set lives in `metering::sharing`.
+
 ---
 
 ## Inbound event routing
@@ -165,7 +194,7 @@ graph TB
 | 13005 | Lastgang Messwerte Strom | NB → LF |
 | 13006 | Zählerstand / Ersatzwert Strom | NB → LF |
 | 13007 | **Gasbeschaffenheitsdaten — Brennwert + Zustandszahl** | NB → LF |
-| 13013 | Allokationsliste Gas MMMA (GaBi Gas 2.0) | NB → LF |
+| 13013 | Allokationsliste Gas MMMA (GaBi Gas 2.1) | NB → LF |
 | 13015 | Lastgang Summenzeitreihe SLP Strom | NB → LF |
 | 13016 | Ausfallarbeit Strom | NB → LF |
 | 13017 | Zählerstand Strom — Ablese-Übermittlung | NB → LF |
@@ -214,10 +243,165 @@ Idempotent on `session_id` — re-submitting the same key returns 200 with the o
 
 ---
 
+## IoT meter ingest (LoRaWAN, M-Bus, REST heat meters)
+
+```http
+POST /api/v1/meter-reads/iot/{malo_id}
+```
+
+Heat and water submetering points usually have **no Smart-Meter-Gateway**, so a
+purely MSCONS pipeline cannot see them at all. This endpoint is the ingest path
+for LoRaWAN uplinks, wM-Bus/M-Bus concentrators and REST-capable heat meters.
+
+**Why it matters commercially.** HeizkostenV §5 Abs. 3 requires every
+non-remote-readable device to be retrofitted or replaced by **31 December 2026**
+(subject to the Satz 2 hardship exception, and distinct from the §5 Abs. 4
+smart-meter-gateway deadline of 31 December 2031),
+and §6a requires a monthly consumption message to each user. §12 Abs. 1 backs
+both with a **3 % Kürzungsrecht** — Satz 2 for a missing remote-readable device
+and, separately, Satz 3 for information that is "nicht oder nicht **vollständig**"
+supplied. Missing an ingest path here is a direct revenue deduction.
+
+```http
+POST /api/v1/meter-reads/iot/62345678901
+Content-Type: application/json
+
+{
+  "sparte": "WAERME",
+  "unit": "KWH",
+  "session_id": "70B3D57ED0012345:4711",
+  "transport": "LORAWAN",
+  "device_id": "70B3D57ED0012345",
+  "obis_code": "6-0:1.0.0",
+  "eichung_bis": "2027-12-31",
+  "raw_payload": "AwAAECcAAA==",
+  "intervals": [
+    { "from": "2026-07-13T00:00:00Z", "to": "2026-07-13T01:00:00Z", "value": "4.120" }
+  ]
+}
+```
+
+### The payload must already be decoded
+
+`edmd` deliberately does **not** decode wM-Bus/OMS frames. German submetering
+payload specs are gated in practice: ista's protocol is proprietary, Kamstrup's
+byte-level wireless document (5512-1034) exists nowhere in public and its AES
+keys require a `mykamstrup.com` login plus serial number or an invoice copy, and
+Itron formally answered "**No**" to *"Is the payload structure available for
+decoding?"* on its own LoRa Alliance device questionnaire for the Cyble 5.
+Apator's APT-WMBUS-NA-1 manual states outright that "the application layer is
+Apator proprietary". Every working open-source decoder for these vendors is
+reverse-engineered rather than spec-derived.
+
+Decoding belongs at the network server or vendor codec, which holds the device
+keys. `edmd` retains **`raw_payload` verbatim**: network-server codecs are mutable
+and carry no version on the uplink, so a stored value can only be re-derived from
+the original frame.
+
+### Idempotency
+
+`session_id` is **required**; there is no timestamp-derived fallback. Use
+`devEUI:fCnt` for LoRaWAN or the telegram access number for OMS/M-Bus. A committed
+session replays as **200 `already_committed`**. A batch in which nothing landed is
+not committed, so it stays retryable.
+
+### Unit and Sparte
+
+A Sparte has **two** units and the endpoint accepts either:
+
+| `sparte` | as measured | as billed |
+|---|---|---|
+| `STROM` | kWh | kWh |
+| `GAS` | **m³** | **kWh** |
+| `WAERME` | kWh | kWh |
+| `WASSER` | m³ | m³ |
+
+A gas meter registers **volume**, so a raw gas uplink arrives in m³ and
+`brennwert_kwh_per_m3` is **required**; `zustandszahl` defaults to 1.0. The
+calorific value varies by supply area and month, so it is not defaulted. Submit
+`unit = KWH` to supply pre-converted values. The response reports
+`unit_submitted`, `unit_stored` and `converted`.
+
+Anything outside those two units is a decode error and 422s, including a `WASSER`
+reading in kWh.
+
+The conversion rests on the Eichrecht exceptions to §33 Abs. 1 MessEG, which
+permits only measured values: §25 Nr. 4 MessEV covers the Brennwert itself and
+§25 Nr. 7 MessEV a value formed as a *"Produkt"* of measured values. DVGW G 685 is
+the anerkannte Regel der Technik referenced by Nr. 4.
+
+**Unit strings are liberal, storage is canonical.** `kWh`, `Wh`, `MWh`, `GWh`,
+`GJ` and `MJ` are all accepted for energy, `m³`/`m3`/`cbm` and `l`/`ltr`/`liter`
+for volume — German heat meters ship with kWh, MWh *or* GJ registers depending on
+the ordered variant, and water submeters commonly report litres. Values are
+rescaled to kWh/m³ before storage using **exact rational** factors (GJ→kWh is
+2500/9, a repeating decimal), so `3.6 GJ` stores as exactly `1000 kWh`.
+
+Negative values are rejected. BDEW requires quantities to be positive or zero;
+direction belongs in the OBIS code, so a negative here is a decode error.
+
+### Calibration (Eichfrist)
+
+An expired Eichfrist produces a **warning, never a rejection**. §37 Abs. 1 Satz 1
+Nr. 1 MessEG bars use of the *Messgerät* once the Eichfrist has run, and §33 Abs. 1
+MessEG then bars the resulting *values*, since a device used contrary to §37 was
+not "bestimmungsgemäß verwendet". BGH VIII ZR 112/10 holds that in civil billing
+such a reading loses only its *Vermutung der Richtigkeit* and remains usable with
+the burden of proof shifted. Public-law Gebührenabrechnung is stricter (BayVGH
+20 B 21.2421 requires estimation), which is a billing-side decision.
+
+§37 Abs. 2 also ends a Eichfrist early on defect or tampering, so an expiry date
+alone is not the whole eichrechtliche validity test.
+
+Note that §34 Abs. 2 MessEV ends a Eichfrist of at least a year only *"mit dem
+Ende des Jahres, in dem die Frist rechnerisch endet"*, so callers send
+`YYYY-12-31`.
+Leave `eichung_bis` unset for Heizkostenverteiler. They have no Eichfrist because
+they are not Messgeräte under MessEG at all — "Heizkostenverteiler" appears nowhere
+in MessEV, neither in Anlage 1 nor in the Eichfristen of Anlage 7. HeizkostenV
+§5 Abs. 1 admits them through a conditional clause ("soweit nicht eichrechtliche
+Bestimmungen zur Anwendung kommen") that requires expert-body confirmation against
+EN 834 / EN 835 instead of Eichung.
+
+Note also that **no German law prescribes a unit for heat meters.** MID Annex VI
+(MI-004) contains no units clause, and EN 1434-1 cl. 6.3.1 permits *"Joules,
+Watt-hours or decimal multiples of those units"* — a GJ meter is exactly as
+compliant as a kWh one. This is why the endpoint accepts GJ and MJ rather than
+assuming kWh. The one hard kWh mandate is HeizkostenV §6a Abs. 2 Nr. 1, and it
+governs the monthly consumption *message*, not the meter.
+
+### Status codes
+
+| Code | Meaning |
+|---|---|
+| 201 | All intervals stored, no warnings |
+| 202 | Stored, with calibration warnings and/or per-interval rejections |
+| 200 | `session_id` already committed — no-op replay |
+| 422 | Unknown `sparte`/`unit`, unit/Sparte mismatch, or nothing storable |
+
+---
+
 ## Hampel-filter quality scoring
 
 `edmd` runs the **Hampel filter** (window k=3, threshold t=3.0, MAD × 1.4826 robust σ)
-on every inbound interval batch via `metering::score_intervals_f64`. This function:
+on every inbound interval batch via `metering::score_intervals_f64`.
+
+Thresholds are **media-aware** — `QualityConfig::for_sparte`. The k=3/t=3.0
+defaults suit 15-minute RLM electricity profiles, which are noisy and rarely flat.
+Heat and water profiles are dominated by long legitimate zero runs and need two
+wider tolerances:
+
+- **Zero runs.** Electricity has a standby floor; water and heat do not, and a
+  vacant flat reads zero for months. `max_zero_run_allowed` is 2 for Strom, 48 for
+  Gas, 720 for Wärme/Wasser.
+- **Sigma floor.** Across a flat window the median absolute deviation is 0, so
+  `t × σ` is 0 and every nonzero value scores as an outlier. `min_sigma` floors the
+  scale estimate, making the test "deviates by more than the floor".
+
+On the IoT path an outlier is stored as **`PRELIMINARY`** (MSCONS Z84, vorläufiger
+Wert) rather than discarded: measured, not yet confirmed. `FAULTY` would assert a
+defect the filter cannot establish, and §17 MessZV substitution is a downstream
+decision. This function:
 
 - Converts Decimal quantities to f64 once per batch — lossless for kWh ≤ 10¹³
 - Uses tight loops over contiguous f64 slices that **auto-vectorise to AVX2
@@ -572,7 +756,7 @@ matches `geplant_am` within ±1 day.
 | `Residual` | §42a EEG | Grid feed-in = gross generation − own consumption |
 | `PvSelfConsumption` | §42b EEG | Prosumer: net grid draw after PV self-use |
 | `GgvConstantAllocation` | §42b Abs. 5 EnWG | GGV tenant with fixed allocation fraction (UTILTS CCI+ZG6) |
-| `GgvProportionalAllocation` | §42b Abs. 5 EnWG | GGV tenant with dynamic consumption-based allocation |
+| `GgvProportionalAllocation` | §42b Abs. 5 EnWG | GGV tenant with dynamic consumption-based allocation. **Also carries §42c Energy Sharing**: the allocation arithmetic is identical and the regimes are distinguished by `legal_basis` (§42b = in-building, no grid transit; §42c = via the public grid). Should BNetzA's §42c Festlegung mandate different arithmetic, that needs its own variant. |
 
 ### GGV allocation formulas (BDEW Anwendungshilfe, 25.01.2024)
 
@@ -638,11 +822,26 @@ graph LR
 
 ### Configuring virtual meters
 
-Create a virtual meter config via the REST API (stored in `virtual_meter_configs`):
+Create a virtual meter config via the REST API (stored in `virtual_meter_configs`).
+
+The table is keyed by `virtual_malo_id` — a virtual meter *is* a Marktlokation,
+addressed by its own MaLo-ID — and carries `legal_basis` so a community records
+which regime it operates under. `rule_type` is constrained to the variants of
+`metering::aggregation_rule::AggregationRule`; `edmd` deserialises `rule_json`
+into that enum, so a value the enum does not know is an unreadable row.
+
+`sqlx::query` is unchecked, so a column that does not exist is a runtime error
+rather than a compile error. The `schema_code_guard` test suite reads the
+migration and the handler queries and asserts they agree — column set, upsert
+conflict key, and the `rule_type` list against the enum.
+
+Routes: `POST /api/v1/virtual` · `GET /api/v1/virtual` ·
+`GET|DELETE /api/v1/virtual/{virtual_malo_id}` ·
+`GET /api/v1/virtual/{virtual_malo_id}/lastgang`.
 
 ```bash
 # Tenant 2: constant 10 % allocation (GgvConstantAllocation)
-curl -X POST http://edmd:8380/api/v1/virtual-meter-configs \
+curl -X POST http://edmd:8380/api/v1/virtual \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" -d '{
     "virtual_malo_id": "10001234002",
@@ -660,7 +859,7 @@ curl -X POST http://edmd:8380/api/v1/virtual-meter-configs \
   }'
 
 # Tenant 2: proportional/variable allocation (GgvProportionalAllocation)
-curl -X POST http://edmd:8380/api/v1/virtual-meter-configs \
+curl -X POST http://edmd:8380/api/v1/virtual \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" -d '{
     "virtual_malo_id": "10001234002",

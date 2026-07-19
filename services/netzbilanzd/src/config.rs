@@ -31,14 +31,14 @@ pub struct NetzbilanzConfig {
     /// Optional ERP webhook URL — receives CloudEvents
     /// `de.netzbilanz.invoic.drafted` and `de.netzbilanz.invoic.dispatched`.
     pub erp_webhook_url: Option<String>,
-    /// ÜNB MP-ID for this NB's Regelzone — used to auto-fetch Strom MMM
+    /// VNB MP-ID used to auto-fetch this operator's published Strom MMM
     /// (Mehr-/Mindermengen) settlement prices from `marktd` when not explicitly
     /// supplied in a billing run request.
     ///
     /// Required for `billing_type = "mmm_strom"` auto-fetch path.
     /// Identify your ÜNB from BDEW Codenummernbericht or
     /// `marktd GET /api/v1/partners` (rol: ÜNB).
-    pub unb_mp_id: Option<String>,
+    pub vnb_mp_id: Option<String>,
     /// How often (seconds) to check for undispatched drafts older than 48 h.
     /// Default: 3600 (1 hour). Set to 0 to disable.
     pub dispatch_alert_interval_secs: Option<u64>,

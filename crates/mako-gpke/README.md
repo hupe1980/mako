@@ -59,20 +59,33 @@ COMDIS from the NB are handled via `ReceiveRemadv` and `ReceiveComdis` commands.
 | 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo)        | ✅ Implemented  |
 | 31006 | MMM-Rechnung (selbst ausgestellt)             | ✅ Implemented  |
 
-> PIDs 31007/31008 (Aggreg. MMM-Rechnung Gas, NB → MGV) belong to `mako-gabi-gas` (BK7-14-020).
+> PIDs 31007/31008 (Aggreg. MMM-Rechnung Gas, NB → MGV) belong to `mako-gabi-gas` (BK7-24-01-008).
 > PIDs 31003 (WiM-Rechnung) and 31009 (MSB-Rechnung) belong to the WiM domain.
 > PID 31004 (Stornorechnung WiM Gas) belongs to `mako-wim-gas` (BK7-24-01-009).
 
-### ORDERS Sperrung Strom — NB role (GPKE Teil 4, BK6-22-024)
+### ORDERS Sperrung Strom (GPKE Teil 4, BK6-22-024)
 
 > The gas Sperrung equivalents of these PIDs (same PID numbers, different Sparte) belong
 > to `mako-geli-gas`. Never mix Strom and Gas Sperrung in the same deployment module.
 
-| PID   | Process name                                              | Direction   | Status         |
-|-------|-----------------------------------------------------------|-------------|----------------|
-| 17115 | Anfrage Sperrung / Entsperrung (NB → gMSB/MSB)           | NB → MSB    | ✅ Implemented |
-| 17116 | Antwort Sperrung / Entsperrung (gMSB/MSB → NB)           | MSB → NB    | ↩ Derived      |
-| 17117 | Stornierung Sperrauftrag / Änderung (NB → gMSB/MSB)      | NB → MSB    | ✅ Implemented |
+**Direction matters here and is easy to get wrong:** 17115 and 17117 travel
+**LF → NB** — the Lieferant orders the grid operator to disconnect or reconnect.
+17116 is the NB asking the MSB. Two workflows model the two ends.
+
+| PID   | Process name                                     | Direction   | Workflow           | Status         |
+|-------|--------------------------------------------------|-------------|--------------------|----------------|
+| 17115 | Sperrauftrag                                     | LF → NB     | both               | ✅ Implemented |
+| 17116 | Anfrage Sperrung (NB fragt MSB)                  | NB → MSB    | `gpke-sperrung`    | ✅ Implemented |
+| 17117 | Entsperrauftrag                                  | LF → NB     | both               | ✅ Implemented |
+| 39000 | Stornierung Sperr-/Entsperrauftrag (ORDCHG)      | LF → NB     | both               | ✅ Implemented |
+| 19116/19117 | Bestätigung / Ablehnung (ORDRSP)           | NB → LF     | `gpke-sperrung-lf` | ✅ Implemented |
+| 19128/19129 | Bestätigung / Ablehnung Stornierung        | NB → LF     | `gpke-sperrung-lf` | ✅ Implemented |
+| 21039 | Auftragsstatus nach Ausführung (IFTSTA)          | NB → LF     | `gpke-sperrung-lf` | ✅ Implemented |
+
+**ERP commands.** LF side: `gpke.sperrung.beauftragen` (17115),
+`gpke.entsperrung.beauftragen` (17117), `gpke.sperrung.stornieren` (39000).
+NB side: `gpke.sperrung.bestaetigen` / `gpke.sperrung.fehlgeschlagen` — both
+dispatch IFTSTA 21039 and are issued automatically by `sperrd`.
 
 ### UTILMD Stornierung Zuordnungsprozess (GPKE Teil 1)
 
@@ -216,7 +229,7 @@ Allokationsliste, exchanged between LF and NB via ORDERS and answered with MSCON
 | `konfiguration`             | `gpke-konfiguration`             | PIDs 17134/17135 (ORDERS outbound) + 19001/19002 (ORDRSP inbound) — GPKE Teil 4 |
 | `konfiguration_aenderung`   | `gpke-konfiguration-aenderung`   | ORDERS/ORDRSP for configuration changes (NB role)                   |
 | `sperrung`                  | `gpke-sperrung`                  | PIDs 17115–17117 (ORDERS Sperrung Strom, NB → MSB)                 |
-| `sperrung_lf`               | `gpke-sperrung-lf`               | ORDRSP 19116/19117 + IFTSTA Sperrung (LF-side ANTWORT receiver)    |
+| `sperrung_lf`               | `gpke-sperrung-lf`               | LF-side Sperrung: ORDERS 17115/17117 + ORDCHG 39000 outbound, ORDRSP 19116/19117 · 19128/19129 + IFTSTA 21039 inbound |
 | `ankuendigung_zuordnung_lf` | `gpke-ankuendigung-zuordnung-lf` | PIDs 55607–55609 (UTILMD Ankündigung Zuordnung LF)                 |
 | `partin`                    | `gpke-partin`                    | PIDs 37000–37006 (PARTIN Strom Kommunikationsdaten)                |
 | `utilts`                    | `gpke-utilts`                    | UTILTS PIDs 25001/25004–25010 (Netzzustandsdaten NB → LF)          |

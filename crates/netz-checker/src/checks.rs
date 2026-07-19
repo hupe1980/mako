@@ -247,7 +247,7 @@ pub fn evaluate(
                 "Mindestvorlauffrist not met for {} metering. \
                  Requested Lieferbeginn {} does not satisfy the minimum lead time \
                  (SLP: next Arbeitstag; RLM: 2 Werktage). \
-                 Source: BK6-22-024 §5 / GeLi Gas BK7-24-01-009.",
+                 Source: BK6-22-024 §5 / GeLi Gas 3.0 (BK7-24-01-009).",
                 anfrage.messtyp, anfrage.process_date
             ),
             check_number: 6,

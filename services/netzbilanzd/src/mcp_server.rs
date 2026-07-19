@@ -764,10 +764,10 @@ impl NetzbilanzMcpHandler {
             PromptMessage::new_text(Role::User, "How do I run the monthly MMM billing?"),
             PromptMessage::new_text(
                 Role::Assistant,
-                "**Monthly MMM Billing (INVOIC 31002, §40 StromNZV)**\n\n\
+                "**Monthly MMM Billing (INVOIC 31002, GPKE (BK6-24-174) Teil 1 Kap. 8.4)**\n\n\
                  **Prerequisites:**\n\
                  - Import MMMA Gas prices (THE): PUT marktd /api/v1/mmma-preise/gas/{year}/{month}\n\
-                 - Import Strom MMM prices (ÜNB): PUT marktd /api/v1/mmm-preise/strom/{year}/{month}\n\
+                 - Import Strom MMM prices (VNB): PUT marktd /api/v1/mmm-preise/strom/{year}/{month}\n\
                  - Ensure edmd has SLP imbalance data for the period (MSCONS from NB)\n\n\
                  **Step 1 — Per-MaLo MMM auto-run (recommended):**\n\
                  For each SLP MaLo in your portfolio:\n\
@@ -784,7 +784,7 @@ impl NetzbilanzMcpHandler {
                  **Step 4 — Monitor for REMADV responses:**\n\
                  Use `list_nne_drafts` with status=dispatched to confirm delivery.\n\
                  Disputes (REMADV 33002) appear as outcome=Dispute — use `investigate-dispute` prompt.\n\n\
-                 **Regulatory basis:** §40 StromNZV; BDEW INVOIC AHB 1.0 PID 31002.",
+                 **Regulatory basis:** GPKE (BK6-24-174) Teil 1 Kap. 8.4; BDEW INVOIC AHB 1.0 PID 31002.",
             ),
         ]
     }
@@ -882,7 +882,7 @@ impl NetzbilanzMcpHandler {
                  |---|---|---|---|---|\n\
                  | 31001 | NNE Strom (Netznutzungsentgelt) | NB → LF | per NbContract.billing_schedule | `nne_strom` |\n\
                  | 31001 | GGV NNE (§42a tenant split) | NB → LF | per NbContract.billing_schedule | `nne_strom` via `/ggv-nne` |\n\
-                 | 31002 | MMM Strom (Mehr-/Mindermenge) | NB → LF | annual settlement §40 StromNZV | `mmm_strom` |\n\
+                 | 31002 | MMM Strom (Mehr-/Mindermenge) | NB → LF | annual settlement GPKE (BK6-24-174) Teil 1 Kap. 8.4 | `mmm_strom` |\n\
                  | 31005 | NNE Gas (Gasnetznetz) | GNB → LFG | per NbContract | `nne_gas` |\n\
                  | 31009 | MSB-Rechnung (metering service) | NB → MSB | per MSB contract | `msb_31009` |\n\
                  | 31011 | AWH Sperrprozesse Gas (GeLi Gas) | GNB → LFG | per Sperrprozess close | `nne_gas_awh_31011` |\n\n\
@@ -890,7 +890,7 @@ impl NetzbilanzMcpHandler {
                  - §22 MessZV: 3-year retention; Stornorechnung/Korrekturrechnung for corrections\n\
                  - invoic-checker blocks dispatch on Dispute outcome (NB can only send defensible invoices)\n\
                  - REMADV 33002 (dispute) → COMDIS 29001 (makod) for formal escalation\n\
-                 - §40 StromNZV: MMM settlement due annually; `mmm-run/{malo_id}` auto-fetches profil_kwh\n\
+                 - GPKE (BK6-24-174) Teil 1 Kap. 8.4: MMM settlement due annually; `mmm-run/{malo_id}` auto-fetches profil_kwh\n\
                  - BK6-20-061: Redispatch Kostenblatt due 15th of following month\n\n\
                  **CloudEvents emitted:**\n\
                  - `de.netzbilanz.invoic.drafted` — after POST /billing/run\n\
@@ -911,7 +911,7 @@ impl ServerHandler for NetzbilanzMcpHandler {
         .with_instructions(
             "netzbilanzd MCP — NNE/KA/MMM Billing Daemon (NB role).\n\
              Generates INVOIC 31001 (NNE Strom), 31002 (MMM Strom), 31005 (NNE Gas),\n\
-             31009 (MSB-Rechnung), 31011 (AWH Sperrprozesse Gas, GeLi Gas BK7-24-01-009).\n\
+             31009 (MSB-Rechnung), 31011 (AWH Sperrprozesse Gas, GeLi Gas 3.0 (BK7-24-01-009)).\n\
              Pre-dispatch self-validation via invoic-checker (period · arithmetic · total · tariff).\n\
              Dispatches to makod via gpke.nne.rechnung.stellen / gpke.mmm.rechnung.stellen.\n\n\
              ## Tools (13)\n\
@@ -930,7 +930,7 @@ impl ServerHandler for NetzbilanzMcpHandler {
              - `list_paid_invoices` — REMADV 33001/33003/33004 confirmed paid invoices\n\n\
              ## Billing types\n\
              - nne_strom → INVOIC 31001 · nne_gas → INVOIC 31005\n\
-             - mmm_strom → INVOIC 31002 (Strom MMM, auto-fetches prices when unb_mp_id configured)\n\
+             - mmm_strom → INVOIC 31002 (Strom MMM, auto-fetches prices when vnb_mp_id configured)\n\
              - mmm_gas → INVOIC 31002 (Gas MMM, THE prices auto-fetched from marktd)\n\
              - msb_31009 → INVOIC 31009 (MSB-Rechnung, metering fee)\n\
              - nne_gas_awh_31011 → INVOIC 31011 (GeLi Gas AWH Sperrprozesse, GNB → LFG)\n\n\

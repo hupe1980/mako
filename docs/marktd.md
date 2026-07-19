@@ -320,7 +320,7 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/partners` | `read-partner` | List partners |
 | `GET/PUT` | `/api/v1/mmma-preise/gas/{year}/{month}` | `read/write-preisblatt` | Gas MMM Abrechnungspreise (Trading Hub Europe / MGV, monthly) — `{mehr_ct_kwh, minder_ct_kwh}`; queried by `netzbilanzd` for INVOIC 31007/31008 billing and `invoicd` check 6 validation |
 | `GET` | `/api/v1/mmma-preise/gas` | `read-preisblatt` | List all Gas MMM price records (newest first; `?limit=`) |
-| `GET/PUT` | `/api/v1/mmm-preise/strom/{year}/{month}` | `read/write-preisblatt` | Strom MMM Ausgleichsenergie prices per ÜNB (§22 StromNZV) — `{unb_mp_id, mehr_ct_kwh, minder_ct_kwh}`; queried by `netzbilanzd` for INVOIC 31002/31005 and `invoicd` check 6 |
+| `GET/PUT` | `/api/v1/mmm-preise/strom/{year}/{month}` | `read/write-preisblatt` | Strom MMM prices (VNB per GPKE BK6-24-174 Teil 1 Kap. 8.4) — `{vnb_mp_id, mehr_ct_kwh, minder_ct_kwh}`; queried by `netzbilanzd` for INVOIC 31002/31005 and `invoicd` check 6 |
 | `PUT` | `/api/v1/preisblaetter/{nb_mp_id}` | `write-preisblatt` | Upsert price sheet + store versioned snapshot + emit `de.markt.pricat.published` |
 | `GET` | `/api/v1/preisblaetter/{nb_mp_id}` | `read-preisblatt` | Get price sheet valid on date |
 | `GET` | `/api/v1/pricat/{nb_mp_id}/history` | `read-preisblatt` | List PRICAT version history (newest first) |
@@ -347,6 +347,7 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `PUT` | `/api/v1/lokationszuordnungen` | `write-malo` | Upsert a directed location graph edge |
 | `DELETE` | `/api/v1/lokationszuordnungen/{von_id}/{nach_id}` | `write-malo` | Hard-delete an edge pair (all temporal variants) |
 | `GET` | `/api/v1/melos/{melo_id}/zaehler` | `read-device` | List `Zaehler` for a MeLo (typed `Vec<ZaehlerResponse>` with `data: rubo4e::current::Zaehler`) |
+| `GET` | `/api/v1/melos/{melo_id}/sharing-eligibility` | `read-sharing-eligibility` | §42c EnWG metering **capability** — qualifies via Zählerstandsgangmessung (§2 Satz 1 Nr. 27 MsbG) **or** viertelstündliche RLM. Returns `capability`, `basis`, `required_action`, `reasons`, `bilanzierungsgebiet`, and the master-data `evidence` it decided from. |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/zaehlwerke` | `read-device` | List `Zaehlwerk` registers for a Zaehler (typed `Vec<Zaehlwerk>` from JSONB) |
 | `PUT` | `/api/v1/zaehler/{zaehler_id}` | `write-device` | Upsert a `Zaehler`; validates `_typ = ZAEHLER` and schema (422 on violation) |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/geraete` | `read-device` | List `Geraete` for a `Zaehler` (typed `Vec<GeraetResponse>` with `data: rubo4e::current::Geraet` + `konfigurationen: Vec<GeraetKonfiguration>`) |
@@ -590,7 +591,7 @@ Migrations run automatically at startup via `sqlx migrate run`.
 | `malo_grid` | MaLo grid topology — Netzgebiet, Bilanzierungsgebiet, sourced from NIS/GIS |
 | `steuerbare_ressourcen` | WiM iMS controllable resources — keyed by SR-ID (`C[A-Z0-9]{9}[0-9]`), linked to MaLo; `konfigurationsprodukte JSONB` for contracted iMS control products  |
 | `technische_ressourcen` | E-mobility, generation, storage resources — keyed by TrId; `tr_typ`, `ist_fernschaltbar` typed columns; linked to MaLo/MeLo |
-| `zaehler` | Meter registry — linked to MeLo; `zaehler_typ`, `eichung_bis` typed columns; BO4E payload with `zaehlwerke` array |
+| `zaehler` | Meter registry — linked to MeLo; `zaehler_typ` (CHECK-constrained to BO4E `Zaehlertyp`), `eichung_bis` typed columns; BO4E payload with `zaehlwerke` array |
 | `geraete` | Device registry — linked to Zaehler, stores `geraet_typ`, BO4E payload, and `geraet_konfigurationen JSONB` (typed `GeraetKonfiguration[]` per MsbG §23; GIN-indexed for cert-expiry queries) |
 | `event_log` | Durable CloudEvent replay log — keyed by `event_id` (unique); indexed by `ce_type` + `received_at` |
 
@@ -1327,7 +1328,7 @@ curl -s "http://marktd:8180/api/v1/mmma-preise/gas?limit=12" \
   -H "Authorization: Bearer <token>"
 ```
 
-### Strom MMM Ausgleichsenergie — ÜNB (§22 StromNZV)
+### Strom MMM Ausgleichsenergie — ÜNB (GPKE (BK6-24-174) Teil 1 Kap. 8.4)
 
 Published monthly per ÜNB (50Hertz, TenneT, Amprion, TransnetBW). Used by
 `netzbilanzd` for INVOIC 31002/31005 and `invoicd` check 6 on inbound Strom MMM invoices.
@@ -1338,14 +1339,14 @@ curl -s -X PUT "http://marktd:8180/api/v1/mmm-preise/strom/2026/7" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "unb_mp_id": "9900823780008",
+    "vnb_mp_id": "9900823780008",
     "mehr_ct_kwh": "2.10",
     "minder_ct_kwh": "1.45",
     "source": "manual"
   }'
 
 # Query
-curl -s "http://marktd:8180/api/v1/mmm-preise/strom/2026/7?unb_mp_id=9900823780008" \
+curl -s "http://marktd:8180/api/v1/mmm-preise/strom/2026/7?vnb_mp_id=9900823780008" \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -1417,7 +1418,13 @@ MeLo ──► Zaehler ──► Geraete
 ```
 
 A `Zaehler` carries:
-- `zaehler_typ` — e.g. `DREHSTROMZAEHLER`, `GASZAEHLER`
+- `zaehler_typ` — BO4E `Zaehlertyp`, **CHECK-constrained** to the 14 v202607 wire
+  values (`DREHSTROMZAEHLER`, `INTELLIGENTES_MESSSYSTEM`, `MODERNE_MESSEINRICHTUNG`, …).
+  `GASZAEHLER` is *not* one of them. §42c Energy-Sharing eligibility reads this
+  column, so an unrecognised value would silently degrade a delivery point to
+  `UNKNOWN`; the `schema_enum_guard` test pins the list to `rubo4e`.
+  Watch the spelling: `Zaehlertyp` uses `INTELLIGENTES_MESSSYSTEM` (three `s`),
+  while `Geraetetyp` uses `INTELLIGENTES_MESSYSTEM` (two). That is a BO4E quirk.
 - `eichung_bis` — calibration valid-until date (Eichgültigkeitsdatum)
 - `data` — full BO4E `Zaehler` payload (the `_typ` discriminator is **auto-injected**
   to `"Zaehler"` if absent, ensuring every stored object is self-describing)

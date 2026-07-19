@@ -2,9 +2,17 @@
 //!
 //! ## Legal basis
 //!
-//! - **§24 GasGVV** (Gasgrundversorgungsverordnung): Abrechnungsmenge in kWh.
-//! - **DVGW G 685** §10: Umrechnung Volumen → Energie.
-//! - **DVGW G 260** (Gasbeschaffenheit): Hs-Bereich für Erdgas H/L.
+//! A gas meter registers m³. The kWh billed is derived, never measured, so the
+//! conversion rests on the Eichrecht exceptions to §33 MessEG:
+//!
+//! - **§33 Abs. 1 MessEG**: a value for a Messgröße may only be used if it was
+//!   determined with a Messgerät.
+//! - **§25 Nr. 4 MessEV**: permits Brennwert values *"wenn sie nach den
+//!   anerkannten Regeln der Technik ermittelt worden sind"*.
+//! - **§25 Nr. 7 MessEV**: permits a value formed as a *"Produkt"* of measured
+//!   values, which is what V × Z × Hs is.
+//! - **DVGW G 685**: the anerkannte Regel der Technik referenced by §25 Nr. 4.
+//! - **DVGW G 260**: Gasbeschaffenheit, Hs-Bereich für Erdgas H/L.
 //!
 //! ## Formula
 //!
@@ -42,12 +50,12 @@ pub struct GasConversionParams {
     /// Superior calorific value (Brennwert Ho / Hs) in kWh/m³.
     ///
     /// Published monthly by the gas distributor per supply area.
-    /// Source: Messstellenbetreiber / NB monthly data per §24 GasGVV.
+    /// Source: Messstellenbetreiber / NB monthly data per supply area.
     pub hs_kwh_per_m3: Decimal,
     /// Volume conversion factor (Zustandszahl, dimensionless).
     ///
     /// Accounts for pressure and temperature at the meter.
-    /// Default per §24 GasGVV when not metered: 1.0.
+    /// Neutral default when not separately metered: 1.0.
     pub zustandszahl: Decimal,
 }
 
@@ -55,7 +63,7 @@ impl GasConversionParams {
     /// Default conversion parameters when no measurement data is available.
     ///
     /// Uses `Hs = 10.55 kWh/m³` (typical German Erdgas H average) and
-    /// `Zustandszahl = 1.0` (neutral) per §24 GasGVV default.
+    /// `Zustandszahl = 1.0` (neutral).
     #[must_use]
     pub fn default_erdgas_h() -> Self {
         Self {
@@ -154,5 +162,220 @@ mod tests {
         let p = GasConversionParams::default_erdgas_h();
         assert_eq!(p.hs_kwh_per_m3, dec!(10.55));
         assert_eq!(p.zustandszahl, Decimal::ONE);
+    }
+}
+
+// ── Warm water → heat energy (HeizkostenV §9 Abs. 2) ─────────────────────────
+
+/// Adjustments applied to a §9 Abs. 2 result.
+///
+/// §9 Abs. 2 Satz 6 applies these to the result of *either* Zahlenwertgleichung
+/// and does not make them exclusive, so more than one may hold at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WarmWaterAdjustments {
+    /// *"bei brennwertbezogener Abrechnung von Erdgas mit 1,11 zu multiplizieren"*.
+    pub brennwert_erdgas: bool,
+    /// *"bei eigenständiger gewerblicher Wärmelieferung durch 1,15 zu dividieren"*.
+    ///
+    /// **Eigenständig** is a term of art (cf. §1 Abs. 1 Nr. 2); ordinary
+    /// commercial heat supply does not qualify.
+    pub eigenstaendige_gewerbliche_waermelieferung: bool,
+    /// *"bei dem Betrieb einer monovalenten Wärmepumpe mit 0,30 zu multiplizieren"*.
+    pub monovalente_waermepumpe: bool,
+}
+
+impl WarmWaterAdjustments {
+    /// No adjustment.
+    pub const NONE: Self = Self {
+        brennwert_erdgas: false,
+        eigenstaendige_gewerbliche_waermelieferung: false,
+        monovalente_waermepumpe: false,
+    };
+
+    fn apply(self, base: Decimal) -> Decimal {
+        let mut q = base;
+        if self.brennwert_erdgas {
+            q *= Decimal::from_str_exact("1.11").unwrap_or(Decimal::ONE);
+        }
+        if self.eigenstaendige_gewerbliche_waermelieferung {
+            q /= Decimal::from_str_exact("1.15").unwrap_or(Decimal::ONE);
+        }
+        if self.monovalente_waermepumpe {
+            q *= Decimal::from_str_exact("0.30").unwrap_or(Decimal::ONE);
+        }
+        q
+    }
+}
+
+/// Heat attributable to a central warm-water system from the **metered volume**,
+/// per HeizkostenV §9 Abs. 2 Satz 2.
+///
+/// ```text
+/// Q [kWh/a] = 2.5 × V [m³] × (t_w [°C] − 10)
+/// ```
+///
+/// §9 Abs. 2 Satz 1 requires the heat quantity to be **measured with a
+/// Wärmezähler**. This equation is the fallback admitted only where measurement
+/// *"nur mit einem unzumutbar hohen Aufwand"* is possible.
+///
+/// It is a *Zahlenwertgleichung* — a numerical-value equation, not dimensionally
+/// consistent — so 2.5 carries no unit. §9 Abs. 2 Satz 3 Nr. 1 defines it as
+/// covering the Erzeugeraufwandszahl des Wärmeerzeugers, the mittlere spezifische
+/// Wärmekapazität des Wassers, the Wärmeverluste für Warmwasserspeicher,
+/// Verteilung einschließlich Zirkulation, and Messdatenerhebungen zum
+/// Warmwasserverbrauch. Because the Erzeugeraufwandszahl is inside the constant,
+/// **Q is generator-input heat, not delivered useful heat**.
+///
+/// `mean_temp_c` is *"die gemessene oder geschätzte mittlere Temperatur"* — the
+/// regulation permits an estimate and prescribes neither a default nor a cap.
+///
+/// # Example
+///
+/// ```rust
+/// use metering::{warm_water_heat_kwh, WarmWaterAdjustments};
+/// use rust_decimal::Decimal;
+///
+/// // 40 m³ of warm water at 60 °C
+/// let q = warm_water_heat_kwh(
+///     Decimal::from(40u32),
+///     Decimal::from(60u32),
+///     WarmWaterAdjustments::NONE,
+/// );
+/// assert_eq!(q, Decimal::from(5000u32)); // 2.5 × 40 × 50
+/// ```
+#[must_use]
+pub fn warm_water_heat_kwh(
+    volume_m3: Decimal,
+    mean_temp_c: Decimal,
+    adjustments: WarmWaterAdjustments,
+) -> Decimal {
+    let factor = Decimal::from_str_exact("2.5").unwrap_or(Decimal::from(2u32));
+    let cold_inlet = Decimal::from(10u32);
+    adjustments.apply(factor * volume_m3 * (mean_temp_c - cold_inlet))
+}
+
+/// Heat attributable to a central warm-water system from **floor area**, per
+/// HeizkostenV §9 Abs. 2 Satz 4: `Q [kWh/a] = 32 × A_Wohn [m²]`.
+///
+/// Admitted only *"in Ausnahmefällen"* where **neither** the heat quantity **nor**
+/// the warm-water volume can be measured — a narrower trigger than an unmetered
+/// volume alone.
+///
+/// `flaeche_m2` is the *"Wohn- oder Nutzfläche"* supplied with warm water by the
+/// central system. §9 Abs. 2 Satz 5 Nr. 1 defines 32 as covering the
+/// Nutzwärmebedarf für Warmwasser, the Erzeugeraufwandszahl and
+/// Messdatenerhebungen — note this is a **different** bundle from the 2.5 of
+/// Satz 2, excluding Speicher-, Verteilungs- und Zirkulationsverluste.
+///
+/// Separate from [`warm_water_heat_kwh`] rather than an `Option` parameter: a
+/// metered volume and a floor-area estimate are different evidentiary categories,
+/// so the caller states which it holds.
+#[must_use]
+pub fn warm_water_heat_kwh_unmetered(
+    flaeche_m2: Decimal,
+    adjustments: WarmWaterAdjustments,
+) -> Decimal {
+    adjustments.apply(Decimal::from(32u32) * flaeche_m2)
+}
+
+#[cfg(test)]
+mod warm_water_tests {
+    use super::*;
+
+    fn d(s: &str) -> Decimal {
+        Decimal::from_str_exact(s).unwrap()
+    }
+
+    /// The worked identity from HeizkostenV §9 Abs. 2 Satz 2.
+    #[test]
+    fn metered_warm_water_follows_the_statutory_formula() {
+        // 2.5 × 40 m³ × (60 − 10) = 5000 kWh
+        assert_eq!(
+            warm_water_heat_kwh(
+                Decimal::from(40u32),
+                Decimal::from(60u32),
+                WarmWaterAdjustments::NONE
+            ),
+            Decimal::from(5000u32)
+        );
+    }
+
+    /// At the assumed cold-inlet temperature there is no apportionable heat.
+    /// Below it the result stays negative, signalling a bad temperature input.
+    #[test]
+    fn at_and_below_cold_inlet_temperature() {
+        assert_eq!(
+            warm_water_heat_kwh(
+                Decimal::from(40u32),
+                Decimal::from(10u32),
+                WarmWaterAdjustments::NONE
+            ),
+            Decimal::ZERO
+        );
+        assert!(
+            warm_water_heat_kwh(
+                Decimal::from(40u32),
+                Decimal::from(5u32),
+                WarmWaterAdjustments::NONE
+            ) < Decimal::ZERO
+        );
+    }
+
+    #[test]
+    fn adjustments_match_the_statutory_factors() {
+        let v = Decimal::from(40u32);
+        let t = Decimal::from(60u32);
+        let base = Decimal::from(5000u32);
+
+        let brennwert = WarmWaterAdjustments {
+            brennwert_erdgas: true,
+            ..WarmWaterAdjustments::NONE
+        };
+        assert_eq!(warm_water_heat_kwh(v, t, brennwert), base * d("1.11"));
+
+        let wp = WarmWaterAdjustments {
+            monovalente_waermepumpe: true,
+            ..WarmWaterAdjustments::NONE
+        };
+        assert_eq!(warm_water_heat_kwh(v, t, wp), base * d("0.30"));
+
+        // Eigenständige gewerbliche Wärmelieferung divides.
+        let gewerblich = WarmWaterAdjustments {
+            eigenstaendige_gewerbliche_waermelieferung: true,
+            ..WarmWaterAdjustments::NONE
+        };
+        assert_eq!(warm_water_heat_kwh(v, t, gewerblich), base / d("1.15"));
+    }
+
+    /// §9 Abs. 2 Satz 6 does not make the three grounds exclusive, so a
+    /// heat-pump system supplied under eigenständige gewerbliche Wärmelieferung
+    /// takes both adjustments.
+    #[test]
+    fn adjustments_compose() {
+        let both = WarmWaterAdjustments {
+            eigenstaendige_gewerbliche_waermelieferung: true,
+            monovalente_waermepumpe: true,
+            ..WarmWaterAdjustments::NONE
+        };
+        let q = warm_water_heat_kwh(Decimal::from(40u32), Decimal::from(60u32), both);
+        assert_eq!(q, Decimal::from(5000u32) / d("1.15") * d("0.30"));
+    }
+
+    /// The adjustments apply to the floor-area equation too ("Satz 2 oder 4").
+    #[test]
+    fn unmetered_fallback_uses_floor_area_and_takes_adjustments() {
+        // 32 × 75 m² = 2400 kWh
+        assert_eq!(
+            warm_water_heat_kwh_unmetered(Decimal::from(75u32), WarmWaterAdjustments::NONE),
+            Decimal::from(2400u32)
+        );
+        let brennwert = WarmWaterAdjustments {
+            brennwert_erdgas: true,
+            ..WarmWaterAdjustments::NONE
+        };
+        assert_eq!(
+            warm_water_heat_kwh_unmetered(Decimal::from(75u32), brennwert),
+            Decimal::from(2400u32) * d("1.11")
+        );
     }
 }

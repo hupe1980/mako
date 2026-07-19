@@ -18,9 +18,9 @@
 //!
 //! ## What this does NOT do
 //!
-//! This module does NOT perform machine-learning forecasting. ML requires an external
-//! runtime (PyTorch, ONNX) which violates the no-I/O contract of this crate.
-//! For ML-based forecasting, see the `agentd` AI agents.
+//! This module does NOT perform machine-learning forecasting. ML requires an
+//! external runtime (PyTorch, ONNX), which violates this crate's no-I/O
+//! contract; it belongs in a service layer that can host one.
 
 use rust_decimal::Decimal;
 use std::collections::HashMap;

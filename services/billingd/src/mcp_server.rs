@@ -483,7 +483,7 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
     ) -> Result<CallToolResult, McpError> {
         let categories = serde_json::json!([
             { "category": "STROM", "description": "Standard electricity — Eintarif/Zweitarif/Mehrtarif", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["grundpreis_ct_per_day", "arbeitspreis_ht_ct_per_kwh", "arbeitspreis_nt_ct_per_kwh", "dynamic_epex", "dynamic_epex_floor_ct_kwh"], "regulatory": "§41a EnWG for dynamic; §3 StromStG levy included" },
-            { "category": "GAS", "description": "Natural gas with Brennwertkorrektur and CO₂ levies", "required": ["gas_arbeitspreis_ct_per_kwh_hs"], "optional": ["gas_grundpreis_ct_per_day", "energiesteuer_gas_ct_per_kwh_override", "behg_gas_ct_per_kwh_override"], "regulatory": "§10 GasGVV (Brennwertkorrektur), §2 EnergieStG, BEHG" },
+            { "category": "GAS", "description": "Natural gas with Brennwertkorrektur and CO₂ levies", "required": ["gas_arbeitspreis_ct_per_kwh_hs"], "optional": ["gas_grundpreis_ct_per_day", "energiesteuer_gas_ct_per_kwh_override", "behg_gas_ct_per_kwh_override"], "regulatory": "§25 Nr. 4 MessEV (Brennwertkorrektur), §2 EnergieStG, BEHG" },
             { "category": "WAERME", "description": "Fernwärme — Grundpreis, Arbeitspreis, Leistungspreis", "required": ["waerme_arbeitspreis_ct_per_kwh"], "optional": ["waerme_grundpreis_eur_per_month", "waerme_leistungspreis_eur_per_kw_month", "mwst_rate_override: 0.07 for renewable Fernwärme"], "regulatory": "§12 Abs.2 Nr.1 UStG: 7% MwSt for renewable heat (set mwst_rate_override: 0.07)" },
             { "category": "SOLAR", "description": "Solar self-consumption, Mieterstrom §38a, §42a GGV community solar", "required": ["solar_arbeitspreis_ct_per_kwh"], "optional": ["mieterstrom_aufschlag_ct_per_kwh", "gemeinschaft_rabatt_ct_per_kwh", "solar_include_stromsteuer", "mwst_rate_override: 0 for PV ≤30kWp from 2023"], "regulatory": "§12 Abs.3 UStG: 0% MwSt for PV ≤30kWp since 01.01.2023 (set mwst_rate_override: 0)" },
             { "category": "EEG", "description": "EEG feed-in Vergütung — credit note to plant operator (LF role, contractual)", "required": ["eeg_verguetungssatz_ct_per_kwh"], "optional": ["eeg_marktpraemie_ct_per_kwh", "eeg_managementpraemie_ct_per_kwh", "kwkg_zuschlag_ct_per_kwh"], "meter": "eeg_meter.einspeisung_kwh, eeg_meter.kwh_during_negative_epex (§51 contractual suspension)", "regulatory": "§21 EEG Vergütung; §20 EEG Marktprämie; §51 EEG Negativpreisregel (contractual for LF)" },
@@ -895,7 +895,7 @@ impl BillingdMcpHandler {
 
     #[prompt(
         name = "gas-billing",
-        description = "Configure Gas billing — Brennwertkorrektur (§10 GasGVV), BEHG CO₂, H2-blend, L-Gas"
+        description = "Configure Gas billing — Brennwertkorrektur (§25 Nr. 4 MessEV), BEHG CO₂, H2-blend, L-Gas"
     )]
     async fn gas_billing_prompt(&self) -> Vec<PromptMessage> {
         vec![
@@ -908,7 +908,7 @@ impl BillingdMcpHandler {
                 "Gas billing in billingd has three input paths:\n\n\
                 **Path 1 — Direct kWh_Hs (preferred for iMSys / MSCONS data)**\n\
                 Supply `kwh_hs` directly in `gas_meter`. The Brennwertkorrektur position\n\
-                appears in the invoice with quantity = 0 m³ (informational only, §10 GasGVV).\n\
+                appears in the invoice with quantity = 0 m³ (informational only, §25 Nr. 4 MessEV).\n\
                 ```json\n{ \"gas_meter\": { \"kwh_hs\": 450.5 } }\n```\n\n\
                 **Path 2 — m³ × Brennwert × Zustandszahl**\n\
                 Supply `messung_qm3`, `brennwert_kwh_per_qm3`, `zustandszahl`.\n\
@@ -930,7 +930,7 @@ impl BillingdMcpHandler {
                 **Grid pass-through (from marktd PreisblattNetznutzung):**\n\
                 Supply via `grid` override: `gas_nne_grundpreis_eur_per_year`, \n\
                 `gas_nne_arbeitspreis_ct_per_kwh`, `gas_ka_ct_per_kwh`,\n\
-                `gas_bilanzierungsumlage_ct_per_kwh` (§26 GasNZV).\n\n\
+                `gas_bilanzierungsumlage_ct_per_kwh` (GaBi Gas 2.1 (BK7-24-01-008) Bilanzierungsumlagekonten).\n\n\
                 **L-Gas vs H-Gas:**\n\
                 L-Gas has lower Brennwert (~9.5 kWh/m³ vs H-Gas ~10.55 kWh/m³).\n\
                 Always use the measured Brennwert from the MSB/GNB, not the default.\n\

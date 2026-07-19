@@ -29,7 +29,7 @@
 //!
 //! - **BK7-24-01-009** — GeLi Gas 3.0 ruling (Beschluss 12.09.2025)
 //! - **INVOIC AHB** — EDI@Energy invoice message format
-//! - **GasNZV** — Gasnetzzugangsverordnung (statutory basis for gas network access)
+//! - **§20 Abs. 3 EnWG** — Festlegungskompetenz for gas network access
 
 use std::collections::HashMap;
 

@@ -5,7 +5,7 @@
 //! - **Aggreg. MMM-Rechnung Gas** (PID 31007): NB invoices MGV for aggregated Mehr-/Mindermengen
 //! - **Aggreg. MMM-Rechnung Gas selbst ausgestellt** (PID 31008): NB invoices MGV (self-billed)
 //!
-//! # Covered Prüfidentifikatoren (INVOIC AHB / FV2025-10-01, BK7-14-020)
+//! # Covered Prüfidentifikatoren (INVOIC AHB / FV2025-10-01, BK7-24-01-008)
 //!
 //! | PID   | Process                                           | Direction   |
 //! |-------|---------------------------------------------------|-------------|
@@ -31,9 +31,9 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BK7-14-020** — GaBi Gas 2.0 ruling (current; Bundesnetzagentur)
+//! - **BK7-24-01-008** — GaBi Gas 2.1 ruling (current; Bundesnetzagentur)
 //! - **INVOIC AHB** — EDI@Energy invoice message format
-//! - **GasNZV** — Gasnetzzugangsverordnung (statutory basis)
+//! - **§20 Abs. 3 EnWG** — Festlegungskompetenz for gas network access
 //!
 //! # Notes
 //!
@@ -65,7 +65,7 @@ use mako_engine::{
 ///
 /// PIDs 31007/31008 were previously misassigned to `mako-gpke`; MGV
 /// (Marktgebietsverantwortlicher) is a Gas-only market role that does not exist
-/// in the Strom domain. Regulatory basis: BK7-14-020 GaBi Gas 2.0.
+/// in the Strom domain. Regulatory basis: BK7-24-01-008 GaBi Gas 2.1.
 pub const GABI_GAS_INVOIC_PIDS: &[u32] = &[
     31010, // Kapazitätsrechnung (capacity billing, FNB/VNB → BKV)
     31007, // Aggreg. MMM-Rechnung Gas (NB → MGV)
@@ -336,7 +336,7 @@ impl CommandPayload for GaBiGasInvoicCommand {}
 ///
 /// Implements the receive → validate → settle/dispute state machine for GaBi
 /// Gas billing (Kapazitätsrechnung and Aggreg. MMM-Rechnung Gas) under
-/// BK7-14-020 (GaBi Gas 2.0).
+/// BK7-24-01-008 (GaBi Gas 2.1).
 ///
 /// # Deadline
 ///

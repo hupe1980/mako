@@ -7831,6 +7831,7 @@ dependencies = [
  "jiff",
  "mako-markt",
  "mako-service",
+ "metering",
  "reqwest 0.13.1",
  "rmcp",
  "rubo4e",

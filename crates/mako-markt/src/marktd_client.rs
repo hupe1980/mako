@@ -481,7 +481,7 @@ impl MarktdClient {
     /// `GET /api/v1/preisblaetter-ka/{nb_mp_id}?date=…&sparte=STROM&kundengruppe=Tarifkunden`
     ///
     /// Returns the `PreisblattKonzessionsabgabe` valid on `billing_date`.
-    /// Used by `netzbilanzd` for KA tariff positions in INVOIC 31001/31002 (§17 `StromNZV`).
+    /// Used by `netzbilanzd` for KA tariff positions in INVOIC 31001/31002 (KAV §2).
     ///
     /// Returns `None` on 404.
     ///
@@ -820,20 +820,20 @@ impl MarktdClient {
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 
-    /// Fetch Strom MMM Ausgleichsenergie prices for a billing month + ÜNB.
+    /// Fetch Strom MMM prices for a billing month + VNB.
     ///
     /// Returns `None` if no prices have been imported for that month/ÜNB.
     pub async fn get_mmm_strom(
         &self,
         year: i32,
         month: u8,
-        unb_mp_id: &str,
+        vnb_mp_id: &str,
     ) -> Result<Option<crate::repository::MmmPreisStromRecord>, MarktdClientError> {
         let url = format!("{}/api/v1/mmm-preise/strom/{year}/{month}", self.base_url);
         let resp = self
             .client
             .get(&url)
-            .query(&[("unb_mp_id", unb_mp_id)])
+            .query(&[("vnb_mp_id", vnb_mp_id)])
             .bearer_auth(self.api_key.expose_secret())
             .send()
             .await
@@ -846,7 +846,7 @@ impl MarktdClient {
             warn!(
                 year,
                 month,
-                unb_mp_id,
+                vnb_mp_id,
                 status = s,
                 "MarktdClient: mmm-strom returned non-2xx"
             );

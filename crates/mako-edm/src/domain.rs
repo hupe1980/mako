@@ -12,14 +12,14 @@ pub use metering::{QualityFlag, Sparte};
 
 /// MSCONS PIDs that `edmd` consumes from `marktd` webhook fan-out.
 ///
-/// ## Messwesen PIDs (MSCONS AHB, BDEW BK6-24-174 / BK7-24-01-009 / BK7-14-020)
+/// ## Messwesen PIDs (MSCONS AHB, BDEW BK6-24-174 / BK7-24-01-009 / BK7-24-01-008)
 ///
 /// | PID   | Direction        | Content |
 /// |-------|------------------|---------|
 /// | 13005 | NB → LF (Strom)  | Lastgang Messwerte Strom |
 /// | 13006 | NB → LF (Strom)  | Zählerstand / Ersatzwert Strom |
 /// | 13007 | NB → LF (Gas)    | Gasbeschaffenheitsdaten (Brennwert + Zustandszahl) |
-/// | 13013 | NB → LF (Gas)    | Allokationsliste Gas MMMA (GaBi Gas 2.0) |
+/// | 13013 | NB → LF (Gas)    | Allokationsliste Gas MMMA (GaBi Gas 2.1) |
 /// | 13015 | NB → LF (Strom)  | Lastgang Summenzeitreihe (SLP-Abrechnung) |
 /// | 13016 | NB → LF (Strom)  | Ausfallarbeit Strom |
 /// | 13017 | NB → LF (Strom)  | Zählerstand Strom (Ablese-Übermittlung) |
@@ -38,7 +38,7 @@ pub use metering::{QualityFlag, Sparte};
 /// `mako-gabi-gas` `gabi-gas-mmma` for workflow state tracking, but the raw
 /// meter-data receipts and interval values are stored here in `edmd`.
 ///
-/// Source: MSCONS AHB 3.1g; BDEW BK6-24-174 Anlage 1; BK7-14-020.
+/// Source: MSCONS AHB 3.1g; BDEW BK6-24-174 Anlage 1; BK7-24-01-008.
 pub const MSCONS_PIDS: &[u32] = &[
     13005, 13006, 13007, 13013, 13015, 13016, 13017, 13018, 13019, 13025, 13027,
 ];
@@ -75,7 +75,7 @@ pub const fn mscons_pid_description(pid: u32) -> &'static str {
         13006 => "Zählerstand / Ersatzwert Strom (NB → LF)",
         13007 => "Gasbeschaffenheitsdaten — Brennwert + Zustandszahl (NB → LF)",
         13013 => {
-            "Allokationsliste Gas MMMA — Mehr-/Mindermengen Gas (NB → LF, GaBi Gas BK7-14-020)"
+            "Allokationsliste Gas MMMA — Mehr-/Mindermengen Gas (NB → LF, GaBi Gas BK7-24-01-008)"
         }
         13015 => "Lastgang Summenzeitreihe SLP Strom (NB → LF)",
         13016 => "Ausfallarbeit Strom (NB → LF)",
@@ -106,7 +106,7 @@ pub const GAS_QUALITY_PIDS: &[u32] = &[13007];
 /// PID 13013 = Marktlokationsscharfe Allokationsliste Gas (MMMA, NB → LF).
 /// Used by `mako-gabi-gas` `gabi-gas-mmma` for balance group accounting.
 ///
-/// Source: BK7-14-020 GaBi Gas 2.0; MSCONS AHB Gas 1.x.
+/// Source: BK7-24-01-008 GaBi Gas 2.1; MSCONS AHB Gas 1.x.
 pub const GAS_MMMA_PIDS: &[u32] = &[13013];
 
 /// Metering / balancing classification of a Marktlokation.
@@ -198,6 +198,17 @@ pub enum IngestionSource {
     AutoSubstitute,
     /// Retroactive correction applied by `POST /api/v1/corrections/{malo_id}`.
     Correction,
+    /// Manual entry by an operator.
+    Manual,
+    /// Estimated value entered by an operator.
+    Estimated,
+    /// IoT push via `POST /api/v1/meter-reads/iot/{malo_id}` — LoRaWAN network
+    /// server, M-Bus/wM-Bus concentrator, or a REST heat meter.
+    ///
+    /// Distinct from `DirectPush`, which is the iMSys/SMGW path: an IoT reading
+    /// arrives outside the MsbG regime (heat and water submetering is governed by
+    /// **HeizkostenV**) and carries no Smart-Meter-Gateway provenance.
+    IotPush,
 }
 
 impl IngestionSource {
@@ -211,6 +222,9 @@ impl IngestionSource {
             Self::ApiImport => "API_IMPORT",
             Self::AutoSubstitute => "AUTO_SUBSTITUTE",
             Self::Correction => "CORRECTION",
+            Self::Manual => "MANUAL",
+            Self::Estimated => "ESTIMATED",
+            Self::IotPush => "IOT_PUSH",
         }
     }
 
@@ -223,6 +237,12 @@ impl IngestionSource {
             "API_IMPORT" => Self::ApiImport,
             "AUTO_SUBSTITUTE" => Self::AutoSubstitute,
             "CORRECTION" => Self::Correction,
+            "MANUAL" => Self::Manual,
+            "ESTIMATED" => Self::Estimated,
+            "IOT_PUSH" => Self::IotPush,
+            // Lossy by design: the column is CHECK-constrained, so an unknown
+            // value means enum and schema have diverged. `schema_code_guard`
+            // pins the two together.
             _ => Self::Mscons,
         }
     }
@@ -359,7 +379,7 @@ pub struct ImbalanceReport {
 /// `GET /api/v1/timeseries/{malo_id}` to avoid transferring 35 k rows per MaLo
 /// in a billing-period summary response.
 ///
-/// Source: GPKE BK6-22-024; GeLi Gas BK7-24-01-009; Allgemeine Festlegungen §6.
+/// Source: GPKE BK6-22-024; GeLi Gas 3.0 (BK7-24-01-009); Allgemeine Festlegungen §6.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeterBillingPeriod {
     /// 11-digit Marktlokations-ID.
@@ -497,7 +517,7 @@ pub struct CorrectionRecord {
 /// Gas quality data received via MSCONS PID 13007 (Gasbeschaffenheitsdaten).
 ///
 /// Contains the Abrechnungsbrennwert and Zustandszahl required to convert gas
-/// volume (m³) to energy (kWh_Hs) per §24 GasGVV and DVGW G 685.
+/// volume (m³) to energy (kWh_Hs) per §25 Nr. 4 MessEV and DVGW G 685.
 ///
 /// ## Formula
 ///
@@ -531,7 +551,7 @@ pub struct GasQualityData {
 impl GasQualityData {
     /// Convert gas volume (m³) to energy (kWh_Hs).
     ///
-    /// Applies Brennwert and Zustandszahl per §24 GasGVV.
+    /// Applies Brennwert and Zustandszahl per §25 Nr. 4 MessEV.
     #[must_use]
     pub fn to_kwh(&self, volume_m3: Decimal) -> Decimal {
         volume_m3 * self.brennwert_kwh_per_m3 * self.zustandszahl

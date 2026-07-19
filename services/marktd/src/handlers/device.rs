@@ -1286,7 +1286,7 @@ pub async fn list_zaehler_saisons(
 ///
 /// ## BO4E mapping
 ///
-/// ```
+/// ```text
 /// ZaehlzeitSaisonRecord rows (zaehler_register × zaehler_saisons)
 ///   ↓
 /// Zaehlzeitdefinition {
@@ -1580,4 +1580,173 @@ pub async fn get_tariff_zone(
 pub struct TariffZoneQuery {
     /// ISO 8601 local datetime, e.g. `2025-07-10T14:30:00`.
     pub datetime: Option<String>,
+}
+
+// ── §42c EnWG Energy-Sharing metering eligibility ─────────────────────────────
+
+/// Capability verdict for one Messlokation under §42c Abs. 1 EnWG.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SharingEligibilityResponse {
+    /// Messlokations-ID that was assessed.
+    pub melo_id: String,
+    /// Marktlokation the MeLo belongs to, when linked.
+    pub malo_id: Option<String>,
+    /// `QUALIFIED` · `DISQUALIFIED` · `UNKNOWN`.
+    pub capability: String,
+    /// Qualifying statutory limb, when one was established.
+    pub basis: Option<String>,
+    /// Citation for `basis`.
+    pub legal_basis: Option<String>,
+    /// What an operator must do to make this point eligible.
+    pub required_action: String,
+    /// Why the point does not qualify, or which master data is missing.
+    pub reasons: Vec<String>,
+    /// Bilanzierungsgebiet — §42c Abs. 4 requires all participants to share one
+    /// until 1 June 2028.
+    pub bilanzierungsgebiet: Option<String>,
+    /// Inputs the verdict was derived from, for audit.
+    pub evidence: SharingEligibilityEvidence,
+}
+
+/// Master-data inputs behind a [`SharingEligibilityResponse`].
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SharingEligibilityEvidence {
+    /// BO4E `Zaehlertyp` of the meter installed at this MeLo.
+    pub zaehlertyp: Option<String>,
+    /// BO4E `Zaehler.istFernauslesbar`.
+    pub ist_fernauslesbar: Option<bool>,
+    /// `Marktlokation.bilanzierungsmethode`.
+    pub bilanzierungsmethode: Option<String>,
+}
+
+/// `GET /api/v1/melos/{melo_id}/sharing-eligibility`
+///
+/// Answer whether a Messlokation can take part in a §42c EnWG Energy-Sharing
+/// community, from **master data only**.
+///
+/// §42c Abs. 1 admits a point measured by Zählerstandsgangmessung (§2 Satz 1
+/// Nr. 27 MsbG) **or** by viertelstündliche registrierende Leistungsmessung.
+/// Those are independent limbs — a conventional RLM meter installed before the
+/// iMSys rollout qualifies without a Smart-Meter-Gateway.
+///
+/// This endpoint reports **capability**, not delivery. A point can be capable
+/// while no quarter-hour series is actually arriving; `edmd`'s readiness report
+/// (`GET /api/v1/sharing/readiness`) joins observed intervals to close that gap.
+/// The decision logic itself is `metering::sharing`, shared by both services.
+#[utoipa::path(
+    get,
+    path = "/api/v1/melos/{melo_id}/sharing-eligibility",
+    params(("melo_id" = String, Path, description = "33-character Messlokations-ID")),
+    responses(
+        (status = 200, description = "Capability verdict", body = SharingEligibilityResponse),
+        (status = 403, description = "Cedar denied"),
+        (status = 404, description = "MeLo not found"),
+    ),
+    tag = "melo"
+)]
+pub async fn get_sharing_eligibility(
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
+    claims: Claims,
+    Path(melo_id): Path<String>,
+) -> impl IntoResponse {
+    use metering::sharing::{Capability, MeteringCapabilityInput, assess_capability};
+
+    if enforcer
+        .check(&claims.principal(), "read-sharing-eligibility", &tenant_gln)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+
+    // One join: MeLo → MaLo (Bilanzierungsmethode/-gebiet) → Zaehler (Typ,
+    // Fernauslesbarkeit). The MeLo may have no MaLo and no meter yet; LEFT JOINs
+    // keep those cases reportable instead of 404-ing a point that simply lacks
+    // master data.
+    let row = sqlx::query(
+        r"SELECT m.melo_id,
+                 m.malo_id,
+                 ma.bilanzierungsmethode,
+                 ma.bilanzierungsgebiet,
+                 z.zaehler_typ,
+                 z.data ->> 'istFernauslesbar' AS ist_fernauslesbar
+            FROM melo m
+            LEFT JOIN malo    ma ON ma.malo_id = m.malo_id
+            LEFT JOIN zaehler z  ON z.melo_id  = m.melo_id AND z.tenant = m.tenant
+           WHERE m.melo_id = $1 AND m.tenant = $2
+           ORDER BY z.updated_at DESC NULLS LAST
+           LIMIT 1",
+    )
+    .bind(&melo_id)
+    .bind(&tenant_gln)
+    .fetch_optional(&pool)
+    .await;
+
+    let row = match row {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, format!("MeLo {melo_id} not found")).into_response();
+        }
+        Err(e) => {
+            tracing::warn!(melo_id = %melo_id, error = %e, "sharing-eligibility query failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    };
+
+    use sqlx::Row as _;
+    let malo_id: Option<String> = row.try_get("malo_id").unwrap_or(None);
+    let bilanzierungsmethode: Option<String> = row.try_get("bilanzierungsmethode").unwrap_or(None);
+    let bilanzierungsgebiet: Option<String> = row.try_get("bilanzierungsgebiet").unwrap_or(None);
+    let zaehlertyp: Option<String> = row.try_get("zaehler_typ").unwrap_or(None);
+    let ist_fernauslesbar = row
+        .try_get::<Option<String>, _>("ist_fernauslesbar")
+        .unwrap_or(None)
+        .and_then(|s| s.parse::<bool>().ok());
+
+    let input = MeteringCapabilityInput {
+        zaehlertyp: zaehlertyp.clone(),
+        ist_fernauslesbar,
+        bilanzierungsmethode: bilanzierungsmethode.clone(),
+        // marktd holds no SMGW session state; edmd owns that signal.
+        smgw_operational: None,
+    };
+    let (capability, mut reasons) = assess_capability(&input);
+
+    if bilanzierungsgebiet.is_none() {
+        reasons.push(
+            "kein Bilanzierungsgebiet an der Marktlokation — \
+             §42c Abs. 4 verlangt bis 01.06.2028 ein gemeinsames Gebiet"
+                .to_owned(),
+        );
+    }
+
+    let (cap_label, basis) = match capability {
+        Capability::Qualified(b) => ("QUALIFIED", Some(b)),
+        Capability::Disqualified => ("DISQUALIFIED", None),
+        Capability::Unknown => ("UNKNOWN", None),
+    };
+
+    let required_action = match capability {
+        Capability::Qualified(_) => "Lieferung der Viertelstundenwerte in edmd prüfen",
+        Capability::Disqualified => "iMSys-Rollout oder RLM-Umbau beauftragen",
+        Capability::Unknown => "Stammdaten vervollständigen",
+    };
+
+    Json(SharingEligibilityResponse {
+        melo_id,
+        malo_id,
+        capability: cap_label.to_owned(),
+        basis: basis.map(|b| b.label().to_owned()),
+        legal_basis: basis.map(|b| b.legal_basis().to_owned()),
+        required_action: required_action.to_owned(),
+        reasons,
+        bilanzierungsgebiet,
+        evidence: SharingEligibilityEvidence {
+            zaehlertyp,
+            ist_fernauslesbar,
+            bilanzierungsmethode,
+        },
+    })
+    .into_response()
 }

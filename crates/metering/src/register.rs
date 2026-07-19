@@ -96,9 +96,10 @@ impl RegisterUnit {
 ///
 /// For Wandlermessungen (metering via current transformers), the raw meter
 /// display must be multiplied by the `wandler_factor` (e.g. 100, 600) to
-/// obtain actual kWh values. All `MeterInterval` values stored in `edmd`
-/// **must already have the wandler factor applied** — this field is metadata
-/// for traceability and audit only.
+/// obtain actual kWh values. Every [`crate::MeterInterval`] is **post-Wandler**:
+/// the factor is applied when the raw counter is read, so this field is metadata
+/// for traceability and audit. Applying it a second time inflates consumption by
+/// the factor.
 ///
 /// ## Dual-tariff configuration
 ///
@@ -113,8 +114,8 @@ pub struct MeterRegister {
 
     /// Physical meter serial number (Zähler-Seriennummer / Geräteidentifikation).
     ///
-    /// Corresponds to the meter device ID in MSCONS `NAD` segments and in
-    /// the Geräte-ID field of `marktd` device registry.
+    /// Corresponds to the meter device ID in MSCONS `NAD` segments and to the
+    /// Geräte-ID held in a device registry.
     pub meter_serial: String,
 
     /// Register number (0–9). Matches OBIS `E` (tariff) field.
@@ -136,7 +137,7 @@ pub struct MeterRegister {
     /// Multiplier applied to raw meter counter readings to obtain kWh.
     ///
     /// Direct metering: `1.0`. Wandlermessung: typically 100–1000.
-    /// All `MeterInterval` values in `edmd` already have this applied.
+    /// Already applied to every [`crate::MeterInterval`] — see the module docs.
     pub wandler_factor: Decimal,
 
     /// Date from which this register configuration is valid (German local date).

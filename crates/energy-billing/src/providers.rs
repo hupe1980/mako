@@ -904,7 +904,7 @@ impl BillingProvider for GasProvider {
                     "Brennwertkorrektur: {:.4} kWh/m³ × {:.4} = {:.3} kWh_Hs",
                     hs, z, kwh_hs
                 ),
-                legal_basis: Some("§24 GasGVV / DVGW G 685".to_owned()),
+                legal_basis: Some("§25 Nr. 4 MessEV / DVGW G 685".to_owned()),
                 quantity: meter.messung_qm3,
                 unit: "m³".to_owned(),
                 unit_price_eur: Decimal::ZERO,
@@ -1081,7 +1081,7 @@ impl BillingProvider for GasProvider {
                         bilu_ct / dec!(100),
                         PositionCategory::GridCharge,
                     )
-                    .with_legal_basis("GasNZV")
+                    .with_legal_basis("GaBi Gas 2.1 (BK7-24-01-008)")
                     .with_tag("gas_bilanzierungsumlage")
                     .with_tag("nne"),
                 );

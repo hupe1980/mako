@@ -68,11 +68,19 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         let pids: Vec<i32> = reads.iter().map(|r| r.pid as i32).collect();
         let spartes: Vec<&str> = reads.iter().map(|r| sparte_to_str(r.sparte)).collect();
         let obis_codes: Vec<Option<&str>> = reads.iter().map(|r| r.obis_code.as_deref()).collect();
+        // Normalise before it enters the primary key: `1-0:1.8.0` and
+        // `1-0:1.8.0*255` are the same register.
         let obis_norms: Vec<String> = reads
             .iter()
-            .map(|r| r.obis_code.clone().unwrap_or_default())
+            .map(|r| {
+                r.obis_code.as_deref().map_or_else(String::new, |s| {
+                    s.parse::<metering::obis::ObisCode>()
+                        .map_or_else(|_| s.to_owned(), |c| c.to_string())
+                })
+            })
             .collect();
-        let sources: Vec<&str> = reads.iter().map(|_| "MSCONS").collect();
+        // Provenance is carried on the record.
+        let sources: Vec<&str> = reads.iter().map(|r| r.source.as_str()).collect();
         let tenants: Vec<&str> = reads.iter().map(|r| r.tenant.as_str()).collect();
 
         sqlx::query(
@@ -491,19 +499,23 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             // 2. Overwrite the meter_reads row with the corrected value
             //    and increment the correction counter.
             sqlx::query(
+                // `tenant` is part of the WHERE: without it a correction crossed
+                // tenant boundaries and rewrote another operator's readings.
                 r"UPDATE meter_reads
                   SET quantity_kwh     = $4,
                       quality          = $5,
                       correction_count = correction_count + 1
                   WHERE malo_id  = $1
                     AND dtm_from = $2
-                    AND dtm_to   = $3",
+                    AND dtm_to   = $3
+                    AND tenant   = $6",
             )
             .bind(&rec.malo_id)
             .bind(rec.dtm_from)
             .bind(rec.dtm_to)
             .bind(rec.corrected_kwh) // 0010: NUMERIC(18,5)
             .bind(quality_to_str(rec.corrected_quality))
+            .bind(&rec.tenant)
             .execute(&mut *tx)
             .await
             .map_err(|e| mako_edm::error::EdmError::Database(e.to_string()))?;
@@ -617,15 +629,19 @@ fn str_to_quality(s: &str) -> QualityFlag {
 }
 
 fn sparte_to_str(s: Sparte) -> &'static str {
-    match s {
-        Sparte::Strom => "STROM",
-        Sparte::Gas => "GAS",
-    }
+    s.as_str()
 }
 
+/// Parse a Sparte from its DB label.
+///
+/// Unknown values fall back to `Strom`. That fallback is lossy by design — the
+/// column is CHECK-constrained, so an unknown value means the schema and this
+/// code have diverged, which the `schema_code_guard` tests exist to catch.
 fn str_to_sparte(s: &str) -> Sparte {
     match s {
         "GAS" => Sparte::Gas,
+        "WAERME" => Sparte::Waerme,
+        "WASSER" => Sparte::Wasser,
         _ => Sparte::Strom,
     }
 }

@@ -376,7 +376,7 @@ if invoice.has_errors() {
 | §2 EnergieStG | Erdgassteuer 0.55 ct/kWh; `energiesteuer_gas_for_year(year)` (incl. 2022 0-rate) |
 | §54 EnergieStG | KWK / industrial gas Energiesteuer exemption |
 | BEHG §10 | CO₂-Preis H-Gas (65 EUR/t 2026) + L-Gas factor; `behg_ct_per_kwh_for_year(year)` |
-| §10 GasGVV | Brennwertkorrektur m³ → kWh_Hs |
+| §25 Nr. 4 MessEV | Brennwertkorrektur m³ → kWh_Hs |
 | §12 Abs. 2 Nr. 1 UStG | Reduced 7% MwSt for renewable Fernwärme |
 | §12 Abs. 3 UStG | 0% MwSt for PV ≤ 30 kWp (Solarpaket I, since 01.01.2023) |
 | §14a EnWG | Controllable loads Modul 1/3 (BK6-24-174) via `ControllableLoadProvider` |

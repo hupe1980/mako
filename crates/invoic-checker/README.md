@@ -153,7 +153,7 @@ match engine.check(&input).await? {
 
 - **BK6-24-174** — INVOIC AHB Strom (NNE/MSB-Rechnung, PIDs 31001/31002/31005/31006/31009)
 - **BK7-24-01-009** — INVOIC AHB Gas (GeLi Gas PID 31011)
-- **BK7-14-020** — INVOIC AHB Gas (GaBi Gas PIDs 31007/31008)
+- **BK7-24-01-008** — INVOIC AHB Gas (GaBi Gas PIDs 31007/31008)
 - **BK7 billing** — WiM Gas PIDs 31003/31004
 - **§7 Allgemeine Festlegungen V6.1d** — Zahlungsziel 30 days (Strom + Gas)
 - **§22 MessZV** — Pflicht zur Rechnungslegung (MSB-Rechnung receipt persistence)

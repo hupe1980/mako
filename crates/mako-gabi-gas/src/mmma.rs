@@ -1,7 +1,7 @@
 //! GaBi Gas MMM Allokationsliste Gas — Mehr-/Mindermengen data delivery (MSCONS).
 //!
 //! Handles inbound MSCONS messages for Gas Mehr-/Mindermengen (MMM) allocation
-//! lists as defined in the GaBi Gas 2.0 framework and BDEW AWH Prozesse
+//! lists as defined in the GaBi Gas 2.1 framework and BDEW AWH Prozesse
 //! Mehr-/Mindermengen Strom/Gas:
 //!
 //! | PID   | Direction | Description |
@@ -22,7 +22,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BK7-14-020** — GaBi Gas 2.0 (Mehr-/Mindermengenbilanzierung Gas)
+//! - **BK7-24-01-008** — GaBi Gas 2.1 (Mehr-/Mindermengenbilanzierung Gas)
 //! - **BDEW AWH Prozesse Mehr-/Mindermengen Strom/Gas V2.1** — Gas Allokationsliste
 //!   format and PID definitions (MSCONS AHB)
 //! - **MSCONS G1.x** — EDI@Energy metered gas data format

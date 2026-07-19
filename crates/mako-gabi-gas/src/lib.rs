@@ -28,8 +28,8 @@
 //!
 //! **GaBi Gas** (*Gasbilanzierung Gas*) is the German regulatory framework for
 //! gas balancing, established by the Bundesnetzagentur (BNetzA) under the
-//! Gasnetzzugangsverordnung (GasNZV). The current version, **GaBi Gas 2.0**,
-//! entered into force with BNetzA order **BK7-14-020**.
+//! Gasnetzzugangsverordnung (GasNZV). The current version, **GaBi Gas 2.1**,
+//! entered into force with BNetzA order **BK7-24-01-008**.
 //!
 //! The framework governs the exchange of gas quantity data between balance
 //! responsible parties (BKV), network operators (FNB/VNB), and market area
@@ -47,9 +47,9 @@
 //!
 //! # Regulatory references
 //!
-//! - **GasNZV** (Gasnetzzugangsverordnung) — statutory basis for gas network
+//! - **§20 Abs. 3 EnWG** — the Festlegungskompetenz for gas network
 //!   access and balancing
-//! - **BNetzA BK7-14-020** — GaBi Gas 2.0 ruling (current)
+//! - **BNetzA BK7-24-01-008** — GaBi Gas 2.1 ruling (current)
 //! - Note: BK7-06-067 is the original **GeLi Gas** ruling, not GaBi Gas
 //! - **DVGW G 685** — technical rules for gas metering and allocation
 

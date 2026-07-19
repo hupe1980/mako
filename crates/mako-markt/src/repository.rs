@@ -699,7 +699,7 @@ pub trait PreisblattMessungRepository: Send + Sync {
 
 /// A stored `PreisblattKonzessionsabgabe` record.
 ///
-/// §17 StromNZV requires the NB to include Konzessionsabgabe (KA) as a separate
+/// KAV §2 requires the NB to include Konzessionsabgabe (KA) as a separate
 /// tariff position in every NNE invoice. `kundengruppe_ka` differentiates between
 /// Tarifkunden and Sondervertragskunden.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -2141,7 +2141,7 @@ pub trait MmmaPreisGasRepository: Send + Sync {
     async fn list_gas(&self, limit: i64) -> Result<Vec<MmmaPreisGasRecord>, MdmError>;
 }
 
-// ── MMM Strom settlement prices (ÜNB per §22 StromNZV) ───────────────────────
+// ── MMM Strom settlement prices (VNB per GPKE (BK6-24-174) Teil 1 Kap. 8.4) ───────────────────────
 
 /// A stored Strom MMM Ausgleichsenergie price record.
 ///
@@ -2152,7 +2152,7 @@ pub struct MmmPreisStromRecord {
     /// First day of the billing month.
     pub price_month: time::Date,
     /// ÜNB MP-ID (BDEW-Codenummer, `99…`).
-    pub unb_mp_id: String,
+    pub vnb_mp_id: String,
     /// Surplus energy price (Mehrmengen) in ct/kWh.
     pub mehr_ct_kwh: rust_decimal::Decimal,
     /// Deficit energy price (Mindermengen) in ct/kWh.
@@ -2167,7 +2167,7 @@ pub trait MmmPreisStromRepository: Send + Sync {
     async fn upsert_strom(
         &self,
         price_month: time::Date,
-        unb_mp_id: &str,
+        vnb_mp_id: &str,
         mehr_ct_kwh: rust_decimal::Decimal,
         minder_ct_kwh: rust_decimal::Decimal,
         source: &str,
@@ -2176,7 +2176,7 @@ pub trait MmmPreisStromRepository: Send + Sync {
     async fn find_strom(
         &self,
         price_month: time::Date,
-        unb_mp_id: &str,
+        vnb_mp_id: &str,
     ) -> Result<Option<MmmPreisStromRecord>, MdmError>;
 }
 

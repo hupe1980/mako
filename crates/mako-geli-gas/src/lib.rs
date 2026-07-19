@@ -299,7 +299,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         // The GNB/VNB bills the LFN/LFA for performing disconnection/reconnection services
         // (Abrechnungswürdige Handlungen from the gas Sperrprozess).
         // Regulatory basis: BK7-24-01-009 (GeLi Gas 3.0, same ruling as Sperrprozesse).
-        // This is NOT GaBi Gas (BK7-14-020); direction is NB → LF, not NB → BKV.
+        // This is NOT GaBi Gas (BK7-24-01-008); direction is NB → LF, not NB → BKV.
         router.register(invoic::SPERRPROZESSE_INVOIC_PID, invoic::WORKFLOW_NAME);
     }
 

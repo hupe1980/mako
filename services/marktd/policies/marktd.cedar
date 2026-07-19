@@ -33,6 +33,9 @@ permit(
         Action::"read-versorgungsstatus",
         Action::"read-nelo",
         Action::"read-malo-grid",
+        Action::"read-device",
+        Action::"read-sr",
+        Action::"read-sharing-eligibility",
         Action::"use-mcp"
     ],
     resource
@@ -51,7 +54,9 @@ permit(
         Action::"write-nb-contract",
         Action::"write-partner",
         Action::"write-versorgungsstatus",
-        Action::"write-malo-grid"
+        Action::"write-malo-grid",
+        Action::"write-device",
+        Action::"write-sr"
     ],
     resource
 ) when {

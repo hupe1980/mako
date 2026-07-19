@@ -17,7 +17,7 @@
 //! | Category | Calculator | Key regulatory refs |
 //! |---|---|---|
 //! | `STROM` | `calculate_strom` | §41a EnWG (dynamic), §14a Modul 1/3 |
-//! | `GAS` | `calculate_gas` | §10 GasGVV (Brennwertkorrektur), §2 EnergieStG, BEHG |
+//! | `GAS` | `calculate_gas` | §25 Nr. 4 MessEV (Brennwertkorrektur), §2 EnergieStG, BEHG |
 //! | `WAERME` | `calculate_waerme` | EnWG Fernwärme |
 //! | `SOLAR` | `calculate_solar` | §42b EEG (Mieterstrom), §42a EEG (GGV) |
 //! | `EEG` | `calculate_eeg` | §21 EEG (Vergütung), §38 EEG (Marktprämie), §53 EEG |

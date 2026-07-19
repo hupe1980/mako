@@ -47,13 +47,26 @@ CREATE TABLE meter_reads (
                            )),
     pid                INTEGER       NOT NULL,
     sparte             TEXT          NOT NULL DEFAULT 'STROM'
-                           CHECK (sparte IN ('STROM','GAS')),
+                           CHECK (sparte IN ('STROM','GAS','WAERME','WASSER')),
+    -- Unit the reading is expressed in. Water is m³ and has no calorific value,
+    -- so it must never be run through the gas m³→kWh conversion; heat is kWh_th
+    -- and shares the kWh column honestly.
+    -- Canonical storage unit. Ingest accepts Wh/MWh/GWh/GJ/MJ and litres and
+    -- rescales to kWh/m3 before writing, so only these two units are stored.
+    -- Gas is stored as kWh: the meter registers m3 and the Brennwert conversion
+    -- (§25 Nr. 4 MessEV) is applied at ingest. Water is stored as m3.
+    unit               TEXT          NOT NULL DEFAULT 'KWH'
+                           CHECK (unit IN ('KWH','M3')),
     obis_code          TEXT,
     obis_code_norm     TEXT          NOT NULL DEFAULT '',
+    -- Must match `mako_edm::domain::IngestionSource` exactly; the two had
+    -- diverged (AUTO_SUBSTITUTE was written by code but rejected by this CHECK,
+    -- and the error was swallowed). `schema_code_guard` pins them together.
     source             TEXT          NOT NULL DEFAULT 'MSCONS'
                            CHECK (source IN (
                                'MSCONS','DIRECT_PUSH','DIRECT_GAS',
-                               'MANUAL','ESTIMATED','CORRECTION','API_IMPORT'
+                               'MANUAL','ESTIMATED','CORRECTION','API_IMPORT',
+                               'AUTO_SUBSTITUTE','IOT_PUSH'
                            )),
     push_session       TEXT,
     quality_warnings   JSONB,
@@ -126,7 +139,7 @@ CREATE TABLE meter_billing_periods (
     messtyp              TEXT          NOT NULL DEFAULT 'SLP'
                              CHECK (messtyp IN ('SLP','RLM','IMSYS')),
     sparte               TEXT          NOT NULL DEFAULT 'STROM'
-                             CHECK (sparte IN ('STROM','GAS')),
+                             CHECK (sparte IN ('STROM','GAS','WAERME','WASSER')),
     arbeitsmenge_kwh     NUMERIC(18,5) NOT NULL,
     arbeitsmenge_ht_kwh  NUMERIC(18,5),
     arbeitsmenge_nt_kwh  NUMERIC(18,5),
@@ -302,27 +315,55 @@ CREATE UNIQUE INDEX gqd_malo_period ON gas_quality_data (malo_id, period_from, p
 CREATE INDEX        gqd_tenant      ON gas_quality_data (tenant);
 
 -- ── Virtual meter configurations ──────────────────────────────────────────────
--- Defines derived meters (sum, residual, GgvAllocation) per §42a/§42b EnWG.
+--
+-- Defines derived meters: Sum, Residual, PV self-consumption, and the
+-- Gemeinschaftliche Gebäudeversorgung allocation rules (§42b EnWG).
+--
+-- `virtual_malo_id` — a virtual meter *is* a Marktlokation, addressed by its own
+-- MaLo-ID, which is why the column is not a bare `virtual_id`.
+--
+-- `rule_type` must match the variants of `metering::aggregation_rule::AggregationRule`
+-- exactly. `edmd` deserialises `rule_json` into that enum, so a value here that
+-- the enum does not know is an unreadable row. The `virtual_meter_rule_types`
+-- guard test in `crates/metering` pins the two lists together.
+--
+-- §42c Energy Sharing reuses `GgvProportionalAllocation`: the allocation
+-- arithmetic is identical, and the two regimes are distinguished by
+-- `legal_basis` (§42b = in-building, no grid transit; §42c = via the public
+-- grid). Should BNetzA's §42c Festlegung — due end-2026 — mandate different
+-- arithmetic, that will need its own variant rather than an overloaded one.
 
 CREATE TABLE virtual_meter_configs (
-    id           UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
-    virtual_id   TEXT    NOT NULL,
-    rule_type    TEXT    NOT NULL
-                     CHECK (rule_type IN (
-                         'Sum','Residual','PvSelfConsumption',
-                         'GgvAllocation',
-                         'GgvConstantAllocation',
-                         'GgvProportionalAllocation'
-                     )),
-    source_ids   JSONB   NOT NULL,
-    config       JSONB,
-    tenant       TEXT    NOT NULL,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    virtual_malo_id TEXT        NOT NULL,
+    display_name    TEXT,
+    rule_type       TEXT        NOT NULL
+                        CHECK (rule_type IN (
+                            'Sum',
+                            'Residual',
+                            'PvSelfConsumption',
+                            'GgvConstantAllocation',
+                            'GgvProportionalAllocation'
+                        )),
+    -- Serialised `AggregationRule`, including its source MaLo-IDs.
+    rule_json       JSONB,
+    -- Statutory citation, e.g. '§42b EnWG' or '§42c EnWG'. Free text: it records
+    -- which regime a community operates under, which `rule_type` cannot express.
+    legal_basis     TEXT,
+    sparte          TEXT        CHECK (sparte IS NULL OR sparte IN ('STROM', 'GAS', 'WAERME', 'WASSER')),
+    valid_from      DATE        NOT NULL DEFAULT CURRENT_DATE,
+    valid_to        DATE,
+    tenant          TEXT        NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT vmc_validity CHECK (valid_to IS NULL OR valid_to >= valid_from)
 );
 
 CREATE INDEX vmc_tenant    ON virtual_meter_configs (tenant);
 CREATE INDEX vmc_rule_type ON virtual_meter_configs (rule_type);
-CREATE UNIQUE INDEX vmc_virtual_id ON virtual_meter_configs (virtual_id, tenant);
+-- The upsert in `create_virtual_meter` targets this conflict key.
+CREATE UNIQUE INDEX vmc_virtual_malo_id ON virtual_meter_configs (virtual_malo_id, tenant);
 
 -- ── Quality assessments ───────────────────────────────────────────────────────
 
@@ -364,6 +405,8 @@ CREATE TABLE substitute_value_log (
                             'ZeroFill','LastValueCarryForward','ManualEntry'
                         )),
     reason          TEXT,
+    -- Operator who authorised the Ersatzwert (§22 MessZV attributability).
+    created_by      TEXT,
     created_at      TIMESTAMPTZ   NOT NULL DEFAULT now(),
     tenant          TEXT          NOT NULL
 );

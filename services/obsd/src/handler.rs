@@ -192,7 +192,7 @@ pub async fn handle_webhook(
 
 /// Derive the process family from workflow name or PID range.
 ///
-/// Source: BDEW PID table 3.3/4.0, BK6-24-174, BK7-24-01-009, BK7-14-020.
+/// Source: BDEW PID table 3.3/4.0, BK6-24-174, BK7-24-01-009, BK7-24-01-008.
 fn derive_family(workflow_name: &str, pid: u32) -> String {
     if !workflow_name.is_empty() {
         if workflow_name.starts_with("gpke") {
@@ -238,7 +238,7 @@ fn derive_family(workflow_name: &str, pid: u32) -> String {
         44039..=44053 | 44168..=44170 => "wim-gas",
         23005 | 23009 => "wim-gas", // INSRPT Gas-only variants
         31003 | 31004 => "wim-gas", // INVOIC WiM Gas Rechnung / Stornorechnung
-        // ── GaBi Gas — Bilanzierung Gas (BK7-14-020) ──────────────────────────
+        // ── GaBi Gas — Bilanzierung Gas (BK7-24-01-008) ──────────────────────────
         31007 | 31008 | 31010 => "gabi-gas", // INVOIC MMM-Rechnung / Kapazitätsrechnung
         13013 => "gabi-gas",                 // MSCONS Allokationsliste Gas (MMMA)
         17110 | 19110 => "gabi-gas",         // ORDERS/ORDRSP Allokationsliste Gas

@@ -65,7 +65,7 @@
 //! {
 //!   "command":    "wim.geraetewechsel.beauftragen",
 //!   "marktrolle": "NB",
-//!   "payload": { "melo_id": "DE00012345678", "wechseldatum": "2026-10-01" }
+//!   "payload": { "melo_id": "DE00012345678", "process_date": "20261001", "receiver_mp_id": "9900357000004" }
 //! }
 //! ```
 //!
@@ -147,12 +147,16 @@
 //! | `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum` |
 //! | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
 //! | `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `alter_lf_mp_id`¹ |
-//! | `gpke.sperrung.bestaetigen` | `malo_id`, `ausfuehrungsdatum` |
+//! | `gpke.sperrung.beauftragen` | `malo_id` |
+//! | `gpke.entsperrung.beauftragen` | `malo_id` |
+//! | `gpke.sperrung.stornieren` | `malo_id` |
+//! | `gpke.sperrung.bestaetigen` | `malo_id`, optional `note`/`reason` |
+//! | `gpke.sperrung.fehlgeschlagen` | `malo_id`, **`reason`** (or `note`) — required |
 //! | `gpke.abrechnung.annehmen` | `rechnung` (RECHNUNG BO4E) |
 //! | `gpke.abrechnung.ablehnen` | `rechnung` (RECHNUNG BO4E), `ablehnungsgrund` |
 //! | `geli.lieferbeginn.anmelden` | `malo_id` (Erdgas MaLo), `lieferbeginn_datum` |
 //! | `geli.lieferende.anmelden` | `malo_id` (Erdgas MaLo), `lieferende_datum` |
-//! | `wim.geraetewechsel.beauftragen` | `melo_id`, `wechseldatum`² |
+//! | `wim.geraetewechsel.beauftragen` | `melo_id`, `process_date` (YYYYMMDD), `receiver_mp_id`, optional `pid`² |
 //! | `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |
 //!
 //! ¹ `alter_lf_mp_id` is required only when the old supplier is a different legal
@@ -188,7 +192,11 @@
 //! | `gpke.lieferende.anmelden` | `LF` | GPKE Lieferende Strom | 55002 |
 //! | `gpke.lieferende.bestaetigen` | `NB` | GPKE NB bestätigt Lieferende | 55005/55006 |
 //! | `gpke.kuendigung.anmelden` | `LF` | GPKE Kündigung Lieferbeginn | 55016 |
-//! | `gpke.sperrung.bestaetigen` | `LF` | GPKE Sperrung bestätigt (LFN → NB; ORDERS 17115/17117) | — |
+//! | `gpke.sperrung.beauftragen` | `LF` | GPKE Sperrauftrag (LF → NB; ORDERS) | 17115 |
+//! | `gpke.entsperrung.beauftragen` | `LF` | GPKE Entsperrauftrag (LF → NB; ORDERS) | 17117 |
+//! | `gpke.sperrung.stornieren` | `LF` | GPKE Stornierung Sperrauftrag (ORDCHG) | 39000 |
+//! | `gpke.sperrung.bestaetigen` | `NB` | NB meldet Ausführung → IFTSTA 21039 | 17115/17117 |
+//! | `gpke.sperrung.fehlgeschlagen` | `NB` | NB meldet Nichtausführung → IFTSTA 21039 | 17115/17117 |
 //! | `gpke.abrechnung.annehmen` | `NB` | GPKE Netznutzungsabrechnung | 31001/31002 |
 //! | `gpke.abrechnung.ablehnen` | `NB` | GPKE Abrechnungsstreit | 31001/31002 |
 //! | `geli.lieferbeginn.anmelden` | `LFG` | GeLi Gas Lieferbeginn | 44001 |
@@ -215,7 +223,9 @@ use mako_engine::{
     ids::{ProcessId, TenantId},
     metrics::EngineMetrics,
     registry::ProcessRegistry as _,
-    types::{BikoId, BillingPeriod, BkvId, MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator},
+    types::{
+        BikoId, BillingPeriod, BkvId, MaLo, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator,
+    },
     version::WorkflowId,
 };
 use mako_gabi_gas::{
@@ -232,6 +242,11 @@ use mako_gpke::{
     AbrechnungCommand, AnkuendigungZuordnungLfCommand, GpkeAbrechnungWorkflow,
     GpkeAnkuendigungZuordnungLfWorkflow, GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow,
     GpkeSupplierChangeWorkflow, LfAnmeldungCommand, SupplierChangeCommand,
+};
+use mako_gpke::{
+    GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, SPERRUNG_LF_ANFRAGE_PIDS,
+    SPERRUNG_LF_ANTWORT_WINDOW_LABEL, SPERRUNG_LF_WORKFLOW_NAME, SPERRUNG_WORKFLOW_NAME,
+    SperrungCommand, SperrungLfCommand,
 };
 use mako_mabis::{
     BillingCommand, BillingVersion, DataStatus, IFTSTA_DATENSTATUS_PID,
@@ -1008,19 +1023,48 @@ fn cmd_gpke_lieferbeginn_aktivieren<'a>(
 }
 
 fn cmd_gpke_sperrung_bestaetigen<'a>(
-    _s: &'a CommandsApiState,
-    _p: &'a serde_json::Value,
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    // TODO(F-022): GpkeSperrungLfWorkflow not yet wired to the command API.
-    // Implement: extract malo_id + ausfuehrungsdatum, call dispatch_to_process
-    // for GpkeSperrungLfWorkflow with SperrungLfCommand::InitiateSperrung.
-    Box::pin(async {
-        Err(DispatchError::NotImplemented(
-            "gpke.sperrung.bestaetigen".to_owned(),
-        ))
-    })
+    Box::pin(dispatch_gpke_sperrung_ausfuehrung(s, p, true))
+}
+
+fn cmd_gpke_sperrung_fehlgeschlagen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_sperrung_ausfuehrung(s, p, false))
+}
+
+fn cmd_gpke_sperrung_beauftragen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_sperrung_lf_beauftragen(s, p, 17115))
+}
+
+fn cmd_gpke_entsperrung_beauftragen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_sperrung_lf_beauftragen(s, p, 17117))
+}
+
+fn cmd_gpke_sperrung_stornieren<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_sperrung_lf_stornieren(s, p))
 }
 
 fn cmd_gpke_abrechnung_annehmen<'a>(
@@ -1270,20 +1314,12 @@ fn cmd_geli_lieferende_ablehnen<'a>(
 }
 
 fn cmd_wim_geraetewechsel_beauftragen<'a>(
-    _s: &'a CommandsApiState,
-    _p: &'a serde_json::Value,
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    // TODO(F-022): WimDeviceChangeWorkflow spawn via ERP command not yet wired.
-    // WiM (BK6-24-174) PIDs 55039/55042/55051/55168 — NB or MSB initiates Gerätewechsel.
-    // Implement: extract melo_id + wechseldatum + marktrolle, resolve NB+MSB GLNs
-    // from MeLo cache, spawn WimDeviceChangeWorkflow with DeviceChangeCommand::ReceiveUtilmd.
-    Box::pin(async {
-        Err(DispatchError::NotImplemented(
-            "wim.geraetewechsel.beauftragen".to_owned(),
-        ))
-    })
+    Box::pin(dispatch_wim_geraetewechsel_beauftragen(s, p))
 }
 
 fn cmd_wim_geraetewechsel_bestaetigen<'a>(
@@ -2344,6 +2380,327 @@ async fn dispatch_geli_lf_anmeldung(
         .await;
 
     Ok(DispatchOutcome::Spawned { process_id })
+}
+
+/// Spawn an outbound WiM MSB-Wechsel order (UTILMD 55039/55042/55051/55168).
+///
+/// **Roles: NB or MSB** — the PID decides the direction:
+///
+/// | PID   | Process                              | Von  | An   | Antwortfrist |
+/// |-------|--------------------------------------|------|------|--------------|
+/// | 55039 | Kündigung MSB                        | MSBN | MSBA | 3 WT |
+/// | 55042 | Anmeldung MSB                        | MSBN | NB   | 5 WT |
+/// | 55051 | Ende MSB (Abmeldung)                 | MSBA | NB   | 7 WT |
+/// | 55168 | Verpflichtungsanfrage / Aufforderung | NB   | gMSB | 1 WT |
+///
+/// The caller supplies `melo_id`, `process_date`, and the counterparty GLN
+/// (`receiver_mp_id`). Business key = `melo_id`.
+///
+/// Deadline: 5 Werktage for the counterparty's answer (WiM BK6-24-174).
+async fn dispatch_wim_geraetewechsel_beauftragen(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let melo_id = extract_melo_id(payload)?;
+
+    let pid_code = payload
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .map(|n| n as u32)
+        .unwrap_or(55_042);
+
+    if !mako_wim::DEVICE_CHANGE_PIDS.contains(&pid_code) {
+        return Err(DispatchError::InvalidPayload(format!(
+            "unsupported WiM MSB-Wechsel PID {pid_code}; expected one of {:?}",
+            mako_wim::DEVICE_CHANGE_PIDS
+        )));
+    }
+
+    let process_date = payload
+        .get("process_date")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"process_date\" (YYYYMMDD in German local time)".to_owned(),
+            )
+        })?
+        .to_owned();
+
+    // The counterparty GLN cannot be derived from the MeLo alone: for 55039/55042
+    // it is the NB, for 55051/55168 it is the nMSB. The ERP knows which.
+    let receiver_mp_id = payload
+        .get("receiver_mp_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"receiver_mp_id\" (13-digit GLN of the counterparty: \
+                 the MSBA for 55039, the NB for 55042 and 55051, the gMSB for 55168)"
+                    .to_owned(),
+            )
+        })?
+        .to_owned();
+
+    let pid = Pruefidentifikator::new(pid_code).map_err(DispatchError::InvalidPayload)?;
+    let message_ref = MessageRef::new(format!("WIM-GW-{}", uuid::Uuid::new_v4()));
+
+    let domain_cmd = DeviceChangeCommand::InitiateDeviceChange {
+        pid,
+        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        receiver: MarktpartnerCode::new(receiver_mp_id),
+        melo_id: MeLo::new(melo_id.clone()),
+        process_date,
+        message_ref,
+    };
+
+    // Idempotency: one active device-change process per MeLo.
+    let existing = state
+        .store
+        .as_process_registry()
+        .lookup_correlated(state.tenant_id, &melo_id)
+        .await
+        .map_err(DispatchError::Engine)?;
+    if let Some(first) = existing
+        .into_iter()
+        .find(|id| id.workflow_id.name.as_ref() == mako_wim::WORKFLOW_NAME)
+    {
+        let dup_id = first.process_id;
+        tracing::warn!(
+            melo_id = %melo_id,
+            process_id = %dup_id,
+            pid = pid_code,
+            "wim.geraetewechsel.beauftragen refused: active device-change process already exists",
+        );
+        return Err(DispatchError::DuplicateProcess {
+            process_id: dup_id,
+            malo_id: melo_id,
+        });
+    }
+
+    let workflow_id = WorkflowId::new(mako_wim::WORKFLOW_NAME, latest_format_version());
+    let process = mako_engine::process::Process::<
+        WimDeviceChangeWorkflow,
+        Arc<mako_engine::store_slatedb::SlateDbStore>,
+    >::new(
+        Arc::clone(&state.store),
+        state.tenant_id,
+        workflow_id.clone(),
+    );
+    let process_id = process.process_id();
+
+    // Antwortfrist per process — NOT a flat 5 WT (BK6-24-174 WiM Teil 1):
+    // 55039 → 3 WT · 55042 → 5 WT · 55051 → 7 WT · 55168 → 1 WT.
+    let frist_wt = mako_wim::antwort_frist_werktage(pid_code).ok_or_else(|| {
+        DispatchError::InvalidPayload(format!("no Antwortfrist defined for PID {pid_code}"))
+    })?;
+    let due_at = mako_engine::fristen::deadline_at_werktage(
+        time::OffsetDateTime::now_utc(),
+        frist_wt,
+        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+    );
+    let deadline = Deadline::new(
+        process.stream_id().clone(),
+        process_id,
+        state.tenant_id,
+        workflow_id,
+        mako_wim::AUFTRAG_ANTWORT_WINDOW_LABEL,
+        due_at,
+    );
+    process
+        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
+        .await?;
+
+    let identity = process.identity();
+    let _ = state
+        .store
+        .as_process_registry()
+        .register_correlated(state.tenant_id, &melo_id, process_id, identity)
+        .await;
+
+    Ok(DispatchOutcome::Spawned { process_id })
+}
+
+/// Report physical Sperrung/Entsperrung execution to the NB-role
+/// `GpkeSperrungWorkflow` (ORDERS 17115/17117 → IFTSTA 21039).
+///
+/// Called by `sperrd` after a field technician confirms (or fails to carry out)
+/// the disconnection, and by ERP operators driving `sperrd` manually.
+///
+/// **Role: NB.** This is the *grid operator* confirming execution of an order it
+/// received from the Lieferant — not the LF issuing one. The LF-side lifecycle is
+/// [`dispatch_gpke_sperrung_lf_beauftragen`].
+///
+/// Business key = `malo_id`; the inbound ORDERS 17115/17117 spawned the process
+/// and registered the correlation.
+///
+/// Regulatory basis: GPKE BK6-22-024 §5 — the NB must dispatch IFTSTA 21039 after
+/// physical execution. `durchgefuehrt = false` reports a failed execution with a
+/// reason (meter access denied, safety block, …) so the LF is not left waiting.
+async fn dispatch_gpke_sperrung_ausfuehrung(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    durchgefuehrt: bool,
+) -> Result<DispatchOutcome, DispatchError> {
+    let malo_id = extract_malo_id(payload)?;
+
+    // `note` is what sperrd sends; `reason` is the ERP-facing alias.
+    let reason = payload
+        .get("reason")
+        .or_else(|| payload.get("note"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+
+    if !durchgefuehrt && reason.is_none() {
+        return Err(DispatchError::InvalidPayload(
+            "gpke.sperrung.fehlgeschlagen requires \"reason\" (or \"note\") \
+             explaining why execution failed"
+                .to_owned(),
+        ));
+    }
+
+    dispatch_to_process::<GpkeSperrungWorkflow, _>(
+        state,
+        &malo_id,
+        SPERRUNG_WORKFLOW_NAME,
+        move || SperrungCommand::BestaetigueSperrung {
+            durchgefuehrt,
+            reason,
+        },
+    )
+    .await
+}
+
+/// Spawn an LF-initiated Sperrauftrag (17115) or Entsperrauftrag (17117).
+///
+/// **Role: LF.** The Lieferant instructs the Netzbetreiber to disconnect or
+/// reconnect a delivery point (typically after a dunning escalation reaches
+/// Mahnstufe 3 in `accountingd`). The NB answers with ORDRSP 19116/19117 and
+/// later reports execution via IFTSTA 21039 — both routed back to this process
+/// by `PidRouter`.
+///
+/// Deadline: 24 wall-clock hours for the NB's ORDRSP (BK6-22-024).
+async fn dispatch_gpke_sperrung_lf_beauftragen(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    pid_code: u32,
+) -> Result<DispatchOutcome, DispatchError> {
+    if !SPERRUNG_LF_ANFRAGE_PIDS.contains(&pid_code) {
+        return Err(DispatchError::InvalidPayload(format!(
+            "unsupported Sperrung PID {pid_code}; expected 17115 or 17117"
+        )));
+    }
+
+    let malo_id = extract_malo_id(payload)?;
+
+    // Resolve the NB GLN from the MaLo cache — the LF addresses its own grid operator.
+    let malo_record = state
+        .malo_cache
+        .get(&state.tenant_id.to_string(), &malo_id)
+        .await
+        .map_err(|e| DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string())))?
+        .ok_or_else(|| DispatchError::MaloNotFound(malo_id.clone()))?;
+
+    let nb_mp_id = malo_record
+        .data_market_location
+        .data_market_location_network_operators
+        .iter()
+        .max_by_key(|p| (p.execution_time_until.is_none(), &p.execution_time_from))
+        .map(|p| MarktpartnerCode::new(format!("{:013}", p.market_partner_id)))
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(format!(
+                "MaLo {malo_id} has no network_operator — NB GLN cannot be resolved",
+            ))
+        })?;
+
+    let pid = Pruefidentifikator::new(pid_code).map_err(DispatchError::InvalidPayload)?;
+    let message_ref = MessageRef::new(format!("SPERR-{}", uuid::Uuid::new_v4()));
+
+    let domain_cmd = SperrungLfCommand::InitiateSperrung {
+        pid,
+        nb_mp_id,
+        location_id: MaLo::new(malo_id.clone()),
+        message_ref,
+    };
+
+    // Idempotency: one active Sperrung process per MaLo.
+    let existing = state
+        .store
+        .as_process_registry()
+        .lookup_correlated(state.tenant_id, &malo_id)
+        .await
+        .map_err(DispatchError::Engine)?;
+    if let Some(first) = existing
+        .into_iter()
+        .find(|id| id.workflow_id.name.as_ref() == SPERRUNG_LF_WORKFLOW_NAME)
+    {
+        let dup_id = first.process_id;
+        tracing::warn!(
+            malo_id = %malo_id,
+            process_id = %dup_id,
+            pid = pid_code,
+            "gpke.sperrung.beauftragen refused: active Sperrung process already exists for this MaLo",
+        );
+        return Err(DispatchError::DuplicateProcess {
+            process_id: dup_id,
+            malo_id,
+        });
+    }
+
+    let workflow_id = WorkflowId::new(SPERRUNG_LF_WORKFLOW_NAME, latest_format_version());
+    let process = mako_engine::process::Process::<
+        GpkeSperrungLfWorkflow,
+        Arc<mako_engine::store_slatedb::SlateDbStore>,
+    >::new(
+        Arc::clone(&state.store),
+        state.tenant_id,
+        workflow_id.clone(),
+    );
+    let process_id = process.process_id();
+
+    // 24 wall-clock hours for the NB's ORDRSP (BK6-22-024) — not Werktage.
+    let due_at = mako_engine::fristen::add_hours(time::OffsetDateTime::now_utc(), 24);
+    let deadline = Deadline::new(
+        process.stream_id().clone(),
+        process_id,
+        state.tenant_id,
+        workflow_id,
+        SPERRUNG_LF_ANTWORT_WINDOW_LABEL,
+        due_at,
+    );
+    process
+        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
+        .await?;
+
+    let identity = process.identity();
+    let _ = state
+        .store
+        .as_process_registry()
+        .register_correlated(state.tenant_id, &malo_id, process_id, identity)
+        .await;
+
+    Ok(DispatchOutcome::Spawned { process_id })
+}
+
+/// Cancel a pending LF-initiated Sperrauftrag via ORDCHG 39000.
+///
+/// **Role: LF.** Valid while the process is in `AuftragGesendet` or
+/// `OrdrsepBestaetigt` — i.e. until the NB has physically executed. The NB
+/// answers with ORDRSP 19128 (Bestätigung) or 19129 (Ablehnung).
+///
+/// Typical trigger: the customer pays before the disconnection is carried out.
+async fn dispatch_gpke_sperrung_lf_stornieren(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let malo_id = extract_malo_id(payload)?;
+    let message_ref = MessageRef::new(format!("SPERR-STORNO-{}", uuid::Uuid::new_v4()));
+
+    dispatch_to_process::<GpkeSperrungLfWorkflow, _>(
+        state,
+        &malo_id,
+        SPERRUNG_LF_WORKFLOW_NAME,
+        move || SperrungLfCommand::SendStornierung { message_ref },
+    )
+    .await
 }
 
 /// Dispatch a GeLi Gas GNB→LFG Antwort to an existing
@@ -3435,13 +3792,50 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: 55001,
         dispatch: cmd_maloid_lieferbeginn_fortsetzen,
     },
-    // ── GPKE Sperrung (ORDERS 17115/17117, LF → NB) — stub ───────────────────
-    // TODO: Implement GpkeSperrungLfWorkflow dispatch (InitiateSperrung).
+    // ── GPKE Sperrung / Entsperrung (ORDERS 17115/17117) ─────────────────────
+    //
+    // Two sides, two workflows — do not conflate them:
+    //
+    //   LF side (`gpke-sperrung-lf`):  LF issues the order, awaits ORDRSP + IFTSTA.
+    //     gpke.sperrung.beauftragen    → 17115 Sperrauftrag
+    //     gpke.entsperrung.beauftragen → 17117 Entsperrauftrag
+    //     gpke.sperrung.stornieren     → ORDCHG 39000
+    //
+    //   NB side (`gpke-sperrung`):     NB receives the order and reports execution.
+    //     gpke.sperrung.bestaetigen    → executed      → IFTSTA 21039
+    //     gpke.sperrung.fehlgeschlagen → not executed  → IFTSTA 21039 + reason
+    //
+    // `sperrd` calls the NB-side pair after field-service confirmation
+    // (GPKE BK6-22-024 §5).
     CommandDescriptor {
-        name: "gpke.sperrung.bestaetigen",
+        name: "gpke.sperrung.beauftragen",
         permitted_roles: &["LF"],
         primary_pid: 17115,
+        dispatch: cmd_gpke_sperrung_beauftragen,
+    },
+    CommandDescriptor {
+        name: "gpke.entsperrung.beauftragen",
+        permitted_roles: &["LF"],
+        primary_pid: 17117,
+        dispatch: cmd_gpke_entsperrung_beauftragen,
+    },
+    CommandDescriptor {
+        name: "gpke.sperrung.stornieren",
+        permitted_roles: &["LF"],
+        primary_pid: 39000,
+        dispatch: cmd_gpke_sperrung_stornieren,
+    },
+    CommandDescriptor {
+        name: "gpke.sperrung.bestaetigen",
+        permitted_roles: &["NB"],
+        primary_pid: 17115,
         dispatch: cmd_gpke_sperrung_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "gpke.sperrung.fehlgeschlagen",
+        permitted_roles: &["NB"],
+        primary_pid: 17115,
+        dispatch: cmd_gpke_sperrung_fehlgeschlagen,
     },
     // ── GPKE Netznutzungsabrechnung — LF-payer side ───────────────────────────
     // The LF receives an INVOIC from the NB and settles or disputes it.
@@ -3499,8 +3893,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: 31009,
         dispatch: cmd_wim_msb_rechnung_stellen,
     },
-    // ── GeLi Gas Lieferbeginn (gas) — LFG-side stubs ─────────────────────────
-    // TODO: Implement GeliGasLfAnmeldungWorkflow (BK7-24-01-009).
+    // ── GeLi Gas Lieferbeginn (gas) — LFG side (BK7-24-01-009) ───────────────
     CommandDescriptor {
         name: "geli.lieferbeginn.anmelden",
         permitted_roles: &["LFG"],
@@ -3557,7 +3950,10 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         dispatch: cmd_geli_gas_datenabruf_anfragen,
     },
     // ── WiM Messstellenbetrieb ────────────────────────────────────────────────
-    // TODO(beauftragen): Implement ERP-initiated WimDeviceChangeWorkflow spawn.
+    //
+    // `wim.geraetewechsel.beauftragen` spawns an outbound MSB-Wechsel order; the
+    // PID selects the direction (55039/55042 = MSB → NB, 55051/55168 = NB → MSB).
+    // `.bestaetigen` / `.ablehnen` answer an *inbound* order via APERAK.
     CommandDescriptor {
         name: "wim.geraetewechsel.beauftragen",
         permitted_roles: &["NB", "MSB"],

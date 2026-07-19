@@ -5,14 +5,14 @@ nav_order: 14
 parent: Reference
 description: >
   dvgw-edi: parsing ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, and DELRES
-  for GaBi Gas 2.0. Covers regulatory basis, message taxonomy, version management,
+  for GaBi Gas 2.1. Covers regulatory basis, message taxonomy, version management,
   profile schema, parsing architecture, and GaBi Gas workflow integration.
 ---
 
 # DVGW EDI
 
 The `dvgw-edi` crate implements EDIFACT parsing for the German gas transport and
-balancing market (GaBi Gas 2.0, BNetzA BK7-14-020). It is the DVGW counterpart
+balancing market (GaBi Gas 2.1, BNetzA BK7-24-01-008). It is the DVGW counterpart
 to the `edi-energy` crate, which covers the BDEW EDI@Energy retail-market layer.
 
 ---
@@ -23,8 +23,8 @@ to the `edi-energy` crate, which covers the BDEW EDI@Energy retail-market layer.
 
 | Document | Significance |
 |---|---|
-| **GasNZV** (Gasnetzzugangsverordnung) | Statutory basis for gas network access and balancing; delegates technical implementation to the BNetzA |
-| **GaBi Gas 2.0** (BNetzA **BK7-14-020**) | Current ruling. Introduced the two-market-area model, simplified exit-zone products, and mandatory DVGW-format electronic exchange. All production implementations must comply with BK7-14-020. |
+| **§20 Abs. 3 EnWG** | Festlegungskompetenz for gas network access and balancing; exercised through the BK7 Festlegungen (GasNZV was repealed with effect from the end of 31.12.2025) |
+| **GaBi Gas 2.1** (BNetzA **BK7-24-01-008**) | Current ruling. Introduced the two-market-area model, simplified exit-zone products, and mandatory DVGW-format electronic exchange. All production implementations must comply with BK7-24-01-008. |
 | **Kooperationsvereinbarung Gas** (KoV) | Industry agreement between all German gas network operators (§ 20 Abs. 1b EnWG), mandating the use of DVGW EDIFACT formats for balancing and transport processes |
 | **DVGW G 685** | Technical standard for gas metering and allocation calculations |
 
@@ -311,7 +311,7 @@ use it when calculating gas allocation quantities or feeding values into
 > **PID 31011 is NOT a GaBi Gas billing.** PID 31011 (Rechnung sonstige Leistung,
 > AWH Sperrprozesse Gas, NB → LF) is the GeLi Gas billing for grid operator
 > charges incurred during gas disconnection processes. It belongs to `mako-geli-gas`
-> per BK7-24-01-009. The distinction matters: GaBi Gas (BK7-14-020) covers transport
+> per BK7-24-01-009. The distinction matters: GaBi Gas (BK7-24-01-008) covers transport
 > and balancing between FNB/MGV/BKV; GeLi Gas (BK7-24-01-009) covers retail gas
 > market communication between LFG/GNB.
 
@@ -328,7 +328,7 @@ The `mako-gabi-gas` crate exposes a rich, regulation-accurate domain vocabulary:
 | `AllocationVersion` | Initial/Correction(n)/Final per KoV §6.4 |
 | `GasMarketRole` | 9-role typed enum (LF, NB, FNB, VNB, BKV, MGV, MSB, Händler, TNB) |
 | `GasImbalanceSaldo` | Mehr/Minder/Balanced with `ausgleichsenergie_price_ct_per_kwh` per KoV §9 |
-| `GasPortfolioBalance` | BKV portfolio across Bilanzkreise; `conservation_check()` per GasNZV §24 |
+| `GasPortfolioBalance` | BKV portfolio across Bilanzkreise; `conservation_check()` per GaBi Gas 2.1 (BK7-24-01-008) |
 | `cloud_events` | Typed `de.gabi.*` CloudEvent constants for all 12 domain events |
 | `dvgw_versions` | Biannual DVGW format version tracking (ALOCAT 5.11a / NOMINT 4.6 FK / …) |
 
@@ -359,7 +359,7 @@ other domain workflow crates in this workspace:
 | ALOCAT 5.11a PDF | [docs/pdfs/dvgw/ALOCAT_5.11a_Stand_2024-04-02.pdf](pdfs/dvgw/ALOCAT_5.11a_Stand_2024-04-02.pdf) |
 | NOMINT 4.6 FK PDF | [docs/pdfs/dvgw/NOMINT_4.6_Stand_2026-02-01_Fehlerkorrektur.pdf](pdfs/dvgw/NOMINT_4.6_Stand_2026-02-01_Fehlerkorrektur.pdf) |
 | NOMRES 4.7 FK PDF | [docs/pdfs/dvgw/NOMRES_4.7_Stand_2026-02-01_Fehlerkorrektur.pdf](pdfs/dvgw/NOMRES_4.7_Stand_2026-02-01_Fehlerkorrektur.pdf) |
-| BNetzA BK7-14-020 (GaBi Gas 2.0) | [docs/pdfs/bentza/](pdfs/bentza/) |
+| BNetzA BK7-24-01-008 (GaBi Gas 2.1) | [docs/pdfs/bentza/](pdfs/bentza/) |
 | `dvgw-edi` source | [crates/dvgw-edi/](../crates/dvgw-edi/) |
 | `mako-gabi-gas` source | [crates/mako-gabi-gas/](../crates/mako-gabi-gas/) |
 | Process engine guide | [docs/engine.md](engine.md) |

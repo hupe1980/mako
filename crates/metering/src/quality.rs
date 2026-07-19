@@ -1,11 +1,15 @@
-//! Hampel-filter quality scoring (M7).
+//! Hampel-filter quality scoring.
 //!
-//! Extracted from `edmd/src/server.rs` where it was embedded inline.
-//! The `meter-quality` crate has been folded into this module.
+//! A Hampel filter flags a point as an outlier when it deviates from its local
+//! median by more than `t` robust sigma, where sigma is the median absolute
+//! deviation scaled by 1.4826 — the constant making MAD a consistent estimator
+//! of the standard deviation for normally distributed data. Median and MAD both
+//! have a 50 % breakdown point, so a run of corrupt readings cannot shift the
+//! threshold enough to mask itself.
 //!
-//! Two entry points:
-//! - [`score_intervals`] — accepts `&[MeterInterval]` (Decimal-based, full edmd integration)
-//! - [`score_intervals_raw`] — accepts `&[f64]` for callers with raw float data (e.g. from DB NUMERIC)
+//! Two entry points, differing only in the numeric type they accept:
+//! - [`score_intervals`] — `&[MeterInterval]`, `Decimal`-based, no precision loss
+//! - [`score_intervals_raw`] — `&[f64]`, for callers holding raw floats
 
 use crate::interval::MeterInterval;
 
@@ -16,7 +20,7 @@ use serde::{Deserialize, Serialize};
 pub const K_MAD: f64 = 1.4826;
 
 /// Configuration for the Hampel-filter quality scorer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct QualityConfig {
     /// Hampel filter half-window (total = `2k+1` points). Default: 3.
     pub hampel_k: usize,
@@ -24,6 +28,20 @@ pub struct QualityConfig {
     pub hampel_t: f64,
     /// Spike detection multiplier: flag when value > `spike_factor × window_median`. Default: 10.0.
     pub spike_factor: f64,
+    /// Longest run of consecutive zero intervals that is *not* a warning.
+    /// Default: 2.
+    ///
+    /// Electricity has a standby floor, so a short zero run indicates a dead
+    /// meter. Water and heat have no such floor: an empty flat or an unheated
+    /// circuit reads zero for days. See [`QualityConfig::for_sparte`].
+    pub max_zero_run_allowed: usize,
+    /// Absolute floor on the robust sigma, in the series' own unit. Default: 0.0.
+    ///
+    /// Across a flat window the median absolute deviation is 0, so `t × sigma`
+    /// is 0 and every nonzero deviation scores as an outlier. On a flat-profile
+    /// medium that flags the first genuine consumption after a quiet period. The
+    /// floor makes the test "deviates by more than `min_sigma`".
+    pub min_sigma: f64,
 }
 
 impl Default for QualityConfig {
@@ -32,6 +50,42 @@ impl Default for QualityConfig {
             hampel_k: 3,
             hampel_t: 3.0,
             spike_factor: 10.0,
+            max_zero_run_allowed: 2,
+            min_sigma: 0.0,
+        }
+    }
+}
+
+impl QualityConfig {
+    /// Media-aware defaults.
+    ///
+    /// The electricity thresholds suit 15-minute RLM load profiles, which are
+    /// noisy and rarely flat. Heat and water submetering profiles are dominated
+    /// by long legitimate zero runs and need wider tolerances.
+    #[must_use]
+    pub fn for_sparte(sparte: crate::interval::Sparte) -> Self {
+        use crate::interval::Sparte;
+        match sparte {
+            Sparte::Strom => Self::default(),
+            // Gas heating is seasonal: a summer week of near-zero draw is normal.
+            Sparte::Gas => Self {
+                max_zero_run_allowed: 48,
+                min_sigma: 0.01,
+                ..Self::default()
+            },
+            // Heat: unheated months, and HCA units are dimensionless and coarse.
+            Sparte::Waerme => Self {
+                max_zero_run_allowed: 720,
+                min_sigma: 0.05,
+                ..Self::default()
+            },
+            // Water: a vacant flat reads exactly zero indefinitely, and the
+            // resolution is litres, so sigma floors must be small.
+            Sparte::Wasser => Self {
+                max_zero_run_allowed: 720,
+                min_sigma: 0.001,
+                ..Self::default()
+            },
         }
     }
 }
@@ -113,6 +167,15 @@ pub struct QualityReport {
 /// ```
 #[must_use]
 pub fn hampel_filter(values: &[f64], k: usize, t: f64) -> Vec<usize> {
+    hampel_filter_with_floor(values, k, t, 0.0)
+}
+
+/// [`hampel_filter`] with an absolute floor on the robust sigma.
+///
+/// See [`QualityConfig::min_sigma`] for why a floor is needed on flat-profile
+/// media such as water and heat.
+#[must_use]
+pub fn hampel_filter_with_floor(values: &[f64], k: usize, t: f64, min_sigma: f64) -> Vec<usize> {
     let n = values.len();
     let mut outliers = Vec::new();
     for i in 0..n {
@@ -139,7 +202,9 @@ pub fn hampel_filter(values: &[f64], k: usize, t: f64) -> Vec<usize> {
             abs_devs[abs_devs.len() / 2]
         };
 
-        let sigma = K_MAD * mad;
+        // `min_sigma` floors the scale estimate so a perfectly flat window
+        // (mad == 0) does not declare every nonzero deviation an outlier.
+        let sigma = (K_MAD * mad).max(min_sigma);
         if sigma <= 0.0 {
             if (values[i] - median).abs() > 0.0 {
                 outliers.push(i);
@@ -228,7 +293,7 @@ pub fn score_intervals(samples: &[MeterInterval], cfg: QualityConfig) -> Quality
 
     // 4. Hampel outlier detection
     let outlier_indices = if sorted.len() > cfg.hampel_k * 2 {
-        hampel_filter(&values, cfg.hampel_k, cfg.hampel_t)
+        hampel_filter_with_floor(&values, cfg.hampel_k, cfg.hampel_t, cfg.min_sigma)
     } else {
         vec![]
     };
@@ -289,7 +354,7 @@ pub fn score_intervals(samples: &[MeterInterval], cfg: QualityConfig) -> Quality
     // Grade
     let total_anomalies = outlier_intervals.len() + spike_intervals.len();
     let has_warnings = gaps_detected > 0
-        || max_zero_run > 2
+        || max_zero_run > cfg.max_zero_run_allowed
         || total_anomalies > 0
         || coverage_pct < 99.0
         || !intervals_consistent;
@@ -520,7 +585,7 @@ pub fn score_intervals_f64(
 
     // ── 4. Hampel outlier detection ───────────────────────────────────────────
     let outlier_indices = if n > cfg.hampel_k * 2 {
-        hampel_filter(values, cfg.hampel_k, cfg.hampel_t)
+        hampel_filter_with_floor(values, cfg.hampel_k, cfg.hampel_t, cfg.min_sigma)
     } else {
         vec![]
     };
@@ -571,7 +636,7 @@ pub fn score_intervals_f64(
     // ── Grade ─────────────────────────────────────────────────────────────────
     let total_anomalies = outlier_intervals.len() + spike_intervals.len();
     let has_warnings = gaps_detected > 0
-        || max_zero_run > 2
+        || max_zero_run > cfg.max_zero_run_allowed
         || total_anomalies > 0
         || coverage_pct < 99.0
         || !intervals_consistent;
@@ -667,5 +732,93 @@ mod tests {
         assert!(!QualityGrade::A.blocks_billing());
         assert!(!QualityGrade::B.blocks_billing());
         assert!(!QualityGrade::C.blocks_billing());
+    }
+}
+
+#[cfg(test)]
+mod media_aware_tests {
+    use super::*;
+    use crate::interval::Sparte;
+
+    /// Across a flat window the median absolute deviation is 0, so without a
+    /// floor every nonzero deviation scores as an outlier.
+    #[test]
+    fn sigma_floor_stops_mad_implosion_on_a_flat_series() {
+        // A vacant flat, then somebody runs a tap.
+        let values = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.012, 0.0, 0.0, 0.0, 0.0];
+
+        let unfloored = hampel_filter(&values, 3, 3.0);
+        assert!(
+            !unfloored.is_empty(),
+            "without a floor the flat window flags the real draw"
+        );
+
+        let floored = hampel_filter_with_floor(&values, 3, 3.0, 0.05);
+        assert!(
+            floored.is_empty(),
+            "a 12 L draw is below the 50 L floor and must not be an outlier"
+        );
+    }
+
+    /// Electricity keeps the strict default; the flat-profile media do not.
+    #[test]
+    fn zero_run_tolerance_is_media_specific() {
+        assert_eq!(
+            QualityConfig::for_sparte(Sparte::Strom).max_zero_run_allowed,
+            2
+        );
+        assert_eq!(
+            QualityConfig::for_sparte(Sparte::Gas).max_zero_run_allowed,
+            48
+        );
+        assert_eq!(
+            QualityConfig::for_sparte(Sparte::Wasser).max_zero_run_allowed,
+            720
+        );
+        assert_eq!(
+            QualityConfig::for_sparte(Sparte::Waerme).max_zero_run_allowed,
+            720
+        );
+
+        // Strom uses the RLM defaults.
+        assert_eq!(
+            QualityConfig::for_sparte(Sparte::Strom),
+            QualityConfig::default()
+        );
+    }
+
+    /// A vacant flat's daily water series grades A under the water profile and
+    /// worse under the electricity one.
+    #[test]
+    fn vacant_flat_water_series_grades_clean() {
+        let values = vec![0.0_f64; 24];
+        let ts_ns: Vec<i64> = (0..24).map(|i| i * 3_600_000_000_000i64).collect();
+        let end = ts_ns[23] + 3_600_000_000_000;
+
+        let water = score_intervals_f64(
+            &values,
+            &ts_ns,
+            ts_ns[0],
+            end,
+            QualityConfig::for_sparte(Sparte::Wasser),
+        );
+        assert_eq!(
+            water.grade,
+            QualityGrade::A,
+            "a vacant flat reading zero is normal, not a data fault"
+        );
+
+        let strom = score_intervals_f64(
+            &values,
+            &ts_ns,
+            ts_ns[0],
+            end,
+            QualityConfig::for_sparte(Sparte::Strom),
+        );
+        assert_ne!(
+            strom.grade,
+            QualityGrade::A,
+            "24 zero hours on electricity means a dead meter"
+        );
     }
 }

@@ -536,7 +536,7 @@ pub(crate) fn today_berlin() -> Date {
 /// 1. If `Marktlokation.lastprofile` is populated in the stored JSONB data, the
 ///    stored values are returned verbatim (already typed BO4E).
 /// 2. Otherwise a default profile is **derived** from `bilanzierungsmethode` +
-///    `sparte` according to §§10–12 StromNZV / BDEW SLP registry:
+///    `sparte` according to §12 StromNZV (bis 31.12.2025) / BDEW SLP registry:
 ///
 /// | bilanzierungsmethode | sparte | derived profilschar | profilart |
 /// |---|---|---|---|
@@ -646,7 +646,7 @@ where
         .into_response();
     }
 
-    // 2. Derive default SLP profile from sparte (§§10–12 StromNZV / BDEW).
+    // 2. Derive default SLP profile from sparte (§12 StromNZV (bis 31.12.2025) / BDEW).
     let profilschar = match record.sparte {
         Sparte::Gas => "G000", // DVGW G 685 — Standardlastprofil Erdgas
         _ => "H0",             // BDEW — Standardlastprofil Haushalt Strom

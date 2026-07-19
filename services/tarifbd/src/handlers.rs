@@ -694,7 +694,7 @@ pub async fn delete_energiemix_handler(
 
 /// Compute estimated all-in annual cost from product + NNE + statutory levies.
 ///
-/// ## Cost components (per §§1-3 StromStG, §17 StromNZV, BNetzA Netzentgelt)
+/// ## Cost components (per §§1-3 StromStG, KAV §2, BNetzA Netzentgelt)
 ///
 /// | Component | Typical share (SLP Gewerbe) | Source |
 /// |---|---|---|
@@ -730,7 +730,7 @@ pub struct PositionCostBreakdown {
     pub supply_netto_eur: Decimal,
     /// DSO grid fees (NNE Grundpreis + Arbeitspreis + Leistungspreis).
     pub nne_netto_eur: Decimal,
-    /// Konzessionsabgabe (§17 StromNZV / §7 GasNZV).
+    /// Konzessionsabgabe (KAV §2).
     pub ka_eur: Decimal,
     /// Statutory levies: Stromsteuer (Strom) or Energiesteuer + BEHG (Gas).
     pub levies_eur: Decimal,

@@ -29,7 +29,7 @@
 //!
 //! - **DVGW G 685 / G 2000** — gas balance group rules
 //! - **Kooperationsvereinbarung Gas (KoV)** — imbalance reporting obligations
-//! - **BNetzA GaBi Gas 2.0 (BK7-14-020)** — regulatory framework for gas balancing
+//! - **BNetzA GaBi Gas 2.1 (BK7-24-01-008)** — regulatory framework for gas balancing
 
 use mako_engine::{
     error::WorkflowError,

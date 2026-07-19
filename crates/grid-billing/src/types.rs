@@ -29,8 +29,8 @@ use rust_decimal::Decimal;
 /// Commodity — Strom (electricity) or Gas.
 ///
 /// Controls which legal references are applied to each settlement position:
-/// - `Strom` → `StromNEV`, `StromNZV`, BK6 decisions
-/// - `Gas` → `GasNEV`, `GasNZV`, BK7 decisions
+/// - `Strom` → `StromNEV`, BK6 Festlegungen
+/// - `Gas` → `GasNEV`, BK7 Festlegungen
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Sparte {
     /// Electricity (Strom). Default.
@@ -40,23 +40,109 @@ pub enum Sparte {
     Gas,
 }
 
-// ── KaKlasse ──────────────────────────────────────────────────────────────────
+// ── Konzessionsabgabe (KAV §2) ────────────────────────────────────────────────
 
-/// KAV §2 concession fee rate class.
+/// Municipality size band for Konzessionsabgabe, per **KAV §2 Abs. 2**.
 ///
-/// Different annual consumption bands attract different KAV rates per
-/// KAV §2 Abs. 2. Providing the class makes each position's audit trace
-/// self-explanatory: auditors can verify the rate matches the class.
+/// KAV bands Tarifkunden rates by the municipality's **inhabitant count**, not by
+/// the customer's annual consumption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KaKlasse {
-    /// Tarifkunde ≤ 25 MWh/a — residential (highest rate tier).
-    TarifkundeLow,
-    /// Tarifkunde > 25 MWh/a and ≤ 150 MWh/a — commercial.
-    TarifkundeMedium,
-    /// Sonderkunde / Industriekunde > 150 MWh/a.
-    SonderkundeHigh,
-    /// Exempt from KA (hospitals, water utilities, §2 Abs. 7 KAV).
+pub enum GemeindeGroesse {
+    /// bis 25 000 Einwohner.
+    Bis25k,
+    /// bis 100 000 Einwohner.
+    Bis100k,
+    /// bis 500 000 Einwohner.
+    Bis500k,
+    /// über 500 000 Einwohner.
+    Ueber500k,
+}
+
+/// Konzessionsabgabe customer group per **KAV §2**.
+///
+/// The Tarifkunde/Sondervertragskunde split is a **contract-type** test, not a
+/// consumption threshold: KAV §2 Abs. 3 applies to Sondervertragskunden whatever
+/// they consume, and Abs. 2 bands Tarifkunden by municipality size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KaKundengruppe {
+    /// Tarifkunde — KAV §2 Abs. 2. Rate depends on [`GemeindeGroesse`].
+    ///
+    /// For gas, `nur_kochen_warmwasser` selects between the two Abs. 2 columns:
+    /// supply limited to cooking and hot water, or all other Tariflieferungen.
+    Tarifkunde {
+        /// Municipality size band.
+        gemeinde: GemeindeGroesse,
+        /// Gas only: supply limited to cooking/hot water. Ignored for Strom.
+        nur_kochen_warmwasser: bool,
+    },
+    /// Schwachlaststrom — KAV §2 Abs. 2. **Strom only**; gas has no such tier.
+    Schwachlast,
+    /// Sondervertragskunde — KAV §2 Abs. 3. Flat, independent of municipality size.
+    Sondervertragskunde,
+    /// Freigestellt nach KAV §2 Abs. 7.
     Exempt,
+}
+
+impl KaKundengruppe {
+    /// The KAV §2 **Höchstbetrag** in ct/kWh for this group and Sparte.
+    ///
+    /// Returns `None` for [`KaKundengruppe::Exempt`], and for
+    /// [`KaKundengruppe::Schwachlast`] on gas, which KAV does not provide.
+    ///
+    /// These are statutory **maxima**, not the agreed rate — a concession contract
+    /// may set anything up to them.
+    #[must_use]
+    pub fn hoechstsatz_ct_per_kwh(self, sparte: Sparte) -> Option<Decimal> {
+        let pick = |a: &str| Decimal::from_str_exact(a).ok();
+        match (self, sparte) {
+            (Self::Exempt, _) => None,
+            (Self::Schwachlast, Sparte::Strom) => pick("0.61"),
+            (Self::Schwachlast, Sparte::Gas) => None,
+            (Self::Sondervertragskunde, Sparte::Strom) => pick("0.11"),
+            (Self::Sondervertragskunde, Sparte::Gas) => pick("0.03"),
+            (Self::Tarifkunde { gemeinde, .. }, Sparte::Strom) => pick(match gemeinde {
+                GemeindeGroesse::Bis25k => "1.32",
+                GemeindeGroesse::Bis100k => "1.59",
+                GemeindeGroesse::Bis500k => "1.99",
+                GemeindeGroesse::Ueber500k => "2.39",
+            }),
+            (
+                Self::Tarifkunde {
+                    gemeinde,
+                    nur_kochen_warmwasser: true,
+                },
+                Sparte::Gas,
+            ) => pick(match gemeinde {
+                GemeindeGroesse::Bis25k => "0.51",
+                GemeindeGroesse::Bis100k => "0.61",
+                GemeindeGroesse::Bis500k => "0.77",
+                GemeindeGroesse::Ueber500k => "0.93",
+            }),
+            (
+                Self::Tarifkunde {
+                    gemeinde,
+                    nur_kochen_warmwasser: false,
+                },
+                Sparte::Gas,
+            ) => pick(match gemeinde {
+                GemeindeGroesse::Bis25k => "0.22",
+                GemeindeGroesse::Bis100k => "0.27",
+                GemeindeGroesse::Bis500k => "0.33",
+                GemeindeGroesse::Ueber500k => "0.40",
+            }),
+        }
+    }
+
+    /// Short label for the invoice position text.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Tarifkunde { .. } => "KAV §2 Abs. 2 Tarifkunde",
+            Self::Schwachlast => "KAV §2 Abs. 2 Schwachlast",
+            Self::Sondervertragskunde => "KAV §2 Abs. 3 Sondervertragskunde",
+            Self::Exempt => "KAV §2 Abs. 7 — freigestellt",
+        }
+    }
 }
 
 // ── QuantityUnit ──────────────────────────────────────────────────────────────
@@ -147,12 +233,12 @@ pub enum SettlementType {
     NneGas,
     /// NNE selbst ausgestellt (NB + LF = same entity) — PID 31006.
     NneSelbstausstellt,
-    /// Mehr-/Mindermengen settlement Strom — PID 31002 (NB → LF, StromNZV §15).
+    /// Mehr-/Mindermengen settlement Strom — PID 31002 (NB → LF, GPKE (BK6-24-174) Teil 1 Kap. 8.4).
     MmmStrom,
-    /// Mehr-/Mindermengen settlement Gas — PID 31002 (NB → LF, GasNZV §14).
+    /// Mehr-/Mindermengen settlement Gas — PID 31002 (NB → LF, GaBi Gas 2.1 (BK7-24-01-008)).
     ///
     /// Gas MMM settlement uses different legal references from Strom MMM:
-    /// `GasNZV §14` and `GeLi Gas BK7-24-01-009`. Using a separate variant
+    /// `GaBi Gas 2.1 (BK7-24-01-008)` and `GeLi Gas 3.0 (BK7-24-01-009)`. Using a separate variant
     /// ensures correct audit traces without conditional logic in call sites.
     MmmGas,
     /// Messstellenbetrieb settlement — PID 31009 (NB → MSB).
@@ -260,14 +346,25 @@ pub enum LegalReference {
         /// AHB reference, e.g. `"GPKE BK6-22-024"`.
         reference: &'static str,
     },
-    /// StromNZV — Stromnetzzugangsverordnung (grid access, Strom).
+    /// StromNZV — Stromnetzzugangsverordnung.
+    ///
+    /// **Außer Kraft mit Ablauf des 31.12.2025** (Art. 15 Abs. 4 des Gesetzes
+    /// v. 22.12.2023, BGBl. 2023 I Nr. 405). Valid only for Lieferzeiträume up
+    /// to that date; the successor competence is §20 Abs. 3 EnWG, exercised
+    /// through the BK6 Festlegungen. [`LegalReference::citation`] appends the
+    /// expiry so an archived invoice stays self-explanatory.
     StromNzv {
-        /// Paragraph citation, e.g. `"§15"`.
+        /// Paragraph citation, e.g. `"§13 Abs. 3"`.
         paragraph: &'static str,
     },
-    /// GasNZV — Gasnetzzugangsverordnung (grid access, Gas).
+    /// GasNZV — Gasnetzzugangsverordnung 2010.
+    ///
+    /// **Außer Kraft mit Ablauf des 31.12.2025** (Art. 15 Abs. 6 des Gesetzes
+    /// v. 22.12.2023, BGBl. 2023 I Nr. 405). Succeeded by KARLA Gas 2.0
+    /// (BK7-24-01-007), GaBi Gas 2.1 (BK7-24-01-008), GeLi Gas 3.0
+    /// (BK7-24-01-009) and ZuBio (BK7-24-01-010), all in force 01.01.2026.
     GasNzv {
-        /// Paragraph citation, e.g. `"§15"`.
+        /// Paragraph citation, e.g. `"§25"`.
         paragraph: &'static str,
     },
     /// EnWG — Energiewirtschaftsgesetz (general energy law).
@@ -298,8 +395,12 @@ impl LegalReference {
             Self::MsbG { paragraph } => format!("MsbG {paragraph}"),
             Self::BnetzaDecision { reference } => format!("BNetzA {reference}"),
             Self::BdewAhb { reference } => format!("BDEW {reference}"),
-            Self::StromNzv { paragraph } => format!("StromNZV {paragraph}"),
-            Self::GasNzv { paragraph } => format!("GasNZV {paragraph}"),
+            Self::StromNzv { paragraph } => {
+                format!("StromNZV {paragraph} (außer Kraft seit 01.01.2026)")
+            }
+            Self::GasNzv { paragraph } => {
+                format!("GasNZV {paragraph} (außer Kraft seit 01.01.2026)")
+            }
             Self::Enwg { paragraph } => format!("EnWG {paragraph}"),
             Self::ARegV { paragraph } => format!("ARegV {paragraph}"),
         }
@@ -479,7 +580,7 @@ pub enum BillingPositionKind {
     /// → `BdewArtikelnummer::Konzessionsabgabe`
     Konzessionsabgabe,
     /// Mehrmengen — positive imbalance (actual > profiled).
-    /// PID 31002 StromNZV §15 / GasNZV §14. → `BdewArtikelnummer::Mehrmenge`
+    /// PID 31002 GPKE (BK6-24-174) Teil 1 Kap. 8.4 / GaBi Gas 2.1 (BK7-24-01-008). → `BdewArtikelnummer::Mehrmenge`
     Mehrmenge,
     /// Mindermengen — negative imbalance credit note (actual < profiled).
     /// PID 31002. → `BdewArtikelnummer::Mindermenge`
@@ -806,7 +907,7 @@ pub struct NneInput {
     ///
     /// Included in the calculation trace for KA positions so auditors can verify
     /// the rate matches the correct KAV §2 tier. `None` when KA is absent.
-    pub ka_klasse: Option<KaKlasse>,
+    pub ka_klasse: Option<KaKundengruppe>,
 
     // ── §14a Modul 3 Spotpreis-NNE per-interval dispatch data ────────────────
     /// §14a Modul 3 (BNetzA BK6-22-300 Anlage 2 §3) per-dispatch-interval positions.
@@ -919,10 +1020,10 @@ pub struct MmmInput {
     pub invoice_date: time::Date,
     /// Payment due date.
     pub due_date: time::Date,
-    /// Commodity — determines legal references (StromNZV vs GasNZV).
+    /// Commodity — determines which Festlegung the legal references cite.
     ///
-    /// - `Sparte::Strom` → `StromNZV §15`, `GPKE BK6-22-024`
-    /// - `Sparte::Gas` → `GasNZV §14`, `GeLi Gas BK7-24-01-009`
+    /// - `Sparte::Strom` → `GPKE (BK6-24-174) Teil 1 Kap. 8.4`, `GPKE BK6-22-024`
+    /// - `Sparte::Gas` → `GaBi Gas 2.1 (BK7-24-01-008)`, `GeLi Gas 3.0 (BK7-24-01-009)`
     pub sparte: Sparte,
     /// Actual measured consumption in kWh (from MSCONS / `MeterBillingPeriod`).
     pub actual_kwh: Decimal,

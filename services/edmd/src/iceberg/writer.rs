@@ -231,6 +231,8 @@ fn sparte_str(s: mako_edm::domain::Sparte) -> &'static str {
     match s {
         mako_edm::domain::Sparte::Gas => "GAS",
         mako_edm::domain::Sparte::Strom => "STROM",
+        mako_edm::domain::Sparte::Waerme => "WAERME",
+        mako_edm::domain::Sparte::Wasser => "WASSER",
     }
 }
 

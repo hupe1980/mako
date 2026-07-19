@@ -5,6 +5,69 @@
 
 [![Crates.io](https://img.shields.io/crates/v/grid-billing?label=grid-billing&color=f59e0b&logo=rust)](https://crates.io/crates/grid-billing)
 
+## Regulatory baseline (2026)
+
+**StromNZV and GasNZV ceased to apply with the end of 31.12.2025** — Art. 15
+Abs. 4 (Strom) and Abs. 6 (Gas) of the Gesetz v. 22.12.2023, BGBl. 2023 I Nr. 405.
+The successor competence is **§20 Abs. 3 EnWG**, exercised through BNetzA
+Festlegungen:
+
+| Domain | Until 31.12.2025 | From 01.01.2026 |
+|---|---|---|
+| Mehr-/Mindermengen Strom | StromNZV §13 Abs. 3 | GPKE (BK6-24-174) Teil 1 Kap. 8.4 |
+| Mehr-/Mindermengen Gas | GasNZV §25 | GaBi Gas 2.1 (BK7-24-01-008) |
+| Standardlastprofile Strom | StromNZV §12 | GPKE (BK6-24-174), "Profilverfahren" |
+| Standardlastprofile Gas | GasNZV §24 | GaBi Gas 2.1 (BK7-24-01-008) |
+| Bilanzkreisabrechnung Strom | StromNZV §4 | MaBiS (Anlage 3 zu BK6-24-174) |
+| Konzessionsabgabe | **KAV §2** (unchanged) | KAV §2 |
+
+`calculate_mmm_invoice` picks its legal references from `period_to`, so a
+settlement for a 2025 period still cites the ordinance that governed it and one
+for 2026 does not. `LegalReference::citation` appends "(außer Kraft seit
+01.01.2026)" to a repealed ordinance, keeping archived invoices self-explanatory.
+
+Konzessionsabgabe was **never** governed by StromNZV or GasNZV — it is KAV plus
+§48 EnWG. StromNZV §17 and GasNZV §7 do not say what they were long cited for.
+
+## Mehr-/Mindermengen sign convention
+
+Both quantities are named from the **network operator's** side, which inverts the
+intuitive reading. GPKE Kap. 8.4 Nr. 3:
+
+> Unterschreitet die Summe der in einem Zeitraum ermittelten elektrischen Arbeit
+> die Summe der Arbeit, die den bilanzierten Profilen zu Grunde gelegt wurde
+> (ungewollte Mehrmenge), so vergütet der Netzbetreiber dem Lieferanten oder dem
+> Kunden diese Differenzmenge.
+
+| Measurement vs profile | Quantity | Money |
+|---|---|---|
+| measured **<** profiled | ungewollte **Mehrmenge** | NB vergütet → **credit** |
+| measured **>** profiled | ungewollte **Mindermenge** | NB stellt in Rechnung → **charge** |
+
+GaBi Gas 2.1 states the same for gas: the Ausspeisenetzbetreiber *nimmt
+Mehrmengen entgegen* and *liefert Mindermengen*. Consuming below the profile
+leaves surplus energy the network absorbed — that surplus is the Mehrmenge, and
+it is reimbursed.
+
+## Konzessionsabgabe (KAV §2)
+
+`KaKundengruppe` models the two orthogonal tests KAV actually applies:
+Tarifkunde vs Sondervertragskunde is a **contract-type** test, and Tarifkunden
+rates band on **municipality inhabitants**, not on annual consumption.
+
+| Group | Strom | Gas |
+|---|---|---|
+| Tarifkunde, Gemeinde ≤ 25 000 Einw. | 1.32 | 0.51 (Kochen/Warmwasser) · 0.22 (übrige) |
+| ≤ 100 000 | 1.59 | 0.61 · 0.27 |
+| ≤ 500 000 | 1.99 | 0.77 · 0.33 |
+| > 500 000 | 2.39 | 0.93 · 0.40 |
+| Schwachlast (Strom only) | 0.61 | — |
+| Sondervertragskunde | 0.11 | 0.03 |
+
+These are **Höchstbeträge**, so `calculate_nne_invoice` emits
+`KA_ABOVE_KAV_MAXIMUM` when the agreed rate exceeds the ceiling for the group,
+and `KA_CHARGED_WHILE_EXEMPT` when a rate is applied to a §2 Abs. 7 exemption.
+
 ## What this crate does
 
 `grid-billing` computes BDEW INVOIC billing positions with full explainability:
@@ -13,8 +76,8 @@
 - **NNE Gas** (PID 31005) — GasNEV §14 legal basis, auto-set when `Sparte::Gas`
 - **§14a Modul 2 ToU** — mandatory HT/NT Arbeit split for controllable loads (BNetzA BK6-22-300)
 - **Selbst ausgestellte NNE** (PID 31006) — LF runs the identical formula (§20 MessZV)
-- **MMM Strom** (PID 31002) — Mehr-/Mindermengensaldo, StromNZV §15
-- **MMM Gas** (PID 31002 via GasNZV §14) — Gas imbalance with GeLi Gas legal basis
+- **MMM Strom** (PID 31002) — Mehr-/Mindermengensaldo, GPKE (BK6-24-174) Teil 1 Kap. 8.4
+- **MMM Gas** (PID 31002) — Gas imbalance, GaBi Gas 2.1 (BK7-24-01-008)
 - **MSB-Rechnung** (PID 31009) — Grundgebühr Messstellenbetrieb + optional Messdienstleistung
 - **GeLi Gas AWH Sperrprozesse** (PID 31011) — abrechnungswürdige Handlungen (BK7-24-01-009 §5.4)
 - **Reversal (Stornorechnung)** — `calculate_reversal()` negates any prior settlement immutably
@@ -241,8 +304,8 @@ pub enum SettlementType {
     NneStrom,          // PID 31001 — NNE Strom (NB → LF)
     NneGas,            // PID 31005 — NNE Gas  (GNB → LFG)
     NneSelbstausstellt,// PID 31006 — NNE selbst ausgestellt (LF)
-    MmmStrom,          // PID 31002 — MMM Strom, StromNZV §15
-    MmmGas,            // PID 31002 — MMM Gas,   GasNZV §14 (separate to ensure correct legal refs)
+    MmmStrom,          // PID 31002 — MMM Strom, GPKE (BK6-24-174) Teil 1 Kap. 8.4
+    MmmGas,            // PID 31002 — MMM Gas,   GaBi Gas 2.1 (BK7-24-01-008) (separate to ensure correct legal refs)
     MsbRechnung,       // PID 31009 — MSB-Rechnung (NB → MSB)
     GasAwhSperrung,    // PID 31011 — AWH Sperrprozesse Gas (GNB → LFG)
     RedispatchKostenblatt, // no standard PID — Redispatch 2.0
@@ -656,7 +719,7 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6, Section 3.2 (valid 01
 | **`Sparte` drives settlement type** | `Sparte::Gas` → `SettlementType::NneGas`, `GasNEV §14`, PID 31005. No manual override needed. |
 | **Every position cites regulation** | `trace.legal_refs` is non-empty for every position. Enables BNetzA audit without re-calculation. |
 | **Artikelnummer on every position** | `InvoicePosition.kind` → `BdewArtikelnummer` via `kind_to_artikelnummer()` in service layer. Never empty. |
-| **`MmmGas` ≠ `MmmStrom`** | Separate `SettlementType` variants ensure correct legal refs (`GasNZV §14` vs `StromNZV §15`) per position. |
+| **`MmmGas` ≠ `MmmStrom`** | Separate `SettlementType` variants ensure correct legal refs (`GaBi Gas 2.1 (BK7-24-01-008)` vs `GPKE (BK6-24-174) Teil 1 Kap. 8.4`) per position. |
 | **Immutable correction chain** | `calculate_reversal()` mirrors positions, sets `status = Reversal`, links via `correction_of`. Original never mutated. |
 | **`calculate_correction()` pair** | Returns `(reversal, replacement)` — both get status set atomically; caller dispatches both. |
 | **Pure functions** | All `calculate_*` functions are sync with no side effects. |
@@ -681,7 +744,7 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6, Section 3.2 (valid 01
 `grid-billing` computes BDEW INVOIC billing positions for:
 
 - **NNE** (Netznutzungsentgelt) — flat-rate or §14a Modul 2 ToU (HT/NT split)
-- **KA** (Konzessionsabgabe) — §17 StromNZV, included as separate position
+- **KA** (Konzessionsabgabe) — KAV §2, included as separate position
 - **MMM** (Mehr-/Mindermengensaldo) — actual vs. SLP profile deviation, credit when Mindermengen dominate
 - **MSB-Rechnung** — metering service fee (NB → MSB, PID 31009)
 

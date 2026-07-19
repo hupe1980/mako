@@ -238,7 +238,7 @@ pub async fn run_billing_internal(
     pool: &PgPool,
     marktd: &Arc<MarktdClient>,
     tenant: &str,
-    unb_mp_id: Option<&str>,
+    vnb_mp_id: Option<&str>,
     req: BillingRunRequest,
 ) -> anyhow::Result<Vec<Uuid>> {
     let invoice_date = parse_date(&req.invoice_date)?;
@@ -309,7 +309,7 @@ pub async fn run_billing_internal(
                 // `"mmm_gas"` → ALWAYS auto-fetches from Trading Hub Europe (THE).
                 //               Fail hard when THE prices are not imported for the month.
                 //
-                // `"mmm_strom"` / `"mmm"` → tries ÜNB-specific Strom MMM prices first.
+                // `"mmm_strom"` / `"mmm"` → tries VNB-specific Strom MMM prices first.
                 //                          Falls back to caller-supplied values (manual path).
                 //                          Never tries Gas THE prices for Strom billing.
                 let (mp, mnp) = if let (Some(m), Some(mn)) =
@@ -340,13 +340,13 @@ pub async fn run_billing_internal(
                             }
                         }
                     } else {
-                        // Strom MMM ("mmm" / "mmm_strom"): auto-fetch when config has ÜNB MP-ID.
-                        // Strom MMM prices are ÜNB-specific (§22 StromNZV); each NB belongs
-                        // to exactly one ÜNB Regelzone. Configure `unb_mp_id` in netzbilanzd.toml.
+                        // Strom MMM ("mmm" / "mmm_strom"): auto-fetch when config has the VNB MP-ID.
+                        // Strom MMM prices are VNB-specific (GPKE (BK6-24-174) Teil 1 Kap. 8.4); each NB publishes
+                        // to exactly one ÜNB Regelzone. Configure `vnb_mp_id` in netzbilanzd.toml.
                         if let (None, None, Some(unb)) = (
                             pos.mehr_preis_ct_per_kwh,
                             pos.minder_preis_ct_per_kwh,
-                            unb_mp_id,
+                            vnb_mp_id,
                         ) {
                             // Auto-fetch Strom MMM prices from marktd.
                             let d = parse_date(&pos.period_from)?;
@@ -359,14 +359,14 @@ pub async fn run_billing_internal(
                                 Some(r) => (r.mehr_ct_kwh, r.minder_ct_kwh),
                                 None => anyhow::bail!(
                                     "Strom MMM billing for {y}/{m}: prices not yet imported for \
-                                     ÜNB {unb}. Import via PUT marktd /api/v1/mmm-preise/strom/{y}/{m}."
+                                     VNB {unb}. Import via PUT marktd /api/v1/mmm-preise/strom/{y}/{m}."
                                 ),
                             }
                         } else {
-                            // Caller supplied both prices (or unb_mp_id not configured).
+                            // Caller supplied both prices (or vnb_mp_id not configured).
                             let mp = pos.mehr_preis_ct_per_kwh.context(
                                 "mehr_preis_ct_per_kwh required for Strom MMM. \
-                                          Configure unb_mp_id in netzbilanzd.toml for auto-fetch, \
+                                          Configure vnb_mp_id in netzbilanzd.toml for auto-fetch, \
                                           or supply prices explicitly.",
                             )?;
                             let mnp = pos
@@ -685,11 +685,12 @@ mod tests {
         };
         let result = calculate_mmm_invoice(&input).expect("mmm calculation must succeed");
         assert_eq!(result.pid, 31002, "MMM must use PID 31002");
-        // Mehr: max(0, 1200-1000) × 5ct = 200 × 0.05 = 10.00 EUR
-        let diff = (result.total_eur - dec!(10.0)).abs();
+        // Over-consumption is an ungewollte Mindermenge, charged at the
+        // Mindermengen price: 200 kWh × 4 ct = 8.00 EUR.
+        let diff = (result.total_eur - dec!(8.0)).abs();
         assert!(
             diff < dec!(0.01),
-            "MMM Mehrmenge expected 10.00 EUR, got {}",
+            "MMM Mindermenge expected 8.00 EUR, got {}",
             result.total_eur
         );
     }
@@ -714,11 +715,12 @@ mod tests {
             sparte: grid_billing::Sparte::Strom,
         };
         let result = calculate_mmm_invoice(&input).expect("mmm calculation must succeed");
-        // Minder: -max(0, 1000-800) × 4ct = -200 × 0.04 = -8.00 EUR (credit)
-        let diff = (result.total_eur - dec!(-8.0)).abs();
+        // Under-consumption is an ungewollte Mehrmenge, credited at the
+        // Mehrmengen price: 200 kWh × 5 ct = -10.00 EUR.
+        let diff = (result.total_eur - dec!(-10.0)).abs();
         assert!(
             diff < dec!(0.01),
-            "MMM Mindermenge expected -8.00 EUR, got {}",
+            "MMM Mehrmenge expected -10.00 EUR, got {}",
             result.total_eur
         );
     }
@@ -744,7 +746,7 @@ mod tests {
             arbeitspreis_nt_ct_per_kwh: None,
             spitzenleistung_kw: None,
             leistungspreis_eur_per_kw: None,
-            ka_satz_ct_per_kwh: Some(dec!(1.32)), // §17 StromNZV residential KA
+            ka_satz_ct_per_kwh: Some(dec!(1.32)), // KAV §2 residential KA
             sect14a_modul1_reduction_factor: None,
             nne_grundpreis_eur_per_month: None,
             nne_grundpreis_months: None,
@@ -829,16 +831,16 @@ mod tests {
         };
         let result = calculate_mmm_invoice(&input).expect("mmm calc must succeed");
         assert_eq!(result.pid, 31002, "MMM Strom must use PID 31002");
-        // Mehrmenge = 100 kWh; Mehrmenge claim = 100 × 3.00ct = 3.00 EUR
-        let diff = (result.total_eur - dec!(3.00)).abs();
+        // Mindermenge = 100 kWh, charged at 2.50 ct = 2.50 EUR.
+        let diff = (result.total_eur - dec!(2.50)).abs();
         assert!(
             diff < dec!(0.01),
-            "MMM Mehrmenge: expected 3.00 EUR, got {total}",
+            "MMM Mindermenge: expected 2.50 EUR, got {total}",
             total = result.total_eur,
         );
     }
 
-    /// MMM Strom: actual < profil → Mindermenge → negative claim (NB credits LF).
+    /// MMM Strom: actual < profil → Mehrmenge → negative claim (NB credits LF).
     #[test]
     fn mmm_strom_mindermenge() {
         use grid_billing::{MmmInput, calculate_mmm_invoice};
@@ -1475,7 +1477,7 @@ mod tests {
         );
     }
 
-    /// KA Konzessionsabgabe: §17 StromNZV — two KA bands residential vs commercial.
+    /// KA Konzessionsabgabe: KAV §2 — two KA bands residential vs commercial.
     /// Residential (H0): 1.32 ct/kWh; commercial (G0): 0.11 ct/kWh.
     /// Both rates must be accepted by the billing engine.
     #[test]
@@ -1539,7 +1541,7 @@ mod tests {
         );
     }
 
-    /// §40 StromNZV MMM: Strom MMM billing type "mmm" (alias for mmm_strom) should use
+    /// GPKE (BK6-24-174) Teil 1 Kap. 8.4 MMM: Strom MMM billing type "mmm" (alias for mmm_strom) should use
     /// the same formula as "mmm_strom". Regression guard for billing_type alias.
     #[test]
     fn mmm_billing_type_alias_consistent() {

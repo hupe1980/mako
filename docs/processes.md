@@ -74,7 +74,7 @@ Quick reference across all process families. Each row is a top-level domain.
 | **GPKE Abmeldung LF** | ⚡ | `mako-gpke` `gpke-lf-abmeldung` | UTILMD 55007 → 55008/55009 | 24 h | BK6-24-174 |
 | **GPKE Ankündigung Zuordnung LF** | ⚡ | `mako-gpke` `gpke-ankuendigung-zuordnung-lf` | UTILMD 55607 → 55608/55609 | 24 h | BK6-24-174 |
 | **GPKE Sperrung/Entsperrung (NB)** | ⚡ | `mako-gpke` `gpke-sperrung` | ORDERS 17115/17117 → ORDRSP 19116/19117 | 24 h | BK6-22-024 |
-| **GPKE Sperrung/Entsperrung (LF-ANTWORT)** | ⚡ | `mako-gpke` `gpke-sperrung-lf` | ORDRSP 19116/19117 · IFTSTA Sperrung | 24 h | BK6-22-024 |
+| **GPKE Sperrung/Entsperrung (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-sperrung-lf` | ORDERS 17115/17117 (out) · ORDCHG 39000 (out) · ORDRSP 19116/19117 · 19128/19129 · IFTSTA 21039 | 24 h | BK6-22-024 |
 | **GPKE Abrechnung (INVOIC)** | ⚡ | `mako-gpke` `gpke-abrechnung` | INVOIC 31001/31002/31005/31006; REMADV; COMDIS | 24 h | BK6-24-174 |
 | **GPKE Datenabruf** | ⚡ | `mako-gpke` `gpke-datenabruf` | ORDERS 17004/17102/17113 → ORDRSP rejection | 24 h | BK6-22-024 |
 | **GPKE Anfrage Bestellung (55555)** | ⚡ | `mako-gpke` `gpke-anfrage-bestellung` | UTILMD 55555 | 24 h | BK6-22-024 |
@@ -84,7 +84,7 @@ Quick reference across all process families. Each row is a top-level domain.
 | **GPKE Konfiguration** | ⚡ | `mako-gpke` `gpke-konfiguration` | ORDERS 17134/17135 → ORDRSP 19001/19002 | 24 h | BK6-22-024 |
 | **GPKE Konfiguration Änderung** | ⚡ | `mako-gpke` `gpke-konfiguration-aenderung` | ORDERS/ORDRSP config changes | 24 h | BK6-22-024 |
 | **PARTIN Strom Kommunikationsdaten** | ⚡ | `mako-gpke` `gpke-partin` | PARTIN 37000–37006 | — | PARTIN AHB 1.0f |
-| **WiM Strom MSB-Wechsel** | ⚡ | `mako-wim` `wim-device-change` | UTILMD 55039/55042/55051/55168 | 5 WT | BK6-24-174 |
+| **WiM Strom MSB-Wechsel** | ⚡ | `mako-wim` `wim-device-change` | UTILMD 55039/55042/55051/55168 (out+in) · 55040/55041 · 55043/55044 · 55052/55053 · 55169/55170 (Antwort) | 3/5/7/1 WT — see below | BK6-24-174 |
 | **WiM Strom Geräteübernahme** | ⚡ | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001–17011 · ORDRSP 19001/19002 | 5 WT | BK6-24-174 |
 | **WiM Strom Abrechnung** | ⚡ | `mako-wim` `wim-rechnung` | INVOIC 31009 | 5 WT | BK6-24-174 |
 | **WiM Strom INSRPT** | ⚡ | `mako-wim` `wim-insrpt` | INSRPT 23001/23003/23004/23008 | 5 WT | BK6-24-174 |
@@ -104,8 +104,8 @@ Quick reference across all process families. Each row is a top-level domain.
 | **WiM Gas Stornierung** | 🔥 | `mako-wim-gas` `wim-gas-stornierung` | UTILMD G 44022–44024 (Msb/Nmsb role) | 10 WT | BK7-24-01-009 |
 | **WiM Gas INSRPT** | 🔥 | `mako-wim-gas` `wim-gas-insrpt` | INSRPT 23005/23009 (Gas-only) | 10 WT | BK7-24-01-009 |
 | **WiM Gas Abrechnung** | 🔥 | `mako-wim-gas` `wim-gas-invoic` | INVOIC 31003/31004 | — | BK7-24-01-009 |
-| **GaBi Gas Abrechnung** | 🔥 | `mako-gabi-gas` `gabi-gas-invoic` | INVOIC 31007/31008/31010 | — | BK7-14-020 |
-| **GaBi Gas Allokationsliste (MMMA)** | 🔥 | `mako-gabi-gas` `gabi-gas-mmma` | ORDERS 17110 · ORDRSP 19110 · MSCONS 13013 | — | BK7-14-020 |
+| **GaBi Gas Abrechnung** | 🔥 | `mako-gabi-gas` `gabi-gas-invoic` | INVOIC 31007/31008/31010 | — | BK7-24-01-008 |
+| **GaBi Gas Allokationsliste (MMMA)** | 🔥 | `mako-gabi-gas` `gabi-gas-mmma` | ORDERS 17110 · ORDRSP 19110 · MSCONS 13013 | — | BK7-24-01-008 |
 | **GaBi Gas ALOCAT** | 🔥 | `mako-gabi-gas` `gabi-gas-allocation` | Synthetic PIDs 90001–90003 | — | DVGW ALOCAT 5.11a |
 | **GaBi Gas NOMINT/NOMRES** | 🔥 | `mako-gabi-gas` `gabi-gas-nomination` | Synthetic PIDs 90011/90012/90021/90022 | — | DVGW NOMINT 4.6 FK |
 | **GaBi Gas SCHEDL** | 🔥 | `mako-gabi-gas` `gabi-gas-schedl` | Synthetic PIDs | — | DVGW G685/G2000 |
@@ -465,12 +465,22 @@ provider) and receiving WiM-Rechnungen for metering services.
 
 ### MSB-Wechsel Strom
 
-| Process | Initiator → Responder | UTILMD PID | Antwort OK | Antwort NG | Crate |
-|---|---|---|---|---|---|
-| Kündigung MSB (neuer MSB initiiert) | MSBN → MSBA | **55039** | 55040 | 55041 | `mako-wim` ✅ |
-| Anmeldung MSB beim NB | MSBN → NB | **55042** | 55043 | 55044 | `mako-wim` ✅ |
-| Ende MSB (alter MSB → NB) | MSBA → NB | **55051** | 55052 | 55053 | `mako-wim` ✅ |
-| Verpflichtungsanfrage / Aufforderung | NB → gMSB | **55168** | 55169 | 55170 | `mako-wim` ✅ |
+| Process | Initiator → Responder | UTILMD PID | Antwort OK | Antwort NG | Frist | Crate |
+|---|---|---|---|---|---|---|
+| Kündigung MSB (neuer MSB initiiert) | MSBN → MSBA | **55039** | 55040 | 55041 | **3 WT** | `mako-wim` ✅ |
+| Anmeldung MSB beim NB | MSBN → NB | **55042** | 55043 | 55044 | **5 WT** | `mako-wim` ✅ |
+| Ende MSB (alter MSB → NB) | MSBA → NB | **55051** | 55052 | 55053 | **7 WT** | `mako-wim` ✅ |
+| Verpflichtungsanfrage / Aufforderung | NB → gMSB | **55168** | 55169 | 55170 | **1 WT** | `mako-wim` ✅ |
+
+The **Antwortfrist differs per process** (BK6-24-174 WiM Teil 1 Kap. 2.2.2 / 2.3.2 /
+2.4.2) and is distinct from the APERAK window, which is 45 minutes for UTILMD in
+Strom (APERAK AHB §2.4.1). `geraetewechsel::antwort_frist_werktage(pid)` is the
+single source for these values.
+
+The Kündigung (55039) runs on the **contract layer between the two MSB** and never
+reaches the NB. Per Kap. 2.1.3 it is explicitly *non-constitutive*: the switch is
+effected solely by a successful Anmeldung MSBN → NB, so 55042 must never be gated
+on a 55040 Bestätigung.
 
 ### Geräteübernahme und Stammdaten
 
@@ -871,7 +881,7 @@ with APERAK within **10 Werktage** (BK7-24-01-009).
 
 > **PIDs 13013 and 13014** are listed here for cross-reference only.
 > **13013** (Allokationsliste Gas, MMMA) belongs to `mako-gabi-gas` (`gabi-gas-mmma`) — GaBi Gas
-> billing domain (BK7-14-020). **13014** (Bilanzierte Menge Gas/Strom) is a GaBi Gas/ÜNB process.
+> billing domain (BK7-24-01-008). **13014** (Bilanzierte Menge Gas/Strom) is a GaBi Gas/ÜNB process.
 > Neither is registered under `mako-geli-gas`; Gas-only deployments that do not load `mako-gabi-gas`
 > will dead-letter these PIDs.
 
@@ -906,7 +916,7 @@ with APERAK within **10 Werktage** (BK7-24-01-009).
 | **Neuanlage MaLo** — UTILMD 55600–55605 | Embedded in UTILMD G 44001 (Lieferbeginn) | ⚠️ Gas has no separate "Neuanlage" PID set; new connections use the same 44001 PID as supplier changes |
 | **Ankündigung Zuordnung LF** — UTILMD 55607–55609 | ❌ No equivalent | Strom-only balancing group notification (§14a EnWG / iMSys demand response) |
 | **UTILTS** — 25001/25004–25010 | ❌ No equivalent | UTILTS carries Zählzeitdefinitionen (HT/NT tariff clocks) and Berechnungsformeln — concepts that don't exist in Gas regulation |
-| **Allokationsliste Strom** — ORDERS 17110 · MSCONS 13014 | **GaBi Gas** Allokationsliste — MSCONS 13013 (`mako-gabi-gas`) | Different crate/domain: Gas allocation belongs to GaBi Gas (BK7-14-020), not GeLi Gas |
+| **Allokationsliste Strom** — ORDERS 17110 · MSCONS 13014 | **GaBi Gas** Allokationsliste — MSCONS 13013 (`mako-gabi-gas`) | Different crate/domain: Gas allocation belongs to GaBi Gas (BK7-24-01-008), not GeLi Gas |
 | **Konfiguration / iMSys** — ORDERS 17134/17135 | **WiM Gas** — UTILMD G 44039–44053 | Handled by `mako-wim-gas`; MSB gateway configuration is a WiM concern in both Strom and Gas |
 | **GPKE Anfrage Bestellung** — UTILMD 55555 | ❌ No equivalent | Strom-only Stammdaten process for special metering configurations |
 | **MSCONS Zählerstand** — 13005/13006 | MSCONS Gas Zählerstand — 13002/13008/13009 | ✅ Equivalent function; Gas uses separate PID range due to Gas-specific Brennwert/Zustandszahl fields |

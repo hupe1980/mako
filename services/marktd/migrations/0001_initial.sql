@@ -258,7 +258,7 @@ CREATE INDEX preisblaetter_messung_api_source
 --
 -- Stores BO4E PreisblattKonzessionsabgabe objects published by Netzbetreiber.
 -- netzbilanzd queries this table for KA tariff positions in INVOIC 31001/31002.
--- §17 StromNZV requires Konzessionsabgabe as a separate position in every NNE
+-- KAV §2 requires Konzessionsabgabe as a separate position in every NNE
 -- invoice; `kundengruppe_ka` differentiates Tarifkunden and Sondervertragskunden.
 --
 -- source='api'  — operator REST upload.
@@ -676,7 +676,29 @@ CREATE TABLE zaehler (
     zaehler_id   TEXT        NOT NULL,   -- manufacturer serial or UUID
     tenant       TEXT        NOT NULL,
     melo_id      TEXT        NOT NULL,   -- owning MeLo
-    zaehler_typ  TEXT,                   -- e.g. 'DREHSTROMZAEHLER', 'GASZAEHLER'
+    -- BO4E `Zaehlertyp` wire value. Constrained because §42c Energy-Sharing
+    -- eligibility reads this column: an unrecognised value there silently
+    -- degrades a delivery point to UNKNOWN. The `zaehler_typ_matches_bo4e`
+    -- guard test pins this list to `rubo4e::current::Zaehlertyp`.
+    -- Note: `Zaehlertyp` spells it INTELLIGENTES_MESSSYSTEM (three S);
+    -- `Geraetetyp` uses INTELLIGENTES_MESSYSTEM (two). That is a BO4E quirk,
+    -- not a typo here.
+    zaehler_typ  TEXT        CHECK (zaehler_typ IS NULL OR zaehler_typ IN (
+                     'BALGENGASZAEHLER',
+                     'DREHKOLBENZAEHLER',
+                     'DREHSTROMZAEHLER',
+                     'ELEKTRONISCHER_ZAEHLER',
+                     'INTELLIGENTES_MESSSYSTEM',
+                     'LEISTUNGSZAEHLER',
+                     'MAXIMUMZAEHLER',
+                     'MODERNE_MESSEINRICHTUNG',
+                     'TURBINENRADGASZAEHLER',
+                     'ULTRASCHALLGASZAEHLER',
+                     'WASSERZAEHLER',
+                     'WECHSELSTROMZAEHLER',
+                     'WIRBELGASZAEHLER',
+                     'UNKNOWN'
+                 )),
     eichung_bis  DATE,                   -- calibration valid until (Eichgültigkeitsdatum)
     data         JSONB       NOT NULL DEFAULT '{}',  -- full BO4E Zaehler object
     bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
@@ -692,7 +714,11 @@ CREATE TABLE geraete (
     geraet_id              TEXT        NOT NULL,   -- manufacturer serial or UUID
     tenant                 TEXT        NOT NULL,
     zaehler_id             TEXT        NOT NULL,   -- owning Zähler
-    geraet_typ             TEXT,                   -- Geraetetyp (e.g. 'WANDLER', 'INTELLIGENTESMESSYSTEM')
+    -- BO4E `Geraetetyp` wire value, e.g. 'STROMWANDLER', 'MODEM_GSM',
+    -- 'INTELLIGENTES_MESSYSTEM' (two S — see the note on zaehler.zaehler_typ).
+    -- Not CHECK-constrained: the enum has 48 variants and turns over between
+    -- BO4E versions, so an inline list would be the next thing to drift.
+    geraet_typ             TEXT,
     data                   JSONB       NOT NULL DEFAULT '{}',  -- full BO4E Geraet object
     -- Typed device-configuration entries per MsbG §23 + BSI TR-03109 + §14a EnWG.
     -- Stored separately from `data` to support atomic partial updates and GIN queries
@@ -770,7 +796,7 @@ CREATE INDEX event_log_time      ON event_log (received_at DESC);
 -- `invoicd` (LF — validates inbound MMM invoices) need monthly settlement prices:
 --
 --   • Gas:   Trading Hub Europe (THE) publishes `mmma_preise_gas` monthly.
---   • Strom: Each ÜNB publishes `mmm_preise_strom` per §22 StromNZV monthly.
+--   • Strom: Each VNB publishes `mmm_preise_strom` per GPKE (BK6-24-174) Teil 1 Kap. 8.4 monthly.
 --
 -- Both services query `marktd` instead of requiring the ERP to supply prices
 -- manually on every billing run (eliminates the current single point of failure).
@@ -798,14 +824,14 @@ CREATE TABLE mmma_preise_gas (
 CREATE INDEX mmma_gas_month
     ON mmma_preise_gas (price_month DESC, marktgebiet);
 
--- ── Strom MMM Ausgleichsenergie prices (ÜNB per §22 StromNZV) ────────────────
+-- ── Strom MMM Ausgleichsenergie prices (VNB per GPKE (BK6-24-174) Teil 1 Kap. 8.4) ────────────────
 
 CREATE TABLE mmm_preise_strom (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     -- First day of the billing month (German local time).
     price_month     DATE        NOT NULL,
     -- ÜNB MP-ID (BDEW-Codenummer 99…): 50Hertz, TenneT, Amprion, TransnetBW.
-    unb_mp_id       TEXT        NOT NULL,
+    vnb_mp_id       TEXT        NOT NULL,
     -- Surplus energy price (Mehrmengen, LF over-consumed) ct/kWh.
     mehr_ct_kwh     NUMERIC     NOT NULL CHECK (mehr_ct_kwh >= 0),
     -- Deficit energy price (Mindermengen, LF under-consumed) ct/kWh.
@@ -814,11 +840,11 @@ CREATE TABLE mmm_preise_strom (
                                 CHECK (source IN ('manual', 'uenb-api', 'csv-import')),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (price_month, unb_mp_id)
+    UNIQUE (price_month, vnb_mp_id)
 );
 
 CREATE INDEX mmm_strom_month
-    ON mmm_preise_strom (price_month DESC, unb_mp_id);
+    ON mmm_preise_strom (price_month DESC, vnb_mp_id);
 
 -- ── marktd migration 0003 — ZaehlzeitRegister + ZaehlzeitSaison ─────────────
 --

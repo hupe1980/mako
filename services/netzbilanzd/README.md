@@ -12,7 +12,7 @@ Closes the payment lifecycle on REMADV receipt. Zero `f64` in the billing path.
 | **INVOIC PIDs** | 31001 (NNE Strom) · 31002 (MMM Strom/Gas) · 31005 (NNE Gas) · 31009 (MSB-Rechnung) · 31011 (AWH Sperrprozesse Gas) |
 | **Calculation** | `grid_billing::calculate_{nne,mmm,msb}_invoice()` — returns `GridInvoice` domain type. `into_rechnung()` called locally. `EuroAmount` (`i64 × 10⁻⁵`), zero `f64` |
 | **Pre-dispatch gate** | `invoic-checker` mandatory; `check_outcome = Dispute` blocks dispatch |
-| **MMM prices** | Auto-fetches `mehr`/`minder` from `marktd` (Gas: THE monthly; Strom: ÜNB via `unb_mp_id`) |
+| **MMM prices** | Auto-fetches `mehr`/`minder` from `marktd` (Gas: THE monthly; Strom: ÜNB via `vnb_mp_id`) |
 | **Draft lifecycle** | `draft` → `dispatched` → `paid` / `dispatched` ← `Dispute`; `rejected` unblocks re-billing |
 | **REMADV handling** | 33001/33003/33004 → `paid`; 33002 → `Dispute` + `de.netzbilanz.invoic.disputed` CE |
 | **§14a Modul 2** | HT/NT ToU split → 2 separate Arbeit positions (mandatory for controllable loads since 01.01.2024) |
@@ -33,7 +33,7 @@ Closes the payment lifecycle on REMADV receipt. Zero `f64` in the billing path.
 | `mmm_gas` | 31002 | GNB → LFG | Mehr-/Mindermengensaldo Gas (THE prices) |
 | `nne_gas` | 31005 | GNB → LFG | NNE Gas |
 | `msb_31009` | 31009 | NB → MSB | MSB-Rechnung (Messstellenbetrieb) |
-| `nne_gas_awh_31011` | 31011 | GNB → LFG | AWH Sperrprozesse Gas (GeLi Gas BK7-24-01-009) |
+| `nne_gas_awh_31011` | 31011 | GNB → LFG | AWH Sperrprozesse Gas (GeLi Gas 3.0 (BK7-24-01-009)) |
 
 ## Configuration
 
@@ -53,7 +53,7 @@ edmd_url        = "http://edmd:8380"
 edmd_api_key    = "env:NETZBILANZD_EDMD_API_KEY"
 
 # ÜNB MP-ID for Strom MMM price auto-fetch (set to your Regelzone's ÜNB)
-unb_mp_id       = "9907324000007"   # 50Hertz / TenneT / Amprion / TransnetBW
+vnb_mp_id       = "9907324000007"   # 50Hertz / TenneT / Amprion / TransnetBW
 
 # ERP webhook receives all de.netzbilanz.* CloudEvents
 erp_webhook_url = "http://erp:9000/webhooks/mako"

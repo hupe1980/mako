@@ -10,10 +10,10 @@
 //!
 //! ## Regulatory basis
 //!
-//! - **GasNZV §24**: Balance group accounting obligations for BKVs
+//! - **GaBi Gas 2.1 (BK7-24-01-008)**: Balance group accounting obligations for BKVs
 //! - **Kooperationsvereinbarung Gas (KoV) §3**: Nomination requirements
 //! - **KoV §6**: Allocation and imbalance settlement
-//! - **BNetzA BK7-14-020**: GaBi Gas 2.0 ruling
+//! - **BNetzA BK7-24-01-008**: GaBi Gas 2.1 ruling
 
 use rust_decimal::Decimal;
 
@@ -166,7 +166,7 @@ impl PortfolioPosition {
 
     /// `true` when the nomination exactly matches the allocation (balanced position).
     ///
-    /// Uses 1 kWh tolerance per GasNZV §24.
+    /// Uses 1 kWh tolerance per GaBi Gas 2.1 (BK7-24-01-008).
     #[must_use]
     pub fn is_balanced(&self) -> bool {
         match (self.nominated_kwh, self.allocated_kwh) {
@@ -193,9 +193,9 @@ impl PortfolioPosition {
 ///
 /// ## Regulatory basis
 ///
-/// - **GasNZV §24**: BKV must balance nominations with actual offtake.
+/// - **GaBi Gas 2.1 (BK7-24-01-008)**: BKV must balance nominations with actual offtake.
 /// - **KoV §6.3**: Imbalance settlement deadlines and Ausgleichsenergie pricing.
-/// - **BNetzA BK7-14-020 §7**: GaBi Gas 2.0 imbalance reporting format.
+/// - **BNetzA BK7-24-01-008 §7**: GaBi Gas 2.1 imbalance reporting format.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GasPortfolioBalance {
     /// EIC code of the BKV.
@@ -258,7 +258,7 @@ impl GasPortfolioBalance {
 
     /// Check energy conservation for this portfolio snapshot.
     ///
-    /// Per KoV and DVGW G 685 / GasNZV §24, the total allocated quantity
+    /// Per KoV and DVGW G 685 / GaBi Gas 2.1 (BK7-24-01-008), the total allocated quantity
     /// across all BKVs in a VNB exit zone must equal the VNB's total measured
     /// offtake. This method verifies that the BKV's own portfolio sums are
     /// internally consistent.
@@ -281,7 +281,7 @@ impl GasPortfolioBalance {
     /// # use time::macros::date;
     /// # let balance = GasPortfolioBalance { bkv_eic: "E".to_owned(), gas_day: GasDay::new(date!(2026-01-01)), positions: vec![], computed_at: time::OffsetDateTime::now_utc() };
     /// let expected_kwh = dec!(5000.0); // from VNB measurement data
-    /// let tolerance_kwh = dec!(1.0);   // 1 kWh tolerance per GasNZV §24
+    /// let tolerance_kwh = dec!(1.0);   // 1 kWh tolerance per GaBi Gas 2.1 (BK7-24-01-008)
     /// match balance.conservation_check(expected_kwh, tolerance_kwh) {
     ///     Ok(total) => println!("Conservation OK: {} kWh allocated", total),
     ///     Err(e) => println!("Conservation violation: {e}"),
@@ -345,7 +345,7 @@ pub enum ConservationViolation {
         actual_kwh: Decimal,
         /// Absolute deviation.
         deviation_kwh: Decimal,
-        /// Accepted tolerance (per GasNZV §24).
+        /// Accepted tolerance (per GaBi Gas 2.1 (BK7-24-01-008)).
         tolerance_kwh: Decimal,
     },
 }
@@ -531,7 +531,9 @@ mod tests {
             ConservationViolation::EnergyImbalance { deviation_kwh, .. } => {
                 assert_eq!(deviation_kwh, dec!(10.0));
             }
-            other => panic!("unexpected violation type: {other:?}"),
+            other @ ConservationViolation::IncompleteAllocations { .. } => {
+                panic!("unexpected violation type: {other:?}")
+            }
         }
     }
 
@@ -558,7 +560,9 @@ mod tests {
             } => {
                 assert_eq!(missing_bilanzkreise, vec!["BK_MISSING"]);
             }
-            other => panic!("unexpected violation type: {other:?}"),
+            other @ ConservationViolation::EnergyImbalance { .. } => {
+                panic!("unexpected violation type: {other:?}")
+            }
         }
     }
 }

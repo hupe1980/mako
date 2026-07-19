@@ -3,7 +3,7 @@
 **GaBi Gas — Gasbilanzierung Gas (Gas Balancing)**
 
 Process engine workflows for the German gas balancing framework under
-GaBi Gas 2.0 (BNetzA BK7-14-020). Governs allocation, nomination, and
+GaBi Gas 2.1 (BNetzA BK7-24-01-008). Governs allocation, nomination, and
 billing between balance responsible parties (BKV), network operators
 (FNB/VNB), and market area managers (MGV).
 
@@ -42,10 +42,10 @@ sequenceDiagram
 
 | Workflow | PIDs / Message types | Governing document | Status |
 |---|---|---|---|
-| `gabi-gas-invoic` | INVOIC 31010 (Kapazitätsrechnung, NB/VNB → BKV) + 31007/31008 (Aggreg. MMM-Rechnung, NB → MGV) | BK7-14-020 | ✅ |
-| `gabi-gas-allocation` | ALOCAT (synthetic PIDs 90001–90003) | BK7-14-020 / DVGW ALOCAT 5.11a | ✅ |
-| `gabi-gas-nomination` | NOMINT (90011/90012) + NOMRES (90021/90022) | BK7-14-020 / DVGW NOMINT 4.6 FK / NOMRES 4.7 FK | ✅ |
-| `gabi-gas-mmma` | MSCONS 13013 + ORDERS 17110 + ORDRSP 19110 (Allokationsliste Gas, MMMA) | BK7-14-020 | ✅ |
+| `gabi-gas-invoic` | INVOIC 31010 (Kapazitätsrechnung, NB/VNB → BKV) + 31007/31008 (Aggreg. MMM-Rechnung, NB → MGV) | BK7-24-01-008 | ✅ |
+| `gabi-gas-allocation` | ALOCAT (synthetic PIDs 90001–90003) | BK7-24-01-008 / DVGW ALOCAT 5.11a | ✅ |
+| `gabi-gas-nomination` | NOMINT (90011/90012) + NOMRES (90021/90022) | BK7-24-01-008 / DVGW NOMINT 4.6 FK / NOMRES 4.7 FK | ✅ |
+| `gabi-gas-mmma` | MSCONS 13013 + ORDERS 17110 + ORDRSP 19110 (Allokationsliste Gas, MMMA) | BK7-24-01-008 | ✅ |
 | `gabi-gas-schedl` | SCHEDL (synthetic PIDs) | DVGW SCHEDL G685/G2000 | ✅ |
 | `gabi-gas-imbnot` | IMBNOT (synthetic PIDs) | DVGW IMBNOT 5.7a | ✅ |
 | `gabi-gas-tranot` | TRANOT (synthetic PIDs) | DVGW TRANOT 5.8b | ✅ |
@@ -114,7 +114,7 @@ assert_eq!(quantity.energy_kwh_hs, dec!(1030.102)); // rounded to 3 dp
 
 `validate()` returns `Err(GasBeschaffenheitValidationError)` listing all violated constraints.
 
-### `GasQualityFlag` — measurement quality per §17 MessZV / GasNZV §24
+### `GasQualityFlag` — measurement quality per §17 MessZV / GaBi Gas 2.1 (BK7-24-01-008)
 
 ```rust
 // Every gas measurement interval carries a quality flag
@@ -128,7 +128,7 @@ match flag {
     GasQualityFlag::Unknown      => /* quality not yet determined */,
 }
 
-// Billing gate per GasNZV §24
+// Billing gate per GaBi Gas 2.1 (BK7-24-01-008)
 if flag.is_billable() { /* includes Measured, Substituted, Calculated, Corrected */ }
 ```
 
@@ -165,7 +165,7 @@ println!("Direction: {:?}", balance.portfolio_direction()); // Mehr / Minder / B
 println!("Open positions: {}", balance.open_imbalance_count());
 
 // Verify energy conservation: SUM(BKV allocations) = VNB measured total
-// per GasNZV §24 and DVGW G 685
+// per DVGW G 685
 match balance.conservation_check(vnb_total_kwh, dec!(1.0) /* tolerance */) {
     Ok(total) => println!("Conservation OK: {} kWh", total),
     Err(ConservationViolation::EnergyImbalance { deviation_kwh, .. }) =>
@@ -250,15 +250,15 @@ DVGW releases take effect on **1 April** and **1 October at 06:00 CET** (= start
 **GaBi Gas** (*Gasbilanzierung Gas*) is the BNetzA framework for gas network
 balancing, established under the Gasnetzzugangsverordnung (GasNZV). It defines
 how gas quantities are allocated, nominated, and settled across the German gas
-transport and balancing market. The current version is **GaBi Gas 2.0**
-(BNetzA BK7-14-020), which introduced the two-market-area model and mandatory
+transport and balancing market. The current version is **GaBi Gas 2.1**
+(BNetzA BK7-24-01-008), which introduced the two-market-area model and mandatory
 DVGW-format electronic exchange for all balancing processes.
 
 ## Key boundary: GaBi Gas vs. GeLi Gas
 
 | Aspect | GeLi Gas (`mako-geli-gas`) | GaBi Gas (`mako-gabi-gas`) |
 |---|---|---|
-| Governing document | BK7-24-01-009 | BK7-14-020 |
+| Governing document | BK7-24-01-009 | BK7-24-01-008 |
 | Scope | Supplier switching (Lieferantenwechsel Gas) + AWH billing | Gas balancing (Bilanzierung) |
 | Parties | LFN ↔ GNB | BKV ↔ FNB/VNB ↔ MGV |
 | Primary formats | UTILMD G (PIDs 44xxx), INVOIC 31011 | ALOCAT, NOMINT, NOMRES, INVOIC 31007/31008/31010, MSCONS 13013 |
@@ -283,7 +283,7 @@ GaBi Gas capacity billing (PID 31010) is in this crate; AWH Sperrprozesse billin
 | 31007 | Aggreg. MMM-Rechnung Gas (NB → MGV)                   | NB → MGV    |
 | 31008 | MMM-Rechnung Gas selbst ausgestellt (MGV → NB)        | MGV → NB    |
 
-> PIDs 31007/31008 are Gas-only (GaBi Gas, BK7-14-020, NB → MGV).
+> PIDs 31007/31008 are Gas-only (GaBi Gas, BK7-24-01-008, NB → MGV).
 > PID 31010 is capacity billing between NB/VNB and BKV.
 > PID 31011 (AWH Sperrprozesse Gas, NB → LF) belongs to `mako-geli-gas` — it is
 > billed by GNB for actions during the Sperrprozess, not by GaBi.
@@ -318,7 +318,7 @@ NB ──(ORDERS 17110 Anfrage)──► MGV
 | 19110 | ORDRSP  | Ablehnung Anfrage Allokationsliste Gas    | MGV → NB   |
 | 13013 | MSCONS  | Allokationsliste Gas (MMMA)               | MGV → NB   |
 
-> PID 17110 here is Gas (GaBi, BK7-14-020). The same PID also exists in `mako-gpke`
+> PID 17110 here is Gas (GaBi, BK7-24-01-008). The same PID also exists in `mako-gpke`
 > for the Strom Allokationsliste (different commodity — never cross-register).
 
 ## DVGW transport workflows
@@ -356,10 +356,10 @@ BDEW EDI@Energy PIDs.
 
 | Document | Scope |
 |---|---|
-| **GasNZV §24** | Statutory basis for balance group accounting |
+| **GaBi Gas 2.1 (BK7-24-01-008)** | Statutory basis for balance group accounting |
 | **KoV §3.2** | Nomination deadlines (D-1 13:00 CET) |
 | **KoV §6.4** | Allocation correction cycle (Initial / Correction / Final) |
-| **BNetzA BK7-14-020** | GaBi Gas 2.0 — current ruling |
+| **BNetzA BK7-24-01-008** | GaBi Gas 2.1 — current ruling |
 | **DVGW G 685** | Gas metering: kWh_Hs = m³ × Hs × Z (≥ 3 decimal places required) |
 | **DVGW G 260** | Gas quality classes: H-Gas (9.5–13.1 kWh/m³) / L-Gas (7.5–10.3 kWh/m³) |
 | **DVGW G 2000** | Gas day definition: starts 06:00 CET (DST-aware) |
@@ -367,7 +367,7 @@ BDEW EDI@Energy PIDs.
 DVGW AHBs and MIGs: <https://www.dvgw-sc.de/leistungen/it-dienstleistungen/datenaustausch-gas>
 
 Process engine workflows for the German gas balancing framework under
-GaBi Gas 2.0 (BNetzA BK7-14-020). Governs allocation, nomination, and
+GaBi Gas 2.1 (BNetzA BK7-24-01-008). Governs allocation, nomination, and
 billing between balance responsible parties (BKV), network operators
 (FNB/VNB), and market area managers (MGV).
 
@@ -375,10 +375,10 @@ billing between balance responsible parties (BKV), network operators
 
 | Workflow | PIDs / Message types | Governing document | Status |
 |---|---|---|---|
-| `gabi-gas-invoic` | INVOIC 31010 (Kapazitätsrechnung, NB/VNB → BKV) + 31007/31008 (Aggreg. MMM-Rechnung, NB → MGV) | BK7-14-020 | ✅ |
-| `gabi-gas-allocation` | ALOCAT (synthetic PIDs 90001–90003) | BK7-14-020 / DVGW ALOCAT 5.11a | ✅ |
-| `gabi-gas-nomination` | NOMINT (90011/90012) + NOMRES (90021/90022) | BK7-14-020 / DVGW NOMINT 4.6 FK / NOMRES 4.7 FK | ✅ |
-| `gabi-gas-mmma` | MSCONS 13013 + ORDERS 17110 + ORDRSP 19110 (Allokationsliste Gas, MMMA) | BK7-14-020 | ✅ |
+| `gabi-gas-invoic` | INVOIC 31010 (Kapazitätsrechnung, NB/VNB → BKV) + 31007/31008 (Aggreg. MMM-Rechnung, NB → MGV) | BK7-24-01-008 | ✅ |
+| `gabi-gas-allocation` | ALOCAT (synthetic PIDs 90001–90003) | BK7-24-01-008 / DVGW ALOCAT 5.11a | ✅ |
+| `gabi-gas-nomination` | NOMINT (90011/90012) + NOMRES (90021/90022) | BK7-24-01-008 / DVGW NOMINT 4.6 FK / NOMRES 4.7 FK | ✅ |
+| `gabi-gas-mmma` | MSCONS 13013 + ORDERS 17110 + ORDRSP 19110 (Allokationsliste Gas, MMMA) | BK7-24-01-008 | ✅ |
 | `gabi-gas-schedl` | SCHEDL (synthetic PIDs) | DVGW SCHEDL G685/G2000 | ✅ |
 | `gabi-gas-imbnot` | IMBNOT (synthetic PIDs) | DVGW IMBNOT 5.7a | ✅ |
 | `gabi-gas-tranot` | TRANOT (synthetic PIDs) | DVGW TRANOT 5.8b | ✅ |
@@ -389,15 +389,15 @@ billing between balance responsible parties (BKV), network operators
 **GaBi Gas** (*Gasbilanzierung Gas*) is the BNetzA framework for gas network
 balancing, established under the Gasnetzzugangsverordnung (GasNZV). It defines
 how gas quantities are allocated, nominated, and settled across the German gas
-transport and balancing market. The current version is **GaBi Gas 2.0**
-(BNetzA BK7-14-020), which introduced the two-market-area model and mandatory
+transport and balancing market. The current version is **GaBi Gas 2.1**
+(BNetzA BK7-24-01-008), which introduced the two-market-area model and mandatory
 DVGW-format electronic exchange for all balancing processes.
 
 ## Key boundary: GaBi Gas vs. GeLi Gas
 
 | Aspect | GeLi Gas (`mako-geli-gas`) | GaBi Gas (`mako-gabi-gas`) |
 |---|---|---|
-| Governing document | BK7-24-01-009 | BK7-14-020 |
+| Governing document | BK7-24-01-009 | BK7-24-01-008 |
 | Scope | Supplier switching (Lieferantenwechsel Gas) + AWH billing | Gas balancing (Bilanzierung) |
 | Parties | LFN ↔ GNB | BKV ↔ FNB/VNB ↔ MGV |
 | Primary formats | UTILMD G (PIDs 44xxx), INVOIC 31011 | ALOCAT, NOMINT, NOMRES, INVOIC 31007/31008/31010, MSCONS 13013 |
@@ -422,7 +422,7 @@ GaBi Gas capacity billing (PID 31010) is in this crate; AWH Sperrprozesse billin
 | 31007 | Aggreg. MMM-Rechnung Gas (NB → MGV)                   | NB → MGV    |
 | 31008 | MMM-Rechnung Gas selbst ausgestellt (MGV → NB)        | MGV → NB    |
 
-> PIDs 31007/31008 are Gas-only (GaBi Gas, BK7-14-020, NB → MGV).
+> PIDs 31007/31008 are Gas-only (GaBi Gas, BK7-24-01-008, NB → MGV).
 > PID 31010 is capacity billing between NB/VNB and BKV.
 > PID 31011 (AWH Sperrprozesse Gas, NB → LF) belongs to `mako-geli-gas` — it is
 > billed by GNB for actions during the Sperrprozess, not by GaBi.
@@ -457,7 +457,7 @@ NB ──(ORDERS 17110 Anfrage)──► MGV
 | 19110 | ORDRSP  | Ablehnung Anfrage Allokationsliste Gas    | MGV → NB   |
 | 13013 | MSCONS  | Allokationsliste Gas (MMMA)               | MGV → NB   |
 
-> PID 17110 here is Gas (GaBi, BK7-14-020). The same PID also exists in `mako-gpke`
+> PID 17110 here is Gas (GaBi, BK7-24-01-008). The same PID also exists in `mako-gpke`
 > for the Strom Allokationsliste (different commodity — never cross-register).
 
 ## DVGW transport workflows
@@ -494,7 +494,7 @@ BDEW EDI@Energy PIDs.
 | Document | Scope |
 |---|---|
 | **GasNZV** | Statutory basis for gas network access and balancing |
-| **BNetzA BK7-14-020** | GaBi Gas 2.0 — current ruling |
+| **BNetzA BK7-24-01-008** | GaBi Gas 2.1 — current ruling |
 | **DVGW G 685** | Technical standard for gas metering and allocation |
 
 DVGW AHBs and MIGs: <https://www.dvgw-sc.de/leistungen/it-dienstleistungen/datenaustausch-gas>

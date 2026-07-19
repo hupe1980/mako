@@ -24,7 +24,8 @@ use rust_decimal::Decimal;
 
 use crate::error::BillingError;
 use crate::types::{
-    BillingPositionKind, CalculationTrace, GasAwhInput, GridSettlement, InvoicePosition, KaKlasse,
+    BillingPositionKind, CalculationTrace, GasAwhInput, GridSettlement, InvoicePosition,
+    KaKundengruppe,
     LegalReference, MmmInput, MsbInput, NneInput, QuantityUnit, Sect14aModule, SettlementStatus,
     SettlementType, SettlementWarning, Sparte, TariffSource, WarningSeverity,
 };
@@ -409,15 +410,35 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<GridSettlement, Billing
                 message: format!("KA rate {ka_ct} ct/kWh is negative — verify tariff sheet"),
             });
         }
+        // KAV §2 rates are Höchstbeträge, so a rate above the statutory ceiling
+        // for the customer group is a compliance defect, not merely unusual.
+        if let Some(gruppe) = input.ka_klasse {
+            match gruppe.hoechstsatz_ct_per_kwh(input.sparte) {
+                Some(max) if ka_ct > max => warnings.push(SettlementWarning {
+                    severity: WarningSeverity::Warning,
+                    code: "KA_ABOVE_KAV_MAXIMUM",
+                    message: format!(
+                        "KA rate {ka_ct} ct/kWh exceeds the KAV §2 Höchstbetrag {max} ct/kWh for {}",
+                        gruppe.label()
+                    ),
+                }),
+                None if gruppe == KaKundengruppe::Exempt && ka_ct > Decimal::ZERO => {
+                    warnings.push(SettlementWarning {
+                        severity: WarningSeverity::Warning,
+                        code: "KA_CHARGED_WHILE_EXEMPT",
+                        message: format!(
+                            "KA rate {ka_ct} ct/kWh charged although the customer is \
+                             freigestellt nach KAV §2 Abs. 7"
+                        ),
+                    });
+                }
+                _ => {}
+            }
+        }
         let ka_klasse_note = input
             .ka_klasse
-            .map(|k| match k {
-                KaKlasse::TarifkundeLow => " (KAV §2 Tarif ≤25 MWh/a)",
-                KaKlasse::TarifkundeMedium => " (KAV §2 Tarif ≪150 MWh/a)",
-                KaKlasse::SonderkundeHigh => " (KAV §2 Sonderkunde)",
-                KaKlasse::Exempt => " (KAV §2 Abs. 7 — freigestellt)",
-            })
-            .unwrap_or("");
+            .map(|k| format!(" ({})", k.label()))
+            .unwrap_or_default();
         let p = InvoicePosition {
             number: next,
             text: format!("Konzessionsabgabe{ka_klasse_note}"),
@@ -571,12 +592,27 @@ pub fn calculate_nne_invoice(input: &NneInput) -> Result<GridSettlement, Billing
 
 // ── MMM invoice (PID 31002) ───────────────────────────────────────────────────
 
-/// Calculate a Mehr-/Mindermengen settlement invoice (PID 31002 Strom, Gas via GasNZV).
+/// Last day on which StromNZV and GasNZV applied.
+///
+/// Both ceased to have effect with the end of 31.12.2025 — Art. 15 Abs. 4 (Strom)
+/// and Abs. 6 (Gas) of the Gesetz v. 22.12.2023, BGBl. 2023 I Nr. 405. From
+/// 01.01.2026 the basis is §20 Abs. 3 EnWG plus the BNetzA Festlegungen.
+const NZV_LAST_DAY: time::Date = time::macros::date!(2025 - 12 - 31);
+
+/// Calculate a Mehr-/Mindermengen settlement invoice (PID 31002, Strom and Gas).
 ///
 /// ## Legal references
 ///
-/// - Strom: Mehrmengen/Mindermengen → `StromNZV §15`, `GPKE BK6-22-024`
-/// - Gas: Mehrmengen/Mindermengen → `GasNZV §14`, `GeLi Gas BK7-24-01-009`
+/// Selected from the **delivery period**, because StromNZV and GasNZV both ceased
+/// to apply with effect from the end of 31.12.2025:
+///
+/// | Period | Strom | Gas |
+/// |---|---|---|
+/// | to 31.12.2025 | StromNZV §13 Abs. 3 | GasNZV §25 |
+/// | from 01.01.2026 | GPKE (BK6-24-174) Teil 1 Kap. 8.4 | GaBi Gas 2.1 (BK7-24-01-008) |
+///
+/// GeLi Gas 3.0 does **not** carry Mehr-/Mindermengen; its transferred scope is
+/// Netzzugangsverträge, Lieferantenwechsel and Messung.
 ///
 /// ## Errors
 ///
@@ -593,17 +629,32 @@ pub fn calculate_mmm_invoice(input: &MmmInput) -> Result<GridSettlement, Billing
     let minder_eur = ct_to_eur(input.minder_preis_ct_per_kwh);
     let diff = input.actual_kwh - input.profil_kwh;
 
-    let mmm_refs = match input.sparte {
-        Sparte::Gas => vec![
-            LegalReference::GasNzv { paragraph: "§14" },
+    // The NZVs applied to Lieferzeiträume ending on or before 31.12.2025.
+    let pre_2026 = input.period_to <= NZV_LAST_DAY;
+    let mmm_refs = match (input.sparte, pre_2026) {
+        (Sparte::Gas, true) => vec![
+            LegalReference::GasNzv { paragraph: "§25" },
             LegalReference::BdewAhb {
-                reference: "GeLi Gas BK7-24-01-009",
+                reference: "GaBi Gas 2.1 (BK7-24-01-008)",
             },
         ],
-        Sparte::Strom => vec![
-            LegalReference::StromNzv { paragraph: "§15" },
-            LegalReference::BdewAhb {
-                reference: "GPKE BK6-22-024",
+        (Sparte::Gas, false) => vec![LegalReference::BdewAhb {
+            reference: "GaBi Gas 2.1 (BK7-24-01-008)",
+        }],
+        (Sparte::Strom, true) => vec![
+            LegalReference::StromNzv {
+                paragraph: "§13 Abs. 3",
+            },
+            LegalReference::BnetzaDecision {
+                reference: "BK6-24-174",
+            },
+        ],
+        (Sparte::Strom, false) => vec![
+            LegalReference::Enwg {
+                paragraph: "§20 Abs. 3",
+            },
+            LegalReference::BnetzaDecision {
+                reference: "BK6-24-174",
             },
         ],
     };
@@ -613,31 +664,60 @@ pub fn calculate_mmm_invoice(input: &MmmInput) -> Result<GridSettlement, Billing
         Sparte::Strom => SettlementType::MmmStrom,
     };
 
-    let mehr_kwh = if diff > Decimal::ZERO {
-        diff
-    } else {
-        Decimal::ZERO
-    };
-    let p1 = kwh_pos_traced(
-        1,
-        "Mehrmengen",
-        BillingPositionKind::Mehrmenge,
-        mehr_kwh,
-        mehr_eur,
-        mmm_refs.clone(),
-        None,
-    );
-
-    let minder_kwh = if diff < Decimal::ZERO {
+    // Sign convention per GPKE (BK6-24-174) Teil 1 Kap. 8.4 Nr. 3 and, for gas,
+    // GaBi Gas 2.1 (BK7-24-01-008) Tenor Nr. 5. Both define the quantities from
+    // the network operator's side, which inverts the intuitive reading:
+    //
+    //   measured < profiled  → ungewollte **Mehrmenge**   → NB vergütet   (credit)
+    //   measured > profiled  → ungewollte **Mindermenge** → NB in Rechnung (charge)
+    //
+    // GPKE: "Unterschreitet die Summe der [...] ermittelten elektrischen Arbeit
+    // die Summe der Arbeit, die den bilanzierten Profilen zu Grunde gelegt wurde
+    // (ungewollte Mehrmenge), so vergütet der Netzbetreiber dem Lieferanten [...]
+    // diese Differenzmenge."
+    let mehr_kwh = if diff < Decimal::ZERO {
         -diff
     } else {
         Decimal::ZERO
     };
-    let minder_net = -pos_net(minder_kwh, minder_eur);
+    let mehr_net = -pos_net(mehr_kwh, mehr_eur);
+    let mehr_gross = mehr_kwh * mehr_eur;
+    let p1 = InvoicePosition {
+        number: 1,
+        text: "Mehrmengen (Gutschrift)".to_owned(),
+        kind: BillingPositionKind::Mehrmenge,
+        artikel_id: None,
+        quantity: mehr_kwh.round_dp(3),
+        unit: QuantityUnit::Kwh,
+        unit_price_eur: mehr_eur.round_dp(6),
+        net_eur: mehr_net,
+        lastvariable_preisposition_json: None,
+        trace: CalculationTrace {
+            explanation: format!(
+                "{mehr_kwh:.3} kWh × {:.6} EUR/kWh = {:.5} EUR (Gutschrift, negiert)",
+                mehr_eur,
+                mehr_gross.round_dp(5)
+            ),
+            input_quantity: mehr_kwh,
+            input_unit_price_eur: mehr_eur,
+            gross_eur: mehr_gross,
+            legal_refs: mmm_refs.clone(),
+            tariff_source: None,
+            regulatory_reduction_factor: None,
+            rounding_note: Some("Mehrmengen are credit positions — net_eur is negated"),
+        },
+    };
+
+    let minder_kwh = if diff > Decimal::ZERO {
+        diff
+    } else {
+        Decimal::ZERO
+    };
+    let minder_net = pos_net(minder_kwh, minder_eur);
     let minder_gross = minder_kwh * minder_eur;
     let p2 = InvoicePosition {
         number: 2,
-        text: "Mindermengen (Gutschrift)".to_owned(),
+        text: "Mindermengen".to_owned(),
         kind: BillingPositionKind::Mindermenge,
         artikel_id: None,
         quantity: minder_kwh.round_dp(3),
@@ -647,7 +727,7 @@ pub fn calculate_mmm_invoice(input: &MmmInput) -> Result<GridSettlement, Billing
         lastvariable_preisposition_json: None,
         trace: CalculationTrace {
             explanation: format!(
-                "{minder_kwh:.3} kWh × {:.6} EUR/kWh = {:.5} EUR (Gutschrift, negiert)",
+                "{minder_kwh:.3} kWh × {:.6} EUR/kWh = {:.5} EUR",
                 minder_eur,
                 minder_gross.round_dp(5)
             ),
@@ -657,7 +737,7 @@ pub fn calculate_mmm_invoice(input: &MmmInput) -> Result<GridSettlement, Billing
             legal_refs: mmm_refs,
             tariff_source: None,
             regulatory_reduction_factor: None,
-            rounding_note: Some("Mindermengen are credit positions — net_eur is negated"),
+            rounding_note: None,
         },
     };
 
@@ -923,7 +1003,7 @@ pub fn calculate_correction(
 /// ## Legal references
 ///
 /// Every position cites:
-/// - `BdewAhb { reference: "GeLi Gas BK7-24-01-009 §5.4" }` (governing ruling)
+/// - `BdewAhb { reference: "GeLi Gas 3.0 (BK7-24-01-009) §5.4" }` (governing ruling)
 /// - `GasNev { paragraph: "§14" }` (general GasNEV charge authorisation)
 ///
 /// ## Errors
@@ -960,7 +1040,7 @@ pub fn calculate_gas_awh_invoice(input: &GasAwhInput) -> Result<GridSettlement, 
     let tariff_src = make_tariff_source(input.tariff_sheet_id.as_deref());
     let awh_legal_refs = vec![
         LegalReference::BdewAhb {
-            reference: "GeLi Gas BK7-24-01-009 §5.4",
+            reference: "GeLi Gas 3.0 (BK7-24-01-009) §5.4",
         },
         LegalReference::GasNev { paragraph: "§14" },
     ];
@@ -1153,8 +1233,10 @@ mod tests {
         ));
     }
 
+    /// measured > profiled is an **ungewollte Mindermenge** — the NB supplied the
+    /// shortfall and invoices it. GPKE (BK6-24-174) Teil 1 Kap. 8.4 Nr. 3.
     #[test]
-    fn mmm_mehr_settlement() {
+    fn over_consumption_is_a_mindermenge_charge() {
         let input = MmmInput {
             malo_id: "51238696780".into(),
             nb_mp_id: "9900357000004".into(),
@@ -1171,12 +1253,17 @@ mod tests {
             minder_preis_ct_per_kwh: d("2.0"),
         };
         let r = calculate_mmm_invoice(&input).unwrap();
-        assert_eq!(r.total_eur, d("4.00"));
-        assert_eq!(r.positions[1].net_eur, Decimal::ZERO);
+        // 100 kWh over profile × 2.0 ct = 2.00 EUR charged at the Mindermengen price.
+        assert_eq!(r.total_eur, d("2.00"));
+        assert_eq!(r.positions[0].net_eur, Decimal::ZERO, "no Mehrmenge position");
+        assert_eq!(r.positions[1].quantity, d("100.000"));
     }
 
+    /// measured < profiled is an **ungewollte Mehrmenge** — the NB took the
+    /// surplus and reimburses it. GPKE (BK6-24-174) Teil 1 Kap. 8.4 Nr. 3:
+    /// "so vergütet der Netzbetreiber dem Lieferanten [...] diese Differenzmenge".
     #[test]
-    fn mmm_minder_credit() {
+    fn under_consumption_is_a_mehrmenge_credit() {
         let input = MmmInput {
             malo_id: "51238696780".into(),
             nb_mp_id: "9900357000004".into(),
@@ -1193,8 +1280,26 @@ mod tests {
             minder_preis_ct_per_kwh: d("2.0"),
         };
         let r = calculate_mmm_invoice(&input).unwrap();
-        assert_eq!(r.total_eur, d("-2.00"));
-        assert_eq!(r.positions[1].net_eur, d("-2.00000"));
+        // 100 kWh under profile × 4.0 ct = 4.00 EUR credited at the Mehrmengen price.
+        assert_eq!(r.total_eur, d("-4.00"));
+        assert_eq!(r.positions[0].net_eur, d("-4.00000"));
+        assert_eq!(r.positions[1].net_eur, Decimal::ZERO, "no Mindermenge position");
+    }
+
+    /// The two quantities must never both be non-zero.
+    #[test]
+    fn mehr_and_minder_are_mutually_exclusive() {
+        for (actual, profil) in [("1600", "1500"), ("1400", "1500"), ("1500", "1500")] {
+            let mut i = base_mmm();
+            i.actual_kwh = d(actual);
+            i.profil_kwh = d(profil);
+            let r = calculate_mmm_invoice(&i).unwrap();
+            assert!(
+                r.positions[0].quantity == Decimal::ZERO
+                    || r.positions[1].quantity == Decimal::ZERO,
+                "{actual}/{profil}: both positions carry a quantity"
+            );
+        }
     }
 
     #[test]
@@ -1297,7 +1402,7 @@ mod tests {
         let refs = r.all_legal_refs();
         assert!(
             refs.iter().any(|r| r.contains("StromNZV")),
-            "expected StromNZV reference, got: {refs:?}"
+            "expected StromNZV reference for a 2025 period, got: {refs:?}"
         );
     }
 
@@ -1432,7 +1537,7 @@ mod tests {
         assert_eq!(SettlementType::GasAwhSperrung.default_pid(), 31011);
     }
 
-    // ── New: sparte, counterparty_mp_id, reversal, Gas path, KaKlasse, validation ──
+    // ── sparte, counterparty_mp_id, reversal, Gas path, KA group, validation ──
 
     #[test]
     fn nne_gas_sparte_sets_gas_type_and_ref() {
@@ -1508,10 +1613,10 @@ mod tests {
     }
 
     #[test]
-    fn ka_klasse_annotation_appears_in_position_text() {
+    fn ka_gruppe_annotation_appears_in_position_text() {
         let mut i = base_nne();
-        i.ka_satz_ct_per_kwh = Some(d("0.13"));
-        i.ka_klasse = Some(KaKlasse::TarifkundeLow);
+        i.ka_satz_ct_per_kwh = Some(d("0.09"));
+        i.ka_klasse = Some(KaKundengruppe::Sondervertragskunde);
         let r = calculate_nne_invoice(&i).unwrap();
         let ka_pos = r
             .positions
@@ -1520,25 +1625,136 @@ mod tests {
             .unwrap();
         assert!(
             ka_pos.text.contains("KAV"),
-            "KaKlasse annotation should appear in position text: {}",
+            "KA group annotation should appear in position text: {}",
             ka_pos.text
         );
     }
 
+    /// KAV §2 rates are Höchstbeträge. Strom Sondervertragskunden cap at
+    /// 0.11 ct/kWh, so a higher agreed rate is a compliance defect.
     #[test]
-    fn gas_mmm_uses_gasnzv_reference() {
+    fn ka_rate_above_kav_maximum_warns() {
+        let mut i = base_nne();
+        i.ka_satz_ct_per_kwh = Some(d("1.32")); // the Tarifkunde ≤25k rate
+        i.ka_klasse = Some(KaKundengruppe::Sondervertragskunde);
+        let r = calculate_nne_invoice(&i).unwrap();
+        assert!(
+            r.warnings.iter().any(|w| w.code == "KA_ABOVE_KAV_MAXIMUM"),
+            "expected KAV ceiling warning, got: {:?}",
+            r.warnings
+        );
+    }
+
+    /// The Tarifkunde bands key on municipality inhabitants, not consumption.
+    #[test]
+    fn kav_hoechstbetraege_match_the_statutory_table() {
+        use crate::types::GemeindeGroesse::{Bis25k, Bis100k, Bis500k, Ueber500k};
+        let tarif = |g, kw| KaKundengruppe::Tarifkunde {
+            gemeinde: g,
+            nur_kochen_warmwasser: kw,
+        };
+
+        // Strom Tarifkunden, KAV §2 Abs. 2.
+        for (g, want) in [
+            (Bis25k, "1.32"),
+            (Bis100k, "1.59"),
+            (Bis500k, "1.99"),
+            (Ueber500k, "2.39"),
+        ] {
+            assert_eq!(
+                tarif(g, false).hoechstsatz_ct_per_kwh(Sparte::Strom),
+                Some(d(want))
+            );
+        }
+
+        // Gas splits Tariflieferungen into cooking/hot-water and all others.
+        assert_eq!(
+            tarif(Bis25k, true).hoechstsatz_ct_per_kwh(Sparte::Gas),
+            Some(d("0.51"))
+        );
+        assert_eq!(
+            tarif(Bis25k, false).hoechstsatz_ct_per_kwh(Sparte::Gas),
+            Some(d("0.22"))
+        );
+
+        // Sondervertragskunden are flat and independent of municipality size.
+        assert_eq!(
+            KaKundengruppe::Sondervertragskunde.hoechstsatz_ct_per_kwh(Sparte::Strom),
+            Some(d("0.11"))
+        );
+        assert_eq!(
+            KaKundengruppe::Sondervertragskunde.hoechstsatz_ct_per_kwh(Sparte::Gas),
+            Some(d("0.03"))
+        );
+
+        // Schwachlast exists for Strom only; KAV provides no gas equivalent.
+        assert_eq!(
+            KaKundengruppe::Schwachlast.hoechstsatz_ct_per_kwh(Sparte::Strom),
+            Some(d("0.61"))
+        );
+        assert_eq!(
+            KaKundengruppe::Schwachlast.hoechstsatz_ct_per_kwh(Sparte::Gas),
+            None
+        );
+
+        assert_eq!(
+            KaKundengruppe::Exempt.hoechstsatz_ct_per_kwh(Sparte::Strom),
+            None
+        );
+    }
+
+    /// A 2025 gas period still cites GasNZV §25, and never the Strom ordinance.
+    #[test]
+    fn gas_mmm_for_a_2025_period_cites_gasnzv() {
         let mut i = base_mmm();
         i.sparte = Sparte::Gas;
         let r = calculate_mmm_invoice(&i).unwrap();
         let refs = r.all_legal_refs();
         assert!(
-            refs.iter().any(|r| r.contains("GasNZV")),
-            "Gas MMM must cite GasNZV, got: {refs:?}"
+            refs.iter().any(|r| r.contains("GasNZV §25")),
+            "Gas MMM must cite GasNZV §25, got: {refs:?}"
         );
         assert!(
             !refs.iter().any(|r| r.contains("StromNZV")),
             "Gas MMM must not cite StromNZV, got: {refs:?}"
         );
+    }
+
+    /// From 01.01.2026 the NZVs no longer apply, so a settlement for that period
+    /// must not cite them.
+    #[test]
+    fn mmm_from_2026_drops_the_repealed_ordinances() {
+        for sparte in [Sparte::Strom, Sparte::Gas] {
+            let mut i = base_mmm();
+            i.sparte = sparte;
+            i.period_from = date!(2026 - 01 - 01);
+            i.period_to = date!(2026 - 01 - 31);
+            let r = calculate_mmm_invoice(&i).unwrap();
+            let refs = r.all_legal_refs();
+            assert!(
+                !refs.iter().any(|r| r.contains("NZV")),
+                "{sparte:?} 2026 settlement must not cite a repealed NZV, got: {refs:?}"
+            );
+            let expected = match sparte {
+                Sparte::Strom => "BK6-24-174",
+                Sparte::Gas => "BK7-24-01-008",
+            };
+            assert!(
+                refs.iter().any(|r| r.contains(expected)),
+                "{sparte:?} 2026 settlement must cite {expected}, got: {refs:?}"
+            );
+        }
+    }
+
+    /// A repealed ordinance must carry its expiry in the citation string, so an
+    /// archived invoice stays self-explanatory.
+    #[test]
+    fn repealed_ordinance_citations_state_their_expiry() {
+        let c = LegalReference::StromNzv {
+            paragraph: "§13 Abs. 3",
+        }
+        .citation();
+        assert!(c.contains("außer Kraft"), "got: {c}");
     }
 
     #[test]

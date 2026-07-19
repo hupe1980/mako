@@ -94,7 +94,7 @@ implementation will differ from other domain crates:
 
 ## Regulatory references
 
-- **§ 46 EnWG / § 46 GasNZV** — statutory basis for distribution grid concession competition (Strom and Gas)
+- **§ 46 EnWG** — statutory basis for distribution grid concession competition (Strom and Gas)
 - **BDEW AWH Netzbetreiberwechselprozesse Strom V1.2** (2025-10-30) — Strom NBW process documentation
 - **BDEW AWH Marktprozesse Netzbetreiberwechsel Sparte Gas V1.0** (2026-06-26) — Gas NBW process documentation (new)
 - **BNetzA GPKE Mitteilung Nr. 71** (01.07.2024) — Empfehlung Marktprozesse NBW Strom

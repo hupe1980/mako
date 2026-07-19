@@ -16,6 +16,187 @@ pub enum Sparte {
     Strom,
     /// Natural gas.
     Gas,
+    /// Heat (Fern-/Nahwärme, Wärmemengenzähler per EN 1434 / MID MI-004).
+    ///
+    /// A heat meter integrates flow against the supply/return temperature
+    /// difference on-device, so its register holds thermal kWh directly.
+    /// Governed by **HeizkostenV**, not MsbG.
+    Waerme,
+    /// Water (Kalt-/Warmwasser).
+    ///
+    /// Metered **and billed** in m³ — the only Sparte whose billing unit is a
+    /// volume. Water has no calorific value, so the gas m³→kWh path does not
+    /// apply to it. For the heat share of warm water see
+    /// [`crate::warm_water_heat_kwh`] (HeizkostenV §9 Abs. 2).
+    Wasser,
+}
+
+impl Sparte {
+    /// The unit this Sparte's meter register advances in.
+    ///
+    /// A gas meter registers m³ of Betriebsvolumen; its energy content is
+    /// derived from Brennwert and Zustandszahl. Electricity and heat meters
+    /// register energy directly.
+    #[must_use]
+    pub const fn measured_unit(self) -> MeasurementUnit {
+        match self {
+            Self::Strom | Self::Waerme => MeasurementUnit::KiloWattHour,
+            Self::Gas | Self::Wasser => MeasurementUnit::CubicMetre,
+        }
+    }
+
+    /// The unit this Sparte is settled and invoiced in.
+    ///
+    /// Differs from [`Sparte::measured_unit`] only for gas, which is metered in
+    /// m³ and billed in kWh.
+    #[must_use]
+    pub const fn billing_unit(self) -> MeasurementUnit {
+        match self {
+            Self::Strom | Self::Gas | Self::Waerme => MeasurementUnit::KiloWattHour,
+            Self::Wasser => MeasurementUnit::CubicMetre,
+        }
+    }
+
+    /// `true` when the measured unit differs from the billing unit, so a
+    /// reading must be converted before it can be settled. Gas only.
+    ///
+    /// [`crate::gas_m3_to_kwh_hs`] performs the conversion. An ingest path uses
+    /// this to require the conversion parameters up front.
+    #[must_use]
+    pub const fn requires_conversion(self) -> bool {
+        matches!(
+            (self.measured_unit(), self.billing_unit()),
+            (MeasurementUnit::KiloWattHour, MeasurementUnit::CubicMetre)
+                | (MeasurementUnit::CubicMetre, MeasurementUnit::KiloWattHour)
+        )
+    }
+
+    /// Stable DB/wire label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Strom => "STROM",
+            Self::Gas => "GAS",
+            Self::Waerme => "WAERME",
+            Self::Wasser => "WASSER",
+        }
+    }
+}
+
+/// Unit a meter reading is expressed in.
+///
+/// Electricity, gas and heat settle in kWh; water settles in m³. Carrying the
+/// unit alongside the value keeps the two dimensions distinguishable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
+pub enum MeasurementUnit {
+    /// Kilowatt-hour. Electricity and heat as measured; gas only after
+    /// conversion.
+    #[default]
+    KiloWattHour,
+    /// Cubic metre. Water as measured and billed; gas as measured, before
+    /// conversion.
+    CubicMetre,
+}
+
+impl MeasurementUnit {
+    /// Stable DB/wire label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::KiloWattHour => "KWH",
+            Self::CubicMetre => "M3",
+        }
+    }
+
+    /// Parse a unit string that is already canonical.
+    ///
+    /// Accepts the superscript `m³` as well as `m3`. Units that need rescaling
+    /// (MWh, GJ, litres) are rejected here; use
+    /// [`MeasurementUnit::parse_scaled`] for those.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        let scaled = Self::parse_scaled(s)?;
+        scaled.is_canonical().then_some(scaled.unit)
+    }
+
+    /// Parse any accepted unit, returning the canonical unit plus the exact
+    /// factor that converts a value into it.
+    ///
+    /// EN 1434-1 cl. 6.3.1 permits heat meters to register in Joules or
+    /// Watt-hours and any decimal multiple, so kWh, MWh and GJ registers are all
+    /// in service; water submeters commonly report litres. Callers rescale to
+    /// the canonical unit before storing, keeping exactly two units in the
+    /// persisted data.
+    #[must_use]
+    pub fn parse_scaled(s: &str) -> Option<UnitScale> {
+        let (unit, num, den) = match s.trim().to_lowercase().as_str() {
+            // ── Human/device unit symbols, as printed on a meter display ────
+            "kwh" | "kwh_th" | "kwh_hs" => (Self::KiloWattHour, 1, 1),
+            "wh" => (Self::KiloWattHour, 1, 1_000),
+            "mwh" => (Self::KiloWattHour, 1_000, 1),
+            "gwh" => (Self::KiloWattHour, 1_000_000, 1),
+            // 1 GJ = 1e9 J and 1 kWh = 3.6e6 J, so the factor is 1000/3.6 —
+            // a repeating decimal. Held as the exact rational 2500/9 so the
+            // conversion does not lose precision on every single reading.
+            "gj" => (Self::KiloWattHour, 2_500, 9),
+            "mj" => (Self::KiloWattHour, 5, 18),
+            "m3" | "m³" | "cbm" => (Self::CubicMetre, 1, 1),
+            "l" | "ltr" | "liter" | "litre" => (Self::CubicMetre, 1, 1_000),
+
+            // ── UN/ECE Recommendation 20 codes ──────────────────────────────
+            // Used by UTILMD DE6411 and EN 16931/PEPPOL. The codes are not the
+            // unit symbols: megajoule is `3B`, gigajoule is `GV`, cubic metre is
+            // `MTQ`. Rec 20 also assigns `GJ` to gram per millilitre; the symbol
+            // reading wins here because no Sparte modelled in this crate carries
+            // a density. Callers emitting Rec 20 should send `GV`.
+            "mtq" => (Self::CubicMetre, 1, 1),
+            "whr" => (Self::KiloWattHour, 1, 1_000),
+            "gv" => (Self::KiloWattHour, 2_500, 9),
+            "3b" => (Self::KiloWattHour, 5, 18),
+            "jou" => (Self::KiloWattHour, 1, 3_600_000),
+            "kjo" => (Self::KiloWattHour, 1, 3_600),
+            _ => return None,
+        };
+        Some(UnitScale { unit, num, den })
+    }
+}
+
+/// A parsed unit together with the exact rational factor converting a value in
+/// that unit into the canonical [`MeasurementUnit`].
+///
+/// The factor is kept as a numerator/denominator pair rather than a single
+/// `Decimal` because the useful ones repeat: 1 GJ is 277.7… kWh. Multiplying
+/// before dividing keeps the result exact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnitScale {
+    /// The canonical unit the value converts into.
+    pub unit: MeasurementUnit,
+    /// Conversion numerator.
+    pub num: i64,
+    /// Conversion denominator.
+    pub den: i64,
+}
+
+impl UnitScale {
+    /// `true` when the source unit is already canonical (factor 1:1).
+    #[must_use]
+    pub const fn is_canonical(self) -> bool {
+        self.num == self.den
+    }
+
+    /// Convert `value` into [`UnitScale::unit`].
+    ///
+    /// Multiplies before dividing so that a repeating factor such as GJ→kWh
+    /// (2500/9) rounds once, at the end, rather than once per operand.
+    #[must_use]
+    pub fn apply(self, value: Decimal) -> Decimal {
+        if self.is_canonical() {
+            return value;
+        }
+        value * Decimal::from(self.num) / Decimal::from(self.den)
+    }
 }
 
 /// BDEW / MSCONS quality flag.
@@ -259,5 +440,155 @@ mod tests {
         assert!(QualityFlag::Preliminary.is_provisional());
         assert!(!QualityFlag::Measured.is_provisional());
         assert!(!QualityFlag::Substituted.is_provisional());
+    }
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::*;
+
+    /// Water is m³ and heat is kWh_th — the distinction the `unit` column exists
+    /// to preserve.
+    #[test]
+    fn measured_unit_is_what_the_register_counts() {
+        // Gas and water meters register a volume.
+        assert_eq!(Sparte::Gas.measured_unit(), MeasurementUnit::CubicMetre);
+        assert_eq!(Sparte::Wasser.measured_unit(), MeasurementUnit::CubicMetre);
+        // A heat meter integrates flow × ΔT on-device, so its register is kWh_th.
+        assert_eq!(
+            Sparte::Waerme.measured_unit(),
+            MeasurementUnit::KiloWattHour
+        );
+        assert_eq!(Sparte::Strom.measured_unit(), MeasurementUnit::KiloWattHour);
+    }
+
+    #[test]
+    fn billing_unit_diverges_from_measured_unit_only_for_gas() {
+        for sparte in [Sparte::Strom, Sparte::Gas, Sparte::Waerme, Sparte::Wasser] {
+            assert_eq!(
+                sparte.requires_conversion(),
+                sparte == Sparte::Gas,
+                "{} conversion requirement",
+                sparte.as_str()
+            );
+            assert_eq!(
+                sparte.measured_unit() != sparte.billing_unit(),
+                sparte.requires_conversion(),
+                "{}: requires_conversion must track the unit divergence",
+                sparte.as_str()
+            );
+        }
+
+        // Water is the one Sparte billed in a volume.
+        assert_eq!(Sparte::Wasser.billing_unit(), MeasurementUnit::CubicMetre);
+        assert_eq!(Sparte::Gas.billing_unit(), MeasurementUnit::KiloWattHour);
+    }
+
+    /// Both spellings of the cubic metre are in use on the wire.
+    #[test]
+    fn unit_parse_accepts_superscript_cubic_metre() {
+        assert_eq!(
+            MeasurementUnit::parse("m³"),
+            Some(MeasurementUnit::CubicMetre)
+        );
+        assert_eq!(
+            MeasurementUnit::parse("m3"),
+            Some(MeasurementUnit::CubicMetre)
+        );
+        assert_eq!(
+            MeasurementUnit::parse(" M3 "),
+            Some(MeasurementUnit::CubicMetre)
+        );
+        assert_eq!(
+            MeasurementUnit::parse("kWh_th"),
+            Some(MeasurementUnit::KiloWattHour)
+        );
+        assert_eq!(MeasurementUnit::parse("furlong"), None);
+    }
+
+    /// `parse` rejects any unit it would have to rescale, so a caller cannot
+    /// read MWh as kWh.
+    #[test]
+    fn strict_parse_rejects_units_needing_rescaling() {
+        assert_eq!(MeasurementUnit::parse("MWh"), None);
+        assert_eq!(MeasurementUnit::parse("GJ"), None);
+        assert_eq!(MeasurementUnit::parse("l"), None);
+        // ...but the scaled parser accepts them.
+        assert!(MeasurementUnit::parse_scaled("MWh").is_some());
+        assert!(MeasurementUnit::parse_scaled("GJ").is_some());
+    }
+
+    /// GJ→kWh is 2500/9, a repeating decimal. Holding it as a rational and
+    /// multiplying before dividing keeps the conversion exact.
+    #[test]
+    fn gigajoule_conversion_is_exact() {
+        let gj = MeasurementUnit::parse_scaled("GJ").unwrap();
+        assert_eq!(gj.unit, MeasurementUnit::KiloWattHour);
+        assert!(!gj.is_canonical());
+
+        // 3.6 GJ is exactly 1000 kWh — the identity that defines the factor.
+        let kwh = gj.apply(Decimal::from_str_exact("3.6").unwrap());
+        assert_eq!(
+            kwh,
+            Decimal::from(1000u32),
+            "3.6 GJ must be exactly 1000 kWh"
+        );
+
+        // 9 GJ is exactly 2500 kWh — no residue from the repeating factor.
+        assert_eq!(gj.apply(Decimal::from(9u32)), Decimal::from(2500u32));
+    }
+
+    /// Rec 20 codes are not the unit symbols, so each mapping is pinned.
+    #[test]
+    fn unece_rec20_codes_do_not_follow_the_obvious_mnemonic() {
+        let kwh = MeasurementUnit::KiloWattHour;
+
+        // Gigajoule is `GV`.
+        let gv = MeasurementUnit::parse_scaled("GV").unwrap();
+        assert_eq!((gv.unit, gv.num, gv.den), (kwh, 2_500, 9));
+
+        // Megajoule is `3B`.
+        let mj = MeasurementUnit::parse_scaled("3B").unwrap();
+        assert_eq!((mj.unit, mj.num, mj.den), (kwh, 5, 18));
+        assert_eq!(mj, MeasurementUnit::parse_scaled("MJ").unwrap());
+
+        // Cubic metre is `MTQ`.
+        assert_eq!(
+            MeasurementUnit::parse_scaled("MTQ").unwrap().unit,
+            MeasurementUnit::CubicMetre
+        );
+
+        // Joule round-trips exactly: 3.6e6 J is 1 kWh.
+        let jou = MeasurementUnit::parse_scaled("JOU").unwrap();
+        assert_eq!(jou.apply(Decimal::from(3_600_000u32)), Decimal::ONE);
+    }
+
+    #[test]
+    fn scaled_units_cover_the_real_device_population() {
+        let cases = [
+            ("MWh", "0.5", "500"), // ista ultego III smart displays 0,01 MWh
+            ("Wh", "2500", "2.5"),
+            ("MJ", "18", "5"),    // 18 MJ = 5 kWh exactly
+            ("l", "1500", "1.5"), // water submeters commonly report litres
+            ("kWh", "42", "42"),  // canonical passes through untouched
+        ];
+        for (unit, input, expected) in cases {
+            let scale =
+                MeasurementUnit::parse_scaled(unit).unwrap_or_else(|| panic!("{unit} must parse"));
+            assert_eq!(
+                scale.apply(Decimal::from_str_exact(input).unwrap()),
+                Decimal::from_str_exact(expected).unwrap(),
+                "{input} {unit}"
+            );
+        }
+    }
+
+    /// Labels are the DB CHECK values.
+    #[test]
+    fn labels_match_the_db_check_values() {
+        assert_eq!(Sparte::Waerme.as_str(), "WAERME");
+        assert_eq!(Sparte::Wasser.as_str(), "WASSER");
+        assert_eq!(MeasurementUnit::KiloWattHour.as_str(), "KWH");
+        assert_eq!(MeasurementUnit::CubicMetre.as_str(), "M3");
     }
 }

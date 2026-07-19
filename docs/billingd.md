@@ -8,7 +8,7 @@ description: >
   billingd operator guide: Multi-Product Billing Engine (LF role).
   Energy billing engine — user-defined product prices from tarifbd;
   12 categories (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE);
-  §41a EPEX dynamic; §10 GasGVV Brennwertkorrektur; §14a Modul 1/3;
+  §41a EPEX dynamic; §25 Nr. 4 MessEV Brennwertkorrektur; §14a Modul 1/3;
   XRechnung 3.0 / ZUGFeRD 2.3 (EN16931, B2G mandate 01.01.2027).
 ---
 
@@ -51,7 +51,7 @@ billingd (HTTP service)
             │
             ├── ElectricityProvider      §41a EPEX; HT/NT; block tariffs; RLM demand
             ├── ControllableLoadProvider §14a Modul 1/3 (WAERMEPUMPE, WALLBOX)
-            ├── GasProvider              §10 GasGVV Brennwertkorrektur; BEHG CO₂
+            ├── GasProvider              §25 Nr. 4 MessEV Brennwertkorrektur; BEHG CO₂
             ├── HeatProvider             Fernwärme; auto-7% MwSt (renewable)
             ├── SolarProvider            §42b Mieterstrom; §42a GGV
             ├── EegProvider              LF-side Gutschrift; contractual §51
@@ -117,7 +117,7 @@ graph LR
         WB["WALLBOX<br/>§14a mandatory<br/>(like STROM)"]
     end
     subgraph heat_gas ["Gas & Heat"]
-        GAS["GAS<br/>§10 GasGVV Brennwertkorrektur<br/>Energiesteuer §2 EnergieStG<br/>BEHG CO₂"]
+        GAS["GAS<br/>§25 Nr. 4 MessEV Brennwertkorrektur<br/>Energiesteuer §2 EnergieStG<br/>BEHG CO₂"]
         WAERME["WAERME<br/>Grundpreis + Leistungspreis<br/>+ Arbeitspreis (kWh_th)"]
     end
     subgraph solar_eeg ["Solar & Feed-in"]
@@ -166,7 +166,7 @@ or `Imsys` metering points.
 ### GAS — Natural Gas
 
 ```
-Brennwertkorrektur      [informational]    m³ × Hs × Z → kWh_Hs  (§10 GasGVV)
+Brennwertkorrektur      [informational]    m³ × Hs × Z → kWh_Hs  (§25 Nr. 4 MessEV)
 Grundpreis Gas          [from tarifbd]     ct/day
 Arbeitspreis Gas        [from tarifbd]     ct/kWh_Hs
 Gasnetzentgelt GP       [from marktd]      pass-through

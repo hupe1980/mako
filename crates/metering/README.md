@@ -31,9 +31,10 @@ metering arithmetic. It has no I/O, no async, and no floating-point money.
 | `demand` | `DemandWindow`, `DemandInterval` | 15-min demand / Spitzenleistung |
 | `tariff_window` | `TariffWindow`, `HtNtSchedule` | DST-aware HT/NT window classification |
 | `load_profile` | `LoadProfile` | German SLP load profile types (H0/G0–G6/L0–L2 …) |
-| `conversion` | `gas_m3_to_kwh_hs()`, `GasConversionParams` | §24 GasGVV / DVGW G 685 |
+| `conversion` | `gas_m3_to_kwh_hs()`, `GasConversionParams` | §25 Nr. 4 MessEV / DVGW G 685 |
 | `imbalance` | `compute_imbalance()`, `ImbalanceSaldo` | §27 MessZV Mehr-/Mindermengensaldo |
 | `resolution` | `IntervalResolution` | Typed interval lengths (15-min / hourly / daily …) |
+| `sharing` | §42c EnWG Energy-Sharing metering eligibility — pure capability/delivery rules over `Messtyp` and `IntervalLengthClass` |
 | `lifecycle` | `MeterExchangeEvent`, `MeterStatus` | WiM meter exchange domain events |
 
 ---
@@ -65,6 +66,78 @@ pub struct MeterInterval {
 }
 ```
 
+### `Sparte` and `MeasurementUnit`
+
+```rust
+pub enum Sparte          { Strom, Gas, Waerme, Wasser }
+pub enum MeasurementUnit { KiloWattHour, CubicMetre }
+```
+
+A Sparte has **two** units, and conflating them is a correctness bug:
+
+| `Sparte` | `measured_unit()` | `billing_unit()` | `requires_conversion()` |
+|---|---|---|---|
+| `Strom` | kWh | kWh | no |
+| `Gas` | **m³** | **kWh** | **yes** |
+| `Waerme` | kWh | kWh | no |
+| `Wasser` | m³ | m³ | no |
+
+A gas meter registers volume; its energy content is derived from Brennwert and
+Zustandszahl (`gas_m3_to_kwh_hs`). `requires_conversion()` lets an ingest path
+require those parameters before storing a value in an energy column.
+
+`Wasser` is the one Sparte billed in a volume — water has no calorific value, so
+the gas conversion does not apply to it. For the heat share of warm water see
+[HeizkostenV §9 Abs. 2](#warm-water--heat-energy-heizkostenv-9-abs-2).
+
+### Wire units vs storage units
+
+Storage is canonical — exactly two units reach a database, so no consumer has to
+know the table below exists. The **wire** is liberal, because real devices are:
+
+```rust
+MeasurementUnit::parse("MWh")         // None — would need rescaling
+MeasurementUnit::parse_scaled("MWh")  // Some(UnitScale { KiloWattHour, 1000, 1 })
+```
+
+| Accepted | Canonical | Factor |
+|---|---|---|
+| `kWh`, `kWh_th`, `kWh_Hs` | kWh | 1 |
+| `Wh` / `MWh` / `GWh` | kWh | 1/1000 · 1000 · 10⁶ |
+| `GJ` | kWh | **2500/9** |
+| `MJ` | kWh | **5/18** |
+| `m³`, `m3`, `cbm` | m³ | 1 |
+| `l`, `ltr`, `liter` | m³ | 1/1000 |
+
+**No German law prescribes a unit for heat meters.** MID Annex VI (MI-004) has no
+units clause, and EN 1434-1 cl. 6.3.1 permits *"Joules, Watt-hours or decimal
+multiples of those units"* — so a GJ meter is exactly as compliant as a kWh one.
+German heat meters ship with kWh, MWh or GJ registers depending on the ordered
+variant (ista sensonic 3 is sold in both kWh and GJ; Zenner multidata WR3 offers
+MJ), and water submeters commonly report litres. The register unit is therefore
+**device metadata, not a constant**.
+
+UN/ECE Rec 20 codes are also accepted, and their mnemonics do not follow the unit
+symbols:
+
+| Rec 20 | Means | Trap |
+|---|---|---|
+| `MTQ` | cubic metre | not `M3` |
+| `GV` | gigajoule | not `GJ` |
+| `3B` | megajoule | `MJ` is not a Rec 20 code |
+| `WHR` / `JOU` / `KJO` | watt hour / joule / kilojoule | |
+
+Rec 20 also assigns `GJ` to gram per millilitre. This crate reads `GJ` as
+gigajoule, since no Sparte modelled here carries a density; callers emitting Rec 20
+codes should send `GV`.
+
+The GJ and MJ factors are held as **exact rationals**, not decimals: 1 GJ is
+277.7… kWh, so a `Decimal` factor would lose precision on every reading.
+`UnitScale::apply` multiplies before dividing, making `3.6 GJ` exactly `1000 kWh`.
+
+`parse` rejects anything needing a rescale, so a caller must go through
+`parse_scaled` to obtain a factor.
+
 ### `QualityFlag` (8 variants)
 
 | Variant | Billable | Description |
@@ -82,12 +155,65 @@ pub struct MeterInterval {
 
 ## Gas conversion: m³ → kWh_Hs
 
-Implements the Brennwertkorrektur formula per **§24 GasGVV** / **DVGW G 685**:
+Implements the Brennwertkorrektur formula per **§25 Nr. 4 MessEV** / **DVGW G 685**:
 
 ```rust
 // kWh_Hs = m³ × Hs × Z  (rounded to 6 dp)
 let kwh = gas_m3_to_kwh_hs(dec!(100), dec!(10.55), dec!(0.9764));
 ```
+
+---
+
+## Warm water → heat energy (HeizkostenV §9 Abs. 2)
+
+```rust
+warm_water_heat_kwh(volume_m3, mean_temp_c, WarmWaterAdjustments::NONE)
+warm_water_heat_kwh_unmetered(flaeche_m2, adjustments)
+```
+
+```text
+Q [kWh/a] = 2.5 × V [m³] × (t_w [°C] − 10)      // Satz 2, metered volume
+Q [kWh/a] = 32 × A_Wohn [m²]                    // Satz 4, floor area
+```
+
+Both are fallbacks. **§9 Abs. 2 Satz 1 requires a Wärmezähler**; Satz 2 applies
+only where measurement is possible *"nur mit einem unzumutbar hohen Aufwand"*, and
+Satz 4 only *"in Ausnahmefällen"* where **neither** the heat quantity **nor** the
+volume can be measured.
+
+These are *Zahlenwertgleichungen* — numerical-value equations, not dimensionally
+consistent — so the constants carry no unit, and they bundle **different** things:
+
+| Constant | Covers (§9 Abs. 2 Satz 3/5) |
+|---|---|
+| 2.5 | Erzeugeraufwandszahl, mittlere spezifische Wärmekapazität des Wassers, Wärmeverluste für Warmwasserspeicher, Verteilung einschließlich Zirkulation, Messdatenerhebungen |
+| 32 | Nutzwärmebedarf für Warmwasser, Erzeugeraufwandszahl, Messdatenerhebungen — **no** Speicher-, Verteilungs- oder Zirkulationsverluste |
+
+Because the Erzeugeraufwandszahl sits inside both constants, **Q is generator-input
+heat, not delivered useful heat**.
+
+`t_w` is *"die gemessene oder geschätzte mittlere Temperatur"* — an estimate is
+permitted and no default or cap is prescribed. `A_Wohn` is the *"Wohn- oder
+Nutzfläche"*, not living area alone.
+
+### `WarmWaterAdjustments`
+
+| Field | Effect | Trigger |
+|---|---|---|
+| `brennwert_erdgas` | × 1.11 | brennwertbezogene Abrechnung von Erdgas |
+| `eigenstaendige_gewerbliche_waermelieferung` | ÷ 1.15 | **eigenständige** gewerbliche Wärmelieferung |
+| `monovalente_waermepumpe` | × 0.30 | Betrieb einer monovalenten Wärmepumpe |
+
+A struct of flags rather than an enum: §9 Abs. 2 Satz 6 applies these to the result
+of *"den Zahlenwertgleichungen in Satz 2 oder 4"* and does not make them exclusive,
+so a heat-pump system under eigenständige gewerbliche Wärmelieferung takes both.
+`eigenständig` is a term of art (cf. §1 Abs. 1 Nr. 2); ordinary commercial heat
+supply does not qualify.
+
+A warm-water meter therefore carries **two quantities**: the m³ billed as water,
+and the kWh this apportions out of the building's heating bill. The metered and
+floor-area forms are separate functions rather than one `Option` parameter, because
+they are different evidentiary categories.
 
 ---
 
@@ -257,121 +383,6 @@ println!("Spitzenlast:  {:?} kW", agg.spitzenleistung_kw);
 
 ---
 
-## Feature flags
-
-| Flag | Effect |
-|---|---|
-| `serde` | Derive `Serialize`/`Deserialize` on all public types |
-
----
-
-## Testing
-
-```bash
-cargo test -p metering --all-features
-```
-
-214 tests covering: gas conversion (DVGW G 685), aggregation (RLM/SLP/Gas), Messtyp
-classification, imbalance arithmetic, V01–V10 validation engine (incl. DST transitions and
-V07 DST ambiguity), §17 MessZV substitute methods, resampling (hourly/daily/monthly),
-§42b EnWG GGV virtual meters (Beispiel 1 constant + Beispiel 3 proportional, Pos() cap,
-zero-division guard), §42a Residuallast, BSI TR-03109 SMGW + CLS lifecycle,
-measurement series provenance, register + ObisCode.
-
----
-
-## Regulatory basis
-
-- **§3, §4 MessZV** — SLP/RLM classification thresholds
-- **§2 Nr. 17 MessZV** — Spitzenleistung definition for RLM
-- **§17 MessZV** — Ersatzwertbildung + Jahresprognose (substitute values + annual forecast)
-- **§22 MessZV** — 3-year provenance retention (`MeasurementSeries`, `ProvenanceEntry`)
-- **§27 MessZV** — Mehr-/Mindermengensaldo
-- **§24 GasGVV / DVGW G 685** — Gas Brennwertkorrektur
-- **§41a EnWG** — 15-Minuten-Lastgang and iMSys Pflichteinbau
-- **§42a/§42b EEG** — Residuallast / GGV community solar virtual meters
-- **§14a EnWG** — Steuerbare Verbrauchseinrichtungen (CLS channels)
-- **BSI TR-03109** — Smart Meter Gateway lifecycle and certificates
-
----
-
-## Design constraints
-
-| Constraint | Detail |
-|---|---|
-| **No I/O** | All inputs are passed as arguments. |
-| **No async** | Synchronous throughout. |
-| **No float money** | All energy amounts use `rust_decimal`. |
-| **Deterministic** | Same inputs always produce the same output. |
-
----
-
-## Core types
-
-### `MeterInterval`
-
-A single timestamped energy reading:
-
-```rust
-pub struct MeterInterval {
-    pub period_start: OffsetDateTime,
-    pub period_end: OffsetDateTime,
-    pub value_kwh: Decimal,
-    pub quality: QualityFlag,
-}
-```
-
-### `Sparte`
-
-```rust
-pub enum Sparte { Strom, Gas }
-```
-
-### `QualityFlag`
-
-`Measured`, `Substituted`, `Estimated`, `Invalid` — mapped to MSCONS/UTILTS
-Datenqualitätskennzeichen.
-
----
-
-## Gas conversion: m³ → kWh_Hs
-
-```rust
-pub fn gas_m3_to_kwh_hs(
-    m3: Decimal,
-    brennwert_kwh_m3: Decimal,
-    zustandszahl: Decimal,
-) -> Decimal
-```
-
-Implements the Brennwertkorrektur formula per **§24 GasGVV** / **DVGW G 685**:
-
-$$kWh_{Hs} = m^3 \times z \times H_s$$
-
----
-
-## Billing period aggregation
-
-`aggregate` computes a `BillingPeriodAggregate` from a slice of `MeterInterval`s:
-
-```rust
-let agg = aggregate(&intervals, &AggregationConfig::rlm_strom())?;
-println!("kWh HT: {}", agg.kwh_ht);
-println!("kWh NT: {}", agg.kwh_nt);
-println!("Spitzenlast: {:?} kW", agg.spitzenleistung_kw);
-```
-
-### `AggregationConfig` presets
-
-| Preset | Messtyp | Split |
-|---|---|---|
-| `rlm_strom()` | RLM | Spitzenleistung §2 Nr. 17 MessZV + HT/NT split |
-| `slp_strom()` | SLP | HT/NT split (no Spitzenleistung) |
-| `rlm_zweitarif()` | RLM | Custom HT/NT window |
-| `gas()` | Gas | Single total (m³ → kWh_Hs, no tariff split) |
-
----
-
 ## SLP/RLM/iMSys classification
 
 ```rust
@@ -387,6 +398,25 @@ pub fn classify_messtyp(
 | `Slp` | < 100 MWh/a (Strom) or < 1.500 MWh/a (Gas) | §3 MessZV |
 | `Rlm` | ≥ 100 MWh/a (Strom) or ≥ 1.500 MWh/a (Gas) | §4 MessZV |
 | `Imsys` | Pflichteinbau iMSys (§41a EnWG) | §41a EnWG |
+
+---
+
+## OBIS medium (value group A)
+
+`ObisCode::is_heat`, `is_water` and `is_heat_cost_allocator` follow the
+DLMS/COSEM Blue Book media list that OMS Spec Vol. 2 adopts:
+
+| A | Medium | Predicate |
+|---|---|---|
+| 1 | Electricity | `is_electricity()` |
+| 4 | Heizkostenverteiler | `is_heat_cost_allocator()` |
+| 5 / 6 | Cooling / heat | `is_heat()` |
+| 7 | Gas | `is_gas()` |
+| 8 / 9 | Cold / hot water | `is_water()` |
+
+**A = 8 is water, not heat.** An HCA (A = 4) reports dimensionless
+*Verbrauchseinheiten* and carries no Eichfrist — HeizkostenV §5 Abs. 1 Satz 3
+admits it as an apportionment device precisely because it measures no unit.
 
 ---
 
@@ -418,6 +448,23 @@ pub fn score_intervals(
 ) -> Vec<QualityGrade>
 ```
 
+### Media-aware thresholds
+
+```rust
+QualityConfig::for_sparte(Sparte::Wasser)
+```
+
+| `Sparte` | `max_zero_run_allowed` | `min_sigma` |
+|---|---|---|
+| `Strom` | 2 | 0.0 |
+| `Gas` | 48 | 0.01 |
+| `Waerme` | 720 | 0.05 |
+| `Wasser` | 720 | 0.001 |
+
+`min_sigma` guards **MAD implosion**: across a flat window the median absolute
+deviation is 0, so `t × sigma` is 0 and every nonzero value scores as an outlier.
+`hampel_filter_with_floor` exposes the same guard as a primitive.
+
 ### `QualityGrade`
 
 | Grade | Meaning | Effect in `edmd` |
@@ -429,55 +476,6 @@ pub fn score_intervals(
 
 `hampel_filter` is also exposed as a low-level primitive that returns raw
 outlier indices.
-
----
-
-## §17 MessZV substitute value generation
-
-When meter readings are missing or faulty, the MSB must supply substitute values
-before billing. `metering` implements all four methods from §17 MessZV and BDEW
-practice.
-
-### Quick usage
-
-```rust
-use metering::{fill_gaps, fill_gaps_with_config, FillGapsConfig, SubstituteMethod};
-
-// Automatic method selection (linear for short gaps, carry-forward for long)
-let filled = fill_gaps(&intervals, 900, period_from, period_to);
-
-// Prior-period averaging per §17 Abs. 2 MessZV (same time-slot, prior week)
-let prior_week: Vec<MeterInterval> = fetch_prior_week(&malo_id);
-let filled = fill_gaps_with_config(
-    &intervals, 900, period_from, period_to,
-    &FillGapsConfig::prior_period(prior_week),
-);
-```
-
-### `SubstituteMethod` variants
-
-| Variant | When to use | BDEW recommendation |
-|---|---|---|
-| `LinearInterpolation` | Short gaps (≤ 3 intervals) with surrounding data | Primary for RLM/iMSys |
-| `PriorPeriodAverage` | Longer gaps; same time-slot from prior reference week | Biomass, industrial load |
-| `ZeroFill` | Documented plant shutdown — affirmative zero only | Outage with evidence |
-| `LastValueCarryForward` | Conservative fallback when no context available | SLP, default for longer gaps |
-
-### `FillGapsConfig`
-
-```rust
-pub struct FillGapsConfig {
-    pub method: SubstituteMethod,            // default: LinearInterpolation
-    pub prior_period_intervals: Vec<MeterInterval>, // for PriorPeriodAverage
-    pub short_gap_threshold: usize,          // default: 3 (auto-linear below this)
-}
-```
-
-`FillGapsConfig::prior_period(prior_week_intervals)` and
-`FillGapsConfig::zero_fill()` are convenience constructors.
-
-Filled intervals carry `quality = QualityFlag::Substituted`
-(billable per §17 MessZV Abs. 1).
 
 ---
 
@@ -495,9 +493,12 @@ Filled intervals carry `quality = QualityFlag::Substituted`
 cargo test -p metering --all-features
 ```
 
-37 tests covering gas conversion, aggregation (RLM/SLP/Gas), Messtyp
-classification, imbalance arithmetic, Hampel filter edge cases, and §17 MessZV
-substitute value generation (all four methods including `PriorPeriodAverage`).
+214 tests covering: gas conversion (DVGW G 685), aggregation (RLM/SLP/Gas), Messtyp
+classification, imbalance arithmetic, V01–V10 validation engine (incl. DST transitions and
+V07 DST ambiguity), §17 MessZV substitute methods, resampling (hourly/daily/monthly),
+§42b EnWG GGV virtual meters (Beispiel 1 constant + Beispiel 3 proportional, Pos() cap,
+zero-division guard), §42a Residuallast, BSI TR-03109 SMGW + CLS lifecycle,
+measurement series provenance, register + ObisCode.
 
 ---
 
@@ -505,7 +506,11 @@ substitute value generation (all four methods including `PriorPeriodAverage`).
 
 - **§3, §4 MessZV** — SLP/RLM classification thresholds
 - **§2 Nr. 17 MessZV** — Spitzenleistung definition for RLM
-- **§17 MessZV** — Ersatzwertbildung (substitute value generation)
+- **§17 MessZV** — Ersatzwertbildung + Jahresprognose (substitute values + annual forecast)
+- **§22 MessZV** — 3-year provenance retention (`MeasurementSeries`, `ProvenanceEntry`)
 - **§27 MessZV** — Mehr-/Mindermengensaldo
-- **§24 GasGVV / DVGW G 685** — Gas Brennwertkorrektur
+- **§25 Nr. 4 MessEV / DVGW G 685** — Gas Brennwertkorrektur
 - **§41a EnWG** — 15-Minuten-Lastgang and iMSys Pflichteinbau
+- **§42a/§42b EEG** — Residuallast / GGV community solar virtual meters
+- **§14a EnWG** — Steuerbare Verbrauchseinrichtungen (CLS channels)
+- **BSI TR-03109** — Smart Meter Gateway lifecycle and certificates

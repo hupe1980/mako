@@ -23,10 +23,10 @@ holidays do not.
 
 | PID   | Process name                                    | EDIFACT       | Module           | Status                          |
 |-------|-------------------------------------------------|---------------|------------------|---------------------------------|
-| 55042 | Anmeldung MSB (nMSB → NB)                       | UTILMD S2.x   | `geraetewechsel` | ✅ Implemented                  |
-| 55039 | Kündigung MSB (nMSB → NB)                       | UTILMD S2.x   | `geraetewechsel` | ✅ Registered (shared workflow) |
-| 55051 | Ende MSB / Abmeldung (NB → MSBN)                | UTILMD S2.x   | `geraetewechsel` | ✅ Registered (shared workflow) |
-| 55168 | Verpflichtungsanfrage (NB → MSBN)               | UTILMD S2.x   | `geraetewechsel` | ✅ Registered (shared workflow) |
+| 55042 | Anmeldung MSB (MSBN → NB)                       | UTILMD S2.x   | `geraetewechsel` | ✅ Implemented · Antwort 55043/55044, **5 WT** |
+| 55039 | Kündigung MSB (MSBN → **MSBA**)                 | UTILMD S2.x   | `geraetewechsel` | ✅ Implemented · Antwort 55040/55041, **3 WT** |
+| 55051 | Ende MSB / Abmeldung (**MSBA → NB**)            | UTILMD S2.x   | `geraetewechsel` | ✅ Implemented · Antwort 55052/55053, **7 WT** |
+| 55168 | Verpflichtungsanfrage / Aufforderung (NB → **gMSB**) | UTILMD S2.x | `geraetewechsel` | ✅ Implemented · Antwort 55169/55170, **1 WT** |
 
 ### Geräteübernahme — ORDERS / ORDRSP
 
@@ -74,7 +74,7 @@ holidays do not.
 
 | Rust module        | Contents                                                                  |
 |--------------------|---------------------------------------------------------------------------|
-| `geraetewechsel`   | PIDs 55039, 55042, 55051, 55168 — MSB-Wechsel workflow + projection       |
+| `geraetewechsel`   | PIDs 55039, 55042, 55051, 55168 — MSB-Wechsel workflow + projection. Handles both directions and closes the loop: inbound UTILMD (`ReceiveUtilmd` → `Initiated` → APERAK) and ERP-initiated outbound orders (`InitiateDeviceChange` → `AuftragGesendet` → `ReceiveAntwort` → `AuftragBestaetigt`/`Rejected`). ERP command `wim.geraetewechsel.beauftragen`. Antwortfrist per process via `antwort_frist_werktage()`. |
 | `geraeteubernahme` | PIDs 17001–17011, 19001/19002/19015/19016 — Geräteübernahme ORDERS/ORDRSP |
 | `stammdaten`       | PIDs 17102–17133, 17132 — Stammdaten Anforderung / Übermittlung           |
 | `stornierung`      | PID 39000 — Stornierung ORDCHG                                            |

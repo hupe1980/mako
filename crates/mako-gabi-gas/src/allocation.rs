@@ -1,8 +1,8 @@
 //! GaBi Gas Allocation workflow — ALOCAT (FNB / MGV / VNB → BKV).
 //!
 //! Implements the receive-and-record side of gas quantity allocation governed
-//! by the Kooperationsvereinbarung Gas (KoV) and the BNetzA GaBi Gas 2.0
-//! framework (BK7-14-020).
+//! by the Kooperationsvereinbarung Gas (KoV) and the BNetzA GaBi Gas 2.1
+//! framework (BK7-24-01-008).
 //!
 //! # Process overview
 //!
@@ -35,7 +35,7 @@
 //! # Regulatory basis
 //!
 //! - **Kooperationsvereinbarung Gas (KoV)** — allocation reporting deadlines
-//! - **BNetzA BK7-14-020** — GaBi Gas 2.0 ruling
+//! - **BNetzA BK7-24-01-008** — GaBi Gas 2.1 ruling
 //! - **DVGW ALOCAT 5.11a** — message format (valid from 2024-10-01)
 
 use mako_engine::{

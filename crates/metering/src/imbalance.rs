@@ -2,28 +2,36 @@
 //!
 //! ## Legal basis
 //!
-//! - **§27 MessZV**: Abrechnung der Mehr-/Mindermengensaldo.
-//! - **GPKE BK6-22-024 §7**: Mehr-/Mindermengensaldo-Abrechnung zwischen LF und NB.
-//! - **GeLi Gas BK7-24-01-009 §6**: Gas Mehr-/Mindermengensaldo.
+//! - **GPKE (BK6-24-174) Teil 1, Kap. 8.4** — Jahresmehr- und Jahresmindermengen
+//!   (Strom). Historically §13 Abs. 3 StromNZV, repealed with effect from the end
+//!   of 31.12.2025.
+//! - **GaBi Gas 2.1 (BK7-24-01-008), Ziff. 3a** — Mehr-/Mindermengen Gas.
+//!   Historically §25 GasNZV, repealed on the same date.
 //!
 //! ## Definition
 //!
-//! The imbalance (`Mehr-/Mindermengensaldo`) compares the **actual metered energy**
-//! against the **contracted/profile energy** for a billing period:
+//! Both quantities are named from the **network operator's** side, which inverts
+//! the intuitive reading. GPKE Kap. 8.4 Nr. 3:
+//!
+//! > Unterschreitet die Summe der in einem Zeitraum ermittelten elektrischen
+//! > Arbeit die Summe der Arbeit, die den bilanzierten Profilen zu Grunde gelegt
+//! > wurde (ungewollte Mehrmenge), so vergütet der Netzbetreiber dem Lieferanten
+//! > oder dem Kunden diese Differenzmenge.
 //!
 //! ```text
-//! Mehr-Menge  = max(0, actual_kwh − contracted_kwh)   [LF owes NB]
-//! Minder-Menge = max(0, contracted_kwh − actual_kwh)  [NB owes LF]
+//! Mehr-Menge   = max(0, profiled_kwh − actual_kwh)   [NB vergütet → NB owes LF]
+//! Minder-Menge = max(0, actual_kwh − profiled_kwh)   [NB stellt in Rechnung → LF owes NB]
 //! ```
+//!
+//! The customer consuming *less* than the profile leaves surplus energy the
+//! network operator absorbed — that surplus is the Mehrmenge, and it is credited.
 //!
 //! Only one of `mehr_kwh` or `minder_kwh` is positive in any period.
 //!
-//! ## Note on current `edmd` implementation
-//!
-//! The current `PgTimeSeriesRepository::imbalance()` returns `delta_kwh = ZERO`
-//! because `contracted_kwh` is not stored in `edmd` — it lives in the LF's
-//! INVOIC/billing system.  The correct pattern is for the ERP to supply
-//! `contracted_kwh` when calling `compute_imbalance`, which `edmd` then computes.
+//! `contracted_kwh` is a parameter because the contracted quantity is a
+//! commercial figure held in the supplier's billing system, not a measured one.
+//! The caller supplies it alongside the measured total; this module owns the
+//! arithmetic and the sign convention.
 
 use rust_decimal::Decimal;
 
@@ -38,22 +46,22 @@ pub struct ImbalanceSaldo {
     pub actual_kwh: Decimal,
     /// Contracted / profile energy in kWh.
     pub contracted_kwh: Decimal,
-    /// Mehr-Menge: max(0, actual − contracted). LF owes NB.
+    /// Mehr-Menge: `max(0, contracted − actual)`. NB vergütet, so NB owes LF.
     pub mehr_kwh: Decimal,
-    /// Minder-Menge: max(0, contracted − actual). NB owes LF.
+    /// Minder-Menge: `max(0, actual − contracted)`. NB invoices, so LF owes NB.
     pub minder_kwh: Decimal,
-    /// Signed delta: actual − contracted (positive = Mehr, negative = Minder).
+    /// Signed delta: `actual − contracted`. Positive is a **Minder**menge.
     pub delta_kwh: Decimal,
 }
 
 impl ImbalanceSaldo {
-    /// `true` when there is a Mehrmengen position (LF owes NB).
+    /// `true` when there is a Mehrmengen position (NB owes LF, a credit).
     #[must_use]
     pub fn is_mehr(&self) -> bool {
         self.mehr_kwh > Decimal::ZERO
     }
 
-    /// `true` when there is a Mindermengen position (NB owes LF).
+    /// `true` when there is a Mindermengen position (LF owes NB, a charge).
     #[must_use]
     pub fn is_minder(&self) -> bool {
         self.minder_kwh > Decimal::ZERO
@@ -91,20 +99,22 @@ impl ImbalanceSaldo {
 /// use metering::compute_imbalance;
 /// use rust_decimal::Decimal;
 ///
-/// // LF delivered 1050 kWh against 1000 kWh contracted → Mehr-Menge 50 kWh
+/// // 1050 kWh measured against a 1000 kWh profile → Mindermenge 50 kWh,
+/// // which the network operator invoices.
 /// let saldo = compute_imbalance(
 ///     Decimal::from(1050u32),
 ///     Decimal::from(1000u32),
 /// );
-/// assert_eq!(saldo.mehr_kwh, Decimal::from(50u32));
-/// assert!(saldo.is_mehr());
-/// assert!(!saldo.is_minder());
+/// assert_eq!(saldo.minder_kwh, Decimal::from(50u32));
+/// assert!(saldo.is_minder());
+/// assert!(!saldo.is_mehr());
 /// ```
 #[must_use]
 pub fn compute_imbalance(actual_kwh: Decimal, contracted_kwh: Decimal) -> ImbalanceSaldo {
     let delta = actual_kwh - contracted_kwh;
-    let mehr = delta.max(Decimal::ZERO);
-    let minder = (-delta).max(Decimal::ZERO);
+    // Under-consumption is the Mehrmenge; over-consumption the Mindermenge.
+    let mehr = (-delta).max(Decimal::ZERO);
+    let minder = delta.max(Decimal::ZERO);
     ImbalanceSaldo {
         actual_kwh,
         contracted_kwh,
@@ -119,26 +129,28 @@ mod tests {
     use super::*;
     use rust_decimal_macros::dec;
 
+    /// Consuming above the profile is an ungewollte **Minder**menge: the NB
+    /// supplied the shortfall and invoices it.
     #[test]
-    fn mehr_menge_lf_owes_nb() {
-        // LF delivered more than contracted
+    fn over_consumption_is_a_mindermenge() {
         let s = compute_imbalance(dec!(1050), dec!(1000));
-        assert_eq!(s.mehr_kwh, dec!(50));
-        assert_eq!(s.minder_kwh, Decimal::ZERO);
+        assert_eq!(s.minder_kwh, dec!(50));
+        assert_eq!(s.mehr_kwh, Decimal::ZERO);
         assert_eq!(s.delta_kwh, dec!(50));
-        assert!(s.is_mehr());
-        assert!(!s.is_minder());
+        assert!(s.is_minder());
+        assert!(!s.is_mehr());
     }
 
+    /// Consuming below the profile is an ungewollte **Mehr**menge: the NB took
+    /// the surplus and reimburses it.
     #[test]
-    fn minder_menge_nb_owes_lf() {
-        // LF delivered less than contracted
+    fn under_consumption_is_a_mehrmenge() {
         let s = compute_imbalance(dec!(950), dec!(1000));
-        assert_eq!(s.mehr_kwh, Decimal::ZERO);
-        assert_eq!(s.minder_kwh, dec!(50));
+        assert_eq!(s.mehr_kwh, dec!(50));
+        assert_eq!(s.minder_kwh, Decimal::ZERO);
         assert_eq!(s.delta_kwh, dec!(-50));
-        assert!(!s.is_mehr());
-        assert!(s.is_minder());
+        assert!(s.is_mehr());
+        assert!(!s.is_minder());
     }
 
     #[test]

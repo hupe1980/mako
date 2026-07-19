@@ -33,6 +33,8 @@ fuzz_target!(|data: &[u8]| {
     let _ = code.is_electricity();
     let _ = code.is_gas();
     let _ = code.is_heat();
+    let _ = code.is_water();
+    let _ = code.is_heat_cost_allocator();
     let _ = code.is_import();
     let _ = code.is_export();
     let _ = code.is_einspeisung();

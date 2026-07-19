@@ -59,7 +59,7 @@
 //!     nne_grundpreis_months: None,
 //!     tariff_sheet_id: Some("Preisblatt-NNE-2025-Q1".into()),
 //!     sparte: grid_billing::Sparte::Strom,
-//!     ka_klasse: Some(grid_billing::KaKlasse::TarifkundeLow),
+//!     ka_klasse: Some(grid_billing::KaKundengruppe::Sondervertragskunde),
 //!     sect14a_modul3_intervals: vec![],
 //! }).expect("valid billing input");
 //!
@@ -99,7 +99,7 @@ pub use types::{
     // Core settlement output
     GridSettlement,
     InvoicePosition,
-    KaKlasse,
+    GemeindeGroesse, KaKundengruppe,
     LegalReference,
     MmmInput,
     MsbInput,

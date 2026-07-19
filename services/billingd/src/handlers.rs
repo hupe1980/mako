@@ -554,7 +554,7 @@ pub(crate) fn normalize_gasqualitaet(raw: &str) -> String {
 /// billing proceeds with the data available.  This prevents an edmd or marktd
 /// outage from blocking all gas invoicing.
 ///
-/// ## DVGW G 685 / §24 GasGVV compliance
+/// ## DVGW G 685 / §25 Nr. 4 MessEV compliance
 ///
 /// `brennwert_kwh_per_qm3` × `zustandszahl` converts m³ → kWh_Hs.  The
 /// energy-billing engine applies DVGW defaults when both are absent:

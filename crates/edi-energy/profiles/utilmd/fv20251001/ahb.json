@@ -2443,7 +2443,7 @@
     },
     {
       "code": 55168,
-      "name": "Anmeldung MSB mit RLMoT (MSBN -> NB)",
+      "name": "Verpflichtungsanfrage / Aufforderung (NB -> gMSB)",
       "segment_rules": [
         {
           "tag": "BGM",

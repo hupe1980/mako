@@ -10,7 +10,7 @@
 //! | Module | Contents |
 //! |---|---|
 //! | [`interval`] | `MeterInterval`, `Sparte`, `QualityFlag`, `demand_kw()` |
-//! | [`conversion`] | Gas m³ → kWh_Hs (§24 GasGVV / DVGW G 685) |
+//! | [`conversion`] | Gas m³ → kWh_Hs (§25 Nr. 4 MessEV / DVGW G 685) |
 //! | [`aggregation`] | Billing period: `arbeitsmenge_kwh`, `spitzenleistung_kw`, HT/NT |
 //! | [`classification`] | SLP/RLM/iMSys detection, interval length |
 //! | [`imbalance`] | Mehr-/Mindermengensaldo (§27 MessZV, compute_imbalance) |
@@ -78,6 +78,7 @@ pub mod quality;
 pub mod register;
 pub mod resample;
 pub mod resolution;
+pub mod sharing;
 pub mod smgw;
 pub mod substitute;
 pub mod tariff_window;
@@ -89,14 +90,17 @@ pub mod virtual_meter;
 pub use aggregation::{AggregationConfig, BillingPeriod, HtNtSplit, aggregate};
 pub use aggregation_rule::AggregationRule;
 pub use classification::{IntervalLengthClass, Messtyp, classify_messtyp, detect_interval_length};
-pub use conversion::{GasConversionParams, gas_m3_to_kwh_hs, normalize_interval_to_kwh};
+pub use conversion::{
+    GasConversionParams, WarmWaterAdjustments, gas_m3_to_kwh_hs, normalize_interval_to_kwh,
+    warm_water_heat_kwh, warm_water_heat_kwh_unmetered,
+};
 pub use demand::{DemandInterval, DemandWindow};
 pub use forecast::{
     AnnualForecast, ForecastMethod, SubstituteValueEntry, prior_period_substitutes,
     project_annual_consumption,
 };
 pub use imbalance::{ImbalanceSaldo, compute_imbalance};
-pub use interval::{MeterInterval, QualityFlag, Sparte};
+pub use interval::{MeasurementUnit, MeterInterval, QualityFlag, Sparte, UnitScale};
 pub use lifecycle::{
     MeterExchangeEvent, MeterLifecycleEvent, MeterLifecycleEventType, MeterStatus,
 };
@@ -108,8 +112,8 @@ pub use measurement_series::{
 pub use obis::{ObisCode, ObisParseError};
 pub use power_quality::PowerQualityInterval;
 pub use quality::{
-    QualityConfig, QualityGrade, QualityReport, hampel_filter, score_intervals,
-    score_intervals_f64, score_intervals_raw,
+    QualityConfig, QualityGrade, QualityReport, hampel_filter, hampel_filter_with_floor,
+    score_intervals, score_intervals_f64, score_intervals_raw,
 };
 pub use register::{EnergyDirection, MeterRegister, RegisterUnit};
 pub use resample::{ResampleConfig, ResampledBucket, resample};

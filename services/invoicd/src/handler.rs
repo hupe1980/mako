@@ -263,7 +263,7 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
                 .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
             let (y, m) = (billing_date.year(), billing_date.month() as u8);
 
-            // Strom MMM prices: sender IS the NB (ÜNB per §22 StromNZV).
+            // Strom MMM prices: sender IS the NB (VNB per GPKE (BK6-24-174) Teil 1 Kap. 8.4).
             let mmm_prices = state
                 .preisblatt_client
                 .get_mmm_strom(y, m, &sender_mp_id)

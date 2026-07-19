@@ -2,8 +2,8 @@
 
 **DVGW EDIFACT format parser for the German gas transport and balancing market**
 
-Implements parsing of DVGW-governed EDIFACT formats used in GaBi Gas 2.0
-(BNetzA BK7-14-020). The crate is the DVGW counterpart to `edi-energy`, which
+Implements parsing of DVGW-governed EDIFACT formats used in GaBi Gas 2.1
+(BNetzA BK7-24-01-008). The crate is the DVGW counterpart to `edi-energy`, which
 covers BDEW EDI@Energy (UTILMD, MSCONS, INVOIC, APERAK, …).
 
 ## Supported formats
@@ -156,7 +156,7 @@ on [edi-energy.de](http://www.edi-energy.de/).
 | Document | Scope |
 |---|---|
 | **GasNZV** | Statutory basis for gas network access and balancing (§ 20 Abs. 1b EnWG) |
-| **BNetzA BK7-14-020** | GaBi Gas 2.0 ruling — current production version |
+| **BNetzA BK7-24-01-008** | GaBi Gas 2.1 ruling — current production version |
 | **Kooperationsvereinbarung Gas** (KoV) | Industry agreement mandating DVGW EDIFACT formats |
 | **DVGW G 685** | Technical standard for gas metering and allocation calculations |
 

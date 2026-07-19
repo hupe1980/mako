@@ -15,7 +15,9 @@
 //! │ │ │ └──── D  measurement type (8 = forward, 9 = reverse, 0 = combined)
 //! │ │ └────── C  quantity (1 = active energy, 3 = reactive energy, 7 = gas volume)
 //! │ └──────── B  channel (0 = sum, otherwise sub-meter)
-//! └────────── A  medium (0 = abstract, 1 = electricity, 7 = gas, 8 = heat/water)
+//! └────────── A  medium, per the DLMS/COSEM Blue Book list that OMS Vol. 2
+//!               adopts: 0 = abstract, 1 = electricity, 4 = Heizkostenverteiler,
+//!               5 = cooling, 6 = heat, 7 = gas, 8 = cold water, 9 = hot water
 //! ```
 //!
 //! ## Commonly used codes in German MaKo
@@ -208,10 +210,39 @@ impl ObisCode {
         self.a == 7
     }
 
-    /// `true` when this code refers to heat/cold (medium A = 8).
+    /// `true` when this code refers to thermal energy — cooling (A = 5) or
+    /// heat (A = 6).
+    ///
+    /// Media are numbered per the DLMS/COSEM Blue Book value-group-A list, which
+    /// OMS Spec Vol. 2 adopts.
     #[must_use]
     pub fn is_heat(&self) -> bool {
-        self.a == 8
+        matches!(self.a, 5 | 6)
+    }
+
+    /// `true` when this code refers to water — cold (A = 8) or hot (A = 9).
+    #[must_use]
+    pub fn is_water(&self) -> bool {
+        matches!(self.a, 8 | 9)
+    }
+
+    /// `true` when this code refers to a Heizkostenverteiler (A = 4).
+    ///
+    /// HCAs report dimensionless *Verbrauchseinheiten*, not a physical quantity.
+    ///
+    /// They carry **no Eichfrist**, because they are not Messgeräte under
+    /// MessEG at all — "Heizkostenverteiler" appears nowhere in MessEV, neither
+    /// in Anlage 1 nor in the Eichfristen of Anlage 7. HeizkostenV §5 Abs. 1
+    /// admits them through an explicitly conditional clause — *"soweit nicht
+    /// eichrechtliche Bestimmungen zur Anwendung kommen"* — requiring instead
+    /// that an expert body confirm conformity with the anerkannte Regeln der
+    /// Technik (EN 834 for evaporation, EN 835 for electronic HCAs).
+    ///
+    /// So an Eichfrist check must **skip** these devices rather than treat a
+    /// missing date as an expiry.
+    #[must_use]
+    pub fn is_heat_cost_allocator(&self) -> bool {
+        self.a == 4
     }
 
     /// `true` when this code measures reactive energy (C = 3 or C = 4 in IEC 62056-21).
@@ -319,9 +350,13 @@ impl ObisCode {
         if self.a == 7 {
             return Some(IntervalResolution::Hour);
         }
-        // Heat / cold energy — usually hourly
-        if self.a == 8 {
+        // Thermal energy (cooling 5, heat 6) — usually hourly
+        if matches!(self.a, 5 | 6) {
             return Some(IntervalResolution::Hour);
+        }
+        // Water (cold 8, hot 9) — submetering is read daily at best
+        if matches!(self.a, 8 | 9) {
+            return Some(IntervalResolution::Day);
         }
         None
     }
@@ -477,5 +512,47 @@ mod tests {
             "1-0:2.8.0*255"
         );
         assert_eq!(ObisCode::GAS_VOLUME_M3.to_string(), "7-0:3.0.0*255");
+    }
+}
+
+#[cfg(test)]
+mod media_group_tests {
+    use super::*;
+
+    /// The value-group-A media list from the DLMS/COSEM Blue Book, which OMS
+    /// Spec Vol. 2 adopts.
+    #[test]
+    fn medium_group_a_follows_the_dlms_media_list() {
+        let hca: ObisCode = "4-0:1.0.0".parse().unwrap();
+        let cooling: ObisCode = "5-0:1.0.0".parse().unwrap();
+        let heat: ObisCode = "6-0:1.0.0".parse().unwrap();
+        let gas: ObisCode = "7-0:3.0.0".parse().unwrap();
+        let cold_water: ObisCode = "8-0:1.0.0".parse().unwrap();
+        let hot_water: ObisCode = "9-0:1.0.0".parse().unwrap();
+
+        assert!(hca.is_heat_cost_allocator());
+        assert!(
+            !hca.is_heat(),
+            "an HCA measures Verbrauchseinheiten, not kWh"
+        );
+
+        assert!(cooling.is_heat() && heat.is_heat());
+        assert!(gas.is_gas() && !gas.is_heat());
+
+        assert!(cold_water.is_water() && hot_water.is_water());
+        assert!(!cold_water.is_heat(), "A=8 is cold water");
+    }
+
+    /// Water submetering is read daily at best — never on a 15-minute grid.
+    #[test]
+    fn water_defaults_to_daily_resolution() {
+        use crate::resolution::IntervalResolution;
+        let cold_water: ObisCode = "8-0:1.0.0".parse().unwrap();
+        let heat: ObisCode = "6-0:1.0.0".parse().unwrap();
+        assert_eq!(
+            cold_water.default_resolution(),
+            Some(IntervalResolution::Day)
+        );
+        assert_eq!(heat.default_resolution(), Some(IntervalResolution::Hour));
     }
 }

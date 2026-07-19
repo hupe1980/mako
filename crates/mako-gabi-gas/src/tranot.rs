@@ -28,7 +28,7 @@
 //!
 //! - **DVGW G 685 / G 2000** — gas transport notification obligations
 //! - **Kooperationsvereinbarung Gas (KoV)** — capacity constraint reporting
-//! - **BNetzA GaBi Gas 2.0 (BK7-14-020)** — regulatory framework
+//! - **BNetzA GaBi Gas 2.1 (BK7-24-01-008)** — regulatory framework
 
 use mako_engine::{
     error::WorkflowError,

@@ -20,7 +20,8 @@
 //!
 //! - **BK6-22-024 Anlage 3 MaBiS**: defines Summenzeitreihe exchange protocol
 //! - **UTILTS AHB**: BDEW format specification for UTILTS S1.0 / S2.0
-//! - **§4 StromNZV**: legal mandate for balance group accounting
+//! - **MaBiS (Anlage 3 zur Festlegung BK6-24-174)**: Marktregeln für die
+//!   Durchführung der Bilanzkreisabrechnung Strom
 //!
 //! ## Architecture note
 //!

@@ -155,6 +155,7 @@ pub fn render_to_wire_bytes(
         "APERAK" => render_aperak(p, msg),
         "CONTRL" => render_contrl(p, msg),
         "ORDERS" => render_orders(p, msg, registry),
+        "ORDCHG" => render_ordchg(p, msg, registry),
         "ORDRSP" => render_ordrsp(p, msg, registry),
         "INVOIC" => render_invoic(p, msg, registry),
         "REMADV" => render_remadv(p, msg, registry),
@@ -472,6 +473,58 @@ fn render_orders(
     })?;
 
     let mut builder = builders::OrdersBuilder::new(release)
+        .sender(sender)
+        .receiver(msg.recipient.as_ref())
+        .message_ref(message_ref);
+
+    if let Some(pv) = pid {
+        builder = builder.document_id(pv.to_string());
+    }
+
+    builder
+        .serialize()
+        .map_err(|e| RenderError::BuilderError(e.to_string()))
+}
+
+// ── ORDCHG ────────────────────────────────────────────────────────────────────
+
+/// Render an ORDCHG (Purchase Order Change) from domain-intent JSON.
+///
+/// Used for Stornierung of a pending order — chiefly PID 39000 (Stornierung
+/// Sperr-/Entsperrauftrag, LF → NB) emitted by `gpke-sperrung-lf`, and PID 39002
+/// (Stornierung der Bestellung, ESA → MSB).
+///
+/// Payload keys: `pid` (u32, required for the document ID), `sender` (optional —
+/// falls back to the registry), `message_ref` (optional — falls back to the
+/// causation event ID). `receiver` is always `msg.recipient`.
+fn render_ordchg(
+    p: &serde_json::Value,
+    msg: &OutboxMessage,
+    registry: &MpIdRegistry,
+) -> Result<Vec<u8>, RenderError> {
+    let mt = "ORDCHG";
+
+    let pid = p.get("pid").and_then(|v| v.as_u64()).map(|n| n as u32);
+
+    let sender = p
+        .get("sender")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| registry.primary_gln());
+
+    let explicit_ref = p
+        .get("message_ref")
+        .and_then(|v| v.as_str())
+        .map(msg_ref_from_uuid);
+    let causation_ref = msg_ref_from_uuid(&msg.causation_event_id.to_string());
+    let message_ref = explicit_ref.as_deref().unwrap_or(causation_ref.as_str());
+
+    let release = active_release(MessageType::Ordchg, &ReleaseTrack::Short).ok_or_else(|| {
+        RenderError::NoActiveProfile {
+            message_type: mt.into(),
+        }
+    })?;
+
+    let mut builder = builders::OrdchgBuilder::new(release)
         .sender(sender)
         .receiver(msg.recipient.as_ref())
         .message_ref(message_ref);

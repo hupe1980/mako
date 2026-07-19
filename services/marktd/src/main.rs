@@ -28,9 +28,9 @@ use marktd::{
         correlation::{get_correlation, list_correlations},
         device::{
             delete_konfigurationsprodukt, get_geraet, get_geraet_konfigurationen,
-            get_konfigurationsprodukte, get_steuerbare_ressource, get_tariff_zone,
-            get_technische_ressource, get_zaehlwerke, get_zaehlzeitdefinitionen, list_geraete,
-            list_technische_ressourcen_by_malo, list_zaehler, list_zaehler_register,
+            get_konfigurationsprodukte, get_sharing_eligibility, get_steuerbare_ressource,
+            get_tariff_zone, get_technische_ressource, get_zaehlwerke, get_zaehlzeitdefinitionen,
+            list_geraete, list_technische_ressourcen_by_malo, list_zaehler, list_zaehler_register,
             list_zaehler_saisons, put_geraet, put_geraet_konfigurationen,
             put_konfigurationsprodukte, put_steuerbare_ressource, put_technische_ressource,
             put_zaehler, put_zaehler_register, put_zaehler_saison,
@@ -425,7 +425,7 @@ async fn main() -> anyhow::Result<()> {
                 "/api/v1/preisblaetter-messung/{msb_mp_id}",
                 get(get_preisblatt_messung).put(put_preisblatt_messung),
             )
-            // Konzessionsabgabe price sheets (B3 — §17 StromNZV)
+            // Konzessionsabgabe price sheets (B3 — KAV §2)
             .route(
                 "/api/v1/preisblaetter-ka/{nb_mp_id}",
                 get(get_preisblatt_ka).put(put_preisblatt_ka),
@@ -436,7 +436,7 @@ async fn main() -> anyhow::Result<()> {
                 "/api/v1/mmma-preise/gas/{year}/{month}",
                 get(mmma_preise::get_mmma_gas).put(mmma_preise::put_mmma_gas),
             )
-            // MMM Strom settlement prices (C18 — ÜNB per §22 StromNZV, monthly)
+            // MMM Strom settlement prices (C18 — VNB per GPKE (BK6-24-174) Teil 1 Kap. 8.4, monthly)
             .route(
                 "/api/v1/mmm-preise/strom/{year}/{month}",
                 get(mmma_preise::get_mmm_strom).put(mmma_preise::put_mmm_strom),
@@ -570,6 +570,10 @@ async fn main() -> anyhow::Result<()> {
             .route("/api/v1/melos/{id}/lokationen", get(get_melo_lokationen))
             // Device registry: Zähler + Geräte (B3 — WiM MSB/NB device handover)
             .route("/api/v1/melos/{melo_id}/zaehler", get(list_zaehler))
+            .route(
+                "/api/v1/melos/{melo_id}/sharing-eligibility",
+                get(get_sharing_eligibility),
+            )
             .route(
                 "/api/v1/zaehler/{zaehler_id}",
                 axum::routing::put(put_zaehler),

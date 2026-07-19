@@ -8,7 +8,9 @@
 //!
 //! ## Legal sources
 //! - **MessZV**: Messzugangsverordnung (§§2–27)
-//! - **GasGVV**: Gasgrundversorgungsverordnung §24 (Abrechnungsbrennwert)
+//! - **MessEG/MessEV**: §33 MessEG + §25 Nr. 4/Nr. 7 MessEV — the exceptions
+//!   that make a *derived* kWh lawful (Brennwert × Zustandszahl). Not GasGVV:
+//!   that ordinance has no §24 and never mentions Brennwert.
 //! - **DVGW G 685**: Gasabrechnung §10 (Zustandszahl)
 //! - **DVGW G 260**: Gasbeschaffenheit (Brennwertbereiche H-Gas / L-Gas)
 //! - **GPKE BK6-22-024**: §3 MMM billing (arbeitsmenge + spitzenleistung)
@@ -114,10 +116,10 @@ fn non_billable_intervals_excluded_from_spitzenleistung() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §24 GasGVV + DVGW G 685 — Gas m³ → kWh_Hs conversion
+// §25 Nr. 4 MessEV + DVGW G 685 — Gas m³ → kWh_Hs conversion
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §24 GasGVV / DVGW G 685 §10: kWh_Hs = m³ × Hs × Zustandszahl.
+/// §25 Nr. 4 MessEV / DVGW G 685 §10: kWh_Hs = m³ × Hs × Zustandszahl.
 /// Typical German Erdgas H: Hs ≈ 10.55 kWh/m³, Z ≈ 0.9764.
 #[test]
 fn gas_h_gas_conversion_typical_values() {
@@ -231,30 +233,33 @@ fn only_imsys_supports_dynamic_tariff() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §27 MessZV — Mehr-/Mindermengensaldo
+// GPKE (BK6-24-174) Teil 1 Kap. 8.4 — Jahresmehr- und Jahresmindermengen
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §27 MessZV: LF delivered more than contracted → Mehr-Menge (LF owes NB).
+/// Consumption above the profile is an ungewollte **Minder**menge: the network
+/// operator supplied the shortfall and invoices it.
 #[test]
-fn mehr_menge_lf_owes_nb() {
+fn over_consumption_is_a_mindermenge_charge() {
     let saldo = compute_imbalance(dec!(1050), dec!(1000));
+    assert_eq!(saldo.minder_kwh, dec!(50));
+    assert_eq!(saldo.mehr_kwh, Decimal::ZERO);
+    assert!(saldo.is_minder());
+    assert!(!saldo.is_mehr());
+}
+
+/// Consumption below the profile is an ungewollte **Mehr**menge: the network
+/// operator absorbed the surplus and reimburses it — "so vergütet der
+/// Netzbetreiber dem Lieferanten [...] diese Differenzmenge".
+#[test]
+fn under_consumption_is_a_mehrmenge_credit() {
+    let saldo = compute_imbalance(dec!(950), dec!(1000));
     assert_eq!(saldo.mehr_kwh, dec!(50));
     assert_eq!(saldo.minder_kwh, Decimal::ZERO);
     assert!(saldo.is_mehr());
     assert!(!saldo.is_minder());
 }
 
-/// §27 MessZV: LF delivered less than contracted → Minder-Menge (NB owes LF).
-#[test]
-fn minder_menge_nb_owes_lf() {
-    let saldo = compute_imbalance(dec!(950), dec!(1000));
-    assert_eq!(saldo.mehr_kwh, Decimal::ZERO);
-    assert_eq!(saldo.minder_kwh, dec!(50));
-    assert!(!saldo.is_mehr());
-    assert!(saldo.is_minder());
-}
-
-/// §27 MessZV: balanced period.
+/// Balanced period.
 #[test]
 fn balanced_period_no_imbalance() {
     let saldo = compute_imbalance(dec!(1000), dec!(1000));

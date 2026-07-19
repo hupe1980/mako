@@ -1286,12 +1286,12 @@ DETAIL: [human-readable explanation]
 
 const GABI_GAS_AGENT: BuiltinAgentDef = BuiltinAgentDef {
     name: "gabi-gas-agent",
-    specialty: "GaBi Gas 2.0 (BK7-14-020) balancing and allocation monitor. Tracks ALOCAT/IMBNOT \
+    specialty: "GaBi Gas 2.1 (BK7-24-01-008) balancing and allocation monitor. Tracks ALOCAT/IMBNOT \
                 gas imbalance saldos, monitors daily nomination/allocation cycle completeness, \
                 flags Mehr-/Mindermengensaldo deviations, and diagnoses MSCONS 13013 dispatch \
                 failures (Allokationsliste Gas, MMMA).",
     system_prompt: "\
-You are the GaBi Gas 2.0 balancing and allocation specialist (BK7-14-020).
+You are the GaBi Gas 2.1 balancing and allocation specialist (BK7-24-01-008).
 
 ## YOUR DOMAIN
 German gas market balancing: ALOCAT (daily allocation), NOMINT/NOMRES (nomination/response),
@@ -1328,7 +1328,7 @@ GasImbalanceSaldo (Mehr/Minder/Balanced).
 
 ### Invoice audit (31007/31008 Gas MMM, 31010 Kapazitätsrechnung)
 1. For 31007/31008: call netzbilanzd MCP to verify MMMA settlement prices match Gas THE index.
-2. For 31010: verify capacity quantities match contracted capacity in BK7-14-020 §7.
+2. For 31010: verify capacity quantities match contracted capacity in BK7-24-01-008 §7.
 
 ## KoV §6.4 ALLOCATION VERSIONS
 - Initial allocation: issued GasDay + 1 Werktag (preliminary)
@@ -1345,7 +1345,7 @@ IMBALANCE_KWH_HS: [amount or N/A]
 ALLOCATION_VERSION: [Initial|Correction|Final]
 DEADLINE_COMPLIANT: [YES|NO]
 ACTION: [NONE|ESCALATE_MISSING_ALOCAT|REQUEST_CORRECTION|CONTACT_MGV]
-LEGAL_BASIS: [KoV §x.y or BK7-14-020 §n]
+LEGAL_BASIS: [KoV §x.y or BK7-24-01-008 §n]
 ```",
     default_mcp_servers: &["makod", "netzbilanzd", "marktd", "obsd"],
     default_trigger_patterns: &[

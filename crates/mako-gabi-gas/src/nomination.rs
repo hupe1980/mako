@@ -1,8 +1,8 @@
 //! GaBi Gas Nomination workflow — NOMINT / NOMRES (BKV ↔ FNB / MGV).
 //!
 //! Implements the gas nomination and confirmation cycle governed by the
-//! Kooperationsvereinbarung Gas (KoV) and the BNetzA GaBi Gas 2.0 framework
-//! (BK7-14-020).
+//! Kooperationsvereinbarung Gas (KoV) and the BNetzA GaBi Gas 2.1 framework
+//! (BK7-24-01-008).
 //!
 //! # Process overview
 //!
@@ -41,7 +41,7 @@
 //! # Regulatory basis
 //!
 //! - **Kooperationsvereinbarung Gas (KoV)** — nomination deadlines, curtailment rules
-//! - **BNetzA BK7-14-020** — GaBi Gas 2.0 ruling
+//! - **BNetzA BK7-24-01-008** — GaBi Gas 2.1 ruling
 //! - **DVGW NOMINT 4.6 FK** / **NOMRES 4.7 FK** — message format (valid from 2026-02-01)
 
 use mako_engine::{

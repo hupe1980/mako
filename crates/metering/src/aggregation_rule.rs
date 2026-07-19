@@ -39,9 +39,9 @@
 //!
 //! ## Relationship to other modules
 //!
-//! - Rules are configured and stored in `marktd` / `edmd` `virtual_meter_configs`
-//! - `edmd` evaluates rules when computing aggregated Lastgang for a virtual MaLo
-//! - The `metering::aggregation` module performs kWh arithmetic on individual intervals
+//! - A rule is persisted configuration; this module only defines and evaluates it
+//! - Evaluation produces the aggregated Lastgang for a virtual MaLo
+//! - [`crate::aggregation`] performs the kWh arithmetic on individual intervals
 //!
 //! ## Regulatory basis
 //!
@@ -188,7 +188,7 @@ pub enum AggregationRule {
 impl AggregationRule {
     /// All source MaLo / MeLo IDs referenced by this rule.
     ///
-    /// Used to enumerate which underlying series must be queried from `edmd`
+    /// Used to enumerate which underlying series must be fetched
     /// before computing the virtual meter value.
     #[must_use]
     pub fn source_malo_ids(&self) -> Vec<&str> {

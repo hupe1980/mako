@@ -747,7 +747,7 @@ pub struct PreisblattKaResponse {
 /// `GET /api/v1/preisblaetter-ka/{nb_mp_id}?date=YYYY-MM-DD&sparte=STROM&kundengruppe=Tarifkunden`
 ///
 /// Returns the `PreisblattKonzessionsabgabe` for the NB valid on `date`.
-/// Used by `netzbilanzd` for KA positions in INVOIC 31001/31002 (§17 StromNZV).
+/// Used by `netzbilanzd` for KA positions in INVOIC 31001/31002 (KAV §2).
 pub async fn get_preisblatt_ka(
     Extension(repo): Extension<PreisblattKaRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

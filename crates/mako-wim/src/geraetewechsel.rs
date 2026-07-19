@@ -55,14 +55,117 @@ pub const WORKFLOW_NAME: &str = "wim-device-change";
 /// ```
 pub const APERAK_WINDOW_LABEL: &str = "wim-aperak-5-werktage";
 
+/// Prüfidentifikatoren that carry a WiM MSB-Wechsel UTILMD.
+///
+/// Directions are per *Anwendungsübersicht der Prüfidentifikatoren* 4.0 and the
+/// BK6-24-174 WiM Teil 1 Lesefassung. Note that they are **not** uniformly
+/// "MSB → NB" — 55039 never reaches the NB at all, and 55168 addresses the gMSB:
+///
+/// | PID   | Process                            | Von  | An   | Kap.  |
+/// |-------|------------------------------------|------|------|-------|
+/// | 55039 | Kündigung MSB                      | MSBN | MSBA | 2.2   |
+/// | 55042 | Anmeldung MSB                      | MSBN | NB   | 2.3   |
+/// | 55051 | Ende MSB (Abmeldung)               | MSBA | NB   | 2.4   |
+/// | 55168 | Verpflichtungsanfrage / Aufforderung | NB | gMSB | 2.4   |
+///
+/// The Kündigung (55039) runs on the **contract layer** between the two MSB and
+/// is explicitly *non-constitutive*: BK6-24-174 Kap. 2.1.3 states that a switch
+/// is effected solely by the successful Anmeldung MSBN → NB. Never gate 55042 on
+/// a 55040 Bestätigung — they are independent channels.
+///
+/// Used both to validate inbound UTILMD and to constrain the outbound
+/// [`DeviceChangeCommand::InitiateDeviceChange`] order.
+pub const DEVICE_CHANGE_PIDS: &[u32] = &[55_039, 55_042, 55_051, 55_168];
+
+/// Antwortfrist in Werktagen for the counterparty's business response.
+///
+/// **These differ per process** — a single flat window would fire early for the
+/// Kündigung and late for the Abmeldung. From BK6-24-174 WiM Teil 1
+/// ("Unverzüglich, jedoch spätester ÜT ist der *n*. WT nach dem ÜT von Nr. 1"):
+///
+/// | Request | Antwort | Frist | Fundstelle |
+/// |---------|---------|-------|------------|
+/// | 55039   | 55040/55041 | **3 WT** | Kap. 2.2.2 Nr. 2 |
+/// | 55042   | 55043/55044 | **5 WT** | Kap. 2.3.2 Nr. 2 |
+/// | 55051   | 55052/55053 | **7 WT** | Kap. 2.4.2 Nr. 2 |
+/// | 55168   | 55169/55170 | **1 WT** | Kap. 2.4.2 Nr. 4 |
+///
+/// Distinct from the APERAK window, which is **45 minutes** for UTILMD in Strom
+/// (APERAK AHB §2.4.1) — see [`APERAK_WINDOW_LABEL`].
+///
+/// Returns `None` when `request_pid` is not a WiM MSB-Wechsel request.
+#[must_use]
+pub const fn antwort_frist_werktage(request_pid: u32) -> Option<u32> {
+    match request_pid {
+        55_039 => Some(3),
+        55_042 => Some(5),
+        55_051 => Some(7),
+        55_168 => Some(1),
+        _ => None,
+    }
+}
+
+/// Deadline label for the 5-Werktage counterparty response window on an
+/// **outbound** MSB-Wechsel order (WiM BK6-24-174).
+///
+/// Registered by the caller alongside [`DeviceChangeCommand::InitiateDeviceChange`].
+/// Distinct from [`APERAK_WINDOW_LABEL`], which tracks *our* obligation to
+/// acknowledge an inbound message; this one tracks *their* obligation to answer ours.
+pub const AUFTRAG_ANTWORT_WINDOW_LABEL: &str = "wim-device-change-antwort-5-werktage";
+
+/// Response Prüfidentifikatoren for the WiM MSB-Wechsel, as
+/// `(antwort_pid, request_pid, is_confirmed)`.
+///
+/// | Request | Bestätigung | Ablehnung |
+/// |---------|-------------|-----------|
+/// | 55039   | 55040       | 55041     |
+/// | 55042   | 55043       | 55044     |
+/// | 55051   | 55052       | 55053     |
+/// | 55168   | 55169       | 55170     |
+///
+/// These close an order opened with [`DeviceChangeCommand::InitiateDeviceChange`].
+///
+/// The UTILMD AHB Strom **does** define all twelve as full Anwendungsfälle —
+/// Kap. 10.1 (Kündigung), 10.2 (Anmeldung), 10.3 (Verpflichtungsanfrage),
+/// 10.4 (Beendigung), each as one table with a column per Prüfidentifikator.
+/// The response PIDs additionally carry `SG4 STS+E01` (Status der Antwort) and
+/// resolve their Ablehnungsgründe through EBD codes (55040→`E_0200`,
+/// 55043/55044→`E_0201`, 55052/55053→`E_0202`, 55169/55170→`E_0240`).
+///
+/// **However**, `crates/edi-energy/src/generated/` currently emits rule packs for
+/// the four *request* PIDs only, so `validate()` on an inbound response yields
+/// `ProfileNotFound`. The adapter therefore treats a missing profile as
+/// "not validated" rather than "invalid", and the Bestätigung/Ablehnung decision
+/// rides on the PID. Regenerating the profiles from AHB Kap. 10 would let these
+/// be schema-validated too — tracked as a codegen follow-up, not a spec limit.
+pub const DEVICE_CHANGE_ANTWORT_PIDS: &[(u32, u32, bool)] = &[
+    (55_040, 55_039, true),
+    (55_041, 55_039, false),
+    (55_043, 55_042, true),
+    (55_044, 55_042, false),
+    (55_052, 55_051, true),
+    (55_053, 55_051, false),
+    (55_169, 55_168, true),
+    (55_170, 55_168, false),
+];
+
+/// Resolve a response PID to `(request_pid, is_confirmed)`.
+///
+/// Returns `None` when `pid` is not a WiM MSB-Wechsel response.
+#[must_use]
+pub fn antwort_pid_meaning(pid: u32) -> Option<(u32, bool)> {
+    DEVICE_CHANGE_ANTWORT_PIDS
+        .iter()
+        .find(|(antwort, _, _)| *antwort == pid)
+        .map(|(_, request, confirmed)| (*request, *confirmed))
+}
+
 /// WiM Strom IFTSTA Prüfidentifikatoren (PIDs 21007, 21009–21015, 21018, 21029–21032).
 ///
 /// These status messages are part of the WiM MSB-Wechsel (WiM Strom Teil 1)
 /// process. All are routed to `"wim-device-change"` for correlation.
 ///
-/// Per IFTSTA AHB, these PIDs are "WiM / Statusmeldung MSB-Wechsel nach MsbG"
-/// (not WiM Gas). The previously documented "WiM Gas" attribution was incorrect;
-/// the AHB profile data is authoritative.
+/// Per IFTSTA AHB these PIDs are "WiM / Statusmeldung MSB-Wechsel nach MsbG".
 ///
 /// | PID   | Beschreibung | Richtung |
 /// |-------|---|---|
@@ -149,11 +252,48 @@ pub enum DeviceChangeEvent {
         /// EDIFACT message reference.
         message_ref: MessageRef,
     },
+    /// An **outbound** MSB-Wechsel order was dispatched by this party.
+    ///
+    /// Distinct from [`Self::Initiated`], which records an inbound UTILMD we
+    /// *received*. Conflating the two would make the event log claim we were
+    /// sent a message we in fact sent — the audit trail must record direction.
+    AuftragGesendet {
+        /// Messlokation the order applies to.
+        melo_id: MeLo,
+        /// GLN of this party (the order sender).
+        sender: MarktpartnerCode,
+        /// GLN of the counterparty (NB or nMSB, depending on PID).
+        receiver: MarktpartnerCode,
+        /// Requested execution date (YYYYMMDD, German local time).
+        process_date: String,
+        /// EDIFACT message reference of the outbound UTILMD.
+        message_ref: MessageRef,
+        /// Prüfidentifikator (55039, 55042, 55051, or 55168).
+        pruefidentifikator: Pruefidentifikator,
+    },
+    /// The counterparty answered our outbound order (Bestätigung or Ablehnung).
+    ///
+    /// Closes the loop opened by [`Self::AuftragGesendet`] and absorbs the
+    /// 5-Werktage response deadline.
+    AntwortEmpfangen {
+        /// Response Prüfidentifikator — see [`DEVICE_CHANGE_ANTWORT_PIDS`].
+        pruefidentifikator: Pruefidentifikator,
+        /// GLN of the answering counterparty.
+        sender: MarktpartnerCode,
+        /// EDIFACT message reference of the inbound response.
+        message_ref: MessageRef,
+        /// `true` for a Bestätigung, `false` for an Ablehnung.
+        is_confirmed: bool,
+        /// Rejection reason, when the counterparty supplied one.
+        reason: Option<String>,
+    },
 }
 
 impl EventPayload for DeviceChangeEvent {
     fn event_type(&self) -> &'static str {
         match self {
+            Self::AuftragGesendet { .. } => "WimDeviceChangeAuftragGesendet",
+            Self::AntwortEmpfangen { .. } => "WimDeviceChangeAntwortEmpfangen",
             Self::Initiated { .. } => "WimDeviceChangeInitiated",
             Self::ValidationPassed { .. } => "WimDeviceChangeValidationPassed",
             Self::AperakDispatched { .. } => "WimDeviceChangeAperakDispatched",
@@ -214,6 +354,10 @@ pub enum DeviceChangeState {
     /// No events yet; stream exists but process has not started.
     #[default]
     New,
+    /// Outbound MSB-Wechsel order dispatched; awaiting the counterparty's answer.
+    AuftragGesendet(DeviceChangeData),
+    /// Counterparty confirmed our outbound order; awaiting the physical device swap.
+    AuftragBestaetigt(DeviceChangeData),
     /// UTILMD received and `Initiated` event applied.
     Initiated(DeviceChangeData),
     /// EDIFACT validation passed; APERAK not yet dispatched.
@@ -235,6 +379,8 @@ impl DeviceChangeState {
     pub fn status_str(&self) -> &'static str {
         match self {
             Self::New => "New",
+            Self::AuftragGesendet(_) => "AuftragGesendet",
+            Self::AuftragBestaetigt(_) => "AuftragBestaetigt",
             Self::Initiated(_) => "Initiated",
             Self::ValidationPassed(_) => "ValidationPassed",
             Self::AperakSent(_) => "AperakSent",
@@ -254,6 +400,47 @@ impl DeviceChangeState {
 /// example.
 #[derive(Clone)]
 pub enum DeviceChangeCommand {
+    /// ERP instructs this party to **send** a WiM MSB-Wechsel order.
+    ///
+    /// Emits [`DeviceChangeEvent::AuftragGesendet`] plus a `UTILMD` outbox entry.
+    /// The caller registers the counterparty-response deadline
+    /// ([`AUFTRAG_ANTWORT_WINDOW_LABEL`]) alongside it, sized per process via
+    /// [`antwort_frist_werktage`] — 3 / 5 / 7 / 1 WT, **not** one flat window.
+    ///
+    /// Direction is per-PID and not a uniform "MSB → NB" split — see
+    /// [`DEVICE_CHANGE_PIDS`] for the table. In particular 55039 never reaches
+    /// the NB (MSBN → MSBA) and 55168 addresses the gMSB.
+    ///
+    /// The command itself is role-agnostic; `makod`'s command API enforces which
+    /// Marktrolle may issue which PID.
+    InitiateDeviceChange {
+        /// Prüfidentifikator; must be one of [`DEVICE_CHANGE_PIDS`].
+        pid: Pruefidentifikator,
+        /// GLN of this party (order sender).
+        sender: MarktpartnerCode,
+        /// GLN of the counterparty (order receiver).
+        receiver: MarktpartnerCode,
+        /// Messlokation the order applies to.
+        melo_id: MeLo,
+        /// Requested execution date (YYYYMMDD, German local time).
+        process_date: String,
+        /// EDIFACT message reference of the outbound UTILMD.
+        message_ref: MessageRef,
+    },
+    /// Inbound Bestätigung / Ablehnung answering our outbound order.
+    ///
+    /// Emits [`DeviceChangeEvent::AntwortEmpfangen`] and closes the
+    /// [`AUFTRAG_ANTWORT_WINDOW_LABEL`] deadline by leaving `AuftragGesendet`.
+    ReceiveAntwort {
+        /// Response Prüfidentifikator — see [`DEVICE_CHANGE_ANTWORT_PIDS`].
+        pid: Pruefidentifikator,
+        /// GLN of the answering counterparty.
+        sender: MarktpartnerCode,
+        /// EDIFACT message reference of the inbound response.
+        message_ref: MessageRef,
+        /// Rejection reason, when the counterparty supplied one.
+        reason: Option<String>,
+    },
     /// Inbound UTILMD accepted from the AS4 layer. Domain fields extracted and
     /// validation performed by the caller before constructing this command.
     ReceiveUtilmd {
@@ -390,12 +577,56 @@ impl Workflow for WimDeviceChangeWorkflow {
                 deadline_id: deadline.deadline_id(),
                 label: deadline.label().into(),
             }),
+            // Counterparty missed the 5-Werktage answer window on our outbound order.
+            (AUFTRAG_ANTWORT_WINDOW_LABEL, DeviceChangeState::AuftragGesendet(_)) => {
+                Some(DeviceChangeCommand::TimeoutExpired {
+                    deadline_id: deadline.deadline_id(),
+                    label: deadline.label().into(),
+                })
+            }
             _ => None,
         }
     }
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         match event {
+            DeviceChangeEvent::AuftragGesendet {
+                melo_id,
+                sender,
+                receiver,
+                process_date,
+                message_ref,
+                pruefidentifikator,
+            } => DeviceChangeState::AuftragGesendet(DeviceChangeData {
+                melo_id: melo_id.clone(),
+                // On an outbound order this party is the sender; `incoming_msb`
+                // and `grid_operator` are populated by PID direction so the
+                // projection stays meaningful either way.
+                incoming_msb: sender.clone(),
+                grid_operator: receiver.clone(),
+                device_id: DeviceId::new(""),
+                document_date: process_date.clone(),
+                pruefidentifikator: *pruefidentifikator,
+                message_ref: Some(message_ref.clone()),
+            }),
+            DeviceChangeEvent::AntwortEmpfangen {
+                is_confirmed,
+                reason,
+                ..
+            } => match state {
+                DeviceChangeState::AuftragGesendet(data) => {
+                    if *is_confirmed {
+                        DeviceChangeState::AuftragBestaetigt(data)
+                    } else {
+                        DeviceChangeState::Rejected {
+                            reason: reason
+                                .clone()
+                                .unwrap_or_else(|| "Auftrag vom Marktpartner abgelehnt".to_owned()),
+                        }
+                    }
+                }
+                other => other,
+            },
             DeviceChangeEvent::Initiated {
                 melo_id,
                 incoming_msb,
@@ -432,14 +663,14 @@ impl Workflow for WimDeviceChangeWorkflow {
                 }
                 _ => state,
             },
-            DeviceChangeEvent::Completed { device_id } => {
-                if let DeviceChangeState::AperakSent(mut data) = state {
+            DeviceChangeEvent::Completed { device_id } => match state {
+                DeviceChangeState::AperakSent(mut data)
+                | DeviceChangeState::AuftragBestaetigt(mut data) => {
                     data.device_id = device_id.clone();
                     DeviceChangeState::Completed(data)
-                } else {
-                    state
                 }
-            }
+                other => other,
+            },
             DeviceChangeEvent::Rejected { reason } => DeviceChangeState::Rejected {
                 reason: reason.clone(),
             },
@@ -460,6 +691,93 @@ impl Workflow for WimDeviceChangeWorkflow {
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
         match command {
+            DeviceChangeCommand::InitiateDeviceChange {
+                pid,
+                sender,
+                receiver,
+                melo_id,
+                process_date,
+                message_ref,
+            } => {
+                if !matches!(state, DeviceChangeState::New) {
+                    return Err(WorkflowError::invalid_state("New", state.status_str()));
+                }
+                if !DEVICE_CHANGE_PIDS.contains(&pid.as_u32()) {
+                    return Err(WorkflowError::rejected(format!(
+                        "expected a WiM MSB-Wechsel PID (55039, 55042, 55051, 55168), got {pid}",
+                    )));
+                }
+
+                // Key set required by `edifact_renderer::render_utilmd` for a WiM
+                // UTILMD: pid, sender, receiver, melo, process_date.
+                let outbox = PendingOutbox::new(
+                    "UTILMD",
+                    receiver.as_str(),
+                    serde_json::json!({
+                        "direction":    "outbound",
+                        "pid":          pid.as_u32(),
+                        "sender":       sender.as_str(),
+                        "receiver":     receiver.as_str(),
+                        "melo":         melo_id.as_str(),
+                        "process_date": process_date,
+                        "message_ref":  message_ref.as_str(),
+                    }),
+                )
+                .caused_by(0);
+
+                let event = DeviceChangeEvent::AuftragGesendet {
+                    melo_id,
+                    sender,
+                    receiver,
+                    process_date,
+                    message_ref,
+                    pruefidentifikator: pid,
+                };
+                Ok(WorkflowOutput::with_outbox(vec![event], vec![outbox]))
+            }
+
+            DeviceChangeCommand::ReceiveAntwort {
+                pid,
+                sender,
+                message_ref,
+                reason,
+            } => {
+                let DeviceChangeState::AuftragGesendet(data) = state else {
+                    return Err(WorkflowError::invalid_state(
+                        "AuftragGesendet",
+                        state.status_str(),
+                    ));
+                };
+
+                let Some((request_pid, is_confirmed)) = antwort_pid_meaning(pid.as_u32()) else {
+                    return Err(WorkflowError::rejected(format!(
+                        "PID {pid} is not a WiM MSB-Wechsel Antwort (expected one of \
+                         55040, 55041, 55043, 55044, 55052, 55053, 55169, 55170)",
+                    )));
+                };
+
+                // The answer must belong to the order we actually sent. Without this
+                // check a 55043 (Anmeldung confirmed) could silently close a 55039
+                // (Kündigung) order and the audit trail would claim the wrong process
+                // completed.
+                if request_pid != data.pruefidentifikator.as_u32() {
+                    return Err(WorkflowError::rejected(format!(
+                        "Antwort PID {pid} answers request {request_pid}, but this process \
+                         sent {}",
+                        data.pruefidentifikator,
+                    )));
+                }
+
+                Ok(vec![DeviceChangeEvent::AntwortEmpfangen {
+                    pruefidentifikator: pid,
+                    sender,
+                    message_ref,
+                    is_confirmed,
+                    reason,
+                }]
+                .into())
+            }
+
             DeviceChangeCommand::ReceiveRestOrder {
                 tx_id,
                 sender_mp_id,
@@ -644,9 +962,15 @@ impl Workflow for WimDeviceChangeWorkflow {
             }
 
             DeviceChangeCommand::Complete { device_id } => {
-                if !matches!(state, DeviceChangeState::AperakSent(_)) {
+                // Reachable from both directions: `AperakSent` closes an inbound
+                // order we acknowledged, `AuftragBestaetigt` closes an outbound
+                // order the counterparty confirmed.
+                if !matches!(
+                    state,
+                    DeviceChangeState::AperakSent(_) | DeviceChangeState::AuftragBestaetigt(_)
+                ) {
                     return Err(WorkflowError::invalid_state(
-                        "AperakSent",
+                        "AperakSent or AuftragBestaetigt",
                         state.status_str(),
                     ));
                 }
@@ -814,6 +1138,24 @@ impl Projection for DeviceChangeProjection {
         }
 
         match event {
+            DeviceChangeEvent::AuftragGesendet {
+                melo_id,
+                sender,
+                receiver,
+                pruefidentifikator,
+                ..
+            } => {
+                let count = record.event_count();
+                *record = DeviceChangeRecord::Active {
+                    status: "AuftragGesendet",
+                    melo_id,
+                    incoming_msb: sender,
+                    grid_operator: receiver,
+                    device_id: DeviceId::new(""),
+                    pruefidentifikator,
+                    event_count: count,
+                };
+            }
             DeviceChangeEvent::Initiated {
                 melo_id,
                 incoming_msb,
@@ -836,6 +1178,15 @@ impl Projection for DeviceChangeProjection {
             DeviceChangeEvent::ValidationPassed { .. } => {
                 if let DeviceChangeRecord::Active { status, .. } = record {
                     *status = "ValidationPassed";
+                }
+            }
+            DeviceChangeEvent::AntwortEmpfangen { is_confirmed, .. } => {
+                if let DeviceChangeRecord::Active { status, .. } = record {
+                    *status = if is_confirmed {
+                        "AuftragBestaetigt"
+                    } else {
+                        "Rejected"
+                    };
                 }
             }
             DeviceChangeEvent::AperakDispatched { positive, .. } => {

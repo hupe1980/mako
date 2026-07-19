@@ -519,6 +519,19 @@ impl EdifactIngestDispatcher {
                     )
                     .await
                 }
+                // Antwort PIDs (55040/55041, 55043/55044, 55052/55053, 55169/55170)
+                // close an order **we** sent — resume, never spawn. An answer with
+                // no open order is Skipped rather than creating an orphan stream.
+                55040 | 55041 | 55043 | 55044 | 55052 | 55053 | 55169 | 55170 => {
+                    let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_utilmd(msg);
+                    self.resume_by_malo::<WimDeviceChangeWorkflow>(
+                        &melo_id,
+                        "wim-device-change",
+                        cmd,
+                    )
+                    .await
+                }
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: "wim-device-change",
                     reason: "pid_not_in_dispatch_table",
@@ -1082,8 +1095,8 @@ impl EdifactIngestDispatcher {
             // PID 33001 (REMADV): payment confirmation from payer — resume.
             // PID 29001 (COMDIS): payment rejection by invoicer — resume.
             //
-            // Regulatory basis: BK7-14-020 (GaBi Gas 2.0).
-            // Settlement window: no statutory deadline in BK7-14-020;
+            // Regulatory basis: BK7-24-01-008 (GaBi Gas 2.1).
+            // Settlement window: no statutory deadline in BK7-24-01-008;
             // 10 Werktage applied by analogy with Gas process norms.
             "gabi-gas-invoic" => match pid {
                 31010 | 31007 | 31008 => {
@@ -1472,7 +1485,7 @@ impl EdifactIngestDispatcher {
             }
 
             // ── GaBi Gas Nomination (PIDs 90011, 90012, 90021, 90022) ─────────
-            // Regulatory basis: Kooperationsvereinbarung Gas (KoV), BK7-14-020.
+            // Regulatory basis: Kooperationsvereinbarung Gas (KoV), BK7-24-01-008.
             // Nomination response (NOMRES) is required by D-1 15:00 CET (≈ 2 h after
             // the D-1 13:00 nomination deadline). The 10-Werktage value here is a
             // conservative outer bound for the engine deadline store; the actual
@@ -1505,7 +1518,7 @@ impl EdifactIngestDispatcher {
 
             // ── GaBi Gas Allocation (PIDs 90001, 90002, 90003) ────────────────
             // Regulatory basis: DVGW ALOCAT (allocation list) — no statutory
-            // response deadline in BK7-14-020; ALOCAT is a one-way push from MMMA
+            // response deadline in BK7-24-01-008; ALOCAT is a one-way push from MMMA
             // to participants. spawn_deadline = None.
             "gabi-gas-allocation" => {
                 if mako_gabi_gas::allocation::ALLOCATION_PIDS.contains(&pid) {

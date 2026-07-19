@@ -146,7 +146,7 @@ pub struct SubmitCommandParams {
     /// | `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum` |
     /// | `geli.lieferbeginn.anmelden` | `malo_id` (gas), `lieferbeginn_datum` |
     /// | `geli.lieferende.anmelden` | `malo_id` (gas), `lieferende_datum` |
-    /// | `wim.geraetewechsel.beauftragen` | `melo_id` (11-digit MeLo), `wechseldatum` |
+    /// | `wim.geraetewechsel.beauftragen` | `melo_id`, `process_date` (YYYYMMDD), `receiver_mp_id` |
     /// | `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |
     #[schemars(example = "{\"malo_id\": \"10001234567\", \"lieferbeginn_datum\": \"2026-10-01\"}")]
     pub payload: serde_json::Value,
@@ -807,8 +807,11 @@ pub struct GeliLieferbeginnArgs {
 pub struct WimGeraetewechselArgs {
     /// 11-digit Messlokations-ID.
     pub melo_id: String,
-    /// Meter change date (YYYY-MM-DD).
-    pub wechseldatum: String,
+    /// Requested execution date (YYYYMMDD, German local time).
+    pub process_date: String,
+    /// 13-digit GLN of the counterparty: the NB for PIDs 55039/55042,
+    /// the nMSB for 55051/55168.
+    pub receiver_mp_id: String,
     /// Initiating Marktrolle: NB or MSB.
     pub marktrolle: String,
 }
@@ -884,7 +887,8 @@ impl MakodMcpHandler {
         Parameters(args): Parameters<WimGeraetewechselArgs>,
     ) -> Vec<PromptMessage> {
         let melo_id = &args.melo_id;
-        let date = &args.wechseldatum;
+        let date = &args.process_date;
+        let receiver = &args.receiver_mp_id;
         let marktrolle = &args.marktrolle;
         vec![PromptMessage::new_text(
             Role::User,
@@ -896,7 +900,8 @@ impl MakodMcpHandler {
                  1. Call `submit_command` with:\n\
                     - command: \"wim.geraetewechsel.beauftragen\"\n\
                     - marktrolle: \"{marktrolle}\"\n\
-                    - payload: {{\"melo_id\": \"{melo_id}\", \"wechseldatum\": \"{date}\"}}\n\
+                    - payload: {{\"melo_id\": \"{melo_id}\", \"process_date\": \"{date}\", \
+                       \"receiver_mp_id\": \"{receiver}\"}}\n\
                  2. Report the process_id and status.\n\
                  3. Explain next steps: the MSB has 5 Werktage to confirm or reject \
                     per BK6-24-174."
@@ -983,19 +988,29 @@ impl MakodMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "**GPKE Sperrung Bestätigung (BK6-22-024)**\n\n\
-                 When `sperrd` has confirmed the physical disconnection (IFTSTA 21039 dispatched),\n\
-                 the LF confirms receipt and acceptance via REMADV or a direct command.\n\n\
+                "**GPKE Sperrung — Ausführungsmeldung (BK6-22-024 §5)**\n\n\
+                 This is the **NB side**. After the field team has (or has not) carried out the\n\
+                 disconnection, the NB reports the outcome and `makod` dispatches IFTSTA 21039\n\
+                 to the Lieferant.\n\n\
                  **Step 1 — Retrieve the Sperrung process:**\n\
-                 Call `get_process` with the `malo_id` of the disconnected MaLo.\n\
-                 Confirm that `workflow_name` contains `sperrung` and the process is active.\n\n\
-                 **Step 2 — Confirm the Sperrung:**\n\
-                 Call `submit_command` with:\n\
+                 Call `get_process` with the `malo_id`. Confirm `workflow_name` is\n\
+                 `gpke-sperrung` (the NB-role workflow) and the process is active.\n\n\
+                 **Step 2a — Execution succeeded:**\n\
                  - command: \"gpke.sperrung.bestaetigen\"\n\
-                 - marktrolle: \"LF\"\n\
-                 - payload: {\"malo_id\": \"<11-digit MaLo>\", \"ausfuehrungsdatum\": \"YYYY-MM-DD\"}\n\n\
-                 **`ausfuehrungsdatum`** is the date the physical disconnection was performed.\n\n\
-                 **Source:** GPKE AHB BK6-22-024 §4; ORDERS PIDs 17115–17117.",
+                 - marktrolle: \"NB\"\n\
+                 - payload: {\"malo_id\": \"<11-digit MaLo>\", \"note\": \"<optional>\"}\n\n\
+                 **Step 2b — Execution failed:**\n\
+                 - command: \"gpke.sperrung.fehlgeschlagen\"\n\
+                 - marktrolle: \"NB\"\n\
+                 - payload: {\"malo_id\": \"<11-digit MaLo>\", \"reason\": \"<why>\"}\n\n\
+                 `reason` is **mandatory** on the failure path — without it the LF waits out\n\
+                 its 24-hour deadline with no explanation.\n\n\
+                 Note: `sperrd` issues both commands automatically from its execute/fail\n\
+                 endpoints. Call them by hand only when driving `makod` without `sperrd`.\n\n\
+                 The **LF side** is a different command set: `gpke.sperrung.beauftragen`\n\
+                 (17115), `gpke.entsperrung.beauftragen` (17117), `gpke.sperrung.stornieren`\n\
+                 (ORDCHG 39000).\n\n\
+                 **Source:** GPKE AHB BK6-22-024 §5; ORDERS PIDs 17115/17117, IFTSTA 21039.",
             ),
         ]
     }
@@ -1324,10 +1339,24 @@ fn next_steps_hint(command: &str) -> &'static str {
             "GNB has 10 Werktage to respond with the requested meter data (BK7-24-01-009)."
         }
         "geli.gas.sperrung.bestaetigen" | "gpke.sperrung.bestaetigen" => {
-            "Sperrung confirmed. sperrd will dispatch IFTSTA 21039 to the NB (BK6-22-024 §4)."
+            "Execution reported. IFTSTA 21039 is queued to the Lieferant (BK6-22-024 §5)."
+        }
+        "gpke.sperrung.fehlgeschlagen" => {
+            "Non-execution reported with reason. IFTSTA 21039 is queued to the Lieferant \
+             so it does not wait out the 24-hour deadline (BK6-22-024 §5)."
+        }
+        "gpke.sperrung.beauftragen" | "gpke.entsperrung.beauftragen" => {
+            "Sperrauftrag sent to the NB. The NB has 24 wall-clock hours to answer with \
+             ORDRSP 19116 (Bestätigung) or 19117 (Ablehnung), then reports execution via \
+             IFTSTA 21039 (BK6-22-024)."
+        }
+        "gpke.sperrung.stornieren" => {
+            "Stornierung (ORDCHG 39000) sent. The NB answers with ORDRSP 19128 (Bestätigung) \
+             or 19129 (Ablehnung). Only valid until the NB has executed."
         }
         "wim.geraetewechsel.beauftragen" => {
-            "MSB has 5 Werktage to respond with a Bestätigung/Ablehnung (BK6-24-174)."
+            "MSB-Wechsel order sent. The counterparty has 5 Werktage to respond with a \
+             Bestätigung/Ablehnung (BK6-24-174)."
         }
         "wim.gas.anmeldung.bestaetigen" | "wim.gas.anmeldung.ablehnen" => {
             "WiM Gas Anmeldung APERAK dispatched. Process closes within 10 Werktage (BK7-24-01-009)."

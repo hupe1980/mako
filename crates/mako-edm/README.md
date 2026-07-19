@@ -71,8 +71,8 @@ pub struct MeterBillingPeriod {
     pub kwh_ht: Decimal,
     pub kwh_nt: Decimal,
     pub spitzenleistung_kw: Option<Decimal>,   // RLM §2 Nr. 17 MessZV
-    pub brennwert_kwh_m3: Option<Decimal>,     // Gas §24 GasGVV
-    pub zustandszahl: Option<Decimal>,          // Gas §10 GasGVV
+    pub brennwert_kwh_m3: Option<Decimal>,     // Gas §25 Nr. 4 MessEV
+    pub zustandszahl: Option<Decimal>,          // Gas §25 Nr. 4 MessEV
 }
 ```
 
@@ -119,5 +119,5 @@ Never enable `testing` in production builds.
 - **§22 MessZV** — Pflicht zur Aufbewahrung von Zählerstandsgängen
 - **§27 MessZV** — Mehr-/Mindermengensaldo-Berechnung
 - **§41a EnWG** — 15-Minuten-Lastgang mandatory for iMSys customers (since 2025)
-- **§24 GasGVV / DVGW G 685** — Brennwertkorrektur (m³ → kWh_Hs)
+- **§25 Nr. 4 MessEV / DVGW G 685** — Brennwertkorrektur (m³ → kWh_Hs)
 - **MSCONS AHB** — Meter reading message format (EDI@Energy)

@@ -273,4 +273,4 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 
 > INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) is billed by the GNB/VNB
 > to the LFN/LFA for AWH performed during the Sperrprozess — it belongs to GeLi Gas (BK7-24-01-009),
-> not GaBi Gas. INVOIC 31010 (Kapazitätsrechnung, NB → BKV) is GaBi Gas (BK7-14-020).
+> not GaBi Gas. INVOIC 31010 (Kapazitätsrechnung, NB → BKV) is GaBi Gas (BK7-24-01-008).

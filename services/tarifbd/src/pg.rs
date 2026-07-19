@@ -735,7 +735,7 @@ pub struct AngebotPositionInput {
     pub nne_grundpreis_eur_per_year: Option<Decimal>,
     /// NNE Leistungspreis in EUR/kW/year — RLM/C&I only (≥ 2500 Jahresbenutzungsstunden).
     pub nne_leistungspreis_eur_per_kw_year: Option<Decimal>,
-    /// Konzessionsabgabe in ct/kWh (§17 StromNZV / §7 GasNZV).
+    /// Konzessionsabgabe in ct/kWh (KAV §2).
     /// Typical value: 0.11–1.99 ct/kWh depending on municipality size.
     pub ka_ct_per_kwh: Option<Decimal>,
 

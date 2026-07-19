@@ -6,7 +6,7 @@
 //! - [`GasQuantity`] — Decimal-precise energy in kWh_Hs with m³ conversion
 //! - [`GasBeschaffenheit`] — Brennwert (Hs/Hu) and Zustandszahl from DVGW G 685
 //! - [`GasBeschaffenheitValidationError`] — DVGW G 260 range check results
-//! - [`GasQualityFlag`] — measurement quality state per §17 MessZV / GasNZV
+//! - [`GasQualityFlag`] — measurement quality state per §17 MessZV
 //! - [`Bilanzkreis`] — BKV balance group with period and status
 //! - [`DeliveryPoint`] — entry/exit point (Einspeise- / Ausspeisepunkt)
 //! - [`GasImbalanceSaldo`] — nomination vs. allocation deviation with Ausgleichsenergie price
@@ -40,8 +40,8 @@
 //! - **DVGW G 260**: Gas quality classes (H-Gas, L-Gas, Biogas)
 //! - **DVGW G 2000**: Gas market communication — gas day definition
 //! - **Kooperationsvereinbarung Gas (KoV)**: BKV/FNB/MGV obligations
-//! - **GasNZV §24**: Balancing group accounting
-//! - **BNetzA BK7-14-020**: GaBi Gas 2.0 ruling
+//! - **GaBi Gas 2.1 (BK7-24-01-008)**: Balancing group accounting
+//! - **BNetzA BK7-24-01-008**: GaBi Gas 2.1 ruling
 
 use rust_decimal::Decimal;
 use time::{Date, Duration, OffsetDateTime, Time, Weekday};
@@ -262,7 +262,7 @@ impl std::error::Error for GasBeschaffenheitValidationError {}
 
 // ── GasQualityFlag ────────────────────────────────────────────────────────────
 
-/// Quality flag for a gas measurement interval per §17 MessZV and GasNZV.
+/// Quality flag for a gas measurement interval per §17 MessZV.
 ///
 /// Gas measurements can originate from direct measurement (MSCONS), be estimated
 /// by a standard load profile (SLP), or be replaced by a substitute value when
@@ -292,7 +292,7 @@ pub enum GasQualityFlag {
 }
 
 impl GasQualityFlag {
-    /// `true` when this interval is billable under GasNZV §24.
+    /// `true` when this interval is billable under GaBi Gas 2.1 (BK7-24-01-008).
     ///
     /// Rejected intervals are never billable. Unknown intervals require
     /// resolution before billing can proceed.
@@ -457,7 +457,7 @@ pub mod dvgw_versions {
 ///
 /// ## Precision
 ///
-/// Per DVGW G 685 §7 and GasNZV §24: billing precision ≥ 3 decimal places.
+/// Billing precision ≥ 3 decimal places, per the DVGW G 685 series (Gasabrechnung).
 /// `energy_kwh_hs` is always stored with `Decimal` to avoid float errors.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GasQuantity {
@@ -844,7 +844,7 @@ impl From<Date> for GasDay {
 
 /// A gas balancing group (Bilanzkreis) managed by a BKV.
 ///
-/// Per GasNZV §24: every market participant delivering or withdrawing gas in
+/// Per GaBi Gas 2.1 (BK7-24-01-008): every market participant delivering or withdrawing gas in
 /// a balancing zone must be assigned to a Bilanzkreis. The BKV is responsible
 /// for keeping nominations in balance.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -880,7 +880,7 @@ impl Bilanzkreis {
 
 /// A gas delivery point — entry (Einspeisepunkt) or exit (Ausspeisepunkt).
 ///
-/// Per GasNZV §3: entry and exit points are the physical locations where gas
+/// Per KARLA Gas 2.0 (BK7-24-01-007): entry and exit points are the locations where gas
 /// enters or leaves a transport grid, identified by EIC codes.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DeliveryPoint {
@@ -913,7 +913,7 @@ pub enum DeliveryPointDirection {
 
 /// Calculated gas imbalance for one BKV for one gas day.
 ///
-/// Per GasNZV §24 and KoV: the imbalance is the difference between nominated
+/// Per GaBi Gas 2.1 (BK7-24-01-008) and KoV: the imbalance is the difference between nominated
 /// quantities and actual allocated quantities. Positive = mehr (excess), negative =
 /// minder (deficit). Settlement via the MGV Ausgleichsenergiepreis.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

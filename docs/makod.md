@@ -683,7 +683,7 @@ context and step-by-step instructions:
 |---|---|---|
 | `gpke-lieferbeginn` | `malo_id`, `lieferbeginn_datum` | Guided GPKE Lieferbeginn Strom workflow (electricity supplier change) |
 | `geli-lieferbeginn` | `malo_id`, `lieferbeginn_datum` | Guided GeLi Gas Lieferbeginn workflow (gas supplier change) |
-| `wim-geraetewechsel` | `melo_id`, `wechseldatum`, `marktrolle` | Guided WiM Gerätewechsel workflow (meter device change) |
+| `wim-geraetewechsel` | `melo_id`, `process_date`, `receiver_mp_id`, `marktrolle` | Guided WiM Gerätewechsel workflow (meter device change) |
 | `msb-preisanfrage` | *(none)* | Step-by-step MSB Preisanfrage (REQOTE/QUOTES, PRICAT 27003 dispatch) |
 | `wim-gas-anmeldung` | *(none)* | Guided WiM Gas MSB-Wechsel Anmeldung (GNB approve/reject within 10 WT) |
 | `gpke-sperrung` | *(none)* | Guided GPKE Sperrung Strom (LF confirms disconnection to NB) |
@@ -856,7 +856,7 @@ For multi-role commands, include `"marktrolle"` to disambiguate:
 {
   "command":    "wim.geraetewechsel.beauftragen",
   "marktrolle": "NB",
-  "payload": { "melo_id": "DE00012345678", "wechseldatum": "2026-10-01" }
+  "payload": { "melo_id": "DE00012345678", "process_date": "20261001", "receiver_mp_id": "9900357000004" }
 }
 ```
 
@@ -936,7 +936,11 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `gpke.lieferende.anmelden` | `LF` | GPKE | 55002 | Old supplier registers supply end |
 | `gpke.lieferende.bestaetigen` | `NB` | GPKE | 55005/55006 | DSO accepts/rejects supply end |
 | `gpke.kuendigung.anmelden` | `LF` | GPKE | 55017 | LF cancels a Lieferbeginn Anmeldung |
-| `gpke.sperrung.bestaetigen` | `LF` | GPKE | 17115/17116/17117 | LF confirms disconnection execution |
+| `gpke.sperrung.beauftragen` | `LF` | GPKE | 17115 | LF orders a disconnection from the NB |
+| `gpke.entsperrung.beauftragen` | `LF` | GPKE | 17117 | LF orders a reconnection from the NB |
+| `gpke.sperrung.stornieren` | `LF` | GPKE | 39000 | LF cancels a pending Sperrauftrag (ORDCHG) |
+| `gpke.sperrung.bestaetigen` | `NB` | GPKE | 17115/17117 | NB reports successful execution → IFTSTA 21039 |
+| `gpke.sperrung.fehlgeschlagen` | `NB` | GPKE | 17115/17117 | NB reports failed execution + reason → IFTSTA 21039 |
 | `gpke.abrechnung.annehmen` | `NB` | GPKE | 31001/31002 | DSO settles a Netznutzungsabrechnung |
 | `gpke.abrechnung.ablehnen` | `NB` | GPKE | 31001/31002 | DSO disputes a Netznutzungsabrechnung |
 | `geli.lieferbeginn.anmelden` | `LFG` | GeLi Gas | 44001 | Gas supplier registers supply start |
@@ -974,12 +978,16 @@ GLNs resolved by the engine (sender, receiver) are intentionally absent.
 | `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum` |
 | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
 | `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `alter_lf_mp_id`¹ |
-| `gpke.sperrung.bestaetigen` | `malo_id`, `ausfuehrungsdatum` |
+| `gpke.sperrung.beauftragen` | `malo_id` |
+| `gpke.entsperrung.beauftragen` | `malo_id` |
+| `gpke.sperrung.stornieren` | `malo_id` |
+| `gpke.sperrung.bestaetigen` | `malo_id`, optional `note`/`reason` |
+| `gpke.sperrung.fehlgeschlagen` | `malo_id`, **`reason`** (or `note`) — required |
 | `gpke.abrechnung.annehmen` | `rechnung` (BO4E `RECHNUNG` object) |
 | `gpke.abrechnung.ablehnen` | `rechnung` (BO4E `RECHNUNG` object), `ablehnungsgrund` |
 | `geli.lieferbeginn.anmelden` | `malo_id` (gas MaLo), `lieferbeginn_datum` |
 | `geli.lieferende.anmelden` | `malo_id` (gas MaLo), `lieferende_datum` |
-| `wim.geraetewechsel.beauftragen` | `melo_id`², `wechseldatum` |
+| `wim.geraetewechsel.beauftragen` | `melo_id`², `process_date` (YYYYMMDD), `receiver_mp_id`, optional `pid` (default 55042) |
 | `wim.gas.anmeldung.bestaetigen` | `malo_id` (gas MaLo) |
 | `wim.gas.anmeldung.ablehnen` | `malo_id` (gas MaLo), `reason` (ERC code + text) |
 | `wim.gas.kuendigung.bestaetigen` | `malo_id` (gas MaLo) |
@@ -1048,17 +1056,32 @@ continues until the APERAK deadline fires or the ERP delivers a confirmation
 via the Command API:
 
 ```bash
-# Confirm disconnection execution for an NB workflow (no gMSB workflow running):
+# NB reports successful physical execution → dispatches IFTSTA 21039 to the LF:
 curl -X POST http://localhost:8080/api/v1/commands \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
     "command": "gpke.sperrung.bestaetigen",
     "marktrolle": "NB",
-    "malo_id": "DE0000000000000000000000000000001",
-    "ausfuehrungsdatum": "2025-11-01"
+    "malo_id": "51238696781",
+    "payload": { "note": "Zähler gesperrt, Plombe gesetzt" }
+  }'
+
+# NB reports that execution failed — `reason` is mandatory, so the LF learns why
+# instead of waiting out the 24-hour deadline:
+curl -X POST http://localhost:8080/api/v1/commands \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "gpke.sperrung.fehlgeschlagen",
+    "marktrolle": "NB",
+    "malo_id": "51238696781",
+    "payload": { "reason": "Zutritt verweigert" }
   }'
 ```
+
+`sperrd` issues both of these automatically from
+`PUT /api/v1/sperr-orders/{id}/execute` and `.../fail`.
 
 ---
 

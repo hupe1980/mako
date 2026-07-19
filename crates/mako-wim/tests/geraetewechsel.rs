@@ -26,6 +26,7 @@ use mako_engine::{
     projection::ProjectionRunner,
     types::{DeviceId, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator},
     version::WorkflowId,
+    workflow::Workflow,
 };
 use mako_wim::{
     DeviceChangeCommand, DeviceChangeProjection, DeviceChangeState, WimDeviceChangeWorkflow,
@@ -376,4 +377,307 @@ async fn projection_tracks_rejected_process() {
     );
     // Initiated + Rejected = 2 events
     assert_eq!(record.event_count(), 2, "2 events in the stream");
+}
+
+// ── Outbound MSB-Wechsel order (InitiateDeviceChange) ─────────────────────────
+
+fn initiate_cmd(pid: u32) -> DeviceChangeCommand {
+    DeviceChangeCommand::InitiateDeviceChange {
+        pid: Pruefidentifikator::new(pid).expect("test pid must be in range"),
+        sender: MarktpartnerCode::new("9900357000004"),
+        receiver: MarktpartnerCode::new("4012345000023"),
+        melo_id: MeLo::new("DE00123456789012345678901234567890"),
+        process_date: "20260801".to_owned(),
+        message_ref: MessageRef::new("WIM-GW-OUT-001"),
+    }
+}
+
+/// An ERP-initiated order moves `New → AuftragGesendet` and emits a UTILMD
+/// outbox entry addressed to the counterparty.
+#[tokio::test]
+async fn initiate_device_change_spawns_outbound_order() {
+    let p = make_process();
+
+    let output = p
+        .execute_and_collect(initiate_cmd(55_042))
+        .await
+        .expect("InitiateDeviceChange must succeed from New");
+
+    let (_events, outbox) = output;
+    assert_eq!(outbox.len(), 1, "exactly one outbox entry");
+    let entry = &outbox[0];
+    assert_eq!(entry.message_type.as_ref(), "UTILMD");
+    assert_eq!(entry.recipient.as_ref(), "4012345000023");
+
+    // The renderer requires these keys for a WiM UTILMD; assert the contract.
+    let p_json = &entry.payload;
+    assert_eq!(p_json["pid"], 55_042);
+    assert_eq!(p_json["sender"], "9900357000004");
+    assert_eq!(p_json["receiver"], "4012345000023");
+    assert_eq!(p_json["melo"], "DE00123456789012345678901234567890");
+    assert_eq!(p_json["process_date"], "20260801");
+    assert_eq!(p_json["direction"], "outbound");
+
+    assert_eq!(
+        p.state().await.unwrap().status_str(),
+        "AuftragGesendet",
+        "state must record that we sent an order, not that we received one"
+    );
+}
+
+/// All four WiM MSB-Wechsel PIDs are accepted.
+#[tokio::test]
+async fn initiate_device_change_accepts_all_wim_pids() {
+    for pid in [55_039_u32, 55_042, 55_051, 55_168] {
+        let p = make_process();
+        p.execute(initiate_cmd(pid))
+            .await
+            .unwrap_or_else(|e| panic!("PID {pid} must be accepted: {e}"));
+        assert_eq!(p.state().await.unwrap().status_str(), "AuftragGesendet");
+    }
+}
+
+/// A non-WiM PID is rejected before any event is written.
+#[tokio::test]
+async fn initiate_device_change_rejects_foreign_pid() {
+    let p = make_process();
+    let err = p
+        .execute(initiate_cmd(55_001))
+        .await
+        .expect_err("PID 55001 is GPKE Lieferbeginn, not a WiM MSB-Wechsel");
+    assert!(
+        err.to_string().contains("55039"),
+        "error must name the valid PIDs, got: {err}"
+    );
+}
+
+/// An outbound order cannot be issued on a stream that already has history.
+#[tokio::test]
+async fn initiate_device_change_requires_new_state() {
+    let p = make_process();
+    p.execute(receive_utilmd_cmd(true))
+        .await
+        .expect("inbound UTILMD sets up prior state");
+
+    let err = p
+        .execute(initiate_cmd(55_042))
+        .await
+        .expect_err("must not issue an outbound order over an inbound process");
+    assert!(
+        err.to_string().contains("New"),
+        "error must mention the expected state, got: {err}"
+    );
+}
+
+/// The projection surfaces the outbound order distinctly from an inbound one.
+#[tokio::test]
+async fn projection_tracks_outbound_order() {
+    let store = InMemoryEventStore::new();
+    let p: Process<WimDeviceChangeWorkflow, _> = Process::new(
+        store.clone(),
+        TenantId::new(),
+        WorkflowId::new("wim-device-change", "FV2025-10-01"),
+    );
+
+    p.execute(initiate_cmd(55_039)).await.unwrap();
+
+    let mut projection = DeviceChangeProjection::default();
+    let events = store.all_events().await;
+    ProjectionRunner::run(&mut projection, &events);
+
+    let record = projection.records.values().next().unwrap();
+    assert_eq!(record.status(), "AuftragGesendet");
+    assert_eq!(record.event_count(), 1);
+}
+
+// ── Counterparty answer closes the outbound order (ReceiveAntwort) ────────────
+
+fn antwort_cmd(pid: u32, reason: Option<&str>) -> DeviceChangeCommand {
+    DeviceChangeCommand::ReceiveAntwort {
+        pid: Pruefidentifikator::new(pid).expect("test pid must be in range"),
+        sender: MarktpartnerCode::new("4012345000023"),
+        message_ref: MessageRef::new("WIM-GW-ANTWORT-001"),
+        reason: reason.map(str::to_owned),
+    }
+}
+
+/// A Bestätigung moves `AuftragGesendet → AuftragBestaetigt` and the order can
+/// then complete on the physical device swap.
+#[tokio::test]
+async fn antwort_bestaetigung_closes_the_order() {
+    let p = make_process();
+    p.execute(initiate_cmd(55_042)).await.unwrap();
+
+    p.execute(antwort_cmd(55_043, None))
+        .await
+        .expect("55043 confirms a 55042 order");
+    assert_eq!(p.state().await.unwrap().status_str(), "AuftragBestaetigt");
+
+    p.execute(DeviceChangeCommand::Complete {
+        device_id: DeviceId::new("ZHR-77777777"),
+    })
+    .await
+    .expect("Complete must be reachable from AuftragBestaetigt");
+    assert_eq!(p.state().await.unwrap().status_str(), "Completed");
+}
+
+/// An Ablehnung rejects the process and carries the counterparty's reason.
+#[tokio::test]
+async fn antwort_ablehnung_rejects_with_reason() {
+    let p = make_process();
+    p.execute(initiate_cmd(55_042)).await.unwrap();
+
+    p.execute(antwort_cmd(55_044, Some("MeLo unbekannt")))
+        .await
+        .expect("55044 rejects a 55042 order");
+
+    match p.state().await.unwrap() {
+        DeviceChangeState::Rejected { reason } => {
+            assert_eq!(reason, "MeLo unbekannt", "counterparty reason must survive");
+        }
+        other => panic!("expected Rejected, got {}", other.status_str()),
+    }
+}
+
+/// Every request PID is closed by its own Bestätigung/Ablehnung pair.
+#[tokio::test]
+async fn antwort_pairs_match_their_request_pid() {
+    for (antwort, request, confirmed) in mako_wim::DEVICE_CHANGE_ANTWORT_PIDS.iter().copied() {
+        let p = make_process();
+        p.execute(initiate_cmd(request)).await.unwrap();
+        p.execute(antwort_cmd(antwort, Some("x")))
+            .await
+            .unwrap_or_else(|e| panic!("{antwort} must answer {request}: {e}"));
+
+        let expected = if confirmed {
+            "AuftragBestaetigt"
+        } else {
+            "Rejected"
+        };
+        assert_eq!(
+            p.state().await.unwrap().status_str(),
+            expected,
+            "PID {antwort} (confirmed={confirmed}) answering {request}"
+        );
+    }
+}
+
+/// An answer belonging to a *different* request must not close this order.
+///
+/// Without this guard a 55043 (Anmeldung confirmed) would silently close a
+/// 55039 (Kündigung) order and the audit trail would record the wrong outcome.
+#[tokio::test]
+async fn antwort_for_a_different_request_is_rejected() {
+    let p = make_process();
+    p.execute(initiate_cmd(55_039)).await.unwrap();
+
+    let err = p
+        .execute(antwort_cmd(55_043, None))
+        .await
+        .expect_err("55043 answers 55042, not 55039");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("55042") && msg.contains("55039"),
+        "error must name both the answered and the sent request, got: {msg}"
+    );
+    assert_eq!(
+        p.state().await.unwrap().status_str(),
+        "AuftragGesendet",
+        "state must be unchanged after a mismatched answer"
+    );
+}
+
+/// A non-Antwort PID is not accepted as an answer.
+#[tokio::test]
+async fn antwort_rejects_non_antwort_pid() {
+    let p = make_process();
+    p.execute(initiate_cmd(55_042)).await.unwrap();
+    let err = p
+        .execute(antwort_cmd(55_001, None))
+        .await
+        .expect_err("55001 is GPKE Lieferbeginn, not a WiM Antwort");
+    assert!(err.to_string().contains("55043"), "got: {err}");
+}
+
+/// An answer with no open order cannot be applied.
+#[tokio::test]
+async fn antwort_requires_an_open_order() {
+    let p = make_process();
+    let err = p
+        .execute(antwort_cmd(55_043, None))
+        .await
+        .expect_err("no order was sent");
+    assert!(err.to_string().contains("AuftragGesendet"), "got: {err}");
+}
+
+/// Once answered the state has left `AuftragGesendet`, so the response deadline
+/// yields no command.
+#[tokio::test]
+async fn answered_order_absorbs_the_response_deadline() {
+    let p = make_process();
+    p.execute(initiate_cmd(55_042)).await.unwrap();
+    p.execute(antwort_cmd(55_043, None)).await.unwrap();
+
+    let state = p.state().await.unwrap();
+    let deadline = mako_engine::deadline::Deadline::new(
+        p.stream_id().clone(),
+        p.process_id(),
+        TenantId::new(),
+        WorkflowId::new("wim-device-change", "FV2025-10-01"),
+        mako_wim::AUFTRAG_ANTWORT_WINDOW_LABEL,
+        time::OffsetDateTime::now_utc(),
+    );
+    assert!(
+        WimDeviceChangeWorkflow::on_deadline(&deadline, &state).is_none(),
+        "an answered order must not be timed out"
+    );
+}
+
+/// The Antwortfrist differs per process and must not be flattened to one value.
+///
+/// BK6-24-174 WiM Teil 1: Kap. 2.2.2 Nr. 2 (3 WT), Kap. 2.3.2 Nr. 2 (5 WT),
+/// Kap. 2.4.2 Nr. 2 (7 WT), Kap. 2.4.2 Nr. 4 (1 WT).
+#[test]
+fn antwortfrist_is_per_process_not_flat() {
+    assert_eq!(mako_wim::antwort_frist_werktage(55_039), Some(3));
+    assert_eq!(mako_wim::antwort_frist_werktage(55_042), Some(5));
+    assert_eq!(mako_wim::antwort_frist_werktage(55_051), Some(7));
+    assert_eq!(mako_wim::antwort_frist_werktage(55_168), Some(1));
+    assert_eq!(mako_wim::antwort_frist_werktage(55_001), None);
+
+    // Every request PID must have a Frist, or the dispatcher rejects the order.
+    for pid in mako_wim::DEVICE_CHANGE_PIDS {
+        assert!(
+            mako_wim::antwort_frist_werktage(*pid).is_some(),
+            "PID {pid} has no Antwortfrist"
+        );
+    }
+}
+
+/// Every response PID pairs with a request PID that has a Frist, and each
+/// request has exactly one Bestätigung and one Ablehnung.
+#[test]
+fn antwort_pid_table_is_complete_and_consistent() {
+    for (antwort, request, _) in mako_wim::DEVICE_CHANGE_ANTWORT_PIDS.iter().copied() {
+        assert!(
+            mako_wim::DEVICE_CHANGE_PIDS.contains(&request),
+            "Antwort {antwort} references unknown request {request}"
+        );
+        assert_eq!(
+            mako_wim::antwort_pid_meaning(antwort),
+            Some((request, mako_wim::antwort_pid_meaning(antwort).unwrap().1))
+        );
+    }
+    for req in mako_wim::DEVICE_CHANGE_PIDS {
+        let ja = mako_wim::DEVICE_CHANGE_ANTWORT_PIDS
+            .iter()
+            .filter(|(_, r, c)| r == req && *c)
+            .count();
+        let nein = mako_wim::DEVICE_CHANGE_ANTWORT_PIDS
+            .iter()
+            .filter(|(_, r, c)| r == req && !*c)
+            .count();
+        assert_eq!(ja, 1, "request {req} needs exactly one Bestätigung");
+        assert_eq!(nein, 1, "request {req} needs exactly one Ablehnung");
+    }
 }

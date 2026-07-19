@@ -1621,7 +1621,7 @@ impl EdmdMcpHandler {
         name = "get_gas_quality",
         description = "Get Gasbeschaffenheitsdaten (Brennwert in kWh/m³ + Zustandszahl) \
                        for a Gas MaLo from PID 13007 deliveries. Required for Gas m³ → kWh_Hs \
-                       conversion (§24 GasGVV / DVGW G 685). \
+                       conversion (§25 Nr. 4 MessEV / DVGW G 685). \
                        Params: malo_id (required), from / to (date YYYY-MM-DD, optional).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -1657,7 +1657,7 @@ impl EdmdMcpHandler {
             "zustandszahl": r.try_get::<String, _>("zustandszahl").unwrap_or_default(),
             "pid": r.try_get::<i32, _>("pid").unwrap_or(13007),
             "received_at": r.try_get::<time::OffsetDateTime, _>("received_at").ok().map(|t| t.to_string()),
-            "legal_basis": "§24 GasGVV / DVGW G 685 kWh_Hs = m³ × Brennwert × Zustandszahl",
+            "legal_basis": "§25 Nr. 4 MessEV / DVGW G 685 kWh_Hs = m³ × Brennwert × Zustandszahl",
         })).collect();
 
         serde_json::to_string_pretty(&serde_json::json!({

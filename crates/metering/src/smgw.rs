@@ -178,7 +178,7 @@ pub enum CertificateType {
 /// ## Data flow
 ///
 /// ```text
-/// DSO Control Center ─→ makod (ORDERS 17134/17135) ─→ makod ─→ SMGW Admin
+/// DSO Control Center ─→ market communication (ORDERS 17134/17135) ─→ SMGW Admin
 ///                                                              │
 ///                                                              └─→ CLS channel
 ///                                                                    │

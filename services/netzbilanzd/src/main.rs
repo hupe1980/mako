@@ -206,7 +206,7 @@ async fn main() -> anyhow::Result<()> {
 fn billing_routes() -> Router {
     Router::new()
         .route("/run", post(handlers::run_billing))
-        // N6: MMM auto-run — auto-fetches profil_kwh from edmd (§40 StromNZV)
+        // N6: MMM auto-run — auto-fetches profil_kwh from edmd (GPKE (BK6-24-174) Teil 1 Kap. 8.4)
         .route("/mmm-run/:malo_id", post(handlers::post_mmm_auto_run))
         // N8: §42a GGV NNE NB-side billing — N × NNE per tenant from Lokationszuordnung
         .route("/ggv-nne/:ggv_malo_id", post(handlers::post_ggv_nne))

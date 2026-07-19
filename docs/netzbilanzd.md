@@ -104,7 +104,7 @@ graph LR
    | Field | Auto-fetch source | Condition |
    |---|---|---|
    | `mehr_preis_ct_per_kwh` (Gas) | `marktd GET /api/v1/mmma-preise/gas/{y}/{m}` | `billing_type = "mmm_gas"` |
-   | `mehr_preis_ct_per_kwh` (Strom) | `marktd GET /api/v1/mmm-preise/strom/{y}/{m}` | `billing_type = "mmm_strom"` + `unb_mp_id` configured |
+   | `mehr_preis_ct_per_kwh` (Strom) | `marktd GET /api/v1/mmm-preise/strom/{y}/{m}` | `billing_type = "mmm_strom"` + `vnb_mp_id` configured |
    | `minder_preis_ct_per_kwh` | Same as above | Same as above |
    | `lastprofil` | `marktd GET /api/v1/malo/{id}` → `bilanzierungsmethode` | `billing_type = "mmm_*"`, field absent |
 
@@ -138,16 +138,45 @@ graph LR
 
 ---
 
+## Regulatory baseline (2026)
+
+**StromNZV and GasNZV ceased to apply with the end of 31.12.2025** (Art. 15 Abs. 4
+resp. Abs. 6 of the Gesetz v. 22.12.2023, BGBl. 2023 I Nr. 405). The successor
+competence is §20 Abs. 3 EnWG, exercised through BNetzA Festlegungen — for MMM
+Strom that is **GPKE (BK6-24-174) Teil 1 Kap. 8.4**, for MMM Gas **GaBi Gas 2.1
+(BK7-24-01-008)**.
+
+Two consequences for this service:
+
+- **MMM prices come from the VNB, not the ÜNB.** GPKE Kap. 8.4 Nr. 3: *"Der
+  Betreiber von Elektrizitätsverteilernetzen berechnet für Jahresmehr- und
+  Jahresmindermengen auf Grundlage der monatlichen Marktpreise einen einheitlichen
+  Preis."* The distribution operator computes and publishes it on its own site.
+- **Konzessionsabgabe is KAV §2**, never StromNZV. The rate bands key on
+  municipality inhabitants, not annual consumption — see `grid-billing`.
+
+### Mehr-/Mindermengen sign convention
+
+| Measurement vs profile | Quantity | Money |
+|---|---|---|
+| measured **<** profiled | ungewollte **Mehrmenge** | NB vergütet → credit |
+| measured **>** profiled | ungewollte **Mindermenge** | NB stellt in Rechnung → charge |
+
+Named from the network operator's side: consuming below the profile leaves
+surplus energy the network absorbed, and that surplus is reimbursed.
+
+---
+
 ## Billing types
 
 | `billing_type` | PID | Direction | Description | Regulatory basis |
 |---|---|---|---|---|
 | `nne_strom` | 31001 | NB → LF | Netznutzungsentgelt Strom, monthly | GPKE BK6-22-024 |
-| `mmm_strom` | 31002 | NB → LF | Mehr-/Mindermengensaldo Strom | §40 StromNZV |
-| `mmm_gas` | 31002 | GNB → LFG | Mehr-/Mindermengensaldo Gas (THE prices) | GasNZV |
-| `nne_gas` | 31005 | GNB → LFG | Netznutzungsentgelt Gas, monthly | GasNZV |
+| `mmm_strom` | 31002 | NB → LF | Mehr-/Mindermengensaldo Strom | GPKE (BK6-24-174) Teil 1 Kap. 8.4 |
+| `mmm_gas` | 31002 | GNB → LFG | Mehr-/Mindermengensaldo Gas (THE prices) | GaBi Gas 2.1 (BK7-24-01-008) |
+| `nne_gas` | 31005 | GNB → LFG | Netznutzungsentgelt Gas, monthly | GasNEV |
 | `msb_31009` | 31009 | NB → MSB | MSB-Rechnung (metering service) | WiM BK6-24-174 |
-| `nne_gas_awh_31011` | 31011 | GNB → LFG | AWH Sperrprozesse Gas (Abrechnungswürdige Handlungen) | GeLi Gas BK7-24-01-009 §5.4 |
+| `nne_gas_awh_31011` | 31011 | GNB → LFG | AWH Sperrprozesse Gas (Abrechnungswürdige Handlungen) | GeLi Gas 3.0 (BK7-24-01-009) §5.4 |
 
 > `"mmm"` (legacy alias) maps to `"mmm_strom"`. Use `"mmm_strom"` or `"mmm_gas"` in new integrations.
 
@@ -297,8 +326,8 @@ flowchart LR
 | `nne_strom` | StromNEV §21 | StromNEV §17 | KAV §2 Abs. 2 | — |
 | `nne_strom` + §14a | §14a EnWG Modul 2 · BNetzA BK6-22-300 | StromNEV §17 | KAV §2 Abs. 2 | — |
 | `nne_gas` | GasNEV §14 | — | — | — |
-| `mmm_strom` | — | — | — | StromNZV §15 · GPKE BK6-22-024 |
-| `mmm_gas` | — | — | — | GasNZV §14 · GeLi Gas BK7-24-01-009 |
+| `mmm_strom` | — | — | — | GPKE (BK6-24-174) Teil 1 Kap. 8.4 · GPKE BK6-22-024 |
+| `mmm_gas` | — | — | — | GaBi Gas 2.1 (BK7-24-01-008) · GeLi Gas 3.0 (BK7-24-01-009) |
 | `msb_31009` | — | — | — | MsbG §§6–7 · MessZV §2 |
 
 ---
@@ -373,7 +402,7 @@ POST /api/v1/billing/mmm-run/{malo_id}
 ```
 
 Auto-fetches: `profil_kwh` ← `edmd /imbalance/{malo_id}`;
-prices ← `marktd /mmm-preise/strom` (when `unb_mp_id` configured) or `marktd /mmma-preise/gas`.
+prices ← `marktd /mmm-preise/strom` (when `vnb_mp_id` configured) or `marktd /mmma-preise/gas`.
 
 ### Draft lifecycle endpoints
 
@@ -611,7 +640,7 @@ edmd_api_key = "env:NETZBILANZD_EDMD_API_KEY"
 #   TenneT:    "9907324000008"
 #   Amprion:   "9907324000009"
 #   TransnetBW:"9907324000010"
-unb_mp_id = "9907324000007"
+vnb_mp_id = "9907324000007"
 
 # ERP webhook — receives all de.netzbilanz.* CloudEvents
 # Also required for background workers to fire
@@ -707,12 +736,12 @@ CREATE TABLE fremdkosten_records (
 | Regulation | Requirement handled |
 |---|---|
 | GPKE BK6-22-024 §5 | NNE invoice generation and dispatch (INVOIC 31001) |
-| §40 StromNZV | MMM settlement reflecting actual vs. SLP profile deviation (INVOIC 31002) |
-| §17 StromNZV | KA as separate Rechnungsposition; §17 residential (1.32 ct/kWh) and commercial (0.11 ct/kWh) rates accepted |
+| GPKE (BK6-24-174) Teil 1 Kap. 8.4 | MMM settlement reflecting actual vs. SLP profile deviation (INVOIC 31002) |
+| KAV §2 | KA as separate Rechnungsposition; §17 residential (1.32 ct/kWh) and commercial (0.11 ct/kWh) rates accepted |
 | §21 MessZV | Zahlungsziel (due_date) recorded per invoice; §22 MessZV 3-year retention enforced in PostgreSQL |
 | §22 MessZV | BNetzA audit export via `GET /api/v1/billing/audit`; Stornorechnung/Korrekturrechnung with `originalRechnungsnummer` + `korrekturGrund` |
 | WiM BK6-24-174 | MSB-Rechnung (INVOIC 31009): NB → MSB metering service fee |
-| GeLi Gas BK7-24-01-009 §5.4 | AWH Sperrprozesse Gas (INVOIC 31011): GNB → LFG for billable Sperrprozess actions |
+| GeLi Gas 3.0 (BK7-24-01-009) §5.4 | AWH Sperrprozesse Gas (INVOIC 31011): GNB → LFG for billable Sperrprozess actions |
 | §14a EnWG (BK6-22-300) | Time-of-Use NNE with separate HT/NT positions; mandatory for controllable loads from 01.01.2024 |
 | §42a EEG 2023 | GGV NNE: each tenant MaLo billed individually for proportional NNE share |
 | BK6-20-061 §4.2 | Redispatch 2.0 Kostenblatt submission to ÜNB by 15th of following month |

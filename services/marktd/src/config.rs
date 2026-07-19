@@ -231,7 +231,7 @@ pub struct MmmaImportConfig {
     /// Example: `https://www.the-group.de/gas/market/market-area-manager/mmma`
     #[serde(default)]
     pub gas_url: String,
-    /// URL of the ÜNB Strom MMM CSV/JSON file.  Leave empty to skip Strom import.
+    /// URL of the VNB Strom MMM CSV/JSON file.  Leave empty to skip Strom import.
     /// Example: `https://www.netztransparenz.de/de-de/strommarkt/mmm`
     #[serde(default)]
     pub strom_url: String,

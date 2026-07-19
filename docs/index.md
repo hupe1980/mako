@@ -294,7 +294,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       Specialists cover billing anomaly detection, §41b/§42 compliance guard,
       annual settlement orchestration, §20 EnWG parity, SMGW BSI TR-03109 diagnostics,
       VPP dispatch settlement audit (RED III Art. 17), MaBiS UTILTS monitoring,
-      GaBi Gas 2.0 ALOCAT/IMBNOT balance monitoring, EEG batch settlement + §52 sweep, and more.
+      GaBi Gas 2.1 ALOCAT/IMBNOT balance monitoring, EEG batch settlement + §52 sweep, and more.
       OIDC auth on <code>POST /api/v1/run</code>; inbound HMAC verification; max_sessions semaphore;
       per-session wall-clock timeout; dead-letter queue with exponential-backoff retry worker.
     </p>
@@ -686,7 +686,7 @@ Beyond the production services, mako exposes reusable Rust libraries:
 | `mako-wim` | workspace | WiM Strom workflows — MSB-Wechsel, INSRPT, Preisanfrage, INVOIC 31009 |
 | `mako-geli-gas` | workspace | GeLi Gas 3.0 — UTILMD G + ORDERS Sperrung Gas + INVOIC 31011 + PARTIN Gas |
 | `mako-wim-gas` | workspace | WiM Gas — UTILMD G MSB-Wechsel + INVOIC 31003/31004 + INSRPT Gas |
-| `mako-gabi-gas` | workspace | GaBi Gas 2.0 (BK7-14-020) — INVOIC 31007/31008/31010 + MSCONS 13013 MMMA + 8 DVGW workflows (ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES); rich domain model: `GasDay` (DST-aware 06:00 CET; `nomres_deadline_utc`, `initial_alocat_deadline_utc`, `final_alocat_deadline_utc` per KoV), `GasQuantity` (Decimal, DVGW G 685), `GasBeschaffenheit` (Hs/Hu + Zustandszahl; `.validate()` per DVGW G 260), `GasQualityFlag` (7 states; billability gate per GasNZV §24), `AllocationVersion` (Initial/Correction/Final per KoV §6.4), `GasMarketRole`, `GasPortfolioBalance` (`conservation_check()`), `GasImbalanceSaldo` (`ausgleichsenergie_price_ct_per_kwh` per KoV §9), `cloud_events` module (`de.gabi.*`), `dvgw_versions` module (biannual release tracking); nomination correction chain; 144 tests |
+| `mako-gabi-gas` | workspace | GaBi Gas 2.1 (BK7-24-01-008) — INVOIC 31007/31008/31010 + MSCONS 13013 MMMA + 8 DVGW workflows (ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES); rich domain model: `GasDay` (DST-aware 06:00 CET; `nomres_deadline_utc`, `initial_alocat_deadline_utc`, `final_alocat_deadline_utc` per KoV), `GasQuantity` (Decimal, DVGW G 685), `GasBeschaffenheit` (Hs/Hu + Zustandszahl; `.validate()` per DVGW G 260), `GasQualityFlag` (7 states; billability gate per GaBi Gas 2.1 (BK7-24-01-008)), `AllocationVersion` (Initial/Correction/Final per KoV §6.4), `GasMarketRole`, `GasPortfolioBalance` (`conservation_check()`), `GasImbalanceSaldo` (`ausgleichsenergie_price_ct_per_kwh` per KoV §9), `cloud_events` module (`de.gabi.*`), `dvgw_versions` module (biannual release tracking); nomination correction chain; 144 tests |
 | `mako-mabis` | workspace | MABIS — PID 13003 Bilanzkreisabrechnung Strom + `SummenzeitreiheBuilder` + Clearingliste (BKV↔ÜNB) |
 | `dvgw-edi` | workspace | DVGW EDIFACT gas transport — ALOCAT, NOMINT, NOMRES, SCHEDL, … |
 | `redispatch-xml` | workspace | Redispatch 2.0 XML/XSD — all 9 CIM/IEC 62325 document types |

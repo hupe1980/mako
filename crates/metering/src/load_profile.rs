@@ -4,7 +4,13 @@
 //!
 //! - **BDEW Repräsentative VDEW-Lastprofile** (1999, updated 2015): defines
 //!   the standard profiles used for German SLP metering.
-//! - **§24 GasGVV / §18 StromGVV**: Abrechnung auf Basis von Lastprofilen.
+//! - **§12 StromNZV / GaBi Gas 2.1 (BK7-24-01-008)**: the duty to apply standardised load
+//!   profiles below 100 000 kWh/a (Strom) and 1.5 million kWh/a (Gas).
+//!   ⚠️ Both ordinances were **repealed with effect from the end of
+//!   31.12.2025** (Art. 15 Abs. 4 des Gesetzes vom 22.12.2023, BGBl. 2023 I
+//!   Nr. 405); the substance now lives in BNetzA Festlegungen.
+//!   (Neither StromGVV nor GasGVV ever governed load profiles — §18 of each is
+//!   "Berechnungsfehler".)
 //! - **BK6-22-024 (GPKE)**: SLP MaLos use profiles for advance billing and MaBiS.
 //!
 //! ## Profile families
@@ -19,7 +25,7 @@
 //!
 //! ## Usage
 //!
-//! The `LoadProfile` type is used to classify MaLos in `marktd` and `edmd`
+//! The `LoadProfile` type classifies MaLos
 //! and drives the billing-period aggregation method in SLP billing runs.
 
 #[cfg(feature = "serde")]
@@ -28,7 +34,7 @@ use serde::{Deserialize, Serialize};
 /// German Standard Load Profile identifier.
 ///
 /// These are the official BDEW Standardlastprofile for electricity and gas.
-/// Used in `marktd.malo.lastprofil` and `mako-edm.MeterBillingPeriod.lastprofil`.
+/// Carried on the MaLo master record and on each billing period.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum LoadProfile {
@@ -109,7 +115,7 @@ pub enum LoadProfile {
 impl LoadProfile {
     /// The canonical BDEW profile identifier string.
     ///
-    /// Used in UTILMD `MR+Z07`/`MR+Z08` segments and marktd lastprofil field.
+    /// Used in UTILMD `MR+Z07`/`MR+Z08` segments and the MaLo lastprofil field.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {

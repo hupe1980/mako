@@ -40,7 +40,7 @@
 //!
 //! - **DVGW G 685 / G 2000** — delivery order protocol
 //! - **Kooperationsvereinbarung Gas (KoV)** — delivery obligations and response deadlines
-//! - **BNetzA GaBi Gas 2.0 (BK7-14-020)** — regulatory framework
+//! - **BNetzA GaBi Gas 2.1 (BK7-24-01-008)** — regulatory framework
 
 use mako_engine::{
     error::WorkflowError,

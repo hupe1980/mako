@@ -145,6 +145,8 @@ pub fn router(state: HandlerState) -> Router {
             get(get_archive_timeseries),
         )
         // §42c Energy Sharing VZW quarter-hour allocation
+        .route("/api/v1/sharing/readiness", get(get_sharing_readiness))
+        .route("/api/v1/meter-reads/iot/{malo_id}", post(post_iot_reads))
         .route(
             "/api/v1/sharing/{community_id}/allocation",
             get(get_sharing_allocation),
@@ -369,7 +371,7 @@ async fn get_imbalance(
 /// - `spitzenleistung_kw` — peak demand (RLM Strom only)
 /// - `brennwert_kwh_per_m3` / `zustandszahl` — Gas conversion factors
 ///
-/// Source: GPKE BK6-22-024 §3; GeLi Gas BK7-24-01-009 §3.
+/// Source: GPKE BK6-22-024 §3; GeLi Gas 3.0 (BK7-24-01-009) §3.
 #[derive(Debug, Deserialize)]
 struct BillingPeriodParams {
     /// ISO 8601 date `YYYY-MM-DD` — start of billing period (inclusive).
@@ -471,8 +473,8 @@ async fn get_billing_period(
 /// Used by `mabis-syncd` to discover which MaLo IDs have meter data in a given
 /// month so it can submit Summenzeitreihen to BIKO (BK6-22-024 Anlage 3).
 ///
-/// **F-04 fix:** previously only `GET /api/v1/billing-period/{malo_id}` (per-MaLo,
-/// path param) existed. `mabis-syncd` requires the collection endpoint.
+/// This is the collection form; `GET /api/v1/billing-period/{malo_id}` returns a
+/// single MaLo.
 #[derive(serde::Deserialize)]
 struct BillingPeriodsParams {
     /// Period start date inclusive (YYYY-MM-DD).
@@ -877,15 +879,7 @@ fn reads_to_arrow_ipc(reads: &[mako_edm::domain::MeterRead]) -> anyhow::Result<V
             })
         })
         .collect();
-    let spartes: StringArray = reads
-        .iter()
-        .map(|r| {
-            Some(match r.sparte {
-                metering::Sparte::Strom => "STROM",
-                metering::Sparte::Gas => "GAS",
-            })
-        })
-        .collect();
+    let spartes: StringArray = reads.iter().map(|r| Some(r.sparte.as_str())).collect();
     let mut obis_builder = StringBuilder::with_capacity(n, n * 12);
     for r in reads {
         match &r.obis_code {
@@ -928,6 +922,10 @@ fn edm_sparte_to_bo4e(s: EdmSparte) -> Bo4eSparte {
     match s {
         EdmSparte::Strom => Bo4eSparte::Strom,
         EdmSparte::Gas => Bo4eSparte::Gas,
+        // BO4E splits heat into Fern-/Nahwärme; `edmd` does not carry that
+        // distinction, and Fernwaerme is the billing-relevant default.
+        EdmSparte::Waerme => Bo4eSparte::Fernwaerme,
+        EdmSparte::Wasser => Bo4eSparte::Wasser,
     }
 }
 
@@ -936,6 +934,12 @@ fn edm_sparte_to_medium(s: EdmSparte) -> Medium {
     match s {
         EdmSparte::Strom => Medium::Strom,
         EdmSparte::Gas => Medium::Gas,
+        EdmSparte::Wasser => Medium::Wasser,
+        // BO4E `Medium` has no heat variant (STROM/GAS/WASSER/DAMPF only), so a
+        // Wärmemengenzähler has no faithful mapping. `Dampf` would be wrong —
+        // district heat is hot water, not steam — so this reports Unknown rather
+        // than asserting something false in an exported Zeitreihe.
+        EdmSparte::Waerme => Medium::Unknown,
     }
 }
 
@@ -1856,7 +1860,7 @@ async fn get_summenzeitreihe(
 /// `GET /api/v1/gas-quality/{malo_id}`
 ///
 /// Returns Gasbeschaffenheitsdaten (Brennwert + Zustandszahl) received via PID 13007.
-/// Used for Gas m³ → kWh_Hs conversion per §24 GasGVV / DVGW G 685.
+/// Used for Gas m³ → kWh_Hs conversion per §25 Nr. 4 MessEV / DVGW G 685.
 async fn get_gas_quality(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1911,7 +1915,7 @@ async fn get_gas_quality(
                 "zustandszahl": r.try_get::<String, _>("zustandszahl").unwrap_or_default(),
                 "pid": r.try_get::<i32, _>("pid").unwrap_or(13007),
                 "received_at": r.try_get::<OffsetDateTime, _>("received_at").ok().map(|t| t.to_string()),
-                "legal_basis": "§24 GasGVV / DVGW G 685",
+                "legal_basis": "§25 Nr. 4 MessEV / DVGW G 685",
             })).collect();
             if records.is_empty() {
                 (
@@ -3207,7 +3211,7 @@ async fn post_direct_reads_inner(
     }
 
     // \u2500\u2500 Interval validation + kWh conversion \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-    // Gas m³ → kWh_Hs via metering::gas_m3_to_kwh_hs (§24 GasGVV / DVGW G 685)
+    // Gas m³ → kWh_Hs via metering::gas_m3_to_kwh_hs (§25 Nr. 4 MessEV / DVGW G 685)
     let hs = req
         .brennwert_kwh_per_m3
         .unwrap_or_else(|| metering::GasConversionParams::default_erdgas_h().hs_kwh_per_m3);
@@ -3283,7 +3287,7 @@ async fn post_direct_reads_inner(
     let melo_id = req.melo_id.as_deref();
 
     for iv in &accepted {
-        // Convert m³ → kWh_Hs for Gas via metering::gas_m3_to_kwh_hs (§24 GasGVV).
+        // Convert m³ → kWh_Hs for Gas via metering::gas_m3_to_kwh_hs (§25 Nr. 4 MessEV).
         let kwh = if iv.unit.to_lowercase() == "m3" {
             metering::gas_m3_to_kwh_hs(iv.value, hs, z)
         } else {
@@ -3347,8 +3351,8 @@ async fn post_direct_reads_inner(
     let _ = sqlx::query(
         r"INSERT INTO direct_push_sessions
               (session_id, malo_id, source, obis_code, interval_count,
-               period_from, period_to, status, quality_summary)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, 'committed', $8)
+               period_from, period_to, status, quality_summary, tenant)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, 'committed', $8, $9)
           ON CONFLICT (session_id) DO UPDATE
               SET status          = 'committed',
                   quality_summary = EXCLUDED.quality_summary",
@@ -3361,6 +3365,7 @@ async fn post_direct_reads_inner(
     .bind(period_start)
     .bind(period_end)
     .bind(&quality_json)
+    .bind(state.tenant.as_str())
     .execute(pool)
     .await;
 
@@ -4033,9 +4038,11 @@ pub async fn post_bulk_reads(
     // Deduplicate by session_id
     if let Some(ref sid) = req.session_id {
         let existing: Option<i64> = sqlx::query_scalar(
-            "SELECT interval_count FROM direct_push_sessions WHERE session_id = $1",
+            "SELECT interval_count FROM direct_push_sessions
+             WHERE session_id = $1 AND tenant = $2",
         )
         .bind(sid)
+        .bind(state.tenant.as_str())
         .fetch_optional(state.repo.pool())
         .await
         .unwrap_or(None);
@@ -4052,10 +4059,24 @@ pub async fn post_bulk_reads(
         }
     }
 
-    let sparte = if req.sparte.eq_ignore_ascii_case("GAS") {
-        "GAS"
-    } else {
-        "STROM"
+    // Sparte determines the storage unit, so an unrecognised value is rejected
+    // rather than defaulted.
+    let sparte = match req.sparte.to_uppercase().as_str() {
+        "STROM" => "STROM",
+        "GAS" => "GAS",
+        "WAERME" | "WÄRME" => "WAERME",
+        "WASSER" => "WASSER",
+        other => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!(
+                        "unknown sparte `{other}`; expected STROM, GAS, WAERME or WASSER"
+                    )
+                })),
+            )
+                .into_response();
+        }
     };
     let source = req.source.as_deref().unwrap_or("API_IMPORT");
     let session_id = req
@@ -4170,8 +4191,8 @@ pub async fn post_bulk_reads(
     let _ = sqlx::query(
         r"INSERT INTO direct_push_sessions
               (session_id, malo_id, source, obis_code, interval_count,
-               period_from, period_to, status, quality_summary)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,'committed',$8)
+               period_from, period_to, status, quality_summary, tenant)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,'committed',$8,$9)
           ON CONFLICT (session_id) DO NOTHING",
     )
     .bind(&session_id)
@@ -4182,6 +4203,7 @@ pub async fn post_bulk_reads(
     .bind(validation_intervals.first().map(|iv| iv.from))
     .bind(validation_intervals.last().map(|iv| iv.to))
     .bind(&issues_summary)
+    .bind(state.tenant.as_str())
     .execute(state.repo.pool())
     .await;
 
@@ -4215,6 +4237,9 @@ pub struct SubstituteRequest {
     pub prior_days: Option<u32>,
     /// Operator ID for audit trail.
     pub operator_id: Option<String>,
+    /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`. Determines the `unit`
+    /// the substitute is stored in — a substituted water gap is m³, not kWh.
+    pub sparte: Option<String>,
 }
 
 /// `POST /api/v1/meter-reads/{malo_id}/substitute`
@@ -4358,6 +4383,19 @@ pub async fn post_substitute_values(
     }
 
     // Store generated intervals and log them
+    let sparte = match req
+        .sparte
+        .as_deref()
+        .unwrap_or("STROM")
+        .to_uppercase()
+        .as_str()
+    {
+        "GAS" => metering::interval::Sparte::Gas,
+        "WAERME" | "WÄRME" => metering::interval::Sparte::Waerme,
+        "WASSER" => metering::interval::Sparte::Wasser,
+        _ => metering::interval::Sparte::Strom,
+    };
+
     let mut stored = 0usize;
     let mut log_entries: Vec<serde_json::Value> = Vec::new();
     let pool = state.repo.pool();
@@ -4367,11 +4405,12 @@ pub async fn post_substitute_values(
         let method_str = format!("{:?}", entry.method);
         let reason_str = "NoMeasurementAvailable";
 
-        // Upsert into meter_reads
-        let _ = sqlx::query(
+        // Upsert into meter_reads.
+        if let Err(e) = sqlx::query(
             r"INSERT INTO meter_reads
-                (malo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, source)
-              VALUES ($1, $2, $3, $4, 'SUBSTITUTED', 0, 'STROM', 'AUTO_SUBSTITUTE')
+                (malo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, unit,
+                 source, tenant)
+              VALUES ($1, $2, $3, $4, 'SUBSTITUTED', 0, $5, $6, 'AUTO_SUBSTITUTE', $7)
               ON CONFLICT (malo_id, dtm_from, obis_code_norm) DO UPDATE
                 SET quantity_kwh = EXCLUDED.quantity_kwh,
                     quality = EXCLUDED.quality,
@@ -4381,13 +4420,25 @@ pub async fn post_substitute_values(
         .bind(iv.from)
         .bind(iv.to)
         .bind(iv.value_kwh)
+        .bind(sparte.as_str())
+        .bind(sparte.billing_unit().as_str())
+        .bind(&state.tenant)
         .execute(pool)
-        .await;
+        .await
+        {
+            tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute upsert failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
 
-        // Insert into substitute_value_log
-        let _ = sqlx::query(
+        // §22 MessZV audit trail: which value was replaced, by what method, on
+        // whose authority.
+        if let Err(e) = sqlx::query(
             r"INSERT INTO substitute_value_log
-                (malo_id, dtm_from, dtm_to, method, reason, substituted_kwh, created_by, tenant)
+                (malo_id, dtm_from, dtm_to, method, reason, substitute_kwh, created_by, tenant)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(&malo_id)
@@ -4399,7 +4450,15 @@ pub async fn post_substitute_values(
         .bind(operator_id)
         .bind(&state.tenant)
         .execute(pool)
-        .await;
+        .await
+        {
+            tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute audit log failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
 
         stored += 1;
         log_entries.push(serde_json::json!({
@@ -5060,6 +5119,717 @@ async fn post_sql_query(
         Json(serde_json::json!({
             "error": "OLAP engine not configured",
             "hint": "Set [archive] enabled=true and storage_uri in edmd.toml to enable DataFusion SQL"
+        })),
+    )
+        .into_response()
+}
+
+// ── §42c EnWG Energy-Sharing readiness report ─────────────────────────────────
+
+/// Query parameters for `GET /api/v1/sharing/readiness`.
+#[derive(Debug, serde::Deserialize)]
+struct SharingReadinessParams {
+    /// RFC 3339 start of the observation window. Defaults to 30 days ago.
+    from: Option<String>,
+    /// RFC 3339 end of the observation window. Defaults to now.
+    to: Option<String>,
+    /// Comma-separated MaLo-IDs to assess. Defaults to every MaLo with readings
+    /// in the window.
+    malo_ids: Option<String>,
+    /// Coverage threshold in percent. Defaults to
+    /// [`metering::sharing::DEFAULT_COVERAGE_THRESHOLD_PCT`].
+    min_coverage_pct: Option<f64>,
+}
+
+/// Per-point delivery verdict in the readiness report.
+#[derive(Debug, serde::Serialize)]
+struct SharingReadinessItem {
+    malo_id: String,
+    /// `DELIVERING` · `INSUFFICIENT` · `ABSENT`.
+    delivery: String,
+    /// Detected interval length in seconds, when determinable.
+    interval_seconds: Option<i64>,
+    /// Classification derived from the observed series.
+    messtyp: Option<String>,
+    /// Share of expected quarter-hour slots present, 0–100.
+    coverage_pct: Option<f64>,
+    reading_count: u64,
+    /// Why the point is not delivering a conforming series.
+    reasons: Vec<String>,
+    /// What an operator must do next.
+    required_action: String,
+}
+
+/// `GET /api/v1/sharing/readiness`
+///
+/// Fleet report: which delivery points are **actually** producing the
+/// quarter-hour series that §42c Abs. 1 EnWG requires.
+///
+/// This is the delivery half of the §42c readiness question. `marktd`'s
+/// `GET /api/v1/melos/{id}/sharing-eligibility` answers the capability half from
+/// device master data. Read together they separate the two states an operator
+/// must act on differently:
+///
+/// - **capable but not delivering** — the meter supports Zählerstandsgangmessung
+///   but none is configured; order the configuration, not a meter.
+/// - **not capable** — needs an iMSys rollout or an RLM conversion.
+///
+/// Resolution is derived per point from the median of `dtm_to - dtm_from` via
+/// `metering::classification::detect_interval_length`; `meter_reads` stores no
+/// resolution column. Coverage is measured against the number of quarter-hour
+/// slots the window contains.
+async fn get_sharing_readiness(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Query(params): Query<SharingReadinessParams>,
+) -> impl IntoResponse {
+    use metering::classification::{classify_messtyp, detect_interval_length};
+    use metering::interval::{MeterInterval, QualityFlag};
+    use metering::sharing::{
+        DEFAULT_COVERAGE_THRESHOLD_PCT, Delivery, DeliveryEvidenceInput, assess_delivery,
+    };
+    use time::format_description::well_known::Rfc3339;
+
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let now = OffsetDateTime::now_utc();
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or(now);
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or_else(|| to - time::Duration::days(30));
+
+    if from >= to {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": "`from` must precede `to`" })),
+        )
+            .into_response();
+    }
+
+    let threshold = params
+        .min_coverage_pct
+        .unwrap_or(DEFAULT_COVERAGE_THRESHOLD_PCT);
+
+    // Expected quarter-hour slots in the window — the coverage denominator.
+    let window_secs = (to - from).whole_seconds().max(1);
+    let expected_slots = (window_secs as f64 / 900.0).max(1.0);
+
+    let explicit: Option<Vec<String>> = params.malo_ids.as_deref().map(|s| {
+        s.split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect()
+    });
+
+    let pool = state.repo.pool();
+
+    // Resolve the candidate set: explicit list, or every MaLo with readings.
+    let malo_ids: Vec<String> = match explicit {
+        Some(ids) => ids,
+        None => {
+            let rows = sqlx::query(
+                r"SELECT DISTINCT malo_id
+                    FROM meter_reads
+                   WHERE tenant = $1 AND dtm_from >= $2 AND dtm_to <= $3
+                   ORDER BY malo_id",
+            )
+            .bind(resource_tenant)
+            .bind(from)
+            .bind(to)
+            .fetch_all(pool)
+            .await;
+            match rows {
+                Ok(rows) => {
+                    use sqlx::Row as _;
+                    rows.iter()
+                        .filter_map(|r| r.try_get::<String, _>("malo_id").ok())
+                        .collect()
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "sharing readiness: candidate scan failed");
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                }
+            }
+        }
+    };
+
+    let mut items = Vec::with_capacity(malo_ids.len());
+
+    for malo_id in &malo_ids {
+        let rows = sqlx::query(
+            r"SELECT dtm_from, dtm_to, quantity_kwh, source
+                FROM meter_reads
+               WHERE malo_id = $1 AND tenant = $2
+                 AND dtm_from >= $3 AND dtm_to <= $4
+                 AND quality NOT IN ('FAULTY', 'UNKNOWN')
+               ORDER BY dtm_from",
+        )
+        .bind(malo_id)
+        .bind(resource_tenant)
+        .bind(from)
+        .bind(to)
+        .fetch_all(pool)
+        .await;
+
+        // A failed per-point query must not abort the fleet report; surface it
+        // as an explicit reason instead of silently dropping the point.
+        let rows = match rows {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(malo_id = %malo_id, error = %e, "sharing readiness: read query failed");
+                items.push(SharingReadinessItem {
+                    malo_id: malo_id.clone(),
+                    delivery: "ABSENT".to_owned(),
+                    interval_seconds: None,
+                    messtyp: None,
+                    coverage_pct: None,
+                    reading_count: 0,
+                    reasons: vec![format!("Abfrage fehlgeschlagen: {e}")],
+                    required_action: "edmd-Log prüfen".to_owned(),
+                });
+                continue;
+            }
+        };
+
+        use sqlx::Row as _;
+        let mut source_hint: Option<String> = None;
+        let intervals: Vec<MeterInterval> = rows
+            .iter()
+            .filter_map(|r| {
+                if source_hint.is_none() {
+                    source_hint = r.try_get::<String, _>("source").ok();
+                }
+                Some(MeterInterval {
+                    from: r.try_get("dtm_from").ok()?,
+                    to: r.try_get("dtm_to").ok()?,
+                    value_kwh: r.try_get("quantity_kwh").ok()?,
+                    quality: QualityFlag::Measured,
+                    obis_code: None,
+                })
+            })
+            .collect();
+
+        let interval_class = detect_interval_length(&intervals);
+        let messtyp = if intervals.is_empty() {
+            None
+        } else {
+            Some(classify_messtyp(&intervals, source_hint.as_deref()))
+        };
+        let coverage_pct = if intervals.is_empty() {
+            None
+        } else {
+            Some(((intervals.len() as f64 / expected_slots) * 100.0).min(100.0))
+        };
+
+        let evidence = DeliveryEvidenceInput {
+            interval_class,
+            messtyp,
+            coverage_pct,
+            reading_count: intervals.len() as u64,
+            last_reading_at: intervals.last().map(|iv| iv.to),
+        };
+        let (delivery, reasons) = assess_delivery(&evidence, threshold);
+
+        let required_action = match delivery {
+            Delivery::Delivering => "keine",
+            Delivery::Insufficient => "Zählerstandsgangmessung konfigurieren bzw. Lücken klären",
+            Delivery::Absent => "Messwertlieferung beim MSB beauftragen",
+        };
+
+        items.push(SharingReadinessItem {
+            malo_id: malo_id.clone(),
+            delivery: match delivery {
+                Delivery::Delivering => "DELIVERING",
+                Delivery::Insufficient => "INSUFFICIENT",
+                Delivery::Absent => "ABSENT",
+            }
+            .to_owned(),
+            interval_seconds: interval_class
+                .as_ref()
+                .map(metering::classification::IntervalLengthClass::seconds),
+            messtyp: messtyp.map(|m| format!("{m:?}").to_uppercase()),
+            coverage_pct,
+            reading_count: intervals.len() as u64,
+            reasons,
+            required_action: required_action.to_owned(),
+        });
+    }
+
+    let delivering = items.iter().filter(|i| i.delivery == "DELIVERING").count();
+    let assessed = items.len();
+    let ready_pct = if assessed == 0 {
+        0.0
+    } else {
+        (delivering as f64 / assessed as f64) * 100.0
+    };
+
+    Json(serde_json::json!({
+        "assessed_at":          now.format(&Rfc3339).unwrap_or_default(),
+        "window_from":          from.format(&Rfc3339).unwrap_or_default(),
+        "window_to":            to.format(&Rfc3339).unwrap_or_default(),
+        "min_coverage_pct":     threshold,
+        "points_assessed":      assessed,
+        "points_delivering":    delivering,
+        "points_insufficient":  items.iter().filter(|i| i.delivery == "INSUFFICIENT").count(),
+        "points_absent":        items.iter().filter(|i| i.delivery == "ABSENT").count(),
+        "ready_pct":            ready_pct,
+        "legal_basis":          "§42c Abs. 1 EnWG i. V. m. §2 Satz 1 Nr. 27 MsbG",
+        "note":                 "Lieferung, nicht Fähigkeit — Stammdaten-Eignung via marktd GET /api/v1/melos/{id}/sharing-eligibility",
+        "items":                items,
+    }))
+    .into_response()
+}
+
+// ── IoT meter ingest (LoRaWAN / M-Bus / REST heat meters) ────────────────────
+
+/// One decoded interval in an IoT push.
+#[derive(Debug, serde::Deserialize)]
+struct IotInterval {
+    /// RFC 3339 interval start (inclusive).
+    from: String,
+    /// RFC 3339 interval end (exclusive).
+    to: String,
+    /// Consumption in `unit` over the interval.
+    value: rust_decimal::Decimal,
+}
+
+/// An IoT meter-reading push.
+///
+/// The envelope is **transport-agnostic and already decoded**. See
+/// [`post_iot_reads`] for why `edmd` does not decode wM-Bus frames itself.
+#[derive(Debug, serde::Deserialize)]
+struct IotPushRequest {
+    /// `WAERME` · `WASSER` · `STROM` · `GAS`.
+    sparte: String,
+    /// `KWH` or `M3`. Must be consistent with `sparte`.
+    unit: String,
+    /// Stable per-batch idempotency key. For LoRaWAN use `devEUI:fCnt`; for
+    /// OMS/M-Bus the telegram access number.
+    session_id: String,
+    /// Transport the reading arrived over, for provenance:
+    /// `LORAWAN` · `MBUS` · `WMBUS` · `REST`.
+    transport: String,
+    /// Optional device identity (LoRaWAN devEUI, M-Bus secondary address).
+    device_id: Option<String>,
+    /// Optional OBIS code. Medium group: 4 = Heizkostenverteiler, 5/6 = thermal,
+    /// 7 = gas, 8 = cold water, 9 = hot water.
+    obis_code: Option<String>,
+    /// Optional Messlokation.
+    melo_id: Option<String>,
+    /// Raw, undecoded payload as received (base64 or hex, verbatim).
+    ///
+    /// Retained as the system of record: network-server codecs are mutable and
+    /// carry no version on the uplink, so a stored value can only be re-derived
+    /// from the original frame.
+    raw_payload: Option<String>,
+    /// Brennwert Hs in kWh/m³. **Required** when `sparte = GAS` and `unit = M3`.
+    ///
+    /// Published monthly per supply area by the NB. There is no safe
+    /// default: the calorific value determines the billed quantity.
+    brennwert_kwh_per_m3: Option<rust_decimal::Decimal>,
+    /// Zustandszahl (dimensionless), default 1.0 when not separately metered.
+    zustandszahl: Option<rust_decimal::Decimal>,
+    /// Calibration validity (`Eichfrist`) end date, `YYYY-MM-DD`, if known.
+    ///
+    /// Per §34 Abs. 2 MessEV a Eichfrist of at least a year ends only *"mit dem
+    /// Ende des Jahres, in dem die Frist rechnerisch endet"*, so callers send
+    /// `YYYY-12-31`. Leave unset for Heizkostenverteiler, which have no Eichfrist.
+    eichung_bis: Option<String>,
+    intervals: Vec<IotInterval>,
+}
+
+/// `POST /api/v1/meter-reads/iot/{malo_id}`
+///
+/// Ingest metering data that does not pass through MSCONS: LoRaWAN uplinks,
+/// M-Bus/wM-Bus concentrators, and REST-capable heat meters.
+///
+/// Heat and water submetering points have no Smart-Meter-Gateway and are
+/// governed by **HeizkostenV**: §5 Abs. 3 requires remote readability by
+/// 31 December 2026, §6a a monthly consumption message, and §12 Abs. 1 grants a
+/// 3 % Kürzungsrecht on two independent grounds — a missing fernablesbare device
+/// (Satz 2) and information supplied "nicht oder nicht vollständig" (Satz 3).
+///
+/// ## Payload
+///
+/// Values arrive already decoded. wM-Bus/OMS payload specifications are vendor-
+/// gated and the device keys sit at the network server, so decoding belongs
+/// there. `raw_payload` is retained verbatim so a value can be re-derived if a
+/// codec changes.
+///
+/// ## Calibration
+///
+/// An expired Eichfrist is recorded as a warning, not a rejection.
+///
+/// §37 Abs. 1 Satz 1 Nr. 1 MessEG bars *use of the Messgerät* once the Eichfrist
+/// has run; §33 Abs. 1 MessEG then bars the resulting values, since a device used
+/// contrary to §37 was not "bestimmungsgemäß verwendet". BGH VIII ZR 112/10 holds
+/// that in civil billing such a reading loses only its *Vermutung der
+/// Richtigkeit*. Public-law Gebührenabrechnung is stricter (BayVGH 20 B 21.2421),
+/// which is a billing-side decision.
+///
+/// §37 Abs. 2 also ends a Eichfrist early on defect or tampering, so an expiry
+/// date alone is not the whole eichrechtliche validity test.
+async fn post_iot_reads(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Json(req): Json<IotPushRequest>,
+) -> impl IntoResponse {
+    use metering::interval::{MeasurementUnit, Sparte as MSparte};
+    use time::format_description::well_known::Rfc3339;
+
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "write-meter-reads", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    if req.intervals.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "intervals must not be empty" })),
+        )
+            .into_response();
+    }
+    if req.session_id.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "session_id is required — use devEUI:fCnt (LoRaWAN) or the \
+                          telegram access number (OMS/M-Bus)"
+            })),
+        )
+            .into_response();
+    }
+
+    let sparte = match req.sparte.to_uppercase().as_str() {
+        "STROM" => MSparte::Strom,
+        "GAS" => MSparte::Gas,
+        "WAERME" | "WÄRME" => MSparte::Waerme,
+        "WASSER" => MSparte::Wasser,
+        other => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!("unknown sparte `{other}`; expected STROM, GAS, WAERME or WASSER")
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // EN 1434-1 cl. 6.3.1 permits heat registers in Joules or Watt-hours and any
+    // decimal multiple; water submeters commonly report litres. The scale is an
+    // exact rational, so GJ→kWh (2500/9) stays exact.
+    let Some(scale) = MeasurementUnit::parse_scaled(&req.unit) else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!(
+                    "unknown unit `{}`; expected kWh/MWh/GJ/MJ/Wh (energy) or m³/l (volume)",
+                    req.unit
+                )
+            })),
+        )
+            .into_response();
+    };
+    let unit = scale.unit;
+
+    // A reading may arrive in the unit the meter registers, or already converted
+    // to the settlement unit. Anything else is a decode error.
+    if unit != sparte.measured_unit() && unit != sparte.billing_unit() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!(
+                    "unit {} is not valid for sparte {} — expected {} (as measured) or {} (as billed)",
+                    unit.as_str(),
+                    sparte.as_str(),
+                    sparte.measured_unit().as_str(),
+                    sparte.billing_unit().as_str()
+                )
+            })),
+        )
+            .into_response();
+    }
+
+    // Gas is metered in m³ and billed in kWh, so a raw gas uplink needs the
+    // Brennwert before it can be stored in an energy column. The calorific value
+    // varies by supply area and month, so it is required rather than defaulted.
+    let conversion = if sparte.requires_conversion() && unit == sparte.measured_unit() {
+        let Some(hs) = req.brennwert_kwh_per_m3 else {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "brennwert_kwh_per_m3 is required when submitting gas in m³ \
+                              (§25 Nr. 4 MessEV); submit unit=KWH to supply pre-converted values"
+                })),
+            )
+                .into_response();
+        };
+        Some((hs, req.zustandszahl.unwrap_or(rust_decimal::Decimal::ONE)))
+    } else {
+        None
+    };
+
+    let pool = state.repo.pool();
+
+    // Idempotency: a committed session replays as 200, never as duplicate rows.
+    let already: Option<String> = sqlx::query_scalar(
+        r"SELECT status FROM direct_push_sessions
+          WHERE session_id = $1 AND malo_id = $2 AND tenant = $3 AND status = 'committed'",
+    )
+    .bind(&req.session_id)
+    .bind(&malo_id)
+    .bind(resource_tenant)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    if already.is_some() {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "malo_id": malo_id,
+                "session_id": req.session_id,
+                "status": "already_committed",
+            })),
+        )
+            .into_response();
+    }
+
+    // Calibration check. Expired → warn, never reject (see fn docs).
+    let mut warnings: Vec<String> = Vec::new();
+    let eichung_expired = req.eichung_bis.as_deref().and_then(|d| {
+        time::Date::parse(
+            d,
+            &time::macros::format_description!("[year]-[month]-[day]"),
+        )
+        .ok()
+    });
+    if let Some(bis) = eichung_expired
+        && bis < time::OffsetDateTime::now_utc().date()
+    {
+        warnings.push(format!(
+            "Eichfrist am {bis} abgelaufen (§37 Abs. 1 Satz 1 Nr. 1 MessEG) — \
+             Messwerte behalten ihre Verwendbarkeit, verlieren aber die Vermutung \
+             der Richtigkeit (BGH VIII ZR 112/10); Befundprüfung nach §39 MessEG \
+             empfohlen"
+        ));
+    }
+
+    // Normalise the OBIS code so it cannot create duplicate primary-key rows:
+    // `1-0:1.8.0` and `1-0:1.8.0*255` are the same register.
+    let obis_norm = req
+        .obis_code
+        .as_deref()
+        .map(|s| {
+            s.parse::<metering::obis::ObisCode>()
+                .map_or_else(|_| s.to_owned(), |c| c.to_string())
+        })
+        .unwrap_or_default();
+
+    // Hampel-filter quality scoring with media-aware thresholds: heat and water
+    // profiles contain long legitimate zero runs.
+    let mut scored: Vec<(f64, i64)> = req
+        .intervals
+        .iter()
+        .filter_map(|iv| {
+            let from = time::OffsetDateTime::parse(&iv.from, &Rfc3339).ok()?;
+            let rescaled = scale.apply(iv.value);
+            let converted = conversion.map_or(rescaled, |(hs, z)| {
+                metering::gas_m3_to_kwh_hs(rescaled, hs, z)
+            });
+            let v = converted.to_string().parse::<f64>().ok()?;
+            Some((v, (from.unix_timestamp_nanos() as i64)))
+        })
+        .collect();
+    scored.sort_by_key(|(_, ts)| *ts);
+
+    let quality = if scored.len() >= 3 {
+        let values: Vec<f64> = scored.iter().map(|(v, _)| *v).collect();
+        let stamps: Vec<i64> = scored.iter().map(|(_, t)| *t).collect();
+        let period_end = req
+            .intervals
+            .iter()
+            .filter_map(|iv| time::OffsetDateTime::parse(&iv.to, &Rfc3339).ok())
+            .map(|t| t.unix_timestamp_nanos() as i64)
+            .max()
+            .unwrap_or_else(|| stamps[stamps.len() - 1]);
+        Some(metering::score_intervals_f64(
+            &values,
+            &stamps,
+            stamps[0],
+            period_end,
+            metering::QualityConfig::for_sparte(sparte),
+        ))
+    } else {
+        None
+    };
+
+    // `outlier_intervals` / `spike_intervals` carry RFC 3339 start timestamps.
+    let outlier_stamps: std::collections::HashSet<i64> = quality
+        .as_ref()
+        .map(|q| {
+            q.outlier_intervals
+                .iter()
+                .chain(q.spike_intervals.iter())
+                .filter_map(|ts| {
+                    time::OffsetDateTime::parse(ts, &Rfc3339)
+                        .ok()
+                        .map(|t| t.unix_timestamp_nanos() as i64)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let stored_unit = sparte.billing_unit();
+
+    let mut stored = 0usize;
+    let mut rejected: Vec<String> = Vec::new();
+
+    for iv in &req.intervals {
+        let (Ok(from), Ok(to)) = (
+            time::OffsetDateTime::parse(&iv.from, &Rfc3339),
+            time::OffsetDateTime::parse(&iv.to, &Rfc3339),
+        ) else {
+            rejected.push(format!("unparseable interval {}..{}", iv.from, iv.to));
+            continue;
+        };
+        if from >= to {
+            rejected.push(format!("from >= to at {from}"));
+            continue;
+        }
+        // BDEW requires quantities to be positive or zero; direction is carried
+        // in the OBIS code.
+        if iv.value < rust_decimal::Decimal::ZERO {
+            rejected.push(format!(
+                "negative value {} at {from} — direction belongs in the OBIS code",
+                iv.value
+            ));
+            continue;
+        }
+
+        // An outlier is flagged, not discarded: §17 MessZV substitution is a
+        // downstream decision.
+        // `PRELIMINARY` (MSCONS Z84, vorläufiger Wert): measured but not yet
+        // confirmed. `FAULTY` would assert a defect the filter cannot establish.
+        let quality_flag = if outlier_stamps.contains(&(from.unix_timestamp_nanos() as i64)) {
+            "PRELIMINARY"
+        } else {
+            "MEASURED"
+        };
+
+        // `meter_reads.quantity_kwh` holds the settlement quantity, so gas is
+        // converted before it lands.
+        let rescaled = scale.apply(iv.value);
+        let quantity = conversion.map_or(rescaled, |(hs, z)| {
+            metering::gas_m3_to_kwh_hs(rescaled, hs, z)
+        });
+
+        let res = sqlx::query(
+            r"INSERT INTO meter_reads
+                (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid,
+                 sparte, unit, obis_code, obis_code_norm, source, push_session, tenant)
+              VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,'IOT_PUSH',$11,$12)
+              ON CONFLICT (malo_id, dtm_from, obis_code_norm) DO UPDATE
+                SET quantity_kwh = EXCLUDED.quantity_kwh,
+                    quality      = EXCLUDED.quality,
+                    unit         = EXCLUDED.unit,
+                    source       = EXCLUDED.source",
+        )
+        .bind(&malo_id)
+        .bind(req.melo_id.as_deref())
+        .bind(from)
+        .bind(to)
+        .bind(quantity)
+        .bind(quality_flag)
+        .bind(sparte.as_str())
+        .bind(stored_unit.as_str())
+        .bind(req.obis_code.as_deref())
+        .bind(&obis_norm)
+        .bind(&req.session_id)
+        .bind(resource_tenant)
+        .execute(pool)
+        .await;
+
+        match res {
+            Ok(_) => stored += 1,
+            Err(e) => {
+                tracing::warn!(malo_id = %malo_id, error = %e, "iot ingest: insert failed");
+                rejected.push(format!("{from}: {e}"));
+            }
+        }
+    }
+
+    // Commit the session only when something landed, so a wholly-failed batch
+    // stays retryable.
+    if stored > 0 {
+        let _ = sqlx::query(
+            r"INSERT INTO direct_push_sessions
+                (session_id, malo_id, interval_count, status, tenant)
+              VALUES ($1,$2,$3,'committed',$4)
+              ON CONFLICT (session_id) DO UPDATE SET status = 'committed'",
+        )
+        .bind(&req.session_id)
+        .bind(&malo_id)
+        .bind(i32::try_from(stored).unwrap_or(i32::MAX))
+        .bind(resource_tenant)
+        .execute(pool)
+        .await;
+    }
+
+    let status = if stored == 0 {
+        StatusCode::UNPROCESSABLE_ENTITY
+    } else if warnings.is_empty() && rejected.is_empty() {
+        StatusCode::CREATED
+    } else {
+        StatusCode::ACCEPTED
+    };
+
+    (
+        status,
+        Json(serde_json::json!({
+            "malo_id":     malo_id,
+            "session_id":  req.session_id,
+            "transport":   req.transport,
+            "device_id":   req.device_id,
+            "sparte":      sparte.as_str(),
+            "unit_submitted": unit.as_str(),
+            "unit_stored":     stored_unit.as_str(),
+            "converted":       conversion.is_some(),
+            "stored":      stored,
+            "rejected":    rejected,
+            "warnings":    warnings,
+            "raw_retained": req.raw_payload.is_some(),
+            "quality": quality.as_ref().map(|q| serde_json::json!({
+                "grade":         q.grade.as_str(),
+                "coverage_pct":  q.coverage_pct,
+                "gaps_detected": q.gaps_detected,
+                "outliers":      q.outlier_intervals.len() + q.spike_intervals.len(),
+                "blocks_billing": q.grade.blocks_billing(),
+            })),
+            "legal_basis": "HeizkostenV §5 Abs. 3 / §6a; MessEG §37",
         })),
     )
         .into_response()

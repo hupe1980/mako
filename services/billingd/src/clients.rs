@@ -520,7 +520,7 @@ impl EdmdClient {
     ///
     /// Returns the DSO-published Abrechnungsbrennwert and Zustandszahl for all
     /// billing periods stored for this MaLo.  These values convert gas volume
-    /// (m³) to energy (kWh_Hs) per §24 GasGVV / DVGW G 685:
+    /// (m³) to energy (kWh_Hs) per §25 Nr. 4 MessEV / DVGW G 685:
     ///
     /// `kWh_Hs = m³ × brennwert_kwh_per_m3 × zustandszahl`
     ///

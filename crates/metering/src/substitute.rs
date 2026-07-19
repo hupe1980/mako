@@ -76,7 +76,7 @@ pub enum SubstituteMethod {
 /// ```rust,ignore
 /// use metering::{fill_gaps_with_config, FillGapsConfig, SubstituteMethod};
 ///
-/// // Reference readings from 7 days prior (from edmd)
+/// // Reference readings from 7 days prior
 /// let prior: Vec<_> = fetch_prior_week_intervals(&malo_id).await;
 ///
 /// let config = FillGapsConfig::prior_period(prior);
@@ -161,7 +161,7 @@ pub struct FillGapsConfig {
     /// Documented reason for gap filling (§22 MessZV audit trail).
     ///
     /// When set, the generated substitute intervals carry this reason in their
-    /// audit metadata. Used by `edmd` to persist the substitution rationale
+    /// audit metadata, so a caller can persist the substitution rationale
     /// in `meter_read_corrections`.
     ///
     /// `None` = reason not specified (acceptable for automated gap-fill).

@@ -1,8 +1,7 @@
-//! End-to-end test: NB → LFN/MSB Sperrauftrag (ORDERS PID 17115).
+//! End-to-end test: LF → NB Sperrauftrag (ORDERS PID 17115), NB receiving side.
 //!
-//! The NB (Netzbetreiber) initiates a disconnection order; the receiving
-//! party (MockLfn, acting as Lieferant or Messstellenbetreiber) processes
-//! the ORDERS 17115 and confirms or denies execution.
+//! The Lieferant issues a disconnection order; the Netzbetreiber (modelled here
+//! by `MockLfn`) receives the ORDERS 17115 and confirms or denies execution.
 //!
 //! # Protocol trace
 //!
@@ -19,10 +18,14 @@
 //!   ──────────────────────────────────────────────────────────────────
 //! ```
 //!
-//! The NB side does **not** have a `mako-engine` workflow for sending the
-//! Sperrung order — the NB's internal system generates the EDIFACT ORDERS
-//! 17115 directly.  This test exercises only the receiving (LFN/MSB) side of
-//! the protocol.
+//! Direction: **17115/17117 are LF → NB** (the Lieferant orders the grid
+//! operator to disconnect). This test exercises the receiving side.
+//!
+//! The LF-side sending half is `gpke-sperrung-lf`, driven by the ERP commands
+//! `gpke.sperrung.beauftragen` / `gpke.entsperrung.beauftragen` /
+//! `gpke.sperrung.stornieren`. The NB reports execution back with
+//! `gpke.sperrung.bestaetigen` / `gpke.sperrung.fehlgeschlagen`, which is what
+//! `sperrd` calls after field service.
 //!
 //! # Regulatory context
 //!

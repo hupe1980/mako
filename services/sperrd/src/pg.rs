@@ -248,13 +248,68 @@ pub async fn execute_order_pg(
 
 // ── fail_order_pg ─────────────────────────────────────────────────────────────
 
-pub async fn fail_order_pg(pool: &PgPool, id: Uuid, reason: &str) -> anyhow::Result<bool> {
+/// Mark an order as failed and dispatch IFTSTA 21039 reporting non-execution.
+///
+/// GPKE BK6-22-024 §5 requires the NB to report the outcome of a Sperrung order
+/// — **including a failed attempt**. Without this dispatch the Lieferant's
+/// `gpke-sperrung-lf` process hangs until its 24-hour deadline expires and the LF
+/// never learns why (meter access denied, safety block, address not found, …).
+pub async fn fail_order_pg(
+    pool: &PgPool,
+    makod: &Arc<MakodClient>,
+    id: Uuid,
+    reason: &str,
+) -> anyhow::Result<bool> {
+    // Fetch order details before the status transition so we can address the command.
+    let order_row = sqlx::query(
+        "SELECT malo_id, lf_mp_id, process_id FROM sperr_orders WHERE id = $1 AND status = 'pending'",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .context("fetch order for fail")?;
+
+    let Some(order) = order_row else {
+        return Ok(false);
+    };
+
+    let malo_id: String = order.try_get("malo_id")?;
+    let lf_mp_id: String = order.try_get("lf_mp_id")?;
+    let process_id: Option<String> = order.try_get("process_id")?;
+
+    let idempotency_key = format!("sperrd-iftsta-fail-{id}");
+    let cmd = ForwardCommand {
+        command: "gpke.sperrung.fehlgeschlagen".to_owned(),
+        marktrolle: None,
+        malo_id: Some(malo_id.clone()),
+        melo_id: None,
+        payload: serde_json::json!({
+            "lf_mp_id":   lf_mp_id,
+            "process_id": process_id,
+            "reason":     reason,
+        }),
+    };
+
+    let accepted = makod
+        .post_command(&idempotency_key, &cmd)
+        .await
+        .context("dispatch IFTSTA 21039 (non-execution) to makod")?;
+
+    let iftsta_ref = accepted.process_id.to_string();
+    let now = time::OffsetDateTime::now_utc();
+
     let rows = sqlx::query(
         r"UPDATE sperr_orders
-          SET status = 'failed', fail_reason = $1, updated_at = now()
-          WHERE id = $2 AND status = 'pending'",
+          SET status               = 'failed',
+              fail_reason          = $1,
+              iftsta_ref           = $2,
+              iftsta_dispatched_at = $3,
+              updated_at           = now()
+          WHERE id = $4 AND status = 'pending'",
     )
     .bind(reason)
+    .bind(&iftsta_ref)
+    .bind(now)
     .bind(id)
     .execute(pool)
     .await

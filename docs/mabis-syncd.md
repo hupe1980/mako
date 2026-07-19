@@ -44,7 +44,7 @@ flowchart LR
 |---|---|
 | **BK6-22-024 Anlage 3 MaBiS** | Vorlaeufige Summenzeitreihe by day 3 after period end |
 | **BK6-22-024 Anlage 3 MaBiS** | Endgueltige Summenzeitreihe by day 8 after period end |
-| **§4 StromNZV** | Legal mandate for balance group accounting |
+| **MaBiS (Anlage 3 zur Festlegung BK6-24-174)** | Marktregeln für die Bilanzkreisabrechnung Strom |
 | **UTILTS AHB S1.0 / S2.0** | EDIFACT message format for Summenzeitreihe |
 | **§22 MessZV** | 3-year audit retention for all billing-relevant data |
 

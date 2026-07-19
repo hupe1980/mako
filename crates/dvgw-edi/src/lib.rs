@@ -2,7 +2,7 @@
 //! balancing market.
 //!
 //! This crate implements parsing of **DVGW-governed EDIFACT formats** used in
-//! gas network balancing (`GaBi Gas 2.0`, `BNetzA` BK7-14-020). It is the DVGW
+//! gas network balancing (`GaBi Gas 2.1`, `BNetzA` BK7-24-01-008). It is the DVGW
 //! counterpart to the `edi-energy` crate which covers BDEW EDI@Energy.
 //!
 //! # Supported formats
@@ -63,8 +63,8 @@
 //!
 //! # Regulatory references
 //!
-//! - **`GasNZV`** — statutory basis for gas network access and balancing
-//! - **`BNetzA` BK7-14-020** — `GaBi` Gas 2.0 ruling (current)
+//! - **§20 Abs. 3 `EnWG`** — Festlegungskompetenz for gas network access and balancing
+//! - **`BNetzA` BK7-24-01-008** — `GaBi` Gas 2.1 ruling (current)
 //! - **`DVGW G 685`** — technical standard for gas metering and allocation
 //! - DVGW AHBs and MIGs: <https://www.dvgw-sc.de/leistungen/it-dienstleistungen/datenaustausch-gas>
 //!

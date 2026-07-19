@@ -119,12 +119,17 @@ pub struct FailRequest {
 /// `PUT /api/v1/sperr-orders/{id}/fail`
 ///
 /// Reports a field failure — escalates to operator review.
+///
+/// Auto-dispatches IFTSTA 21039 reporting non-execution, so the Lieferant learns
+/// why the Sperrung did not happen instead of waiting out its 24-hour deadline
+/// (GPKE BK6-22-024 §5).
 pub async fn fail_order(
     Extension(pool): Extension<PgPool>,
+    Extension(makod): Extension<Arc<MakodClient>>,
     Path(id): Path<Uuid>,
     Json(req): Json<FailRequest>,
 ) -> impl IntoResponse {
-    match fail_order_pg(&pool, id, &req.reason).await {
+    match fail_order_pg(&pool, &makod, id, &req.reason).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),

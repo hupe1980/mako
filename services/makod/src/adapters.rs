@@ -712,6 +712,30 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
                 .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
                 .unwrap_or_default();
 
+            // Antwort PIDs close an order we sent. They carry no UTILMD AHB
+            // Anwendungsfall, so `validate()` yields `ProfileNotFound` and the
+            // validation flags above are meaningless here — the Bestätigung /
+            // Ablehnung decision comes from the PID itself.
+            if mako_wim::antwort_pid_meaning(pid.as_u32()).is_some() {
+                return Ok(DeviceChangeCommand::ReceiveAntwort {
+                    pid,
+                    sender: MarktpartnerCode::new(
+                        u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                    ),
+                    message_ref: MessageRef::new(msg.message_ref()),
+                    reason: validation_result
+                        .as_ref()
+                        .map(|r| {
+                            r.errors()
+                                .iter()
+                                .map(|i| format!("{i}"))
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        })
+                        .filter(|s| !s.is_empty()),
+                });
+            }
+
             // WiM uses MeLo (Messlokation) as the object ID.
             let melo_id = MeLo::new(
                 u.transactions()
@@ -3488,7 +3512,7 @@ pub fn geli_gas_stornierung_registry() -> AdapterRegistry<GeliGasStornierungWork
 /// belongs to GeLi Gas (BK7-24-01-009) and is handled by
 /// `geli_gas_sperrprozesse_invoic_registry()` in `mako-geli-gas`.
 ///
-/// Regulatory basis: BK7-14-020 (GaBi Gas 2.0).
+/// Regulatory basis: BK7-24-01-008 (GaBi Gas 2.1).
 #[must_use]
 pub fn gabi_gas_invoic_registry() -> AdapterRegistry<GaBiGasInvoicWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -4181,7 +4205,7 @@ pub fn gabi_gas_comdis_registry() -> AdapterRegistry<GaBiGasInvoicWorkflow> {
 /// DVGW messages carry no BGM Prüfidentifikator; the synthetic PID is derived
 /// from the message type and role qualifier via `AnyDvgwMessage::detect_pid`.
 ///
-/// Regulatory basis: KoV (Kooperationsvereinbarung Gas), BNetzA BK7-14-020.
+/// Regulatory basis: KoV (Kooperationsvereinbarung Gas), BNetzA BK7-24-01-008.
 #[must_use]
 pub fn gabi_gas_nomination_registry() -> AdapterRegistry<GaBiGasNominationWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -4277,7 +4301,7 @@ pub fn gabi_gas_nomination_registry() -> AdapterRegistry<GaBiGasNominationWorkfl
 /// DVGW messages carry no BGM Prüfidentifikator; the synthetic PID is derived
 /// from the message type and role qualifier via `AnyDvgwMessage::detect_pid`.
 ///
-/// Regulatory basis: KoV (Kooperationsvereinbarung Gas), BNetzA BK7-14-020.
+/// Regulatory basis: KoV (Kooperationsvereinbarung Gas), BNetzA BK7-24-01-008.
 #[must_use]
 pub fn gabi_gas_allocation_registry() -> AdapterRegistry<GaBiGasAllocationWorkflow> {
     let mut registry = AdapterRegistry::new();

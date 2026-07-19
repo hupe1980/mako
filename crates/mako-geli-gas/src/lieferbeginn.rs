@@ -56,7 +56,7 @@ use time::OffsetDateTime;
 /// Stable workflow name used as the `WorkflowId.name` and in the `ProcessRegistry`.
 pub const WORKFLOW_NAME: &str = "geli-gas-supplier-change";
 
-/// Deadline label for the 10-Werktage response window (GeLi Gas BK7-24-01-009).
+/// Deadline label for the 10-Werktage response window (GeLi Gas 3.0 (BK7-24-01-009)).
 pub const RESPONSE_WINDOW_LABEL: &str = "geli-gas-response-10-werktage";
 
 // ── PID sets ──────────────────────────────────────────────────────────────────

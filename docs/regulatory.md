@@ -38,7 +38,7 @@ graph LR
 
     subgraph gas ["Gas frameworks"]
         BK7_24["BK7-24-01-009\nGeLi Gas 3.0"]
-        BK7_14["BK7-14-020\nGaBi Gas 2.0 (DVGW)"]
+        BK7_14["BK7-24-01-008\nGaBi Gas 2.1 (DVGW)"]
     end
 
     subgraph retail ["Retail / LF"]
@@ -59,7 +59,7 @@ graph LR
 
     BK6_24 -->|"mako-gpke\nmako-wim\nmako-mabis"| GPKE_impl["247 PIDs covered\n(100%)"]
     BK7_24 -->|"mako-geli-gas\nmako-wim-gas"| GAS_impl["GeLi Gas 3.0\nWiM Gas"]
-    BK7_14 -->|"mako-gabi-gas\ndvgw-edi"| DVGW_impl["8 DVGW messages\nGaBi Gas 2.0"]
+    BK7_14 -->|"mako-gabi-gas\ndvgw-edi"| DVGW_impl["8 DVGW messages\nGaBi Gas 2.1"]
     ENW41 -->|"vertragd"| LF_impl["B2C/B2B contracts\nGDPR Art. 15/17/20"]
     EEG -->|"eeg-billing\neinsd"| EEG_impl["9 settlement schemes\n324 tests"]
     BSI -->|"metering\nedmd"| IOT_impl["SmgwSession\nClsChannel"]
@@ -76,7 +76,7 @@ graph LR
 | **BK6-24-174** (GPKE + WiM + MaBiS, in force 06.06.2025) | Strom | `mako-gpke`, `mako-wim`, `mako-mabis` |
 | **BK6-22-024** (GPKE Teil 4 — Stammdaten, Sperrung) | Strom | `mako-gpke` |
 | **BK7-24-01-009** (GeLi Gas 3.0, BK7 Beschluss 12.09.2025) | Gas | `mako-geli-gas`, `mako-wim-gas` |
-| **BK7-14-020** (GaBi Gas 2.0 — Kapazitätsabrechnung, DVGW) | Gas | `mako-gabi-gas`, `dvgw-edi` |
+| **BK7-24-01-008** (GaBi Gas 2.1 — Kapazitätsabrechnung, DVGW) | Gas | `mako-gabi-gas`, `dvgw-edi` |
 | **PARTIN AHB 1.0f** (Kommunikationsdaten Strom + Gas) | Both | `mako-gpke` (37000–37006), `mako-geli-gas` (37008–37014) |
 | **§42b Abs. 5 EnWG** (Solarpaket I — GGV Gemeinschaftliche Gebäudeversorgung) | Strom | `metering` crate (`GgvConstantAllocation`, `GgvProportionalAllocation`), `edmd` |
 | **§42a EEG** (Residuallast) | Strom | `metering` crate (`Residual` rule), `edmd` |

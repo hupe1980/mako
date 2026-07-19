@@ -302,7 +302,7 @@ fn is_strom_only_pid(pid: u32) -> bool {
         55001..=55557
             // GPKE IFTSTA Strom (Vollzugsmeldung)
             | 21024..=21028 | 21033 | 21035 | 21045 | 21047
-            // Strom INVOIC (GPKE, WiM Strom) — 31007/31008 are Gas-only (BK7-14-020)
+            // Strom INVOIC (GPKE, WiM Strom) — 31007/31008 are Gas-only (BK7-24-01-008)
             | 31001 | 31002 | 31005 | 31006 | 31009
             // MaBiS MSCONS / IFTSTA
             | 13003 | 21000..=21005
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn strom_only_excludes_gas_invoic_pids() {
-        // 31007 and 31008 are Gas-only (BK7-14-020, Aggreg. MMM-Rechnung Gas, NB → MGV)
+        // 31007 and 31008 are Gas-only (BK7-24-01-008, Aggreg. MMM-Rechnung Gas, NB → MGV)
         // They must NOT appear in is_strom_only_pid even though 31005–31009 is a natural range.
         assert!(!is_strom_only_pid(31007));
         assert!(!is_strom_only_pid(31008));

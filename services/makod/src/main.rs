@@ -89,7 +89,7 @@
 //!         │                   [role-lf-gas OR role-nb-gas OR no role flags]
 //!         ├── WimGasModule      — PIDs 44022–44024, 44039–44053, 44168–44170, 31003, 31004 (WiM Gas MSB-Wechsel + INVOIC billing)
 //!         │                       [role-msb-gas OR role-nb-gas OR no role flags]
-//!         ├── GaBiGasModule     — PIDs 31010/31007/31008 (INVOIC billing, BK7-14-020)
+//!         ├── GaBiGasModule     — PIDs 31010/31007/31008 (INVOIC billing, BK7-24-01-008)
 //!         │                   + PID 33001 (REMADV Zahlungsavis) + PID 29001 (COMDIS Ablehnung)
 //!         │                   + PID 13013 (MSCONS Gas Allokationsliste, `gabi-gas-mmma`)
 //!         │                   [role-nb-gas OR no role flags]

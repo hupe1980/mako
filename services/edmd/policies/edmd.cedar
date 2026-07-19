@@ -23,6 +23,8 @@ permit(
         Action::"read-imbalance",
         Action::"read-billing-period",
         Action::"read-corrections",
+        Action::"read-archive-olap",
+        Action::"read-archive-status",
         Action::"use-mcp"
     ],
     resource
@@ -30,12 +32,25 @@ permit(
     context.principal_tenant == context.resource_tenant
 };
 
-// Same-tenant write: MSB, LF, or admin roles may push meter reads and corrections.
+// Same-tenant write.
+//
+// Note: the guard below checks tenant only. `context.principal_roles` is passed
+// by the enforcer but never evaluated here, so despite the historical comment
+// naming "MSB, LF, or admin" there is no role gating — any authenticated
+// principal of the right tenant may write. Add a `principal_roles.contains(..)`
+// clause here if that needs tightening.
+//
+// `write-timeseries` and `write-quality-rescore` are used by
+// `post_bulk_reads`, `post_corrections` and `post_quality_rescore` but were
+// never declared. Cedar is default-deny, so those endpoints returned 403 for
+// every caller regardless of role.
 permit(
     principal,
     action in [
         Action::"write-meter-reads",
-        Action::"write-corrections"
+        Action::"write-corrections",
+        Action::"write-timeseries",
+        Action::"write-quality-rescore"
     ],
     resource
 ) when {

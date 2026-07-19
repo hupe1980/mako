@@ -11,7 +11,7 @@
 //! | `PUT` | `/api/v1/mmma-preise/gas/{year}/{month}` | `write-preisblatt` | Upsert Gas MMM price pair (THE publication) |
 //! | `GET` | `/api/v1/mmma-preise/gas/{year}/{month}` | `read-preisblatt` | Fetch Gas MMM prices for a billing month |
 //! | `GET` | `/api/v1/mmma-preise/gas` | `read-preisblatt` | List all Gas MMM price records (newest first) |
-//! | `PUT` | `/api/v1/mmm-preise/strom/{year}/{month}` | `write-preisblatt` | Upsert Strom MMM price pair (ÜNB publication) |
+//! | `PUT` | `/api/v1/mmm-preise/strom/{year}/{month}` | `write-preisblatt` | Upsert Strom MMM price pair (VNB publication) |
 //! | `GET` | `/api/v1/mmm-preise/strom/{year}/{month}` | `read-preisblatt` | Fetch Strom MMM prices |
 
 use std::sync::Arc;
@@ -217,7 +217,7 @@ pub async fn list_mmma_gas(
 #[derive(Debug, Serialize)]
 pub struct MmmStromResponse {
     pub price_month: String,
-    pub unb_mp_id: String,
+    pub vnb_mp_id: String,
     pub mehr_ct_kwh: Decimal,
     pub minder_ct_kwh: Decimal,
     pub source: String,
@@ -228,8 +228,9 @@ pub struct MmmStromResponse {
 /// Request body for upserting Strom MMM prices.
 #[derive(Debug, Deserialize)]
 pub struct MmmStromUpsertRequest {
-    /// ÜNB MP-ID (BDEW-Codenummer, `99…`): 50Hertz, TenneT, Amprion, TransnetBW.
-    pub unb_mp_id: String,
+    /// VNB MP-ID (BDEW-Codenummer). The distribution network operator computes and
+    /// publishes the price on its own website.
+    pub vnb_mp_id: String,
     pub mehr_ct_kwh: Decimal,
     pub minder_ct_kwh: Decimal,
     #[serde(default = "default_source_manual")]
@@ -238,7 +239,7 @@ pub struct MmmStromUpsertRequest {
 
 /// `PUT /api/v1/mmm-preise/strom/{year}/{month}`
 ///
-/// Upsert the Strom MMM Ausgleichsenergie prices for a billing month + ÜNB.
+/// Upsert the Strom MMM prices for a billing month + VNB.
 pub async fn put_mmm_strom(
     Extension(repo): Extension<MmmStromRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -260,7 +261,7 @@ pub async fn put_mmm_strom(
     match repo
         .upsert_strom(
             price_month,
-            &req.unb_mp_id,
+            &req.vnb_mp_id,
             req.mehr_ct_kwh,
             req.minder_ct_kwh,
             &req.source,
@@ -272,7 +273,7 @@ pub async fn put_mmm_strom(
     }
 }
 
-/// `GET /api/v1/mmm-preise/strom/{year}/{month}?unb_mp_id=9900...`
+/// `GET /api/v1/mmm-preise/strom/{year}/{month}?vnb_mp_id=9900...`
 pub async fn get_mmm_strom(
     Extension(repo): Extension<MmmStromRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -287,12 +288,12 @@ pub async fn get_mmm_strom(
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
-    let unb_mp_id = match q.get("unb_mp_id") {
+    let vnb_mp_id = match q.get("vnb_mp_id") {
         Some(id) => id.clone(),
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                "unb_mp_id query parameter required",
+                "vnb_mp_id query parameter required",
             )
                 .into_response();
         }
@@ -301,10 +302,10 @@ pub async fn get_mmm_strom(
         Ok(d) => d,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
-    match repo.find_strom(price_month, &unb_mp_id).await {
+    match repo.find_strom(price_month, &vnb_mp_id).await {
         Ok(Some(r)) => Json(MmmStromResponse {
             price_month: r.price_month.to_string(),
-            unb_mp_id: r.unb_mp_id,
+            vnb_mp_id: r.vnb_mp_id,
             mehr_ct_kwh: r.mehr_ct_kwh,
             minder_ct_kwh: r.minder_ct_kwh,
             source: r.source,
@@ -314,7 +315,7 @@ pub async fn get_mmm_strom(
         Ok(None) => (
             StatusCode::NOT_FOUND,
             format!(
-                "No MMM Strom prices for {}/{} ÜNB {unb_mp_id}",
+                "No MMM Strom prices for {}/{} VNB {vnb_mp_id}",
                 path.year, path.month
             ),
         )

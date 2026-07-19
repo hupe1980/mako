@@ -51,7 +51,7 @@ pub enum MeasurementSource {
     /// Received via EDIFACT MSCONS (standard MaKo pipeline).
     ///
     /// The canonical source for DSO-metered customers. Follows the
-    /// makod → marktd → edmd webhook pipeline.
+    /// market-communication → master-data → metering webhook pipeline.
     Mscons {
         /// MSCONS Prüfidentifikator (e.g. 13005).
         pid: u32,
@@ -200,7 +200,7 @@ pub enum ProvenanceEventType {
 ///
 /// For most processing (aggregation, validation, resampling), use `Vec<MeterInterval>`
 /// directly. Use `MeasurementSeries` at system boundaries where the full context
-/// must be preserved: `edmd` storage, MCP tool responses, and ERP handoffs.
+/// must be preserved: persistence, tool responses, and ERP handoffs.
 ///
 /// ## Relationship to `MeasurementPoint`
 ///

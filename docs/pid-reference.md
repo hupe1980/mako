@@ -132,14 +132,14 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 55037 | Beendigung der Zuordnung | GPKE Teil 2 | NB → LFA | — | ✅ | — | ✅ | ✅ | — |
 | 55038 | Aufhebung einer zuk. Zuordnung | GPKE Teil 2 | NB → LFZ | — | ✅ | — | ✅ | ✅ | — |
 | 55039 | Kündigung MSB | WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
-| 55040 | Bestätigung Kündigung MSB | WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | — | ✅ | ✅ | — |
-| 55041 | Ablehnung Kündigung MSB | WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | — | ✅ | ✅ | — |
+| 55040 | Bestätigung Kündigung MSB | WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 55041 | Ablehnung Kündigung MSB | WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55042 | Anmeldung MSB | WiM Strom Teil 1 | MSBN → NB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
-| 55043 | Bestätigung Anmeldung MSB | WiM Strom Teil 1 | NB → MSBN | — | ✅ | — | ✅ | ✅ | — |
-| 55044 | Ablehnung Anmeldung MSB | WiM Strom Teil 1 | NB → MSBN | — | ✅ | — | ✅ | ✅ | — |
+| 55043 | Bestätigung Anmeldung MSB | WiM Strom Teil 1 | NB → MSBN | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 55044 | Ablehnung Anmeldung MSB | WiM Strom Teil 1 | NB → MSBN | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55051 | Ende MSB | WiM Strom Teil 1 | MSBA → NB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
-| 55052 | Bestätigung Ende MSB | WiM Strom Teil 1 | NB → MSBA | — | ✅ | — | ✅ | ✅ | — |
-| 55053 | Ablehnung Ende MSB | WiM Strom Teil 1 | NB → MSBA | — | ✅ | — | ✅ | ✅ | — |
+| 55052 | Bestätigung Ende MSB | WiM Strom Teil 1 | NB → MSBA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 55053 | Ablehnung Ende MSB | WiM Strom Teil 1 | NB → MSBA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55060 | Antwort auf GDA | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
 | 55062 | Aktivierung von ZP | MaBiS / AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → NB · NB → BIKO · NB → LF · ÜNB → LF · ÜNB → BIKO · BIKO → NB · BIKO → BKV · BIKO → ÜNB · ÜNB → NB · ÜNB → BKV · NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
 | 55063 | Deaktivierung von ZP | MaBiS / AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → NB · NB → BIKO · NB → LF · ÜNB → LF · ÜNB → BIKO · BIKO → NB · BIKO → BKV · BIKO → ÜNB · ÜNB → NB · ÜNB → BKV · NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
@@ -166,8 +166,8 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 55137 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | NB → LF | 55109 | ✅ | — | ✅ | ✅ | — |
 | 55156 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 | LF → NB | 55126 | ✅ | — | ✅ | ✅ | — |
 | 55168 | Verpflichtungsanfrage / Aufforderung | WiM Strom Teil 1 | NB → gMSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
-| 55169 | Bestätigung Verpflichtungsanfrage | WiM Strom Teil 1 | gMSB → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55170 | Ablehnung Verpflichtungsanfrage | WiM Strom Teil 1 | gMSB → NB | — | ✅ | — | ✅ | ✅ | — |
+| 55169 | Bestätigung Verpflichtungsanfrage | WiM Strom Teil 1 | gMSB → NB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 55170 | Ablehnung Verpflichtungsanfrage | WiM Strom Teil 1 | gMSB → NB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55173 | Änderung der Lokationsbündelstruktur | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
 | 55175 | Änderung der Lokationsbündelstruktur | GPKE Teil 4 | NB → LF | — | ✅ | — | ✅ | ✅ | — |
 | 55177 | Rückmeldung/Anfrage Lokationsbündelstruktur | GPKE Teil 4 | MSB → NB | 55173 | ✅ | — | ✅ | ✅ | — |
@@ -411,9 +411,9 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 17110 | Anforderung der Allokationsliste | MMM Strom/Gas | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-mmma` |
 | 17113 | Reklamation von Werten | WiM Gas / WiM Strom Teil 2 | LF → NB · NB → MSB · MSB → MSB · LF → MSB · ÜNB → MSB | — | ✅ | ✅ | ✅ | ✅ | — |
 | 17114 | Anforderung bilanzierte Menge | MMM Strom/Gas | NB → ÜNB | — | ✅ | — | ✅ | ⚠️ | — |
-| 17115 | Sperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` (Strom inbound NB-role) · `mako-geli-gas` `geli-gas-sperrung-lf` (Gas outbound LF-role) · `mako-geli-gas` `geli-gas-sperrung-nb` (Gas inbound GNB-role) |
+| 17115 | Sperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` (Strom inbound NB-role) · `mako-gpke` `gpke-sperrung-lf` (Strom outbound LF-role) · `mako-geli-gas` `geli-gas-sperrung-lf` (Gas outbound LF-role) · `mako-geli-gas` `geli-gas-sperrung-nb` (Gas inbound GNB-role) |
 | 17116 | Anfrage Sperrung | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` · `mako-geli-gas` `geli-gas-sperrung-nb` (Gas GNB→gMSB role) |
-| 17117 | Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` (Strom inbound NB-role) · `mako-geli-gas` `geli-gas-sperrung-lf` (Gas outbound LF-role) · `mako-geli-gas` `geli-gas-sperrung-nb` (Gas inbound GNB-role) |
+| 17117 | Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` (Strom inbound NB-role) · `mako-gpke` `gpke-sperrung-lf` (Strom outbound LF-role) · `mako-geli-gas` `geli-gas-sperrung-lf` (Gas outbound LF-role) · `mako-geli-gas` `geli-gas-sperrung-nb` (Gas inbound GNB-role) |
 | 17118 | Bestellung einer Konfigurationsänderung | GPKE Teil 3 | MSB → MSB | — | ✅ | — | ✅ | ✅ | — |
 | 17120 | Bestellung Änderung Prognosegrundlage | GPKE Teil 3 | LF → NB | — | ✅ | — | ✅ | ✅ | — |
 | 17121 | Bestellung Änderung | GPKE Teil 3 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
@@ -490,7 +490,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
-| 39000 | Stornierung Sperr-/Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` |
+| 39000 | Stornierung Sperr-/Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` (inbound NB-role) · `mako-gpke` `gpke-sperrung-lf` (outbound LF-role) |
 | 39001 | Weiterleitung der Stornierung | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → MSB | — | ✅ | ✅ | ✅ | ✅ | — |
 | 39002 | Stornierung der Bestellung | WiM Strom Teil 2 | ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-stornierung` |
 

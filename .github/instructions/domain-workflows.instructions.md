@@ -30,7 +30,7 @@ applyTo: "crates/mako-gpke/**, crates/mako-wim/**, crates/mako-geli-gas/**, crat
 | 44039–44041 | `mako-wim-gas` `wim-gas-kuendigung` (Kündigung MSB Gas) | BK7-24-01-009 |
 | 44042–44053 | `mako-wim-gas` `wim-gas-anmeldung` (Anmeldung / Ende MSB Gas) | BK7-24-01-009 |
 | 44168–44170 | `mako-wim-gas` `wim-gas-verpflichtungsanfrage` (Verpflichtungsanfrage) | BK7-24-01-009 |
-| 31010 | `mako-gabi-gas` `gabi-gas-invoic` (Kapazitätsrechnung, FNB/VNB → BKV) | BK7-14-020 |
+| 31010 | `mako-gabi-gas` `gabi-gas-invoic` (Kapazitätsrechnung, FNB/VNB → BKV) | BK7-24-01-008 |
 
 **PIDs that do NOT exist — never register:**
 44555, 56001–56010, 13001, 11004–11099.
@@ -65,7 +65,7 @@ Saturday = Werktag. Sundays and German public holidays do not count. All deadlin
 
 - Governed by **BK7-24-01-009** (GeLi Gas 3.0, Beschluss 12.09.2025). Supersedes BK7-19-001 and BK7-06-067.
 - Scope: UTILMD G (PIDs 44001–44021) + ORDERS Sperrung Gas (17115–17117) + PARTIN Gas (37008–37014) + **INVOIC 31011** (Rechnung sonstige Leistung, AWH Sperrprozesse Gas, NB → LF).
-- PID 31011 is billed by GNB/VNB to LFN/LFA for performing AWH (Sperrung/Entsperrung). Direction is NB → LF — NOT NB → BKV. This is GeLi Gas (BK7-24-01-009), not GaBi Gas (BK7-14-020).
+- PID 31011 is billed by GNB/VNB to LFN/LFA for performing AWH (Sperrung/Entsperrung). Direction is NB → LF — NOT NB → BKV. This is GeLi Gas (BK7-24-01-009), not GaBi Gas (BK7-24-01-008).
 - **APERAK deadline: 10 Werktage.**
 
 ## crates/mako-mabis
@@ -84,7 +84,7 @@ Saturday = Werktag. Sundays and German public holidays do not count. All deadlin
 
 ## crates/mako-gabi-gas
 
-- Governed by **BK7-14-020** (GaBi Gas 2.0, Bundesnetzagentur).
+- Governed by **BK7-24-01-008** (GaBi Gas 2.1, Bundesnetzagentur).
 - Scope: INVOIC **31010** only (Kapazitätsrechnung, FNB/VNB → BKV).
 - GaBi Gas = gas balancing. Key roles: FNB, VNB, BKV, MGV. The BKV pays the FNB/VNB for transmission capacity.
 - PID 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) belongs to `mako-geli-gas`. Direction NB → LF (not NB → BKV) confirms this is NOT a GaBi Gas process.

@@ -69,7 +69,7 @@ pub async fn run_billing(
     Extension(http_client): Extension<Arc<reqwest::Client>>,
     Json(req): Json<BillingRunRequest>,
 ) -> impl IntoResponse {
-    match run_billing_internal(&pool, &marktd, &cfg.tenant, cfg.unb_mp_id.as_deref(), req).await {
+    match run_billing_internal(&pool, &marktd, &cfg.tenant, cfg.vnb_mp_id.as_deref(), req).await {
         Ok(ids) => {
             // Emit CloudEvent for each drafted invoice (fire-and-forget).
             if let Some(ref url) = cfg.erp_webhook_url {
@@ -356,7 +356,7 @@ pub async fn post_mmm_auto_run(
         &pool,
         &marktd,
         &cfg.tenant,
-        cfg.unb_mp_id.as_deref(),
+        cfg.vnb_mp_id.as_deref(),
         billing_req,
     )
     .await
@@ -966,7 +966,7 @@ pub struct GgvNneRequest {
     pub arbeitspreis_ct_per_kwh: rust_decimal::Decimal,
     /// NNE Grundpreis EUR/year for this GGV (from `PreisblattNetznutzung`).
     pub grundpreis_eur_per_year: Option<rust_decimal::Decimal>,
-    /// KA rate ct/kWh (§17 StromNZV, optional).
+    /// KA rate ct/kWh (KAV §2, optional).
     pub ka_satz_ct_per_kwh: Option<rust_decimal::Decimal>,
     /// Per-tenant consumption in kWh.
     ///
@@ -1149,7 +1149,7 @@ pub async fn post_ggv_nne(
             &pool,
             &marktd,
             &cfg.tenant,
-            cfg.unb_mp_id.as_deref(),
+            cfg.vnb_mp_id.as_deref(),
             billing_req,
         )
         .await

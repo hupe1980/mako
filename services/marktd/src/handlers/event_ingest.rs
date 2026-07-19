@@ -175,7 +175,7 @@ where
 
     // 5. Derive VersorgungsStatus from supply-state-changing CloudEvents.
     //
-    // Event → action mapping (GPKE BK6-22-024 + GeLi Gas BK7-24-01-009):
+    // Event → action mapping (GPKE BK6-22-024 + GeLi Gas 3.0 (BK7-24-01-009)):
     //
     //   process.initiated  + PID 55001/44001
     //     → announce_lf_next: set lf_mp_id_next + lf_next_lieferbeginn

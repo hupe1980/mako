@@ -251,7 +251,7 @@ including `days_overdue` — the sperrd-agent calls this in its daily compliance
 | BK6-22-024 §6.2 | Failure to send IFTSTA 21039 leaves the process permanently unresolved in the LF system |
 | BK6-22-024 §9 | Failed Sperrung must be reported to the LF within 3 Werktage |
 | BDEW ORDERS AHB PIDs 17115–17117 | Sperrung/Entsperrung order + confirmation message flow |
-| BDEW GeLi Gas BK7-24-01-009 | Gas Sperrprozesse — ORDERS 17115/17117 + INVOIC 31011 (AWH) |
+| BDEW GeLi Gas 3.0 (BK7-24-01-009) | Gas Sperrprozesse — ORDERS 17115/17117 + INVOIC 31011 (AWH) |
 
 > **Integration note:** Inbound ORDERS 17115 from the LF triggers the order creation in `sperrd`.
 > Outbound IFTSTA 21039 is dispatched to `makod`, which serializes it as EDIFACT and delivers

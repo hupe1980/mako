@@ -9,10 +9,10 @@
 //!
 //! | Process | PIDs | Message | Module | Status |
 //! |---|---|---|---|---|
-//! | Anmeldung MSB (nMSB → NB) | 55042 | UTILMD | `geraetewechsel` | ✅ Implemented |
-//! | Kündigung MSB (nMSB → NB) | 55039 | UTILMD | `geraetewechsel` | ✅ Registered (shared workflow) |
-//! | Ende MSB / Abmeldung (NB → MSBN) | 55051 | UTILMD | `geraetewechsel` | ✅ Registered (shared workflow) |
-//! | Verpflichtungsanfrage (NB → MSBN) | 55168 | UTILMD | `geraetewechsel` | ✅ Registered (shared workflow) |
+//! | Anmeldung MSB (MSBN → NB) | 55042 → 55043/55044 | UTILMD | `geraetewechsel` | ✅ Implemented |
+//! | Kündigung MSB (MSBN → **MSBA**) | 55039 → 55040/55041 | UTILMD | `geraetewechsel` | ✅ Implemented |
+//! | Ende MSB / Abmeldung (**MSBA → NB**) | 55051 → 55052/55053 | UTILMD | `geraetewechsel` | ✅ Implemented |
+//! | Verpflichtungsanfrage (NB → **gMSB**) | 55168 → 55169/55170 | UTILMD | `geraetewechsel` | ✅ Implemented |
 //! | Bestellung Geräteübernahmeangebot | 17001–17011 | ORDERS | `geraeteubernahme` | ✅ Implemented |
 //! | Stammdaten Anfrage / Übermittlung | 17132 (req), 17102–17133 (resp) | ORDERS | `stammdaten` | ✅ Implemented |
 //! | Preisanfrage (REQOTE/QUOTES) | 35001–35005 (REQOTE in), 15001–15005 (QUOTES in) | REQOTE, QUOTES | `preisanfrage` | ✅ Implemented |
@@ -43,9 +43,16 @@
 //!
 //! | Aspect | GPKE | WiM |
 //! |---|---|---|
-//! | APERAK Frist | **24 h** wall-clock | **5 Werktage** |
-//! | Frist helper | `fristen::add_hours(24)` | `fristen::add_werktage(5, BdewMaKo)` |
+//! | APERAK Frist (Strom UTILMD) | **45 min** | **45 min** |
+//! | Business Antwortfrist | 24 h wall-clock | **1 / 3 / 5 / 7 Werktage, per process** |
+//! | Frist helper | `fristen::add_hours(24)` | `geraetewechsel::antwort_frist_werktage(pid)` |
 //! | Governing rule | BK6-22-024 | BK6-24-174 |
+//!
+//! Two distinct clocks, easily conflated: the **APERAK** window is the
+//! processability acknowledgement (45 min for UTILMD/ORDERS in Strom, APERAK AHB
+//! §2.4.1); the **Antwortfrist** is the counterparty's business answer and varies
+//! per process — 3 WT Kündigung, 5 WT Anmeldung, 7 WT Abmeldung, 1 WT
+//! Verpflichtungsanfrage.
 //!
 //! ## Command construction example
 //!
@@ -109,9 +116,10 @@ pub use geraeteubernahme::{
     WORKFLOW_NAME as GERAETEUBERNAHME_WORKFLOW_NAME, WimGeraeteubernahmeWorkflow,
 };
 pub use geraetewechsel::{
-    APERAK_WINDOW_LABEL as GERAETEWECHSEL_APERAK_WINDOW_LABEL, DeviceChangeCommand,
-    DeviceChangeData, DeviceChangeEvent, DeviceChangeProjection, DeviceChangeRecord,
-    DeviceChangeState, WORKFLOW_NAME, WimDeviceChangeWorkflow,
+    APERAK_WINDOW_LABEL as GERAETEWECHSEL_APERAK_WINDOW_LABEL, AUFTRAG_ANTWORT_WINDOW_LABEL,
+    DEVICE_CHANGE_ANTWORT_PIDS, DEVICE_CHANGE_PIDS, DeviceChangeCommand, DeviceChangeData,
+    DeviceChangeEvent, DeviceChangeProjection, DeviceChangeRecord, DeviceChangeState,
+    WORKFLOW_NAME, WimDeviceChangeWorkflow, antwort_frist_werktage, antwort_pid_meaning,
 };
 pub use insrpt::{
     ANTWORT_WINDOW_LABEL as INSRPT_ANTWORT_WINDOW_LABEL, INSRPT_ANFRAGE_PIDS, INSRPT_ANTWORT_PIDS,
@@ -164,10 +172,10 @@ pub use technik_aenderung::{
 ///
 /// | PID(s) | Workflow key | Module | Role |
 /// |---|---|---|---|
-/// | 55039 | `wim-device-change` | Kündigung MSB (MSBN → NB) | any |
+/// | 55039 | `wim-device-change` | Kündigung MSB (MSBN → MSBA) | any |
 /// | 55042 | `wim-device-change` | Anmeldung MSB (MSBN → NB) | any |
-/// | 55051 | `wim-device-change` | Ende MSB / Abmeldung (NB → MSBN) | any |
-/// | 55168 | `wim-device-change` | Verpflichtungsanfrage (NB → MSBN) | any |
+/// | 55051 | `wim-device-change` | Ende MSB / Abmeldung (MSBA → NB) | any |
+/// | 55168 | `wim-device-change` | Verpflichtungsanfrage / Aufforderung (NB → gMSB) | any |
 /// | 17001–17011 | `wim-geraeteubernahme` | Geräteübernahme ORDERS (nMSB → NB) | any |
 /// | 17132 | `wim-stammdaten` | Stammdaten Anforderung Strom (NB → MSB), MSB role | any |
 /// | 17102–17133 | `wim-stammdaten` | Stammdatenübermittlung responses (MSB → NB), NB role | **Nb only** |
@@ -226,15 +234,27 @@ impl mako_engine::builder::EngineModule for WimModule {
     ) {
         // UTILMD WiM MSB-Wechsel family (PIDs 55039, 55042, 55051, 55168).
         //
-        // 55039 — Kündigung MSB (MSBN → NB): incoming MSB initiates cancellation.
+        // 55039 — Kündigung MSB (MSBN → MSBA): contract layer between the two MSB;
+        //         non-constitutive per BK6-24-174 Kap. 2.1.3 — the NB is not a party.
         // 55042 — Anmeldung MSB (MSBN → NB): new MSB initiates change.
-        // 55051 — Ende MSB / Abmeldung (NB → MSBN): NB terminates MSB relationship.
-        // 55168 — Verpflichtungsanfrage (NB → MSBN): grid operator obligation request.
+        // 55051 — Ende MSB / Abmeldung (MSBA → NB): NB terminates MSB relationship.
+        // 55168 — Verpflichtungsanfrage / Aufforderung (NB → gMSB).
         //
         // All four share WimDeviceChangeWorkflow; the PID is carried in the
         // DeviceChangeData and available for business-logic branching.
         for pid in [55_039_u32, 55_042, 55_051, 55_168] {
             router.register(pid, "wim-device-change");
+        }
+
+        // Antwort PIDs (Bestätigung / Ablehnung) for an order **we** sent.
+        // 55040/55041 ← 55039 · 55043/55044 ← 55042
+        // 55052/55053 ← 55051 · 55169/55170 ← 55168
+        //
+        // These resume the existing process by MeLo rather than spawning: the
+        // ingest dispatcher uses `resume_by_malo`, so an answer with no open
+        // order is skipped rather than creating an orphan stream.
+        for &(antwort_pid, _, _) in geraetewechsel::DEVICE_CHANGE_ANTWORT_PIDS {
+            router.register(antwort_pid, "wim-device-change");
         }
 
         // ORDERS 17001–17011 — Geräteübernahme (Anfrage, Bestellung, Stornierung).
