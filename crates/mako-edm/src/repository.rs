@@ -1,7 +1,6 @@
 #![allow(async_fn_in_trait)]
 
 use time::Date;
-use uuid::Uuid;
 
 use crate::{
     domain::{
@@ -31,12 +30,14 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
     async fn query(&self, q: &TimeSeriesQuery) -> Result<Vec<MeterRead>, EdmError>;
 
     /// Query raw delivery receipts for a MaLo (all MSCONS PIDs).
+    ///
+    /// All results are scoped to `tenant` — cross-tenant queries are not possible.
     async fn receipts(
         &self,
         malo_id: &str,
         from: time::OffsetDateTime,
         to: time::OffsetDateTime,
-        tenant_id: Option<Uuid>,
+        tenant: &str,
     ) -> Result<Vec<MeterDataReceipt>, EdmError>;
 
     /// Compute Mehr-/Mindermengen imbalance for one MaLo in one billing period.

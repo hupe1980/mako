@@ -1,9 +1,9 @@
 -- edmd schema — single authoritative DDL for a clean PostgreSQL install.
 --
--- All 11 historical migrations have been consolidated into this one file.
+-- All historical migrations have been consolidated into this one file.
 -- Column types reflect the final state: NUMERIC(18,5) for kWh values,
--- TEXT for tenant isolation (not nullable UUID), and all indexes co-located
--- with the table they serve.
+-- TEXT NOT NULL for tenant isolation on every table (no nullable UUIDs),
+-- and all indexes co-located with the table they serve.
 --
 -- §22 MessZV requires 5 decimal place kWh precision.
 -- GDPR Art. 32 requires per-tenant data isolation on every table.
@@ -20,14 +20,14 @@ CREATE TABLE meter_data_receipts (
     sender_mp_id TEXT        NOT NULL,
     message_ref  TEXT,
     received_at  TIMESTAMPTZ NOT NULL,
-    -- tenant_id UUID is intentional here: receipts are linked to process UUIDs
-    -- from makod. All other tables use tenant TEXT.
-    tenant_id    UUID,
+    -- tenant is TEXT NOT NULL (BDEW/DVGW Codenummer or GLN) — same type and
+    -- semantics as meter_reads.tenant and all other edmd tables.
+    tenant       TEXT        NOT NULL DEFAULT '',
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX mdr_malo_received ON meter_data_receipts (malo_id, received_at DESC);
-CREATE INDEX mdr_tenant        ON meter_data_receipts (tenant_id) WHERE tenant_id IS NOT NULL;
+CREATE INDEX mdr_tenant        ON meter_data_receipts (tenant, malo_id);
 
 -- ── Typed meter reads (hot tier) ─────────────────────────────────────────────
 -- One row per 15-min (or coarser) interval per MaLo per OBIS code.
@@ -168,8 +168,9 @@ CREATE TABLE meter_read_corrections (
     corrected_at     TIMESTAMPTZ   NOT NULL DEFAULT now(),
     process_id       UUID,
     pid              INTEGER,
-    tenant           TEXT          NOT NULL,
-    tenant_id        UUID  -- legacy, keep for receipt join compatibility
+    tenant           TEXT          NOT NULL
+    -- NOTE: legacy tenant_id UUID column removed; all tenant isolation uses
+    -- tenant TEXT NOT NULL, consistent with meter_data_receipts and meter_reads.
 );
 
 CREATE INDEX mrc_malo_dtm         ON meter_read_corrections (malo_id, dtm_from, dtm_to);

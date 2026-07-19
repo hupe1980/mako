@@ -310,5 +310,6 @@ End-to-end tests covering all process families live in `tests/`:
 | `e2e_lieferende_gas.rs` | GeLi Gas Lieferende bilateral |
 | `e2e_mabis.rs` | MaBiS Bilanzkreisabrechnung (PID 13003) |
 | `e2e_ahb_conformance.rs` | Cross-PID AHB rule enforcement |
-| `startup_smoke.rs` | `assert_dispatch_coverage` — every registered workflow has a deadline dispatch entry |
+| `startup_smoke.rs` | `assert_dispatch_coverage` — every registered workflow has a deadline dispatch entry; §2.13 party registry validation |
+| `as4_security.rs` | **11 AS4 security tests** — BDEW AS4-Profil v1.2 compliance: sign+encrypt defaults, tampered-signature rejection (`As4WsSecVerifier`), `require_encrypted_inbound` enforcement, 72h replay dedup, full round-trip via `MockAs4Endpoint` with decryption |
 | `erp_response_dispatch.rs` | ERP adapter response correlation |

@@ -3,7 +3,6 @@
 use rust_decimal::Decimal;
 use sqlx::{PgPool, Row};
 use time::{Date, OffsetDateTime};
-use uuid::Uuid;
 
 use mako_edm::{
     domain::{
@@ -37,7 +36,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
     async fn store_receipt(&self, receipt: &MeterDataReceipt) -> Result<(), EdmError> {
         sqlx::query(
             r"INSERT INTO meter_data_receipts
-                  (process_id, pid, malo_id, sender_mp_id, message_ref, received_at, tenant_id)
+                  (process_id, pid, malo_id, sender_mp_id, message_ref, received_at, tenant)
               VALUES ($1, $2, $3, $4, $5, $6, $7)
               ON CONFLICT (process_id) DO NOTHING",
         )
@@ -47,7 +46,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         .bind(&receipt.sender_mp_id)
         .bind(&receipt.message_ref)
         .bind(receipt.received_at)
-        .bind(receipt.tenant_id)
+        .bind(&receipt.tenant)
         .execute(&self.pool)
         .await
         .map_err(|e| EdmError::Database(e.to_string()))?;
@@ -139,23 +138,23 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         malo_id: &str,
         from: OffsetDateTime,
         to: OffsetDateTime,
-        tenant_id: Option<Uuid>,
+        tenant: &str,
     ) -> Result<Vec<MeterDataReceipt>, EdmError> {
-        // meter_data_receipts uses tenant_id UUID (not TEXT); keep UUID guard but
-        // require non-NULL — empty string tenant is never stored as NULL UUID.
+        // `meter_data_receipts.tenant` is TEXT NOT NULL — exact match required.
+        // Cross-tenant queries are not permitted.
         let rows = sqlx::query(
-            r"SELECT process_id, pid, malo_id, sender_mp_id, message_ref, received_at, tenant_id
+            r"SELECT process_id, pid, malo_id, sender_mp_id, message_ref, received_at, tenant
               FROM meter_data_receipts
               WHERE malo_id    = $1
                 AND received_at >= $2
                 AND received_at <= $3
-                AND (tenant_id = $4 OR $4 IS NULL)
+                AND tenant       = $4
               ORDER BY received_at DESC",
         )
         .bind(malo_id)
         .bind(from)
         .bind(to)
-        .bind(tenant_id)
+        .bind(tenant)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EdmError::Database(e.to_string()))?;
@@ -585,8 +584,8 @@ fn row_to_receipt(row: &sqlx::postgres::PgRow) -> Result<MeterDataReceipt, EdmEr
         received_at: row
             .try_get("received_at")
             .map_err(|e| EdmError::Database(e.to_string()))?,
-        tenant_id: row
-            .try_get("tenant_id")
+        tenant: row
+            .try_get("tenant")
             .map_err(|e| EdmError::Database(e.to_string()))?,
     })
 }

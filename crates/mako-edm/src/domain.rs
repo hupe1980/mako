@@ -171,8 +171,11 @@ pub struct MeterDataReceipt {
     pub message_ref: Option<String>,
     /// UTC timestamp of the `de.mako.process.completed` event.
     pub received_at: OffsetDateTime,
-    /// Tenant ID for multi-tenant deployments.
-    pub tenant_id: Option<Uuid>,
+    /// Data-isolation key — operator's BDEW/DVGW Codenummer or GLN.
+    ///
+    /// Mandatory; every receipt is scoped to exactly one tenant.
+    /// Matches `meter_reads.tenant` and all other `edmd` table tenant columns.
+    pub tenant: String,
 }
 
 /// How a `MeterRead` entered the system.
@@ -608,6 +611,6 @@ pub struct BilanzzuordnungRecord {
     pub valid_from: Date,
     /// Effective until (exclusive). `None` = open-ended (currently active).
     pub valid_to: Option<Date>,
-    /// Tenant scope.
-    pub tenant_id: Option<Uuid>,
+    /// Data-isolation key — operator's BDEW/DVGW Codenummer or GLN.
+    pub tenant: String,
 }

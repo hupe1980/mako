@@ -302,37 +302,65 @@ to run integration tests locally immediately:
 ```toml
 [dev-dependencies]
 mako-as4 = { path = "../mako-as4", features = ["testing"] }
+# asx-rs 0.8 testing helpers used below
+asx-rs   = { version = "0.8", features = ["as4", "testing"] }
 ```
+
+The following uses **asx-rs v0.8.0 convenience APIs** — no manual `CertHandle`
+construction or direct `zeroize` dependency required:
 
 ```rust
-use mako_as4::testing::BdewTestPki;
+use mako_as4::testing::{BdewTestPki, MockAs4Endpoint};
+use asx_rs::core::SessionContextBuilder;
+use asx_rs::observability::EventBus;
+use asx_rs::transport::As4HttpTransport;
 
-#[test]
-fn test_as4_round_trip() {
-    // Generate a full three-keypair bundle in one call.
-    let pki = BdewTestPki::generate("Test NB 9900357000004");
+#[tokio::test]
+async fn test_as4_full_round_trip() {
+    let sender_pki = BdewTestPki::generate("Test NB 9900357000004");
+    let receiver_pki = BdewTestPki::generate("Test LF 9900357000005");
 
-    // Build a test SessionContext for asx-rs:
-    let session = asx_rs::core::SessionContextBuilder::new("sess-test", "9900357000004")
-        .with_signing_cert_pem(pki.signing.cert_pem_str())
-        .with_signing_key_pem(pki.signing.key_pem_str())
-        .with_trust_anchor_pem(pki.signing.cert_pem_str())  // self-signed: cert IS the CA
-        .build()
+    // Mock endpoint configured to decrypt ECDH-ES messages (asx-rs 0.8 FR-1).
+    // Without with_decryption_key_pem(), encrypted messages would return HTTP 400.
+    let mock = MockAs4Endpoint::builder()
+        .with_decryption_key_pem(receiver_pki.encryption.key_pem.clone())
+        .bind("127.0.0.1:0")
+        .await
         .unwrap();
 
-    // Register the partner's encryption cert in the profile:
-    let mut profile = mako_as4::BdewAs4Profile::new();
-    profile
-        .register_partner_all_actions("4012345000023", "http://127.0.0.1:9999/as4")
-        .register_partner_encryption_cert("4012345000023", &pki.encryption.cert_pem);
+    // with_signing_material() atomically sets cert + key and auto-derives key_id
+    // from partner_id — no manual CertHandle construction needed (asx-rs 0.8 BUG-1 fix).
+    let session = std::sync::Arc::new(
+        SessionContextBuilder::new("sess-test", "9900357000004")
+            .with_signing_material(
+                sender_pki.signing.cert_pem_str(),
+                sender_pki.signing.key_pem_str(),
+            )
+            .with_trust_anchor_pem(sender_pki.signing.cert_pem_str())
+            .build()
+            .unwrap(),
+    );
 
-    // Wire decryption key into ingest handler:
-    // handler.with_decryption_key_pem(Some(pki.encryption.key_pem.clone()))
+    // EventBus::new_for_testing() — BestEffort mode, no audit sink required (asx-rs 0.8 FR-2).
+    let event_bus = std::sync::Arc::new(EventBus::new_for_testing());
 
-    assert!(!pki.signing.cert_pem.is_empty());
-    assert!(!pki.encryption.cert_pem.is_empty());
+    // ... build and send As4SendRequest with partial credentials (FR-4):
+    // Only recipient_cert_pem is needed — signing falls back to session cert_handle.
+
+    // As4HttpTransport for localhost — SSRF guard disabled (asx-rs 0.8 FR-3).
+    // Use send_to_localhost() (not send()) to bypass SSRF URL validation.
+    let transport = As4HttpTransport::new_for_localhost_testing().unwrap();
+    // transport.send_to_localhost(&mock.local_url(), &output).await.unwrap();
+
+    // mock.next_received() delivers the decrypted plaintext payload (FR-1).
+    // let received = mock.next_received().await.unwrap();
+    // assert!(received.payload.starts_with(b"UNB"));
 }
 ```
+
+For a complete, runnable example with SOAP envelope verification, see
+`services/makod/tests/as4_security.rs` — 11 tests covering the full BDEW AS4 security
+envelope including tampered-signature rejection and `require_encrypted_inbound` enforcement.
 
 ### Generating test certificates manually with OpenSSL
 
@@ -496,6 +524,48 @@ AlgorithmID/PartyUInfo/PartyVInfo = empty strings (§2.2.6.2.2)
 | Inbound messages not arriving | AS4 not configured | `--as4-addr :4080` + signing key/cert required |
 | "AS4 inbox dedup is volatile" warning | No `--data-dir` set | Add `--data-dir /var/lib/makod` for durable dedup (required for BDEW conformance) |
 | Partner endpoint not found | P-Mode not registered | Add `--as4-partner GLN=URL` for the recipient GLN |
+
+---
+
+## Security test coverage
+
+`makod` ships **11 automated tests** in `services/makod/tests/as4_security.rs` that
+verify the full BDEW AS4-Profil v1.2 security envelope without WIRK certificates:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Test
+    participant sender as BdewTestPki (sender)
+    participant receiver as BdewTestPki (receiver)
+    participant mock as MockAs4Endpoint<br/>(with_decryption_key_pem)
+    participant verifier as As4WsSecVerifier<br/>(real PKI check)
+
+    Test->>sender: generate("Test NB …")
+    Test->>receiver: generate("Test LF …")
+    Test->>mock: builder().with_decryption_key_pem(receiver.encryption.key_pem)
+    Test->>sender: send_async(sign + encrypt, recipient_cert = receiver.encrypt)
+    sender-->>mock: ECDH-ES encrypted SOAP over HTTP
+    mock-->>Test: next_received() — decrypted plaintext ✓
+    Test->>verifier: receive_push(tampered_body)
+    verifier-->>Test: Err(SignatureVerificationFailure) ✓
+```
+
+| Test | Verifies | BDEW spec |
+|---|---|---|
+| `sign_encrypt_pmode_defaults` | `bdew_pmode()` forces `encrypt=true` by default | §2.2.6.2.2 |
+| `sign_only_pmode_disables_encryption` | `bdew_pmode_sign_only()` is dev-only | §2.2.6.2.2 |
+| `policy_with_key_requires_encryption` | `bdew_push_policy(key)` enforces `require_encrypted_inbound` | §2.2.6.2.2 |
+| `policy_without_key_no_encryption_required` | Dev-mode without key does not block onboarding | §2.2.6.2.2 |
+| `fragment_scope_is_soap_sender_id` | OneWayPush never triggers fragment `PolicyViolation` | §2.2.5 |
+| `sign_encrypt_policy_is_bdew_compliant` | SOAP policy constants satisfy §2.2.6.2.1 + §2.2.6.2.2 | §2.2.6 |
+| `replay_dedup_blocks_duplicate_message_id` | 72-hour dedup window prevents replays | §4.2 |
+| **`tampered_signature_is_rejected`** | Real `As4WsSecVerifier` rejects payload tampering | §2.2.6.2.1 |
+| **`inbound_encryption_enforced_when_decryption_key_set`** | Unencrypted inbound is rejected when key is set | §2.2.6.2.2 |
+| `sign_encrypt_round_trip_via_mock_endpoint` | Full sign+encrypt→transport→decrypt pipeline | §2.2.6 |
+| `sign_only_round_trip_envelope_contains_wssec_signature` | Sign-only maintains WS-Security elements | §2.2.6.2.1 |
+
+Run with: `cargo test -p makod --test as4_security`
 
 ---
 

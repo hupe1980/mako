@@ -496,6 +496,10 @@ pub(crate) async fn ingest_edifact(
             };
             let ctx = ctx.with_tenant_id(state.tenant_id.to_string());
             let dead_pid = pid.unwrap_or(mako_engine::ids::Pid::new(1));
+            // Track per-PID unroutable count in the inbound_received metric so
+            // Alertmanager can alert on `makod_inbound_messages_total{result="unknown_pid"}`.
+            mako_engine::metrics::EngineMetrics::global()
+                .inbound_received(dead_pid.as_u32(), "unknown_pid");
             state.dl_sink.reject(&DeadLetterReason::UnknownPid {
                 pid: dead_pid,
                 context: ctx,

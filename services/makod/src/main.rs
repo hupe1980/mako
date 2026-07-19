@@ -155,6 +155,17 @@ use mako_gabi_gas::GaBiGasModule;
 use mako_geli_gas::GeliGasModule;
 use mako_gpke::GpkeModule;
 use mako_mabis::MabisModule;
+#[cfg(any(
+    not(any(
+        feature = "role-lf-strom",
+        feature = "role-lf-gas",
+        feature = "role-nb-strom",
+        feature = "role-nb-gas",
+        feature = "role-msb-strom",
+        feature = "role-msb-gas",
+    )),
+    feature = "role-nb-strom",
+))]
 use mako_redispatch::RedispatchModule;
 use mako_wim::WimModule;
 use mako_wim_gas::WimGasModule;
@@ -1316,8 +1327,25 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         m.push(Box::new(MabisModule));
 
         // RedispatchModule: Redispatch 2.0 (§§ 13/13a/14 EnWG); IFTSTA 21037/21038.
-        // Role-specific NB/ÜNB/ANB dispatch is handled inside the module.
-        // Always registered — Redispatch obligations may apply to any NB/ÜNB operator.
+        // Applicable to NB (VNB/ANB) and ÜNB roles only — Lieferant (LF) and MSB
+        // deployments are out of scope for Redispatch 2.0 per BK6-20-059/060/061.
+        //
+        // Gate: registered unconditionally when no role feature flags are active
+        // (backward-compatible default), and when role-nb-strom is active (covers
+        // VNB, ANB, and ÜNB roles that share the NB Strom deployment role).
+        // Excluded for LF-only, MSB-only, and gas-only deployments — none of those
+        // roles have Redispatch 2.0 obligations.
+        #[cfg(any(
+            not(any(
+                feature = "role-lf-strom",
+                feature = "role-lf-gas",
+                feature = "role-nb-strom",
+                feature = "role-nb-gas",
+                feature = "role-msb-strom",
+                feature = "role-msb-gas",
+            )),
+            feature = "role-nb-strom",
+        ))]
         m.push(Box::new(RedispatchModule));
         m
     };
@@ -1578,8 +1606,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             cedar: Arc::clone(&cedar),
         });
         let mcp_state = Arc::new(mcp_server::MakodMcpState {
-            tenant_id: mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
-            tenant_id_str: gln_registry.primary_gln().to_owned(),
+            tenant: gln_registry.primary_gln().to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             cedar: Arc::clone(&cedar),
             commands: Arc::clone(&commands_state),
@@ -1686,8 +1713,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                 .clone()
                 .unwrap_or_else(|| cert_pem.clone());
             SessionContextBuilder::new(&session_id, &party_id)
-                .with_signing_cert_pem(cert_pem.clone())
-                .with_signing_key_pem(key_pem.expose_secret())
+                .with_signing_material(cert_pem.clone(), key_pem.expose_secret())
                 .with_trust_anchor_pem(trust_anchor)
                 .build()
                 .map_err(|e| anyhow::anyhow!("AS4 SessionContext build failed: {e}"))?
@@ -1808,6 +1834,25 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // MaLo Identification is active. Control Measures are wired to
     // WimSteuerungsauftragWorkflow.
     if let Some(addr) = cli.api_webdienste_addr {
+        // ── API-Webdienste auth warning ────────────────────────────────────────
+        //
+        // The BDEW API-Webdienste Strom specification requires mTLS with
+        // certificates issued by BDEW-approved CAs. This port currently has no
+        // bearer-token or mTLS guard — requests from any unauthenticated caller
+        // are accepted. Deploy behind a reverse-proxy with mTLS termination
+        // (e.g. Nginx with `ssl_verify_client require` and the BDEW CA) before
+        // exposing this port on a production network boundary.
+        //
+        // Internally-facing deployments (behind a service mesh / VPC) where
+        // network-level access controls are enforced may operate without mTLS
+        // if the threat model permits it.
+        tracing::warn!(
+            addr = %addr,
+            "API-Webdienste Strom port started WITHOUT authentication. \
+             BDEW API-Webdienste requires mTLS (BDEW PKI CA). \
+             Deploy behind a reverse proxy with mTLS termination before \
+             exposing this port to public networks.",
+        );
         let handler = Arc::new(webdienste::MakodApiHandler {
             store: store.clone(),
             tenant_id: mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),

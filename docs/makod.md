@@ -278,7 +278,7 @@ irrelevant for a particular operator — reducing binary size and attack surface
 |---|---|
 | `role-lf-strom` | `mako-gpke` (LF side): `gpke-lf-anmeldung`, `gpke-lf-abmeldung`, `gpke-ankuendigung-zuordnung-lf`, `gpke-abrechnung`, `gpke-messwerte`, `gpke-allokationsliste`, `gpke-datenabruf`, `gpke-anfrage-bestellung`, `gpke-utilts` |
 | `role-lf-gas` | `mako-geli-gas` (LF side): `geli-gas-stornierung-lf`, `geli-gas-sperrung-lf`, `geli-gas-mscons` |
-| `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side) |
+| `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side), **`mako-redispatch`** (Redispatch 2.0 is gated to NB Strom / ÜNB — LF and MSB deployments are out of scope per BK6-20-059/060/061) |
 | `role-nb-gas` | `mako-geli-gas` (GNB side): `geli-gas-supplier-change`, `geli-gas-sperrung-nb`, `geli-gas-stornierung`, `geli-gas-datenabruf`, `geli-gas-partin`, `geli-gas-sperrprozesse-invoic` |
 | `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-preisliste`, `wim-rechnung`, `wim-insrpt`, `wim-stornierung` |
 | `role-msb-gas` | `mako-wim-gas`: all WiM Gas workflows |
@@ -554,11 +554,54 @@ Partners are bootstrapped into the durable `PartnerStore` on startup. Changes
 made at runtime via the REST API (`PUT /admin/partners/{mp_id}`) survive restarts
 without requiring a redeploy.
 
+### AS4 security test coverage
+
+`makod` ships **11 automated tests** in `services/makod/tests/as4_security.rs` that
+verify BDEW AS4-Profil v1.2 compliance without WIRK certificates:
+
+```mermaid
+graph LR
+    A[BdewTestPki\nBrainpoolP256r1] -->|generate| B[sender PKI]
+    A -->|generate| C[receiver PKI]
+    B -->|with_signing_material| D[SessionContext]
+    D -->|send_async| E[SOAP envelope\nsigned + encrypted]
+    C -->|with_decryption_key_pem| F[MockAs4Endpoint]
+    E -->|send_to_localhost| F
+    F -->|next_received| G[plaintext payload\ndecrypted ✓]
+```
+
+| Test | What it proves | BDEW spec |
+|---|---|---|
+| `sign_encrypt_pmode_defaults` | `bdew_pmode()` defaults to `encrypt=true` | §2.2.6.2.2 |
+| `policy_with_key_requires_encryption` | `bdew_push_policy` enforces `require_encrypted_inbound` | §2.2.6.2.2 |
+| `sign_encrypt_policy_is_bdew_compliant` | SOAP constants satisfy §2.2.6.2.1 + §2.2.6.2.2 | §2.2.6 |
+| `tampered_signature_is_rejected` | Real `As4WsSecVerifier` rejects payload tampering | §2.2.6.2.1 |
+| `inbound_encryption_enforced_when_decryption_key_set` | Unencrypted inbound is rejected | §2.2.6.2.2 |
+| `replay_dedup_blocks_duplicate_message_id` | 72-hour dedup window prevents replay attacks | §4.2 |
+| `sign_encrypt_round_trip_via_mock_endpoint` | Full sign+encrypt→transport→decrypt pipeline | §2.2.6 |
+
+Run these tests with:
+
+```bash
+cargo test -p makod --test as4_security
+```
+
 ### `[webdienste]` — BDEW API-Webdienste Strom
 
 | TOML key | Env var | CLI flag | Description |
 |---|---|---|---|
 | `addr` | `MAKOD_API_WEBDIENSTE_ADDR` | `--api-webdienste-addr` | TCP listen address |
+
+> **Security requirement — mTLS**: The BDEW API-Webdienste Strom specification
+> requires mutual TLS (mTLS) with certificates issued by the BDEW PKI CA.
+> The `:8090` port has **no built-in bearer-token or mTLS guard** — deploy it
+> behind a reverse proxy (Nginx, Envoy, AWS ALB) that enforces mTLS with the
+> BDEW PKI CA before forwarding requests in production.
+>
+> `makod` emits a `WARN` at startup when `--api-webdienste-addr` is set without
+> an mTLS proxy: `"API-Webdienste Strom port started WITHOUT authentication"`.
+> The warning is safe to suppress only when the port is behind a service mesh
+> or VPC boundary with network-level access controls.
 
 ---
 

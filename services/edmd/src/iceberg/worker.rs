@@ -109,10 +109,9 @@ impl ArchiveWorker {
 
         // ── 1. Load rows eligible for archival ────────────────────────────────
         // NOTE: No tenant filter here — the archive worker operates on all tenants
-        // per run. Each archived row's `tenant_id` is preserved in the Iceberg data.
-        // For strict per-tenant isolation, the RunConfig should carry a tenant field
-        // and this query should include `AND tenant = $3`. This is tracked as
-        // a future hardening item (H8 from the security audit).
+        // per run. Each archived row's `tenant` (TEXT, mandatory) is preserved in
+        // the Iceberg data. For strict per-tenant isolation, the RunConfig should
+        // carry a tenant field and this query should include `AND tenant = $3`.
         let rows = sqlx::query_as::<_, RawMeterRead>(
             r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh,
                      quality, pid, sparte, obis_code, tenant

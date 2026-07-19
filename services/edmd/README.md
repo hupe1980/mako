@@ -156,10 +156,12 @@ Response:
 
 | Migration | Tables |
 |---|---|
-| `0001_initial_schema.sql` | `meter_data_receipts` · `meter_reads` · `meter_billing_periods` |
+| `0001_initial_schema.sql` | `meter_data_receipts` · `meter_reads` · `meter_billing_periods` · `meter_read_corrections` |
 | `0002_archive_tracking.sql` | `archive_batches` · `iceberg_snapshots` · `archived` column on `meter_reads` |
 
-All tables carry `tenant_id UUID` for multi-tenant isolation.
+All tables carry `tenant TEXT NOT NULL` for multi-tenant isolation — the BDEW/DVGW
+Codenummer or GLN of the operating entity (not a UUID). `meter_reads.tenant` is the
+authoritative column; `meter_data_receipts.tenant` uses the same type for consistency.
 
 ---
 

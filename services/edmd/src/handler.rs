@@ -326,7 +326,7 @@ pub async fn handle_webhook(
             sender_mp_id,
             message_ref,
             received_at,
-            tenant_id: None,
+            tenant: state.tenant.clone(),
         };
 
         match state.repo.store_receipt(&receipt).await {

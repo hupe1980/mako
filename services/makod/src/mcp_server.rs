@@ -91,10 +91,12 @@ use crate::malo_cache::SlateDbMaloCache;
 
 /// Shared state injected into each MCP handler instance.
 pub struct MakodMcpState {
-    /// Operator tenant ID — all cache and store operations are scoped to this.
-    pub tenant_id: TenantId,
-    /// Operator tenant ID as a plain string (used in log messages).
-    pub tenant_id_str: String,
+    /// Operator tenant — BDEW/DVGW Codenummer or GLN (data-isolation key).
+    ///
+    /// Single source of truth for tenant identity in this state struct.
+    /// When `TenantId` (UUID) is needed for SlateDB operations, derive it
+    /// inline: `TenantId::from_party_id(&self.tenant)`.
+    pub tenant: String,
     /// Daemon version string (from `makod --version`).
     pub version: String,
     /// Cedar authorizer — authenticates incoming Bearer tokens.
@@ -396,7 +398,7 @@ impl MakodMcpHandler {
         match self
             .state
             .malo_cache
-            .get(&self.state.tenant_id_str, &p.malo_id)
+            .get(&self.state.tenant, &p.malo_id)
             .await
         {
             Ok(Some(record)) => ContentBlock::json(&record)
@@ -432,7 +434,7 @@ impl MakodMcpHandler {
     ) -> Result<CallToolResult, McpError> {
         let limit = p.limit.unwrap_or(100).clamp(1, 500);
 
-        match self.state.partner_store.list(self.state.tenant_id).await {
+        match self.state.partner_store.list(TenantId::from_party_id(&self.state.tenant)).await {
             Ok(all_partners) => {
                 // Decode the cursor as a base-10 offset index.
                 let offset = p
@@ -483,7 +485,7 @@ impl MakodMcpHandler {
         match self
             .state
             .partner_store
-            .get(self.state.tenant_id, &mp_id)
+            .get(TenantId::from_party_id(&self.state.tenant), &mp_id)
             .await
         {
             Ok(Some(record)) => ContentBlock::json(&record)
@@ -515,14 +517,14 @@ impl MakodMcpHandler {
         let cache_stats = self
             .state
             .malo_cache
-            .stats(&self.state.tenant_id_str)
+            .stats(&self.state.tenant)
             .await
             .ok();
 
         ContentBlock::json(serde_json::json!({
             "status": "ok",
             "version": self.state.version,
-            "tenant_id": self.state.tenant_id_str,
+            "tenant_id": self.state.tenant,
             "configured_marktrollen": self.state.commands.configured_marktrollen,
             "malo_cache": cache_stats.map(|s| serde_json::json!({
                 "count": s.count,
@@ -562,7 +564,7 @@ impl MakodMcpHandler {
 
         let registry = self.state.process_store.as_process_registry();
         let identity = registry
-            .lookup(self.state.tenant_id, &key)
+            .lookup(TenantId::from_party_id(&self.state.tenant), &key)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
@@ -678,7 +680,7 @@ impl MakodMcpHandler {
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         ContentBlock::json(serde_json::json!({
             "active_process_count": count,
-            "tenant": self.state.tenant_id_str,
+            "tenant": self.state.tenant,
             "note": "Count of process instances (streams) registered in the process \
                      registry. Each entry corresponds to one MaKo workflow instance \
                      (e.g. one Lieferantenwechsel or one Messstellenwechsel).",
@@ -725,7 +727,7 @@ impl MakodMcpHandler {
             "total_in_queue":        total_in_queue,
             "oldest_pending_secs":   oldest_secs,
             "alert": alert,
-            "tenant": self.state.tenant_id_str,
+            "tenant": self.state.tenant,
             "note": if alert {
                 "⚠️ Messages have been in the outbox for more than 5 minutes — \
                  the outbox worker may be stalled or the recipient endpoint may be down. \
@@ -1070,7 +1072,7 @@ impl ServerHandler for MakodMcpHandler {
              `wim-gas-anmeldung`, `gpke-sperrung`, and `msb-preisanfrage` prompts\n\
              for guided step-by-step workflows with pre-filled instructions.",
             ver = self.state.version,
-            tenant = self.state.tenant_id_str,
+            tenant = self.state.tenant,
             roles = configured.join(", "),
         );
 
@@ -1137,7 +1139,7 @@ impl ServerHandler for MakodMcpHandler {
             return match self
                 .state
                 .malo_cache
-                .get(&self.state.tenant_id_str, malo_id)
+                .get(&self.state.tenant, malo_id)
                 .await
             {
                 Ok(Some(record)) => {
@@ -1163,7 +1165,7 @@ impl ServerHandler for MakodMcpHandler {
             return match self
                 .state
                 .partner_store
-                .get(self.state.tenant_id, &mp_id)
+                .get(TenantId::from_party_id(&self.state.tenant), &mp_id)
                 .await
             {
                 Ok(Some(record)) => {
@@ -1254,7 +1256,7 @@ async fn mcp_auth_middleware(
     if !state.cedar.authorize_mcp(
         &identity,
         &McpResource {
-            tenant: &state.tenant_id_str,
+            tenant: &state.tenant,
         },
     ) {
         return (

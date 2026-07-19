@@ -287,6 +287,12 @@ impl GasPortfolioBalance {
     ///     Err(e) => println!("Conservation violation: {e}"),
     /// }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConservationViolation::IncompleteAllocations`] when any position lacks
+    /// an `allocated_kwh` value, or [`ConservationViolation::EnergyImbalance`] when the
+    /// sum of allocations differs from `expected_total_kwh` by more than `tolerance_kwh`.
     pub fn conservation_check(
         &self,
         expected_total_kwh: Decimal,

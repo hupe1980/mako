@@ -89,6 +89,10 @@ permalink: /
     <span class="mako-kpi__label">MCP tools (AI-ready)</span>
   </div>
   <div class="mako-kpi">
+    <span class="mako-kpi__value">11</span>
+    <span class="mako-kpi__label">AS4 security tests</span>
+  </div>
+  <div class="mako-kpi">
     <span class="mako-kpi__value">29</span>
     <span class="mako-kpi__label">built-in AI specialists</span>
   </div>
@@ -473,7 +477,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/makod' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">makod</span>
     <span class="mako-service-card__port">:8080 · :4080 · :8090</span>
-    <span class="mako-service-card__desc">45+ GPKE/WiM/GeLi Gas/MABIS/GaBi Gas workflows. AS4, REST, iMS. SlateDB event store.</span>
+    <span class="mako-service-card__desc">45+ GPKE/WiM/GeLi Gas/MABIS/GaBi Gas/Redispatch workflows. AS4 sign+encrypt (asx-rs v0.8, BrainpoolP256r1). REST, iMS. SlateDB event store. 11 AS4 security tests.</span>
   </a>
   <a href="{{ '/marktd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">marktd</span>

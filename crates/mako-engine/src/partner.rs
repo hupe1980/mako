@@ -544,6 +544,12 @@ impl<S: PartnerStore> PartnerStore for Arc<S> {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoopPartnerStore;
 
+// The `#[allow(deprecated)]` is required because the `deprecated` attribute on
+// `NoopPartnerStore` fires on the impl block inside the same file. This is a
+// known Rust quirk (implementing a deprecated type fires the lint even in the
+// defining module). The guard is still effective: *callers* that instantiate
+// `NoopPartnerStore` outside of test/feature-gated code will see the warning.
+#[allow(deprecated)]
 impl PartnerStore for NoopPartnerStore {
     async fn upsert(
         &self,

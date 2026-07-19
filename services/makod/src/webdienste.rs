@@ -33,8 +33,23 @@
 //!
 //! ## Authentication
 //!
-//! Add mTLS before production. BDEW API-Webdienste requires mTLS with
-//! certificates issued by BDEW-approved CAs.
+//! **Production requirement**: BDEW API-Webdienste Strom requires mTLS with
+//! certificates issued by the BDEW PKI CA. Deploy this port behind a reverse
+//! proxy (e.g. Nginx, Envoy, AWS ALB with mutual TLS) that validates the
+//! client certificate against the BDEW PKI CA before forwarding requests.
+//!
+//! At startup, `makod` logs a warning when `--api-webdienste-addr` is set
+//! without an mTLS guard:
+//!
+//! ```text
+//! WARN makod: API-Webdienste Strom port started WITHOUT authentication. \
+//!      BDEW API-Webdienste requires mTLS (BDEW PKI CA). Deploy behind a \
+//!      reverse proxy with mTLS termination before exposing to public networks.
+//! ```
+//!
+//! Internal deployments behind a service mesh or VPC with network-level
+//! access controls enforced may operate without mTLS if the threat model
+//! permits unauthenticated inbound requests from network-adjacent peers.
 
 use std::sync::Arc;
 

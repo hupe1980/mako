@@ -184,6 +184,11 @@ impl GasBeschaffenheit {
     /// };
     /// assert!(b.validate().is_err());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GasBeschaffenheitValidationError`] when any measured property is outside
+    /// DVGW G 260 physical range.
     pub fn validate(&self) -> Result<(), GasBeschaffenheitValidationError> {
         let mut violations = Vec::new();
 
@@ -207,14 +212,14 @@ impl GasBeschaffenheit {
 
         // Hu range check when present
         if let Some(hu) = self.brennwert_hu_kwh_per_m3 {
-            let (hu_min, hu_max) = match self.quality_class {
+            let (hu_range_min, hu_range_max) = match self.quality_class {
                 GasQualityClass::HGas => (Decimal::new(85, 1), Decimal::new(118, 1)), // 8.5–11.8
                 GasQualityClass::LGas => (Decimal::new(68, 1), Decimal::new(93, 1)),  // 6.8–9.3
                 GasQualityClass::Biogas => (Decimal::new(70, 1), Decimal::new(120, 1)),
             };
-            if hu < hu_min || hu > hu_max {
+            if hu < hu_range_min || hu > hu_range_max {
                 violations.push(format!(
-                    "Brennwert Hu {hu:.3} kWh/m³ is outside DVGW G 260 range [{hu_min:.1}–{hu_max:.1}]"
+                    "Brennwert Hu {hu:.3} kWh/m³ is outside DVGW G 260 range [{hu_range_min:.1}–{hu_range_max:.1}]"
                 ));
             }
             // Sanity: Hu must be < Hs (lower heating value definition)
@@ -379,7 +384,7 @@ pub struct DvgwFormatVersion {
 /// Current DVGW format versions (as of 2026-07-18 — update each April/October).
 pub mod dvgw_versions {
     use time::macros::date;
-    use super::{Date, DvgwFormatVersion, DvgwMessageType};
+    use super::{DvgwFormatVersion, DvgwMessageType};
 
     /// ALOCAT 5.11a — valid from 2024-10-01 (current).
     pub const ALOCAT: DvgwFormatVersion = DvgwFormatVersion {
@@ -785,7 +790,7 @@ impl GasDay {
         let last_day = Date::from_calendar_date(
             target_year,
             target_month,
-            time::util::days_in_year_month(target_year, target_month),
+            target_month.length(target_year),
         )
         .unwrap_or_else(|_| self.date + Duration::days(60));
 

@@ -4,7 +4,6 @@ use std::sync::Mutex;
 
 use rust_decimal::Decimal;
 use time::{Date, OffsetDateTime};
-use uuid::Uuid;
 
 use crate::{
     domain::{
@@ -62,12 +61,17 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
         malo_id: &str,
         from: OffsetDateTime,
         to: OffsetDateTime,
-        _tenant_id: Option<Uuid>,
+        tenant: &str,
     ) -> Result<Vec<MeterDataReceipt>, EdmError> {
         let guard = self.receipts.lock().unwrap();
         Ok(guard
             .iter()
-            .filter(|r| r.malo_id == malo_id && r.received_at >= from && r.received_at <= to)
+            .filter(|r| {
+                r.malo_id == malo_id
+                    && r.received_at >= from
+                    && r.received_at <= to
+                    && r.tenant == tenant
+            })
             .cloned()
             .collect())
     }
@@ -77,10 +81,13 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
         malo_id: &str,
         from: Date,
         to: Date,
-        _tenant: &str,
+        tenant: &str,
     ) -> Result<ImbalanceReport, EdmError> {
         let guard = self.reads.lock().unwrap();
-        let relevant: Vec<_> = guard.iter().filter(|r| r.malo_id == malo_id).collect();
+        let relevant: Vec<_> = guard
+            .iter()
+            .filter(|r| r.malo_id == malo_id && r.tenant == tenant)
+            .collect();
         if relevant.is_empty() {
             return Err(EdmError::NoData {
                 malo_id: malo_id.to_owned(),
@@ -235,7 +242,7 @@ mod tests {
             sender_mp_id: "9900000000001".into(),
             message_ref: None,
             received_at: OffsetDateTime::now_utc(),
-            tenant_id: None,
+            tenant: "test-tenant".into(),
         };
         repo.store_receipt(&receipt).await.unwrap();
         // Idempotent second insert.
@@ -245,7 +252,7 @@ mod tests {
                 "DE00001",
                 OffsetDateTime::UNIX_EPOCH,
                 OffsetDateTime::now_utc(),
-                None,
+                "test-tenant",
             )
             .await
             .unwrap();
@@ -253,6 +260,20 @@ mod tests {
             receipts.len(),
             1,
             "idempotency: second insert must be no-op"
+        );
+        // Cross-tenant query must return nothing.
+        let other_tenant_receipts = repo
+            .receipts(
+                "DE00001",
+                OffsetDateTime::UNIX_EPOCH,
+                OffsetDateTime::now_utc(),
+                "other-tenant",
+            )
+            .await
+            .unwrap();
+        assert!(
+            other_tenant_receipts.is_empty(),
+            "cross-tenant query must not return receipts from a different tenant"
         );
     }
 

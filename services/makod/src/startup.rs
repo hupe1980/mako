@@ -661,8 +661,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
                 .clone()
                 .unwrap_or_else(|| cert_pem.to_owned());
             asx_rs::core::SessionContextBuilder::new(&session_id, &party_id)
-                .with_signing_cert_pem(cert_pem.to_owned())
-                .with_signing_key_pem(key_pem.to_owned())
+                .with_signing_material(cert_pem, key_pem)
                 .with_trust_anchor_pem(trust_anchor)
                 .build()
                 .map_err(|e| anyhow::anyhow!("AS4 outbound session build failed: {e}"))?
@@ -761,6 +760,13 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
     info!("outbox delivery worker started");
 
     // ── ERP webhook outbound worker ───────────────────────────────────────
+    //
+    // Note: `OutboxErpWorker` does not implement the `with_heartbeat` API
+    // and is therefore NOT tracked by `GET /health`. A silently-panicking
+    // ERP worker will not cause a health degraded state. To detect ERP worker
+    // stalls, monitor the `makod_dead_letter_recorded_total{reason="erp_delivery_failed"}`
+    // counter in Alertmanager and alert when ERP-targeted outbox entries age
+    // beyond `max_attempts × initial_backoff` (default: 10 × 5 min ≈ 3 hours).
     if let Some(erp_url) = cfg.erp_webhook_url.clone() {
         let adapter = erp_adapter::WebhookErpAdapter::new(erp_url.clone(), cfg.erp_webhook_secret);
         let worker = erp_adapter::OutboxErpWorker::new(

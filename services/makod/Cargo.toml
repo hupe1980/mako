@@ -33,7 +33,7 @@ energy-api   = { path = "../../crates/energy-api", features = ["server", "client
 rubo4e       = { workspace = true }
 mako-markt   = { path = "../../crates/mako-markt", features = ["marktd-client"] }
 rust_decimal = { workspace = true }
-asx-rs       = { version = "0.7", features = ["as4", "client", "interop-strict", "server"] }
+asx-rs       = { version = "0.8", features = ["as4", "client", "interop-strict", "server"] }
 edi-energy   = { path = "../../crates/edi-energy", default-features = false, features = [
     "utilmd", "mscons", "aperak", "contrl", "invoic", "remadv",
     "orders", "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp",
