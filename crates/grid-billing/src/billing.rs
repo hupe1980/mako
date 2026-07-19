@@ -25,9 +25,8 @@ use rust_decimal::Decimal;
 use crate::error::BillingError;
 use crate::types::{
     BillingPositionKind, CalculationTrace, GasAwhInput, GridSettlement, InvoicePosition,
-    KaKundengruppe,
-    LegalReference, MmmInput, MsbInput, NneInput, QuantityUnit, Sect14aModule, SettlementStatus,
-    SettlementType, SettlementWarning, Sparte, TariffSource, WarningSeverity,
+    KaKundengruppe, LegalReference, MmmInput, MsbInput, NneInput, QuantityUnit, Sect14aModule,
+    SettlementStatus, SettlementType, SettlementWarning, Sparte, TariffSource, WarningSeverity,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -1255,7 +1254,11 @@ mod tests {
         let r = calculate_mmm_invoice(&input).unwrap();
         // 100 kWh over profile × 2.0 ct = 2.00 EUR charged at the Mindermengen price.
         assert_eq!(r.total_eur, d("2.00"));
-        assert_eq!(r.positions[0].net_eur, Decimal::ZERO, "no Mehrmenge position");
+        assert_eq!(
+            r.positions[0].net_eur,
+            Decimal::ZERO,
+            "no Mehrmenge position"
+        );
         assert_eq!(r.positions[1].quantity, d("100.000"));
     }
 
@@ -1283,7 +1286,11 @@ mod tests {
         // 100 kWh under profile × 4.0 ct = 4.00 EUR credited at the Mehrmengen price.
         assert_eq!(r.total_eur, d("-4.00"));
         assert_eq!(r.positions[0].net_eur, d("-4.00000"));
-        assert_eq!(r.positions[1].net_eur, Decimal::ZERO, "no Mindermenge position");
+        assert_eq!(
+            r.positions[1].net_eur,
+            Decimal::ZERO,
+            "no Mindermenge position"
+        );
     }
 
     /// The two quantities must never both be non-zero.

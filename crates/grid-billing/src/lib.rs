@@ -94,12 +94,13 @@ pub use types::{
     CalculationTrace,
     // Input types
     GasAwhInput,
+    GemeindeGroesse,
     // Backward-compatible alias for GridSettlement — same type, kept for call-site stability
     GridInvoice,
     // Core settlement output
     GridSettlement,
     InvoicePosition,
-    GemeindeGroesse, KaKundengruppe,
+    KaKundengruppe,
     LegalReference,
     MmmInput,
     MsbInput,
