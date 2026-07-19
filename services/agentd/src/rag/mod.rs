@@ -52,7 +52,11 @@ pub struct RagEngine {
 
 impl RagEngine {
     /// Build and initialise the RAG engine.
-    pub async fn new(cfg: &RagConfig, embedder: Arc<dyn LlmProvider>, tenant: &str) -> Result<Self> {
+    pub async fn new(
+        cfg: &RagConfig,
+        embedder: Arc<dyn LlmProvider>,
+        tenant: &str,
+    ) -> Result<Self> {
         let store = Arc::new(RagStore::open(&cfg.storage_uri, cfg.embedding_dim).await?);
         let engine = Self {
             store,
@@ -118,7 +122,10 @@ impl RagEngine {
         let query_vec = vecs.into_iter().next().unwrap_or_default();
         if query_vec.is_empty() {
             // No embedding available (e.g. Anthropic provider) — BM25 text search fallback.
-            return self.store.bm25_search(query, self.top_k, &self.tenant).await;
+            return self
+                .store
+                .bm25_search(query, self.top_k, &self.tenant)
+                .await;
         }
         // Convert similarity threshold to cosine distance threshold:
         // cosine_similarity = 1 - cosine_distance  →  max_distance = 1 - score_threshold

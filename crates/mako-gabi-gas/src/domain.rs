@@ -236,7 +236,8 @@ impl GasBeschaffenheit {
         } else {
             Err(GasBeschaffenheitValidationError { violations })
         }
-    }}
+    }
+}
 
 // ── GasBeschaffenheitValidationError ─────────────────────────────────────────
 
@@ -249,7 +250,11 @@ pub struct GasBeschaffenheitValidationError {
 
 impl std::fmt::Display for GasBeschaffenheitValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GasBeschaffenheit validation failed: {}", self.violations.join("; "))
+        write!(
+            f,
+            "GasBeschaffenheit validation failed: {}",
+            self.violations.join("; ")
+        )
     }
 }
 
@@ -383,62 +388,62 @@ pub struct DvgwFormatVersion {
 
 /// Current DVGW format versions (as of 2026-07-18 — update each April/October).
 pub mod dvgw_versions {
-    use time::macros::date;
     use super::{DvgwFormatVersion, DvgwMessageType};
+    use time::macros::date;
 
     /// ALOCAT 5.11a — valid from 2024-10-01 (current).
     pub const ALOCAT: DvgwFormatVersion = DvgwFormatVersion {
         version: "5.11a",
-        valid_from: date!(2024-10-01),
+        valid_from: date!(2024 - 10 - 01),
         valid_to: None,
         message_type: DvgwMessageType::Alocat,
     };
     /// NOMINT 4.6 FK — valid from 2026-02-01 (current).
     pub const NOMINT: DvgwFormatVersion = DvgwFormatVersion {
         version: "4.6 FK",
-        valid_from: date!(2026-02-01),
+        valid_from: date!(2026 - 02 - 01),
         valid_to: None,
         message_type: DvgwMessageType::Nomint,
     };
     /// NOMRES 4.7 FK — valid from 2026-02-01 (current).
     pub const NOMRES: DvgwFormatVersion = DvgwFormatVersion {
         version: "4.7 FK",
-        valid_from: date!(2026-02-01),
+        valid_from: date!(2026 - 02 - 01),
         valid_to: None,
         message_type: DvgwMessageType::Nomres,
     };
     /// SCHEDL 4.4 FK — valid from 2026-02-01 (current).
     pub const SCHEDL: DvgwFormatVersion = DvgwFormatVersion {
         version: "4.4 FK",
-        valid_from: date!(2026-02-01),
+        valid_from: date!(2026 - 02 - 01),
         valid_to: None,
         message_type: DvgwMessageType::Schedl,
     };
     /// IMBNOT 5.7a — valid from 2023-10-01 (current).
     pub const IMBNOT: DvgwFormatVersion = DvgwFormatVersion {
         version: "5.7a",
-        valid_from: date!(2023-10-01),
+        valid_from: date!(2023 - 10 - 01),
         valid_to: None,
         message_type: DvgwMessageType::Imbnot,
     };
     /// TRANOT 5.8b — valid from 2023-10-01 (current).
     pub const TRANOT: DvgwFormatVersion = DvgwFormatVersion {
         version: "5.8b",
-        valid_from: date!(2023-10-01),
+        valid_from: date!(2023 - 10 - 01),
         valid_to: None,
         message_type: DvgwMessageType::Tranot,
     };
     /// DELORD 4.5 FK — valid from 2026-02-01 (current).
     pub const DELORD: DvgwFormatVersion = DvgwFormatVersion {
         version: "4.5 FK",
-        valid_from: date!(2026-02-01),
+        valid_from: date!(2026 - 02 - 01),
         valid_to: None,
         message_type: DvgwMessageType::Delord,
     };
     /// DELRES 4.6 FK — valid from 2026-02-01 (current).
     pub const DELRES: DvgwFormatVersion = DvgwFormatVersion {
         version: "4.6 FK",
-        valid_from: date!(2026-02-01),
+        valid_from: date!(2026 - 02 - 01),
         valid_to: None,
         message_type: DvgwMessageType::Delres,
     };
@@ -749,10 +754,8 @@ impl GasDay {
         let berlin = timezones::db::europe::BERLIN;
         let d_plus_3 = self.date + Duration::days(3);
         // 11:00 UTC = 12:00 CET; 10:00 UTC = 12:00 CEST
-        let candidate_winter =
-            OffsetDateTime::new_utc(d_plus_3, Time::from_hms(11, 0, 0).unwrap());
-        let candidate_summer =
-            OffsetDateTime::new_utc(d_plus_3, Time::from_hms(10, 0, 0).unwrap());
+        let candidate_winter = OffsetDateTime::new_utc(d_plus_3, Time::from_hms(11, 0, 0).unwrap());
+        let candidate_summer = OffsetDateTime::new_utc(d_plus_3, Time::from_hms(10, 0, 0).unwrap());
         if candidate_winter.to_timezone(berlin).hour() == 12 {
             candidate_winter
         } else {
@@ -782,23 +785,24 @@ impl GasDay {
         let year = self.date.year();
         let (target_year, target_month) = if month_num >= 11 {
             // Nov → Jan+1, Dec → Feb+1
-            (year + 1, time::Month::try_from((month_num + 2) % 12).unwrap_or(time::Month::January))
+            (
+                year + 1,
+                time::Month::try_from((month_num + 2) % 12).unwrap_or(time::Month::January),
+            )
         } else {
-            (year, time::Month::try_from(month_num + 2).unwrap_or(time::Month::January))
+            (
+                year,
+                time::Month::try_from(month_num + 2).unwrap_or(time::Month::January),
+            )
         };
         // Last day of target month
-        let last_day = Date::from_calendar_date(
-            target_year,
-            target_month,
-            target_month.length(target_year),
-        )
-        .unwrap_or_else(|_| self.date + Duration::days(60));
+        let last_day =
+            Date::from_calendar_date(target_year, target_month, target_month.length(target_year))
+                .unwrap_or_else(|_| self.date + Duration::days(60));
 
         // 11:00 UTC = 12:00 CET (winter); 10:00 UTC = 12:00 CEST (summer)
-        let candidate_winter =
-            OffsetDateTime::new_utc(last_day, Time::from_hms(11, 0, 0).unwrap());
-        let candidate_summer =
-            OffsetDateTime::new_utc(last_day, Time::from_hms(10, 0, 0).unwrap());
+        let candidate_winter = OffsetDateTime::new_utc(last_day, Time::from_hms(11, 0, 0).unwrap());
+        let candidate_summer = OffsetDateTime::new_utc(last_day, Time::from_hms(10, 0, 0).unwrap());
         if candidate_winter.to_timezone(berlin).hour() == 12 {
             candidate_winter
         } else {
@@ -1246,7 +1250,10 @@ mod tests {
         assert_eq!(dl.date(), date!(2026 - 01 - 14));
         assert_eq!(dl.hour(), 14, "15:00 CET = 14:00 UTC in winter");
         // NOMRES deadline must be > NOMINT deadline (D-1 13:00 CET)
-        assert!(dl > d.nomination_deadline_utc(), "NOMRES deadline must be after NOMINT deadline");
+        assert!(
+            dl > d.nomination_deadline_utc(),
+            "NOMRES deadline must be after NOMINT deadline"
+        );
     }
 
     #[test]
@@ -1272,7 +1279,11 @@ mod tests {
         // Gas day 2026-01-15 → Final ALOCAT deadline = end of 2026-03 at 12:00 CET
         let d = GasDay::new(date!(2026 - 01 - 15));
         let dl = d.final_alocat_deadline_utc();
-        assert_eq!(dl.date().month(), time::Month::March, "M+2 = March for January gas day");
+        assert_eq!(
+            dl.date().month(),
+            time::Month::March,
+            "M+2 = March for January gas day"
+        );
         assert_eq!(dl.date().year(), 2026);
         assert_eq!(dl.date().day(), 31, "last day of March");
     }
@@ -1282,7 +1293,11 @@ mod tests {
         // Gas day 2026-11-15 → Final ALOCAT deadline = end of 2027-01
         let d = GasDay::new(date!(2026 - 11 - 15));
         let dl = d.final_alocat_deadline_utc();
-        assert_eq!(dl.date().year(), 2027, "M+2 from November wraps to next year");
+        assert_eq!(
+            dl.date().year(),
+            2027,
+            "M+2 from November wraps to next year"
+        );
         assert_eq!(dl.date().month(), time::Month::January);
     }
 
@@ -1425,4 +1440,3 @@ mod tests {
         assert!(saldo.settlement_amount_ct().is_none());
     }
 }
-

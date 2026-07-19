@@ -197,11 +197,7 @@ impl DlqStore {
         DlqSnapshot {
             pending_count: g.pending.len(),
             exhausted_count: g.exhausted.len(),
-            entries: g
-                .pending
-                .iter()
-                .map(DlqEntryView::from)
-                .collect(),
+            entries: g.pending.iter().map(DlqEntryView::from).collect(),
             recent_exhausted: g
                 .exhausted
                 .iter()

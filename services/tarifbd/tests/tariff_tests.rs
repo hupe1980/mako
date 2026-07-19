@@ -1183,9 +1183,19 @@ mod sharing_category_tests {
     #[test]
     fn sharing_is_valid_category() {
         const VALID_CATEGORIES: &[&str] = &[
-            "STROM", "GAS", "WAERME", "SOLAR", "EEG", "EINSPEISUNG",
-            "WAERMEPUMPE", "WALLBOX", "HEMS", "EMOBILITY",
-            "ENERGIEDIENSTLEISTUNG", "BUNDLE", "SHARING",
+            "STROM",
+            "GAS",
+            "WAERME",
+            "SOLAR",
+            "EEG",
+            "EINSPEISUNG",
+            "WAERMEPUMPE",
+            "WALLBOX",
+            "HEMS",
+            "EMOBILITY",
+            "ENERGIEDIENSTLEISTUNG",
+            "BUNDLE",
+            "SHARING",
         ];
         assert!(
             VALID_CATEGORIES.contains(&"SHARING"),
@@ -1198,8 +1208,15 @@ mod sharing_category_tests {
     #[test]
     fn sharing_is_tarifpreisblatt_category() {
         const TARIFPREISBLATT_CATEGORIES: &[&str] = &[
-            "STROM", "GAS", "WAERME", "SOLAR", "EEG", "EINSPEISUNG",
-            "WAERMEPUMPE", "WALLBOX", "SHARING",
+            "STROM",
+            "GAS",
+            "WAERME",
+            "SOLAR",
+            "EEG",
+            "EINSPEISUNG",
+            "WAERMEPUMPE",
+            "WALLBOX",
+            "SHARING",
         ];
         assert!(
             TARIFPREISBLATT_CATEGORIES.contains(&"SHARING"),
@@ -1260,15 +1277,36 @@ mod mcp_validate_tariff_tests {
 
         // Replicate the whitelist from handlers.rs for isolation
         const VALID_PREISTYPEN: &[&str] = &[
-            "GRUNDPREIS", "ARBEITSPREIS_EINTARIF", "ARBEITSPREIS_HT", "ARBEITSPREIS_NT",
-            "LEISTUNGSPREIS", "MESSPREIS", "ENTGELT_ABLESUNG", "ENTGELT_ABRECHNUNG",
-            "ENTGELT_MSB", "PROVISION", "SOLAR_ARBEITSPREIS", "EEG_VERGUETUNG",
-            "EEG_MARKTPRAEMIE", "EEG_MANAGEMENTPRAEMIE", "KWKG_ZUSCHLAG", "MARKTWERT",
-            "VERMARKTUNGSGEBUEHR", "MIETERSTROM_AUFSCHLAG", "GEMEINSCHAFT_RABATT",
-            "STEUERUNGSRABATT_MODUL1", "STEUERUNGSRABATT_MODUL3",
-            "HEMS_PLATTFORMGEBUEHR", "HEMS_OPTIMIERUNGSEVENT", "HEMS_AUSLESUNG",
-            "EMOBILITY_SERVICEGEBUEHR", "EMOBILITY_ARBEITSPREIS", "EMOBILITY_SESSION",
-            "EMOBILITY_ROAMING", "SERVICE_GEBUEHR", "SERVICE_EVENT",
+            "GRUNDPREIS",
+            "ARBEITSPREIS_EINTARIF",
+            "ARBEITSPREIS_HT",
+            "ARBEITSPREIS_NT",
+            "LEISTUNGSPREIS",
+            "MESSPREIS",
+            "ENTGELT_ABLESUNG",
+            "ENTGELT_ABRECHNUNG",
+            "ENTGELT_MSB",
+            "PROVISION",
+            "SOLAR_ARBEITSPREIS",
+            "EEG_VERGUETUNG",
+            "EEG_MARKTPRAEMIE",
+            "EEG_MANAGEMENTPRAEMIE",
+            "KWKG_ZUSCHLAG",
+            "MARKTWERT",
+            "VERMARKTUNGSGEBUEHR",
+            "MIETERSTROM_AUFSCHLAG",
+            "GEMEINSCHAFT_RABATT",
+            "STEUERUNGSRABATT_MODUL1",
+            "STEUERUNGSRABATT_MODUL3",
+            "HEMS_PLATTFORMGEBUEHR",
+            "HEMS_OPTIMIERUNGSEVENT",
+            "HEMS_AUSLESUNG",
+            "EMOBILITY_SERVICEGEBUEHR",
+            "EMOBILITY_ARBEITSPREIS",
+            "EMOBILITY_SESSION",
+            "EMOBILITY_ROAMING",
+            "SERVICE_GEBUEHR",
+            "SERVICE_EVENT",
         ];
 
         for pt in REQUIRED_PREISTYPEN {
@@ -1283,15 +1321,36 @@ mod mcp_validate_tariff_tests {
     #[test]
     fn unknown_preistyp_not_in_whitelist() {
         const VALID_PREISTYPEN: &[&str] = &[
-            "GRUNDPREIS", "ARBEITSPREIS_EINTARIF", "ARBEITSPREIS_HT", "ARBEITSPREIS_NT",
-            "LEISTUNGSPREIS", "MESSPREIS", "ENTGELT_ABLESUNG", "ENTGELT_ABRECHNUNG",
-            "ENTGELT_MSB", "PROVISION", "SOLAR_ARBEITSPREIS", "EEG_VERGUETUNG",
-            "EEG_MARKTPRAEMIE", "EEG_MANAGEMENTPRAEMIE", "KWKG_ZUSCHLAG", "MARKTWERT",
-            "VERMARKTUNGSGEBUEHR", "MIETERSTROM_AUFSCHLAG", "GEMEINSCHAFT_RABATT",
-            "STEUERUNGSRABATT_MODUL1", "STEUERUNGSRABATT_MODUL3",
-            "HEMS_PLATTFORMGEBUEHR", "HEMS_OPTIMIERUNGSEVENT", "HEMS_AUSLESUNG",
-            "EMOBILITY_SERVICEGEBUEHR", "EMOBILITY_ARBEITSPREIS", "EMOBILITY_SESSION",
-            "EMOBILITY_ROAMING", "SERVICE_GEBUEHR", "SERVICE_EVENT",
+            "GRUNDPREIS",
+            "ARBEITSPREIS_EINTARIF",
+            "ARBEITSPREIS_HT",
+            "ARBEITSPREIS_NT",
+            "LEISTUNGSPREIS",
+            "MESSPREIS",
+            "ENTGELT_ABLESUNG",
+            "ENTGELT_ABRECHNUNG",
+            "ENTGELT_MSB",
+            "PROVISION",
+            "SOLAR_ARBEITSPREIS",
+            "EEG_VERGUETUNG",
+            "EEG_MARKTPRAEMIE",
+            "EEG_MANAGEMENTPRAEMIE",
+            "KWKG_ZUSCHLAG",
+            "MARKTWERT",
+            "VERMARKTUNGSGEBUEHR",
+            "MIETERSTROM_AUFSCHLAG",
+            "GEMEINSCHAFT_RABATT",
+            "STEUERUNGSRABATT_MODUL1",
+            "STEUERUNGSRABATT_MODUL3",
+            "HEMS_PLATTFORMGEBUEHR",
+            "HEMS_OPTIMIERUNGSEVENT",
+            "HEMS_AUSLESUNG",
+            "EMOBILITY_SERVICEGEBUEHR",
+            "EMOBILITY_ARBEITSPREIS",
+            "EMOBILITY_SESSION",
+            "EMOBILITY_ROAMING",
+            "SERVICE_GEBUEHR",
+            "SERVICE_EVENT",
         ];
         assert!(!VALID_PREISTYPEN.contains(&"UNKNOWN_PREISTYP"));
         assert!(!VALID_PREISTYPEN.contains(&"PREISTYP_XYZ"));
@@ -1319,7 +1378,10 @@ mod customer_product_history_tests {
         ];
         // Current active product: assigned_to IS NULL
         let current = history.iter().find(|(_, _, to)| to.is_none());
-        assert!(current.is_some(), "must have one active (NULL assigned_to) product");
+        assert!(
+            current.is_some(),
+            "must have one active (NULL assigned_to) product"
+        );
         assert_eq!(current.unwrap().0, "STROM-PREMIUM-2026");
         // History is ordered newest-first
         assert_eq!(history[0].0, "STROM-PREMIUM-2026");
@@ -1327,7 +1389,10 @@ mod customer_product_history_tests {
         assert_eq!(history[2].0, "STROM-BASIC-2024");
         // Exactly one active product
         let active_count = history.iter().filter(|(_, _, to)| to.is_none()).count();
-        assert_eq!(active_count, 1, "exactly one product must be active at any time");
+        assert_eq!(
+            active_count, 1,
+            "exactly one product must be active at any time"
+        );
     }
 
     /// A Tarifwechsel must close the old assignment (set assigned_to = wirksamkeit)
@@ -1440,8 +1505,10 @@ mod product_status_tests {
         // assign_product checks product_status = 'PUBLISHED' before creating assignment.
         let can_assign = |status: &str| status == "PUBLISHED";
         assert!(can_assign("PUBLISHED"));
-        assert!(!can_assign("DRAFT"),
-            "DRAFT products must not be assignable to MaLos");
+        assert!(
+            !can_assign("DRAFT"),
+            "DRAFT products must not be assignable to MaLos"
+        );
     }
 }
 
@@ -1458,10 +1525,7 @@ mod assign_product_guard_tests {
         product_status: &'static str,
     }
 
-    fn validate_assignment(
-        product: &ProductMeta,
-        assigned_from: time::Date,
-    ) -> Result<(), String> {
+    fn validate_assignment(product: &ProductMeta, assigned_from: time::Date) -> Result<(), String> {
         if product.product_status == "DRAFT" {
             return Err("product is DRAFT; publish before assigning".to_owned());
         }
@@ -1589,7 +1653,10 @@ mod bo4e_version_tests {
         let parts: Vec<&str> = without_v.split('.').collect();
         assert_eq!(parts.len(), 3, "BO4E version must have 3 parts");
         let yyyymm: u32 = parts[0].parse().expect("YYYYMM");
-        assert!(yyyymm >= 202400 && yyyymm <= 209912, "Unexpected year/month: {yyyymm}");
+        assert!(
+            yyyymm >= 202400 && yyyymm <= 209912,
+            "Unexpected year/month: {yyyymm}"
+        );
     }
 }
 
@@ -1617,9 +1684,15 @@ mod german_dst_tests {
     fn german_utc_offset(date: time::Date, hour_utc: u8) -> i8 {
         let dst_start = last_sunday_of_month(date.year(), time::Month::March);
         let dst_end = last_sunday_of_month(date.year(), time::Month::October);
-        if date > dst_start && date < dst_end { return 2; }
-        if date == dst_start && hour_utc >= 1 { return 2; }
-        if date == dst_end && hour_utc < 1 { return 2; }
+        if date > dst_start && date < dst_end {
+            return 2;
+        }
+        if date == dst_start && hour_utc >= 1 {
+            return 2;
+        }
+        if date == dst_end && hour_utc < 1 {
+            return 2;
+        }
         1
     }
 
@@ -1643,8 +1716,11 @@ mod german_dst_tests {
         assert_eq!(dst_start.month(), time::Month::March);
         // Must be the LAST Sunday (no Sunday after it in March)
         let next_sunday = dst_start + time::Duration::days(7);
-        assert_ne!(next_sunday.month(), time::Month::March,
-            "No Sunday after dst_start should still be in March");
+        assert_ne!(
+            next_sunday.month(),
+            time::Month::March,
+            "No Sunday after dst_start should still be in March"
+        );
     }
 
     #[test]
@@ -1693,15 +1769,36 @@ mod preistyp_count_tests {
     fn preistyp_count_is_30() {
         // Mirror of tarifbd::handlers::VALID_PREISTYPEN
         const VALID_PREISTYPEN: &[&str] = &[
-            "GRUNDPREIS", "ARBEITSPREIS_EINTARIF", "ARBEITSPREIS_HT", "ARBEITSPREIS_NT",
-            "LEISTUNGSPREIS", "MESSPREIS", "ENTGELT_ABLESUNG", "ENTGELT_ABRECHNUNG",
-            "ENTGELT_MSB", "PROVISION",
-            "SOLAR_ARBEITSPREIS", "EEG_VERGUETUNG", "EEG_MARKTPRAEMIE", "EEG_MANAGEMENTPRAEMIE",
-            "KWKG_ZUSCHLAG", "MARKTWERT", "VERMARKTUNGSGEBUEHR", "MIETERSTROM_AUFSCHLAG",
-            "GEMEINSCHAFT_RABATT", "STEUERUNGSRABATT_MODUL1", "STEUERUNGSRABATT_MODUL3",
-            "HEMS_PLATTFORMGEBUEHR", "HEMS_OPTIMIERUNGSEVENT", "HEMS_AUSLESUNG",
-            "EMOBILITY_SERVICEGEBUEHR", "EMOBILITY_ARBEITSPREIS", "EMOBILITY_SESSION",
-            "EMOBILITY_ROAMING", "SERVICE_GEBUEHR", "SERVICE_EVENT",
+            "GRUNDPREIS",
+            "ARBEITSPREIS_EINTARIF",
+            "ARBEITSPREIS_HT",
+            "ARBEITSPREIS_NT",
+            "LEISTUNGSPREIS",
+            "MESSPREIS",
+            "ENTGELT_ABLESUNG",
+            "ENTGELT_ABRECHNUNG",
+            "ENTGELT_MSB",
+            "PROVISION",
+            "SOLAR_ARBEITSPREIS",
+            "EEG_VERGUETUNG",
+            "EEG_MARKTPRAEMIE",
+            "EEG_MANAGEMENTPRAEMIE",
+            "KWKG_ZUSCHLAG",
+            "MARKTWERT",
+            "VERMARKTUNGSGEBUEHR",
+            "MIETERSTROM_AUFSCHLAG",
+            "GEMEINSCHAFT_RABATT",
+            "STEUERUNGSRABATT_MODUL1",
+            "STEUERUNGSRABATT_MODUL3",
+            "HEMS_PLATTFORMGEBUEHR",
+            "HEMS_OPTIMIERUNGSEVENT",
+            "HEMS_AUSLESUNG",
+            "EMOBILITY_SERVICEGEBUEHR",
+            "EMOBILITY_ARBEITSPREIS",
+            "EMOBILITY_SESSION",
+            "EMOBILITY_ROAMING",
+            "SERVICE_GEBUEHR",
+            "SERVICE_EVENT",
         ];
         assert_eq!(
             VALID_PREISTYPEN.len(),
@@ -1715,14 +1812,24 @@ mod preistyp_count_tests {
     #[test]
     fn schema_has_13_categories_including_sharing() {
         const ALL_DB_CATEGORIES: &[&str] = &[
-            "STROM", "GAS", "WAERME", "SOLAR", "EEG", "EINSPEISUNG",
-            "WAERMEPUMPE", "WALLBOX", "HEMS", "EMOBILITY", "ENERGIEDIENSTLEISTUNG",
+            "STROM",
+            "GAS",
+            "WAERME",
+            "SOLAR",
+            "EEG",
+            "EINSPEISUNG",
+            "WAERMEPUMPE",
+            "WALLBOX",
+            "HEMS",
+            "EMOBILITY",
+            "ENERGIEDIENSTLEISTUNG",
             "BUNDLE",
             "SHARING", // §42c EnWG — 13th category; present in DB schema
         ];
         assert_eq!(ALL_DB_CATEGORIES.len(), 13);
-        assert!(ALL_DB_CATEGORIES.contains(&"SHARING"),
-            "SHARING (§42c EnWG) must be in the DB CHECK constraint");
+        assert!(
+            ALL_DB_CATEGORIES.contains(&"SHARING"),
+            "SHARING (§42c EnWG) must be in the DB CHECK constraint"
+        );
     }
 }
-

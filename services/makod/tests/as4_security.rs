@@ -222,9 +222,9 @@ async fn sign_encrypt_round_trip_via_mock_endpoint() {
     use asx_rs::core::SessionContextBuilder;
     use asx_rs::observability::EventBus;
     use asx_rs::transport::As4HttpTransport;
-    use mako_as4::pmode::{bdew_pmode_with_endpoint, BdewAction};
-    use mako_as4::testing::{BdewTestPki, MockAs4Endpoint};
+    use mako_as4::pmode::{BdewAction, bdew_pmode_with_endpoint};
     use mako_as4::profile::BdewAs4Profile;
+    use mako_as4::testing::{BdewTestPki, MockAs4Endpoint};
 
     let sender_pki = BdewTestPki::generate("Test NB 9900000000001");
     let receiver_pki = BdewTestPki::generate("Test LF 9900000000002");
@@ -263,10 +263,8 @@ async fn sign_encrypt_round_trip_via_mock_endpoint() {
 
     // ── Part A: verify sign+encrypt SOAP output has all required elements ─────
     let mut profile = BdewAs4Profile::new();
-    profile.register_partner_encryption_cert(
-        RECEIVER_GLN,
-        receiver_pki.encryption.cert_pem.clone(),
-    );
+    profile
+        .register_partner_encryption_cert(RECEIVER_GLN, receiver_pki.encryption.cert_pem.clone());
     profile.register_pmode(bdew_pmode_with_endpoint(
         "pm-utilmd-lf",
         RECEIVER_GLN,
@@ -280,9 +278,7 @@ async fn sign_encrypt_round_trip_via_mock_endpoint() {
     assert!(pm.security.sign, "bdew_pmode must sign");
     assert!(pm.security.encrypt, "bdew_pmode must encrypt");
 
-    let mut policy = pm
-        .to_send_policy()
-        .expect("sign+encrypt policy must build");
+    let mut policy = pm.to_send_policy().expect("sign+encrypt policy must build");
     policy.conversation_id = Some("CONV-ENCRYPT".to_owned());
 
     // Partial As4SendCredentials: recipient_cert_pem only; session fallback for
@@ -328,8 +324,8 @@ async fn sign_encrypt_round_trip_via_mock_endpoint() {
     // asx-rs v0.8.0: As4HttpTransport::new_for_localhost_testing() (FR-3) — use the real
     // transport layer (Content-Type, receipt inspection) instead of raw reqwest.
     // `send_to_localhost()` bypasses the SSRF URL guard; regular `send()` still validates.
-    let transport = As4HttpTransport::new_for_localhost_testing()
-        .expect("localhost test transport must build");
+    let transport =
+        As4HttpTransport::new_for_localhost_testing().expect("localhost test transport must build");
     transport
         .send_to_localhost(&endpoint_url, &output)
         .await
@@ -375,7 +371,7 @@ async fn sign_only_round_trip_envelope_contains_wssec_signature() {
     use asx_rs::core::SessionContextBuilder;
     use asx_rs::observability::EventBus;
     use asx_rs::transport::As4HttpTransport;
-    use mako_as4::pmode::{bdew_pmode_sign_only, BdewAction};
+    use mako_as4::pmode::{BdewAction, bdew_pmode_sign_only};
     use mako_as4::testing::{BdewTestPki, MockAs4Endpoint};
 
     let sender_pki = BdewTestPki::generate("Test NB 9900000000003");
@@ -418,8 +414,8 @@ async fn sign_only_round_trip_envelope_contains_wssec_signature() {
     .await
     .expect("sign-only send_async must succeed");
 
-    let soap_str = std::str::from_utf8(&output.soap_envelope.body)
-        .expect("SOAP envelope must be valid UTF-8");
+    let soap_str =
+        std::str::from_utf8(&output.soap_envelope.body).expect("SOAP envelope must be valid UTF-8");
 
     assert!(
         soap_str.contains("BinarySecurityToken"),
@@ -436,8 +432,8 @@ async fn sign_only_round_trip_envelope_contains_wssec_signature() {
 
     // v0.8.0: As4HttpTransport::new_for_localhost_testing() (FR-3) — use the real
     // transport layer (Content-Type, receipt inspection) instead of raw reqwest.
-    let transport = As4HttpTransport::new_for_localhost_testing()
-        .expect("localhost test transport must build");
+    let transport =
+        As4HttpTransport::new_for_localhost_testing().expect("localhost test transport must build");
     transport
         .send_to_localhost(&endpoint_url, &output)
         .await
@@ -477,16 +473,16 @@ async fn sign_only_round_trip_envelope_contains_wssec_signature() {
 /// Regulatory basis: BDEW AS4-Profil v1.2 §2.2.6.2.1 (mandatory signing).
 #[tokio::test]
 async fn tampered_signature_is_rejected() {
-    use std::sync::Arc;
     use asx_rs::as4::{
-        As4ReceivePushRequest, As4SendRequest,
-        receive_push_with_dedup_async_with_custom_verifier, send_async, As4WsSecVerifier,
+        As4ReceivePushRequest, As4SendRequest, As4WsSecVerifier,
+        receive_push_with_dedup_async_with_custom_verifier, send_async,
     };
     use asx_rs::core::SessionContextBuilder;
     use asx_rs::observability::EventBus;
     use asx_rs::storage::DurableInMemoryDedupBackend;
-    use mako_as4::{bdew_push_policy, bdew_pmode_sign_only, pmode::BdewAction};
     use mako_as4::testing::BdewTestPki;
+    use mako_as4::{bdew_pmode_sign_only, bdew_push_policy, pmode::BdewAction};
+    use std::sync::Arc;
 
     let sender_pki = BdewTestPki::generate("Tamper NB 9900000000010");
     const SENDER_GLN: &str = "9900000000010";
@@ -536,10 +532,7 @@ async fn tampered_signature_is_rejected() {
 
     // Step 2: corrupt the payload by flipping a byte in the middle of the body.
     // The SOAP body contains the EDIFACT payload string. Find "UNB" and mutate it.
-    if let Some(pos) = tampered_body
-        .windows(3)
-        .position(|w| w == b"UNB")
-    {
+    if let Some(pos) = tampered_body.windows(3).position(|w| w == b"UNB") {
         tampered_body[pos] = b'X'; // "UNB" → "XNB" — valid UTF-8 but wrong content
     }
 
@@ -579,9 +572,12 @@ async fn tampered_signature_is_rejected() {
     // or policy check — it must specifically be the signature mismatch.
     let err_str = format!("{err:?}");
     assert!(
-        err_str.contains("signature") || err_str.contains("Signature")
-            || err_str.contains("verify") || err_str.contains("Verify")
-            || err_str.contains("CryptoFailure") || err_str.contains("InvalidSignature")
+        err_str.contains("signature")
+            || err_str.contains("Signature")
+            || err_str.contains("verify")
+            || err_str.contains("Verify")
+            || err_str.contains("CryptoFailure")
+            || err_str.contains("InvalidSignature")
             || err_str.contains("WsSecVerification"),
         "Error must indicate signature verification failure, not a different error; got: {err}"
     );
@@ -600,17 +596,16 @@ async fn tampered_signature_is_rejected() {
 /// is wired correctly in `makod`'s `as4_ingest.rs`.
 #[tokio::test]
 async fn inbound_encryption_enforced_when_decryption_key_set() {
-    use std::sync::Arc;
     use asx_rs::as4::{
-        As4ReceivePushRequest, As4SendRequest,
+        As4ReceivePushRequest, As4SendRequest, InsecureBypassAs4Verifier,
         receive_push_with_dedup_async_with_custom_verifier, send_async,
-        InsecureBypassAs4Verifier,
     };
     use asx_rs::core::SessionContextBuilder;
     use asx_rs::observability::EventBus;
     use asx_rs::storage::DurableInMemoryDedupBackend;
-    use mako_as4::{bdew_push_policy, bdew_pmode_sign_only, pmode::BdewAction};
     use mako_as4::testing::BdewTestPki;
+    use mako_as4::{bdew_pmode_sign_only, bdew_push_policy, pmode::BdewAction};
+    use std::sync::Arc;
 
     let sender_pki = BdewTestPki::generate("EncReq NB 9900000000020");
     const SENDER_GLN: &str = "9900000000020";
@@ -684,7 +679,8 @@ async fn inbound_encryption_enforced_when_decryption_key_set() {
     );
     let err_str = format!("{:?}", result.unwrap_err());
     assert!(
-        err_str.contains("encrypt") || err_str.contains("Encrypt")
+        err_str.contains("encrypt")
+            || err_str.contains("Encrypt")
             || err_str.contains("PolicyViolation"),
         "Rejection must cite encryption policy violation; got: {err_str}"
     );

@@ -450,7 +450,10 @@ fn hmac_uses_sha256_prefix() {
     let hex = mako_service::webhook::hmac_hex(secret, body);
     let sig = format!("sha256={hex}");
     // Must start with sha256= — NOT a bare hex string
-    assert!(sig.starts_with("sha256="), "signature must use sha256= prefix");
+    assert!(
+        sig.starts_with("sha256="),
+        "signature must use sha256= prefix"
+    );
     assert_eq!(sig.len(), 64 + 7, "sha256= (7) + 64 hex chars");
     // Must verify correctly with mako_service::webhook::verify_hmac
     assert!(
@@ -500,7 +503,10 @@ fn is_new_insert_semantics() {
     assert!(is_new, "fresh insert: id matches proposed id");
     // Simulate: returned id = existing_id (conflict)
     let is_new_conflict = existing_id == fresh_id;
-    assert!(!is_new_conflict, "conflict: returned id does not match proposed id");
+    assert!(
+        !is_new_conflict,
+        "conflict: returned id does not match proposed id"
+    );
 }
 
 // ── widerruf_kuendigung state machine ─────────────────────────────────────────
@@ -509,9 +515,18 @@ fn is_new_insert_semantics() {
 #[test]
 fn widerruf_only_valid_for_gekuendigt() {
     // widerruf_kuendigung returns Err when status != GEKÜNDIGT
-    let invalid_statuses = ["AKTIV", "ANGELEGT", "IN_BEARBEITUNG", "ABGELAUFEN", "STORNIERT"];
+    let invalid_statuses = [
+        "AKTIV",
+        "ANGELEGT",
+        "IN_BEARBEITUNG",
+        "ABGELAUFEN",
+        "STORNIERT",
+    ];
     for s in invalid_statuses {
-        assert_ne!(s, "GEKÜNDIGT", "status {s} is not GEKÜNDIGT — widerruf should fail");
+        assert_ne!(
+            s, "GEKÜNDIGT",
+            "status {s} is not GEKÜNDIGT — widerruf should fail"
+        );
     }
 }
 
@@ -636,8 +651,10 @@ fn storniert_is_terminal() {
     let terminals = ["STORNIERT", "ABGELAUFEN"];
     for t in terminals {
         // Terminal states cannot be Storniert again
-        assert!(!matches!(t, "ANGELEGT" | "IN_BEARBEITUNG"),
-            "{t} is terminal — cannot be storniert again");
+        assert!(
+            !matches!(t, "ANGELEGT" | "IN_BEARBEITUNG"),
+            "{t} is terminal — cannot be storniert again"
+        );
     }
 }
 
@@ -645,12 +662,24 @@ fn storniert_is_terminal() {
 #[test]
 fn stornierung_valid_states() {
     let valid = ["ANGELEGT", "IN_BEARBEITUNG"];
-    let invalid = ["AKTIV", "TEILERFUELLUNG", "GEKÜNDIGT", "ABGELAUFEN", "STORNIERT"];
+    let invalid = [
+        "AKTIV",
+        "TEILERFUELLUNG",
+        "GEKÜNDIGT",
+        "ABGELAUFEN",
+        "STORNIERT",
+    ];
     for v in valid {
-        assert!(matches!(v, "ANGELEGT" | "IN_BEARBEITUNG"), "{v} must allow stornierung");
+        assert!(
+            matches!(v, "ANGELEGT" | "IN_BEARBEITUNG"),
+            "{v} must allow stornierung"
+        );
     }
     for inv in invalid {
-        assert!(!matches!(inv, "ANGELEGT" | "IN_BEARBEITUNG"), "{inv} must reject stornierung");
+        assert!(
+            !matches!(inv, "ANGELEGT" | "IN_BEARBEITUNG"),
+            "{inv} must reject stornierung"
+        );
     }
 }
 
@@ -684,8 +713,14 @@ fn gdpr_export_includes_required_fields() {
     };
 
     // Art. 15: all required categories are present
-    assert!(export.person.is_some(), "Art. 15: personal data (Person) included");
-    assert!(export.zahlungsinformation.is_some(), "Art. 15: payment data (IBAN) included");
+    assert!(
+        export.person.is_some(),
+        "Art. 15: personal data (Person) included"
+    );
+    assert!(
+        export.zahlungsinformation.is_some(),
+        "Art. 15: payment data (IBAN) included"
+    );
     assert_eq!(export.kunde.kundentyp, "B2C");
 }
 
@@ -694,8 +729,8 @@ fn gdpr_export_includes_required_fields() {
 /// CreateRahmenvertragInput must have angebot_id for CPQ traceability.
 #[test]
 fn create_rahmenvertrag_input_has_angebot_id() {
-    use vertragd::pg::CreateRahmenvertragInput;
     use time::macros::date;
+    use vertragd::pg::CreateRahmenvertragInput;
     let input = CreateRahmenvertragInput {
         rahmenvertrag_nr: None,
         gueltig_von: date!(2026 - 01 - 01),
@@ -711,7 +746,10 @@ fn create_rahmenvertrag_input_has_angebot_id() {
         angebot_id: Some(Uuid::new_v4()), // CPQ linkage
         notizen: None,
     };
-    assert!(input.angebot_id.is_some(), "angebot_id must be settable for CPQ pipeline");
+    assert!(
+        input.angebot_id.is_some(),
+        "angebot_id must be settable for CPQ pipeline"
+    );
 }
 
 // ── Kündigung state guards ────────────────────────────────────────────────────
@@ -719,7 +757,13 @@ fn create_rahmenvertrag_input_has_angebot_id() {
 /// Kündigung must be rejected for contracts not in AKTIV/TEILERFUELLUNG.
 #[test]
 fn kuendigung_rejected_for_non_active_contracts() {
-    let non_cancellable = ["ANGELEGT", "IN_BEARBEITUNG", "ABGELAUFEN", "STORNIERT", "GEKÜNDIGT"];
+    let non_cancellable = [
+        "ANGELEGT",
+        "IN_BEARBEITUNG",
+        "ABGELAUFEN",
+        "STORNIERT",
+        "GEKÜNDIGT",
+    ];
     for s in non_cancellable {
         assert!(
             !matches!(s, "AKTIV" | "TEILERFUELLUNG"),

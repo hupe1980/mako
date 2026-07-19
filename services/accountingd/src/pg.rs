@@ -289,10 +289,7 @@ pub async fn persist_sepa_collection(
 }
 
 /// Mark a SEPA collection run as dispatched to the ERP.
-pub async fn mark_sepa_collection_dispatched(
-    pool: &PgPool,
-    run_id: Uuid,
-) -> anyhow::Result<()> {
+pub async fn mark_sepa_collection_dispatched(pool: &PgPool, run_id: Uuid) -> anyhow::Result<()> {
     sqlx::query(
         "UPDATE sepa_collection_runs
          SET dispatch_status = 'DISPATCHED', dispatched_at = now()
@@ -1672,9 +1669,9 @@ pub async fn run_auto_dunning(
 /// Maps an `entry_type` and amount sign to (debit_account, credit_account) pairs
 /// using German SKR 03 / SKR 04 chart of accounts.
 pub struct JournalMapping {
-    pub debit_skr:  &'static str,
+    pub debit_skr: &'static str,
     pub debit_desc: &'static str,
-    pub credit_skr:  &'static str,
+    pub credit_skr: &'static str,
     pub credit_desc: &'static str,
 }
 
@@ -1685,52 +1682,77 @@ pub fn journal_mapping(entry_type: &str, amount_ct: i64) -> JournalMapping {
 
     match entry_type {
         "RECHNUNG" | "ABSCHLAG" => JournalMapping {
-            debit_skr:   "1400", debit_desc:  "Forderungen aus L+L",
-            credit_skr:  "4000", credit_desc: "Energieerlöse",
+            debit_skr: "1400",
+            debit_desc: "Forderungen aus L+L",
+            credit_skr: "4000",
+            credit_desc: "Energieerlöse",
         },
         "STORNO" if is_debit => JournalMapping {
-            debit_skr:   "1400", debit_desc:  "Forderungen aus L+L",
-            credit_skr:  "4000", credit_desc: "Energieerlöse (Storno)",
+            debit_skr: "1400",
+            debit_desc: "Forderungen aus L+L",
+            credit_skr: "4000",
+            credit_desc: "Energieerlöse (Storno)",
         },
         "STORNO" => JournalMapping {
-            debit_skr:   "4000", debit_desc:  "Energieerlöse (Storno)",
-            credit_skr:  "1400", credit_desc: "Forderungen aus L+L",
+            debit_skr: "4000",
+            debit_desc: "Energieerlöse (Storno)",
+            credit_skr: "1400",
+            credit_desc: "Forderungen aus L+L",
         },
         "ZAHLUNG" => JournalMapping {
-            debit_skr:   "1200", debit_desc:  "Bankguthaben",
-            credit_skr:  "1400", credit_desc: "Forderungen aus L+L",
+            debit_skr: "1200",
+            debit_desc: "Bankguthaben",
+            credit_skr: "1400",
+            credit_desc: "Forderungen aus L+L",
         },
         "GUTSCHRIFT" => JournalMapping {
-            debit_skr:   "4000", debit_desc:  "Energieerlöse",
-            credit_skr:  "1400", credit_desc: "Forderungen aus L+L",
+            debit_skr: "4000",
+            debit_desc: "Energieerlöse",
+            credit_skr: "1400",
+            credit_desc: "Forderungen aus L+L",
         },
         "EEG_GUTSCHRIFT" | "EEG_MARKTPRAEMIE" => JournalMapping {
-            debit_skr:   "3000", debit_desc:  "Verbindlichkeiten EEG",
-            credit_skr:  "4001", credit_desc: "EEG Einspeisevergütung",
+            debit_skr: "3000",
+            debit_desc: "Verbindlichkeiten EEG",
+            credit_skr: "4001",
+            credit_desc: "EEG Einspeisevergütung",
         },
         "BANKRUECKLAST" => JournalMapping {
-            debit_skr:   "1400", debit_desc:  "Forderungen aus L+L",
-            credit_skr:  "1200", credit_desc: "Bankguthaben",
+            debit_skr: "1400",
+            debit_desc: "Forderungen aus L+L",
+            credit_skr: "1200",
+            credit_desc: "Bankguthaben",
         },
         "MAHNGEBUEHR" => JournalMapping {
-            debit_skr:   "1400", debit_desc:  "Forderungen aus L+L",
-            credit_skr:  "4003", credit_desc: "Mahngebühren / Verzugszinsen",
+            debit_skr: "1400",
+            debit_desc: "Forderungen aus L+L",
+            credit_skr: "4003",
+            credit_desc: "Mahngebühren / Verzugszinsen",
         },
         "JAHRESABSCHLUSS" if is_debit => JournalMapping {
-            debit_skr:   "1400", debit_desc:  "Forderungen aus L+L",
-            credit_skr:  "4000", credit_desc: "Energieerlöse Jahresabschluss",
+            debit_skr: "1400",
+            debit_desc: "Forderungen aus L+L",
+            credit_skr: "4000",
+            credit_desc: "Energieerlöse Jahresabschluss",
         },
         "JAHRESABSCHLUSS" => JournalMapping {
-            debit_skr:   "4000", debit_desc:  "Energieerlöse Jahresabschluss",
-            credit_skr:  "3001", credit_desc: "Verbindlichkeiten Erstattung",
+            debit_skr: "4000",
+            debit_desc: "Energieerlöse Jahresabschluss",
+            credit_skr: "3001",
+            credit_desc: "Verbindlichkeiten Erstattung",
         },
         "KORREKTUR" if is_debit => JournalMapping {
-            debit_skr:   "1400", debit_desc:  "Forderungen aus L+L",
-            credit_skr:  "4000", credit_desc: "Energieerlöse (Korrektur)",
+            debit_skr: "1400",
+            debit_desc: "Forderungen aus L+L",
+            credit_skr: "4000",
+            credit_desc: "Energieerlöse (Korrektur)",
         },
-        _ => JournalMapping { // KORREKTUR credit or unknown
-            debit_skr:   "4000", debit_desc:  "Energieerlöse (Korrektur)",
-            credit_skr:  "1400", credit_desc: "Forderungen aus L+L",
+        _ => JournalMapping {
+            // KORREKTUR credit or unknown
+            debit_skr: "4000",
+            debit_desc: "Energieerlöse (Korrektur)",
+            credit_skr: "1400",
+            credit_desc: "Forderungen aus L+L",
         },
     }
 }
@@ -1787,10 +1809,10 @@ pub async fn insert_journal_lines(
 /// Aging bucket for open receivables.
 #[derive(Debug, Serialize)]
 pub struct AgingBucket {
-    pub bucket:          &'static str,  // "0-30d", "31-60d", "61-90d", ">90d"
-    pub account_count:   i64,
-    pub total_ct:        i64,
-    pub total_eur:       String,
+    pub bucket: &'static str, // "0-30d", "31-60d", "61-90d", ">90d"
+    pub account_count: i64,
+    pub total_ct: i64,
+    pub total_eur: String,
 }
 
 /// Aging analysis: group overdue account balances by days-overdue bucket.
@@ -1800,10 +1822,7 @@ pub struct AgingBucket {
 /// when present, or the account `updated_at` otherwise.
 ///
 /// Returns four buckets: 0–30 days, 31–60 days, 61–90 days, >90 days.
-pub async fn list_aging_buckets(
-    pool: &PgPool,
-    tenant: &str,
-) -> anyhow::Result<Vec<AgingBucket>> {
+pub async fn list_aging_buckets(pool: &PgPool, tenant: &str) -> anyhow::Result<Vec<AgingBucket>> {
     let rows = sqlx::query(
         r"SELECT
             CASE
@@ -1835,17 +1854,24 @@ pub async fn list_aging_buckets(
     let mut buckets = Vec::with_capacity(4);
     // Ensure all four buckets are present even if empty
     for (label, min_days, max_days) in &[
-        ("0-30d",  0i32,  30i32),
-        ("31-60d", 31,    60),
-        ("61-90d", 61,    90),
-        (">90d",   91,  i32::MAX),
+        ("0-30d", 0i32, 30i32),
+        ("31-60d", 31, 60),
+        ("61-90d", 61, 90),
+        (">90d", 91, i32::MAX),
     ] {
-        let (account_count, total_ct) = rows.iter()
-            .find(|r| r.try_get::<&str, _>("bucket").map(|b| b == *label).unwrap_or(false))
-            .map(|r| (
-                r.try_get::<i64, _>("account_count").unwrap_or(0),
-                r.try_get::<i64, _>("total_ct").unwrap_or(0),
-            ))
+        let (account_count, total_ct) = rows
+            .iter()
+            .find(|r| {
+                r.try_get::<&str, _>("bucket")
+                    .map(|b| b == *label)
+                    .unwrap_or(false)
+            })
+            .map(|r| {
+                (
+                    r.try_get::<i64, _>("account_count").unwrap_or(0),
+                    r.try_get::<i64, _>("total_ct").unwrap_or(0),
+                )
+            })
             .unwrap_or((0, 0));
         let _ = (min_days, max_days); // used only for ordering above
         buckets.push(AgingBucket {
@@ -1862,21 +1888,21 @@ pub async fn list_aging_buckets(
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct InterestChargeRow {
-    pub id:               Uuid,
-    pub account_id:       Uuid,
-    pub tenant:           String,
+    pub id: Uuid,
+    pub account_id: Uuid,
+    pub tenant: String,
     pub invoice_reference: Option<String>,
-    pub principal_ct:     i64,
-    pub interest_ct:      i64,
-    pub rate_pct:         rust_decimal::Decimal,
+    pub principal_ct: i64,
+    pub interest_ct: i64,
+    pub rate_pct: rust_decimal::Decimal,
     pub ecb_base_rate_pct: rust_decimal::Decimal,
-    pub customer_type:    String,
-    pub period_from:      time::Date,
-    pub period_to:        time::Date,
-    pub legal_basis:      String,
-    pub ledger_entry_id:  Option<Uuid>,
+    pub customer_type: String,
+    pub period_from: time::Date,
+    pub period_to: time::Date,
+    pub legal_basis: String,
+    pub ledger_entry_id: Option<Uuid>,
     #[serde(with = "time::serde::rfc3339")]
-    pub created_at:       OffsetDateTime,
+    pub created_at: OffsetDateTime,
 }
 
 /// Fetch the current ECB Basiszinssatz (§247 BGB) from the `ecb_base_rates` table.
@@ -1899,7 +1925,9 @@ pub async fn fetch_ecb_base_rate(
         Some(r) => Ok(r.try_get("rate_pct")?),
         None => {
             // Fallback to a conservative estimate if no rates are seeded
-            tracing::warn!("accountingd: no ECB base rate found — using 2.00% fallback. Seed ecb_base_rates table.");
+            tracing::warn!(
+                "accountingd: no ECB base rate found — using 2.00% fallback. Seed ecb_base_rates table."
+            );
             Ok(rust_decimal::Decimal::new(200, 2)) // 2.00%
         }
     }
@@ -2000,49 +2028,49 @@ pub async fn list_interest_charges(
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct PaymentPlanRow {
-    pub plan_id:           Uuid,
-    pub account_id:        Uuid,
-    pub tenant:            String,
-    pub total_ct:          i64,
-    pub installment_ct:    i64,
+    pub plan_id: Uuid,
+    pub account_id: Uuid,
+    pub tenant: String,
+    pub total_ct: i64,
+    pub installment_ct: i64,
     pub installment_count: i32,
-    pub billing_day:       i16,
-    pub status:            String,
-    pub dunning_case_id:   Option<Uuid>,
-    pub operator_sub:      Option<String>,
-    pub note:              Option<String>,
+    pub billing_day: i16,
+    pub status: String,
+    pub dunning_case_id: Option<Uuid>,
+    pub operator_sub: Option<String>,
+    pub note: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
-    pub created_at:        OffsetDateTime,
+    pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
-    pub updated_at:        OffsetDateTime,
+    pub updated_at: OffsetDateTime,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct PaymentPlanInstallmentRow {
-    pub id:                Uuid,
-    pub plan_id:           Uuid,
-    pub tenant:            String,
-    pub installment_no:    i32,
-    pub due_date:          time::Date,
-    pub amount_ct:         i64,
-    pub status:            String,
-    pub ledger_entry_id:   Option<Uuid>,
-    pub paid_at:           Option<OffsetDateTime>,
+    pub id: Uuid,
+    pub plan_id: Uuid,
+    pub tenant: String,
+    pub installment_no: i32,
+    pub due_date: time::Date,
+    pub amount_ct: i64,
+    pub status: String,
+    pub ledger_entry_id: Option<Uuid>,
+    pub paid_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
-    pub created_at:        OffsetDateTime,
+    pub created_at: OffsetDateTime,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreatePaymentPlanRequest {
-    pub malo_id:           String,
-    pub lf_mp_id:          Option<String>,
-    pub total_ct:          i64,
-    pub installment_ct:    i64,
-    pub billing_day:       i16,
-    pub first_due_date:    String, // ISO 8601 date
-    pub dunning_case_id:   Option<Uuid>,
-    pub note:              Option<String>,
-    pub operator_sub:      Option<String>,
+    pub malo_id: String,
+    pub lf_mp_id: Option<String>,
+    pub total_ct: i64,
+    pub installment_ct: i64,
+    pub billing_day: i16,
+    pub first_due_date: String, // ISO 8601 date
+    pub dunning_case_id: Option<Uuid>,
+    pub note: Option<String>,
+    pub operator_sub: Option<String>,
 }
 
 /// Create a payment plan and its installment schedule.
@@ -2093,9 +2121,8 @@ pub async fn create_payment_plan(
     for n in 0..installment_count {
         let due_date = first_due
             .replace_month(
-                time::Month::try_from(
-                    ((first_due.month() as u8 - 1 + n as u8) % 12) + 1
-                ).unwrap_or(time::Month::January)
+                time::Month::try_from(((first_due.month() as u8 - 1 + n as u8) % 12) + 1)
+                    .unwrap_or(time::Month::January),
             )
             .unwrap_or(first_due);
 
@@ -2246,4 +2273,3 @@ pub async fn record_bank_import(
     .context("record_bank_import")?;
     Ok(())
 }
-

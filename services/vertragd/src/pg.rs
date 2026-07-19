@@ -1235,7 +1235,6 @@ pub async fn gdpr_export(
     }))
 }
 
-
 // ── Additional query helpers for MCP tools ────────────────────────────────────
 
 /// Fetch a single Rahmenvertrag by UUID.
@@ -1244,11 +1243,13 @@ pub async fn fetch_rahmenvertrag(
     id: Uuid,
     tenant: &str,
 ) -> anyhow::Result<Option<RahmenvertragRow>> {
-    Ok(sqlx::query_as("SELECT * FROM rahmenvertraege WHERE id=$1 AND tenant=$2")
-        .bind(id)
-        .bind(tenant)
-        .fetch_optional(pool)
-        .await?)
+    Ok(
+        sqlx::query_as("SELECT * FROM rahmenvertraege WHERE id=$1 AND tenant=$2")
+            .bind(id)
+            .bind(tenant)
+            .fetch_optional(pool)
+            .await?,
+    )
 }
 
 /// List all Rahmenverträge for a tenant (operator CRM view).
@@ -1299,13 +1300,11 @@ pub async fn fetch_zahlungsinformation(
     kunden_id: Uuid,
     tenant: &str,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let row = sqlx::query(
-        "SELECT zahlungsinformation FROM kunden WHERE id=$1 AND tenant=$2",
-    )
-    .bind(kunden_id)
-    .bind(tenant)
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query("SELECT zahlungsinformation FROM kunden WHERE id=$1 AND tenant=$2")
+        .bind(kunden_id)
+        .bind(tenant)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.and_then(|r| {
         r.try_get::<Option<serde_json::Value>, _>("zahlungsinformation")
             .ok()
@@ -1321,16 +1320,18 @@ pub async fn check_preisgarantie_for_mcp(
     tenant: &str,
     wirksamkeit: time::Date,
 ) -> anyhow::Result<(bool, Option<time::Date>)> {
-    let row = sqlx::query(
-        "SELECT preisgarantie_bis FROM versorgungsvertraege WHERE id=$1 AND tenant=$2",
-    )
-    .bind(vertrag_id)
-    .bind(tenant)
-    .fetch_optional(pool)
-    .await?;
+    let row =
+        sqlx::query("SELECT preisgarantie_bis FROM versorgungsvertraege WHERE id=$1 AND tenant=$2")
+            .bind(vertrag_id)
+            .bind(tenant)
+            .fetch_optional(pool)
+            .await?;
 
-    let garantie_bis: Option<time::Date> = row
-        .and_then(|r| r.try_get::<Option<time::Date>, _>("preisgarantie_bis").ok().flatten());
+    let garantie_bis: Option<time::Date> = row.and_then(|r| {
+        r.try_get::<Option<time::Date>, _>("preisgarantie_bis")
+            .ok()
+            .flatten()
+    });
     let blocked = garantie_bis.is_some_and(|g| wirksamkeit <= g);
     Ok((blocked, garantie_bis))
 }
@@ -1393,7 +1394,11 @@ pub async fn update_letzter_login(pool: &PgPool, oidc_sub: &str, tenant: &str) -
 
 /// Count active KundenIdentitaeten for a Kunde.
 /// Used to enforce `max_identitaeten_per_kunde` limit.
-pub async fn count_active_identitaeten(pool: &PgPool, kunden_id: Uuid, tenant: &str) -> Result<i64> {
+pub async fn count_active_identitaeten(
+    pool: &PgPool,
+    kunden_id: Uuid,
+    tenant: &str,
+) -> Result<i64> {
     let row = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM kunden_identitaeten
          WHERE kunden_id = $1 AND tenant = $2 AND aktiv = true",
@@ -1417,13 +1422,12 @@ pub async fn count_active_identitaeten(pool: &PgPool, kunden_id: Uuid, tenant: &
 /// the in-flight Lieferende UTILMD via processd.
 pub async fn widerruf_kuendigung(pool: &PgPool, id: Uuid, tenant: &str) -> Result<()> {
     // Verify contract is in GEKÜNDIGT state
-    let vertrag: Option<(String,)> = sqlx::query_as(
-        "SELECT status FROM versorgungsvertraege WHERE id = $1 AND tenant = $2",
-    )
-    .bind(id)
-    .bind(tenant)
-    .fetch_optional(pool)
-    .await?;
+    let vertrag: Option<(String,)> =
+        sqlx::query_as("SELECT status FROM versorgungsvertraege WHERE id = $1 AND tenant = $2")
+            .bind(id)
+            .bind(tenant)
+            .fetch_optional(pool)
+            .await?;
 
     let status = vertrag
         .ok_or_else(|| anyhow::anyhow!("Vertrag {id} not found"))?

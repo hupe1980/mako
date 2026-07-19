@@ -287,7 +287,11 @@ pub async fn put_product(
     }
     // dyn_source is validated by the DB CHECK constraint, but we surface a
     // clear 422 here before hitting the DB.
-    if let Some(ref ds) = req.dyn_source.as_deref().filter(|&ds| ds != "epex-spot-day-ahead") {
+    if let Some(ref ds) = req
+        .dyn_source
+        .as_deref()
+        .filter(|&ds| ds != "epex-spot-day-ahead")
+    {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(serde_json::json!({
@@ -860,8 +864,10 @@ fn compute_cost_breakdown(
         levies_eur: levies_eur.round_dp(2),
         total_netto_eur: total_netto_eur.round_dp(2),
         total_brutto_eur: total_brutto_eur.round_dp(2),
-        arbeitspreis_ct_per_kwh: arbeitspreis_ct.map(|ct| (ct * rabatt).round_dp_with_strategy(
-            4, rust_decimal::RoundingStrategy::MidpointAwayFromZero)),
+        arbeitspreis_ct_per_kwh: arbeitspreis_ct.map(|ct| {
+            (ct * rabatt)
+                .round_dp_with_strategy(4, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+        }),
         grundpreis_eur_per_year: grundpreis_ct
             .map(|gp| (gp * Decimal::from(365) / Decimal::ONE_HUNDRED).round_dp(2)),
     })
@@ -872,8 +878,7 @@ fn estimate_jahreskosten(
     pos: &crate::pg::AngebotPositionInput,
     rabatt_pct: Option<Decimal>,
 ) -> Option<Decimal> {
-    compute_cost_breakdown(product_data, pos, rabatt_pct)
-        .map(|bd| bd.total_netto_eur)
+    compute_cost_breakdown(product_data, pos, rabatt_pct).map(|bd| bd.total_netto_eur)
 }
 
 /// Default Angebot validity: today + 10 Werktage (≈ 14 calendar days).
@@ -1044,7 +1049,7 @@ pub async fn post_angebot(
         &req,
         &positionen_json,
         &varianten_json,
-        &serde_json::Value::Array(vec![]),  // varianten_enriched populated lazily on GET .../comparison
+        &serde_json::Value::Array(vec![]), // varianten_enriched populated lazily on GET .../comparison
         total_netto_opt,
         total_brutto_opt,
         gueltig_bis,
@@ -1223,9 +1228,7 @@ pub async fn get_angebot_comparison(
             if let Some(ref overrides) = v.product_codes_override {
                 for code in overrides.iter().flatten() {
                     if !product_cache.contains_key(code) {
-                        let p = fetch_product(&pool, lf_mp_id, code)
-                            .await
-                            .unwrap_or(None);
+                        let p = fetch_product(&pool, lf_mp_id, code).await.unwrap_or(None);
                         product_cache.insert(code.clone(), p);
                     }
                 }
@@ -1234,61 +1237,54 @@ pub async fn get_angebot_comparison(
     }
 
     // Helper: compute a scenario from positions + optional overrides + discount.
-    let compute_scenario =
-        |label: String,
-         laufzeit: i16,
-         ist_basis: bool,
-         variante_index: Option<usize>,
-         rabatt_pct: Option<Decimal>,
-         product_overrides: Option<&Vec<Option<String>>>|
-         -> ScenarioCostBreakdown {
-            let mut pos_details: Vec<PositionCostBreakdown> = Vec::new();
-            let mut total_netto = Decimal::ZERO;
+    let compute_scenario = |label: String,
+                            laufzeit: i16,
+                            ist_basis: bool,
+                            variante_index: Option<usize>,
+                            rabatt_pct: Option<Decimal>,
+                            product_overrides: Option<&Vec<Option<String>>>|
+     -> ScenarioCostBreakdown {
+        let mut pos_details: Vec<PositionCostBreakdown> = Vec::new();
+        let mut total_netto = Decimal::ZERO;
 
-            for (i, pos) in positionen.iter().enumerate() {
-                let effective_code = product_overrides
-                    .and_then(|ov| ov.get(i))
-                    .and_then(|c| c.as_ref())
-                    .unwrap_or(&pos.product_code);
-                let product_data = product_cache
-                    .get(effective_code)
-                    .and_then(|p| p.as_ref())
-                    .map(|p| &p.data);
+        for (i, pos) in positionen.iter().enumerate() {
+            let effective_code = product_overrides
+                .and_then(|ov| ov.get(i))
+                .and_then(|c| c.as_ref())
+                .unwrap_or(&pos.product_code);
+            let product_data = product_cache
+                .get(effective_code)
+                .and_then(|p| p.as_ref())
+                .map(|p| &p.data);
 
-                if let Some(data) = product_data {
-                    let mut effective_pos = pos.clone();
-                    effective_pos.product_code = effective_code.clone();
-                    if let Some(bd) = compute_cost_breakdown(data, &effective_pos, rabatt_pct) {
-                        total_netto += bd.total_netto_eur;
-                        pos_details.push(bd);
-                    }
+            if let Some(data) = product_data {
+                let mut effective_pos = pos.clone();
+                effective_pos.product_code = effective_code.clone();
+                if let Some(bd) = compute_cost_breakdown(data, &effective_pos, rabatt_pct) {
+                    total_netto += bd.total_netto_eur;
+                    pos_details.push(bd);
                 }
             }
+        }
 
-            let total_brutto = (total_netto * mwst).round_dp(2);
-            ScenarioCostBreakdown {
-                label,
-                laufzeit_monate: laufzeit,
-                ist_basis,
-                variante_index,
-                rabatt_pct,
-                jahreskosten_netto_eur: total_netto.round_dp(2),
-                jahreskosten_brutto_eur: total_brutto,
-                ersparnis_vs_basis_eur: None, // filled below
-                positionen_detail: pos_details,
-            }
-        };
+        let total_brutto = (total_netto * mwst).round_dp(2);
+        ScenarioCostBreakdown {
+            label,
+            laufzeit_monate: laufzeit,
+            ist_basis,
+            variante_index,
+            rabatt_pct,
+            jahreskosten_netto_eur: total_netto.round_dp(2),
+            jahreskosten_brutto_eur: total_brutto,
+            ersparnis_vs_basis_eur: None, // filled below
+            positionen_detail: pos_details,
+        }
+    };
 
     // Compute base scenario.
     let base_label = format!("Basis ({} Monate)", angebot.laufzeit_monate);
-    let base_scenario = compute_scenario(
-        base_label,
-        angebot.laufzeit_monate,
-        true,
-        None,
-        None,
-        None,
-    );
+    let base_scenario =
+        compute_scenario(base_label, angebot.laufzeit_monate, true, None, None, None);
     let base_total = base_scenario.jahreskosten_netto_eur;
 
     // Compute variant scenarios.
@@ -1413,10 +1409,7 @@ pub async fn post_angebot_annehmen(
             );
             builder = builder.header("X-Mako-Signature", sig);
         }
-        if let Ok(resp) = builder
-            .json(&ce)
-            .send()
-            .await
+        if let Ok(resp) = builder.json(&ce).send().await
             && resp.status().is_success()
             && let Ok(body) = resp.json::<serde_json::Value>().await
             && let Some(rid) = body
@@ -1902,15 +1895,14 @@ pub fn build_tarifinfo(row: &crate::pg::ProductRow, lf_mp_id: &str) -> Tarifinfo
     });
 
     // ── Kundentypen ───────────────────────────────────────────────────────────
-    let kundentypen: Option<Vec<Kundentyp>> =
-        row.kundentyp.as_deref().map(|kt| {
-            let variant = match kt {
-                "Haushalt" => Kundentyp::Privat,
-                "Gewerbe" | "Gewerbe_RLM" => Kundentyp::Gewerbe,
-                _ => Kundentyp::Privat,
-            };
-            vec![variant]
-        });
+    let kundentypen: Option<Vec<Kundentyp>> = row.kundentyp.as_deref().map(|kt| {
+        let variant = match kt {
+            "Haushalt" => Kundentyp::Privat,
+            "Gewerbe" | "Gewerbe_RLM" => Kundentyp::Gewerbe,
+            _ => Kundentyp::Privat,
+        };
+        vec![variant]
+    });
 
     // ── Registeranzahl ────────────────────────────────────────────────────────
     let registeranzahl: Option<Registeranzahl> =
@@ -2110,10 +2102,7 @@ pub async fn get_comparison_feed_bo4e(
         StatusCode::OK,
         [
             ("ETag", etag.as_str()),
-            (
-                "Cache-Control",
-                "public, max-age=300",
-            ),
+            ("Cache-Control", "public, max-age=300"),
             ("Content-Type", "application/json"),
             ("Vary", "Accept-Encoding"),
             ("X-Content-Type-Options", "nosniff"),

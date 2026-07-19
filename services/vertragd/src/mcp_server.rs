@@ -381,7 +381,10 @@ impl VertragdMcpHandler {
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None))
             }
-            Ok(None) => Err(McpError::resource_not_found(format!("Kunde {id} not found"), None)),
+            Ok(None) => Err(McpError::resource_not_found(
+                format!("Kunde {id} not found"),
+                None,
+            )),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
@@ -400,10 +403,13 @@ impl VertragdMcpHandler {
             .map_err(|_| McpError::invalid_params("invalid UUID", None))?;
         match fetch_rahmenvertrag(&self.state.pool, id, &self.state.tenant).await {
             Ok(Some(r)) => {
-                let vertraege =
-                    list_versorgungsvertraege_by_rahmenvertrag(&self.state.pool, id, &self.state.tenant)
-                        .await
-                        .unwrap_or_default();
+                let vertraege = list_versorgungsvertraege_by_rahmenvertrag(
+                    &self.state.pool,
+                    id,
+                    &self.state.tenant,
+                )
+                .await
+                .unwrap_or_default();
                 ContentBlock::json(serde_json::json!({
                     "rahmenvertrag": r,
                     "versorgungsvertraege": vertraege,
@@ -532,7 +538,11 @@ impl VertragdMcpHandler {
         Parameters(p): Parameters<serde_json::Value>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::find_auto_renewal_due;
-        let days = p.get("days").and_then(|v| v.as_i64()).unwrap_or(30).clamp(1, 90);
+        let days = p
+            .get("days")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(30)
+            .clamp(1, 90);
         match find_auto_renewal_due(&self.state.pool, &self.state.tenant, days).await {
             Ok(rows) => ContentBlock::json(serde_json::json!({
                 "count": rows.len(),

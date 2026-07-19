@@ -92,8 +92,8 @@ async fn migration_dispatch_table_covers_active_fv_transitions() {
 /// and incorrect UNB DE0004 sender identities in all EDIFACT messages.
 #[test]
 fn party_registry_rejects_mixed_strom_gas_roles() {
-    use makod::party_registry::MpIdRegistry;
     use makod::config::PartyConfig;
+    use makod::party_registry::MpIdRegistry;
 
     // A single party entry claiming both NB (Strom) and GNB (Gas) on the same GLN.
     // Per BDEW §2.13 these must be two separate entries with different GLNs.
@@ -122,8 +122,8 @@ fn party_registry_rejects_mixed_strom_gas_roles() {
 /// different GLNs (99… for Strom, 98… for Gas).  Must be accepted.
 #[test]
 fn party_registry_accepts_valid_viu_strom_gas_split() {
-    use makod::party_registry::MpIdRegistry;
     use makod::config::PartyConfig;
+    use makod::party_registry::MpIdRegistry;
 
     let parties = vec![
         PartyConfig {
@@ -162,8 +162,8 @@ fn party_registry_accepts_valid_viu_strom_gas_split() {
 /// Each Marktrolle must belong to exactly one party entry.
 #[test]
 fn party_registry_rejects_duplicate_role() {
-    use makod::party_registry::MpIdRegistry;
     use makod::config::PartyConfig;
+    use makod::party_registry::MpIdRegistry;
 
     let parties = vec![
         PartyConfig {

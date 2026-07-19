@@ -1,7 +1,7 @@
 //! Configuration for `accountingd`.
 
-use serde::Deserialize;
 use secrecy::SecretString;
+use serde::Deserialize;
 
 /// EEG Einspeisevergütung payout configuration (`[eeg]` table in TOML).
 ///

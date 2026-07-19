@@ -353,7 +353,9 @@ pub enum ConservationViolation {
 impl std::fmt::Display for ConservationViolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::IncompleteAllocations { missing_bilanzkreise } => write!(
+            Self::IncompleteAllocations {
+                missing_bilanzkreise,
+            } => write!(
                 f,
                 "Conservation check requires complete allocations; \
                  missing for Bilanzkreise: {}",
@@ -551,7 +553,9 @@ mod tests {
         let result = balance.conservation_check(dec!(500.0), dec!(1.0));
         assert!(result.is_err());
         match result.unwrap_err() {
-            ConservationViolation::IncompleteAllocations { missing_bilanzkreise } => {
+            ConservationViolation::IncompleteAllocations {
+                missing_bilanzkreise,
+            } => {
                 assert_eq!(missing_bilanzkreise, vec!["BK_MISSING"]);
             }
             other => panic!("unexpected violation type: {other:?}"),

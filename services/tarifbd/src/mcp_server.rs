@@ -518,21 +518,31 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
 
         let category = p.category.to_uppercase();
         let tarifpreisblatt_categories = &[
-            "STROM", "GAS", "WAERME", "SOLAR", "EEG", "EINSPEISUNG",
-            "WAERMEPUMPE", "WALLBOX", "SHARING",
+            "STROM",
+            "GAS",
+            "WAERME",
+            "SOLAR",
+            "EEG",
+            "EINSPEISUNG",
+            "WAERMEPUMPE",
+            "WALLBOX",
+            "SHARING",
         ];
         let is_bo4e = tarifpreisblatt_categories.contains(&category.as_str());
 
         // Check _typ for BO4E categories
         if is_bo4e {
             match p.data.get("_typ").and_then(|v| v.as_str()) {
-                None => return Ok(CallToolResult::success(vec![ContentBlock::text(
-                    "INVALID: missing _typ field. Add: \"_typ\": \"TARIFPREISBLATT\"".to_owned(),
-                )])),
-                Some(t) if t.to_uppercase() != "TARIFPREISBLATT" => {
+                None => {
                     return Ok(CallToolResult::success(vec![ContentBlock::text(
-                        format!("INVALID: _typ must be 'TARIFPREISBLATT' for category {category}, got '{t}'"),
-                    )]))
+                        "INVALID: missing _typ field. Add: \"_typ\": \"TARIFPREISBLATT\""
+                            .to_owned(),
+                    )]));
+                }
+                Some(t) if t.to_uppercase() != "TARIFPREISBLATT" => {
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                        "INVALID: _typ must be 'TARIFPREISBLATT' for category {category}, got '{t}'"
+                    ))]));
                 }
                 _ => {}
             }
@@ -540,7 +550,11 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
 
         // Check preistyp whitelist
         let mut errors: Vec<String> = Vec::new();
-        if let Some(positionen) = p.data.get("tarifpreispositionen").and_then(|v| v.as_array()) {
+        if let Some(positionen) = p
+            .data
+            .get("tarifpreispositionen")
+            .and_then(|v| v.as_array())
+        {
             for (i, pos) in positionen.iter().enumerate() {
                 if let Some(pt) = pos.get("preistyp").and_then(|v| v.as_str()) {
                     let upper = pt.to_uppercase();
@@ -568,9 +582,13 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
                     ),
                 }
             } else {
-                format!("VALID: category={category} (non-BO4E category, free-form data accepted). All preistyp entries whitelisted.")
+                format!(
+                    "VALID: category={category} (non-BO4E category, free-form data accepted). All preistyp entries whitelisted."
+                )
             };
-            Ok(CallToolResult::success(vec![ContentBlock::text(result_msg)]))
+            Ok(CallToolResult::success(vec![ContentBlock::text(
+                result_msg,
+            )]))
         } else {
             Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                 "INVALID: {} error(s):\n{}",
@@ -597,9 +615,12 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
 
         let product = match fetch_product(&self.state.pool, &p.lf_mp_id, &p.product_code).await {
             Ok(Some(pr)) => pr,
-            Ok(None) => return Err(McpError::resource_not_found(
-                format!("product {}/{} not found", p.lf_mp_id, p.product_code), None,
-            )),
+            Ok(None) => {
+                return Err(McpError::resource_not_found(
+                    format!("product {}/{} not found", p.lf_mp_id, p.product_code),
+                    None,
+                ));
+            }
             Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
         };
 
@@ -647,7 +668,9 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
             ),
         };
 
-        Ok(CallToolResult::success(vec![ContentBlock::text(explanation)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            explanation,
+        )]))
     }
 
     #[tool(
@@ -690,13 +713,13 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
         &self,
         Parameters(p): Parameters<ListProductsParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::{ComparisonFeedQuery, fetch_comparison_feed};
         use crate::handlers::{compute_jahreskosten_supply_netto, extract_tarif_preise};
+        use crate::pg::{ComparisonFeedQuery, fetch_comparison_feed};
         use rust_decimal_macros::dec;
 
         let q = ComparisonFeedQuery {
             lf_mp_id: Some(p.lf_mp_id.clone()),
-            sparte: p.category.clone(),  // reuse category param for sparte filter
+            sparte: p.category.clone(), // reuse category param for sparte filter
             kundentyp: None,
             verbrauch_kwh: Some(dec!(3500)),
             oekolabel: None,

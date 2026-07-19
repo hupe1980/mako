@@ -434,7 +434,12 @@ impl MakodMcpHandler {
     ) -> Result<CallToolResult, McpError> {
         let limit = p.limit.unwrap_or(100).clamp(1, 500);
 
-        match self.state.partner_store.list(TenantId::from_party_id(&self.state.tenant)).await {
+        match self
+            .state
+            .partner_store
+            .list(TenantId::from_party_id(&self.state.tenant))
+            .await
+        {
             Ok(all_partners) => {
                 // Decode the cursor as a base-10 offset index.
                 let offset = p
@@ -514,12 +519,7 @@ impl MakodMcpHandler {
     )]
     #[instrument(skip(self))]
     async fn get_health(&self) -> Result<CallToolResult, McpError> {
-        let cache_stats = self
-            .state
-            .malo_cache
-            .stats(&self.state.tenant)
-            .await
-            .ok();
+        let cache_stats = self.state.malo_cache.stats(&self.state.tenant).await.ok();
 
         ContentBlock::json(serde_json::json!({
             "status": "ok",
@@ -1136,12 +1136,7 @@ impl ServerHandler for MakodMcpHandler {
         let uri = request.uri.as_str();
 
         if let Some(malo_id) = uri.strip_prefix("malo://") {
-            return match self
-                .state
-                .malo_cache
-                .get(&self.state.tenant, malo_id)
-                .await
-            {
+            return match self.state.malo_cache.get(&self.state.tenant, malo_id).await {
                 Ok(Some(record)) => {
                     let json =
                         serde_json::to_string_pretty(&record).unwrap_or_else(|_| "{}".to_owned());

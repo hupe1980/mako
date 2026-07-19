@@ -187,7 +187,12 @@ impl RagStore {
         Ok(0)
     }
     /// BM25 keyword scan scoped to `tenant` (O(n) — fallback for providers without embeddings).
-    pub async fn bm25_search(&self, query: &str, top_k: usize, tenant: &str) -> Result<Vec<RagChunk>> {
+    pub async fn bm25_search(
+        &self,
+        query: &str,
+        top_k: usize,
+        tenant: &str,
+    ) -> Result<Vec<RagChunk>> {
         let table = self.conn.open_table(TABLE).execute().await?;
         if table.count_rows(None).await? == 0 {
             return Ok(Vec::new());

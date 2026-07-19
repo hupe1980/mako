@@ -1,7 +1,7 @@
 //! `agentd.toml` — multi-agent configuration.
 
-use serde::Deserialize;
 use secrecy::SecretString;
+use serde::Deserialize;
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]

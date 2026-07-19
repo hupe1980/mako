@@ -18,7 +18,9 @@ use mako_markt::repository::{
     TechnischeRessourceRepository,
 };
 use mako_service::cedar::CedarEnforcer;
-use rubo4e::current::{Geraet, SteuerbareRessource, TechnischeRessource, Zaehler, Zaehlzeitdefinition};
+use rubo4e::current::{
+    Geraet, SteuerbareRessource, TechnischeRessource, Zaehler, Zaehlzeitdefinition,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -822,7 +824,11 @@ pub async fn get_geraet(
                 Ok(g) => g,
                 Err(e) => {
                     tracing::warn!(geraet_id, error = %e, "schema drift: stored Geraet cannot be deserialised");
-                    return (StatusCode::INTERNAL_SERVER_ERROR, "schema drift — re-PUT to fix").into_response();
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "schema drift — re-PUT to fix",
+                    )
+                        .into_response();
                 }
             };
             Json(GeraetResponse {
@@ -836,7 +842,11 @@ pub async fn get_geraet(
             })
             .into_response()
         }
-        Ok(None) => (StatusCode::NOT_FOUND, format!("Geraet {geraet_id} not found")).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            format!("Geraet {geraet_id} not found"),
+        )
+            .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -871,7 +881,11 @@ pub async fn get_geraet_konfigurationen(
 
     match repo.find_geraet(&geraet_id, &tenant_gln).await {
         Ok(Some(r)) => Json(r.konfigurationen).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, format!("Geraet {geraet_id} not found")).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            format!("Geraet {geraet_id} not found"),
+        )
+            .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -963,7 +977,11 @@ pub async fn put_geraet_konfigurationen(
             }
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, format!("Geraet {geraet_id} not found")).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            format!("Geraet {geraet_id} not found"),
+        )
+            .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1319,7 +1337,10 @@ pub async fn get_zaehlzeitdefinitionen(
     }
 
     // ── 1. Fetch all registers for this Zähler ────────────────────────────────
-    let registers = match repo.list_registers_by_zaehler(&zaehler_id, &tenant_gln).await {
+    let registers = match repo
+        .list_registers_by_zaehler(&zaehler_id, &tenant_gln)
+        .await
+    {
         Ok(r) => r,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
@@ -1429,8 +1450,8 @@ pub async fn get_zaehlzeitdefinitionen(
         typ: Some(BoTyp::Zaehlzeitdefinition),
         version: Some("v202607.0.0".to_owned()),
         saisons: Some(saisons),
-        saisonprofil: None,       // could be set to "Sommer/Winter" if seasons detected
-        feiertagskalender: None,  // BDEW standard not encoded in DB rows
+        saisonprofil: None, // could be set to "Sommer/Winter" if seasons detected
+        feiertagskalender: None, // BDEW standard not encoded in DB rows
         urheber: None,
         zusatz_attribute: None,
         _additional: Default::default(),
@@ -1483,17 +1504,17 @@ fn normalize_wochentage_key(wochentage: &serde_json::Value) -> String {
 fn wochentage_key_to_wiederholungstyp(key: &str) -> rubo4e::current::Wiederholungstyp {
     use rubo4e::current::Wiederholungstyp;
     match key {
-        "1,2,3,4,5"       => Wiederholungstyp::Werktags,
-        "6,7"             => Wiederholungstyp::Wochenende,
-        "1,2,3,4,5,6,7"  => Wiederholungstyp::Taeglich,
-        "1"               => Wiederholungstyp::Montags,
-        "2"               => Wiederholungstyp::Dienstags,
-        "3"               => Wiederholungstyp::Mittwochs,
-        "4"               => Wiederholungstyp::Donnerstags,
-        "5"               => Wiederholungstyp::Freitags,
-        "6"               => Wiederholungstyp::Samstags,
-        "7"               => Wiederholungstyp::Sonntags,
-        _                 => Wiederholungstyp::Taeglich,
+        "1,2,3,4,5" => Wiederholungstyp::Werktags,
+        "6,7" => Wiederholungstyp::Wochenende,
+        "1,2,3,4,5,6,7" => Wiederholungstyp::Taeglich,
+        "1" => Wiederholungstyp::Montags,
+        "2" => Wiederholungstyp::Dienstags,
+        "3" => Wiederholungstyp::Mittwochs,
+        "4" => Wiederholungstyp::Donnerstags,
+        "5" => Wiederholungstyp::Freitags,
+        "6" => Wiederholungstyp::Samstags,
+        "7" => Wiederholungstyp::Sonntags,
+        _ => Wiederholungstyp::Taeglich,
     }
 }
 

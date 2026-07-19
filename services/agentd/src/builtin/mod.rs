@@ -298,10 +298,7 @@ ESCALATION_LEVEL: [NONE|REMINDER|FEE|SPERR]
 RECOMMENDED_ACTION: [specific step]
 ```",
     default_mcp_servers: &["invoicd", "marktd", "netzbilanzd"],
-    default_trigger_patterns: &[
-        "de.invoic.payment.overdue",
-        "de.invoic.receipt.*",
-    ],
+    default_trigger_patterns: &["de.invoic.payment.overdue", "de.invoic.receipt.*"],
     default_max_turns: 15,
     default_use_rag: false,
 };

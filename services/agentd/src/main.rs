@@ -26,8 +26,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use axum::{
-    Extension,
-    Router,
+    Extension, Router,
     routing::{get, post},
 };
 use mako_service::{health::health_routes, http::default_client, load_config, oidc::OidcConfig};

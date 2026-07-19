@@ -2209,9 +2209,9 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             pool_arc,
             smgw_tenant,
             smgw_webhook_url,
-            30,      // cert_warning_days — warn 30 days before expiry (BSI TR-03109-4 §6.3)
-            2,       // comm_fault_threshold_hours — §17 MessZV: substitute after 2h silence
-            86_400,  // interval_secs — sweep daily
+            30,     // cert_warning_days — warn 30 days before expiry (BSI TR-03109-4 §6.3)
+            2,      // comm_fault_threshold_hours — §17 MessZV: substitute after 2h silence
+            86_400, // interval_secs — sweep daily
             cfg.shutdown.clone(),
         );
     }

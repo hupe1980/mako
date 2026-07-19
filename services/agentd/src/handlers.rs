@@ -201,7 +201,10 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 pub async fn manual_run(
@@ -215,8 +218,9 @@ pub async fn manual_run(
         Err(_) => {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
-                Json(serde_json::json!({"error": "max_sessions reached"}))
-            ).into_response();
+                Json(serde_json::json!({"error": "max_sessions reached"})),
+            )
+                .into_response();
         }
     };
 
@@ -224,7 +228,11 @@ pub async fn manual_run(
     let event_type = req["event_type"].as_str().unwrap_or("manual").to_owned();
     let event_id = uuid::Uuid::new_v4().to_string();
     // Accept both "context" (legacy) and "input" (A2A standard field)
-    let data = req.get("input").or_else(|| req.get("context")).cloned().unwrap_or_default();
+    let data = req
+        .get("input")
+        .or_else(|| req.get("context"))
+        .cloned()
+        .unwrap_or_default();
     tracing::info!(event_type, event_id, ?agent_name, "agentd: manual run");
 
     let dispatch = if let Some(ref name) = agent_name
@@ -240,7 +248,9 @@ pub async fn manual_run(
             .cloned()
             .collect();
         let session = AgentSession::new(specialist, event_id.clone(), event_type.clone());
-        session.run(data, &state.mcp, &peers, state.rag.as_ref()).await
+        session
+            .run(data, &state.mcp, &peers, state.rag.as_ref())
+            .await
     } else {
         state
             .orchestrator

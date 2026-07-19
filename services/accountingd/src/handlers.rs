@@ -54,7 +54,10 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 // ── Account endpoints ─────────────────────────────────────────────────────────
@@ -226,7 +229,13 @@ pub async fn ingest_webhook(
     if let Some(ref secret) = cfg.erp_hmac_secret {
         let expected = format!(
             "sha256={}",
-            mako_service::webhook::hmac_hex({ use secrecy::ExposeSecret; secret.expose_secret().as_bytes() }, &body)
+            mako_service::webhook::hmac_hex(
+                {
+                    use secrecy::ExposeSecret;
+                    secret.expose_secret().as_bytes()
+                },
+                &body
+            )
         );
         let provided = headers
             .get("x-mako-signature")
@@ -416,7 +425,8 @@ pub async fn ingest_webhook(
                 .unwrap_or(0);
             if !malo_id.is_empty()
                 && settlement_ct != 0
-                && let Ok(account_id) = upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant).await
+                && let Ok(account_id) =
+                    upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant).await
                 && account_id != Uuid::nil()
             {
                 #[allow(clippy::collapsible_if)]
@@ -733,9 +743,12 @@ pub async fn import_payments(
                     &entry.reference
                 );
                 // Simple deterministic key (not cryptographic — only for dedup)
-                format!("{:016x}", key.bytes().fold(0u64, |acc, b| {
-                    acc.wrapping_mul(1099511628211).wrapping_add(b as u64)
-                }))
+                format!(
+                    "{:016x}",
+                    key.bytes().fold(0u64, |acc, b| {
+                        acc.wrapping_mul(1099511628211).wrapping_add(b as u64)
+                    })
+                )
             });
 
         // Check deduplication log
@@ -1980,8 +1993,7 @@ pub async fn get_eeg_payouts(
                     })
                 })
                 .collect();
-            Json(serde_json::json!({ "payouts": result, "count": result.len() }))
-                .into_response()
+            Json(serde_json::json!({ "payouts": result, "count": result.len() })).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -1994,21 +2006,19 @@ pub async fn get_eeg_payout(
     Path(payout_id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     use sqlx::Row;
-    let row = match sqlx::query(
-        "SELECT * FROM eeg_payout_orders WHERE payout_id = $1 AND tenant = $2",
-    )
-    .bind(payout_id)
-    .bind(&cfg.tenant)
-    .fetch_optional(&pool)
-    .await
-    {
-        Ok(Some(r)) => r,
-        Ok(None) => return (StatusCode::NOT_FOUND, "payout not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
+    let row =
+        match sqlx::query("SELECT * FROM eeg_payout_orders WHERE payout_id = $1 AND tenant = $2")
+            .bind(payout_id)
+            .bind(&cfg.tenant)
+            .fetch_optional(&pool)
+            .await
+        {
+            Ok(Some(r)) => r,
+            Ok(None) => return (StatusCode::NOT_FOUND, "payout not found").into_response(),
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
 
-    let submitted_at: Option<time::OffsetDateTime> =
-        row.try_get("submitted_at").unwrap_or(None);
+    let submitted_at: Option<time::OffsetDateTime> = row.try_get("submitted_at").unwrap_or(None);
     let settled_at: Option<time::OffsetDateTime> = row.try_get("settled_at").unwrap_or(None);
     let created_at: time::OffsetDateTime = row.get("created_at");
 
@@ -2077,16 +2087,10 @@ pub async fn post_run_eeg_payouts(
         }
     };
 
-    let use_instant = req
-        .instant_override
-        .unwrap_or(cfg.eeg.sepa_instant);
+    let use_instant = req.instant_override.unwrap_or(cfg.eeg.sepa_instant);
     let today = time::OffsetDateTime::now_utc();
-    let year = req
-        .billing_year
-        .unwrap_or(today.year() as i16);
-    let month = req
-        .billing_month
-        .unwrap_or(today.month() as i16);
+    let year = req.billing_year.unwrap_or(today.year() as i16);
+    let month = req.billing_month.unwrap_or(today.month() as i16);
 
     // Fetch all EEG_GUTSCHRIFT ledger entries for the given period that do not
     // yet have a payout order.
@@ -2221,7 +2225,15 @@ pub async fn post_run_eeg_payouts(
             Ok(r) if r.rows_affected() > 0 => {
                 // If bank_submit_url configured, submit immediately.
                 if let Some(ref url) = cfg.eeg.bank_submit_url {
-                    submit_pain001_to_bank(url, cfg.eeg.bank_api_key.as_deref(), &pain_xml, &e2e_ref, &pool, &cfg.tenant).await;
+                    submit_pain001_to_bank(
+                        url,
+                        cfg.eeg.bank_api_key.as_deref(),
+                        &pain_xml,
+                        &e2e_ref,
+                        &pool,
+                        &cfg.tenant,
+                    )
+                    .await;
                 }
                 generated += 1;
             }
@@ -2444,14 +2456,20 @@ pub(crate) async fn create_eeg_payout_order(
         &params.malo_id[..params.malo_id.len().min(10)],
         params.billing_year,
         params.billing_month,
-        params.source_ce_id
+        params
+            .source_ce_id
             .and_then(|s| s.get(..8))
             .unwrap_or("AUTO")
     );
 
     let pain_xml = match build_pain_001(
         debtor_iban,
-        &[(params.creditor_iban, params.creditor_name, params.amount_ct, &e2e_ref)],
+        &[(
+            params.creditor_iban,
+            params.creditor_name,
+            params.amount_ct,
+            &e2e_ref,
+        )],
         use_instant,
     ) {
         Ok(xml) => xml,
@@ -2496,7 +2514,15 @@ pub(crate) async fn create_eeg_payout_order(
             );
             // Auto-submit to bank adapter if configured.
             if let Some(ref url) = cfg.eeg.bank_submit_url {
-                submit_pain001_to_bank(url, cfg.eeg.bank_api_key.as_deref(), &pain_xml, &e2e_ref, pool, &cfg.tenant).await;
+                submit_pain001_to_bank(
+                    url,
+                    cfg.eeg.bank_api_key.as_deref(),
+                    &pain_xml,
+                    &e2e_ref,
+                    pool,
+                    &cfg.tenant,
+                )
+                .await;
             }
         }
         Ok(_) => {} // idempotent — already exists
@@ -2559,12 +2585,12 @@ pub async fn get_interest_charges(
 
 #[derive(Debug, Deserialize)]
 pub struct CreateInterestChargeRequest {
-    pub lf_mp_id:            Option<String>,
-    pub invoice_reference:   Option<String>,
-    pub principal_ct:        i64,
-    pub is_b2b:              Option<bool>,
-    pub period_from:         String,
-    pub period_to:           String,
+    pub lf_mp_id: Option<String>,
+    pub invoice_reference: Option<String>,
+    pub principal_ct: i64,
+    pub is_b2b: Option<bool>,
+    pub period_from: String,
+    pub period_to: String,
 }
 
 /// `POST /api/v1/accounts/{malo_id}/interest-charges` — calculate and book Verzugszinsen.
@@ -2651,7 +2677,11 @@ pub async fn post_payment_plan(
 ) -> impl IntoResponse {
     req.malo_id = malo_id;
     match crate::pg::create_payment_plan(&pool, &cfg.tenant, req).await {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "plan_id": id }))).into_response(),
+        Ok(id) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "plan_id": id })),
+        )
+            .into_response(),
         Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
     }
 }
@@ -2680,16 +2710,8 @@ pub async fn delete_payment_plan(
     claims: Claims,
     Path(plan_id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match crate::pg::cancel_payment_plan(
-        &pool,
-        plan_id,
-        &cfg.tenant,
-        Some(claims.sub()),
-    )
-    .await
-    {
+    match crate::pg::cancel_payment_plan(&pool, plan_id, &cfg.tenant, Some(claims.sub())).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
     }
 }
-

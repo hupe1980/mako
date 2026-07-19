@@ -334,8 +334,8 @@ impl DeviceRepository for PgDeviceRepository {
                 k
             })
             .collect();
-        let json = serde_json::to_value(&timestamped)
-            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        let json =
+            serde_json::to_value(&timestamped).map_err(|e| MdmError::Internal(e.to_string()))?;
 
         let updated = sqlx::query(
             r"UPDATE geraete

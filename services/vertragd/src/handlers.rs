@@ -17,20 +17,19 @@ use crate::{
     config::VertragdConfig,
     events::{build_cloud_event, parse_mako_outcome},
     pg::{
-        count_active_identitaeten, CreateKundeInput, CreateRahmenvertragInput,
-        CreateVersorgungsvertragInput, KuendigungInput,
-        TarifwechselInput, UpdateKundeInput, UpsertIdentitaetInput, deactivate_identitaet_by_sub,
-        derive_vertrag_status, earliest_kuendigungsdatum, extract_sub_from_bearer,
-        fetch_identitaet_by_sub, fetch_komponente, fetch_kunde, fetch_kunde_by_sub, fetch_person,
-        fetch_preisgarantie, fetch_vertrag, find_expiring_vertraege, gdpr_export, idempotent_event,
-        insert_rahmenvertrag, insert_versorgungsvertrag, list_aktive_malo_ids, list_identitaeten,
-        list_komponenten, list_kunden, list_offene_vertraege, list_portfolio_by_kunde,
-        list_rahmenvertraege_by_kunde, list_rahmenvertrag_malos, list_vertraege_by_kunde,
-        list_all_rahmenvertraege, list_versorgungsvertraege_by_rahmenvertrag,
+        CreateKundeInput, CreateRahmenvertragInput, CreateVersorgungsvertragInput, KuendigungInput,
+        TarifwechselInput, UpdateKundeInput, UpsertIdentitaetInput, count_active_identitaeten,
+        deactivate_identitaet_by_sub, derive_vertrag_status, earliest_kuendigungsdatum,
+        extract_sub_from_bearer, fetch_identitaet_by_sub, fetch_komponente, fetch_kunde,
+        fetch_kunde_by_sub, fetch_person, fetch_preisgarantie, fetch_vertrag,
+        find_expiring_vertraege, gdpr_export, idempotent_event, insert_rahmenvertrag,
+        insert_versorgungsvertrag, list_aktive_malo_ids, list_all_rahmenvertraege,
+        list_identitaeten, list_komponenten, list_kunden, list_offene_vertraege,
+        list_portfolio_by_kunde, list_rahmenvertraege_by_kunde, list_rahmenvertrag_malos,
+        list_versorgungsvertraege_by_rahmenvertrag, list_vertraege_by_kunde,
         store_pending_tarifwechsel, storniere_vertrag, update_komponente_product,
         update_komponente_status, update_kunde, update_letzter_login, update_vertrag_status,
-        upsert_identitaet, upsert_kunde, upsert_person, upsert_preisgarantie,
-        widerruf_kuendigung,
+        upsert_identitaet, upsert_kunde, upsert_person, upsert_preisgarantie, widerruf_kuendigung,
     },
 };
 
@@ -50,9 +49,9 @@ fn require_operator_role(claims: &Claims) -> Option<(StatusCode, axum::Json<serd
         // Dev mode (OidcVerifier::disabled): permit all.
         return None;
     }
-    let has_write_role = roles.iter().any(|r| {
-        matches!(r.to_uppercase().as_str(), "LF" | "NB" | "MSB")
-    });
+    let has_write_role = roles
+        .iter()
+        .any(|r| matches!(r.to_uppercase().as_str(), "LF" | "NB" | "MSB"));
     if !has_write_role {
         Some((
             StatusCode::FORBIDDEN,
@@ -964,8 +963,16 @@ async fn dispatch_lieferbeginn(
     sparte: String,
     lieferbeginn: time::Date,
 ) {
-    let endpoint = if sparte == "GAS" { "start-supply-gas" } else { "start-supply" };
-    let url = format!("{}/api/v1/{}", cfg.processd_url.trim_end_matches('/'), endpoint);
+    let endpoint = if sparte == "GAS" {
+        "start-supply-gas"
+    } else {
+        "start-supply"
+    };
+    let url = format!(
+        "{}/api/v1/{}",
+        cfg.processd_url.trim_end_matches('/'),
+        endpoint
+    );
     let body = serde_json::json!({
         "malo_id": malo_id, "nb_mp_id": nb_mp_id,
         "lf_mp_id": cfg.lf_mp_id, "lieferbeginn": lieferbeginn.to_string()
@@ -986,7 +993,13 @@ async fn dispatch_lieferbeginn(
                 if let Ok(data) = resp.json::<serde_json::Value>().await {
                     let process_id = data.get("process_id").and_then(|v| v.as_str());
                     let _ = update_komponente_status(
-                        &pool, komp_id, "ANGEMELDET", process_id, None, None, None,
+                        &pool,
+                        komp_id,
+                        "ANGEMELDET",
+                        process_id,
+                        None,
+                        None,
+                        None,
                     )
                     .await;
                 }
@@ -1136,7 +1149,10 @@ async fn emit_event(
         .header("Content-Type", "application/cloudevents+json");
     // HMAC-SHA256 webhook signature using workspace-standard sha256= prefix.
     if let Some(secret) = hmac_secret {
-        let sig = format!("sha256={}", mako_service::webhook::hmac_hex(secret.as_bytes(), &body));
+        let sig = format!(
+            "sha256={}",
+            mako_service::webhook::hmac_hex(secret.as_bytes(), &body)
+        );
         req = req.header("X-Mako-Signature", sig);
     }
     if let Err(e) = req.body(body).send().await {
@@ -1779,13 +1795,11 @@ pub async fn widerruf_kuendigung_handler(
             )
                 .into_response()
         }
-        Err(e) if e.to_string().contains("only allowed") => {
-            (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response()
-        }
+        Err(e) if e.to_string().contains("only allowed") => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
         Err(e) if e.to_string().contains("not found") => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -1807,15 +1821,18 @@ pub async fn kuendige_rahmenvertrag_handler(
     Path(rahmenvertrag_id): Path<Uuid>,
     Json(input): Json<KuendigungInput>,
 ) -> impl IntoResponse {
-    let vertraege =
-        match list_versorgungsvertraege_by_rahmenvertrag(&pool, rahmenvertrag_id, &cfg.tenant)
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-            }
-        };
+    let vertraege = match list_versorgungsvertraege_by_rahmenvertrag(
+        &pool,
+        rahmenvertrag_id,
+        &cfg.tenant,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    };
 
     if vertraege.is_empty() {
         return (
@@ -1990,7 +2007,10 @@ pub async fn post_angebot_webhook(
         let (y, m) = if now.month() as u8 == 12 {
             (now.year() + 1, time::Month::January)
         } else {
-            (now.year(), time::Month::try_from(now.month() as u8 + 1).unwrap_or(time::Month::January))
+            (
+                now.year(),
+                time::Month::try_from(now.month() as u8 + 1).unwrap_or(time::Month::January),
+            )
         };
         time::Date::from_calendar_date(y, m, 1).unwrap_or(now)
     });
@@ -2043,9 +2063,12 @@ pub async fn post_angebot_webhook(
     };
 
     // ── Create Rahmenvertrag with angebot_id linkage ──────────────────────────
-    let vertragsende =
-        time::Date::from_calendar_date(lieferbeginn.year() + laufzeit_monate / 12, lieferbeginn.month(), lieferbeginn.day())
-        .ok();
+    let vertragsende = time::Date::from_calendar_date(
+        lieferbeginn.year() + laufzeit_monate / 12,
+        lieferbeginn.month(),
+        lieferbeginn.day(),
+    )
+    .ok();
 
     let rahmen_input = crate::pg::CreateRahmenvertragInput {
         rahmenvertrag_nr: Some(format!("RV-{angebotsnummer}")),
@@ -2055,10 +2078,8 @@ pub async fn post_angebot_webhook(
         auto_renewal: Some(false), // CPQ Angebote are fixed-term by default
         renewal_monate: Some(laufzeit_monate),
         preisanpassungsformel: None,
-        portfolio_rabatt_prozent: data
-            .get("varianten")
-            .and_then(|v| v.as_array())
-            .and_then(|vars| {
+        portfolio_rabatt_prozent: data.get("varianten").and_then(|v| v.as_array()).and_then(
+            |vars| {
                 // If a specific variant was chosen, extract its rabatt_pct
                 data.get("gewaehlte_variante")
                     .and_then(|i| i.as_u64())
@@ -2066,7 +2087,8 @@ pub async fn post_angebot_webhook(
                     .and_then(|var| var.get("rabatt_pct"))
                     .and_then(|v| v.as_str())
                     .and_then(|s| s.parse::<rust_decimal::Decimal>().ok())
-            }),
+            },
+        ),
         rechnungsstellung: Some("SAMMEL".to_owned()),
         sammelrechnung_intervall: Some("JAEHRLICH".to_owned()),
         erp_rahmenvertrag_id: Some(angebot_id.to_string()), // idempotency key
@@ -2102,9 +2124,15 @@ pub async fn post_angebot_webhook(
                 let product_code = pos.get("product_code").and_then(|v| v.as_str())?.to_owned();
                 Some(crate::pg::CreateKomponenteInput {
                     sparte,
-                    malo_id: pos.get("malo_id").and_then(|v| v.as_str()).map(str::to_owned),
+                    malo_id: pos
+                        .get("malo_id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned),
                     melo_id: None,
-                    nb_mp_id: pos.get("nb_mp_id").and_then(|v| v.as_str()).map(str::to_owned),
+                    nb_mp_id: pos
+                        .get("nb_mp_id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned),
                     product_code,
                     lieferbeginn,
                     lieferende: vertragsende,

@@ -127,10 +127,7 @@ async fn main() -> anyhow::Result<()> {
         // GET  /api/v1/eeg/payouts/{id}        — single order with pain.001 XML
         // POST /api/v1/eeg/payouts/run         — batch-generate for unbatched EEG_GUTSCHRIFT entries
         // PUT  /api/v1/eeg/payouts/{id}/status — process pain.002 ACCP/RJCT/CANC
-        .route(
-            "/api/v1/eeg/payouts",
-            get(handlers::get_eeg_payouts),
-        )
+        .route("/api/v1/eeg/payouts", get(handlers::get_eeg_payouts))
         .route(
             "/api/v1/eeg/payouts/run",
             post(handlers::post_run_eeg_payouts),
@@ -167,7 +164,7 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/accounts/{malo_id}/anonymize",
             post(handlers::post_anonymize),
-        )        // ── Aging analysis ─────────────────────────────────────────────────
+        ) // ── Aging analysis ─────────────────────────────────────────────────
         // GET /api/v1/aging — overdue receivables grouped by age bucket (0-30d/31-60d/61-90d/>90d)
         .route("/api/v1/aging", get(handlers::get_aging))
         // ── Verzugszinsen §288 BGB ─────────────────────────────────────────
@@ -189,7 +186,8 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/payment-plans/{plan_id}",
             get(handlers::get_payment_plan).delete(handlers::delete_payment_plan),
-        )        .layer(Extension(Arc::clone(&cfg)))
+        )
+        .layer(Extension(Arc::clone(&cfg)))
         .layer(Extension(pool.clone()))
         // P0-1: OIDC verifier extension — enables Claims extractor on write endpoints
         .layer(Extension(oidc));
@@ -325,7 +323,10 @@ async fn main() -> anyhow::Result<()> {
                             }
                         };
                         // Creditor name defaults to tenant if not configured separately
-                        let creditor_name = cfg_sepa.creditor_name.as_deref().unwrap_or(&cfg_sepa.tenant);
+                        let creditor_name = cfg_sepa
+                            .creditor_name
+                            .as_deref()
+                            .unwrap_or(&cfg_sepa.tenant);
                         let creditor_id = cfg_sepa.creditor_id.as_deref();
 
                         let batches = match accountingd::sepa::build_pain_008(

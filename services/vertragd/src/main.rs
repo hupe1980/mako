@@ -446,7 +446,10 @@ async fn main() -> anyhow::Result<()> {
                 match pg::find_expiring_vertraege(&pool_exp, &cfg_exp.tenant, 30).await {
                     Ok(rows) => {
                         if !rows.is_empty() {
-                            tracing::info!(count = rows.len(), "vertragd: dispatching expiry notifications");
+                            tracing::info!(
+                                count = rows.len(),
+                                "vertragd: dispatching expiry notifications"
+                            );
                         }
                         for row in &rows {
                             if let Some(ref url) = cfg_exp.erp_webhook_url {
@@ -477,9 +480,10 @@ async fn main() -> anyhow::Result<()> {
                                     .post(url)
                                     .header("Content-Type", "application/cloudevents+json");
                                 if let Some(ref secret) = cfg_exp.erp_hmac_secret {
-                                    let sig = format!("sha256={}", mako_service::webhook::hmac_hex(
-                                        secret.as_bytes(), &body,
-                                    ));
+                                    let sig = format!(
+                                        "sha256={}",
+                                        mako_service::webhook::hmac_hex(secret.as_bytes(), &body,)
+                                    );
                                     req = req.header("X-Mako-Signature", sig);
                                 }
                                 let _ = req.body(body).send().await;

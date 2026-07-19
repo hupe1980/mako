@@ -900,8 +900,8 @@ pub async fn post_batch_settle(
                         _ => "de.eeg.verguetung.berechnet",
                     };
                     emit_settlement_ce(
-                        &cfg, &client, ce_type, &tr_id, &malo_id, result, year, month,
-                        None, None, None,
+                        &cfg, &client, ce_type, &tr_id, &malo_id, result, year, month, None, None,
+                        None,
                     )
                     .await;
                 }

@@ -33,9 +33,16 @@ fn test_interest_b2c_ecb_plus_5pp() {
     let principal_ct = 10_000i64; // 100.00 EUR
     let days = 30i64;
     let (interest_ct, annual_rate) = calculate_interest_ct(principal_ct, ecb_rate, false, days);
-    assert_eq!(annual_rate, dec!(7.15), "B2C rate = base 2.15 + 5pp = 7.15%");
+    assert_eq!(
+        annual_rate,
+        dec!(7.15),
+        "B2C rate = base 2.15 + 5pp = 7.15%"
+    );
     // 10000 * 7.15/100 * 30/36500 = 58.76... → floor = 58 ct
-    assert_eq!(interest_ct, 58, "B2C: 30-day interest on 100 EUR at 7.15% = 58 ct");
+    assert_eq!(
+        interest_ct, 58,
+        "B2C: 30-day interest on 100 EUR at 7.15% = 58 ct"
+    );
 }
 
 #[test]
@@ -45,9 +52,16 @@ fn test_interest_b2b_ecb_plus_9pp() {
     let principal_ct = 10_000i64;
     let days = 30i64;
     let (interest_ct, annual_rate) = calculate_interest_ct(principal_ct, ecb_rate, true, days);
-    assert_eq!(annual_rate, dec!(11.15), "B2B rate = base 2.15 + 9pp = 11.15%");
+    assert_eq!(
+        annual_rate,
+        dec!(11.15),
+        "B2B rate = base 2.15 + 9pp = 11.15%"
+    );
     // 10000 * 11.15/100 * 30/36500 = 91.64... → floor = 91 ct
-    assert_eq!(interest_ct, 91, "B2B: 30-day interest on 100 EUR at 11.15% = 91 ct");
+    assert_eq!(
+        interest_ct, 91,
+        "B2B: 30-day interest on 100 EUR at 11.15% = 91 ct"
+    );
 }
 
 #[test]
@@ -57,7 +71,10 @@ fn test_interest_b2b_exceeds_b2c() {
     let days = 90i64;
     let (b2c_ct, _) = calculate_interest_ct(principal_ct, ecb_rate, false, days);
     let (b2b_ct, _) = calculate_interest_ct(principal_ct, ecb_rate, true, days);
-    assert!(b2b_ct > b2c_ct, "B2B interest must always exceed B2C for same period");
+    assert!(
+        b2b_ct > b2c_ct,
+        "B2B interest must always exceed B2C for same period"
+    );
 }
 
 #[test]
@@ -74,8 +91,14 @@ fn test_interest_proportional_to_principal() {
     let (ct_5x, _) = calculate_interest_ct(50_000, ecb_rate, false, days);
     let (ct_10x, _) = calculate_interest_ct(100_000, ecb_rate, false, days);
     // Larger principal → larger interest (monotonic ordering)
-    assert!(ct_5x > ct_1x, "5× principal must yield more interest than 1×");
-    assert!(ct_10x > ct_5x, "10× principal must yield more interest than 5×");
+    assert!(
+        ct_5x > ct_1x,
+        "5× principal must yield more interest than 1×"
+    );
+    assert!(
+        ct_10x > ct_5x,
+        "10× principal must yield more interest than 5×"
+    );
     // Must be at least 8× and at most 12× for a 10× principal multiplier
     // (floor() breaks exact linearity but must stay approximately proportional)
     assert!(
@@ -96,22 +119,34 @@ fn test_journal_mapping_rechnung_debit() {
 #[test]
 fn test_journal_mapping_zahlung_credit() {
     let m = journal_mapping("ZAHLUNG", -1000); // negative = credit
-    assert_eq!(m.debit_skr, "1200", "ZAHLUNG debit → Bankguthaben (cash received)");
+    assert_eq!(
+        m.debit_skr, "1200",
+        "ZAHLUNG debit → Bankguthaben (cash received)"
+    );
     assert_eq!(m.credit_skr, "1400", "ZAHLUNG credit → Forderungen aus L+L");
 }
 
 #[test]
 fn test_journal_mapping_bankruecklast() {
     let m = journal_mapping("BANKRUECKLAST", 1000);
-    assert_eq!(m.debit_skr, "1400", "BANKRUECKLAST debit → Forderungen (re-open)");
-    assert_eq!(m.credit_skr, "1200", "BANKRUECKLAST credit → Bankguthaben (reversed)");
+    assert_eq!(
+        m.debit_skr, "1400",
+        "BANKRUECKLAST debit → Forderungen (re-open)"
+    );
+    assert_eq!(
+        m.credit_skr, "1200",
+        "BANKRUECKLAST credit → Bankguthaben (reversed)"
+    );
 }
 
 #[test]
 fn test_journal_mapping_eeg_gutschrift() {
     let m = journal_mapping("EEG_GUTSCHRIFT", -500);
     assert_eq!(m.debit_skr, "3000", "EEG credit → LF Verbindlichkeit");
-    assert_eq!(m.credit_skr, "4001", "EEG credit → EEG Einspeisevergütung Erlöse");
+    assert_eq!(
+        m.credit_skr, "4001",
+        "EEG credit → EEG Einspeisevergütung Erlöse"
+    );
 }
 
 #[test]
@@ -119,14 +154,20 @@ fn test_journal_mapping_storno_reversal() {
     // STORNO with negative amount = credit (reversing a RECHNUNG)
     let m = journal_mapping("STORNO", -1000);
     assert_eq!(m.debit_skr, "4000", "STORNO credit → reverse Erlöse debit");
-    assert_eq!(m.credit_skr, "1400", "STORNO credit → reverse Forderungen credit");
+    assert_eq!(
+        m.credit_skr, "1400",
+        "STORNO credit → reverse Forderungen credit"
+    );
 }
 
 #[test]
 fn test_journal_mapping_mahngebuehr() {
     let m = journal_mapping("MAHNGEBUEHR", 500);
     assert_eq!(m.debit_skr, "1400", "Mahngebühr debit → Forderungen");
-    assert_eq!(m.credit_skr, "4003", "Mahngebühr credit → Mahngebühren Erlöse");
+    assert_eq!(
+        m.credit_skr, "4003",
+        "Mahngebühr credit → Mahngebühren Erlöse"
+    );
 }
 
 // ── SEPA pain.008 batch splitting ─────────────────────────────────────────────
@@ -168,17 +209,25 @@ fn test_pain008_frst_rcur_separation() {
     )
     .expect("build_pain_008 should succeed");
 
-    assert_eq!(batches.len(), 2, "FRST and RCUR must be in separate batches");
-    let frst_batch = batches.iter().find(|b| {
-        format!("{:?}", b.sequence_type) == "Frst"
-    });
-    let rcur_batch = batches.iter().find(|b| {
-        format!("{:?}", b.sequence_type) == "Rcur"
-    });
+    assert_eq!(
+        batches.len(),
+        2,
+        "FRST and RCUR must be in separate batches"
+    );
+    let frst_batch = batches
+        .iter()
+        .find(|b| format!("{:?}", b.sequence_type) == "Frst");
+    let rcur_batch = batches
+        .iter()
+        .find(|b| format!("{:?}", b.sequence_type) == "Rcur");
     assert!(frst_batch.is_some(), "must have a FRST batch");
     assert!(rcur_batch.is_some(), "must have a RCUR batch");
     assert_eq!(frst_batch.unwrap().entry_count, 1, "FRST batch has 1 entry");
-    assert_eq!(rcur_batch.unwrap().entry_count, 2, "RCUR batch has 2 entries");
+    assert_eq!(
+        rcur_batch.unwrap().entry_count,
+        2,
+        "RCUR batch has 2 entries"
+    );
 }
 
 #[test]
@@ -187,8 +236,8 @@ fn test_pain008_includes_creditor_name_not_iban() {
     use accountingd::sepa::build_pain_008;
 
     let batches = build_pain_008(
-        "DE89370400440532013000",  // creditor IBAN
-        "Muster Energie GmbH",      // creditor NAME — must NOT appear as IBAN in XML
+        "DE89370400440532013000", // creditor IBAN
+        "Muster Energie GmbH",    // creditor NAME — must NOT appear as IBAN in XML
         None,
         &[],
     )
@@ -196,7 +245,8 @@ fn test_pain008_includes_creditor_name_not_iban() {
 
     // Empty entries → no batches (the function returns empty vec for no entries)
     assert_eq!(
-        batches.len(), 0,
+        batches.len(),
+        0,
         "no entries → no batches (all were empty groups)"
     );
 }
@@ -205,13 +255,11 @@ fn test_pain008_includes_creditor_name_not_iban() {
 fn test_pain008_invalid_creditor_iban_fails() {
     use accountingd::sepa::build_pain_008;
 
-    let result = build_pain_008(
-        "INVALID-IBAN",
-        "Test",
-        None,
-        &[],
+    let result = build_pain_008("INVALID-IBAN", "Test", None, &[]);
+    assert!(
+        result.is_err(),
+        "invalid creditor IBAN must return an error"
     );
-    assert!(result.is_err(), "invalid creditor IBAN must return an error");
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("INVALID-IBAN") || err.contains("invalid"),
@@ -224,12 +272,7 @@ fn test_pain008_creditor_id_validated() {
     use accountingd::sepa::build_pain_008;
 
     // Invalid Gläubiger-ID format should fail
-    let result = build_pain_008(
-        "DE89370400440532013000",
-        "Test",
-        Some("INVALID-CI"),
-        &[],
-    );
+    let result = build_pain_008("DE89370400440532013000", "Test", Some("INVALID-CI"), &[]);
     assert!(result.is_err(), "invalid creditor_id must return an error");
 }
 
@@ -240,19 +283,30 @@ fn test_dedup_hash_is_deterministic() {
     // The fallback hash in import_payments must be deterministic for the same input
     let key1 = "DE89370400440532013000|-5000|2026-07-15|VERWZ-12345";
     let key2 = "DE89370400440532013000|-5000|2026-07-15|VERWZ-12345";
-    let hash1 = format!("{:016x}", key1.bytes().fold(0u64, |acc, b| {
-        acc.wrapping_mul(1099511628211).wrapping_add(b as u64)
-    }));
-    let hash2 = format!("{:016x}", key2.bytes().fold(0u64, |acc, b| {
-        acc.wrapping_mul(1099511628211).wrapping_add(b as u64)
-    }));
+    let hash1 = format!(
+        "{:016x}",
+        key1.bytes().fold(0u64, |acc, b| {
+            acc.wrapping_mul(1099511628211).wrapping_add(b as u64)
+        })
+    );
+    let hash2 = format!(
+        "{:016x}",
+        key2.bytes().fold(0u64, |acc, b| {
+            acc.wrapping_mul(1099511628211).wrapping_add(b as u64)
+        })
+    );
     assert_eq!(hash1, hash2, "same input must produce same dedup hash");
 
     // Different inputs must produce different hashes
     let key3 = "DE89370400440532013000|-5000|2026-07-16|VERWZ-12345"; // different date
-    let hash3 = format!("{:016x}", key3.bytes().fold(0u64, |acc, b| {
-        acc.wrapping_mul(1099511628211).wrapping_add(b as u64)
-    }));
-    assert_ne!(hash1, hash3, "different dates must produce different hashes");
+    let hash3 = format!(
+        "{:016x}",
+        key3.bytes().fold(0u64, |acc, b| {
+            acc.wrapping_mul(1099511628211).wrapping_add(b as u64)
+        })
+    );
+    assert_ne!(
+        hash1, hash3,
+        "different dates must produce different hashes"
+    );
 }
-

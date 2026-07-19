@@ -451,13 +451,8 @@ pub async fn assign_product(
     .await
     .context("check product exists")?;
 
-    let product = product.ok_or_else(|| {
-        anyhow::anyhow!(
-            "product {}/{} not found",
-            lf_mp_id,
-            req.product_code
-        )
-    })?;
+    let product = product
+        .ok_or_else(|| anyhow::anyhow!("product {}/{} not found", lf_mp_id, req.product_code))?;
 
     // Reject DRAFT products — operators must publish before assigning.
     let status: String = product.try_get("product_status").unwrap_or_default();

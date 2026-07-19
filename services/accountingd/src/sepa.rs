@@ -169,12 +169,7 @@ pub fn build_pain_008(
             _ => SequenceType::Rcur,
         };
 
-        let msg_id = format!(
-            "DD-{}-{:02}-{}",
-            today.year(),
-            today.month() as u8,
-            seq_key
-        );
+        let msg_id = format!("DD-{}-{:02}-{}", today.year(), today.month() as u8, seq_key);
 
         let mut builder = Pain008Builder::new(creditor_name, &creditor_iban)
             .msg_id(msg_id)
@@ -325,9 +320,8 @@ pub fn calculate_interest_ct(
     // Formula: interest = principal × annual_rate × days / (100 × 365)
     // = principal × annual_rate × days / 36500
     // Note: do NOT divide by 100 separately — 36500 = 100 × 365 already combines both.
-    let interest_dec = Decimal::from(principal_ct) * annual_rate * Decimal::from(days)
-        / dec!(36500);
+    let interest_dec =
+        Decimal::from(principal_ct) * annual_rate * Decimal::from(days) / dec!(36500);
     let interest_ct = interest_dec.floor().to_i64().unwrap_or(0);
     (interest_ct, annual_rate)
 }
-

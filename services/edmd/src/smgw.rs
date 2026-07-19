@@ -49,9 +49,9 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use metering::{CertificateType, SmgwSession};
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
+use metering::{CertificateType, SmgwSession};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
@@ -364,12 +364,10 @@ pub async fn run_cls_compliance_sweep(
     let client = mako_service::http::default_client();
 
     // ── 1. Fetch all sessions for this tenant ─────────────────────────────────
-    let rows = match sqlx::query(
-        "SELECT malo_id, session FROM smgw_sessions WHERE tenant = $1",
-    )
-    .bind(tenant)
-    .fetch_all(pool)
-    .await
+    let rows = match sqlx::query("SELECT malo_id, session FROM smgw_sessions WHERE tenant = $1")
+        .bind(tenant)
+        .fetch_all(pool)
+        .await
     {
         Ok(r) => r,
         Err(e) => {
@@ -596,7 +594,11 @@ pub async fn put_smgw_session(
 ) -> impl IntoResponse {
     let tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "write-meter-reads", tenant) {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
     }
 
     // Parse and validate the session payload.
@@ -664,23 +666,23 @@ pub async fn put_smgw_session(
     for issue in &issues {
         let event_id = Uuid::new_v4().to_string();
         let details = serde_json::to_value(issue).ok();
-let _ = sqlx::query(
-                r"INSERT INTO cls_compliance_log
+        let _ = sqlx::query(
+            r"INSERT INTO cls_compliance_log
                       (malo_id, device_id, issue_type, severity, cert_serial, cert_type,
                        days_to_expiry, channel_id, details, cloud_event_id, tenant)
                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-            )
-            .bind(&issue.malo_id)
-            .bind(&issue.device_id)
-            .bind(issue.issue_type.db_str())
-            .bind(issue.severity)
-            .bind(issue.cert_serial.as_deref())
-            .bind(issue.cert_type.as_deref())
-            .bind(issue.days_to_expiry)
-            .bind(issue.channel_id.as_deref())
-            .bind(&details)
-            .bind(&event_id)
-            .bind(tenant)
+        )
+        .bind(&issue.malo_id)
+        .bind(&issue.device_id)
+        .bind(issue.issue_type.db_str())
+        .bind(issue.severity)
+        .bind(issue.cert_serial.as_deref())
+        .bind(issue.cert_type.as_deref())
+        .bind(issue.days_to_expiry)
+        .bind(issue.channel_id.as_deref())
+        .bind(&details)
+        .bind(&event_id)
+        .bind(tenant)
         .execute(pool.as_ref())
         .await;
 
@@ -741,7 +743,11 @@ pub async fn get_smgw_session(
 ) -> impl IntoResponse {
     let tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", tenant) {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
     }
 
     let row = match sqlx::query(
@@ -758,7 +764,11 @@ pub async fn get_smgw_session(
     };
 
     let Some(row) = row else {
-        return (StatusCode::NOT_FOUND, format!("SmgwSession for MaLo {malo_id} not found")).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            format!("SmgwSession for MaLo {malo_id} not found"),
+        )
+            .into_response();
     };
 
     let device_id: String = row.get("device_id");
@@ -835,7 +845,11 @@ pub async fn list_smgw_sessions(
 ) -> impl IntoResponse {
     let tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", tenant) {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
     }
 
     let rows = sqlx::query(
@@ -862,7 +876,8 @@ pub async fn list_smgw_sessions(
                     let malo_id: String = r.get("malo_id");
                     let device_id: String = r.get("device_id");
                     let gateway_status: String = r.get("gateway_status");
-                    let last_contact_at: Option<OffsetDateTime> = r.try_get("last_contact_at").unwrap_or(None);
+                    let last_contact_at: Option<OffsetDateTime> =
+                        r.try_get("last_contact_at").unwrap_or(None);
                     let updated_at: OffsetDateTime = r.get("updated_at");
                     let critical: i64 = r.try_get::<i64, _>("critical_count").unwrap_or(0);
                     let warning: i64 = r.try_get::<i64, _>("warning_count").unwrap_or(0);
@@ -918,18 +933,20 @@ pub async fn get_smgw_compliance(
 ) -> impl IntoResponse {
     let tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", tenant) {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
     }
 
     let scanned_at = OffsetDateTime::now_utc();
     let today = scanned_at.date();
 
-    let rows = match sqlx::query(
-        "SELECT malo_id, session FROM smgw_sessions WHERE tenant = $1",
-    )
-    .bind(tenant)
-    .fetch_all(pool.as_ref())
-    .await
+    let rows = match sqlx::query("SELECT malo_id, session FROM smgw_sessions WHERE tenant = $1")
+        .bind(tenant)
+        .fetch_all(pool.as_ref())
+        .await
     {
         Ok(r) => r,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -985,7 +1002,11 @@ pub async fn post_smgw_compliance_scan(
 ) -> impl IntoResponse {
     let tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "write-meter-reads", tenant) {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": e.to_string() }))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
     }
 
     let report = run_cls_compliance_sweep(
