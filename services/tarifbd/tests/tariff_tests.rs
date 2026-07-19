@@ -1371,7 +1371,7 @@ mod customer_product_history_tests {
         // 1. STROM-BASIC-2024 from 2024-01-01 to 2025-01-01
         // 2. STROM-DYNAMIC-2025 from 2025-01-01 to 2026-01-01
         // 3. STROM-PREMIUM-2026 from 2026-01-01 (current, assigned_to = NULL)
-        let history = vec![
+        let history = [
             ("STROM-PREMIUM-2026", "2026-01-01", None::<&str>),
             ("STROM-DYNAMIC-2025", "2025-01-01", Some("2026-01-01")),
             ("STROM-BASIC-2024", "2024-01-01", Some("2025-01-01")),
@@ -1529,19 +1529,19 @@ mod assign_product_guard_tests {
         if product.product_status == "DRAFT" {
             return Err("product is DRAFT; publish before assigning".to_owned());
         }
-        if let Some(vf) = product.valid_from {
-            if assigned_from < vf {
-                return Err(format!(
-                    "assigned_from ({assigned_from}) is before product valid_from ({vf})"
-                ));
-            }
+        if let Some(vf) = product.valid_from
+            && assigned_from < vf
+        {
+            return Err(format!(
+                "assigned_from ({assigned_from}) is before product valid_from ({vf})"
+            ));
         }
-        if let Some(vt) = product.valid_to {
-            if assigned_from > vt {
-                return Err(format!(
-                    "product expired on {vt}; cannot assign after expiry"
-                ));
-            }
+        if let Some(vt) = product.valid_to
+            && assigned_from > vt
+        {
+            return Err(format!(
+                "product expired on {vt}; cannot assign after expiry"
+            ));
         }
         Ok(())
     }
@@ -1654,7 +1654,7 @@ mod bo4e_version_tests {
         assert_eq!(parts.len(), 3, "BO4E version must have 3 parts");
         let yyyymm: u32 = parts[0].parse().expect("YYYYMM");
         assert!(
-            yyyymm >= 202400 && yyyymm <= 209912,
+            (202400..=209912).contains(&yyyymm),
             "Unexpected year/month: {yyyymm}"
         );
     }
@@ -1669,7 +1669,6 @@ mod german_dst_tests {
     /// - MEZ  (UTC+1): otherwise
     ///
     /// This verifies the pure-arithmetic implementation used in mcp_server.rs.
-
     fn last_sunday_of_month(year: i32, month: time::Month) -> time::Date {
         let next_month = if month == time::Month::December {
             time::Date::from_calendar_date(year + 1, time::Month::January, 1).unwrap()

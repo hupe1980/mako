@@ -198,7 +198,7 @@ fn test_pain008_frst_rcur_separation() {
     let frst = make_mandate("FRST");
     let rcur1 = make_mandate("RCUR");
     let rcur2 = make_mandate("RCUR");
-    let mandates = vec![&frst, &rcur1, &rcur2];
+    let mandates = [&frst, &rcur1, &rcur2];
     let entries: Vec<(&SepaMandateRow, i64)> = mandates.iter().map(|m| (*m, 5000i64)).collect();
 
     let batches = build_pain_008(

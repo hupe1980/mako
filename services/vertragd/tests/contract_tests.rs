@@ -588,27 +588,6 @@ fn custom_max_identitaeten_is_respected() {
     assert_eq!(cfg.max_identitaeten_per_kunde, 10);
 }
 
-// ── preisgarantie_override_log binding ───────────────────────────────────────
-
-/// Verify the correct fields are passed to the override log.
-/// preisgarantie_bis must be a DATE, not the product_code TEXT.
-#[test]
-fn preisgarantie_override_log_has_correct_date_field() {
-    use time::macros::date;
-    // The bug was: $4 was bound to komp.product_code (TEXT) instead of vertrag.preisgarantie_bis (DATE)
-    let preisgarantie_bis: Option<time::Date> = Some(date!(2027 - 12 - 31));
-    let wirksamkeit = date!(2027 - 06 - 01);
-    // Verify the DATE type is used for the column
-    assert!(
-        preisgarantie_bis.is_some(),
-        "preisgarantie_bis must be Some(Date) for the log"
-    );
-    assert!(
-        wirksamkeit <= preisgarantie_bis.unwrap(),
-        "wirksamkeit within guarantee window — this override should be logged"
-    );
-}
-
 // ── earliest_kuendigungsdatum with year rollover ──────────────────────────────
 
 /// Notice period that spans year boundary: Dec 1 + 3 months → Mar 1.
