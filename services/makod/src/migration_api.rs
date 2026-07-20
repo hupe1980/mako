@@ -97,6 +97,8 @@ pub struct MigrationApiState {
     pub store: Arc<SlateDbStore>,
     /// Cedar-based authorization engine.
     pub cedar: Arc<CedarAuthorizer>,
+    /// Operator tenant (GLN) — the Cedar resource scope.
+    pub tenant: String,
 }
 
 /// Every `(from, to)` FV pair that is registered in [`dispatch_migrations`].
@@ -534,11 +536,27 @@ async fn handle_migrate(
     headers: HeaderMap,
     Json(req): Json<MigrateRequest>,
 ) -> Response {
-    if state.cedar.authenticate(&headers).is_none() {
+    let Some(identity) = state.cedar.authenticate(&headers) else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(ErrorResponse {
                 error: "unauthorized".to_owned(),
+            }),
+        )
+            .into_response();
+    };
+    // A migration mutates every in-flight process — authentication alone is
+    // not authorization. Cedar action: AdminMigrations.
+    if !state.cedar.authorize_migrations(
+        &identity,
+        &crate::cedar_authz::MigrationResource {
+            tenant: &state.tenant,
+        },
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponse {
+                error: "AdminMigrations permission denied".to_owned(),
             }),
         )
             .into_response();

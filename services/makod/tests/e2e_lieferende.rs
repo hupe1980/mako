@@ -153,6 +153,7 @@ impl MockLfn {
 
         render_to_wire_bytes(msg, &make_registry(LFN_ID, "LF"))
             .expect("LFN: render_to_wire_bytes 55002")
+            .bytes
     }
 
     /// ERP notification: receive NB's UTILMD response wire bytes and process them.
@@ -317,7 +318,9 @@ impl MockNb {
             "NB Antwort must be addressed to the LFN"
         );
 
-        render_to_wire_bytes(utilmd, &make_registry(NB_ID, "NB")).expect("NB: render_to_wire_bytes")
+        render_to_wire_bytes(utilmd, &make_registry(NB_ID, "NB"))
+            .expect("NB: render_to_wire_bytes")
+            .bytes
     }
 
     async fn state(&self) -> SupplierChangeState {

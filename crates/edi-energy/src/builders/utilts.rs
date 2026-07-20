@@ -9,20 +9,16 @@ use crate::{Error, Release};
 
 use super::{Set, Unset, bytes_to_segments};
 
-macro_rules! emit_seg {
-    ($writer:expr, $tag:expr, $($elem:expr),+ $(,)?) => {{
-        let elements: &[&str] = &[$($elem),+];
-        $writer.write_raw($tag, elements).map_err(|e| Error::Parse(e.into()))?;
-    }};
-}
-
 // ── UTILTS-specific DTM helpers (format 303) ──────────────────────────────────
+//
+// These return only the DE 2380 datetime value; qualifier and format code are
+// separate components at the emit site.
 
-fn fmt303(qualifier: &str, date: &str) -> String {
-    format!("{qualifier}:{date}0000+0000:303")
+fn midnight_303(date: &str) -> String {
+    format!("{date}0000+0000")
 }
 
-fn dtm_now_303() -> String {
+fn now_303() -> String {
     let now = time::OffsetDateTime::now_utc();
     let (y, mo, d, h, m) = (
         now.year(),
@@ -31,7 +27,7 @@ fn dtm_now_303() -> String {
         now.hour(),
         now.minute(),
     );
-    format!("137:{y:04}{mo:02}{d:02}{h:02}{m:02}+0000:303")
+    format!("{y:04}{mo:02}{d:02}{h:02}{m:02}+0000")
 }
 
 // ── Body structs (public, re-exported from mod.rs) ────────────────────────────
@@ -568,37 +564,38 @@ impl<S, R> UtiltsBuilder<S, R> {
 
     #[allow(clippy::too_many_lines)]
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        let unh_type = format!("UTILTS:D:18A:UN:{}", self.inner.release.as_str());
         let dtm_val = match self.inner.document_date.as_deref() {
-            Some(d) if d.starts_with("303:") => {
-                let raw = &d["303:".len()..];
-                format!("137:{raw}:303")
-            }
-            Some(d) => fmt303("137", d),
-            None => dtm_now_303(),
+            Some(d) if d.starts_with("303:") => d["303:".len()..].to_owned(),
+            Some(d) => midnight_303(d),
+            None => now_303(),
         };
 
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
 
         let doc_id = self.inner.document_id.as_deref().unwrap_or("");
-        emit_seg!(w, "UNH", &self.inner.message_ref, &unh_type);
+        emit_comp!(
+            w,
+            "UNH",
+            [&self.inner.message_ref],
+            ["UTILTS", "D", "18A", "UN", self.inner.release.as_str()]
+        );
         emit_seg!(w, "BGM", &self.inner.document_code, doc_id);
-        emit_seg!(w, "DTM", &dtm_val);
+        emit_comp!(w, "DTM", ["137", &dtm_val, "303"]);
         if let Some(id) = &self.inner.sender_id {
-            emit_seg!(
+            emit_comp!(
                 w,
                 "NAD",
-                "MS",
-                &self.inner.sender_agency.format_nad_c082(id)
+                ["MS"],
+                [id, "", self.inner.sender_agency.as_str()]
             );
         }
         if let Some(id) = &self.inner.receiver_id {
-            emit_seg!(
+            emit_comp!(
                 w,
                 "NAD",
-                "MR",
-                &self.inner.receiver_agency.format_nad_c082(id)
+                ["MR"],
+                [id, "", self.inner.receiver_agency.as_str()]
             );
         }
 
@@ -611,43 +608,43 @@ impl<S, R> UtiltsBuilder<S, R> {
                 emit_seg!(w, "LOC", "Z09", code);
             }
             if let Some(vf) = &vorgang.valid_from {
-                emit_seg!(w, "DTM", &format!("157:{vf}:303"));
+                emit_comp!(w, "DTM", ["157", vf, "303"]);
             }
             if let (Some(code), Some(pid)) =
                 (&vorgang.formula_status_code, &vorgang.formula_status_period)
             {
                 emit_seg!(w, "STS", "Z23", code, &pid.to_string());
             }
-            emit_seg!(w, "RFF", &format!("Z13:{}", vorgang.pruefidentifikator));
+            emit_comp!(w, "RFF", ["Z13", &vorgang.pruefidentifikator.to_string()]);
             if let Some(ref_id) = &vorgang.ref_transaction_id {
-                emit_seg!(w, "RFF", &format!("TN:{ref_id}"));
+                emit_comp!(w, "RFF", ["TN", ref_id]);
             }
             for period in &vorgang.usage_periods {
-                emit_seg!(
+                emit_comp!(
                     w,
                     "RFF",
-                    &format!("{}::{}", period.qualifier, period.period_id)
+                    [&period.qualifier, "", &period.period_id.to_string()]
                 );
-                emit_seg!(w, "DTM", &format!("Z25:{}:303", period.usage_from));
+                emit_comp!(w, "DTM", ["Z25", &period.usage_from, "303"]);
                 if let Some(to) = &period.usage_to {
-                    emit_seg!(w, "DTM", &format!("Z26:{to}:303"));
+                    emit_comp!(w, "DTM", ["Z26", to, "303"]);
                 }
             }
             for er in &vorgang.energy_amount_refs {
                 emit_seg!(w, "SEQ", "Z36");
-                emit_seg!(w, "RFF", &format!("Z46:{}", er.time_period_id));
-                emit_seg!(w, "RFF", &format!("Z23:{}", er.final_step_id));
+                emit_comp!(w, "RFF", ["Z46", &er.time_period_id.to_string()]);
+                emit_comp!(w, "RFF", ["Z23", &er.final_step_id.to_string()]);
             }
             for step in &vorgang.calc_steps {
                 emit_seg!(w, "SEQ", "Z37", &step.step_id.to_string());
                 if let Some(tp) = step.time_period_id {
-                    emit_seg!(w, "RFF", &format!("Z46:{tp}"));
+                    emit_comp!(w, "RFF", ["Z46", &tp.to_string()]);
                 }
                 if let Some(malo) = &step.messlokation_id {
-                    emit_seg!(w, "RFF", &format!("Z19:{malo}"));
+                    emit_comp!(w, "RFF", ["Z19", malo]);
                 }
                 if let Some(rs) = step.ref_calc_step_id {
-                    emit_seg!(w, "RFF", &format!("Z23:{rs}"));
+                    emit_comp!(w, "RFF", ["Z23", &rs.to_string()]);
                 }
                 if let Some(op) = &step.operator {
                     emit_seg!(w, "CCI", "", "", "Z86");
@@ -659,15 +656,15 @@ impl<S, R> UtiltsBuilder<S, R> {
                 }
                 if let Some(vt) = &step.loss_factor_trafo {
                     emit_seg!(w, "CCI", "", "", "Z16");
-                    emit_seg!(w, "CAV", &format!("Z28:::{vt}"));
+                    emit_comp!(w, "CAV", ["Z28", "", "", vt]);
                 }
                 if let Some(vl) = &step.loss_factor_line {
                     emit_seg!(w, "CCI", "", "", "ZB2");
-                    emit_seg!(w, "CAV", &format!("Z28:::{vl}"));
+                    emit_comp!(w, "CAV", ["Z28", "", "", vl]);
                 }
                 if let Some(af) = &step.split_factor {
                     emit_seg!(w, "CCI", "", "", "ZG6");
-                    emit_seg!(w, "CAV", &format!("ZH6:::{af}"));
+                    emit_comp!(w, "CAV", ["ZH6", "", "", af]);
                 }
             }
             for block in &vorgang.definition_blocks {
@@ -678,13 +675,13 @@ impl<S, R> UtiltsBuilder<S, R> {
                         "Z70" | "Z74" => "Z45",
                         _ => "Z33",
                     };
-                    emit_seg!(w, "DTM", &format!("{dtm_q}:{ct}:303"));
+                    emit_comp!(w, "DTM", [dtm_q, ct, "303"]);
                 }
                 if let Some(rc) = &block.register_code {
-                    emit_seg!(w, "RFF", &format!("Z28:{rc}"));
+                    emit_comp!(w, "RFF", ["Z28", rc]);
                 }
                 if let Some(rc) = &block.ref_definition_code {
-                    emit_seg!(w, "RFF", &format!("Z28:{rc}"));
+                    emit_comp!(w, "RFF", ["Z28", rc]);
                 }
                 if let Some(def_code) = &block.definition_code {
                     let cci_type = match block.seq_qualifier.as_str() {
@@ -694,16 +691,16 @@ impl<S, R> UtiltsBuilder<S, R> {
                     };
                     emit_seg!(w, "CCI", cci_type, "", def_code);
                     if let Some(freq) = &block.frequency {
-                        emit_seg!(w, "CAV", &format!("ZE0:::{freq}"));
+                        emit_comp!(w, "CAV", ["ZE0", "", "", freq]);
                     }
                     if let Some(tr) = &block.transmissibility {
-                        emit_seg!(w, "CAV", &format!("ZD5:::{tr}"));
+                        emit_comp!(w, "CAV", ["ZD5", "", "", tr]);
                     }
                     if let Some(pl) = &block.peak_load_detection {
-                        emit_seg!(w, "CAV", &format!("ZD4:::{pl}"));
+                        emit_comp!(w, "CAV", ["ZD4", "", "", pl]);
                     }
                     if let Some(ord) = &block.orderable {
-                        emit_seg!(w, "CAV", &format!("ZD7:::{ord}"));
+                        emit_comp!(w, "CAV", ["ZD7", "", "", ord]);
                     }
                 }
                 if let Some(sa) = &block.switching_action {

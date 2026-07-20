@@ -217,7 +217,7 @@ pub(crate) async fn handle_list(
 pub(crate) async fn handle_get(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
-    Path(gln_str): Path<String>,
+    Path(mp_id_str): Path<String>,
 ) -> Response {
     let identity = match state.cedar.authenticate(&headers) {
         Some(id) => id,
@@ -228,12 +228,12 @@ pub(crate) async fn handle_get(
         MakoAction::AdminPartnerRead,
         &PartnerResource {
             tenant: &state.tenant_id.to_string(),
-            mp_id: Some(&gln_str),
+            mp_id: Some(&mp_id_str),
         },
     ) {
         return forbidden();
     }
-    let mp_id = MarktpartnerCode::from(gln_str.as_str());
+    let mp_id = MarktpartnerCode::from(mp_id_str.as_str());
     match state.store.get(state.tenant_id, &mp_id).await {
         Ok(Some(record)) => {
             let updated_at = record.updated_at.to_string();
@@ -264,7 +264,7 @@ pub(crate) async fn handle_get(
 pub(crate) async fn handle_put(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
-    Path(gln_str): Path<String>,
+    Path(mp_id_str): Path<String>,
     Json(body): Json<UpsertRequest>,
 ) -> Response {
     let identity = match state.cedar.authenticate(&headers) {
@@ -276,12 +276,12 @@ pub(crate) async fn handle_put(
         MakoAction::AdminPartnerWrite,
         &PartnerResource {
             tenant: &state.tenant_id.to_string(),
-            mp_id: Some(&gln_str),
+            mp_id: Some(&mp_id_str),
         },
     ) {
         return forbidden();
     }
-    let path_gln = MarktpartnerCode::from(gln_str.as_str());
+    let path_gln = MarktpartnerCode::from(mp_id_str.as_str());
     if body.record.mp_id != path_gln {
         return (
             StatusCode::BAD_REQUEST,
@@ -326,7 +326,7 @@ pub(crate) async fn handle_put(
 pub(crate) async fn handle_delete(
     headers: HeaderMap,
     State(state): State<Arc<PartnerAdminState>>,
-    Path(gln_str): Path<String>,
+    Path(mp_id_str): Path<String>,
 ) -> Response {
     let identity = match state.cedar.authenticate(&headers) {
         Some(id) => id,
@@ -337,12 +337,12 @@ pub(crate) async fn handle_delete(
         MakoAction::AdminPartnerDelete,
         &PartnerResource {
             tenant: &state.tenant_id.to_string(),
-            mp_id: Some(&gln_str),
+            mp_id: Some(&mp_id_str),
         },
     ) {
         return forbidden();
     }
-    let mp_id = MarktpartnerCode::from(gln_str.as_str());
+    let mp_id = MarktpartnerCode::from(mp_id_str.as_str());
     match state.store.remove(state.tenant_id, &mp_id).await {
         Ok(()) => {
             info!(%mp_id, tenant = %state.tenant_id, "partner removed via admin API");
@@ -431,15 +431,15 @@ pub(crate) async fn handle_import(
             let pid = partin.detect_pruefidentifikator().ok().map(|p| p.as_u32());
             match crate::edifact_api::partin_to_partner_record(&partin, pid) {
                 Some(record) => {
-                    let gln_str = record.mp_id.to_string();
+                    let mp_id_str = record.mp_id.to_string();
                     match state.store.upsert(state.tenant_id, &record).await {
                         Ok(()) => {
-                            info!(mp_id = %gln_str, "PARTIN import: partner upserted");
-                            glns.push(gln_str);
+                            info!(mp_id = %mp_id_str, "PARTIN import: partner upserted");
+                            glns.push(mp_id_str);
                             upserted += 1;
                         }
                         Err(e) => {
-                            tracing::warn!(mp_id = %gln_str, error = %e, "PARTIN import: upsert failed");
+                            tracing::warn!(mp_id = %mp_id_str, error = %e, "PARTIN import: upsert failed");
                             skipped += 1;
                         }
                     }

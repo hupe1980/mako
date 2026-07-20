@@ -17,129 +17,129 @@ use crate::registry::Profile;
 use crate::{MessageType, Pruefidentifikator, Release};
 
 static SEGMENTS: &[SegmentDefinition] = &[
-    SegmentDefinition {
-        tag: "UNH",
-        name: "Nachrichten-Kopfsegment",
-        elements: &[
+    SegmentDefinition::new(
+        "UNH",
+        "Nachrichten-Kopfsegment",
+        &[
             ElementRef::new(1, "0062", Status::Mandatory, 1),
             ElementRef::new(2, "S009", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "BGM",
-        name: "Beginn der Nachricht",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "BGM",
+        "Beginn der Nachricht",
+        &[
             ElementRef::new(1, "C002", Status::Mandatory, 1),
             ElementRef::new(2, "C106", Status::Conditional, 1),
             ElementRef::new(3, "1225", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "DTM",
-        name: "Nachrichtendatum",
-        elements: &[ElementRef::new(1, "C507", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "IMD",
-        name: "Abonnement / Abonnementtyp",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "DTM",
+        "Nachrichtendatum",
+        &[ElementRef::new(1, "C507", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "IMD",
+        "Abonnement / Abonnementtyp",
+        &[
             ElementRef::new(1, "7077", Status::Conditional, 1),
             ElementRef::new(2, "C272", Status::Conditional, 1),
             ElementRef::new(3, "C273", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "FTX",
-        name: "Allgemeine Information",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "FTX",
+        "Allgemeine Information",
+        &[
             ElementRef::new(1, "4451", Status::Mandatory, 1),
             ElementRef::new(2, "4453", Status::Conditional, 1),
             ElementRef::new(3, "C107", Status::Conditional, 1),
             ElementRef::new(4, "C108", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "UNS",
-        name: "Abschnitts-Kontrollsegment",
-        elements: &[ElementRef::new(1, "0081", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "UNT",
-        name: "Nachrichten-Endesegment",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "UNS",
+        "Abschnitts-Kontrollsegment",
+        &[ElementRef::new(1, "0081", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "UNT",
+        "Nachrichten-Endesegment",
+        &[
             ElementRef::new(1, "0074", Status::Mandatory, 1),
             ElementRef::new(2, "0062", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "RFF",
-        name: "Referenz Nachrichtennummer",
-        elements: &[ElementRef::new(1, "C506", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "NAD",
-        name: "MP-ID Absender/Empfänger",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "RFF",
+        "Referenz Nachrichtennummer",
+        &[ElementRef::new(1, "C506", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "NAD",
+        "MP-ID Absender/Empfänger",
+        &[
             ElementRef::new(1, "3035", Status::Mandatory, 1),
             ElementRef::new(2, "C082", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "LOC",
-        name: "Bilanzierungsgebiet/Regelzone",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "LOC",
+        "Bilanzierungsgebiet/Regelzone",
+        &[
             ElementRef::new(1, "3227", Status::Mandatory, 1),
             ElementRef::new(2, "C517", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "CTA",
-        name: "Ansprechpartner",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "CTA",
+        "Ansprechpartner",
+        &[
             ElementRef::new(1, "3139", Status::Conditional, 1),
             ElementRef::new(2, "C056", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "COM",
-        name: "Kommunikationsverbindung",
-        elements: &[ElementRef::new(1, "C076", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "LIN",
-        name: "Positionsdaten",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "COM",
+        "Kommunikationsverbindung",
+        &[ElementRef::new(1, "C076", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "LIN",
+        "Positionsdaten",
+        &[
             ElementRef::new(1, "1082", Status::Conditional, 1),
             ElementRef::new(2, "1229", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "PIA",
-        name: "OBIS-Kennzahl / Messprodukt",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "PIA",
+        "OBIS-Kennzahl / Messprodukt",
+        &[
             ElementRef::new(1, "4347", Status::Mandatory, 1),
             ElementRef::new(2, "C212", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "QTY",
-        name: "Prozentualer Anteil der Tranche",
-        elements: &[ElementRef::new(1, "C186", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "CCI",
-        name: "Profilgruppe",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "QTY",
+        "Prozentualer Anteil der Tranche",
+        &[ElementRef::new(1, "C186", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "CCI",
+        "Profilgruppe",
+        &[
             ElementRef::new(1, "7059", Status::Conditional, 1),
             ElementRef::new(2, "C240", Status::Conditional, 1),
             ElementRef::new(3, "C889", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "CAV",
-        name: "Prognosegrundlage",
-        elements: &[ElementRef::new(1, "C889", Status::Mandatory, 1)],
-    },
+    ),
+    SegmentDefinition::new(
+        "CAV",
+        "Prognosegrundlage",
+        &[ElementRef::new(1, "C889", Status::Mandatory, 1)],
+    ),
 ];
 
 static SEGMENT_MAP: LazyLock<std::collections::HashMap<&'static str, &'static SegmentDefinition>> =

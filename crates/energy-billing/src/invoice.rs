@@ -8,8 +8,8 @@ use rust_decimal::dec;
 use serde::Serialize;
 
 use crate::context::{AbschlagDeduction, BillingContext};
+use crate::error::EngineError;
 use crate::position::{BillingPosition, BillingWarning, PositionCategory};
-use billing::BillingError;
 
 /// A completed invoice — the immutable result of `BillingEngine::bill()`.
 ///
@@ -124,8 +124,8 @@ impl Invoice {
     ///
     /// # Errors
     ///
-    /// Returns [`BillingError`] if an advance's amounts overflow.
-    pub fn advance_payments(&self) -> Result<Vec<billing::AdvancePayment>, BillingError> {
+    /// Returns [`EngineError::Arithmetic`] if an advance's amounts overflow.
+    pub fn advance_payments(&self) -> Result<Vec<billing::AdvancePayment>, EngineError> {
         self.context
             .abschlage
             .iter()
@@ -142,14 +142,14 @@ impl Invoice {
     ///
     /// # Errors
     ///
-    /// Returns [`BillingError`] if an advance's amounts overflow, or if the set
-    /// of advances is not a valid prepayment.
-    pub fn prepayment(&self) -> Result<billing::Prepayment, BillingError> {
+    /// Returns [`EngineError::Arithmetic`] if an advance's amounts overflow, or
+    /// if the set of advances is not a valid prepayment.
+    pub fn prepayment(&self) -> Result<billing::Prepayment, EngineError> {
         let advances = self.advance_payments()?;
         if advances.is_empty() {
             return Ok(billing::Prepayment::None);
         }
-        billing::Prepayment::itemised(advances)
+        Ok(billing::Prepayment::itemised(advances)?)
     }
 
     /// The residual VAT breakdown for a **Restrechnung** — the whole supply per
@@ -163,14 +163,14 @@ impl Invoice {
     ///
     /// # Errors
     ///
-    /// Returns [`BillingError::InvalidInput`] when an advance taxed a
+    /// Returns [`EngineError::Arithmetic`] when an advance taxed a
     /// `(category, rate)` group this supply does not contain, or when the
     /// advances exceed the supply in any group — over-deduction would understate
     /// the output tax owed.
     pub fn residual_breakdown(
         &self,
         default_rate: Decimal,
-    ) -> Result<Vec<billing::TaxBreakdownEntry>, BillingError> {
+    ) -> Result<Vec<billing::TaxBreakdownEntry>, EngineError> {
         let full: Vec<billing::TaxBreakdownEntry> = self
             .tax_subtotals(default_rate)
             .iter()
@@ -180,7 +180,7 @@ impl Invoice {
         if advances.is_empty() {
             return Ok(full);
         }
-        billing::advance::residual_breakdown(&full, &advances)
+        Ok(billing::advance::residual_breakdown(&full, &advances)?)
     }
 
     /// Assemble an `Invoice` from a flat list of positions and warnings.
@@ -365,11 +365,23 @@ impl Invoice {
                     },
                     "positionstyp": p.tags.first().map(String::as_str).unwrap_or("POSITION"),
                     "kategorie": format!("{:?}", p.category),
+                    // The calculation trace travels with the position it explains.
+                    // BO4E has no field for one, so it rides as a ZusatzAttribut —
+                    // the sanctioned place for what the schema does not model. This
+                    // is the only surviving record of *why* the amount is what it
+                    // is once the Invoice value is dropped after storage.
+                    "zusatzAttribute": serde_json::to_value(&p.trace).ok().map(|t| {
+                        serde_json::json!([{
+                            "_typ": "ZUSATZ_ATTRIBUT",
+                            "name": "mako:calculation_trace",
+                            "wert": t,
+                        }])
+                    }),
                 })
             })
             .collect();
 
-        let zahlungsziel = ctx.period_to + time::Duration::days(14);
+        let zahlungsziel = ctx.period_to() + time::Duration::days(14);
 
         // Collect ZusatzAttribute from info positions tagged "gasqualitaet"
         let mut zusatz_attribute: Vec<serde_json::Value> = self
@@ -385,12 +397,42 @@ impl Invoice {
             })
             .collect();
 
-        // §41 Abs. 1 Nr. 8 + §42 EnWG — Energiemix (fuel/source mix on invoice)
-        if let Some(mix) = &ctx.energiemix {
+        // §40 Abs. 1 EnWG — contract facts. They change no amount, but an
+        // invoice without them is incomplete; each rides as its own attribute
+        // so a renderer can place them individually.
+        if let Some(vi) = &ctx.vertragsinformationen {
+            for (name, wert) in [
+                ("vertragsdauer", vi.vertragsdauer.clone()),
+                ("kuendigungsfrist", vi.kuendigungsfrist.clone()),
+                (
+                    "naechstmoeglicher_kuendigungstermin",
+                    vi.naechstmoeglicher_kuendigungstermin
+                        .map(|d| d.to_string()),
+                ),
+                (
+                    "naechster_abrechnungstermin",
+                    vi.naechster_abrechnungstermin.map(|d| d.to_string()),
+                ),
+            ] {
+                if let Some(wert) = wert {
+                    zusatz_attribute.push(serde_json::json!({
+                        "_typ": "ZUSATZ_ATTRIBUT",
+                        "name": name,
+                        "wert": wert
+                    }));
+                }
+            }
+        }
+
+        // §42 EnWG — Stromkennzeichnung, structured: fuel-mix percentages, the
+        // CO₂ figure §42 Abs. 2 Nr. 2 makes mandatory, and HKN certification.
+        if let Some(quellen) = &ctx.energiequellen
+            && let Ok(wert) = serde_json::to_value(quellen)
+        {
             zusatz_attribute.push(serde_json::json!({
                 "_typ": "ZUSATZ_ATTRIBUT",
-                "name": "energiemix",
-                "wert": mix
+                "name": "stromkennzeichnung",
+                "wert": wert
             }));
         }
 
@@ -431,6 +473,16 @@ impl Invoice {
             }));
         }
 
+        // The contractual regime the prices come from — Grundversorgung invoices
+        // bill the published Allgemeine Preise (§36 EnWG, §5 StromGVV/GasGVV),
+        // Ersatzversorgung the §38 EnWG fallback terms. Emitted for every
+        // invoice so the regime is explicit, not inferred from the tariff.
+        zusatz_attribute.push(serde_json::json!({
+            "_typ": "ZUSATZ_ATTRIBUT",
+            "name": "vertragsart",
+            "wert": ctx.vertragsart.label()
+        }));
+
         // §40a EnWG Abs. 1 — Kilowattstundenpreis (all-inclusive total price per kWh).
         // Compute from brutto_eur / billable kWh. Use total eligible kWh from positions.
         let total_kwh_positions: Decimal = self
@@ -454,7 +506,7 @@ impl Invoice {
             "_typ": "RECHNUNG",
             "rechnungsnummer": ctx.rechnungsnummer,
             "rechnungsart": ctx.invoice_type.rechnungsart(),
-            "rechnungsdatum": ctx.period_to.to_string(),  // deterministic: no now()
+            "rechnungsdatum": ctx.period_to().to_string(),  // deterministic: no now()
             "originalRechnungsId": ctx.invoice_type.original_invoice_id(),
             "marktlokationsId": ctx.malo_id,
             "zaehlerIdLieferstelle": ctx.zaehler_id,
@@ -471,8 +523,8 @@ impl Invoice {
             "vertragsId": ctx.contract_id,
             "rechnungsperiode": {
                 "_typ": "ZEITRAUM",
-                "startdatum": ctx.period_from.to_string(),
-                "enddatum": ctx.period_to.to_string()
+                "startdatum": ctx.period_from().to_string(),
+                "enddatum": ctx.period_to().to_string()
             },
             "rechnungspositionen": pos_json,
             "zusatzAttribute": if zusatz_attribute.is_empty() { serde_json::Value::Null } else { serde_json::json!(zusatz_attribute) },
@@ -533,7 +585,7 @@ impl Invoice {
     /// for its sub-period.
     ///
     /// Uses the context from `self` (billing period, IDs) for the merged invoice.
-    /// `other.context.period_to` is used to update the effective period end.
+    /// `other.context.period_to()` is used to update the effective period end.
     ///
     /// ## Equivalent to `billing::merge_period_documents`
     ///
@@ -554,8 +606,9 @@ impl Invoice {
     pub fn merge(self, other: Invoice) -> Invoice {
         let mut ctx = self.context;
         // Extend period to cover both sub-periods
-        if other.context.period_to > ctx.period_to {
-            ctx.period_to = other.context.period_to;
+        if other.context.period_to() > ctx.period_to() {
+            ctx.period = crate::BillingPeriod::new(ctx.period_from(), other.context.period_to())
+                .expect("extending the end of a valid period keeps from <= to");
         }
         let mut positions = self.positions;
         positions.extend(other.positions);
@@ -589,14 +642,11 @@ impl Invoice {
         self,
         fractions: &[Decimal],
         contexts: Vec<crate::context::BillingContext>,
-    ) -> Result<Vec<Invoice>, billing::BillingError> {
+    ) -> Result<Vec<Invoice>, EngineError> {
         if fractions.len() != contexts.len() || fractions.is_empty() {
-            return Err(billing::BillingError::InvalidInput {
-                reason: format!(
-                    "fractions.len() ({}) must equal contexts.len() ({})",
-                    fractions.len(),
-                    contexts.len()
-                ),
+            return Err(EngineError::AllocationMismatch {
+                fractions: fractions.len(),
+                contexts: contexts.len(),
             });
         }
 
@@ -852,8 +902,9 @@ impl TaxSubtotal {
     ///
     /// # Errors
     ///
-    /// Returns [`BillingError`] if the base or tax overflows [`billing::EuroAmount`].
-    pub fn to_breakdown_entry(&self) -> Result<billing::TaxBreakdownEntry, BillingError> {
+    /// Returns [`EngineError::Arithmetic`] if the base or tax overflows
+    /// [`billing::EuroAmount`].
+    pub fn to_breakdown_entry(&self) -> Result<billing::TaxBreakdownEntry, EngineError> {
         Ok(billing::TaxBreakdownEntry::new(
             match self.category {
                 VatCategory::Standard => billing::TaxCategory::Standard,
@@ -1293,5 +1344,46 @@ mod correction_tests {
             corrected["vorauszahlungen"][0]["betrag"]["wert"],
             serde_json::json!("-119.00")
         );
+    }
+}
+
+#[cfg(test)]
+mod trace_emission_tests {
+    use super::*;
+    use crate::position::PositionCategory;
+    use rust_decimal::dec;
+
+    /// The calculation trace must survive into the stored Rechnung.
+    ///
+    /// `PositionTrace` was serializable from the start and never emitted:
+    /// `to_rechnung_json` dropped it, so billingd's explain tool read a field
+    /// that was always null — while its own note promised seven trace fields.
+    #[test]
+    fn the_position_trace_reaches_the_stored_rechnung() {
+        let mut pos = BillingPosition::debit(
+            "Arbeitspreis",
+            dec!(1000),
+            "kWh",
+            dec!(0.30),
+            PositionCategory::Commodity,
+        );
+        pos.trace.formula = "1000 kWh x 0.30 EUR/kWh".to_owned();
+        pos.trace.regulatory_basis = vec!["§40 EnWG".to_owned()];
+
+        let invoice = Invoice::from_positions(BillingContext::default(), vec![pos], vec![]);
+        let json = invoice.to_rechnung_json();
+
+        // Extract exactly the way the MCP explain tool does.
+        let trace = json["rechnungspositionen"][0]["zusatzAttribute"]
+            .as_array()
+            .expect("position carries attributes")
+            .iter()
+            .find(|a| a["name"] == "mako:calculation_trace")
+            .and_then(|a| a.get("wert"))
+            .expect("mako:calculation_trace present");
+
+        assert_eq!(trace["formula"], "1000 kWh x 0.30 EUR/kWh");
+        assert_eq!(trace["regulatory_basis"][0], "§40 EnWG");
+        assert!(trace.get("input_quantity").is_some(), "{trace}");
     }
 }

@@ -11,6 +11,111 @@ zero async, zero hardcoded regulatory rates**. It answers one question:
 
 ---
 
+## §42 Stromkennzeichnung — structured, and on the invoice
+
+`BillingContext.energiequellen` carries the typed `EnergieQuellen` (fuel-mix
+percentages, the CO₂ g/kWh figure §42 Abs. 2 Nr. 2 EnWG makes mandatory, HKN
+certification) and `to_rechnung_json` emits it as the `stromkennzeichnung`
+ZusatzAttribut with the structure intact. billingd copies it from the tarifbd
+product via `Product::energiequellen()`.
+
+The structured type existed on the product all along, was parsed from tarifbd
+and validated by the MCP tool — and the invoice emitted only a legacy free-text
+string that billingd never even populated. The free-text field is gone.
+
+## §14a — all three modules
+
+| Modul | What is billed | Where |
+|---|---|---|
+| 1 | flat NNE reduction (per-kWh and per-kW credits) | `ControllableLoadProvider` |
+| 2 | zeitvariables Netzentgelt — **three** Tarifstufen HT/ST/NT (BK6-22-300 Anlage 2 §2) | `sect14a_modul2_nne_*` + `Sect14aModul2Verbrauch` |
+| 3 | dispatch compensation | `ControllableLoadProvider` |
+
+The Modul 2 bands *replace* the flat NNE Arbeitspreis; setting both raises the
+Error-severity `MODUL2_AND_FLAT_NNE` and the run is refused — billing both
+charges the device's network usage twice. The bands come from the
+Netzbetreiber's time windows, which is why they are not derived from the
+supplier's own HT/NT split.
+
+## Warnings that actually fire
+
+`invoice.warnings` now carries machine-readable codes beyond the §41b guard:
+`ESTIMATED_READING` (§17 Abs. 1 MessZV), `PREISGARANTIE_ENDET` (ends within 30
+days of the period), `VERBRAUCH_ABWEICHUNG_50PCT` (deviation beyond half the
+prior year's consumption). All three were promised in the `BillingWarning`
+docstring and previously either Info positions — visible on paper, invisible to
+code — or absent entirely. They are `Warning` severity: they inform dispatch,
+they do not block it.
+
+Every position built through the shared helpers (Arbeitspreis, Grundpreis, and
+all levy positions — Stromsteuer, Energiesteuer, BEHG, KA, NNE) now carries a
+populated `PositionTrace`; previously 3 of ~22 position constructions did.
+
+## Explainability reaches the stored invoice
+
+Every `BillingPosition` carries a `PositionTrace` (formula, inputs, §-citations,
+tariff source). `to_rechnung_json()` emits it per position as the
+`mako:calculation_trace` ZusatzAttribut — BO4E has no field for a calculation
+trace, and the attribute is the sanctioned place for what the schema does not
+model. This is the only surviving record of *why* an amount is what it is once
+the `Invoice` value is dropped after storage; billingd's
+`explain_invoice_position` MCP tool reads it from there.
+
+It previously read a `trace` key that `to_rechnung_json` never wrote — the tool
+promised seven audit fields and always returned null.
+
+## Period-correct rates
+
+The year tables (`stromsteuer_for_year`, `energiesteuer_gas_for_year`,
+`behg_ct_per_kwh_for_year`) are joined by `mwst_rate_for_period`: 19 % since
+2007 except the COVID window 01.07.2020–31.12.2020 at 16 %. A period straddling
+the window yields `None` — no single rate is correct for it, so the caller
+splits rather than misbilling half of it. billingd derives its default
+`RegulatoryRates` from these tables per billing period; explicit configuration
+still wins.
+
+## Pro-rating conventions (stated, deliberately)
+
+Three coexist, each matching how its charge is contractually quoted:
+per-day charges bill **active contract days** (clipped to
+`vertragsbeginn`/`vertragsende`); annual EUR/a charges bill **days/365**;
+monthly EUR/month charges bill **days/30.4375**. The NNE Grundpreis previously
+billed the *full period* days unclipped — a mid-month move-in paid a full month
+of network base charge; it now clips like the commodity Grundpreis.
+
+## Typed errors
+
+`BillingEngine::bill` returns `EngineError`, not a stringly error:
+
+| Variant | Meaning | `code()` |
+|---|---|---|
+| `ValidationBlocked { warnings }` | `Error`-severity regulatory warnings blocked the run — carries **all** collected warnings | `VALIDATION_BLOCKED` |
+| `PriceOutOfRange { field, value }` | A tariff price exceeds the monetary range (corrupt tariff) | `PRICE_OUT_OF_RANGE` |
+| `InvalidPeriod { from, to }` | What `BillingPeriod::new` returns for `from > to` | `INVALID_PERIOD` |
+| `AllocationMismatch { fractions, contexts }` | `allocate_proportionally` shape mismatch | `ALLOCATION_MISMATCH` |
+| `Arithmetic(billing::BillingError)` | Passthrough from the arithmetic core | `ARITHMETIC` |
+
+`code()` is stable and machine-readable; `blocking_warnings()` exposes the
+warnings behind a blocked validation so services can answer with structured
+error bodies instead of parsed prose.
+
+## Validated period, stated regime
+
+`BillingContext.period` is a `BillingPeriod` — the constructor (and the serde
+path) refuse `from > to`, so an inverted period is unrepresentable in every
+provider and helper downstream.
+
+`BillingContext.vertragsart` states the contractual regime and is emitted as
+the `vertragsart` ZusatzAttribut on every invoice:
+
+- **`Sondervertrag`** (default) — freely negotiated, §41 EnWG.
+- **`Grundversorgung`** — the published Allgemeine Preise apply (§36 EnWG,
+  StromGVV/GasGVV).
+- **`Ersatzversorgung`** — §38 EnWG fallback supply. It ends by law three
+  months after it began (§38 Abs. 2 S. 2 EnWG), so the engine **refuses** a
+  longer Ersatzversorgung period with `ERSATZVERSORGUNG_UEBER_3_MONATE`:
+  such a supply cannot exist, and billing it would invent one.
+
 ## Architecture
 
 ```
@@ -33,9 +138,10 @@ billingd (HTTP service)
             │
             ├── Quantities             — all meter inputs for one billing period
             ├── BillingContext         — period, IDs, invoice type, regulatory rates
+            │     └── period: BillingPeriod   — validated; from > to unrepresentable
             ├── BillingEngine          — composes BillingProvider instances
             │     ├── validate()       — pre-flight regulatory check (no positions)
-            │     ├── bill(&self, …)   — pure function → Result<Invoice, BillingError>
+            │     ├── bill(&self, …)   — pure function → Result<Invoice, EngineError>
             │     └── bill_batch(…)    — portfolio billing
             ├── BillingProvider        — one implementation per product/tax type
             └── Invoice                — result with positions + totals + warnings + BO4E JSON
@@ -47,7 +153,7 @@ billingd (HTTP service)
 The engine runs in passes:
 
 ```
-Pass 0  validate_warnings()      §41b iMSys guard · regulatory pre-checks
+Pass 0  validate_warnings()      §38/§41b guards · regulatory pre-checks
 Pass 1  commodity / levy providers   (ElectricityProvider, GasProvider, …)
 Pass 2  tax provider                 (MwStProvider — sees all net positions)
 Pass 3  Abschlag deductions          (Final invoice reconciliation)
@@ -60,8 +166,8 @@ Pass 5  Cancellation sign reversal   (Stornorechnung — all signs negated)
 ## Quick start
 
 ```rust
-use energy_billing::{Product, BillingContext, InvoiceType, MeterInput, Quantities,
-                     RegulatoryRates, GridInput};
+use energy_billing::{BillingContext, BillingPeriod, GridInput, InvoiceType, MeterInput,
+                     Product, Quantities, RegulatoryRates};
 use rust_decimal::dec;
 use time::macros::date;
 
@@ -76,8 +182,7 @@ let ctx = BillingContext {
     malo_id:          "51238696781".to_owned(),
     lf_mp_id:         "9910000000002".to_owned(),
     rechnungsnummer:  "R2026-06-001".to_owned(),
-    period_from:      date!(2026-06-01),
-    period_to:        date!(2026-06-30),
+    period:           BillingPeriod::new(date!(2026-06-01), date!(2026-06-30))?,
     invoice_type:     InvoiceType::Initial,
     regulatory_rates: RegulatoryRates::default(),
     ..Default::default()
@@ -163,7 +268,8 @@ Each category has its own struct with only the relevant fields — no silent fie
 ### §41b EnWG — iMSys guard for dynamic tariffs
 
 Dynamic tariffs (`Product::Strom(p)` where `p.dynamic_epex = true`) require an intelligent
-metering system. `BillingEngine::bill()` rejects with `BillingError::InvalidInput` when
+metering system. `BillingEngine::bill()` rejects with
+`EngineError::ValidationBlocked` — carrying every collected warning — when
 `quantities.electricity.metering_mode != MeteringMode::Imsys`:
 
 ```rust
@@ -380,7 +486,7 @@ let merged = inv_old.merge(inv_new);
 
 ```rust
 let engine = product.build_engine(&grid, &rates);
-let results: Vec<Result<Invoice, BillingError>> = engine.bill_batch(
+let results: Vec<Result<Invoice, EngineError>> = engine.bill_batch(
     customers.into_iter().map(|(ctx, quantities)| (ctx, quantities)).collect()
 );
 ```

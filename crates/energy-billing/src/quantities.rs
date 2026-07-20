@@ -454,6 +454,13 @@ pub struct EnergyShareMeterInput {
 pub struct Quantities {
     /// Electricity consumption (STROM, WAERMEPUMPE, WALLBOX).
     pub electricity: Option<MeterInput>,
+
+    /// §14a Modul 2 — the controllable device's energy per Tarifstufe.
+    ///
+    /// The Netzbetreiber's time windows, not the supplier's HT/NT: the two
+    /// gratings are set by different parties and rarely coincide, which is why
+    /// this is not derived from `MeterInput`'s Zweitarif split.
+    pub sect14a_modul2: Option<Sect14aModul2Verbrauch>,
     /// Natural gas consumption (GAS).
     pub gas: Option<GasMeterInput>,
     /// District heat / Fernwärme (WAERME).
@@ -764,6 +771,23 @@ mod tests {
         let sum: Decimal = allocs.iter().map(|(_, k)| k).sum();
         assert_eq!(sum, total);
     }
+}
+
+// ── Sect14aModul2Verbrauch ────────────────────────────────────────────────────
+
+/// Energy per §14a Modul 2 Tarifstufe (BK6-22-300 Anlage 2 §2).
+///
+/// All three bands are present by construction — a Modul 2 metering
+/// configuration reports every window, and a zero band is a real zero, not an
+/// absent one.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+pub struct Sect14aModul2Verbrauch {
+    /// Hochtarif energy in kWh.
+    pub ht_kwh: Decimal,
+    /// Standardtarif energy in kWh.
+    pub st_kwh: Decimal,
+    /// Niedertarif energy in kWh.
+    pub nt_kwh: Decimal,
 }
 
 // ── Abschlagsplan ─────────────────────────────────────────────────────────────

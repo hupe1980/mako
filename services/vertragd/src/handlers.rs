@@ -22,14 +22,15 @@ use crate::{
         deactivate_identitaet_by_sub, derive_vertrag_status, earliest_kuendigungsdatum,
         extract_sub_from_bearer, fetch_identitaet_by_sub, fetch_komponente, fetch_kunde,
         fetch_kunde_by_sub, fetch_person, fetch_preisgarantie, fetch_vertrag,
-        find_expiring_vertraege, gdpr_export, idempotent_event, insert_rahmenvertrag,
-        insert_versorgungsvertrag, list_aktive_malo_ids, list_all_rahmenvertraege,
-        list_identitaeten, list_komponenten, list_kunden, list_offene_vertraege,
-        list_portfolio_by_kunde, list_rahmenvertraege_by_kunde, list_rahmenvertrag_malos,
-        list_versorgungsvertraege_by_rahmenvertrag, list_vertraege_by_kunde,
-        store_pending_tarifwechsel, storniere_vertrag, update_komponente_product,
-        update_komponente_status, update_kunde, update_letzter_login, update_vertrag_status,
-        upsert_identitaet, upsert_kunde, upsert_person, upsert_preisgarantie, widerruf_kuendigung,
+        fetch_vertrag_by_malo, find_expiring_vertraege, gdpr_export, idempotent_event,
+        insert_rahmenvertrag, insert_versorgungsvertrag, list_aktive_malo_ids,
+        list_all_rahmenvertraege, list_identitaeten, list_komponenten, list_kunden,
+        list_offene_vertraege, list_portfolio_by_kunde, list_rahmenvertraege_by_kunde,
+        list_rahmenvertrag_malos, list_versorgungsvertraege_by_rahmenvertrag,
+        list_vertraege_by_kunde, store_pending_tarifwechsel, storniere_vertrag,
+        update_komponente_product, update_komponente_status, update_kunde, update_letzter_login,
+        update_vertrag_status, upsert_identitaet, upsert_kunde, upsert_person,
+        upsert_preisgarantie, widerruf_kuendigung,
     },
 };
 
@@ -277,6 +278,47 @@ pub async fn get_vertrag(
         Ok(Some(v)) => {
             let komp = list_komponenten(&pool, id).await.unwrap_or_default();
             Json(serde_json::json!({ "vertrag": v, "komponenten": komp })).into_response()
+        }
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/vertraege/by-malo/{malo_id}` — the active contract behind a MaLo.
+///
+/// The lookup `billingd` uses to state §40 Abs. 1 EnWG contract facts on the
+/// invoice. Besides the raw contract row, the response computes the next
+/// possible Kündigungstermin as of today:
+///
+/// - unbefristet: today plus the Kündigungsfrist;
+/// - befristet, notice still possible: the Vertragsende;
+/// - befristet with auto-renewal, notice window passed: today plus one month —
+///   after an automatic renewal, §309 Nr. 9 lit. b BGB caps the notice period
+///   at one month;
+/// - befristet without renewal, notice window passed: the Vertragsende (the
+///   contract ends then regardless).
+pub async fn get_vertrag_by_malo(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(malo_id): Path<String>,
+) -> impl IntoResponse {
+    match fetch_vertrag_by_malo(&pool, &malo_id, &cfg.tenant).await {
+        Ok(Some((vertrag, komponente))) => {
+            let today = time::OffsetDateTime::now_utc().date();
+            let mit_frist = earliest_kuendigungsdatum(today, vertrag.kuendigungsfrist_monate);
+            let naechstmoeglicher_kuendigungstermin = match vertrag.vertragsende {
+                Some(ende) if mit_frist <= ende => ende,
+                Some(_) if vertrag.auto_renewal => earliest_kuendigungsdatum(today, 1),
+                Some(ende) => ende,
+                None => mit_frist,
+            };
+            Json(serde_json::json!({
+                "vertrag": vertrag,
+                "komponente": komponente,
+                "naechstmoeglicher_kuendigungstermin":
+                    naechstmoeglicher_kuendigungstermin.to_string(),
+            }))
+            .into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),

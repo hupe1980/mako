@@ -34,6 +34,31 @@ pub struct Verbrauchshistorie {
     pub kundengruppe: Option<String>,
 }
 
+// ── Vertragsinformationen ─────────────────────────────────────────────────────
+
+/// §40 Abs. 1 EnWG — contract facts the invoice must state.
+///
+/// Vertragsdauer, Kündigungsfrist, the next possible Kündigungstermin and the
+/// next Abrechnungstermin are invoice *contents*, not calculation inputs: they
+/// change no amount, but an electricity or gas invoice without them is
+/// incomplete under §40. Typed here so billingd can source them from vertragd
+/// and the engine can emit them without either side inventing prose.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct Vertragsinformationen {
+    /// Contract term as displayed, e.g. `"24 Monate"` or `"unbefristet"`.
+    #[serde(default)]
+    pub vertragsdauer: Option<String>,
+    /// Notice period as displayed, e.g. `"6 Wochen zum Vertragsende"`.
+    #[serde(default)]
+    pub kuendigungsfrist: Option<String>,
+    /// Next date the customer could terminate to.
+    #[serde(default)]
+    pub naechstmoeglicher_kuendigungstermin: Option<time::Date>,
+    /// Next scheduled Abrechnungstermin.
+    #[serde(default)]
+    pub naechster_abrechnungstermin: Option<time::Date>,
+}
+
 // ── InvoiceType ───────────────────────────────────────────────────────────────
 
 /// Whether this is an initial invoice, a correction, a cancellation, or a final settlement.
@@ -322,8 +347,9 @@ impl AbschlagDeduction {
     ///
     /// # Errors
     ///
-    /// Returns [`billing::BillingError`] if the amounts overflow [`billing::EuroAmount`].
-    pub fn to_advance_payment(&self) -> Result<billing::AdvancePayment, billing::BillingError> {
+    /// Returns [`EngineError::Arithmetic`](crate::EngineError::Arithmetic) if
+    /// the amounts overflow [`billing::EuroAmount`].
+    pub fn to_advance_payment(&self) -> Result<billing::AdvancePayment, crate::EngineError> {
         let category = if self.ust_satz.is_zero() {
             billing::TaxCategory::ZeroRated
         } else {
@@ -373,6 +399,139 @@ pub enum SettlementForm {
     Restrechnung,
 }
 
+// ── BillingPeriod ─────────────────────────────────────────────────────────────
+
+/// A validated billing period — first and last day, both inclusive.
+///
+/// The constructor refuses `from > to`, so an inverted period is
+/// unrepresentable everywhere downstream: no provider, no pro-rata helper,
+/// no JSON assembly ever needs to re-check the ordering.
+///
+/// Deserialization runs through the same validation
+/// (`#[serde(try_from = …)]`), so a period arriving over the wire holds the
+/// same invariant as one built in code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "PeriodEndpoints", into = "PeriodEndpoints")]
+pub struct BillingPeriod {
+    from: time::Date,
+    to: time::Date,
+}
+
+/// Serde carrier for [`BillingPeriod`] — validation happens in `TryFrom`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PeriodEndpoints {
+    from: time::Date,
+    to: time::Date,
+}
+
+impl TryFrom<PeriodEndpoints> for BillingPeriod {
+    type Error = crate::EngineError;
+    fn try_from(p: PeriodEndpoints) -> Result<Self, Self::Error> {
+        Self::new(p.from, p.to)
+    }
+}
+
+impl From<BillingPeriod> for PeriodEndpoints {
+    fn from(p: BillingPeriod) -> Self {
+        Self {
+            from: p.from,
+            to: p.to,
+        }
+    }
+}
+
+impl BillingPeriod {
+    /// Build a period from first and last day (both inclusive).
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::InvalidPeriod`](crate::EngineError::InvalidPeriod) when `from > to`.
+    pub fn new(from: time::Date, to: time::Date) -> Result<Self, crate::EngineError> {
+        if from > to {
+            return Err(crate::EngineError::InvalidPeriod { from, to });
+        }
+        Ok(Self { from, to })
+    }
+
+    /// First day of the period (inclusive).
+    #[must_use]
+    pub const fn from(self) -> time::Date {
+        self.from
+    }
+
+    /// Last day of the period (inclusive).
+    #[must_use]
+    pub const fn to(self) -> time::Date {
+        self.to
+    }
+
+    /// Number of calendar days, inclusive of both endpoints. Always ≥ 1.
+    #[must_use]
+    pub fn days(self) -> i64 {
+        (self.to - self.from).whole_days() + 1
+    }
+
+    /// Whether the given date falls inside the period.
+    #[must_use]
+    pub fn contains(self, date: time::Date) -> bool {
+        self.from <= date && date <= self.to
+    }
+}
+
+impl Default for BillingPeriod {
+    /// Placeholder single-day period at `Date::MIN` — used only by
+    /// `BillingContext::default()`. Always set an explicit period before
+    /// billing.
+    fn default() -> Self {
+        Self {
+            from: time::Date::MIN,
+            to: time::Date::MIN,
+        }
+    }
+}
+
+impl std::fmt::Display for BillingPeriod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}..{}", self.from, self.to)
+    }
+}
+
+// ── Vertragsart ───────────────────────────────────────────────────────────────
+
+/// The contractual regime the delivery runs under — drives which invoice
+/// disclosures and period limits apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Vertragsart {
+    /// Freely negotiated supply contract (§41 EnWG). The default.
+    #[default]
+    Sondervertrag,
+
+    /// Grundversorgung (§36 EnWG, StromGVV/GasGVV): the published Allgemeine
+    /// Preise apply, termination per §20 StromGVV/GasGVV is two weeks.
+    /// Emitted as the `vertragsart` ZusatzAttribut so the invoice states the
+    /// regime the prices come from.
+    Grundversorgung,
+
+    /// Ersatzversorgung (§38 EnWG): the fallback supply when energy is drawn
+    /// without an assignable contract. Ends by law after **three months** at
+    /// the latest (§38 Abs. 2 S. 2 EnWG) — the engine refuses to bill a
+    /// longer Ersatzversorgung period, because such a supply cannot exist.
+    Ersatzversorgung,
+}
+
+impl Vertragsart {
+    /// The label emitted as the `vertragsart` ZusatzAttribut.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Sondervertrag => "SONDERVERTRAG",
+            Self::Grundversorgung => "GRUNDVERSORGUNG",
+            Self::Ersatzversorgung => "ERSATZVERSORGUNG",
+        }
+    }
+}
+
 // ── BillingContext ────────────────────────────────────────────────────────────
 
 /// Immutable billing metadata — the *context* for one invoice generation run.
@@ -392,7 +551,7 @@ pub enum SettlementForm {
 /// ## Example
 ///
 /// ```rust
-/// use energy_billing::{BillingContext, InvoiceType, RegulatoryRates, AbschlagDeduction};
+/// use energy_billing::{AbschlagDeduction, BillingContext, BillingPeriod, InvoiceType, RegulatoryRates};
 /// use time::macros::date;
 /// use rust_decimal::dec;
 ///
@@ -400,8 +559,7 @@ pub enum SettlementForm {
 ///     malo_id: "51238696781".to_owned(),
 ///     lf_mp_id: "9900000000001".to_owned(),
 ///     rechnungsnummer: "R2026-001".to_owned(),
-///     period_from: date!(2026-01-01),
-///     period_to: date!(2026-12-31),
+///     period: BillingPeriod::new(date!(2026-01-01), date!(2026-12-31)).unwrap(),
 ///     invoice_type: InvoiceType::Final,
 ///     regulatory_rates: RegulatoryRates::default(),
 ///     contract_id: None,
@@ -417,7 +575,7 @@ pub enum SettlementForm {
 /// };
 /// assert_eq!(ctx.total_abschlage_eur(), dec!(120.00));
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct BillingContext {
     /// 11-digit Marktlokations-ID of the delivery point.
     pub malo_id: String,
@@ -431,14 +589,18 @@ pub struct BillingContext {
     /// `{prefix}-{year}-{sequence}` (e.g. `"INV-2026-000001"`).
     pub rechnungsnummer: String,
 
-    /// First day of the billing period (inclusive).
-    pub period_from: time::Date,
-
-    /// Last day of the billing period (inclusive).
-    pub period_to: time::Date,
+    /// The billing period — validated, `from > to` unrepresentable.
+    pub period: BillingPeriod,
 
     /// Invoice type: initial, correction, cancellation, or final settlement.
     pub invoice_type: InvoiceType,
+
+    /// The contractual regime — Sondervertrag, Grundversorgung, or
+    /// Ersatzversorgung. Emitted as the `vertragsart` ZusatzAttribut; an
+    /// Ersatzversorgung period longer than three months blocks the run
+    /// (§38 Abs. 2 S. 2 EnWG).
+    #[serde(default)]
+    pub vertragsart: Vertragsart,
 
     /// How advances are accounted for on a settling invoice.
     ///
@@ -492,16 +654,22 @@ pub struct BillingContext {
     #[serde(default)]
     pub verbrauchshistorie: Option<Verbrauchshistorie>,
 
-    /// §41 EnWG Abs. 1 Nr. 8 + §42 EnWG — Energiemix description.
-    ///
-    /// Must appear on electricity invoices. Can be the product's certified mix
-    /// from a Herkunftsnachweis (HKN) or the national residual mix (Restmix).
-    /// Injected as a `ZusatzAttribut` with name `"energiemix"`.
-    ///
-    /// ## Example
-    /// `"100% Ernäuerbarer Energien (EE-Strom, HKN-zertifiziert, Österreich)"`
+    /// §40 Abs. 1 EnWG contract facts, emitted as ZusatzAttribute.
     #[serde(default)]
-    pub energiemix: Option<String>,
+    pub vertragsinformationen: Option<Vertragsinformationen>,
+
+    /// §42 EnWG — Stromkennzeichnung, structured.
+    ///
+    /// Fuel-mix percentages, the specific CO₂ emissions (§42 Abs. 2 Nr. 2 —
+    /// mandatory on every electricity invoice), and HKN certification. Emitted
+    /// as the `stromkennzeichnung` ZusatzAttribut with the structure intact;
+    /// prose belongs in [`crate::tariff::EnergieQuellen::beschreibung`].
+    ///
+    /// This replaces a free-text `energiemix` string that could not carry the
+    /// CO₂ figure the law names explicitly — the structured type existed on the
+    /// product all along and never reached the invoice.
+    #[serde(default)]
+    pub energiequellen: Option<crate::tariff::EnergieQuellen>,
 
     /// Minimum invoice amount (brutto) in EUR.
     ///
@@ -555,40 +723,25 @@ pub struct BillingContext {
     pub kundenkategorie: CustomerKategorie,
 }
 
-impl Default for BillingContext {
-    fn default() -> Self {
-        Self {
-            malo_id: String::new(),
-            lf_mp_id: String::new(),
-            rechnungsnummer: String::new(),
-            period_from: time::Date::MIN,
-            period_to: time::Date::MIN,
-            invoice_type: InvoiceType::default(),
-            settlement_form: SettlementForm::default(),
-            regulatory_rates: RegulatoryRates::default(),
-            contract_id: None,
-            vertragsbeginn: None,
-            vertragsende: None,
-            zaehler_id: None,
-            abschlage: Vec::new(),
-            verbrauchshistorie: None,
-            energiemix: None,
-            minimum_invoice_eur_brutto: None,
-            nb_mp_id: None,
-            billing_run_id: None,
-            kundenkategorie: CustomerKategorie::default(),
-        }
-    }
-}
-
 impl BillingContext {
+    /// First day of the billing period (inclusive).
+    #[must_use]
+    pub const fn period_from(&self) -> time::Date {
+        self.period.from()
+    }
+
+    /// Last day of the billing period (inclusive).
+    #[must_use]
+    pub const fn period_to(&self) -> time::Date {
+        self.period.to()
+    }
+
     /// Number of calendar days in the billing period.
     ///
     /// Used for Grundpreis (daily rate × days) and pro-rata calculations.
     #[must_use]
     pub fn days(&self) -> i64 {
-        let diff = self.period_to - self.period_from;
-        diff.whole_days() + 1 // inclusive of both endpoints
+        self.period.days()
     }
 
     /// Pro-rata fraction of the billing period actually billable.
@@ -605,12 +758,11 @@ impl BillingContext {
     /// # Example
     ///
     /// ```rust
-    /// use energy_billing::{BillingContext, InvoiceType, RegulatoryRates};
+    /// use energy_billing::{BillingContext, BillingPeriod, InvoiceType, RegulatoryRates};
     /// use time::macros::date;
     ///
     /// let ctx = BillingContext {
-    ///     period_from:    date!(2026-01-01),
-    ///     period_to:      date!(2026-01-31),  // 31 days
+    ///     period: BillingPeriod::new(date!(2026-01-01), date!(2026-01-31)).unwrap(),
     ///     vertragsbeginn: Some(date!(2026-01-16)), // contract started mid-month
     ///     ..Default::default()
     /// };
@@ -627,14 +779,14 @@ impl BillingContext {
 
         // Effective start: max(period_from, vertragsbeginn)
         let effective_from = match self.vertragsbeginn {
-            Some(vb) if vb > self.period_from => vb,
-            _ => self.period_from,
+            Some(vb) if vb > self.period_from() => vb,
+            _ => self.period_from(),
         };
 
         // Effective end: min(period_to, vertragsende)
         let effective_to = match self.vertragsende {
-            Some(ve) if ve < self.period_to => ve,
-            _ => self.period_to,
+            Some(ve) if ve < self.period_to() => ve,
+            _ => self.period_to(),
         };
 
         let billable = (effective_to - effective_from).whole_days() + 1;
@@ -671,11 +823,10 @@ impl BillingContext {
     /// ## Example — Grundpreis pro-rata
     ///
     /// ```rust
-    /// # use energy_billing::BillingContext;
+    /// # use energy_billing::{BillingContext, BillingPeriod};
     /// # use time::macros::date;
     /// let ctx = BillingContext {
-    ///     period_from: date!(2026-01-01),
-    ///     period_to:   date!(2026-01-31),
+    ///     period: BillingPeriod::new(date!(2026-01-01), date!(2026-01-31)).unwrap(),
     ///     vertragsbeginn: Some(date!(2026-01-16)),
     ///     ..Default::default()
     /// };
@@ -692,13 +843,13 @@ impl BillingContext {
         // Effective start: max(period_from, vertragsbeginn)
         let effective_from = self
             .vertragsbeginn
-            .filter(|&vb| vb > self.period_from)
-            .unwrap_or(self.period_from);
+            .filter(|&vb| vb > self.period_from())
+            .unwrap_or(self.period_from());
         // Effective end: min(period_to, vertragsende)
         let effective_to = self
             .vertragsende
-            .filter(|&ve| ve < self.period_to)
-            .unwrap_or(self.period_to);
+            .filter(|&ve| ve < self.period_to())
+            .unwrap_or(self.period_to());
         let active = ((effective_to - effective_from).whole_days() + 1).max(0) as u32;
         (active.min(total), total)
     }
@@ -712,8 +863,7 @@ mod tests {
 
     fn base_ctx() -> BillingContext {
         BillingContext {
-            period_from: date!(2026 - 01 - 01),
-            period_to: date!(2026 - 01 - 31),
+            period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
             ..Default::default()
         }
     }

@@ -24,10 +24,165 @@ use crate::{
     xrechnung::{build_zugferd_cii_xml, info_from_rechnung_json},
 };
 use energy_billing::{
-    BillingContext, DynamicInterval, EegMeterInput, EmobilityMeterInput, GasMeterInput, GridInput,
-    HemsMeterInput, Invoice, InvoiceType, MeterInput, Product, Quantities, RegulatoryRates,
+    BillingContext, BillingPeriod, BillingPosition, BillingProvider as _, DynamicInterval,
+    EegMeterInput, EmobilityMeterInput, GasMeterInput, GridInput, HemsMeterInput, Invoice,
+    InvoiceType, MeterInput, MwStProvider, PositionCategory, Product, Quantities, RegulatoryRates,
     ServiceMeterInput, SolarMeterInput, WaermeMeterInput, negate_rechnung_json_for_correction,
 };
+
+/// Build a VPP settlement through the engine's canonical invoice path.
+///
+/// The VPP paths hand-assembled BO4E JSON with their own inline VAT — a second
+/// VAT implementation whose Steuerkennzeichen was hardcoded `UST_19` even when
+/// the contract overrode the rate. Positions plus the engine's tax provider
+/// plus `to_rechnung_json` replace all of it: steuerbetraege, traces, and the
+/// ABSCHLAGSRECHNUNG rechnungsart come out the same way every other invoice
+/// does.
+///
+/// VPP-specific references (tx-id, SR-ID, dispatch process ids) are appended as
+/// document-level ZusatzAttribute after rendering.
+#[allow(clippy::too_many_arguments)]
+fn build_vpp_invoice(
+    malo_id: &str,
+    lf_mp_id: &str,
+    rechnungsnummer: String,
+    period_from: time::Date,
+    period_to: time::Date,
+    mwst_rate: rust_decimal::Decimal,
+    positions: Vec<BillingPosition>,
+    extra_attrs: Vec<serde_json::Value>,
+) -> anyhow::Result<(Invoice, serde_json::Value)> {
+    let ctx = BillingContext {
+        malo_id: malo_id.to_owned(),
+        lf_mp_id: lf_mp_id.to_owned(),
+        rechnungsnummer,
+        period: BillingPeriod::new(period_from, period_to)
+            .expect("parse_period guarantees from < to"),
+        invoice_type: InvoiceType::AdvancePayment,
+        regulatory_rates: RegulatoryRates {
+            mwst_rate,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut all = positions;
+    let tax = MwStProvider::new(mwst_rate)
+        .bill(&ctx, &Quantities::default(), &all)
+        .map_err(|e| anyhow::anyhow!("VPP tax pass failed: {e}"))?;
+    all.extend(tax);
+    let invoice = Invoice::from_positions(ctx, all, vec![]);
+    let mut json = invoice.to_rechnung_json();
+    if let Some(attrs) = json
+        .get_mut("zusatzAttribute")
+        .and_then(|a| a.as_array_mut())
+    {
+        attrs.extend(extra_attrs);
+    } else if !extra_attrs.is_empty() {
+        json["zusatzAttribute"] = serde_json::Value::Array(extra_attrs);
+    }
+    Ok((invoice, json))
+}
+
+/// Assemble a consolidated document (Sammelrechnung, GGV-Sammel) from per-MaLo
+/// engine invoices.
+///
+/// The per-MaLo runs stay stored as calculation records; the consolidated
+/// document is the invoice the counterparty receives, so its VAT is computed
+/// **once** over the combined base per rate — not summed from the per-MaLo
+/// roundings, which can drift from a single consistent tax document by cents.
+/// Concretely: the sub-invoices' Tax positions are stripped, the engine's tax
+/// provider re-runs over the concatenated base (grouping by each position's
+/// effective rate), and `to_rechnung_json` renders totals, steuerbetraege and
+/// rechnungsdatum the same way every other invoice gets them.
+///
+/// Each rendered position carries the `marktlokationsId` it came from; the
+/// document-level tax positions carry none, because they belong to the whole
+/// document.
+#[allow(clippy::too_many_arguments)]
+fn build_aggregate_invoice(
+    subject_id: &str,
+    lf_mp_id: &str,
+    rechnungsnummer: String,
+    period_from: time::Date,
+    period_to: time::Date,
+    rates: RegulatoryRates,
+    parts: Vec<(String, Invoice)>,
+    extra_attrs: Vec<serde_json::Value>,
+) -> anyhow::Result<(Invoice, serde_json::Value)> {
+    let ctx = BillingContext {
+        malo_id: subject_id.to_owned(),
+        lf_mp_id: lf_mp_id.to_owned(),
+        rechnungsnummer,
+        period: BillingPeriod::new(period_from, period_to)
+            .expect("parse_period guarantees from < to"),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates,
+        ..Default::default()
+    };
+
+    let mut base: Vec<BillingPosition> = Vec::new();
+    let mut warnings = Vec::new();
+    // (malo_id, number of positions contributed) — for the JSON annotation.
+    let mut slices: Vec<(String, usize)> = Vec::with_capacity(parts.len());
+    for (malo_id, invoice) in parts {
+        let non_tax: Vec<BillingPosition> = invoice
+            .positions
+            .into_iter()
+            .filter(|p| p.category != PositionCategory::Tax)
+            .collect();
+        slices.push((malo_id, non_tax.len()));
+        base.extend(non_tax);
+        warnings.extend(invoice.warnings);
+    }
+
+    let tax = MwStProvider::new(ctx.regulatory_rates.mwst_rate)
+        .bill(&ctx, &Quantities::default(), &base)
+        .map_err(|e| anyhow::anyhow!("aggregate tax pass failed: {e}"))?;
+    base.extend(tax);
+    let aggregate = Invoice::from_positions(ctx, base, warnings);
+
+    let mut json = aggregate.to_rechnung_json();
+    if let Some(pos) = json
+        .get_mut("rechnungspositionen")
+        .and_then(|p| p.as_array_mut())
+    {
+        let mut idx = 0usize;
+        for (malo_id, count) in &slices {
+            for p in pos.iter_mut().skip(idx).take(*count) {
+                if let Some(obj) = p.as_object_mut() {
+                    obj.insert("marktlokationsId".to_owned(), serde_json::json!(malo_id));
+                }
+            }
+            idx += count;
+        }
+    }
+    if let Some(attrs) = json
+        .get_mut("zusatzAttribute")
+        .and_then(|a| a.as_array_mut())
+    {
+        attrs.extend(extra_attrs);
+    } else if !extra_attrs.is_empty() {
+        json["zusatzAttribute"] = serde_json::Value::Array(extra_attrs);
+    }
+    Ok((aggregate, json))
+}
+
+/// Structured JSON error body for a typed engine error.
+///
+/// Carries the stable machine-readable code, the display message, and — for a
+/// blocked validation — every warning the engine collected, so a caller can
+/// act on `MODUL2_AND_FLAT_NNE` without parsing prose.
+fn engine_error_body(context: &str, e: &energy_billing::EngineError) -> String {
+    serde_json::json!({
+        "error": {
+            "code": e.code(),
+            "context": context,
+            "message": e.to_string(),
+            "warnings": e.blocking_warnings(),
+        }
+    })
+    .to_string()
+}
 
 // ── Request bodies ─────────────────────────────────────────────────────────────
 
@@ -85,12 +240,14 @@ pub struct CalculateRequest {
 /// 5. Dispatch to category-specific pure calculator
 /// 6. Persist `billing_records` (idempotent on same malo+period+product)
 /// 7. Emit `de.billing.rechnung.erstellt` CloudEvent
+#[allow(clippy::too_many_arguments)]
 pub async fn post_calculate(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Extension(tarifbd): Extension<Arc<TarifbdClient>>,
     Extension(edmd): Extension<Arc<EdmdClient>>,
     Extension(marktd): Extension<Arc<mako_markt::marktd_client::MarktdClient>>,
+    Extension(vertragd): Extension<Arc<VertragdClient>>,
     Path(malo_id): Path<String>,
     Json(req): Json<CalculateRequest>,
 ) -> impl IntoResponse {
@@ -104,7 +261,7 @@ pub async fn post_calculate(
         Err(e) => return e.into_response(),
     };
 
-    let rates = cfg.regulatory_rates();
+    let rates = cfg.regulatory_rates_for_period(period_from, period_to);
     let rechnungsnummer = req
         .rechnungsnummer
         .clone()
@@ -120,6 +277,8 @@ pub async fn post_calculate(
         &rates,
         &edmd,
         &marktd,
+        &tarifbd,
+        &vertragd,
     )
     .await
     {
@@ -129,6 +288,7 @@ pub async fn post_calculate(
 
     let record_id = match insert_billing_record(
         &pool,
+        &cfg.tenant,
         &malo_id,
         &req.lf_mp_id,
         tariff.product_code().unwrap_or(tariff.category_str()),
@@ -174,12 +334,14 @@ pub async fn post_calculate(
 }
 
 /// `POST /api/v1/billing/{malo_id}/preview` — dry-run, no persist, no CloudEvent.
+#[allow(clippy::too_many_arguments)]
 pub async fn post_preview(
     Extension(_pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Extension(tarifbd): Extension<Arc<TarifbdClient>>,
     Extension(edmd): Extension<Arc<EdmdClient>>,
     Extension(marktd): Extension<Arc<mako_markt::marktd_client::MarktdClient>>,
+    Extension(vertragd): Extension<Arc<VertragdClient>>,
     Path(malo_id): Path<String>,
     Json(req): Json<CalculateRequest>,
 ) -> impl IntoResponse {
@@ -191,7 +353,7 @@ pub async fn post_preview(
         Ok(t) => t,
         Err(e) => return e.into_response(),
     };
-    let rates = cfg.regulatory_rates();
+    let rates = cfg.regulatory_rates_for_period(period_from, period_to);
     let rechnungsnummer = req
         .rechnungsnummer
         .clone()
@@ -206,6 +368,8 @@ pub async fn post_preview(
         &rates,
         &edmd,
         &marktd,
+        &tarifbd,
+        &vertragd,
     )
     .await
     {
@@ -231,6 +395,7 @@ pub async fn post_preview(
 // ── Category dispatch via BillingEngine ──────────────────────────────────────
 
 /// Build the `Quantities` for a billing request by resolving meter data.
+#[allow(clippy::too_many_arguments)]
 async fn build_quantities(
     tariff: &Product,
     req: &CalculateRequest,
@@ -239,6 +404,7 @@ async fn build_quantities(
     period_to: time::Date,
     edmd: &Arc<EdmdClient>,
     marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
+    tarifbd: &Arc<TarifbdClient>,
 ) -> Result<Quantities, (StatusCode, String)> {
     let mut q = Quantities {
         eeg_gutschrift_eur: req.eeg_gutschrift_eur,
@@ -255,7 +421,7 @@ async fn build_quantities(
             if is_dynamic {
                 q.dynamic_intervals =
                     fetch_dynamic_intervals(malo_id, period_from, period_to, edmd).await;
-                q.dynamic_epex_prices = fetch_epex_prices(period_from, period_to, marktd).await;
+                q.dynamic_epex_prices = fetch_epex_prices(period_from, period_to, tarifbd).await;
             } else {
                 q.electricity =
                     Some(resolve_strom_meter(req, malo_id, period_from, period_to, edmd).await?);
@@ -308,6 +474,8 @@ async fn dispatch_invoice(
     rates: &RegulatoryRates,
     edmd: &Arc<EdmdClient>,
     marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
+    tarifbd: &Arc<TarifbdClient>,
+    vertragd: &Arc<VertragdClient>,
 ) -> Result<Invoice, (StatusCode, String)> {
     // BUNDLE: requires component recursion — not yet supported
     if tariff.category_str() == "BUNDLE" {
@@ -319,24 +487,74 @@ async fn dispatch_invoice(
     }
 
     let grid = req.grid.clone().unwrap_or_default();
-    let quantities =
-        build_quantities(tariff, req, malo_id, period_from, period_to, edmd, marktd).await?;
+    let quantities = build_quantities(
+        tariff,
+        req,
+        malo_id,
+        period_from,
+        period_to,
+        edmd,
+        marktd,
+        tarifbd,
+    )
+    .await?;
 
     // Generate a unique billing run ID for audit trail and duplicate detection.
     // Stored on the Invoice and propagated to the billing_records table.
     let run_id = Uuid::new_v4().to_string();
 
+    // §40 Abs. 1 EnWG — the contract facts the invoice must state live in
+    // vertragd, not in the tariff. Soft dependency: an unreachable vertragd
+    // or an uncontracted MaLo degrades to an invoice without them, logged.
+    let vertrag = match vertragd.get_vertrag_by_malo(malo_id).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(%malo_id, error = %e, "billingd: vertragd lookup failed — invoice will lack §40 contract facts");
+            None
+        }
+    };
+    let vertragsinformationen = vertrag.as_ref().map(|v| {
+        energy_billing::Vertragsinformationen {
+            vertragsdauer: Some(match v.vertrag.vertragsende {
+                Some(ende) => format!("{} bis {ende}", v.vertrag.vertragsbeginn),
+                None => format!("unbefristet seit {}", v.vertrag.vertragsbeginn),
+            }),
+            kuendigungsfrist: Some(match v.vertrag.kuendigungsfrist_monate {
+                1 => "1 Monat".to_owned(),
+                n => format!("{n} Monate"),
+            }),
+            naechstmoeglicher_kuendigungstermin: v.naechstmoeglicher_kuendigungstermin,
+            // The next settlement follows the cadence of this one: a period of
+            // the same length, starting the day after this one ends.
+            naechster_abrechnungstermin: period_to.checked_add(time::Duration::days(
+                (period_to - period_from).whole_days() + 1,
+            )),
+        }
+    });
+
     let ctx = BillingContext {
         malo_id: malo_id.to_owned(),
         lf_mp_id: req.lf_mp_id.clone(),
         rechnungsnummer: rechnungsnummer.to_owned(),
-        period_from,
-        period_to,
+        period: BillingPeriod::new(period_from, period_to)
+            .expect("parse_period guarantees from < to"),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
-        contract_id: None,
+        contract_id: vertrag.as_ref().map(|v| {
+            v.vertrag
+                .vertrags_nr
+                .clone()
+                .unwrap_or_else(|| v.vertrag.id.clone())
+        }),
+        // §41 EnWG pro-rata: clip the billable days to the contract term.
+        vertragsbeginn: vertrag.as_ref().map(|v| v.vertrag.vertragsbeginn),
+        vertragsende: vertrag.as_ref().and_then(|v| v.vertrag.vertragsende),
+        vertragsinformationen,
         // Propagate minimum invoice from product definition (tarifbd) to billing context.
         minimum_invoice_eur_brutto: tariff.minimum_invoice_eur_brutto(),
+        // §42 EnWG — the product's Stromkennzeichnung, structured, so the
+        // invoice can state the fuel mix and the mandatory CO₂ figure.
+        energiequellen: tariff.energiequellen().cloned(),
         // §41 Abs. 1 Nr. 5 EnWG — Netzbetreiber identification on invoice.
         nb_mp_id: req.nb_mp_id.clone(),
         // Audit trail: unique run ID links DB record to calculation output.
@@ -346,9 +564,36 @@ async fn dispatch_invoice(
 
     let engine = tariff.build_engine(&grid, rates);
 
-    engine
-        .bill(ctx, &quantities)
-        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))
+    let mut invoice = engine.bill(ctx, &quantities).map_err(|e| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            engine_error_body(malo_id, &e),
+        )
+    })?;
+
+    // §40c EnWG — Abrechnungen must be issued within six weeks of the end of
+    // the Abrechnungszeitraum (final invoices: of the end of supply). The
+    // engine is clock-free by design, so the deadline is checked here, where a
+    // clock legitimately exists: generation time is what the law measures.
+    let deadline = period_to + time::Duration::weeks(6);
+    let today = time::OffsetDateTime::now_utc().date();
+    if today > deadline {
+        tracing::warn!(
+            %malo_id,
+            %period_to,
+            %deadline,
+            "billingd: invoice issued after the §40c EnWG six-week deadline"
+        );
+        invoice.warnings.push(energy_billing::BillingWarning {
+            code: "SECT40C_DEADLINE_EXCEEDED",
+            severity: energy_billing::WarningSeverity::Warning,
+            message: format!(
+                "issued {today}, after the §40c EnWG deadline of {deadline} \
+                 (six weeks past the period end {period_to})"
+            ),
+        });
+    }
+    Ok(invoice)
 }
 
 /// Backward-compat shim: dispatch and return Invoice.
@@ -366,6 +611,8 @@ async fn dispatch_calculator(
     rates: &RegulatoryRates,
     edmd: &Arc<EdmdClient>,
     marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
+    tarifbd: &Arc<TarifbdClient>,
+    vertragd: &Arc<VertragdClient>,
 ) -> Result<Invoice, (StatusCode, String)> {
     dispatch_invoice(
         tariff,
@@ -377,6 +624,8 @@ async fn dispatch_calculator(
         rates,
         edmd,
         marktd,
+        tarifbd,
+        vertragd,
     )
     .await
 }
@@ -431,7 +680,9 @@ pub async fn get_xrechnung(
         Ok(None) => return (StatusCode::NOT_FOUND, "billing record not found").into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
-    let rates = cfg.regulatory_rates();
+    // The stored record's own period decides its rates — an XRechnung rendered
+    // for an old record must state the VAT rate that period was billed under.
+    let rates = cfg.regulatory_rates_for_period(row.period_from, row.period_to);
     let netto = row.total_netto_eur.unwrap_or_default();
     let brutto = row.total_brutto_eur.unwrap_or_default();
     let mwst = brutto - netto;
@@ -751,12 +1002,19 @@ async fn fetch_dynamic_intervals(
 async fn fetch_epex_prices(
     period_from: time::Date,
     period_to: time::Date,
-    marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
+    tarifbd: &Arc<TarifbdClient>,
 ) -> std::collections::HashMap<(i32, u8, u8, u8), rust_decimal::Decimal> {
-    // EPEX prices are fetched from tarifbd directly by tarifbd_client in the calling context.
-    // This function is a stub for future marktd-based price fetching.
-    let _ = (period_from, period_to, marktd);
-    std::collections::HashMap::new()
+    // tarifbd owns the imported EPEX day-ahead series. This was a stub returning
+    // an empty map, which made every §41a dynamic calculate run price all
+    // intervals at nothing — the client function existed the whole time and was
+    // dead code.
+    match tarifbd.get_hourly_epex_prices(period_from, period_to).await {
+        Ok(map) => map,
+        Err(e) => {
+            tracing::warn!(error = %e, "billingd: EPEX price fetch failed; dynamic intervals will lack prices");
+            std::collections::HashMap::new()
+        }
+    }
 }
 
 async fn emit_cloud_event(
@@ -892,6 +1150,7 @@ pub async fn post_correction(
 
     let correction_id = match insert_correction_record(
         &pool,
+        &cfg.tenant,
         &original.malo_id,
         &original.lf_mp_id,
         &original.product_code,
@@ -1109,8 +1368,8 @@ pub async fn post_tarifwechsel(
         malo_id: malo_id.clone(),
         lf_mp_id: req.lf_mp_id.clone(),
         rechnungsnummer: format!("{base_nr}-A"),
-        period_from,
-        period_to: period_a_to,
+        period: BillingPeriod::new(period_from, period_a_to)
+            .expect("switch date is validated inside the period"),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: (*rates).clone(),
         nb_mp_id: req.nb_mp_id.clone(),
@@ -1124,7 +1383,13 @@ pub async fn post_tarifwechsel(
     let engine_a = req.old_tariff.build_engine(&grid, &rates);
     let inv_a = match engine_a.bill(ctx_a, &quantities_a) {
         Ok(i) => i,
-        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                engine_error_body("tarifwechsel period A", &e),
+            )
+                .into_response();
+        }
     };
 
     // ── Sub-period B: switch_date → period_to ─────────────────────────────────
@@ -1133,8 +1398,8 @@ pub async fn post_tarifwechsel(
         malo_id: malo_id.clone(),
         lf_mp_id: req.lf_mp_id.clone(),
         rechnungsnummer: format!("{base_nr}-B"),
-        period_from: switch_date,
-        period_to,
+        period: BillingPeriod::new(switch_date, period_to)
+            .expect("switch date is validated inside the period"),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: (*rates).clone(),
         nb_mp_id: req.nb_mp_id.clone(),
@@ -1148,7 +1413,13 @@ pub async fn post_tarifwechsel(
     let engine_b = req.new_tariff.build_engine(&grid, &rates);
     let inv_b = match engine_b.bill(ctx_b, &quantities_b) {
         Ok(i) => i,
-        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                engine_error_body("tarifwechsel period B", &e),
+            )
+                .into_response();
+        }
     };
 
     // ── Merge via billing::merge_period_documents semantics ───────────────────
@@ -1166,6 +1437,7 @@ pub async fn post_tarifwechsel(
     );
     let record_id = match insert_billing_record(
         &pool,
+        &cfg.tenant,
         &malo_id,
         &req.lf_mp_id,
         &product_code,
@@ -1276,11 +1548,9 @@ pub async fn post_ggv_billing(
             std::collections::HashMap::new()
         };
 
-    let rates = cfg.regulatory_rates();
+    let rates = cfg.regulatory_rates_for_period(period_from, period_to);
     let mut tenant_results: Vec<serde_json::Value> = Vec::with_capacity(req.tenants.len());
-    let mut sammel_netto = rust_decimal::Decimal::ZERO;
-    let mut sammel_brutto = rust_decimal::Decimal::ZERO;
-    let mut sammel_positions: Vec<serde_json::Value> = Vec::new();
+    let mut parts: Vec<(String, Invoice)> = Vec::with_capacity(req.tenants.len());
 
     for tenant in &req.tenants {
         // Build Product — prefer request overrides, fall back to tarifbd lookup.
@@ -1381,8 +1651,8 @@ pub async fn post_ggv_billing(
             malo_id: tenant.malo_id.clone(),
             lf_mp_id: req.lf_mp_id.clone(),
             rechnungsnummer: rechnungsnummer.clone(),
-            period_from,
-            period_to,
+            period: BillingPeriod::new(period_from, period_to)
+                .expect("parse_period guarantees from < to"),
             invoice_type: InvoiceType::Initial,
             regulatory_rates: rates.clone(),
             contract_id: None,
@@ -1395,7 +1665,7 @@ pub async fn post_ggv_billing(
             Err(e) => {
                 return (
                     StatusCode::UNPROCESSABLE_ENTITY,
-                    format!("GGV tenant {}: {e}", tenant.malo_id),
+                    engine_error_body(&format!("GGV tenant {}", tenant.malo_id), &e),
                 )
                     .into_response();
             }
@@ -1403,6 +1673,7 @@ pub async fn post_ggv_billing(
 
         let record_id = match insert_billing_record(
             &pool,
+            &cfg.tenant,
             &tenant.malo_id,
             &req.lf_mp_id,
             tariff.product_code().unwrap_or("SOLAR_GGV"),
@@ -1419,14 +1690,6 @@ pub async fn post_ggv_billing(
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
 
-        sammel_netto += result.netto_eur;
-        sammel_brutto += result.brutto_eur;
-        if let Some(serde_json::Value::Array(pos)) =
-            result.to_rechnung_json().get("rechnungspositionen")
-        {
-            sammel_positions.extend(pos.clone());
-        }
-
         tenant_results.push(serde_json::json!({
             "record_id": record_id,
             "malo_id": tenant.malo_id,
@@ -1434,42 +1697,47 @@ pub async fn post_ggv_billing(
             "netto_eur": result.netto_eur,
             "brutto_eur": result.brutto_eur,
         }));
+        parts.push((tenant.malo_id.clone(), result));
     }
 
-    // Create consolidated SAMMEL record for the GGV installation.
+    // Consolidated SAMMEL document for the GGV installation — through the
+    // engine, like every other invoice: derived totals, per-rate VAT over the
+    // combined base, deterministic rechnungsdatum.
     let sammel_nr = format!("GGV-SAMMEL-{ggv_id}-{period_from}");
-    let sammel_rechnung = serde_json::json!({
-        "_typ": "RECHNUNG",
-        "rechnungsnummer": sammel_nr,
-        "rechnungsart": "ABSCHLAGSRECHNUNG",
-        "rechnungsdatum": time::OffsetDateTime::now_utc().date().to_string(),
-        "marktlokationsId": ggv_id,
-        "herausgeber": { "_typ": "MARKTTEILNEHMER", "marktpartnercode": req.lf_mp_id },
-        "rechnungsperiode": {
-            "_typ": "ZEITRAUM",
-            "startdatum": period_from.to_string(),
-            "enddatum": period_to.to_string()
-        },
-        "rechnungspositionen": sammel_positions,
-        "gesamtnetto": { "_typ": "BETRAG", "wert": sammel_netto.to_string(), "waehrung": "EUR" },
-        "gesamtbrutto": { "_typ": "BETRAG", "wert": sammel_brutto.to_string(), "waehrung": "EUR" },
-        "zusatzAttribute": [{
-            "_typ": "ZUSATZATTRIBUT",
-            "name": "ggv_id",
-            "wert": ggv_id
-        }, {
-            "_typ": "ZUSATZATTRIBUT",
-            "name": "tenant_count",
-            "wert": tenant_results.len().to_string()
-        }, {
-            "_typ": "ZUSATZATTRIBUT",
-            "name": "total_kwh",
-            "wert": total_kwh.to_string()
-        }]
-    });
+    let (sammel_invoice, sammel_rechnung) = match build_aggregate_invoice(
+        &ggv_id,
+        &req.lf_mp_id,
+        sammel_nr,
+        period_from,
+        period_to,
+        rates,
+        parts,
+        vec![
+            serde_json::json!({
+                "_typ": "ZUSATZ_ATTRIBUT",
+                "name": "ggv_id",
+                "wert": ggv_id
+            }),
+            serde_json::json!({
+                "_typ": "ZUSATZ_ATTRIBUT",
+                "name": "tenant_count",
+                "wert": tenant_results.len().to_string()
+            }),
+            serde_json::json!({
+                "_typ": "ZUSATZ_ATTRIBUT",
+                "name": "total_kwh",
+                "wert": total_kwh.to_string()
+            }),
+        ],
+    ) {
+        Ok(x) => x,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let (sammel_netto, sammel_brutto) = (sammel_invoice.netto_eur, sammel_invoice.brutto_eur);
 
     let sammel_id = match insert_sammelrechnung_record(
         &pool,
+        &cfg.tenant,
         &ggv_id,
         &req.lf_mp_id,
         period_from,
@@ -1604,55 +1872,36 @@ pub async fn post_vpp_billing(
         .mwst_rate_override
         .unwrap_or_else(|| cfg.regulatory_rates().mwst_rate);
 
-    // ── Build Rechnungspositionen from dispatch events ─────────────────────────
-    let mut positions: Vec<serde_json::Value> = Vec::with_capacity(req.dispatch_events.len());
-    let mut total_netto = Decimal::ZERO;
+    // ── Positions from dispatch events, through the engine ────────────────────
+    // Every event becomes a BillingPosition; VAT, steuerbetraege and traces come
+    // from the same machinery as every other invoice instead of an inline block
+    // whose Steuerkennzeichen said UST_19 whatever the override rate was.
+    let mut positions: Vec<BillingPosition> = Vec::with_capacity(req.dispatch_events.len());
     let mut total_flex_kwh = Decimal::ZERO;
-
-    for (i, ev) in req.dispatch_events.iter().enumerate() {
+    for ev in &req.dispatch_events {
         if ev.flexibility_kwh <= Decimal::ZERO {
             continue;
         }
-        let position_netto = (ev.flexibility_kwh * req.capacity_price_eur_per_kwh).round_dp(5);
-        total_netto += position_netto;
         total_flex_kwh += ev.flexibility_kwh;
-
-        let mut pos = serde_json::json!({
-            "_typ": "RECHNUNGSPOSITION",
-            "positionsnummer": i + 1,
-            "positionstext": format!("VPP Dispatch {} – {}", ev.start_utc, ev.end_utc),
-            "positionsMenge": {
-                "_typ": "MENGE",
-                "wert": ev.flexibility_kwh.to_string(),
-                "einheit": "KWH"
-            },
-            "einzelpreis": {
-                "_typ": "PREIS",
-                "wert": req.capacity_price_eur_per_kwh.to_string(),
-                "einheit": "EUR"
-            },
-            "gesamtpreis": {
-                "_typ": "BETRAG",
-                "wert": position_netto.to_string(),
-                "waehrung": "EUR"
-            },
-            "positionstyp": "vpp_dispatch",
-            "zeitraum": {
-                "_typ": "ZEITRAUM",
-                "startdatum": ev.start_utc,
-                "enddatum": ev.end_utc
-            }
-        });
-        if let (Some(pid), Some(pos_obj)) = (ev.process_id.as_deref(), pos.as_object_mut()) {
-            pos_obj.insert(
-                "referenz".to_owned(),
-                serde_json::json!({ "process_id": pid }),
-            );
-        }
+        let mut pos = BillingPosition::debit(
+            format!("VPP Dispatch {} bis {}", ev.start_utc, ev.end_utc),
+            ev.flexibility_kwh,
+            "kWh",
+            req.capacity_price_eur_per_kwh,
+            PositionCategory::Fee,
+        )
+        .with_legal_basis("RED III Art. 17, VPP-Vertrag")
+        .with_tag("vpp_dispatch");
+        pos.trace = energy_billing::PositionTrace::commodity(
+            ev.flexibility_kwh,
+            "kWh",
+            req.capacity_price_eur_per_kwh,
+            "RED III Art. 17, VPP-Vertrag",
+        );
         positions.push(pos);
     }
 
-    if total_netto <= Decimal::ZERO {
+    if positions.is_empty() {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             "all dispatch events have zero or negative flexibility — no billing generated",
@@ -1660,58 +1909,48 @@ pub async fn post_vpp_billing(
             .into_response();
     }
 
-    let mwst_eur = (total_netto * mwst_rate).round_dp(5);
-    let total_brutto = total_netto + mwst_eur;
-
     let rechnungsnummer = req
         .rechnungsnummer_prefix
         .as_deref()
         .map(|p| format!("{p}-{period_from}"))
         .unwrap_or_else(|| format!("VPP-{vpp_id}-{period_from}"));
 
-    let rechnung_json = serde_json::json!({
-        "_typ": "RECHNUNG",
-        "rechnungsnummer": rechnungsnummer,
-        "rechnungsart": "ABSCHLAGSRECHNUNG",
-        "rechnungsdatum": time::OffsetDateTime::now_utc().date().to_string(),
-        "marktlokationsId": req.malo_id,
-        "herausgeber": { "_typ": "MARKTTEILNEHMER", "marktpartnercode": req.lf_mp_id },
-        "rechnungsperiode": {
-            "_typ": "ZEITRAUM",
-            "startdatum": period_from.to_string(),
-            "enddatum": period_to.to_string()
-        },
-        "rechnungspositionen": positions,
-        "steuern": [{
-            "_typ": "STEUERBETRAG",
-            "steuerkennzeichen": "UST_19",
-            "steuerbetrag": { "_typ": "BETRAG", "wert": mwst_eur.to_string(), "waehrung": "EUR" },
-            "steuerGrundlage": { "_typ": "BETRAG", "wert": total_netto.to_string(), "waehrung": "EUR" }
-        }],
-        "gesamtnetto": { "_typ": "BETRAG", "wert": total_netto.to_string(), "waehrung": "EUR" },
-        "gesamtbrutto": { "_typ": "BETRAG", "wert": total_brutto.to_string(), "waehrung": "EUR" },
-        "zusatzAttribute": [{
+    let attrs = vec![
+        serde_json::json!({ "_typ": "ZUSATZ_ATTRIBUT", "name": "vpp_id", "wert": vpp_id }),
+        serde_json::json!({ "_typ": "ZUSATZ_ATTRIBUT", "name": "total_flexibility_kwh", "wert": total_flex_kwh.to_string() }),
+        serde_json::json!({ "_typ": "ZUSATZ_ATTRIBUT", "name": "dispatch_event_count", "wert": req.dispatch_events.len().to_string() }),
+        serde_json::json!({
             "_typ": "ZUSATZ_ATTRIBUT",
-            "name": "vpp_id",
-            "wert": vpp_id
-        }, {
-            "_typ": "ZUSATZ_ATTRIBUT",
-            "name": "total_flexibility_kwh",
-            "wert": total_flex_kwh.to_string()
-        }, {
-            "_typ": "ZUSATZ_ATTRIBUT",
-            "name": "dispatch_event_count",
-            "wert": req.dispatch_events.len().to_string()
-        }, {
-            "_typ": "ZUSATZ_ATTRIBUT",
-            "name": "regulatory_basis",
-            "wert": "RED III Article 17"
-        }]
-    });
+            "name": "dispatch_process_ids",
+            "wert": req
+                .dispatch_events
+                .iter()
+                .filter_map(|ev| ev.process_id.as_deref())
+                .collect::<Vec<_>>(),
+        }),
+    ];
+    let (invoice, rechnung_json) = match build_vpp_invoice(
+        &req.malo_id,
+        &req.lf_mp_id,
+        rechnungsnummer,
+        period_from,
+        period_to,
+        mwst_rate,
+        positions,
+        attrs,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    };
+    let total_netto = invoice.netto_eur;
+    let total_brutto = invoice.brutto_eur;
 
     // Persist billing record.
     let record_id = match insert_billing_record(
         &pool,
+        &cfg.tenant,
         &req.malo_id,
         &req.lf_mp_id,
         &format!("VPP_{vpp_id}"),
@@ -1776,7 +2015,7 @@ pub async fn post_vpp_billing(
             "total_flexibility_kwh": total_flex_kwh.to_string(),
             "total_netto_eur": total_netto.to_string(),
             "total_brutto_eur": total_brutto.to_string(),
-            "mwst_eur": mwst_eur.to_string(),
+            "mwst_eur": invoice.mwst_eur.to_string(),
             "rechnung": rechnung_json,
         })),
     )
@@ -1840,16 +2079,14 @@ pub async fn post_sammelrechnung(
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("vertragd: {e}")).into_response(),
     };
 
-    let rates = cfg.regulatory_rates();
+    let rates = cfg.regulatory_rates_for_period(period_from, period_to);
     let sammel_nr = req
         .rechnungsnummer
         .clone()
         .unwrap_or_else(|| format!("SAMMEL-{rahmenvertrag_id}-{period_from}"));
 
     // Calculate each MaLo independently.
-    let mut all_positions: Vec<serde_json::Value> = Vec::new();
-    let mut total_netto = Decimal::ZERO;
-    let mut total_brutto = Decimal::ZERO;
+    let mut parts: Vec<(String, Invoice)> = Vec::with_capacity(malos.len());
     let mut per_malo_ids: Vec<Uuid> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
@@ -1891,6 +2128,8 @@ pub async fn post_sammelrechnung(
             &rates,
             &edmd,
             &marktd,
+            &tarifbd,
+            &vertragd,
         )
         .await
         {
@@ -1901,29 +2140,10 @@ pub async fn post_sammelrechnung(
             }
         };
 
-        // Accumulate totals.
-        total_netto += result.netto_eur;
-        total_brutto += result.brutto_eur;
-
-        // Collect positions with MaLo annotation.
-        if let Some(serde_json::Value::Array(pos)) =
-            result.to_rechnung_json().get("rechnungspositionen")
-        {
-            for p in pos {
-                let mut annotated = p.clone();
-                if let Some(obj) = annotated.as_object_mut() {
-                    obj.insert(
-                        "marktlokationsId".to_owned(),
-                        serde_json::json!(entry.malo_id),
-                    );
-                }
-                all_positions.push(annotated);
-            }
-        }
-
         // Persist per-MaLo record.
         if let Ok(record_id) = insert_billing_record(
             &pool,
+            &cfg.tenant,
             &entry.malo_id,
             &req.lf_mp_id,
             tariff.product_code().unwrap_or(tariff.category_str()),
@@ -1938,9 +2158,10 @@ pub async fn post_sammelrechnung(
         {
             per_malo_ids.push(record_id);
         }
+        parts.push((entry.malo_id.clone(), result));
     }
 
-    if all_positions.is_empty() {
+    if parts.is_empty() {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(
@@ -1950,30 +2171,39 @@ pub async fn post_sammelrechnung(
             .into_response();
     }
 
-    // Build consolidated Sammelrechnung JSON.
-    let sammel_json = serde_json::json!({
-        "_typ": "RECHNUNG",
-        "rechnungsnummer": sammel_nr,
-        "rechnungstyp": "ENDKUNDENRECHNUNG",
-        "istOriginal": true,
-        "rechnungsdatum": time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .unwrap_or_default(),
-        "rechnungsperiode": {
-            "startdatum": period_from.to_string(),
-            "enddatum": period_to.to_string(),
-        },
-        "rechnungsersteller": { "marktrolle": "LF" },
-        "rechnungsempfaenger": { "externeKundenId": rahmenvertrag_id },
-        "gesamtnetto": { "wert": total_netto.to_string(), "waehrung": "EUR" },
-        "gesamtbrutto": { "wert": total_brutto.to_string(), "waehrung": "EUR" },
-        "rechnungspositionen": all_positions,
-        "mako:rahmenvertragId": rahmenvertrag_id,
-        "mako:malosCount": per_malo_ids.len(),
-    });
+    // Consolidated Sammelrechnung — through the engine: per-rate VAT over the
+    // combined base, derived totals, deterministic rechnungsdatum. The per-MaLo
+    // runs stay stored as calculation records linked below.
+    let malos_count = parts.len();
+    let (sammel_invoice, sammel_json) = match build_aggregate_invoice(
+        &rahmenvertrag_id,
+        &req.lf_mp_id,
+        sammel_nr.clone(),
+        period_from,
+        period_to,
+        rates,
+        parts,
+        vec![
+            serde_json::json!({
+                "_typ": "ZUSATZ_ATTRIBUT",
+                "name": "rahmenvertragId",
+                "wert": rahmenvertrag_id
+            }),
+            serde_json::json!({
+                "_typ": "ZUSATZ_ATTRIBUT",
+                "name": "malosCount",
+                "wert": malos_count.to_string()
+            }),
+        ],
+    ) {
+        Ok(x) => x,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let (total_netto, total_brutto) = (sammel_invoice.netto_eur, sammel_invoice.brutto_eur);
 
     let sammel_id = match insert_sammelrechnung_record(
         &pool,
+        &cfg.tenant,
         &rahmenvertrag_id,
         &req.lf_mp_id,
         period_from,
@@ -2064,7 +2294,7 @@ pub async fn post_submit_b2g(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    let rates = cfg.regulatory_rates();
+    let rates = cfg.regulatory_rates_for_period(row.period_from, row.period_to);
     let netto = row.total_netto_eur.unwrap_or_default();
     let brutto = row.total_brutto_eur.unwrap_or_default();
     let mwst = brutto - netto;
@@ -2481,9 +2711,16 @@ pub async fn post_vpp_webhook(
     }
 
     // ── 5. Look up active VPP contract ────────────────────────────────────────
-    let today = time::OffsetDateTime::now_utc().date();
+    // The contract is selected by the day the dispatch was *executed*, not the
+    // day this webhook happens to be processed. Selecting by "today" meant a
+    // replayed or delayed event could bill under a different contract version
+    // than the one in force when the flexibility was actually delivered.
+    let dispatch_date = parse_dispatch_date(&execution_time_from)
+        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
     let contract =
-        match crate::pg::find_active_vpp_contract(&pool, &location_id, &cfg.tenant, today).await {
+        match crate::pg::find_active_vpp_contract(&pool, &location_id, &cfg.tenant, dispatch_date)
+            .await
+        {
             Ok(Some(c)) => c,
             Ok(None) => {
                 tracing::warn!(
@@ -2531,16 +2768,14 @@ pub async fn post_vpp_webhook(
     }
 
     // ── 8. Build and run VPP billing ──────────────────────────────────────────
-    // Billing period = calendar day of dispatch_from.
-    let period_from = parse_dispatch_date(&execution_time_from).unwrap_or(today);
+    // Billing period = calendar day of dispatch_from — the same day the
+    // contract above was selected by.
+    let period_from = dispatch_date;
     let period_to = period_from; // single-day billing record per dispatch
 
     let mwst_rate = contract
         .mwst_rate_override
         .unwrap_or_else(|| cfg.regulatory_rates().mwst_rate);
-    let position_netto = (flexibility_kwh * contract.capacity_price_eur_per_kwh).round_dp(5);
-    let mwst_eur = (position_netto * mwst_rate).round_dp(5);
-    let total_brutto = position_netto + mwst_eur;
 
     let rechnungsnummer = format!(
         "VPP-{}-{}-{}",
@@ -2549,80 +2784,57 @@ pub async fn post_vpp_webhook(
         tx_id.get(..8).unwrap_or(&tx_id)
     );
 
-    let rechnung_json = serde_json::json!({
-        "_typ": "RECHNUNG",
-        "rechnungsnummer": rechnungsnummer,
-        "rechnungsart": "ABSCHLAGSRECHNUNG",
-        "rechnungsdatum": today.to_string(),
-        "marktlokationsId": contract.malo_id,
-        "herausgeber": {
-            "_typ": "MARKTTEILNEHMER",
-            "marktpartnercode": contract.lf_mp_id
-        },
-        "rechnungsperiode": {
-            "_typ": "ZEITRAUM",
-            "startdatum": period_from.to_string(),
-            "enddatum": period_to.to_string()
-        },
-        "rechnungspositionen": [{
-            "_typ": "RECHNUNGSPOSITION",
-            "positionsnummer": 1,
-            "positionstext": format!(
-                "VPP Dispatch {} – {} (SR: {})",
-                execution_time_from,
-                execution_time_until.as_deref().unwrap_or("open"),
-                location_id
-            ),
-            "positionsMenge": {
-                "_typ": "MENGE",
-                "wert": flexibility_kwh.to_string(),
-                "einheit": "KWH"
-            },
-            "einzelpreis": {
-                "_typ": "PREIS",
-                "wert": contract.capacity_price_eur_per_kwh.to_string(),
-                "einheit": "EUR"
-            },
-            "gesamtpreis": {
-                "_typ": "BETRAG",
-                "wert": position_netto.to_string(),
-                "waehrung": "EUR"
-            },
-            "positionstyp": "vpp_dispatch",
-            "zeitraum": {
-                "_typ": "ZEITRAUM",
-                "startdatum": execution_time_from,
-                "enddatum": execution_time_until.as_deref().unwrap_or(&execution_time_from)
-            },
-            "referenz": { "tx_id": tx_id, "sr_id": location_id }
-        }],
-        "steuern": [{
-            "_typ": "STEUERBETRAG",
-            "steuerkennzeichen": "UST_19",
-            "steuerbetrag": {
-                "_typ": "BETRAG",
-                "wert": mwst_eur.to_string(),
-                "waehrung": "EUR"
-            },
-            "steuerGrundlage": {
-                "_typ": "BETRAG",
-                "wert": position_netto.to_string(),
-                "waehrung": "EUR"
-            }
-        }],
-        "gesamtnetto":  { "_typ": "BETRAG", "wert": position_netto.to_string(), "waehrung": "EUR" },
-        "gesamtbrutto": { "_typ": "BETRAG", "wert": total_brutto.to_string(),  "waehrung": "EUR" },
-        "zusatzAttribute": [
-            { "_typ": "ZUSATZ_ATTRIBUT", "name": "vpp_id",         "wert": contract.vpp_id.clone() },
-            { "_typ": "ZUSATZ_ATTRIBUT", "name": "tx_id",          "wert": tx_id.clone() },
-            { "_typ": "ZUSATZ_ATTRIBUT", "name": "sr_id",          "wert": location_id.clone() },
-            { "_typ": "ZUSATZ_ATTRIBUT", "name": "flexibility_kwh","wert": flexibility_kwh.to_string() },
-            { "_typ": "ZUSATZ_ATTRIBUT", "name": "regulatory_basis","wert": "RED III Article 17" }
-        ]
-    });
+    // One position through the engine's canonical path — VAT, steuerbetraege
+    // and the trace come from the same machinery as every other invoice.
+    let mut pos = BillingPosition::debit(
+        format!(
+            "VPP Dispatch {} bis {} (SR: {})",
+            execution_time_from,
+            execution_time_until.as_deref().unwrap_or("open"),
+            location_id
+        ),
+        flexibility_kwh,
+        "kWh",
+        contract.capacity_price_eur_per_kwh,
+        PositionCategory::Fee,
+    )
+    .with_legal_basis("RED III Art. 17, VPP-Vertrag")
+    .with_tag("vpp_dispatch");
+    pos.trace = energy_billing::PositionTrace::commodity(
+        flexibility_kwh,
+        "kWh",
+        contract.capacity_price_eur_per_kwh,
+        "RED III Art. 17, VPP-Vertrag",
+    );
+
+    let attrs = vec![
+        serde_json::json!({ "_typ": "ZUSATZ_ATTRIBUT", "name": "vpp_id", "wert": contract.vpp_id.clone() }),
+        serde_json::json!({ "_typ": "ZUSATZ_ATTRIBUT", "name": "tx_id", "wert": tx_id.clone() }),
+        serde_json::json!({ "_typ": "ZUSATZ_ATTRIBUT", "name": "sr_id", "wert": location_id.clone() }),
+        serde_json::json!({ "_typ": "ZUSATZ_ATTRIBUT", "name": "flexibility_kwh", "wert": flexibility_kwh.to_string() }),
+    ];
+    let (invoice, rechnung_json) = match build_vpp_invoice(
+        &contract.malo_id,
+        &contract.lf_mp_id,
+        rechnungsnummer,
+        period_from,
+        period_to,
+        mwst_rate,
+        vec![pos],
+        attrs,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(tx_id, error = %e, "billingd: vpp invoice build failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let position_netto = invoice.netto_eur;
+    let total_brutto = invoice.brutto_eur;
 
     let record_id = match insert_billing_record(
         &pool,
+        &cfg.tenant,
         &contract.malo_id,
         &contract.lf_mp_id,
         &format!("VPP_{}", contract.vpp_id),
@@ -2741,7 +2953,11 @@ fn parse_dispatch_date(ts: &str) -> Option<time::Date> {
 
 #[cfg(test)]
 mod gas_enrichment_tests {
-    use super::normalize_gasqualitaet;
+    use super::{build_aggregate_invoice, engine_error_body, normalize_gasqualitaet};
+    use energy_billing::{
+        BillingContext, BillingPeriod, BillingPosition, BillingProvider as _, Invoice, InvoiceType,
+        MwStProvider, Quantities, RegulatoryRates,
+    };
 
     // ── normalize_gasqualitaet ────────────────────────────────────────────────
 
@@ -2848,5 +3064,133 @@ mod gas_enrichment_tests {
     fn normalize_trims_whitespace() {
         assert_eq!(normalize_gasqualitaet("  HGas  "), "H_GAS");
         assert_eq!(normalize_gasqualitaet("\tLGas\n"), "L_GAS");
+    }
+
+    // ── build_aggregate_invoice ───────────────────────────────────────────────
+
+    fn sub_invoice(malo: &str, netto_ct: rust_decimal::Decimal) -> (String, Invoice) {
+        use energy_billing::PositionCategory;
+        let ctx = BillingContext {
+            malo_id: malo.to_owned(),
+            lf_mp_id: "9900000000001".to_owned(),
+            rechnungsnummer: format!("SUB-{malo}"),
+            period: BillingPeriod::new(
+                time::macros::date!(2026 - 01 - 01),
+                time::macros::date!(2026 - 01 - 31),
+            )
+            .unwrap(),
+            invoice_type: InvoiceType::Initial,
+            regulatory_rates: RegulatoryRates::default(),
+            ..Default::default()
+        };
+        let base = vec![BillingPosition::debit(
+            "Arbeitspreis".to_owned(),
+            rust_decimal::Decimal::ONE,
+            "kWh",
+            netto_ct,
+            PositionCategory::Commodity,
+        )];
+        let mut all = base.clone();
+        all.extend(
+            MwStProvider::new(rust_decimal::dec!(0.19))
+                .bill(&ctx, &Quantities::default(), &base)
+                .unwrap(),
+        );
+        (malo.to_owned(), Invoice::from_positions(ctx, all, vec![]))
+    }
+
+    /// The consolidated document strips the sub-invoices' tax positions and
+    /// recomputes VAT once over the combined base per rate — steuerbetraege
+    /// and totals agree by construction, not by hoping the parts add up.
+    #[test]
+    fn aggregate_recomputes_vat_over_the_combined_base() {
+        use rust_decimal::dec;
+        let parts: Vec<(String, Invoice)> = ["11111111111", "22222222222", "33333333333"]
+            .iter()
+            .map(|m| sub_invoice(m, dec!(10.01)))
+            .collect();
+        let (agg, json) = build_aggregate_invoice(
+            "RV-1",
+            "9900000000001",
+            "SAMMEL-RV-1".to_owned(),
+            time::macros::date!(2026 - 01 - 01),
+            time::macros::date!(2026 - 01 - 31),
+            RegulatoryRates::default(),
+            parts,
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(agg.netto_eur, dec!(30.03));
+        // 30.03 × 0.19, at the engine's 5-dp precision — cent rounding is a
+        // display concern, not a calculation one.
+        assert_eq!(agg.mwst_eur, dec!(5.7057), "VAT over the combined base");
+        assert_eq!(agg.brutto_eur, dec!(35.7357));
+        // The BG-23 breakdown rounds to cents (BT-117) over the combined
+        // base per rate — 30.03 × 0.19 = 5.7057 → 5.71. Had the aggregate
+        // summed the per-MaLo breakdowns instead, it would show 3 × 1.90.
+        let steuer: rust_decimal::Decimal = json["steuerbetraege"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                s["steuerwert"]
+                    .as_str()
+                    .map(|v| v.parse::<rust_decimal::Decimal>().unwrap())
+                    .unwrap_or_else(|| {
+                        rust_decimal::Decimal::try_from(s["steuerwert"].as_f64().unwrap()).unwrap()
+                    })
+            })
+            .sum();
+        assert_eq!(steuer, dec!(5.71));
+    }
+
+    /// Every rendered position names the MaLo it came from; the document-level
+    /// tax position names none.
+    #[test]
+    fn aggregate_annotates_positions_with_their_malo() {
+        use rust_decimal::dec;
+        let parts = vec![
+            sub_invoice("11111111111", dec!(50)),
+            sub_invoice("22222222222", dec!(70)),
+        ];
+        let (_, json) = build_aggregate_invoice(
+            "RV-2",
+            "9900000000001",
+            "SAMMEL-RV-2".to_owned(),
+            time::macros::date!(2026 - 01 - 01),
+            time::macros::date!(2026 - 01 - 31),
+            RegulatoryRates::default(),
+            parts,
+            vec![],
+        )
+        .unwrap();
+        let pos = json["rechnungspositionen"].as_array().unwrap();
+        // 2 commodity positions annotated + 1 aggregate tax position without.
+        assert_eq!(pos[0]["marktlokationsId"], "11111111111");
+        assert_eq!(pos[1]["marktlokationsId"], "22222222222");
+        let tax = pos
+            .iter()
+            .find(|p| p["kategorie"] == "Tax")
+            .expect("aggregate tax position");
+        assert!(tax.get("marktlokationsId").is_none());
+        // Deterministic rechnungsdatum — no wall clock in the document.
+        assert_eq!(json["rechnungsdatum"], "2026-01-31");
+    }
+
+    /// The engine-error body is machine-readable: code, context, warnings.
+    #[test]
+    fn engine_error_body_is_structured() {
+        let e = energy_billing::EngineError::ValidationBlocked {
+            warnings: vec![energy_billing::BillingWarning {
+                code: "MODUL2_AND_FLAT_NNE",
+                severity: energy_billing::WarningSeverity::Error,
+                message: "both configured".to_owned(),
+            }],
+        };
+        let body: serde_json::Value =
+            serde_json::from_str(&engine_error_body("51238696781", &e)).unwrap();
+        assert_eq!(body["error"]["code"], "VALIDATION_BLOCKED");
+        assert_eq!(body["error"]["context"], "51238696781");
+        assert_eq!(body["error"]["warnings"][0]["code"], "MODUL2_AND_FLAT_NNE");
     }
 }

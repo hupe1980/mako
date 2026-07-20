@@ -111,14 +111,6 @@ impl AgencyCode {
             _ => None,
         }
     }
-
-    /// Return the NAD C082 wire fragment for `{party_id}::{agency}`.
-    ///
-    /// The EDIFACT middle component (code list id) is always empty in EDI@Energy.
-    #[must_use]
-    pub fn format_nad_c082(self, party_id: &str) -> String {
-        format!("{party_id}::{}", self.as_str())
-    }
 }
 
 impl Default for AgencyCode {
@@ -155,17 +147,5 @@ mod tests {
             assert_eq!(variant.as_str(), code);
         }
         assert_eq!(AgencyCode::parse("999"), None);
-    }
-
-    #[test]
-    fn format_nad_c082_bdew() {
-        let frag = AgencyCode::Bdew.format_nad_c082("9900123456789");
-        assert_eq!(frag, "9900123456789::293");
-    }
-
-    #[test]
-    fn format_nad_c082_entso() {
-        let frag = AgencyCode::Entso.format_nad_c082("10XDE-EON-NETZ--I");
-        assert_eq!(frag, "10XDE-EON-NETZ--I::305");
     }
 }

@@ -26,8 +26,8 @@
 //! path so the expected values can be verified by hand.
 
 use energy_billing::{
-    BillingContext, GasMeterInput, GridInput, InvoiceType, MeterInput, PositionCategory, Product,
-    Quantities, RegulatoryRates,
+    BillingContext, BillingPeriod, GasMeterInput, GridInput, InvoiceType, MeterInput,
+    PositionCategory, Product, Quantities, RegulatoryRates,
 };
 use rust_decimal::dec;
 use time::macros::date;
@@ -52,8 +52,7 @@ fn sect41b_dynamic_tariff_rejects_non_imsys_metering_mode() {
         malo_id: "51238696780".into(),
         lf_mp_id: "9900000000001".into(),
         rechnungsnummer: "R41B-TEST-001".into(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -171,8 +170,7 @@ fn golden_strom_slp_eintarif_jan_2026() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "GOLDEN-STROM-001".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -269,8 +267,7 @@ fn golden_gas_with_levies_jan_2026() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "GOLDEN-GAS-001".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -383,8 +380,7 @@ fn golden_eeg_gutschrift_10kwp_jan_2026() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "GOLDEN-EEG-001".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::CreditNote,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -475,8 +471,7 @@ fn golden_rlm_demand_charge() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "GOLDEN-RLM-001".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates,
         ..Default::default()
@@ -577,8 +572,7 @@ fn golden_gas_energiesteuer_exempt_kwk() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "GOLDEN-GAS-KWK-001".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates,
         ..Default::default()
@@ -688,8 +682,7 @@ fn sect40a_kilowattstundenpreis_brutto_includes_all_charges() {
         malo_id: "51238696780".into(),
         lf_mp_id: "9900000000001".into(),
         rechnungsnummer: "R40A-TEST-001".into(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         kundenkategorie: CustomerKategorie::Haushalt,
@@ -757,13 +750,19 @@ fn sect41_rechnung_json_contains_mandatory_fields() {
         malo_id: "51238696780".into(),
         lf_mp_id: "9900000000001".into(),
         rechnungsnummer: "R41-TEST-001".into(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         zaehler_id: Some("1EFW1234567".into()), // §41 Abs. 1 Nr. 6 — Zählernummer
         nb_mp_id: Some("9900357000004".into()), // §41 Abs. 1 Nr. 5 — Netzbetreiber
-        energiemix: Some("100% Ökostrom (EE-Strom HKN-zertifiziert)".into()), // §42 EnWG
+        // §42 EnWG — structured, with the CO₂ figure Abs. 2 Nr. 2 requires.
+        energiequellen: Some(energy_billing::EnergieQuellen {
+            erneuerbar_pct: dec!(100),
+            co2_g_per_kwh: dec!(0),
+            hkn_certified: true,
+            beschreibung: Some("100% Ökostrom (EE-Strom HKN-zertifiziert)".into()),
+            ..Default::default()
+        }),
         billing_run_id: Some("d1a2b3c4-0001".into()),
         kundenkategorie: CustomerKategorie::Haushalt,
         verbrauchshistorie: Some(Verbrauchshistorie {
@@ -839,8 +838,8 @@ fn sect41_rechnung_json_contains_mandatory_fields() {
 
     // §42 EnWG — Energiemix
     assert!(
-        has_attr("energiemix"),
-        "§42 EnWG: energiemix ZusatzAttribut required"
+        has_attr("stromkennzeichnung"),
+        "§42 EnWG: Stromkennzeichnung ZusatzAttribut required"
     );
 
     // CustomerKategorie for ERP routing
@@ -870,8 +869,7 @@ fn sect42c_energy_sharing_credit_reduces_effective_cost() {
         malo_id: "51238696780".into(),
         lf_mp_id: "9900000000001".into(),
         rechnungsnummer: "R42C-TEST-001".into(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -977,8 +975,7 @@ fn industrie_customer_stromsteuer_befreiung_removes_levy() {
         malo_id: "51238696780".into(),
         lf_mp_id: "9900000000001".into(),
         rechnungsnummer: "R-INDUSTRIE-001".into(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         kundenkategorie: CustomerKategorie::Industrie,

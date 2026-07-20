@@ -6,8 +6,8 @@
 //! Run: `cargo test -p energy-billing --test calculator_tests`
 
 use energy_billing::{
-    AbschlagDeduction, BillingContext, BillingEngine, DynamicInterval, EegMeterInput,
-    ElectricityProvider, EmobilityMeterInput, GasMeterInput, GasProvider, GridInput,
+    AbschlagDeduction, BillingContext, BillingEngine, BillingPeriod, DynamicInterval,
+    EegMeterInput, ElectricityProvider, EmobilityMeterInput, GasMeterInput, GasProvider, GridInput,
     HemsMeterInput, InvoiceType, MeterInput, MeteringMode, MwStProvider, PositionCategory, Product,
     Quantities, RegulatoryRates, Sect41aAnnualComparison, ServiceMeterInput, SolarMeterInput,
     WaermeMeterInput, behg_ct_per_kwh_for_year,
@@ -111,8 +111,7 @@ fn bill_full(
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TEST".to_owned(),
-        period_from: f,
-        period_to: t,
+        period: BillingPeriod::new(f, t).unwrap(),
         invoice_type,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -1723,8 +1722,7 @@ fn jahresabrechnung_deducts_abschlage_from_zahlbetrag() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "SCHLUSS-2025".to_owned(),
-        period_from: date!(2025 - 01 - 01),
-        period_to: date!(2025 - 12 - 31),
+        period: BillingPeriod::new(date!(2025 - 01 - 01), date!(2025 - 12 - 31)).unwrap(),
         invoice_type: InvoiceType::Final,
         regulatory_rates: rates_2026(),
         abschlage,
@@ -1976,13 +1974,11 @@ fn behg_year_aware_rate_differs_by_year() {
 fn billing_context_prorata_mid_month_start() {
     use time::macros::date;
     let ctx_full = BillingContext {
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         ..Default::default()
     };
     let ctx_half = BillingContext {
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         vertragsbeginn: Some(date!(2026 - 01 - 16)),
         ..Default::default()
     };
@@ -2025,8 +2021,7 @@ fn strom_zaehlerstand_produces_info_position() {
                     malo_id: "51238696781".to_owned(),
                     lf_mp_id: "9900000000001".to_owned(),
                     rechnungsnummer: "TEST".to_owned(),
-                    period_from: f,
-                    period_to: t,
+                    period: BillingPeriod::new(f, t).unwrap(),
                     invoice_type: InvoiceType::Initial,
                     regulatory_rates: rates_2026(),
                     ..Default::default()
@@ -2179,8 +2174,7 @@ fn strom_verbrauchshistorie_produces_info_positions() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TEST-VH".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates_2026(),
         verbrauchshistorie: Some(Verbrauchshistorie {
@@ -2274,11 +2268,16 @@ fn strom_energiemix_appears_in_rechnung_json() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TEST-EM".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates_2026(),
-        energiemix: Some("100% Ökostrom, HKN-zertifiziert (TÜV Rheinland 2026)".to_owned()),
+        energiequellen: Some(energy_billing::EnergieQuellen {
+            erneuerbar_pct: dec!(100),
+            co2_g_per_kwh: dec!(0),
+            hkn_certified: true,
+            beschreibung: Some("100% Ökostrom, HKN-zertifiziert (TÜV Rheinland 2026)".to_owned()),
+            ..Default::default()
+        }),
         ..Default::default()
     };
     let invoice = tariff
@@ -2299,9 +2298,18 @@ fn strom_energiemix_appears_in_rechnung_json() {
         .expect("zusatzAttribute must exist");
     let em = attrs
         .iter()
-        .find(|a| a["name"] == "energiemix")
-        .expect("energiemix ZusatzAttribut must exist");
-    assert!(em["wert"].as_str().unwrap().contains("Ökostrom"));
+        .find(|a| a["name"] == "stromkennzeichnung")
+        .expect("stromkennzeichnung ZusatzAttribut must exist");
+    // Structured, not prose: the CO₂ figure §42 Abs. 2 Nr. 2 names is a field,
+    // and the human description travels inside the structure.
+    assert_eq!(em["wert"]["erneuerbar_pct"], "100");
+    assert_eq!(em["wert"]["co2_g_per_kwh"], "0");
+    assert!(
+        em["wert"]["beschreibung"]
+            .as_str()
+            .unwrap()
+            .contains("Ökostrom")
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2743,8 +2751,7 @@ fn minimum_invoice_topup_when_below_minimum() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TEST-MIN".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates_2026(),
         minimum_invoice_eur_brutto: Some(dec!(100.00)),
@@ -2790,8 +2797,7 @@ fn minimum_invoice_no_topup_when_already_above_minimum() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TEST-MIN2".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates_2026(),
         minimum_invoice_eur_brutto: Some(dec!(5.00)), // minimum well below actual
@@ -2879,8 +2885,7 @@ fn bundled_invoice_electricity_19pct_and_renewable_heat_7pct_two_tax_positions()
                     malo_id: "51238696781".to_owned(),
                     lf_mp_id: "9900000000001".to_owned(),
                     rechnungsnummer: "TEST-MULTI-RATE".to_owned(),
-                    period_from: f,
-                    period_to: t,
+                    period: BillingPeriod::new(f, t).unwrap(),
                     invoice_type: InvoiceType::Initial,
                     regulatory_rates: rates_2026(),
                     ..Default::default()
@@ -2960,8 +2965,7 @@ fn heat_positions_carry_7pct_applicable_tax_rate() {
                     malo_id: "51238696781".to_owned(),
                     lf_mp_id: "9900000000001".to_owned(),
                     rechnungsnummer: "TEST-HEAT-7".to_owned(),
-                    period_from: f,
-                    period_to: t,
+                    period: BillingPeriod::new(f, t).unwrap(),
                     invoice_type: InvoiceType::Initial,
                     regulatory_rates: rates_2026(),
                     ..Default::default()
@@ -3287,8 +3291,7 @@ fn seasonal_gas_winter_price_higher_than_summer() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TEST-WINTER".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates_2026(),
         ..Default::default()
@@ -3296,8 +3299,7 @@ fn seasonal_gas_winter_price_higher_than_summer() {
     // July billing → summer rate (8.0 ct)
     let ctx_summer = BillingContext {
         rechnungsnummer: "TEST-SUMMER".to_owned(),
-        period_from: date!(2026 - 07 - 01),
-        period_to: date!(2026 - 07 - 31),
+        period: BillingPeriod::new(date!(2026 - 07 - 01), date!(2026 - 07 - 31)).unwrap(),
         ..ctx_winter.clone()
     };
 
@@ -3367,8 +3369,7 @@ fn seasonal_electricity_summer_rate_lower_than_base() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TEST-AUG".to_owned(),
-        period_from: date!(2026 - 08 - 01),
-        period_to: date!(2026 - 08 - 31),
+        period: BillingPeriod::new(date!(2026 - 08 - 01), date!(2026 - 08 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates_2026(),
         ..Default::default()
@@ -3376,8 +3377,7 @@ fn seasonal_electricity_summer_rate_lower_than_base() {
     // November → base (30.0 ct)
     let ctx_nov = BillingContext {
         rechnungsnummer: "TEST-NOV".to_owned(),
-        period_from: date!(2026 - 11 - 01),
-        period_to: date!(2026 - 11 - 30),
+        period: BillingPeriod::new(date!(2026 - 11 - 01), date!(2026 - 11 - 30)).unwrap(),
         ..ctx_aug.clone()
     };
 
@@ -3466,8 +3466,7 @@ fn prosumer_bills_only_grid_consumption_no_nne_on_self_consumption() {
                     malo_id: "51238696781".to_owned(),
                     lf_mp_id: "9900000000001".to_owned(),
                     rechnungsnummer: "TEST-PROSUMER".to_owned(),
-                    period_from: f,
-                    period_to: t,
+                    period: BillingPeriod::new(f, t).unwrap(),
                     invoice_type: InvoiceType::Initial,
                     regulatory_rates: rates_2026(),
                     ..Default::default()
@@ -3706,8 +3705,7 @@ fn nb_mp_id_appears_in_rechnung_json_when_set() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TEST-NB-001".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates_2026(),
         // §41 Abs. 1 Nr. 5 EnWG: Netzbetreiber BDEW-Codenummer
@@ -3771,8 +3769,7 @@ fn welcome_bonus_reduces_brutto_with_bonus_category() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TEST-BONUS".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates_2026(),
         ..Default::default()
@@ -3793,7 +3790,7 @@ fn welcome_bonus_reduces_brutto_with_bonus_category() {
             _ctx: &BillingContext,
             _q: &Quantities,
             _prior: &[BillingPosition],
-        ) -> Result<Vec<BillingPosition>, energy_billing::BillingError> {
+        ) -> Result<Vec<BillingPosition>, energy_billing::EngineError> {
             Ok(vec![BillingPosition {
                 description: "Willkommensbonus Neukunde".to_owned(),
                 legal_basis: None,
@@ -3860,8 +3857,7 @@ fn multi_product_electricity_and_gas_on_one_invoice() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TEST-MULTI".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates_2026(),
         ..Default::default()
@@ -3925,8 +3921,7 @@ fn anlage_kwp_le30_auto_zero_pct_mwst() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "R-TEST-ANLKWP".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::CreditNote,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -3975,8 +3970,7 @@ fn anlage_kwp_above30_normal_mwst() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "R-TEST-ANLLG".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::CreditNote,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -4019,8 +4013,7 @@ fn industrie_stromsteuer_befreiung_produces_info_position() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "R-TEST-INDUSTRIE".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -4087,8 +4080,7 @@ fn is_estimated_meter_produces_info_position() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "R-TEST-EST".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -4135,8 +4127,7 @@ fn zaehler_replaced_produces_info_position() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "R-TEST-ZWECHSEL".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -4181,8 +4172,7 @@ fn preisgarantie_bis_produces_info_position_when_in_future() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "R-TEST-PREISGAR".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -4224,8 +4214,7 @@ fn billing_run_id_propagated_to_invoice_and_json() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "R-TEST-RUNID".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         billing_run_id: Some("run-uuid-12345".to_owned()),
@@ -4344,8 +4333,7 @@ fn tou_pricing_ht_nt_matches_manual_calculation() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TEST-TOU".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -4397,8 +4385,7 @@ fn tou_pricing_ht_nt_matches_manual_calculation() {
 fn prorate_days_returns_active_and_total() {
     // vertragsbeginn = Jan 16 → active_days = 16, total_days = 31
     let ctx = BillingContext {
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         vertragsbeginn: Some(date!(2026 - 01 - 16)),
         ..Default::default()
     };
@@ -4410,8 +4397,7 @@ fn prorate_days_returns_active_and_total() {
 #[test]
 fn prorate_days_no_constraint_returns_full() {
     let ctx = BillingContext {
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         ..Default::default()
     };
     let (active, total) = ctx.prorate_days();
@@ -4436,8 +4422,7 @@ fn grundpreis_prorated_for_partial_period() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TEST-PRORATA".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         vertragsbeginn: Some(date!(2026 - 01 - 16)),
@@ -4487,8 +4472,7 @@ fn invoice_merge_combines_positions_and_recalculates_totals() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TW-A".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 14),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 14)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -4497,8 +4481,7 @@ fn invoice_merge_combines_positions_and_recalculates_totals() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "TW-B".to_owned(),
-        period_from: date!(2026 - 01 - 15),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 15), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -4534,8 +4517,8 @@ fn invoice_merge_combines_positions_and_recalculates_totals() {
     merged.assert_valid();
 
     // Merged period covers the full month
-    assert_eq!(merged.context.period_from, date!(2026 - 01 - 01));
-    assert_eq!(merged.context.period_to, date!(2026 - 01 - 31));
+    assert_eq!(merged.context.period_from(), date!(2026 - 01 - 01));
+    assert_eq!(merged.context.period_to(), date!(2026 - 01 - 31));
 
     // Totals are the sum of both sub-invoices
     assert_eq!(
@@ -4560,8 +4543,7 @@ fn invoice_allocate_proportionally_penny_correct() {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "ALLOC-BASE".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates.clone(),
         ..Default::default()
@@ -4600,4 +4582,319 @@ fn invoice_allocate_proportionally_penny_correct() {
     let sum: Decimal = parts.iter().map(|p| p.brutto_eur).sum();
     assert_eq!(sum, original_brutto, "Allocation must be penny-exact");
     assert!(parts[0].brutto_eur > parts[1].brutto_eur, "60% > 40%");
+}
+
+/// The NNE Grundpreis accrues only over active contract days.
+///
+/// It billed the full period regardless of `vertragsbeginn`/`vertragsende`,
+/// while the commodity Grundpreis was clipped — so a mid-month move-in paid a
+/// full month of network base charge and half a month of the supplier's own.
+#[test]
+fn nne_grundpreis_is_clipped_to_the_contract() {
+    use energy_billing::{GridInput, MeterInput};
+
+    let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
+        "category": "STROM",
+        "arbeitspreis_ct_per_kwh": 30.0,
+        "grundpreis_ct_per_day": 10.0,
+    }))
+    .unwrap();
+    let grid = GridInput {
+        nne_grundpreis_eur_per_year: Some(dec!(73.00)), // 0.20 EUR/day
+        ..Default::default()
+    };
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        // Moved in on the 17th: 15 active days of 31.
+        vertragsbeginn: Some(date!(2026 - 01 - 17)),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(100),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let invoice = product
+        .build_engine(&grid, &ctx.regulatory_rates)
+        .bill(ctx, &quantities)
+        .unwrap();
+
+    let nne_gp = invoice
+        .positions
+        .iter()
+        .find(|p| p.description.contains("Netznutzungsentgelt Grundpreis"))
+        .expect("NNE Grundpreis billed");
+    // 15 days × 0.20 EUR = 3.00 EUR — not 31 × 0.20 = 6.20.
+    assert_eq!(nne_gp.quantity, dec!(15));
+    assert_eq!(nne_gp.net_eur, dec!(3.00));
+
+    // And the commodity Grundpreis is clipped to the same 15 days.
+    let gp = invoice
+        .positions
+        .iter()
+        .find(|p| p.description == "Grundpreis")
+        .expect("Grundpreis billed");
+    assert_eq!(gp.quantity, dec!(15));
+}
+
+/// The warnings the docstring always promised now actually fire.
+///
+/// Estimated reading, ending price guarantee and a >50 % consumption deviation
+/// were Info positions or absent entirely — visible on paper, invisible to any
+/// dispatch system that inspects `invoice.warnings`.
+#[test]
+fn the_promised_warnings_fire() {
+    use energy_billing::{MeterInput, Verbrauchshistorie};
+
+    let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
+        "category": "STROM",
+        "arbeitspreis_ct_per_kwh": 30.0,
+        "preisgarantie_bis": "2026-02-10",
+    }))
+    .unwrap();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        verbrauchshistorie: Some(Verbrauchshistorie {
+            vorjahr_kwh: Some(dec!(1000)),
+            bundesdurchschnitt_kwh: None,
+            kundengruppe: None,
+        }),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(1600), // +60 % vs prior year
+            is_estimated: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let invoice = product
+        .build_engine(&Default::default(), &ctx.regulatory_rates)
+        .bill(ctx, &quantities)
+        .unwrap();
+
+    let codes: Vec<&str> = invoice.warnings.iter().map(|w| w.code).collect();
+    assert!(codes.contains(&"ESTIMATED_READING"), "{codes:?}");
+    assert!(codes.contains(&"PREISGARANTIE_ENDET"), "{codes:?}");
+    assert!(codes.contains(&"VERBRAUCH_ABWEICHUNG_50PCT"), "{codes:?}");
+    // None of them block the run — they are Warning, not Error severity.
+    assert!(!invoice.has_errors());
+}
+
+/// §14a Modul 2 bills three Tarifstufen that replace the flat NNE Arbeitspreis.
+///
+/// Only Modul 1 (flat reduction) and Modul 3 (dispatch compensation) existed;
+/// the zeitvariables Netzentgelt — BK6-22-300 Anlage 2 §2, with *three* bands,
+/// not two — was absent from the retail engine entirely.
+#[test]
+fn sect14a_modul2_bills_three_bands() {
+    use energy_billing::{MeterInput, Sect14aModul2Verbrauch};
+
+    let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
+        "category": "WAERMEPUMPE",
+        "arbeitspreis_ct_per_kwh": 20.0,
+        "sect14a_modul2_nne_ht_ct_per_kwh": 12.0,
+        "sect14a_modul2_nne_st_ct_per_kwh": 6.0,
+        "sect14a_modul2_nne_nt_ct_per_kwh": 2.0,
+    }))
+    .unwrap();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(600),
+            ..Default::default()
+        }),
+        sect14a_modul2: Some(Sect14aModul2Verbrauch {
+            ht_kwh: dec!(100),
+            st_kwh: dec!(300),
+            nt_kwh: dec!(200),
+        }),
+        ..Default::default()
+    };
+    let invoice = product
+        .build_engine(&Default::default(), &ctx.regulatory_rates)
+        .bill(ctx, &quantities)
+        .unwrap();
+
+    let bands: Vec<_> = invoice
+        .positions
+        .iter()
+        .filter(|p| p.description.starts_with("Netzentgelt §14a Modul 2"))
+        .collect();
+    assert_eq!(bands.len(), 3, "all three Tarifstufen appear");
+    // HT 100×0.12 + ST 300×0.06 + NT 200×0.02 = 12 + 18 + 4 = 34.00 EUR.
+    let total: Decimal = bands.iter().map(|p| p.net_eur).sum();
+    assert_eq!(total, dec!(34.00));
+    // Each band explains itself.
+    for b in &bands {
+        assert!(!b.trace.formula.is_empty(), "{} has a trace", b.description);
+    }
+}
+
+/// Modul 2 alongside a flat NNE Arbeitspreis is refused — it would bill the
+/// device's network usage twice.
+#[test]
+fn sect14a_modul2_with_flat_nne_is_refused() {
+    use energy_billing::{GridInput, MeterInput};
+
+    let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
+        "category": "WALLBOX",
+        "arbeitspreis_ct_per_kwh": 20.0,
+        "sect14a_modul2_nne_ht_ct_per_kwh": 12.0,
+        "sect14a_modul2_nne_st_ct_per_kwh": 6.0,
+        "sect14a_modul2_nne_nt_ct_per_kwh": 2.0,
+    }))
+    .unwrap();
+    let grid = GridInput {
+        nne_arbeitspreis_ct_per_kwh: Some(dec!(7.5)),
+        ..Default::default()
+    };
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(600),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let err = product
+        .build_engine(&grid, &ctx.regulatory_rates)
+        .bill(ctx, &quantities)
+        .unwrap_err();
+    assert!(err.to_string().contains("Modul 2"), "{err}");
+}
+
+// ── Vertragsart: §38 EnWG Ersatzversorgung, GVV disclosure ────────────────────
+
+/// §38 Abs. 2 S. 2 EnWG: Ersatzversorgung ends at the latest three months
+/// after it began. A four-month Ersatzversorgung period describes a supply
+/// that cannot legally exist — the engine refuses it with a typed error
+/// carrying the blocking warning.
+#[test]
+fn ersatzversorgung_over_three_months_blocks_the_run() {
+    let product: Product =
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        vertragsart: energy_billing::Vertragsart::Ersatzversorgung,
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 04 - 30)).unwrap(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(600),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let err = product
+        .build_engine(&GridInput::default(), &ctx.regulatory_rates)
+        .bill(ctx, &quantities)
+        .unwrap_err();
+    assert_eq!(err.code(), "VALIDATION_BLOCKED");
+    assert!(
+        err.blocking_warnings()
+            .iter()
+            .any(|w| w.code == "ERSATZVERSORGUNG_UEBER_3_MONATE"),
+        "{err}"
+    );
+}
+
+/// Three months minus a day is the longest lawful Ersatzversorgung period —
+/// it bills normally and the invoice names the regime.
+#[test]
+fn ersatzversorgung_within_three_months_bills_and_names_the_regime() {
+    let product: Product =
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        vertragsart: energy_billing::Vertragsart::Ersatzversorgung,
+        period: BillingPeriod::new(date!(2026 - 01 - 15), date!(2026 - 04 - 14)).unwrap(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(600),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let invoice = product
+        .build_engine(&GridInput::default(), &ctx.regulatory_rates)
+        .bill(ctx, &quantities)
+        .unwrap();
+    let json = invoice.to_rechnung_json();
+    let attrs = json["zusatzAttribute"].as_array().unwrap();
+    assert!(
+        attrs
+            .iter()
+            .any(|a| a["name"] == "vertragsart" && a["wert"] == "ERSATZVERSORGUNG"),
+        "vertragsart attribute must name the regime"
+    );
+}
+
+/// The default Sondervertrag is stated on every invoice too — the regime is
+/// explicit, never inferred from the tariff.
+#[test]
+fn sondervertrag_is_stated_explicitly() {
+    let product: Product =
+        serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(100),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let invoice = product
+        .build_engine(&GridInput::default(), &ctx.regulatory_rates)
+        .bill(ctx, &quantities)
+        .unwrap();
+    let json = invoice.to_rechnung_json();
+    let attrs = json["zusatzAttribute"].as_array().unwrap();
+    assert!(
+        attrs
+            .iter()
+            .any(|a| a["name"] == "vertragsart" && a["wert"] == "SONDERVERTRAG")
+    );
+}
+
+/// An inverted period is unrepresentable: the constructor is the only door.
+#[test]
+fn billing_period_refuses_inversion() {
+    let err = BillingPeriod::new(date!(2026 - 02 - 01), date!(2026 - 01 - 31)).unwrap_err();
+    assert_eq!(err.code(), "INVALID_PERIOD");
+
+    // Serde round-trips a valid period …
+    let ok = BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap();
+    let json = serde_json::to_string(&ok).unwrap();
+    let back: BillingPeriod = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, ok);
+
+    // … and rejects the same payload with the endpoints swapped, proving the
+    // validation runs on the wire format too.
+    let swapped = {
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        serde_json::json!({ "from": v["to"], "to": v["from"] }).to_string()
+    };
+    let parsed: Result<BillingPeriod, _> = serde_json::from_str(&swapped);
+    assert!(parsed.is_err(), "deserialization must validate too");
 }

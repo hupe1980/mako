@@ -100,3 +100,47 @@ permit(
   action    == MaKo::Action::"AdminMaloRead",
   resource  is MaKo::AdminMaloRecord
 );
+
+// ── Rechnung reads: ERP integration and read-only operators ───────────────────
+permit(
+  principal == MaKo::Principal::"erp-operator",
+  action    == MaKo::Action::"ReadRechnung",
+  resource  is MaKo::RechnungEndpoint
+);
+
+permit(
+  principal == MaKo::Principal::"admin-readonly",
+  action    == MaKo::Action::"ReadRechnung",
+  resource  is MaKo::RechnungEndpoint
+);
+
+// ── Migrations: a deliberate operator action, granted to no standing principal.
+// Grant MaKo::Action::"AdminMigrations" to a dedicated break-glass principal
+// in your site policy for the FV-cutover window, then remove it.
+
+// ── Process reads: workflow-scoped (§9 EnWG Informatorisches Unbundling) ──────
+// The context carries the process's workflow name; a VIU site can split this
+// into role-scoped principals, e.g. permit an NB operator only when the
+// workflow is NB-side:
+//
+//   permit(principal == MaKo::Principal::"nb-operator",
+//          action == MaKo::Action::"ReadProcess", resource)
+//   when { context.workflow like "gpke-sperrung*" };
+permit(
+  principal == MaKo::Principal::"mcp-agent",
+  action    == MaKo::Action::"ReadProcess",
+  resource  is MaKo::ProcessRecord
+);
+
+permit(
+  principal == MaKo::Principal::"admin-readonly",
+  action    == MaKo::Action::"ReadProcess",
+  resource  is MaKo::ProcessRecord
+);
+
+// ── API-Webdienste (:8090): a dedicated client principal ──────────────────────
+permit(
+  principal == MaKo::Principal::"api-webdienste-client",
+  action    == MaKo::Action::"UseWebdienste",
+  resource  is MaKo::WebdiensteEndpoint
+);

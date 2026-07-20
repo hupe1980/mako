@@ -7,14 +7,7 @@ use edifact_rs::Writer;
 use crate::AgencyCode;
 use crate::{Error, Release};
 
-use super::{Set, Unset, bytes_to_segments, dtm_today, format_dtm137};
-
-macro_rules! emit_seg {
-    ($writer:expr, $tag:expr, $($elem:expr),+ $(,)?) => {{
-        let elements: &[&str] = &[$($elem),+];
-        $writer.write_raw($tag, elements).map_err(|e| Error::Parse(e.into()))?;
-    }};
-}
+use super::{Set, Unset, bytes_to_segments, today_ccyymmdd};
 
 #[derive(Debug, Clone)]
 struct InsrptBuilderInner {
@@ -141,34 +134,38 @@ impl<S, R> InsrptBuilder<S, R> {
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        let unh_type = format!("INSRPT:D:96A:UN:{}", self.inner.release.as_str());
         let dtm_val = self
             .inner
             .document_date
             .as_deref()
-            .map_or_else(dtm_today, format_dtm137);
+            .map_or_else(today_ccyymmdd, str::to_owned);
 
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
 
         let doc_id = self.inner.document_id.as_deref().unwrap_or("");
-        emit_seg!(w, "UNH", &self.inner.message_ref, &unh_type);
+        emit_comp!(
+            w,
+            "UNH",
+            [&self.inner.message_ref],
+            ["INSRPT", "D", "96A", "UN", self.inner.release.as_str()]
+        );
         emit_seg!(w, "BGM", &self.inner.document_code, doc_id);
-        emit_seg!(w, "DTM", &dtm_val);
+        emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
         if let Some(id) = &self.inner.sender_id {
-            emit_seg!(
+            emit_comp!(
                 w,
                 "NAD",
-                "MS",
-                &self.inner.sender_agency.format_nad_c082(id)
+                ["MS"],
+                [id, "", self.inner.sender_agency.as_str()]
             );
         }
         if let Some(id) = &self.inner.receiver_id {
-            emit_seg!(
+            emit_comp!(
                 w,
                 "NAD",
-                "MR",
-                &self.inner.receiver_agency.format_nad_c082(id)
+                ["MR"],
+                [id, "", self.inner.receiver_agency.as_str()]
             );
         }
         w.finish_unt(&self.inner.message_ref)

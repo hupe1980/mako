@@ -33,7 +33,9 @@ energy-api   = { path = "../../crates/energy-api", features = ["server", "client
 rubo4e       = { workspace = true }
 mako-markt   = { path = "../../crates/mako-markt", features = ["marktd-client"] }
 rust_decimal = { workspace = true }
-asx-rs       = { version = "0.9", features = ["as4", "client", "interop-strict", "server"] }
+asx-rs       = { version = "0.10", features = ["as4", "client", "interop-strict", "server"] }
+# Structured logging + optional OTLP span export (OTEL_EXPORTER_OTLP_ENDPOINT).
+mako-service = { workspace = true, features = ["otel", "oidc", "cedar"] }
 edi-energy   = { path = "../../crates/edi-energy", default-features = false, features = [
     "utilmd", "mscons", "aperak", "contrl", "invoic", "remadv",
     "orders", "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp",
@@ -75,6 +77,7 @@ governor = "0.6"
 # Must never appear in a production build.
 mako-engine  = { path = "../../crates/mako-engine", features = ["testing"] }
 mako-as4     = { path = "../../crates/mako-as4", features = ["testing"] }
+tempfile     = "3"
 tokio        = { version = "1", features = ["full"] }
 serde_json   = { workspace = true }
 time         = { workspace = true }

@@ -27,6 +27,69 @@ no customer management. It pulls product definitions from `tarifbd`, consumption
 | **MCP** | 12 tools at `/mcp`: list/get/preview/calculate, `validate_tariff_config`, `explain_invoice_position` |
 | **Health** | `GET /health/live`, `GET /health/ready` |
 
+## Record store integrity
+
+`insert_billing_record` shipped with two independent faults — it omitted the
+NOT-NULL `tenant` column and its `ON CONFLICT` named five of the partial unique
+index's six columns with no predicate — so **it failed on every call**, and
+nothing noticed because nothing tested `pg.rs`. All three insert paths now
+supply the tenant, the upsert names the full index identity and repeats its
+predicate, and a re-run may replace a **draft only**: once dispatched, the
+stored Rechnung is what the counterparty received, and a conflicting re-run is
+refused with a pointer at the correction path.
+
+`tests/schema_code_guard.rs` pins these rules textually on every `cargo test`;
+`just test-billingd-db` proves them against a real PostgreSQL.
+
+## Every document through the engine
+
+No handler assembles BO4E invoice JSON by hand:
+
+- **VPP** (webhook auto-billing and `POST /billing/vpp/:id`): positions plus
+  the engine's tax provider plus `to_rechnung_json`. The previous inline VAT
+  block hardcoded `UST_19` even when the contract overrode the rate.
+- **GGV and Sammelrechnung aggregates** (`build_aggregate_invoice`): the
+  per-MaLo engine runs stay stored as calculation records; the consolidated
+  document strips their tax positions and recomputes VAT **once** over the
+  combined base per rate. At the BG-23 breakdown (cent-rounded per BT-117)
+  this matters: three sub-invoices of 10.01 EUR each show 1.90 apiece, the
+  combined base 30.03 correctly shows 5.71. Each rendered position carries
+  the `marktlokationsId` it came from; rechnungsdatum is derived, not
+  wall-clock.
+
+## Typed engine errors on the wire
+
+Engine failures answer with a structured body, not prose:
+
+```json
+{ "error": { "code": "VALIDATION_BLOCKED", "context": "51238696781",
+             "message": "…", "warnings": [{ "code": "MODUL2_AND_FLAT_NNE", … }] } }
+```
+
+`code` is `EngineError::code()` — stable, machine-readable; `warnings` carries
+the full set behind a blocked validation.
+
+## §40 contract facts from vertragd
+
+`dispatch_invoice` resolves the active contract behind the MaLo via
+`GET vertragd /api/v1/vertraege/by-malo/{malo_id}` and puts the §40 Abs. 1
+EnWG facts on the invoice: Vertragsdauer, Kündigungsfrist, the next possible
+Kündigungstermin (computed by vertragd, including the §309 Nr. 9 BGB one-month
+cap after an automatic renewal) and the next Abrechnungstermin (same cadence,
+next period). The contract dates also set `vertragsbeginn`/`vertragsende`, so
+first and last invoices pro-rate to the actual contract days (§41 EnWG). The
+dependency is soft: an unreachable vertragd degrades to an invoice without the
+facts, logged.
+
+## §40c and §41a
+
+Invoice generation checks the §40c EnWG six-week deadline (generation time vs
+period end) and attaches `SECT40C_DEADLINE_EXCEEDED` when late — the engine is
+clock-free by design, so the deadline lives here, where a clock legitimately
+exists. The §41a dynamic path now fetches hourly EPEX prices from tarifbd; it
+was a stub returning an empty map, which priced every dynamic interval at
+nothing while the working client function sat as dead code.
+
 ## Billing arithmetic
 
 All monetary amounts use `billing::Amount<5>` (`EuroAmount` — `i64 × 10⁻⁵` EUR). Never `f64`.

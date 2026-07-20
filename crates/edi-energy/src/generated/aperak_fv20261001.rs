@@ -17,64 +17,64 @@ use crate::registry::Profile;
 use crate::{MessageType, Pruefidentifikator, Release};
 
 static SEGMENTS: &[SegmentDefinition] = &[
-    SegmentDefinition {
-        tag: "UNH",
-        name: "Nachrichten-Kopfsegment",
-        elements: &[
+    SegmentDefinition::new(
+        "UNH",
+        "Nachrichten-Kopfsegment",
+        &[
             ElementRef::new(1, "0062", Status::Mandatory, 1),
             ElementRef::new(2, "S009", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "BGM",
-        name: "Beginn der Nachricht",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "BGM",
+        "Beginn der Nachricht",
+        &[
             ElementRef::new(1, "C002", Status::Mandatory, 1),
             ElementRef::new(2, "C106", Status::Conditional, 1),
             ElementRef::new(3, "1225", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "DTM",
-        name: "Dokumentendatum",
-        elements: &[ElementRef::new(1, "C507", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "UNT",
-        name: "Nachrichten-Endesegment",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "DTM",
+        "Dokumentendatum",
+        &[ElementRef::new(1, "C507", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "UNT",
+        "Nachrichten-Endesegment",
+        &[
             ElementRef::new(1, "0074", Status::Mandatory, 1),
             ElementRef::new(2, "0062", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "RFF",
-        name: "Referenzangaben",
-        elements: &[ElementRef::new(1, "C506", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "NAD",
-        name: "MP-ID Absender/Empfänger",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "RFF",
+        "Referenzangaben",
+        &[ElementRef::new(1, "C506", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "NAD",
+        "MP-ID Absender/Empfänger",
+        &[
             ElementRef::new(1, "3035", Status::Mandatory, 1),
             ElementRef::new(2, "C082", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "ERC",
-        name: "Fehlercode",
-        elements: &[ElementRef::new(1, "C901", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "FTX",
-        name: "Freier Text",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "ERC",
+        "Fehlercode",
+        &[ElementRef::new(1, "C901", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "FTX",
+        "Freier Text",
+        &[
             ElementRef::new(1, "4451", Status::Mandatory, 1),
             ElementRef::new(2, "4453", Status::Conditional, 1),
             ElementRef::new(3, "C107", Status::Conditional, 1),
             ElementRef::new(4, "C108", Status::Conditional, 1),
         ],
-    },
+    ),
 ];
 
 static SEGMENT_MAP: LazyLock<std::collections::HashMap<&'static str, &'static SegmentDefinition>> =

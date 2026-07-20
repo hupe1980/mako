@@ -307,6 +307,9 @@ impl MakodMcpHandler {
     async fn submit_command(
         &self,
         Parameters(p): Parameters<SubmitCommandParams>,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
         meta: Meta,
         client: Peer<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
@@ -332,6 +335,36 @@ impl MakodMcpHandler {
             &self.state.commands.configured_marktrollen,
         )
         .map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+
+        // ── Per-command Cedar authorization ───────────────────────────────
+        // Transport-level `UseMcp` grants access to the MCP endpoint; it does
+        // NOT grant command submission. The same `SubmitCommand` action the
+        // REST `/api/v1/commands` handler evaluates runs here, with the
+        // identity the transport middleware authenticated.
+        let identity = parts
+            .extensions
+            .get::<crate::cedar_authz::CallerIdentity>()
+            .cloned()
+            .ok_or_else(|| {
+                McpError::internal_error(
+                    "authenticated identity missing from request context".to_owned(),
+                    None,
+                )
+            })?;
+        if !self.state.cedar.authorize_command(
+            &identity,
+            &crate::cedar_authz::CommandResource {
+                name: &cmd_lower,
+                marktrolle: &effective_role,
+                pid: crate::commands_api::command_primary_pid(&cmd_lower),
+                tenant: &self.state.commands.tenant_id.to_string(),
+            },
+        ) {
+            return Err(McpError::invalid_request(
+                format!("Cedar policy denied SubmitCommand for {cmd_lower:?}"),
+                None,
+            ));
+        }
 
         let idempotency_key = p
             .idempotency_key
@@ -556,6 +589,9 @@ impl MakodMcpHandler {
     async fn get_process(
         &self,
         Parameters(p): Parameters<GetProcessParams>,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
     ) -> Result<CallToolResult, McpError> {
         use mako_engine::registry::RegistryKey;
 
@@ -575,6 +611,32 @@ impl MakodMcpHandler {
                 p.business_key
             ))])),
             Some(id) => {
+                // §9 EnWG Informatorisches Unbundling: process reads are
+                // scoped per workflow — a VIU deployment can deny an
+                // NB-scoped principal access to LF process state. Deny with
+                // the same shape as not-found to avoid an existence oracle.
+                let caller = parts
+                    .extensions
+                    .get::<crate::cedar_authz::CallerIdentity>()
+                    .cloned()
+                    .ok_or_else(|| {
+                        McpError::internal_error(
+                            "authenticated identity missing from request context".to_owned(),
+                            None,
+                        )
+                    })?;
+                if !self.state.cedar.authorize_process_read(
+                    &caller,
+                    &crate::cedar_authz::ProcessResource {
+                        tenant: &self.state.tenant,
+                        workflow: id.workflow_id.name.as_ref(),
+                    },
+                ) {
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                        "process_not_found: No active process for business key '{}'.",
+                        p.business_key
+                    ))]));
+                }
                 // Retrieve active deadlines for this stream.
                 let deadlines = self
                     .state
@@ -1247,7 +1309,7 @@ impl ServerHandler for MakodMcpHandler {
 /// `UseMcp` permission are rejected with `403 Forbidden`.
 async fn mcp_auth_middleware(
     axum::extract::State(state): axum::extract::State<Arc<MakodMcpState>>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
     use crate::cedar_authz::McpResource;
@@ -1275,6 +1337,12 @@ async fn mcp_auth_middleware(
         )
             .into_response();
     }
+
+    // Forward the authenticated identity to the tool handlers: rmcp injects
+    // the request's `http::request::Parts` (including these extensions) into
+    // the tool context, so `submit_command` can run the per-command Cedar
+    // check with the same principal the transport authenticated.
+    request.extensions_mut().insert(identity);
 
     next.run(request).await
 }

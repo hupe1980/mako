@@ -17,105 +17,105 @@ use crate::registry::Profile;
 use crate::{MessageType, Pruefidentifikator, Release};
 
 static SEGMENTS: &[SegmentDefinition] = &[
-    SegmentDefinition {
-        tag: "UNH",
-        name: "Message Header",
-        elements: &[
+    SegmentDefinition::new(
+        "UNH",
+        "Message Header",
+        &[
             ElementRef::new(1, "0062", Status::Mandatory, 1),
             ElementRef::new(2, "S009", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "BGM",
-        name: "Beginning of Message",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "BGM",
+        "Beginning of Message",
+        &[
             ElementRef::new(1, "C002", Status::Mandatory, 1),
             ElementRef::new(2, "C106", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "DTM",
-        name: "Date/Time/Period (Dokumentendatum)",
-        elements: &[ElementRef::new(1, "C507", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "RFF",
-        name: "Reference (Prüfidentifikator)",
-        elements: &[ElementRef::new(1, "C506", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "NAD",
-        name: "Name and Address",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "DTM",
+        "Date/Time/Period (Dokumentendatum)",
+        &[ElementRef::new(1, "C507", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "RFF",
+        "Reference (Prüfidentifikator)",
+        &[ElementRef::new(1, "C506", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "NAD",
+        "Name and Address",
+        &[
             ElementRef::new(1, "3035", Status::Mandatory, 1),
             ElementRef::new(2, "C082", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "CTA",
-        name: "Contact Information",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "CTA",
+        "Contact Information",
+        &[
             ElementRef::new(1, "3139", Status::Conditional, 1),
             ElementRef::new(2, "C056", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "COM",
-        name: "Communication Contact",
-        elements: &[ElementRef::new(1, "C076", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "CUX",
-        name: "Currencies (Zahlungswährung)",
-        elements: &[ElementRef::new(1, "C504", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "DOC",
-        name: "Document/Message Details (Rückmeldung)",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "COM",
+        "Communication Contact",
+        &[ElementRef::new(1, "C076", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "CUX",
+        "Currencies (Zahlungswährung)",
+        &[ElementRef::new(1, "C504", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "DOC",
+        "Document/Message Details (Rückmeldung)",
+        &[
             ElementRef::new(1, "C002", Status::Mandatory, 1),
             ElementRef::new(2, "C503", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "MOA",
-        name: "Monetary Amount",
-        elements: &[ElementRef::new(1, "C516", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "AJT",
-        name: "Adjustment Details (Abweichungsgrund)",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "MOA",
+        "Monetary Amount",
+        &[ElementRef::new(1, "C516", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "AJT",
+        "Adjustment Details (Abweichungsgrund)",
+        &[
             ElementRef::new(1, "4465", Status::Mandatory, 1),
             ElementRef::new(2, "1229", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "FTX",
-        name: "Free Text",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "FTX",
+        "Free Text",
+        &[
             ElementRef::new(1, "4451", Status::Mandatory, 1),
             ElementRef::new(2, "C108", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "DLI",
-        name: "Document Line Identification",
-        elements: &[ElementRef::new(1, "1082", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "UNS",
-        name: "Section Control",
-        elements: &[ElementRef::new(1, "0081", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "UNT",
-        name: "Message Trailer",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "DLI",
+        "Document Line Identification",
+        &[ElementRef::new(1, "1082", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "UNS",
+        "Section Control",
+        &[ElementRef::new(1, "0081", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "UNT",
+        "Message Trailer",
+        &[
             ElementRef::new(1, "0074", Status::Mandatory, 1),
             ElementRef::new(2, "0062", Status::Mandatory, 1),
         ],
-    },
+    ),
 ];
 
 static SEGMENT_MAP: LazyLock<std::collections::HashMap<&'static str, &'static SegmentDefinition>> =

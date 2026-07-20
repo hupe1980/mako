@@ -1536,10 +1536,12 @@ fn emit_segments_array(out: &mut String, segments: &[&MigSegment]) {
         if !seen_tags.insert(seg.tag.as_str()) {
             continue; // skip duplicate tags (same segment in multiple groups)
         }
-        writeln!(out, "        SegmentDefinition {{").unwrap();
-        writeln!(out, "            tag: {:?},", seg.tag).unwrap();
-        writeln!(out, "            name: {:?},", seg.name).unwrap();
-        writeln!(out, "            elements: &[").unwrap();
+        // `SegmentDefinition` is `#[non_exhaustive]`; its `const fn new` keeps
+        // the directory table buildable in a `static`.
+        writeln!(out, "        SegmentDefinition::new(").unwrap();
+        writeln!(out, "            {:?},", seg.tag).unwrap();
+        writeln!(out, "            {:?},", seg.name).unwrap();
+        writeln!(out, "            &[").unwrap();
         for (pos, elem) in seg.elements.iter().enumerate() {
             let status = if elem.status == "M" {
                 "Status::Mandatory"
@@ -1556,7 +1558,7 @@ fn emit_segments_array(out: &mut String, segments: &[&MigSegment]) {
             .unwrap();
         }
         writeln!(out, "            ],").unwrap();
-        writeln!(out, "        }},").unwrap();
+        writeln!(out, "        ),").unwrap();
     }
     writeln!(out, "    ];").unwrap();
     writeln!(out).unwrap();

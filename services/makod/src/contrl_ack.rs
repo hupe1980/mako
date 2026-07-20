@@ -41,10 +41,10 @@ use std::sync::Arc;
 
 use edi_energy::{AnyMessage, EdiEnergyMessage as _};
 use mako_engine::{
-    deadline::{Deadline, DeadlineStore as _},
+    deadline::Deadline,
     ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId},
-    outbox::{OutboxMessage, OutboxStore as _},
-    store_slatedb::{SlateDbDeadlineStore, SlateDbStore},
+    outbox::OutboxMessage,
+    store_slatedb::SlateDbStore,
     version::WorkflowId,
 };
 use time::Duration;
@@ -60,13 +60,11 @@ use time::Duration;
 /// Uses [`SlateDbStore`] directly (not a trait object) because async-fn-in-trait
 /// methods are not yet dyn-compatible in Rust 1.89.
 pub struct ContrlAckService {
+    /// Shared store: the CONTRL message and its 6-hour delivery deadline
+    /// (CONTRL AHB 1.0 §2.3.1) are written in **one** transaction via
+    /// [`SlateDbStore::enqueue_outbox_with_deadlines`], so a crash can never
+    /// queue the message without its escalation deadline.
     outbox: Arc<SlateDbStore>,
-    /// Deadline store for registering the mandatory 6-hour CONTRL delivery window.
-    ///
-    /// CONTRL AHB 1.0 §2.3.1 requires delivery within 6 wall-clock hours.
-    /// Registering a deadline ensures an escalation fires if the `OutboxWorker`
-    /// is delayed beyond 6 hours (e.g. due to a network outage or worker crash).
-    deadline_store: SlateDbDeadlineStore,
     tenant_id: TenantId,
     /// The tenant's own market-participant identifier (GLN), emitted as the
     /// CONTRL `sender` field (the party acknowledging the inbound interchange).
@@ -76,20 +74,18 @@ pub struct ContrlAckService {
 impl ContrlAckService {
     /// Construct a new service.
     ///
-    /// - `outbox`: shared `SlateDbStore` for enqueuing the CONTRL message.
-    /// - `deadline_store`: persists the 6h CONTRL delivery deadline (CONTRL AHB 1.0 §2.3.1).
+    /// - `outbox`: shared `SlateDbStore` — enqueues the CONTRL message and
+    ///   registers its 6h deadline (CONTRL AHB 1.0 §2.3.1) atomically.
     /// - `tenant_id`: the active tenant identifier.
     /// - `own_mp_id`: the tenant's market-participant code (BDEW GLN, 13 digits).
     #[must_use]
     pub fn new(
         outbox: Arc<SlateDbStore>,
-        deadline_store: SlateDbDeadlineStore,
         tenant_id: TenantId,
         own_mp_id: impl Into<Box<str>>,
     ) -> Self {
         Self {
             outbox,
-            deadline_store,
             tenant_id,
             own_mp_id: own_mp_id.into(),
         }
@@ -173,46 +169,44 @@ impl ContrlAckService {
             }),
         );
 
-        match self.outbox.enqueue(&[msg]).await {
+        // The 6-hour CONTRL delivery deadline (CONTRL AHB 1.0 §2.3.1): the
+        // Empfangsbestätigung must be delivered within 6 wall-clock hours.
+        // The deadline scheduler fires a `contrl-ack-obligation` event if the
+        // OutboxWorker has not cleared the message by then; `deadline_dispatch`
+        // logs a regulatory alert for any fired `contrl-ack-obligation`.
+        //
+        // The format version is the latest known FV from the release registry.
+        // `contrl-ack-obligation` is not a domain workflow; the FV is used
+        // only as a WorkflowId discriminator in the deadline store.
+        let fv = crate::adapters::known_fvs()
+            .into_iter()
+            .max()
+            .unwrap_or_else(|| {
+                mako_engine::version::FormatVersion::parse("FV2025-10-01")
+                    .expect("FV2025-10-01 is a valid fallback format version")
+            });
+        let due_at = time::OffsetDateTime::now_utc() + Duration::hours(6);
+        let deadline = Deadline::new(
+            StreamId::for_process(self.tenant_id, &process_id),
+            process_id,
+            self.tenant_id,
+            WorkflowId::new("contrl-ack-obligation", fv.as_str()),
+            "contrl-6h-delivery-window",
+            due_at,
+        );
+
+        // Message and deadline land in ONE transaction: a crash between two
+        // separate writes would queue a CONTRL with no escalation deadline —
+        // the exact loss the atomic write path exists to prevent.
+        match self
+            .outbox
+            .enqueue_outbox_with_deadlines(&[msg], &[deadline])
+            .await
+        {
             Ok(()) => {
-                // Register the 6-hour CONTRL delivery deadline.
-                //
-                // CONTRL AHB 1.0 §2.3.1: the Empfangsbestätigung must be delivered
-                // within 6 wall-clock hours.  The deadline scheduler fires a
-                // `contrl-ack-obligation` event if the OutboxWorker has not cleared
-                // the message by then.  The `deadline_dispatch` module logs a
-                // regulatory alert for any fired `contrl-ack-obligation` deadlines.
-                //
-                // The format version is the latest known FV from the release registry.
-                // `contrl-ack-obligation` is not a domain workflow; the FV is used
-                // only as a WorkflowId discriminator in the deadline store.
-                let fv = crate::adapters::known_fvs()
-                    .into_iter()
-                    .max()
-                    .unwrap_or_else(|| {
-                        mako_engine::version::FormatVersion::parse("FV2025-10-01")
-                            .expect("FV2025-10-01 is a valid fallback format version")
-                    });
-                let due_at = time::OffsetDateTime::now_utc() + Duration::hours(6);
-                let deadline = Deadline::new(
-                    StreamId::for_process(self.tenant_id, &process_id),
-                    process_id,
-                    self.tenant_id,
-                    WorkflowId::new("contrl-ack-obligation", fv.as_str()),
-                    "contrl-6h-delivery-window",
-                    due_at,
-                );
-                if let Err(e) = self.deadline_store.register(&deadline).await {
-                    tracing::error!(
-                        error      = %e,
-                        sender_mp_id = sender_mp_id.as_ref(),
-                        "CONTRL ack: failed to register 6h deadline — escalation \
-                         will not fire if OutboxWorker is delayed (CONTRL AHB 1.0 §2.3.1)",
-                    );
-                }
                 tracing::debug!(
                     sender_mp_id = sender_mp_id.as_ref(),
-                    "CONTRL ack: Empfangsbestätigung enqueued for Gas interchange",
+                    "CONTRL ack: Empfangsbestätigung + 6h deadline enqueued atomically",
                 );
             }
             Err(e) => {
@@ -221,8 +215,8 @@ impl ContrlAckService {
                 tracing::error!(
                     error      = %e,
                     sender_mp_id = sender_mp_id.as_ref(),
-                    "CONTRL ack: outbox enqueue failed — regulatory 6h CONTRL window \
-                     at risk (CONTRL AHB 1.0 §1.2 / APERAK AHB 1.0 §1.2)",
+                    "CONTRL ack: atomic outbox+deadline enqueue failed — regulatory \
+                     6h CONTRL window at risk (CONTRL AHB 1.0 §1.2 / APERAK AHB 1.0 §1.2)",
                 );
             }
         }

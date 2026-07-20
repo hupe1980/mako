@@ -248,6 +248,15 @@ pub struct OutboxMessage {
     /// (backward-compatible deserialisation via `#[serde(default)]`).
     #[serde(default)]
     pub workflow_name: Box<str>,
+
+    /// W3C `traceparent` of the request that caused this message.
+    ///
+    /// Captured from [`crate::trace_ctx`] at creation time and injected into
+    /// outbound deliveries (ERP webhook header + CloudEvents `traceparent`
+    /// extension), so a trace started by the inbound transport continues
+    /// across the asynchronous outbox boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<Box<str>>,
 }
 
 impl OutboxMessage {
@@ -287,6 +296,7 @@ impl OutboxMessage {
             deliver_after: None,
             attempt_count: 0,
             workflow_name: "".into(),
+            trace_context: crate::trace_ctx::current().map(Into::into),
         }
     }
 

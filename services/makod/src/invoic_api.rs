@@ -38,6 +38,11 @@ use uuid::Uuid;
 pub struct InvoicApiState {
     pub store: Arc<SlateDbStore>,
     pub tenant_id: TenantId,
+    /// Cedar-based authorization engine — the stored BO4E `Rechnung` carries
+    /// customer billing data and must never be an unauthenticated read.
+    pub cedar: Arc<crate::cedar_authz::CedarAuthorizer>,
+    /// Operator tenant (GLN) — the Cedar resource scope.
+    pub tenant: String,
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -60,8 +65,32 @@ pub fn router(state: Arc<InvoicApiState>) -> Router {
 /// - **422 Unprocessable Entity** — `process_id` is not a valid UUID
 async fn get_rechnung(
     State(state): State<Arc<InvoicApiState>>,
+    headers: axum::http::HeaderMap,
     Path(process_id_str): Path<String>,
 ) -> impl IntoResponse {
+    let Some(identity) = state.cedar.authenticate(&headers) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({
+                "error": "Authorization: Bearer <token> required"
+            })),
+        )
+            .into_response();
+    };
+    if !state.cedar.authorize_rechnung(
+        &identity,
+        &crate::cedar_authz::RechnungResource {
+            tenant: &state.tenant,
+        },
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            axum::Json(serde_json::json!({
+                "error": "ReadRechnung permission denied"
+            })),
+        )
+            .into_response();
+    }
     let process_uuid: Uuid = match process_id_str.parse() {
         Ok(id) => id,
         Err(_) => {

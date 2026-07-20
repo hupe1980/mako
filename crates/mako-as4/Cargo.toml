@@ -11,7 +11,7 @@ keywords     = ["as4", "ebms", "energy", "mako", "bdew"]
 categories   = ["network-programming", "encoding"]
 
 [dependencies]
-asx-rs = { version = "0.9", features = ["as4", "interop-strict"] }
+asx-rs = { version = "0.10", features = ["as4", "interop-strict"] }
 
 [features]
 ## Activates the `asx-rs/server` feature (Axum router helpers) so dependents

@@ -39,6 +39,7 @@ pub struct BillingRecordRow {
 
 pub async fn insert_billing_record(
     pool: &PgPool,
+    tenant: &str,
     malo_id: &str,
     lf_mp_id: &str,
     product_code: &str,
@@ -49,18 +50,31 @@ pub async fn insert_billing_record(
     total_netto_eur: Decimal,
     total_brutto_eur: Decimal,
 ) -> anyhow::Result<Uuid> {
+    // `tenant` is NOT NULL with no default, and `br_unique_original` is a
+    // *partial* index over six columns including it. The previous statement
+    // omitted the tenant and named five conflict columns with no predicate —
+    // two independent reasons it failed on every call. Nothing noticed because
+    // nothing tested pg.rs.
     let row = sqlx::query(
         r"INSERT INTO billing_records
-              (malo_id, lf_mp_id, product_code, category, period_from, period_to,
+              (tenant, malo_id, lf_mp_id, product_code, category, period_from, period_to,
                rechnung_json, total_netto_eur, total_brutto_eur)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-          ON CONFLICT (malo_id, lf_mp_id, period_from, period_to, product_code) DO UPDATE
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          ON CONFLICT (malo_id, lf_mp_id, period_from, period_to, product_code, tenant)
+              WHERE is_correction = false AND sammelrechnung_id IS NULL
+              DO UPDATE
           SET rechnung_json   = EXCLUDED.rechnung_json,
               total_netto_eur = EXCLUDED.total_netto_eur,
               total_brutto_eur= EXCLUDED.total_brutto_eur,
               updated_at      = now()
+          -- A re-run may replace a draft, never a record that has left the
+          -- house: once dispatched (or beyond), the stored Rechnung is what the
+          -- counterparty received, and changing it breaks the audit trail. Such
+          -- periods are corrected via the correction path instead.
+          WHERE billing_records.outcome = 'generated'
           RETURNING id",
     )
+    .bind(tenant)
     .bind(malo_id)
     .bind(lf_mp_id)
     .bind(product_code)
@@ -70,11 +84,18 @@ pub async fn insert_billing_record(
     .bind(rechnung_json)
     .bind(total_netto_eur)
     .bind(total_brutto_eur)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await
     .context("insert_billing_record")?;
 
-    Ok(row.try_get("id")?)
+    match row {
+        Some(row) => Ok(row.try_get("id")?),
+        // The guard refused the overwrite: the period already left the house.
+        None => anyhow::bail!(
+            "billing record for {malo_id} {period_from} to {period_to} is already \
+             dispatched; a re-run may replace a draft only - issue a correction"
+        ),
+    }
 }
 
 pub async fn fetch_billing_record(
@@ -135,6 +156,7 @@ pub async fn mark_dispatched(pool: &PgPool, id: Uuid, ce_id: Uuid) -> anyhow::Re
 /// `originalRechnungsnummer` set by the caller; monetary amounts must already be negated.
 pub async fn insert_correction_record(
     pool: &PgPool,
+    tenant: &str,
     malo_id: &str,
     lf_mp_id: &str,
     product_code: &str,
@@ -149,12 +171,13 @@ pub async fn insert_correction_record(
 ) -> anyhow::Result<Uuid> {
     let row = sqlx::query(
         r"INSERT INTO billing_records
-              (malo_id, lf_mp_id, product_code, category, period_from, period_to,
+              (tenant, malo_id, lf_mp_id, product_code, category, period_from, period_to,
                rechnung_json, total_netto_eur, total_brutto_eur,
                is_correction, original_record_id, correction_reason)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE, $10, $11)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12)
           RETURNING id",
     )
+    .bind(tenant)
     .bind(malo_id)
     .bind(lf_mp_id)
     .bind(product_code)
@@ -178,6 +201,7 @@ pub async fn insert_correction_record(
 /// Individual per-MaLo records are linked back via `sammelrechnung_id`.
 pub async fn insert_sammelrechnung_record(
     pool: &PgPool,
+    tenant: &str,
     rahmenvertrag_id: &str,
     lf_mp_id: &str,
     period_from: Date,
@@ -188,11 +212,12 @@ pub async fn insert_sammelrechnung_record(
 ) -> anyhow::Result<Uuid> {
     let row = sqlx::query(
         r"INSERT INTO billing_records
-              (malo_id, lf_mp_id, product_code, category, period_from, period_to,
+              (tenant, malo_id, lf_mp_id, product_code, category, period_from, period_to,
                rechnung_json, total_netto_eur, total_brutto_eur)
-          VALUES ($1, $2, $3, 'SAMMEL', $4, $5, $6, $7, $8)
+          VALUES ($1, $2, $3, $4, 'SAMMEL', $5, $6, $7, $8, $9)
           RETURNING id",
     )
+    .bind(tenant)
     .bind(rahmenvertrag_id)
     .bind(lf_mp_id)
     .bind(format!("SAMMEL-{rahmenvertrag_id}"))

@@ -150,12 +150,12 @@ fn party_registry_accepts_valid_viu_strom_gas_split() {
     );
 
     let registry = result.unwrap();
-    assert_eq!(registry.primary_gln(), "9900000000001");
+    assert_eq!(registry.primary_mp_id(), "9900000000001");
     // Agency for 99… prefix must be "293" (BDEW Strom).
     assert_eq!(registry.primary_agency(), "293");
-    // is_own_gln must recognise both GLNs.
-    assert!(registry.is_own_gln("9900000000001"));
-    assert!(registry.is_own_gln("9800000000001"));
+    // is_own_mp_id must recognise both GLNs.
+    assert!(registry.is_own_mp_id("9900000000001"));
+    assert!(registry.is_own_mp_id("9800000000001"));
 }
 
 /// Same role in two separate party entries must be rejected.

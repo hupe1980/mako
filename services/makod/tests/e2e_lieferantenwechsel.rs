@@ -188,6 +188,7 @@ impl MockLfn {
 
         render_to_wire_bytes(msg, &make_registry(LFN_ID, "LF"))
             .expect("LFN: render_to_wire_bytes (55001)")
+            .bytes
     }
 
     /// ERP action: submit Kündigung Lieferbeginn (PID 55016) to the old supplier.
@@ -240,6 +241,7 @@ impl MockLfn {
 
         render_to_wire_bytes(msg, &make_registry(LFN_ID, "LF"))
             .expect("LFN: render_to_wire_bytes (55016)")
+            .bytes
     }
 
     /// ERP notification: receive NB's UTILMD response (55003/55004) and execute on `nb_leg`.
@@ -432,7 +434,9 @@ impl MockNb {
             );
         }
 
-        render_to_wire_bytes(utilmd, &make_registry(NB_ID, "NB")).expect("NB: render_to_wire_bytes")
+        render_to_wire_bytes(utilmd, &make_registry(NB_ID, "NB"))
+            .expect("NB: render_to_wire_bytes")
+            .bytes
     }
 
     async fn state(&self) -> SupplierChangeState {
@@ -576,6 +580,7 @@ impl MockLfa {
 
         render_to_wire_bytes(msg, &make_registry(LFA_ID, "LF"))
             .expect("LFA: render_to_wire_bytes (55017)")
+            .bytes
     }
 
     async fn state(&self) -> SupplierChangeState {

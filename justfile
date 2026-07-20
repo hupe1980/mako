@@ -62,6 +62,21 @@ test-einsd-db:
     EINSD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55434/einsd" \
         cargo test -p einsd --test settlement_integration -- --include-ignored --test-threads=1
 
+# Integration tests for billingd against a throwaway PostgreSQL.
+test-billingd-db:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker rm -f billingd-test >/dev/null 2>&1 || true
+    docker run -d --name billingd-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=billingd \
+        -p 55435:5432 postgres:17-alpine >/dev/null
+    trap 'docker rm -f billingd-test >/dev/null 2>&1 || true' EXIT
+    for _ in $(seq 1 30); do
+        docker exec billingd-test pg_isready -U postgres >/dev/null 2>&1 && break
+        sleep 1
+    done
+    BILLINGD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55435/billingd" \
+        cargo test -p billingd --test records_integration -- --include-ignored --test-threads=1
+
 # Lint with warnings as errors
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings

@@ -8,14 +8,7 @@ use rubo4e::identifiers::ObisCode;
 use crate::AgencyCode;
 use crate::{Error, Pruefidentifikator, Release};
 
-use super::{Set, Unset, bytes_to_segments, dtm_today, format_dtm137};
-
-macro_rules! emit_seg {
-    ($writer:expr, $tag:expr, $($elem:expr),+ $(,)?) => {{
-        let elements: &[&str] = &[$($elem),+];
-        $writer.write_raw($tag, elements).map_err(|e| Error::Parse(e.into()))?;
-    }};
-}
+use super::{Set, Unset, bytes_to_segments, today_ccyymmdd};
 
 /// DE 7143 code marking a `PIA` value as an OBIS-Kennzahl (MSCONS AHB 3.2, SG9).
 ///
@@ -284,7 +277,6 @@ impl<S, R> MsconsBuilder<S, R> {
             .pruefidentifikator
             .map(|p| format!("{:05}", p.as_u32()))
             .unwrap_or_default();
-        let unh_type = format!("MSCONS:D:04B:UN:{}", self.inner.release.as_str());
         // Defaults to the Prüfidentifikator, which is what BDEW's examples put
         // in DE 1004 for these use cases.
         let document_number = if self.inner.document_number.is_empty() {
@@ -296,43 +288,48 @@ impl<S, R> MsconsBuilder<S, R> {
             .inner
             .document_date
             .as_deref()
-            .map_or_else(dtm_today, format_dtm137);
+            .map_or_else(today_ccyymmdd, str::to_owned);
 
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
 
-        emit_seg!(w, "UNH", &self.inner.message_ref, &unh_type);
+        emit_comp!(
+            w,
+            "UNH",
+            [&self.inner.message_ref],
+            ["MSCONS", "D", "04B", "UN", self.inner.release.as_str()]
+        );
         // BGM DE 1004 is the Dokumentennummer. The Prüfidentifikator travels in
         // SG1 RFF+Z13 (MSCONS AHB 3.2), which is what the receiver routes on —
         // putting it in BGM leaves the message with no detectable PID.
         emit_seg!(w, "BGM", &self.inner.document_code, &document_number, "9");
-        emit_seg!(w, "DTM", &dtm_val);
+        emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
         if !pid_str.is_empty() {
-            emit_seg!(w, "RFF", &format!("Z13:{pid_str}"));
+            emit_comp!(w, "RFF", ["Z13", &pid_str]);
         }
         for (qualifier, value) in &self.inner.header_references {
-            emit_seg!(w, "RFF", &format!("{qualifier}:{value}"));
+            emit_comp!(w, "RFF", [qualifier, value]);
         }
         if let Some(id) = &self.inner.sender_id {
-            emit_seg!(
+            emit_comp!(
                 w,
                 "NAD",
-                "MS",
-                &self.inner.sender_agency.format_nad_c082(id)
+                ["MS"],
+                [id, "", self.inner.sender_agency.as_str()]
             );
         }
         if let Some(id) = &self.inner.receiver_id {
-            emit_seg!(
+            emit_comp!(
                 w,
                 "NAD",
-                "MR",
-                &self.inner.receiver_agency.format_nad_c082(id)
+                ["MR"],
+                [id, "", self.inner.receiver_agency.as_str()]
             );
         }
         if !self.inner.metering_points.is_empty() {
             emit_seg!(w, "UNS", "D");
             for mp in &self.inner.metering_points {
-                emit_seg!(w, "NAD", "DP", &format!("{}::293", mp.malo_id));
+                emit_comp!(w, "NAD", ["DP"], [&mp.malo_id, "", "293"]);
                 if !mp.line_items.is_empty() {
                     // LOC+172 is mandatory. Falling back to the metering point
                     // keeps a caller that set no separate location from emitting
@@ -340,10 +337,10 @@ impl<S, R> MsconsBuilder<S, R> {
                     let loc_id = mp.location_id.as_deref().unwrap_or(mp.malo_id.as_str());
                     emit_seg!(w, "LOC", "172", loc_id);
                     if let Some(period) = &mp.balancing_period {
-                        emit_seg!(w, "DTM", &format!("492:{period}:610"));
+                        emit_comp!(w, "DTM", ["492", period, "610"]);
                     }
                     if let Some(version) = &mp.version {
-                        emit_seg!(w, "DTM", &format!("293:{version}:304"));
+                        emit_comp!(w, "DTM", ["293", version, "304"]);
                     }
                     for item in &mp.line_items {
                         let ln = item.line_number.to_string();
@@ -351,29 +348,27 @@ impl<S, R> MsconsBuilder<S, R> {
                         if let Some(obis) = &item.obis_code {
                             // DE 7143 `SRW` marks the value as an OBIS-Kennzahl
                             // (MSCONS AHB 3.2, SG9 PIA); `Z08` would mark it as a
-                            // Medium. `to_pia_string()` drops the F component and
-                            // returns the OBIS without release characters;
-                            // `escape_value` handles a non-default UNA.
+                            // Medium. `to_pia_string()` returns the OBIS without
+                            // release characters; the writer escapes it for the
+                            // active UNA because the component boundary is
+                            // structural here, not inferred from `:`.
                             let pia_value = obis.to_pia_string();
-                            let escaped = w.escape_value(&pia_value);
-                            let composite = format!("{escaped}:{PIA_TYPE_OBIS}");
-                            emit_seg!(w, "PIA", "5", &composite);
+                            emit_comp!(w, "PIA", ["5"], [&pia_value, PIA_TYPE_OBIS]);
                         }
                         for qty in &item.quantities {
-                            let qty_val = format!("{}:{}:{}", qty.qualifier, qty.value, qty.unit);
-                            emit_seg!(w, "QTY", &qty_val);
+                            emit_comp!(w, "QTY", [&qty.qualifier, &qty.value, &qty.unit]);
                             // DE 2005 163/164 = Beginn/Ende Messperiode. Emitted
                             // immediately after the QTY they bound, which is what
                             // associates them with that quantity.
                             if let Some((start, end)) = &qty.period {
-                                emit_seg!(w, "DTM", &format!("163:{start}:303"));
-                                emit_seg!(w, "DTM", &format!("164:{end}:303"));
+                                emit_comp!(w, "DTM", ["163", start, "303"]);
+                                emit_comp!(w, "DTM", ["164", end, "303"]);
                             }
                         }
                         // The Leistungsperiode belongs to the line item's
                         // maximum, so it follows that item's quantities.
                         if let Some(lp) = &item.leistungsperiode {
-                            emit_seg!(w, "DTM", &format!("306:{}:{}", lp.value, lp.format));
+                            emit_comp!(w, "DTM", ["306", &lp.value, &lp.format]);
                         }
                     }
                 }

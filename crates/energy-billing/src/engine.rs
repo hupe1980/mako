@@ -8,7 +8,7 @@
 //! The recommended way to build an engine is via [`Product::build_engine()`](crate::Product::build_engine):
 //!
 //! ```rust
-//! use energy_billing::{BillingContext, InvoiceType, MeterInput, Product, Quantities, RegulatoryRates, GridInput};
+//! use energy_billing::{BillingContext, BillingPeriod, GridInput, InvoiceType, MeterInput, Product, Quantities, RegulatoryRates};
 //! use rust_decimal::dec;
 //! use time::macros::date;
 //!
@@ -17,8 +17,7 @@
 //!     malo_id:         "51238696781".to_owned(),
 //!     lf_mp_id:        "9900000000001".to_owned(),
 //!     rechnungsnummer: "R2026-001".to_owned(),
-//!     period_from:      date!(2026-01-01),
-//!     period_to:        date!(2026-01-31),
+//!     period: BillingPeriod::new(date!(2026-01-01), date!(2026-01-31)).unwrap(),
 //!     invoice_type:     InvoiceType::Initial,
 //!     regulatory_rates: RegulatoryRates::default(),
 //!     ..Default::default()
@@ -44,9 +43,8 @@
 //!     .bill(ctx, &quantities).unwrap();
 //! ```
 
-use billing::BillingError;
-
 use crate::context::BillingContext;
+use crate::error::EngineError;
 use crate::invoice::Invoice;
 use crate::position::{BillingPosition, BillingWarning, WarningSeverity};
 use crate::provider::BillingProvider;
@@ -107,7 +105,7 @@ impl BillingEngine {
     pub fn bill_batch(
         &self,
         batch: Vec<(BillingContext, Quantities)>,
-    ) -> Vec<Result<Invoice, BillingError>> {
+    ) -> Vec<Result<Invoice, EngineError>> {
         batch
             .into_iter()
             .map(|(ctx, quantities)| self.bill(ctx, &quantities))
@@ -124,27 +122,21 @@ impl BillingEngine {
         &self,
         ctx: BillingContext,
         quantities: &Quantities,
-    ) -> Result<Invoice, BillingError> {
+    ) -> Result<Invoice, EngineError> {
         // ── Pass 0: collect regulatory warnings ───────────────────────────────
-        // Run validate_warnings() on all providers. If any Error-severity warning
-        // is found, fail before generating any positions — the billing run is
-        // invalid and must not be dispatched.
-        let mut warnings: Vec<BillingWarning> = Vec::new();
+        // Run context-level checks and validate_warnings() on all providers.
+        // If any Error-severity warning is found, fail before generating any
+        // positions — the billing run is invalid and must not be dispatched.
+        let mut warnings: Vec<BillingWarning> = context_warnings(&ctx);
         for provider in self.providers.iter() {
-            let w = provider.validate_warnings(&ctx, quantities);
-            if w.iter().any(|x| x.severity == WarningSeverity::Error) {
-                // Collect all warnings (so the caller sees all violations) then fail.
-                warnings.extend(w);
-                let reasons: Vec<&str> = warnings
-                    .iter()
-                    .filter(|x| x.severity == WarningSeverity::Error)
-                    .map(|x| x.message.as_str())
-                    .collect();
-                return Err(BillingError::InvalidInput {
-                    reason: reasons.join("; "),
-                });
-            }
-            warnings.extend(w);
+            warnings.extend(provider.validate_warnings(&ctx, quantities));
+        }
+        if warnings
+            .iter()
+            .any(|x| x.severity == WarningSeverity::Error)
+        {
+            // The error carries ALL warnings so the caller sees every violation.
+            return Err(EngineError::ValidationBlocked { warnings });
         }
 
         let mut positions: Vec<BillingPosition> = Vec::new();
@@ -244,6 +236,48 @@ impl BillingEngine {
 
         Ok(Invoice::from_positions(ctx, positions, warnings))
     }
+}
+
+// ── Context-level regulatory checks ───────────────────────────────────────────
+
+/// Warnings derived from the context alone, independent of any provider.
+///
+/// Currently one check: §38 Abs. 2 S. 2 EnWG limits Ersatzversorgung to three
+/// months — a longer Ersatzversorgung period describes a supply that cannot
+/// legally exist, so it blocks the run (`Error` severity). Bill the first
+/// three months as Ersatzversorgung and the remainder under the regime the
+/// supply actually continued in.
+fn context_warnings(ctx: &BillingContext) -> Vec<BillingWarning> {
+    let mut warnings = Vec::new();
+    if ctx.vertragsart == crate::context::Vertragsart::Ersatzversorgung {
+        let from = ctx.period_from();
+        // Three months after the first day; the Ersatzversorgung may run
+        // through the day before.
+        let limit = add_months(from, 3);
+        if ctx.period_to() >= limit {
+            warnings.push(BillingWarning {
+                code: "ERSATZVERSORGUNG_UEBER_3_MONATE",
+                severity: WarningSeverity::Error,
+                message: format!(
+                    "Ersatzversorgung endet spätestens drei Monate nach Beginn \
+                     (§38 Abs. 2 S. 2 EnWG): Zeitraum {}..{} überschreitet die \
+                     Grenze {limit}",
+                    from,
+                    ctx.period_to(),
+                ),
+            });
+        }
+    }
+    warnings
+}
+
+/// `date` plus `months` calendar months, clamped to the last valid day.
+fn add_months(date: time::Date, months: i32) -> time::Date {
+    let total = date.month() as i32 - 1 + months;
+    let year = date.year() + total.div_euclid(12);
+    let month = time::Month::try_from((total.rem_euclid(12) + 1) as u8).expect("1..=12");
+    let day = date.day().min(time::util::days_in_month(month, year));
+    time::Date::from_calendar_date(year, month, day).expect("valid clamped date")
 }
 
 // ── Cancellation helpers ──────────────────────────────────────────────────────

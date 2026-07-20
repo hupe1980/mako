@@ -298,6 +298,15 @@ pub struct ErpEvent {
     /// Wall-clock time when the domain event was persisted.
     pub occurred_at: OffsetDateTime,
 
+    /// W3C `traceparent` propagated from the request that caused this event.
+    ///
+    /// Copied from `OutboxMessage::trace_context`; injected into the webhook
+    /// delivery as the `traceparent` HTTP header and the CloudEvents
+    /// `traceparent` extension attribute (CloudEvents distributed-tracing
+    /// extension), so the ERP joins the same trace as the inbound transport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<Box<str>>,
+
     /// Workflow family name that produced this event (e.g. `"gpke-sperrung"`).
     ///
     /// Carried through from `OutboxMessage::workflow_name`.  Emitted as the

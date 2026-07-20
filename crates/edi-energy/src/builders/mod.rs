@@ -134,32 +134,53 @@ pub(super) fn bytes_to_segments(
     feature = "comdis",
     feature = "utilts",
 ))]
-pub(super) fn format_dtm137(date: &str) -> String {
-    format!("137:{date}:102")
-}
-
-#[cfg(any(
-    feature = "utilmd",
-    feature = "mscons",
-    feature = "aperak",
-    feature = "iftsta",
-    feature = "insrpt",
-    feature = "invoic",
-    feature = "orders",
-    feature = "partin",
-    feature = "reqote",
-    feature = "remadv",
-    feature = "ordchg",
-    feature = "ordrsp",
-    feature = "quotes",
-    feature = "comdis",
-    feature = "utilts",
-))]
-pub(super) fn dtm_today() -> String {
+pub(super) fn today_ccyymmdd() -> String {
     let today = time::OffsetDateTime::now_utc().date();
     let (y, m, d) = (today.year(), today.month() as u8, today.day());
-    format!("137:{y:04}{m:02}{d:02}:102")
+    format!("{y:04}{m:02}{d:02}")
 }
+
+// ── Writer macros ─────────────────────────────────────────────────────────────
+//
+// One shared pair for every builder.
+//
+// `emit_seg!` writes elements through `Writer::write_raw`: a `:` inside an
+// element string is a **component boundary**. Only compile-time constants may
+// carry composites through it — never interpolate runtime data into an
+// element, because a literal separator inside the value would be promoted to
+// a boundary instead of escaped. A guard test enforces that no `format!`
+// appears inside an `emit_seg!` call.
+//
+// `emit_comp!` writes explicit element/component structure through
+// `Writer::write_composites`: boundaries are structural, so a literal
+// separator inside a runtime value is escaped. Each `[...]` group is one
+// element; its entries are the components.
+//
+// ```ignore
+// emit_comp!(w, "RFF", ["ACW", runtime_ref]);          // RFF+ACW:<ref>
+// emit_comp!(w, "NAD", ["MS"], [id, "", "293"]);       // NAD+MS+<id>::293
+// ```
+
+macro_rules! emit_seg {
+    ($writer:expr, $tag:expr, $($elem:expr),+ $(,)?) => {{
+        let elements: &[&str] = &[$($elem),+];
+        $writer
+            .write_raw($tag, elements)
+            .map_err(|e| $crate::Error::Parse(e.into()))?;
+    }};
+}
+
+macro_rules! emit_comp {
+    ($writer:expr, $tag:expr, $([$($comp:expr),* $(,)?]),+ $(,)?) => {{
+        let elements: &[&[&str]] = &[$(&[$($comp),*]),+];
+        $writer
+            .write_composites($tag, elements)
+            .map_err(|e| $crate::Error::Parse(e.into()))?;
+    }};
+}
+
+// The macros reach the sibling builder modules through textual scope — they
+// are defined above the `mod` declarations, so no re-export is needed.
 
 // ── Sub-modules ───────────────────────────────────────────────────────────────
 

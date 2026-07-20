@@ -194,6 +194,17 @@ let parsed = edi_energy::parse(&bytes)?;
 parsed.validate()?.into_error_result()?;
 ```
 
+### Separator safety
+
+Builders never pre-join composites with `:`. Runtime data — free texts,
+references, OBIS codes, party IDs — is written through
+`Writer::write_composites` (the internal `emit_comp!` macro), where component
+boundaries are structural and a literal `:`, `+`, `?`, or `'` inside a value
+is escaped on the wire instead of being promoted to a boundary. A guard test
+(`builder_writer_guard`) enforces that no `format!`-interpolated value ever
+reaches the raw writer path, and a round-trip test proves a separator-hostile
+free text survives builder → wire → parser unchanged.
+
 ---
 
 ## See Also

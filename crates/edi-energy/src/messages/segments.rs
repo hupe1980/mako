@@ -584,8 +584,10 @@ pub struct Lin {
 /// `item_number` contains the full clean OBIS string (`"1-1:1.9.1"`)
 /// and `item_type` contains the DE 7143 qualifier (`"SRW"` or `"Z12"`).
 ///
-/// **Builder note:** always use `Writer::escape_value()` when constructing the
-/// PIA composite to ensure the OBIS colons are correctly escaped.
+/// **Builder note:** write the PIA composite through
+/// `Writer::write_composites` (the builders' `emit_comp!`), where the OBIS is
+/// one component and its colons are escaped structurally — never pre-join the
+/// composite with `:` and hand it to `write_raw`.
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
 #[edifact(segment = "PIA")]
 pub struct Pia {

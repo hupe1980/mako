@@ -647,6 +647,52 @@ impl VertragdClient {
             .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
         resp.json().await.context("parse rahmenvertrag malos")
     }
+
+    /// `GET /api/v1/vertraege/by-malo/{malo_id}`
+    ///
+    /// The active Versorgungsvertrag behind a MaLo — the source of the §40
+    /// Abs. 1 EnWG contract facts (Vertragsdauer, Kündigungsfrist, next
+    /// possible Kündigungstermin) the invoice must state. `Ok(None)` when the
+    /// MaLo has no active contract in vertragd.
+    pub async fn get_vertrag_by_malo(&self, malo_id: &str) -> Result<Option<VertragByMalo>> {
+        let url = format!("{}/api/v1/vertraege/by-malo/{}", self.base_url, malo_id);
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("vertragd GET vertrag by malo")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
+        resp.json().await.context("parse vertrag by malo")
+    }
+}
+
+/// Response of `GET /api/v1/vertraege/by-malo/{malo_id}`.
+#[derive(Debug, serde::Deserialize)]
+pub struct VertragByMalo {
+    /// The contract row — only the fields billing needs are read.
+    pub vertrag: VertragFacts,
+    /// Next possible Kündigungstermin, computed by vertragd as of today.
+    pub naechstmoeglicher_kuendigungstermin: Option<time::Date>,
+}
+
+/// The contract facts billingd puts on the invoice (§40 Abs. 1 EnWG).
+#[derive(Debug, serde::Deserialize)]
+pub struct VertragFacts {
+    /// vertragd's contract UUID — the invoice's `contract_id` fallback.
+    pub id: String,
+    /// Human-readable contract number, preferred for `contract_id`.
+    pub vertrags_nr: Option<String>,
+    /// Contract start — enables §41 pro-rata clipping on first invoices.
+    pub vertragsbeginn: time::Date,
+    /// Contract end when befristet; `None` for unbefristete Verträge.
+    pub vertragsende: Option<time::Date>,
+    /// Notice period in months.
+    pub kuendigungsfrist_monate: i32,
 }
 
 /// One active supply site within a Rahmenvertrag.

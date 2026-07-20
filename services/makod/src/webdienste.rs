@@ -529,3 +529,46 @@ pub fn router(handler: Arc<MakodApiHandler>) -> Router {
         .merge(malo_ident::router(Arc::clone(&handler)))
         .merge(wim_order::router(handler))
 }
+
+/// Bearer/OIDC authentication state for the `:8090` API-Webdienste port.
+#[derive(Clone)]
+pub struct WebdiensteAuthState {
+    /// Cedar-based authenticator/authorizer.
+    pub cedar: Arc<crate::cedar_authz::CedarAuthorizer>,
+    /// Operator tenant (GLN) — the Cedar resource scope.
+    pub tenant: Arc<str>,
+}
+
+/// Authentication middleware for every `:8090` route.
+///
+/// The BDEW API-Webdienste specification requires authenticated access. The
+/// caller must present a bearer token (named key or OIDC JWT) and hold the
+/// Cedar `UseWebdienste` action; the body-size limit is applied by the caller
+/// via [`axum::extract::DefaultBodyLimit`].
+pub async fn webdienste_auth_middleware(
+    axum::extract::State(state): axum::extract::State<WebdiensteAuthState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    let Some(identity) = state.cedar.authenticate(request.headers()) else {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            "Authorization: Bearer <token> required for API-Webdienste",
+        )
+            .into_response();
+    };
+    if !state.cedar.authorize_webdienste(
+        &identity,
+        &crate::cedar_authz::WebdiensteResource {
+            tenant: &state.tenant,
+        },
+    ) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "403 Forbidden: UseWebdienste permission denied",
+        )
+            .into_response();
+    }
+    next.run(request).await
+}

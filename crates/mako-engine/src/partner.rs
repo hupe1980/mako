@@ -549,6 +549,7 @@ pub struct NoopPartnerStore;
 // known Rust quirk (implementing a deprecated type fires the lint even in the
 // defining module). The guard is still effective: *callers* that instantiate
 // `NoopPartnerStore` outside of test/feature-gated code will see the warning.
+#[cfg(any(test, feature = "testing"))]
 #[allow(deprecated)]
 impl PartnerStore for NoopPartnerStore {
     async fn upsert(

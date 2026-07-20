@@ -941,8 +941,17 @@ where
 /// sent to any counterparty. Do not use in production.
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use = "NoopAs4Sender discards all outbound messages silently — use a real AS4 gateway in production"]
+#[cfg_attr(
+    not(any(test, feature = "testing")),
+    deprecated = "NoopAs4Sender must not be wired in production builds; every \
+                  outbound EDIFACT message would be silently discarded. Use \
+                  a real As4Sender implementation instead."
+)]
 pub struct NoopAs4Sender;
 
+// The trait impl is test/testing-only: a release build without the `testing`
+// feature cannot wire NoopAs4Sender into an outbox worker at all.
+#[cfg(any(test, feature = "testing"))]
 impl As4Sender for NoopAs4Sender {
     async fn send(&self, _msg: &OutboxMessage) -> Result<(), EngineError> {
         Ok(())

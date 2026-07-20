@@ -611,6 +611,44 @@ pub async fn list_komponenten(
     )
 }
 
+/// The active Versorgungsvertrag delivering to a MaLo, with its component.
+///
+/// This is the lookup `billingd` uses to put §40 Abs. 1 EnWG contract facts
+/// (Vertragsdauer, Kündigungsfrist, next Kündigungstermin) on the invoice —
+/// the contract, not the tariff, is where they live. Newest active contract
+/// wins when a MaLo re-contracted within the tenant.
+pub async fn fetch_vertrag_by_malo(
+    pool: &PgPool,
+    malo_id: &str,
+    tenant: &str,
+) -> Result<Option<(VersorgungsvertragRow, VertragskomponenteRow)>> {
+    let vertrag: Option<VersorgungsvertragRow> = sqlx::query_as(
+        "SELECT v.* FROM versorgungsvertraege v
+         JOIN vertragskomponenten k ON k.vertrag_id = v.id
+         WHERE k.malo_id=$1 AND v.tenant=$2
+           AND v.status IN ('TEILERFUELLUNG','AKTIV','GEKÜNDIGT')
+           AND k.status IN ('AKTIV','BESTAETIGT')
+         ORDER BY v.vertragsbeginn DESC LIMIT 1",
+    )
+    .bind(malo_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await?;
+    let Some(vertrag) = vertrag else {
+        return Ok(None);
+    };
+    let komponente: Option<VertragskomponenteRow> = sqlx::query_as(
+        "SELECT * FROM vertragskomponenten
+         WHERE vertrag_id=$1 AND malo_id=$2
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(vertrag.id)
+    .bind(malo_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(komponente.map(|k| (vertrag, k)))
+}
+
 pub async fn list_offene_vertraege(
     pool: &PgPool,
     tenant: &str,

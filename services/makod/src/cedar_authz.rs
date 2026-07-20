@@ -222,6 +222,14 @@ pub enum MakoAction {
     ReadMetrics,
     /// Use the MCP server at `/mcp` — covers all MCP tool invocations.
     UseMcp,
+    /// Read a stored BO4E Rechnung — `GET /api/v1/invoic/{process_id}/rechnung`.
+    ReadRechnung,
+    /// Use the `:8090` API-Webdienste Strom endpoints.
+    UseWebdienste,
+    /// Read process state (MCP `get_process` / `list_active_processes`).
+    ReadProcess,
+    /// Trigger a process migration — `POST /admin/migrations`.
+    AdminMigrations,
 }
 
 impl MakoAction {
@@ -239,6 +247,10 @@ impl MakoAction {
             Self::AdminPartnerImport => "AdminPartnerImport",
             Self::ReadMetrics => "ReadMetrics",
             Self::UseMcp => "UseMcp",
+            Self::ReadRechnung => "ReadRechnung",
+            Self::UseWebdienste => "UseWebdienste",
+            Self::ReadProcess => "ReadProcess",
+            Self::AdminMigrations => "AdminMigrations",
         }
     }
 }
@@ -281,6 +293,37 @@ pub struct PartnerResource<'a> {
 
 /// Resource descriptor for metrics endpoint checks.
 pub struct MetricsResource<'a> {
+    /// Operator tenant (GLN).
+    pub tenant: &'a str,
+}
+
+/// Resource descriptor for API-Webdienste (`:8090`) checks.
+pub struct WebdiensteResource<'a> {
+    /// Operator tenant (GLN).
+    pub tenant: &'a str,
+}
+
+/// Resource descriptor for process-state reads (§9 EnWG unbundling scope).
+pub struct ProcessResource<'a> {
+    /// Operator tenant (GLN).
+    pub tenant: &'a str,
+    /// Workflow name of the process being read (e.g. `"gpke-lf-anmeldung"`).
+    ///
+    /// The workflow name encodes the Marktrolle side of the process, so a
+    /// VIU deployment can write Cedar policies that keep an NB-scoped
+    /// principal out of LF process state (§9 EnWG Informatorisches
+    /// Unbundling) by matching on `context.workflow`.
+    pub workflow: &'a str,
+}
+
+/// Resource descriptor for Rechnung read checks.
+pub struct RechnungResource<'a> {
+    /// Operator tenant (GLN).
+    pub tenant: &'a str,
+}
+
+/// Resource descriptor for migration-trigger checks.
+pub struct MigrationResource<'a> {
     /// Operator tenant (GLN).
     pub tenant: &'a str,
 }
@@ -646,6 +689,134 @@ impl CedarAuthorizer {
         self.eval(
             identity,
             MakoAction::ReadMetrics,
+            resource_uid,
+            vec![principal_entity(identity), resource],
+            serde_json::json!({ "tenant": res.tenant }),
+        )
+    }
+
+    /// Evaluate authorization for the API-Webdienste (`:8090`) endpoints.
+    pub fn authorize_webdienste(
+        &self,
+        identity: &CallerIdentity,
+        res: &WebdiensteResource<'_>,
+    ) -> bool {
+        let resource_uid = entity_uid("MaKo::WebdiensteEndpoint", res.tenant);
+        let resource = match Entity::new(
+            resource_uid.clone(),
+            std::collections::HashMap::from([("tenant".to_owned(), cedar_str(res.tenant))]),
+            std::collections::HashSet::new(),
+        ) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::error!(
+                    principal = %identity.name,
+                    "cedar: failed to build WebdiensteEndpoint entity: {e}"
+                );
+                return false;
+            }
+        };
+        self.eval(
+            identity,
+            MakoAction::UseWebdienste,
+            resource_uid,
+            vec![principal_entity(identity), resource],
+            serde_json::json!({ "tenant": res.tenant }),
+        )
+    }
+
+    /// Evaluate authorization for a process-state read.
+    ///
+    /// The `workflow` context lets §9 EnWG VIU deployments deny an NB-scoped
+    /// principal access to LF process state and vice versa.
+    pub fn authorize_process_read(
+        &self,
+        identity: &CallerIdentity,
+        res: &ProcessResource<'_>,
+    ) -> bool {
+        let resource_uid = entity_uid("MaKo::ProcessRecord", res.tenant);
+        let resource = match Entity::new(
+            resource_uid.clone(),
+            std::collections::HashMap::from([
+                ("tenant".to_owned(), cedar_str(res.tenant)),
+                ("workflow".to_owned(), cedar_str(res.workflow)),
+            ]),
+            std::collections::HashSet::new(),
+        ) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::error!(
+                    principal = %identity.name,
+                    "cedar: failed to build ProcessRecord entity: {e}"
+                );
+                return false;
+            }
+        };
+        self.eval(
+            identity,
+            MakoAction::ReadProcess,
+            resource_uid,
+            vec![principal_entity(identity), resource],
+            serde_json::json!({ "tenant": res.tenant, "workflow": res.workflow }),
+        )
+    }
+
+    /// Evaluate authorization for a Rechnung read — the stored BO4E invoice
+    /// carries customer billing data and must never be an unauthenticated read.
+    pub fn authorize_rechnung(
+        &self,
+        identity: &CallerIdentity,
+        res: &RechnungResource<'_>,
+    ) -> bool {
+        let resource_uid = entity_uid("MaKo::RechnungEndpoint", res.tenant);
+        let resource = match Entity::new(
+            resource_uid.clone(),
+            std::collections::HashMap::from([("tenant".to_owned(), cedar_str(res.tenant))]),
+            std::collections::HashSet::new(),
+        ) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::error!(
+                    principal = %identity.name,
+                    "cedar: failed to build RechnungEndpoint entity: {e}"
+                );
+                return false;
+            }
+        };
+        self.eval(
+            identity,
+            MakoAction::ReadRechnung,
+            resource_uid,
+            vec![principal_entity(identity), resource],
+            serde_json::json!({ "tenant": res.tenant }),
+        )
+    }
+
+    /// Evaluate authorization for triggering a process migration — a mutation
+    /// over every in-flight process, so authentication alone is not enough.
+    pub fn authorize_migrations(
+        &self,
+        identity: &CallerIdentity,
+        res: &MigrationResource<'_>,
+    ) -> bool {
+        let resource_uid = entity_uid("MaKo::MigrationEndpoint", res.tenant);
+        let resource = match Entity::new(
+            resource_uid.clone(),
+            std::collections::HashMap::from([("tenant".to_owned(), cedar_str(res.tenant))]),
+            std::collections::HashSet::new(),
+        ) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::error!(
+                    principal = %identity.name,
+                    "cedar: failed to build MigrationEndpoint entity: {e}"
+                );
+                return false;
+            }
+        };
+        self.eval(
+            identity,
+            MakoAction::AdminMigrations,
             resource_uid,
             vec![principal_entity(identity), resource],
             serde_json::json!({ "tenant": res.tenant }),

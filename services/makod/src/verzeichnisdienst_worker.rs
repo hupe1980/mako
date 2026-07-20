@@ -98,10 +98,10 @@ impl VerzeichnisdienstLookup {
         &self,
         mp_id: &str,
     ) -> Result<Option<Url>, mako_engine::error::EngineError> {
-        let gln_code = MarktpartnerCode::new(mp_id);
+        let mp_id_code = MarktpartnerCode::new(mp_id);
 
         // 1. Check the partner store for a cached AW channel.
-        if let Some(record) = self.partner_store.get(self.tenant_id, &gln_code).await?
+        if let Some(record) = self.partner_store.get(self.tenant_id, &mp_id_code).await?
             && let Some(url_str) = record.api_webdienste_endpoint()
         {
             match Url::parse(url_str) {
@@ -130,7 +130,7 @@ impl VerzeichnisdienstLookup {
                 );
 
                 // 3. Persist to partner store so future lookups are instant.
-                self.persist_api_webdienste_url(mp_id, &gln_code, api_url.as_str())
+                self.persist_api_webdienste_url(mp_id, &mp_id_code, api_url.as_str())
                     .await;
 
                 Ok(Some(api_url))
@@ -148,8 +148,12 @@ impl VerzeichnisdienstLookup {
                 match Url::parse(url.as_ref()) {
                     Ok(redirected_url) => {
                         // Store the redirect target URL as the partner's API-Webdienste endpoint.
-                        self.persist_api_webdienste_url(mp_id, &gln_code, redirected_url.as_str())
-                            .await;
+                        self.persist_api_webdienste_url(
+                            mp_id,
+                            &mp_id_code,
+                            redirected_url.as_str(),
+                        )
+                        .await;
                         Ok(Some(redirected_url))
                     }
                     Err(e) => {
@@ -169,10 +173,10 @@ impl VerzeichnisdienstLookup {
     async fn persist_api_webdienste_url(
         &self,
         mp_id: &str,
-        gln_code: &MarktpartnerCode,
+        mp_id_code: &MarktpartnerCode,
         url: &str,
     ) {
-        let record = match self.partner_store.get(self.tenant_id, gln_code).await {
+        let record = match self.partner_store.get(self.tenant_id, mp_id_code).await {
             Ok(Some(mut existing)) => {
                 // Update or insert the AW channel.
                 if let Some(ch) = existing
@@ -192,7 +196,7 @@ impl VerzeichnisdienstLookup {
             Ok(None) => {
                 // Create a minimal record if this partner is not yet in the store.
                 PartnerRecord {
-                    mp_id: gln_code.clone(),
+                    mp_id: mp_id_code.clone(),
                     display_name: None,
                     channels: vec![CommunicationChannel::api_webdienste(url)],
                     roles: Vec::new(),

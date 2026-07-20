@@ -267,7 +267,7 @@ pub(crate) fn partin_to_partner_record(
     pid: Option<u32>,
 ) -> Option<PartnerRecord> {
     let sender = msg.sender()?;
-    let gln_str = sender.party_id.as_deref().filter(|s| !s.is_empty())?;
+    let mp_id_str = sender.party_id.as_deref().filter(|s| !s.is_empty())?;
 
     let channels: Vec<CommunicationChannel> = msg
         .com_segments()
@@ -285,7 +285,7 @@ pub(crate) fn partin_to_partner_record(
         .unwrap_or_default();
 
     Some(PartnerRecord {
-        mp_id: MarktpartnerCode::from(gln_str),
+        mp_id: MarktpartnerCode::from(mp_id_str),
         display_name: sender.party_name.as_deref().map(Into::into),
         channels,
         roles,

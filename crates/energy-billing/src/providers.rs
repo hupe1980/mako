@@ -4,13 +4,12 @@
 //! a `TariffInput` (the product definition from `tarifbd`) and register them
 //! with `BillingEngine`.
 
-use billing::{
-    BillingError, Currency, DynamicPricing, TariffBand, TariffSchedule, TimeOfUsePricing, TouBand,
-};
+use billing::{Currency, DynamicPricing, TariffBand, TariffSchedule, TimeOfUsePricing, TouBand};
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 
 use crate::context::BillingContext;
+use crate::error::EngineError;
 use crate::position::{
     BillingPosition, BillingWarning, PositionCategory, WarningSeverity, arbeitspreis_position,
     grundpreis_position, levy_position, validated_eur,
@@ -61,12 +60,73 @@ impl ElectricityProvider {
 }
 
 impl BillingProvider for ElectricityProvider {
+    fn validate_warnings(
+        &self,
+        ctx: &BillingContext,
+        quantities: &Quantities,
+    ) -> Vec<BillingWarning> {
+        let mut w = Vec::new();
+        let meter = quantities.electricity.as_ref();
+
+        // An estimated reading is billable (§17 Abs. 1 MessZV), but the caller
+        // must know it happened: the customer can demand a corrected invoice
+        // once a real reading arrives, so dispatch systems treat it differently.
+        // This was an Info *position* only — visible on paper, invisible to code.
+        if meter.is_some_and(|m| m.is_estimated) {
+            w.push(BillingWarning {
+                code: "ESTIMATED_READING",
+                severity: WarningSeverity::Warning,
+                message: "billed on an estimated reading (§17 Abs. 1 MessZV) — \
+                          expect a correction when the real reading arrives"
+                    .to_owned(),
+            });
+        }
+
+        // A price guarantee that ends inside or within 30 days of the billed
+        // period is something the operator wants to see before dispatch.
+        if let Some(bis) = self.product.preisgarantie_bis
+            && bis <= ctx.period_to() + time::Duration::days(30)
+        {
+            w.push(BillingWarning {
+                code: "PREISGARANTIE_ENDET",
+                severity: WarningSeverity::Warning,
+                message: format!(
+                    "the price guarantee ends {bis}, within 30 days of the billed \
+                     period — verify the follow-on price was communicated"
+                ),
+            });
+        }
+
+        // A consumption deviation beyond 50 % of the prior year is the standard
+        // plausibility threshold before an invoice goes out: it usually means a
+        // meter fault, a reading transposition, or a tenant change nobody booked.
+        if let (Some(m), Some(vh)) = (meter, ctx.verbrauchshistorie.as_ref())
+            && let Some(vorjahr) = vh.vorjahr_kwh
+            && vorjahr > Decimal::ZERO
+        {
+            let deviation = ((m.arbeitsmenge_kwh - vorjahr) / vorjahr).abs();
+            if deviation > dec!(0.5) {
+                w.push(BillingWarning {
+                    code: "VERBRAUCH_ABWEICHUNG_50PCT",
+                    severity: WarningSeverity::Warning,
+                    message: format!(
+                        "consumption {} kWh deviates {:.0}% from the prior year's \
+                         {vorjahr} kWh — verify the reading before dispatch",
+                        m.arbeitsmenge_kwh,
+                        deviation * dec!(100)
+                    ),
+                });
+            }
+        }
+        w
+    }
+
     fn bill(
         &self,
         ctx: &BillingContext,
         quantities: &Quantities,
         _prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         let meter = quantities.electricity.as_ref().cloned().unwrap_or_default();
         let kwh = meter.arbeitsmenge_kwh;
         let days = ctx.days();
@@ -77,8 +137,8 @@ impl BillingProvider for ElectricityProvider {
 
         // ── Resolve seasonal arbeitspreis ──────────────────────────────────────
         // When seasonal_prices is set, the price for the billing month is looked up.
-        // Uses ctx.period_from month as the representative month for the period.
-        let billing_month = ctx.period_from.month() as u8;
+        // Uses ctx.period_from() month as the representative month for the period.
+        let billing_month = ctx.period_from().month() as u8;
         let seasonal_arbeitspreis = product.seasonal_prices.as_ref().and_then(|seasons| {
             seasons
                 .iter()
@@ -123,15 +183,17 @@ impl BillingProvider for ElectricityProvider {
                 let mut bands = Vec::new();
                 if let Some(ap_ht) = product.arbeitspreis_ht_ct_per_kwh {
                     let price = billing::Amount::<5>::try_from((ap_ht / dec!(100)).round_dp(5))
-                        .map_err(|_| BillingError::InvalidInput {
-                            reason: "HT price out of range".into(),
+                        .map_err(|_| EngineError::PriceOutOfRange {
+                            field: "arbeitspreis_ht_ct_per_kwh".to_owned(),
+                            value: ap_ht,
                         })?;
                     bands.push(TouBand::new("HT", price));
                 }
                 if let Some(ap_nt) = product.arbeitspreis_nt_ct_per_kwh {
                     let price = billing::Amount::<5>::try_from((ap_nt / dec!(100)).round_dp(5))
-                        .map_err(|_| BillingError::InvalidInput {
-                            reason: "NT price out of range".into(),
+                        .map_err(|_| EngineError::PriceOutOfRange {
+                            field: "arbeitspreis_nt_ct_per_kwh".to_owned(),
+                            value: ap_nt,
                         })?;
                     bands.push(TouBand::new("NT", price));
                 }
@@ -221,10 +283,14 @@ impl BillingProvider for ElectricityProvider {
         let kwh_for_grid = kwh;
         if let Some(nne_gp) = grid.nne_grundpreis_eur_per_year {
             let daily = nne_gp / dec!(365);
+            // Active contract days, not the full billing period: the NNE
+            // Grundpreis accrues only while the contract supplies the MaLo, the
+            // same clipping the commodity Grundpreis applies. Billing the full
+            // period over-charged every mid-period move-in and move-out.
             positions.push(
                 BillingPosition::debit(
                     "Netznutzungsentgelt Grundpreis",
-                    Decimal::from(days),
+                    Decimal::from(ctx.prorate_days().0),
                     "Tage",
                     daily,
                     PositionCategory::GridCharge,
@@ -549,7 +615,7 @@ impl BillingProvider for ElectricityProvider {
         }
 
         // ── Preisgarantie notice (§41 Abs. 1 Nr. 4 EnWG) ─────────────────────
-        if let Some(pg_bis) = product.preisgarantie_bis.filter(|d| *d >= ctx.period_to) {
+        if let Some(pg_bis) = product.preisgarantie_bis.filter(|d| *d >= ctx.period_to()) {
             positions.push(BillingPosition {
                 description: format!("Preisgarantie gültig bis {pg_bis}"),
                 legal_basis: Some("§41 Abs. 1 Nr. 4 EnWG".to_owned()),
@@ -581,7 +647,7 @@ impl ElectricityProvider {
         grid: &GridInput,
         rates: &crate::rates::RegulatoryRates,
         seasonal_arbeitspreis: Option<Decimal>,
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         let days = ctx.days();
         let mut positions: Vec<BillingPosition> = Vec::new();
         let grid_kwh = prosumer.grid_consumption_kwh;
@@ -727,9 +793,25 @@ impl BillingProvider for ControllableLoadProvider {
         ctx: &BillingContext,
         quantities: &Quantities,
     ) -> Vec<BillingWarning> {
-        // Delegate to base ElectricityProvider for §41b and other validation.
-        ElectricityProvider::new(self.product.base.clone(), self.grid.clone())
-            .validate_warnings(ctx, quantities)
+        // The base electricity checks apply to the underlying supply.
+        let base = ElectricityProvider::new(self.product.base.clone(), self.grid.clone());
+        let mut w = base.validate_warnings(ctx, quantities);
+
+        // The Modul 2 bands *replace* the flat NNE Arbeitspreis. Both at once
+        // bill the device's network usage twice.
+        if self.product.sect14a_modul2_nne_ht_ct_per_kwh.is_some()
+            && self.grid.nne_arbeitspreis_ct_per_kwh.is_some()
+        {
+            w.push(BillingWarning {
+                code: "MODUL2_AND_FLAT_NNE",
+                severity: WarningSeverity::Error,
+                message: "§14a Modul 2 band rates are set alongside a flat NNE \
+                          Arbeitspreis — the bands replace it; billing both charges \
+                          the network usage twice"
+                    .to_owned(),
+            });
+        }
+        w
     }
 
     fn bill(
@@ -737,7 +819,7 @@ impl BillingProvider for ControllableLoadProvider {
         ctx: &BillingContext,
         quantities: &Quantities,
         prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         // ── Pass 1: standard electricity billing ─────────────────────────────
         let ep = ElectricityProvider::new(self.product.base.clone(), self.grid.clone());
         let mut positions = ep.bill(ctx, quantities, prior)?;
@@ -747,6 +829,43 @@ impl BillingProvider for ControllableLoadProvider {
         let kwh = meter.arbeitsmenge_kwh;
         let days = ctx.days();
         let p = &self.product;
+
+        // ── §14a Modul 2 — zeitvariables Netzentgelt (BK6-22-300 Anlage 2 §2) ─
+        // Three Tarifstufen replace the flat NNE Arbeitspreis for the device.
+        // A zero band still produces a position: a rate band silently omitted
+        // from the invoice is indistinguishable from one that was never priced.
+        if let (Some(ht), Some(st), Some(nt)) = (
+            p.sect14a_modul2_nne_ht_ct_per_kwh,
+            p.sect14a_modul2_nne_st_ct_per_kwh,
+            p.sect14a_modul2_nne_nt_ct_per_kwh,
+        ) {
+            let verbrauch = quantities.sect14a_modul2.unwrap_or_default();
+            for (label, band_kwh, rate_ct) in [
+                ("Netzentgelt §14a Modul 2 HT", verbrauch.ht_kwh, ht),
+                ("Netzentgelt §14a Modul 2 ST", verbrauch.st_kwh, st),
+                ("Netzentgelt §14a Modul 2 NT", verbrauch.nt_kwh, nt),
+            ] {
+                let mut pos = BillingPosition::debit(
+                    label,
+                    band_kwh,
+                    "kWh",
+                    rate_ct / dec!(100),
+                    PositionCategory::GridCharge,
+                );
+                pos.trace = crate::position::PositionTrace::commodity(
+                    band_kwh,
+                    "kWh",
+                    rate_ct / dec!(100),
+                    "§14a EnWG, BK6-22-300 Anlage 2 §2",
+                );
+                positions.push(
+                    pos.with_legal_basis("§14a EnWG")
+                        .with_tag("§14a")
+                        .with_tag("modul2")
+                        .with_tag("nne"),
+                );
+            }
+        }
 
         // Modul 1 per-kWh NNE reduction (ct/kWh)
         if let Some(sect14a_m1_ct) = p.sect14a_modul1_nne_reduktion_ct_per_kwh
@@ -871,15 +990,14 @@ impl BillingProvider for GasProvider {
         ctx: &BillingContext,
         quantities: &Quantities,
         _prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         let meter = quantities.gas.as_ref().cloned().unwrap_or_default();
-        let days = ctx.days();
         let product = &self.product;
         let grid = &self.grid;
         let rates = &ctx.regulatory_rates;
 
         // ── Seasonal gas price lookup ──────────────────────────────────────────
-        let billing_month = ctx.period_from.month() as u8;
+        let billing_month = ctx.period_from().month() as u8;
         let seasonal_gas_ap = product.seasonal_prices.as_ref().and_then(|seasons| {
             seasons
                 .iter()
@@ -1034,10 +1152,11 @@ impl BillingProvider for GasProvider {
             // ── Gas NNE ────────────────────────────────────────────────────────
             if let Some(nne_gp) = grid.gas_nne_grundpreis_eur_per_year {
                 let daily = nne_gp / dec!(365);
+                // Active contract days — see the Strom NNE Grundpreis.
                 positions.push(
                     BillingPosition::debit(
                         "Gasnetznutzungsentgelt Grundpreis",
-                        Decimal::from(days),
+                        Decimal::from(ctx.prorate_days().0),
                         "Tage",
                         daily,
                         PositionCategory::GridCharge,
@@ -1235,7 +1354,7 @@ impl BillingProvider for HeatProvider {
         ctx: &BillingContext,
         quantities: &Quantities,
         _prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         let meter = quantities.heat.as_ref().cloned().unwrap_or_default();
         let days = ctx.days();
         let product = &self.product;
@@ -1339,7 +1458,7 @@ impl BillingProvider for SolarProvider {
         ctx: &BillingContext,
         quantities: &Quantities,
         _prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         let product = &self.product;
         let mut positions: Vec<BillingPosition> = Vec::new();
 
@@ -1575,7 +1694,7 @@ impl BillingProvider for EegProvider {
         ctx: &BillingContext,
         quantities: &Quantities,
         _prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         // ── Preferred path: delegate to eeg-billing for full regulatory accuracy ──
         // Only available when the `eeg` feature is enabled.
         #[cfg(feature = "eeg")]
@@ -1694,7 +1813,7 @@ impl BillingProvider for EegProvider {
 fn bill_eeg_full(
     settle_input: &eeg_billing::SettleInput,
     _ctx: &BillingContext,
-) -> Result<Vec<BillingPosition>, BillingError> {
+) -> Result<Vec<BillingPosition>, EngineError> {
     let output = eeg_billing::calculate_settlement(settle_input);
     let positions = output
         .positions
@@ -1735,7 +1854,7 @@ impl BillingProvider for EinspeisungProvider {
         _ctx: &BillingContext,
         quantities: &Quantities,
         _prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         let meter = quantities.einspeisung.as_ref().cloned().unwrap_or_default();
         let product = &self.product;
         let kwh = meter.einspeisung_kwh;
@@ -1807,7 +1926,7 @@ impl BillingProvider for HemsProvider {
         _ctx: &BillingContext,
         quantities: &Quantities,
         _prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         let usage = quantities.hems.as_ref().cloned().unwrap_or_default();
         let product = &self.product;
         let months = usage.months.unwrap_or(dec!(1));
@@ -1899,7 +2018,7 @@ impl BillingProvider for EmobilityProvider {
         _ctx: &BillingContext,
         quantities: &Quantities,
         _prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         let usage = quantities.emobility.as_ref().cloned().unwrap_or_default();
         let product = &self.product;
         let months = usage.months.unwrap_or(dec!(1));
@@ -2006,7 +2125,7 @@ impl BillingProvider for ServiceProvider {
         _ctx: &BillingContext,
         quantities: &Quantities,
         _prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         let usage = quantities.service.as_ref().cloned().unwrap_or_default();
         let product = &self.product;
         let months = usage.months.unwrap_or(dec!(1));
@@ -2131,7 +2250,7 @@ impl BillingProvider for DynamicElectricityProvider {
         ctx: &BillingContext,
         quantities: &Quantities,
         _prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         let product = &self.product;
         let grid = &self.grid;
         let rates = &ctx.regulatory_rates;
@@ -2222,10 +2341,7 @@ impl BillingProvider for DynamicElectricityProvider {
                 .unit("kWh")
                 .currency(Currency::EUR)
                 .build()
-                .and_then(|dp| dp.calculate())
-                .map_err(|e| BillingError::InvalidInput {
-                    reason: format!("§41a DynamicPricing: {e}"),
-                })?;
+                .and_then(|dp| dp.calculate())?;
 
             let total_kwh = item.quantity_value().unwrap_or_default();
             let total_eur = item.net_amount.into_decimal();
@@ -2302,10 +2418,14 @@ impl BillingProvider for DynamicElectricityProvider {
         // NNE Grundpreis
         if let Some(nne_gp) = grid.nne_grundpreis_eur_per_year {
             let daily = nne_gp / dec!(365);
+            // Active contract days, not the full billing period: the NNE
+            // Grundpreis accrues only while the contract supplies the MaLo, the
+            // same clipping the commodity Grundpreis applies. Billing the full
+            // period over-charged every mid-period move-in and move-out.
             positions.push(
                 BillingPosition::debit(
                     "Netznutzungsentgelt Grundpreis",
-                    Decimal::from(days),
+                    Decimal::from(ctx.prorate_days().0),
                     "Tage",
                     daily,
                     PositionCategory::GridCharge,
@@ -2395,7 +2515,7 @@ impl BillingProvider for MwStProvider {
         _ctx: &BillingContext,
         _quantities: &Quantities,
         prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         use std::collections::BTreeMap;
 
         // Group taxable positions by their effective MwSt rate.
@@ -2512,15 +2632,16 @@ fn build_block_tariff_positions(
     tiers: &[crate::tariff::BlockTierInput],
     kwh: Decimal,
     extra_tags: &[&str],
-) -> Result<Vec<BillingPosition>, BillingError> {
+) -> Result<Vec<BillingPosition>, EngineError> {
     let mut builder = TariffSchedule::graduated().unit("kWh");
     let mut prev: Option<Decimal> = None;
 
     for (idx, tier) in tiers.iter().enumerate() {
         let price_eur =
             billing::Amount::<5>::try_from((tier.preis_ct_per_kwh / dec!(100)).round_dp(5))
-                .map_err(|_| BillingError::InvalidInput {
-                    reason: format!("block tier {} price out of range", idx + 1),
+                .map_err(|_| EngineError::PriceOutOfRange {
+                    field: format!("blocktarif_stufe_{}_preis_ct_per_kwh", idx + 1),
+                    value: tier.preis_ct_per_kwh,
                 })?;
         let desc = match tier.bis_kwh {
             Some(upper) => format!(
@@ -2593,7 +2714,7 @@ impl BillingProvider for EnergyShareProvider {
         _ctx: &crate::context::BillingContext,
         quantities: &crate::quantities::Quantities,
         _prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError> {
+    ) -> Result<Vec<BillingPosition>, EngineError> {
         let product = &self.product;
         let mut positions: Vec<BillingPosition> = Vec::new();
 

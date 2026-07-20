@@ -316,6 +316,23 @@ pub struct ControllableLoadProduct {
     /// §14a Modul 1: per-kWh NNE reduction credit (ct/kWh).
     #[serde(default)]
     pub sect14a_modul1_nne_reduktion_ct_per_kwh: Option<Decimal>,
+
+    /// §14a Modul 2 — zeitvariables Netzentgelt (BK6-22-300 Anlage 2 §2).
+    ///
+    /// Three Tarifstufen, not two: Hochtarif, Standardtarif and Niedertarif,
+    /// each a NNE rate in ct/kWh published by the Netzbetreiber. All three must
+    /// be set together; the matching band energies arrive on
+    /// [`crate::Sect14aModul2Verbrauch`]. When Modul 2 is billed, the flat NNE
+    /// Arbeitspreis from `GridInput` must be left unset — the bands *replace*
+    /// it, and setting both raises `MODUL2_AND_FLAT_NNE`.
+    #[serde(default)]
+    pub sect14a_modul2_nne_ht_ct_per_kwh: Option<Decimal>,
+    /// §14a Modul 2 Standardtarif rate. See `sect14a_modul2_nne_ht_ct_per_kwh`.
+    #[serde(default)]
+    pub sect14a_modul2_nne_st_ct_per_kwh: Option<Decimal>,
+    /// §14a Modul 2 Niedertarif rate. See `sect14a_modul2_nne_ht_ct_per_kwh`.
+    #[serde(default)]
+    pub sect14a_modul2_nne_nt_ct_per_kwh: Option<Decimal>,
     /// §14a Modul 3: per-kWh Steuerungsentschädigung (ct/kWh).
     #[serde(default)]
     pub sect14a_modul3_entschaedigung_ct_per_kwh: Option<Decimal>,
@@ -593,6 +610,19 @@ impl Product {
             Self::Emobility(p) => p.product_code.as_deref(),
             Self::Energiedienstleistung(p) => p.product_code.as_deref(),
             Self::Sharing(p) => p.electricity.product_code.as_deref(),
+        }
+    }
+
+    /// The §42 EnWG Stromkennzeichnung declared on this product, if any.
+    ///
+    /// Electricity variants only — §42 is an electricity-disclosure duty. The
+    /// service copies this onto the `BillingContext` so it reaches the invoice.
+    #[must_use]
+    pub fn energiequellen(&self) -> Option<&EnergieQuellen> {
+        match self {
+            Self::Strom(p) => p.energiequellen.as_ref(),
+            Self::Waermepumpe(p) | Self::Wallbox(p) => p.base.energiequellen.as_ref(),
+            _ => None,
         }
     }
 

@@ -632,6 +632,66 @@ impl SlateDbStore {
         }
     }
 
+    /// Enqueue outbox messages and register deadlines in **one** SSI transaction.
+    ///
+    /// For protocol-level obligations that have no domain event stream — the
+    /// Gas CONTRL Empfangsbestätigung is the canonical case: the message is a
+    /// synthetic interchange-level acknowledgement, but its 6-hour delivery
+    /// window (CONTRL AHB 1.0 §2.3.1) is as regulatory as any workflow
+    /// deadline. Writing the message and its deadline in two separate commits
+    /// leaves a crash window in which the CONTRL is queued with no escalation
+    /// deadline; this method removes that window.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] when the transaction cannot be started,
+    /// a write fails, or the commit conflicts.
+    pub async fn enqueue_outbox_with_deadlines(
+        &self,
+        messages: &[crate::outbox::OutboxMessage],
+        deadlines: &[crate::deadline::Deadline],
+    ) -> Result<(), EngineError> {
+        let txn = self
+            .db
+            .begin(IsolationLevel::SerializableSnapshot)
+            .await
+            .map_err(to_store_err)?;
+
+        if !messages.is_empty() {
+            let current_count = read_om_count_txn(&txn).await?;
+            let new_count = current_count + messages.len() as u64;
+            txn.put(OM_COUNT_KEY, new_count.to_le_bytes().as_slice())
+                .map_err(to_outbox_err)?;
+            write_outbox_entries_txn(&txn, messages)?;
+        }
+
+        if !deadlines.is_empty() {
+            let dl_count_before = read_dl_count_txn(&txn).await?;
+            txn.put(
+                DL_COUNT_KEY,
+                (dl_count_before + deadlines.len() as u64)
+                    .to_le_bytes()
+                    .as_slice(),
+            )
+            .map_err(to_deadline_err)?;
+            for deadline in deadlines {
+                let payload = serde_json::to_vec(deadline)
+                    .map_err(|e| EngineError::deadline(e.to_string()))?;
+                let dl_k = dl_key(&deadline.deadline_id());
+                let time_key = dt_key(deadline.due_at(), &deadline.deadline_id());
+                let stream_key = ds_key(deadline.stream_id(), &deadline.deadline_id());
+                txn.put(dl_k.as_bytes(), payload.as_slice())
+                    .map_err(to_deadline_err)?;
+                txn.put(time_key.as_bytes(), b"").map_err(to_deadline_err)?;
+                txn.put(stream_key.as_bytes(), b"")
+                    .map_err(to_deadline_err)?;
+            }
+        }
+
+        txn.commit().await.map_err(to_store_err)?;
+        Ok(())
+    }
+
     /// Return a [`SlateDbProcessRegistry`] that shares the underlying database.
     #[must_use]
     pub fn as_process_registry(&self) -> SlateDbProcessRegistry {
@@ -1185,6 +1245,7 @@ fn materialise_outbox(
         causation_event_id: env.event_id,
         message_type: pending.message_type.clone(),
         recipient: pending.recipient.clone(),
+        trace_context: crate::trace_ctx::current().map(Into::into),
         payload: pending.payload.clone(),
         payload_schema: pending.payload_schema.clone(),
         created_at: now,
@@ -2895,6 +2956,7 @@ mod tests {
             deliver_after: Some(now + deliver_in),
             attempt_count: 0,
             workflow_name: "".into(),
+            trace_context: crate::trace_ctx::current().map(Into::into),
         }
     }
 

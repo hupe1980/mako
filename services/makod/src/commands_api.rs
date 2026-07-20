@@ -1120,8 +1120,8 @@ fn cmd_gpke_abrechnung_selbstausstellen<'a>(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        let sender_gln = p
-            .get("sender_gln")
+        let sender_mp_id = p
+            .get("sender_mp_id")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
@@ -1133,7 +1133,7 @@ fn cmd_gpke_abrechnung_selbstausstellen<'a>(
             move || AbrechnungCommand::SendInvoic {
                 pid: mako_engine::types::Pruefidentifikator::new(31006)
                     .expect("31006 is a valid PID"),
-                sender: mako_engine::types::MarktpartnerCode::new(sender_gln.as_str()),
+                sender: mako_engine::types::MarktpartnerCode::new(sender_mp_id.as_str()),
                 recipient: mako_engine::types::MarktpartnerCode::new(nb_mp_id.as_str()),
                 invoice_ref: mako_engine::types::MessageRef::new(invoice_ref_clone.clone()),
                 document_date: time::OffsetDateTime::now_utc()
@@ -3018,7 +3018,7 @@ async fn dispatch_steuerungsauftrag_endantwort(
 /// - `stream_id`     — Process stream ID (UUID)
 /// - `pid`           — IFTSTA Prüfidentifikator (21024–21033)
 /// - `sender_mp_id`    — Sender party GLN
-/// - `receiver_gln`  — Receiver party GLN
+/// - `receiver_mp_id`  — Receiver party GLN
 /// - `message_ref`   — EDIFACT message reference string
 async fn dispatch_gpke_iftsta(
     state: &CommandsApiState,
@@ -3043,7 +3043,7 @@ async fn dispatch_gpke_iftsta(
     );
     let receiver = MarktpartnerCode::new(
         payload
-            .get("receiver_gln")
+            .get("receiver_mp_id")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
     );
@@ -3076,7 +3076,7 @@ async fn dispatch_gpke_iftsta(
 /// Constructs [`DeviceChangeCommand::ReceiveIftsta`] and executes it on the
 /// existing `wim-device-change` process identified by `stream_id` in the payload.
 ///
-/// Expected payload fields: `stream_id`, `pid`, `sender_mp_id`, `receiver_gln`,
+/// Expected payload fields: `stream_id`, `pid`, `sender_mp_id`, `receiver_mp_id`,
 /// `message_ref`.
 async fn dispatch_wim_iftsta(
     state: &CommandsApiState,
@@ -3101,7 +3101,7 @@ async fn dispatch_wim_iftsta(
     );
     let receiver = MarktpartnerCode::new(
         payload
-            .get("receiver_gln")
+            .get("receiver_mp_id")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
     );
@@ -3388,6 +3388,7 @@ async fn dispatch_mabis_summenzeitreihe_uebermitteln(
         deliver_after: None,
         attempt_count: 0,
         workflow_name: "".into(),
+        trace_context: mako_engine::trace_ctx::current().map(Into::into),
     };
     let process_id = message.process_id;
 
@@ -3526,7 +3527,7 @@ async fn dispatch_mabis_billing_begleichen(
 /// [`MABIS_IFTSTA_PIDS`].
 ///
 /// Expected payload fields: `stream_id`, `pid` (optional for datenstatus),
-/// `sender_mp_id`, `receiver_gln`, `message_ref`. For datenstatus: `data_status`.
+/// `sender_mp_id`, `receiver_mp_id`, `message_ref`. For datenstatus: `data_status`.
 async fn dispatch_mabis_iftsta(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -3562,7 +3563,7 @@ async fn dispatch_mabis_iftsta(
     );
     let receiver = MarktpartnerCode::new(
         payload
-            .get("receiver_gln")
+            .get("receiver_mp_id")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
     );
@@ -3965,7 +3966,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // Self-issued INVOIC 31006 (LF selbstausgestellt): `invoicd` generates the
     // BO4E Rechnung via `POST /api/v1/selbstausstellen/{malo_id}` and then calls
     // this command to record the outbound send and await the NB's REMADV response.
-    // Payload: { "invoice_ref": "<uuid>", "nb_mp_id": "...", "sender_gln": "..." }
+    // Payload: { "invoice_ref": "<uuid>", "nb_mp_id": "...", "sender_mp_id": "..." }
     CommandDescriptor {
         name: "gpke.abrechnung.selbstausstellen",
         permitted_roles: &["LF"],

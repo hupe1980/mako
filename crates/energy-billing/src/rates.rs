@@ -365,3 +365,64 @@ mod tests {
         assert!(ct > dec!(0.90) && ct < dec!(0.92));
     }
 }
+
+/// The Umsatzsteuer rate in force for a billing period.
+///
+/// Germany has had one departure from 19 % since 2007: the COVID reduction of
+/// 01.07.2020 – 31.12.2020, at 16 % (§28 Abs. 1 UStG in the then-current
+/// Fassung). A period wholly inside that window bills 16 %; wholly outside,
+/// 19 %.
+///
+/// Returns `None` when the period *straddles* the window boundary: no single
+/// rate is correct for such a period, and picking one silently would misbill
+/// part of it. The caller splits the period — the same discipline the grid
+/// engine applies to regulatory-regime turnovers.
+#[must_use]
+pub fn mwst_rate_for_period(from: time::Date, to: time::Date) -> Option<Decimal> {
+    const SENKUNG_VON: time::Date = time::macros::date!(2020 - 07 - 01);
+    const SENKUNG_BIS: time::Date = time::macros::date!(2020 - 12 - 31);
+
+    let inside = from >= SENKUNG_VON && to <= SENKUNG_BIS;
+    let outside = to < SENKUNG_VON || from > SENKUNG_BIS;
+    match (inside, outside) {
+        (true, _) => Some(dec!(0.16)),
+        (_, true) => Some(dec!(0.19)),
+        _ => None, // straddles the boundary — split the period
+    }
+}
+
+#[cfg(test)]
+mod mwst_period_tests {
+    use super::*;
+    use time::macros::date;
+
+    /// The COVID window bills 16 %, everything else 19 %.
+    #[test]
+    fn the_covid_window_and_its_edges() {
+        assert_eq!(
+            mwst_rate_for_period(date!(2020 - 07 - 01), date!(2020 - 12 - 31)),
+            Some(dec!(0.16))
+        );
+        assert_eq!(
+            mwst_rate_for_period(date!(2020 - 01 - 01), date!(2020 - 06 - 30)),
+            Some(dec!(0.19))
+        );
+        assert_eq!(
+            mwst_rate_for_period(date!(2026 - 01 - 01), date!(2026 - 01 - 31)),
+            Some(dec!(0.19))
+        );
+    }
+
+    /// A straddling period has no single correct rate.
+    #[test]
+    fn a_straddling_period_yields_none() {
+        assert_eq!(
+            mwst_rate_for_period(date!(2020 - 06 - 15), date!(2020 - 07 - 15)),
+            None
+        );
+        assert_eq!(
+            mwst_rate_for_period(date!(2020 - 12 - 15), date!(2021 - 01 - 15)),
+            None
+        );
+    }
+}

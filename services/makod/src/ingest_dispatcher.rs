@@ -119,7 +119,7 @@ pub struct EdifactIngestDispatcher {
     /// GLNs of counterparties acting as an Energieserviceanbieter.
     ///
     /// See [`EdifactIngestDispatcher::with_esa_partners`].
-    esa_partner_glns: std::collections::HashSet<String>,
+    esa_partner_mp_ids: std::collections::HashSet<String>,
 }
 
 impl EdifactIngestDispatcher {
@@ -199,13 +199,13 @@ impl EdifactIngestDispatcher {
     /// back to the `PIA` Messprodukt marker alone.
     #[must_use]
     pub fn with_esa_partners(mut self, glns: impl IntoIterator<Item = String>) -> Self {
-        self.esa_partner_glns = glns.into_iter().collect();
+        self.esa_partner_mp_ids = glns.into_iter().collect();
         self
     }
 
     /// `true` when `gln` is a registered ESA counterparty.
-    fn sender_is_esa(&self, gln: &str) -> bool {
-        !gln.is_empty() && self.esa_partner_glns.contains(gln)
+    fn sender_is_esa(&self, mp_id: &str) -> bool {
+        !mp_id.is_empty() && self.esa_partner_mp_ids.contains(mp_id)
     }
 
     /// Construct a new dispatcher backed by the given stores.
@@ -221,7 +221,7 @@ impl EdifactIngestDispatcher {
             snap_store,
             snapshot_interval,
             tenant_id,
-            esa_partner_glns: std::collections::HashSet::new(),
+            esa_partner_mp_ids: std::collections::HashSet::new(),
         }
     }
 
@@ -1503,7 +1503,7 @@ impl EdifactIngestDispatcher {
                 // content before the Preisanfrage workflow claims the message.
                 if pid == mako_wim::wertebestellung::ANFRAGE_PID
                     && mako_wim::wertebestellung::classify_reqote(
-                        self.sender_is_esa(&extract_sender_gln(msg)),
+                        self.sender_is_esa(&extract_sender_mp_id(msg)),
                         mako_wim::wertebestellung::has_messprodukt(extract_pia_codes(msg)),
                     ) == mako_wim::wertebestellung::ReqoteKind::EsaWerteanfrage
                 {
@@ -2057,9 +2057,19 @@ pub fn extract_malo_from_msg(msg: &AnyMessage) -> String {
         AnyMessage::Mscons(m) => m.segments(),
         _ => return String::new(),
     };
+    // The location travels in LOC where the profile has one; the GPKE/GeLi
+    // Lieferbeginn family (55001/44001, per the official Beispiele) carries
+    // the MaLo as the IDE object id instead — fall back to IDE so both the
+    // conformant inbound shape and our own loopback renderings correlate.
     segs.iter()
         .find(|s| s.tag == "LOC")
         .and_then(|s| s.component_str(1, 0))
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            segs.iter()
+                .find(|s| s.tag == "IDE")
+                .and_then(|s| s.component_str(1, 0))
+        })
         .unwrap_or("")
         .to_owned()
 }
@@ -2067,7 +2077,7 @@ pub fn extract_malo_from_msg(msg: &AnyMessage) -> String {
 /// Extract the sender GLN from the message's `NAD+MS` segment.
 ///
 /// Empty when the message carries no sender NAD.
-pub fn extract_sender_gln(msg: &AnyMessage) -> String {
+pub fn extract_sender_mp_id(msg: &AnyMessage) -> String {
     let segs = match msg {
         AnyMessage::Reqote(r) => r.segments(),
         AnyMessage::Quotes(q) => q.segments(),

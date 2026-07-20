@@ -34,7 +34,8 @@ use support::{outbox_message, registry};
 fn assert_conforms(pid: u32, payload: serde_json::Value) -> String {
     let msg = outbox_message("MSCONS", "9900077000006", payload);
     let bytes = render_to_wire_bytes(&msg, &registry("9900357000004"))
-        .unwrap_or_else(|e| panic!("PID {pid}: render failed: {e:?}"));
+        .unwrap_or_else(|e| panic!("PID {pid}: render failed: {e:?}"))
+        .bytes;
 
     let parsed = Platform::with_all_profiles()
         .parse(&bytes)

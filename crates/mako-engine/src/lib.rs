@@ -108,6 +108,7 @@ pub mod registry;
 pub mod snapshot;
 #[cfg(feature = "slatedb")]
 pub mod store_slatedb;
+pub mod trace_ctx;
 pub mod types;
 pub mod version;
 pub mod workflow;

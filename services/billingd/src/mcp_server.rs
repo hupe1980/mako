@@ -540,8 +540,11 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
             malo_id: params.malo_id.unwrap_or_else(|| "00000000000".to_owned()),
             lf_mp_id: "9900000000001".to_owned(),
             rechnungsnummer: "VALIDATE".to_owned(),
-            period_from: date!(2026 - 01 - 01),
-            period_to: date!(2026 - 01 - 31),
+            period: energy_billing::BillingPeriod::new(
+                date!(2026 - 01 - 01),
+                date!(2026 - 01 - 31),
+            )
+            .expect("static valid period"),
             invoice_type: InvoiceType::Initial,
             regulatory_rates: rates,
             ..Default::default()
@@ -694,8 +697,16 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
                         "gesamtpreis": pos["gesamtpreis"],
                         "rechtsgrundlage": pos["rechtlicheGrundlage"],
                         "kategorie": pos["kategorie"],
-                        "trace": pos.get("trace"),
-                        "note": "The 'trace' field contains formula, input_quantity, input_unit_price_eur, gross_eur, regulatory_basis, tariff_source, and pro_rata_fraction for full audit reconstruction."
+                        // The trace rides on the position as the
+                        // `mako:calculation_trace` ZusatzAttribut.
+                        "trace": pos.get("zusatzAttribute")
+                            .and_then(|z| z.as_array())
+                            .and_then(|attrs| attrs.iter().find(|a| {
+                                a.get("name").and_then(|n| n.as_str())
+                                    == Some("mako:calculation_trace")
+                            }))
+                            .and_then(|a| a.get("wert")),
+                        "note": "trace carries formula, input_quantity, input_unit_price_eur, gross_eur, and regulatory_basis for audit reconstruction."
                     }
                 });
                 ContentBlock::json(explanation)

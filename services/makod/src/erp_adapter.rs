@@ -90,6 +90,9 @@ struct CloudEventEnvelope<'a> {
     /// Absent when no ERC code is available (e.g. timeout-initiated rejections).
     #[serde(skip_serializing_if = "Option::is_none")]
     makoerc: Option<&'a str>,
+    /// CloudEvents distributed-tracing extension: W3C `traceparent`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    traceparent: Option<&'a str>,
     data: &'a serde_json::Value,
 }
 
@@ -118,6 +121,7 @@ impl<'a> CloudEventEnvelope<'a> {
             makofailreason: fail_reason,
             makoworkflow: event.workflow_name.as_ref(),
             makoerc: erc_code,
+            traceparent: event.trace_context.as_deref(),
             data: &event.payload,
         }
     }
@@ -234,6 +238,12 @@ impl ErpAdapter for WebhookErpAdapter {
             .header("Content-Type", "application/cloudevents+json")
             .header("X-Idempotency-Key", &event.idempotency_key);
 
+        // W3C trace-context propagation: the ERP continues the trace the
+        // inbound transport started.
+        if let Some(tp) = &event.trace_context {
+            builder = builder.header("traceparent", tp.as_ref());
+        }
+
         if let Some(secret) = &self.shared_secret {
             let sig = hmac_sha256(secret.expose_secret().as_bytes(), &body);
             builder = builder.header("X-Mako-Signature", sig);
@@ -339,6 +349,11 @@ pub struct OutboxErpWorker<OS, A> {
     max_attempts: u32,
     /// Base for the exponential back-off delay (seconds).
     initial_backoff_secs: u64,
+    /// Durable dead-letter sink — a permanently failed ERP notification
+    /// leaves a queryable record, not just a log line.
+    dl_sink: Option<std::sync::Arc<dyn mako_engine::dead_letter::DeadLetterSink>>,
+    /// Liveness heartbeat, surfaced via `GET /health`.
+    heartbeat: Option<std::sync::Arc<std::sync::atomic::AtomicI64>>,
 }
 
 impl<OS, A> OutboxErpWorker<OS, A>
@@ -365,6 +380,42 @@ where
             poll_interval,
             max_attempts: 10,
             initial_backoff_secs: 300, // 5 minutes
+            dl_sink: None,
+            heartbeat: None,
+        }
+    }
+
+    /// Record permanently failed deliveries in a durable dead-letter sink.
+    #[must_use]
+    pub fn with_dead_letter_sink(
+        mut self,
+        sink: std::sync::Arc<dyn mako_engine::dead_letter::DeadLetterSink>,
+    ) -> Self {
+        self.dl_sink = Some(sink);
+        self
+    }
+
+    /// Report liveness through the shared worker-health heartbeat.
+    #[must_use]
+    pub fn with_heartbeat(
+        mut self,
+        last_tick: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    ) -> Self {
+        self.heartbeat = Some(last_tick);
+        self
+    }
+
+    /// Record a permanently failed ERP delivery in the dead-letter sink.
+    fn dead_letter(&self, msg: &mako_engine::outbox::OutboxMessage, last_error: &str) {
+        if let Some(sink) = &self.dl_sink {
+            use mako_engine::dead_letter::DeadLetterReason;
+            sink.reject(&DeadLetterReason::OutboxExhausted {
+                message_id: msg.message_id,
+                message_type: msg.message_type.to_string(),
+                recipient: msg.recipient.to_string(),
+                last_error: last_error.to_owned(),
+                attempts: msg.attempt_count,
+            });
         }
     }
 
@@ -388,6 +439,12 @@ where
     /// Run the ERP delivery loop.  Cancellable via task abort.
     pub async fn run(self) {
         loop {
+            if let Some(hb) = &self.heartbeat {
+                hb.store(
+                    time::OffsetDateTime::now_utc().unix_timestamp(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
             let batch = match self.store.pending_now(self.batch_size).await {
                 Ok(b) => b,
                 Err(e) => {
@@ -456,6 +513,7 @@ where
                     payload: msg.payload.clone(),
                     occurred_at: msg.created_at,
                     workflow_name: msg.workflow_name.clone(),
+                    trace_context: msg.trace_context.clone(),
                 };
 
                 match self.adapter.notify(event).await {
@@ -478,6 +536,7 @@ where
                                 error         = %e,
                                 "OutboxErpWorker: max delivery attempts reached; dead-lettering",
                             );
+                            self.dead_letter(&msg, &e.to_string());
                             let _ = self.store.acknowledge(msg.message_id).await;
                         } else {
                             // Exponential back-off: initial_backoff * 2^attempt_count,
@@ -511,8 +570,9 @@ where
                             error = %e,
                             "OutboxErpWorker: permanent ERP error; dead-lettering",
                         );
-                        // Acknowledge to prevent infinite redelivery — the
-                        // dead-letter sink or log is the audit trail.
+                        // Record durably, then acknowledge to prevent infinite
+                        // redelivery — the dead-letter sink is the audit trail.
+                        self.dead_letter(&msg, &e.to_string());
                         let _ = self.store.acknowledge(msg.message_id).await;
                     }
                 }

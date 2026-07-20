@@ -17,18 +17,18 @@ use crate::registry::Profile;
 use crate::{MessageType, Pruefidentifikator, Release};
 
 static SEGMENTS: &[SegmentDefinition] = &[
-    SegmentDefinition {
-        tag: "UNH",
-        name: "Nachrichten-Kopfsegment",
-        elements: &[
+    SegmentDefinition::new(
+        "UNH",
+        "Nachrichten-Kopfsegment",
+        &[
             ElementRef::new(1, "0062", Status::Mandatory, 1),
             ElementRef::new(2, "S009", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "UCI",
-        name: "Übertragungsdatei-Antwort",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "UCI",
+        "Übertragungsdatei-Antwort",
+        &[
             ElementRef::new(1, "0020", Status::Mandatory, 1),
             ElementRef::new(2, "S002", Status::Mandatory, 1),
             ElementRef::new(3, "S003", Status::Mandatory, 1),
@@ -37,19 +37,19 @@ static SEGMENTS: &[SegmentDefinition] = &[
             ElementRef::new(6, "0013", Status::Conditional, 1),
             ElementRef::new(7, "S011", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "UNT",
-        name: "Nachrichten-Endesegment",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "UNT",
+        "Nachrichten-Endesegment",
+        &[
             ElementRef::new(1, "0074", Status::Mandatory, 1),
             ElementRef::new(2, "0062", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "UCM",
-        name: "Nachrichtenantwort",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "UCM",
+        "Nachrichtenantwort",
+        &[
             ElementRef::new(1, "0062", Status::Conditional, 1),
             ElementRef::new(2, "S009", Status::Mandatory, 1),
             ElementRef::new(3, "0083", Status::Mandatory, 1),
@@ -57,23 +57,23 @@ static SEGMENTS: &[SegmentDefinition] = &[
             ElementRef::new(5, "0013", Status::Conditional, 1),
             ElementRef::new(6, "S011", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "UCS",
-        name: "Segment-Fehleranzeige",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "UCS",
+        "Segment-Fehleranzeige",
+        &[
             ElementRef::new(1, "0096", Status::Mandatory, 1),
             ElementRef::new(2, "0085", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "UCD",
-        name: "Datenelement-Fehleranzeige",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "UCD",
+        "Datenelement-Fehleranzeige",
+        &[
             ElementRef::new(1, "0085", Status::Mandatory, 1),
             ElementRef::new(2, "S011", Status::Mandatory, 1),
         ],
-    },
+    ),
 ];
 
 static SEGMENT_MAP: LazyLock<std::collections::HashMap<&'static str, &'static SegmentDefinition>> =

@@ -179,6 +179,10 @@ async fn main() -> anyhow::Result<()> {
         )
         // Supply contracts (B2C + B2B)
         .route("/api/v1/vertraege", get(handlers::list_vertraege))
+        .route(
+            "/api/v1/vertraege/by-malo/:malo_id",
+            get(handlers::get_vertrag_by_malo),
+        )
         // Expiring contracts monitor (§13 GasGVV / §14 StromGVV / §41 EnWG)
         .route(
             "/api/v1/vertraege/expiring",

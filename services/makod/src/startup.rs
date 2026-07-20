@@ -449,7 +449,7 @@ pub(crate) struct WorkersConfig {
     ///
     /// Built from `[[party]]` entries in `makod.toml`. The primary GLN is used
     /// as the storage partition key (`TenantId`) and AS4 `partyId` fallback.
-    pub gln_registry: Arc<MpIdRegistry>,
+    pub mp_id_registry: Arc<MpIdRegistry>,
     pub as4_partner: Vec<String>,
     pub as4_signing_key_pem: Option<SecretString>,
     pub as4_signing_cert_pem: Option<String>,
@@ -460,6 +460,18 @@ pub(crate) struct WorkersConfig {
     /// Used by the outbound AS4 sender to populate `As4SendCredentials::recipient_cert_pem`
     /// when `security.encrypt = true` (the BDEW-compliant default).
     pub as4_partner_certs: Vec<String>,
+    /// DEV/TEST ONLY: downgrade missing-encryption-material refusals to warnings.
+    ///
+    /// Mirrors `--allow-unencrypted-as4`. In production (`false`), a registered
+    /// AS4 partner without an encryption certificate is a startup error —
+    /// BDEW AS4-Profil v1.2 §2.2.6.2.2 requires encrypted outbound, and the
+    /// send path fails per message anyway (asx-rs refuses `encrypt = true`
+    /// without a recipient certificate), so failing early names the gap once
+    /// instead of dead-lettering every delivery.
+    pub allow_unencrypted_as4: bool,
+    /// When `true`, a missing/mismatched synchronous `eb:Receipt` only warns
+    /// instead of failing the delivery (interop debugging; strict by default).
+    pub as4_lenient_receipts: bool,
     pub as4_party_id: Option<String>,
     // ── MaLo-ID sender config ────────────────────────────────────────────
     pub maloid_partner: Vec<String>,
@@ -477,6 +489,9 @@ pub(crate) struct WorkersConfig {
     ///
     /// Pass `--allow-no-as4-signing` on the CLI to set this flag.
     pub allow_no_as4_signing: bool,
+    /// Shared durable dead-letter sink (backed by the same SlateDB store and
+    /// drained by the dead-letter worker spawned in `main`).
+    pub dead_letter_sink: mako_engine::store_slatedb::SlateDbDeadLetterSink,
     // ── Scheduler / timing config ────────────────────────────────────────
     pub snapshot_interval: u64,
     pub deadline_poll_interval_secs: u64,
@@ -544,7 +559,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
             );
             let vz_partner_store = cfg.store.as_partner_store();
             let vz_tenant_id =
-                mako_engine::ids::TenantId::from_party_id(cfg.gln_registry.primary_gln());
+                mako_engine::ids::TenantId::from_party_id(cfg.mp_id_registry.primary_mp_id());
             info!(url = %base_url, "Verzeichnisdienst integration enabled");
             let lookup = verzeichnisdienst_worker::VerzeichnisdienstLookup::new(
                 vz_client,
@@ -613,13 +628,40 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
                 .filter_map(|p| p.split_once('=').map(|(g, _)| g.trim()))
                 .collect();
             info!(partners = ?glns, "AS4 per-partner encryption certificates registered");
-        } else if !cfg.as4_partner.is_empty() {
-            tracing::warn!(
-                "AS4 partners registered without encryption certificates. \
-                 BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every outbound message to be encrypted \
-                 with the recipient's EC (BrainpoolP256r1) certificate. \
-                 Add --as4-partner-cert GLN=<PEM> for each partner."
-            );
+        }
+        // Every registered partner endpoint needs an encryption certificate —
+        // the send path refuses `encrypt = true` without one, so a missing
+        // cert means every delivery to that partner dead-letters. Fail closed
+        // at startup and name the GLNs, unless dev/test explicitly opts out.
+        let cert_mp_ids: std::collections::HashSet<&str> = cfg
+            .as4_partner_certs
+            .iter()
+            .filter_map(|p| p.split_once('=').map(|(g, _)| g.trim()))
+            .collect();
+        let missing: Vec<&str> = cfg
+            .as4_partner
+            .iter()
+            .filter_map(|p| p.split_once('=').map(|(g, _)| g.trim()))
+            .filter(|g| !cert_mp_ids.contains(g))
+            .collect();
+        if !missing.is_empty() {
+            if cfg.allow_unencrypted_as4 {
+                tracing::warn!(
+                    partners = ?missing,
+                    "--allow-unencrypted-as4: AS4 partners registered without encryption \
+                     certificates. Outbound deliveries to them will FAIL at send time \
+                     (BDEW AS4-Profil v1.2 §2.2.6.2.2 requires encryption and the sender \
+                     refuses to encrypt without a recipient certificate)."
+                );
+            } else {
+                return Err(anyhow::anyhow!(
+                    "AS4 partners registered without encryption certificates: {missing:?}. \
+                     BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every outbound message to be \
+                     encrypted with the recipient's EC (BrainpoolP256r1) certificate. \
+                     Add --as4-partner-cert GLN=<PEM> for each partner, or pass \
+                     --allow-unencrypted-as4 for dev/test."
+                ));
+            }
         }
         profile
     };
@@ -644,7 +686,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
         let party_id = cfg
             .as4_party_id
             .clone()
-            .unwrap_or_else(|| cfg.gln_registry.primary_gln().to_owned());
+            .unwrap_or_else(|| cfg.mp_id_registry.primary_mp_id().to_owned());
 
         // NOTE: One outbound SessionContext / signing key is used for ALL mp_ids.
         // For a combined Strom+Gas deployment the Gas mp_id's outbound AS4 messages
@@ -676,7 +718,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
             outbound_bus,
             Arc::new(as4_profile),
             malo_sender,
-            Arc::clone(&cfg.gln_registry),
+            Arc::clone(&cfg.mp_id_registry),
             Some(Arc::new(crate::edifact_api::EdifactApiState {
                 platform: Arc::clone(&cfg.platform),
                 pid_router: cfg.ctx.pid_router().clone(),
@@ -687,7 +729,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
                 max_body_bytes: 256 * 1024 * 1024, // 256 MiB — generous but finite (F-009)
                 partner_store: None,
                 tenant_id: mako_engine::ids::TenantId::from_party_id(
-                    cfg.gln_registry.primary_gln(),
+                    cfg.mp_id_registry.primary_mp_id(),
                 ),
                 dl_sink: std::sync::Arc::new(mako_engine::dead_letter::LogDeadLetterSink),
                 dispatcher: Some(Arc::clone(&cfg.ingest_dispatcher)),
@@ -695,12 +737,14 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
                 // we are both sender and receiver in this code path.
                 contrl_ack: None,
             })),
+            Arc::clone(&cfg.platform),
+            cfg.as4_lenient_receipts,
         )?;
 
         info!(
             party_id        = %party_id,
-            primary_gln     = %cfg.gln_registry.primary_gln(),
-            own_glns        = ?cfg.gln_registry.own_glns().collect::<Vec<_>>(),
+            primary_mp_id     = %cfg.mp_id_registry.primary_mp_id(),
+            own_mp_ids        = ?cfg.mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
             "AS4 outbound sender active (BdewAs4Sender)",
         );
         let (outbox_hb, outbox_watch) = new_heartbeat("outbox-worker", 120);
@@ -714,7 +758,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
         use crate::as4_sender::WebhookEdifactSender;
         let sender = WebhookEdifactSender::new(
             edifact_webhook_url.as_str(),
-            Arc::clone(&cfg.gln_registry),
+            Arc::clone(&cfg.mp_id_registry),
             cfg.http_client.clone(),
             malo_sender,
         );
@@ -761,20 +805,23 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
 
     // ── ERP webhook outbound worker ───────────────────────────────────────
     //
-    // Note: `OutboxErpWorker` does not implement the `with_heartbeat` API
-    // and is therefore NOT tracked by `GET /health`. A silently-panicking
-    // ERP worker will not cause a health degraded state. To detect ERP worker
-    // stalls, monitor the `makod_dead_letter_recorded_total{reason="erp_delivery_failed"}`
-    // counter in Alertmanager and alert when ERP-targeted outbox entries age
-    // beyond `max_attempts × initial_backoff` (default: 10 × 5 min ≈ 3 hours).
+    // Health-tracked like every other worker, and permanently failed
+    // deliveries land in the durable dead-letter store — an ERP notification
+    // that exhausted its retries must stay queryable, not vanish into a log.
+    let erp_dl_sink: std::sync::Arc<dyn mako_engine::dead_letter::DeadLetterSink> =
+        std::sync::Arc::new(cfg.dead_letter_sink);
     if let Some(erp_url) = cfg.erp_webhook_url.clone() {
         let adapter = erp_adapter::WebhookErpAdapter::new(erp_url.clone(), cfg.erp_webhook_secret);
+        let (erp_hb, erp_watch) = new_heartbeat("erp-webhook-worker", 120);
         let worker = erp_adapter::OutboxErpWorker::new(
             cfg.store.clone(),
             adapter,
             50,
             Duration::from_secs(5),
-        );
+        )
+        .with_dead_letter_sink(erp_dl_sink)
+        .with_heartbeat(erp_hb.last_tick_raw());
+        cfg.health_state.register_worker(erp_watch);
         info!(erp_webhook_url = %erp_url, "ERP webhook outbound worker started");
         tokio::spawn(async move { worker.run().await });
     } else {
@@ -784,7 +831,8 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
             adapter,
             50,
             Duration::from_secs(30),
-        );
+        )
+        .with_dead_letter_sink(erp_dl_sink);
         tracing::debug!(
             "ERP outbound notifications are logged only \
              (--erp-webhook-url not set; set to enable HTTP delivery)",
@@ -867,20 +915,23 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
 
     // ── Inbox purge worker ────────────────────────────────────────────────
     //
-    // Deletes deduplication keys older than 72 hours once per day.
+    // The BDEW AS4 retry window is 72 hours; a dedup entry evicted at exactly
+    // 72h could let a final retry at the window's edge re-process as a new
+    // message. Retention adds a 24-hour safety margin on top of the window.
+    const INBOX_DEDUP_RETENTION: time::Duration = time::Duration::hours(72 + 24);
     let inbox_store_for_purge = cfg.inbox_store_for_purge;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(24 * 3600));
         loop {
             interval.tick().await;
-            let cutoff = time::OffsetDateTime::now_utc() - time::Duration::hours(72);
+            let cutoff = time::OffsetDateTime::now_utc() - INBOX_DEDUP_RETENTION;
             match inbox_store_for_purge.purge_expired(cutoff).await {
                 Ok(n) => tracing::info!(removed = n, "inbox purge complete"),
                 Err(e) => tracing::error!(error = %e, "inbox purge failed"),
             }
         }
     });
-    info!("inbox purge worker started (daily, 72h TTL)");
+    info!("inbox purge worker started (daily, 96h retention for the 72h AS4 retry window)");
 
     Ok(())
 }

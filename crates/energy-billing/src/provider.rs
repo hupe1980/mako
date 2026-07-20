@@ -19,7 +19,7 @@
 //! The `is_tax_pass()` method marks tax providers so the engine knows to run them
 //! in a second pass (after all commodity/levy providers have executed).
 
-use billing::BillingError;
+use crate::error::EngineError;
 
 use crate::context::BillingContext;
 use crate::position::{BillingPosition, BillingWarning};
@@ -101,7 +101,7 @@ impl SpotPriceSource for EpexSpotSource {
 ///         _ctx: &BillingContext,
 ///         _quantities: &Quantities,
 ///         _prior: &[BillingPosition],
-///     ) -> Result<Vec<BillingPosition>, BillingError> {
+///     ) -> Result<Vec<BillingPosition>, EngineError> {
 ///         Ok(vec![
 ///             BillingPosition::debit("Service Fee", Decimal::ONE, "Pauschal", self.eur, PositionCategory::Fee)
 ///                 .with_tag("service_fee"),
@@ -119,7 +119,7 @@ pub trait BillingProvider: Send + Sync {
         ctx: &BillingContext,
         quantities: &Quantities,
         prior: &[BillingPosition],
-    ) -> Result<Vec<BillingPosition>, BillingError>;
+    ) -> Result<Vec<BillingPosition>, EngineError>;
 
     /// `true` when this provider computes taxes on accumulated prior positions.
     ///
@@ -140,7 +140,7 @@ pub trait BillingProvider: Send + Sync {
     /// §41b iMSys requirement).
     ///
     /// Warnings with `WarningSeverity::Error` cause `BillingEngine::bill()` to return
-    /// `Err(BillingError::InvalidInput)` before any positions are generated.
+    /// [`EngineError::ValidationBlocked`] before any positions are generated.
     fn validate_warnings(
         &self,
         _ctx: &BillingContext,

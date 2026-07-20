@@ -600,6 +600,39 @@ struct Cli {
     )]
     as4_partner_cert: Vec<String>,
 
+    /// DEV/TEST ONLY: allow AS4 operation without encryption material.
+    ///
+    /// BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every production AS4 message
+    /// to be encrypted. Without this flag, `makod` refuses to start when AS4
+    /// is active but the inbound decryption key (`--as4-decryption-key-pem`)
+    /// is missing, or when a registered AS4 partner has no encryption
+    /// certificate (`--as4-partner-cert`).
+    ///
+    /// Setting this flag downgrades both refusals to warnings. Never set it
+    /// against the regulated market — messages would flow unencrypted.
+    #[arg(long, env = "MAKOD_ALLOW_UNENCRYPTED_AS4")]
+    allow_unencrypted_as4: bool,
+
+    /// INTEROP DEBUGGING ONLY: treat a missing or mismatched synchronous
+    /// `eb:Receipt` as a warning instead of a delivery failure.
+    ///
+    /// The BDEW MaKo AS4 MEP requires the receiver to return a synchronous
+    /// `eb:Receipt` on the same HTTP connection. By default `makod` only
+    /// acknowledges an outbox entry after that receipt is verified to
+    /// reference the sent message id — an unverified delivery is retried and
+    /// eventually dead-lettered. This flag downgrades the check to a warning
+    /// for sessions against non-conformant counterparties.
+    #[arg(long, env = "MAKOD_AS4_LENIENT_RECEIPTS")]
+    as4_lenient_receipts: bool,
+
+    /// Disable authentication on the `:8090` API-Webdienste port.
+    ///
+    /// By default every :8090 route requires a bearer/OIDC token and the
+    /// Cedar `UseWebdienste` action. Set this only when a fronting proxy
+    /// terminates mTLS with the BDEW PKI CA and enforces access itself.
+    #[arg(long, env = "MAKOD_WEBDIENSTE_ALLOW_UNAUTHENTICATED")]
+    webdienste_allow_unauthenticated: bool,
+
     /// Register a trading-partner AS4 endpoint for outbound EDIFACT delivery.
     ///
     /// Format: `<GLN>=<HTTPS-URL>` (e.g.
@@ -795,7 +828,7 @@ struct Cli {
         env = "MAKOD_ESA_PARTNER_GLNS",
         value_delimiter = ','
     )]
-    esa_partner_glns: Vec<String>,
+    esa_partner_mp_ids: Vec<String>,
 
     /// Shared secret for `X-Mako-Signature` HMAC-SHA256 on ERP webhook POSTs.
     ///
@@ -1028,7 +1061,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn async_main(cli: Cli) -> anyhow::Result<()> {
-    init_tracing(&cli);
+    // Hold the guard for the process lifetime — dropping it flushes OTel spans.
+    let _otel_guard = init_tracing(&cli);
 
     use party_registry::MpIdRegistry;
 
@@ -1049,13 +1083,13 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
          See docs/makod.md for the full configuration reference."
     );
 
-    let gln_registry: Arc<MpIdRegistry> =
+    let mp_id_registry: Arc<MpIdRegistry> =
         Arc::new(MpIdRegistry::from_config(&cli.parties).context("invalid [[party]] config")?);
 
     info!(
-        primary_gln  = %gln_registry.primary_gln(),
-        primary_agency = %gln_registry.primary_agency(),
-        own_glns     = ?gln_registry.own_glns().collect::<Vec<_>>(),
+        primary_mp_id  = %mp_id_registry.primary_mp_id(),
+        primary_agency = %mp_id_registry.primary_agency(),
+        own_mp_ids     = ?mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
         party_count  = cli.parties.len(),
         "GLN registry built from [[party]] entries",
     );
@@ -1066,7 +1100,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // derive from the union of all [[party]] roles.  This eliminates the need
     // to configure the same role set in two places.
     let effective_deployment_roles = if cli.deployment_roles.is_empty() {
-        let derived = gln_registry.deployment_role_strings();
+        let derived = mp_id_registry.deployment_role_strings();
         if !derived.is_empty() {
             info!(
                 roles = ?derived,
@@ -1083,7 +1117,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     //
     // When --marktrollen / MAKOD_MARKTROLLEN is not set, derive from [[party]].
     let effective_marktrollen: Vec<String> = if cli.marktrollen.is_empty() {
-        gln_registry
+        mp_id_registry
             .all_roles()
             .iter()
             .map(|s| s.to_string())
@@ -1217,6 +1251,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     let (dl_sink, dl_worker) = store.as_dead_letter_sink();
     let dl_sink_shutdown = dl_sink.clone();
     let dl_sink_ingest = dl_sink.clone();
+    let dl_sink_workers = dl_sink.clone();
     let dl_worker_handle = tokio::spawn(dl_worker.run());
 
     // ── Domain module selection ────────────────────────────────────────────────
@@ -1502,9 +1537,9 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             Arc::new(store.clone()),
             store.as_snapshot_store(),
             cli.snapshot_interval,
-            mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+            mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
         )
-        .with_esa_partners(cli.esa_partner_glns.clone()),
+        .with_esa_partners(cli.esa_partner_mp_ids.clone()),
     );
 
     // ── Shared health state ───────────────────────────────────────────────────
@@ -1523,73 +1558,76 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         .build()
         .map_err(|e| anyhow::anyhow!("HTTP client build: {e}"))?;
 
+    // ── Build Cedar authorizer (shared by :8080 REST, /mcp, and :8090) ───────
+    // Required whenever any authenticated port is enabled.
+    let needs_auth = cli.http_addr.is_some()
+        || (cli.api_webdienste_addr.is_some() && !cli.webdienste_allow_unauthenticated);
+    if needs_auth && cli.auth_keys.is_empty() && cli.oidc_issuer.is_none() {
+        anyhow::bail!(
+            "--auth-key / MAKOD_AUTH_KEYS or --oidc-issuer / MAKOD_OIDC_ISSUER is \
+             required when --http-addr or --api-webdienste-addr is set.\n\
+             These ports perform privileged operations (submitting commands, \
+             triggering migrations, API-Webdienste requests) and must not be \
+             exposed unauthenticated.\n\
+             Provide at least one named API key with --auth-key NAME=TOKEN \
+             (e.g. --auth-key erp-prod=$(openssl rand -hex 32)), or configure \
+             an OIDC issuer with --oidc-issuer <URL> --oidc-audience <AUD>."
+        );
+    }
+    let oidc = if let Some(issuer) = cli.oidc_issuer.clone() {
+        let audience = cli.oidc_audience.clone().context(
+            "--oidc-audience / MAKOD_OIDC_AUDIENCE is required when \
+             --oidc-issuer / MAKOD_OIDC_ISSUER is set",
+        )?;
+        let verifier = oidc_verifier::OidcVerifier::new(issuer, audience, &http_client)
+            .await
+            .context("OIDC verifier initialisation failed")?;
+        verifier.spawn_refresh_task(
+            http_client.clone(),
+            cli.oidc_jwks_refresh_secs,
+            shutdown_token.clone(),
+        );
+        Some(verifier)
+    } else {
+        None
+    };
+    let extra_policies = read_cedar_policy_dir(&cli.cedar_policy_dir)
+        .context("loading Cedar policy files from --cedar-policy-dir")?;
+    let auth_keys = cli
+        .auth_keys
+        .iter()
+        .map(|s| cedar_authz::NamedKey::from_arg(s))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let cedar = Arc::new(
+        cedar_authz::CedarAuthorizer::new(auth_keys, extra_policies, oidc)
+            .map_err(|e| anyhow::anyhow!("{e}"))?,
+    );
+
     if let Some(addr) = cli.http_addr {
-        if cli.auth_keys.is_empty() && cli.oidc_issuer.is_none() {
-            anyhow::bail!(
-                "--auth-key / MAKOD_AUTH_KEYS or --oidc-issuer / MAKOD_OIDC_ISSUER is \
-                 required when --http-addr is set.\n\
-                 The HTTP REST API and /admin/migrations endpoint perform \
-                 privileged operations (submitting commands, triggering \
-                 migrations) and must not be exposed unauthenticated.\n\
-                 Provide at least one named API key with --auth-key NAME=TOKEN \
-                 (e.g. --auth-key erp-prod=$(openssl rand -hex 32)), or configure \
-                 an OIDC issuer with --oidc-issuer <URL> --oidc-audience <AUD>."
-            );
-        }
-        // ── Build OIDC verifier (optional) ────────────────────────────────────
-        let oidc = if let Some(issuer) = cli.oidc_issuer {
-            let audience = cli.oidc_audience.context(
-                "--oidc-audience / MAKOD_OIDC_AUDIENCE is required when \
-                 --oidc-issuer / MAKOD_OIDC_ISSUER is set",
-            )?;
-            let verifier = oidc_verifier::OidcVerifier::new(issuer, audience, &http_client)
-                .await
-                .context("OIDC verifier initialisation failed")?;
-            verifier.spawn_refresh_task(
-                http_client.clone(),
-                cli.oidc_jwks_refresh_secs,
-                shutdown_token.clone(),
-            );
-            Some(verifier)
-        } else {
-            None
-        };
-        // ── Build Cedar authorizer ────────────────────────────────────────────
-        let extra_policies = read_cedar_policy_dir(&cli.cedar_policy_dir)
-            .context("loading Cedar policy files from --cedar-policy-dir")?;
-        let keys = cli
-            .auth_keys
-            .iter()
-            .map(|s| cedar_authz::NamedKey::from_arg(s))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        let cedar = cedar_authz::CedarAuthorizer::new(keys, extra_policies, oidc)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        let cedar = Arc::new(cedar);
         let api_state = Arc::new(edifact_api::EdifactApiState {
             platform: Arc::clone(&platform),
             pid_router: ctx.pid_router().clone(),
             cedar: Arc::clone(&cedar),
             max_body_bytes: cli.http_max_body_bytes,
             partner_store: Some(Arc::new(store.as_partner_store())),
-            tenant_id: mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+            tenant_id: mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
             dl_sink: Arc::new(dl_sink_ingest.clone()),
             dispatcher: Some(Arc::clone(&ingest_dispatcher)),
             contrl_ack: Some(Arc::new(contrl_ack::ContrlAckService::new(
                 Arc::new(store.clone()),
-                store.as_deadline_store(),
-                mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
-                gln_registry.primary_gln().to_owned(),
+                mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
+                mp_id_registry.primary_mp_id().to_owned(),
             ))),
         });
         let admin_state = Arc::new(malo_admin_api::MaloAdminState {
             cache: malo_cache::SlateDbMaloCache::new(store.clone()),
             cedar: Arc::clone(&cedar),
-            tenant_id: gln_registry.primary_gln().to_owned(),
+            tenant_id: mp_id_registry.primary_mp_id().to_owned(),
         });
         let partner_store = store.as_partner_store();
         let partner_tenant_id =
-            mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln());
+            mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id());
         partner_api::seed_from_config(&partner_store, partner_tenant_id, &cli.as4_partner)
             .await
             .context("seeding partner store from config")?;
@@ -1600,8 +1638,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             platform: Arc::clone(&platform),
         });
         let commands_state = Arc::new(commands_api::CommandsApiState {
-            tenant_id: mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
-            sender_party_id: gln_registry.primary_gln().to_owned(),
+            tenant_id: mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
+            sender_party_id: mp_id_registry.primary_mp_id().to_owned(),
             configured_marktrollen: effective_marktrollen.to_vec(),
             max_body_bytes: cli.http_max_body_bytes,
             snapshot_interval: cli.snapshot_interval,
@@ -1619,16 +1657,17 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             metrics_api::MetricsState::new(
                 store.clone(),
                 Arc::clone(&cedar),
-                gln_registry.primary_gln().to_owned(),
+                mp_id_registry.primary_mp_id().to_owned(),
             )
             .with_volatile_mode(cli.data_dir.is_none() && cli.allow_volatile),
         );
         let migration_state = Arc::new(migration_api::MigrationApiState {
             store: Arc::new(store.clone()),
             cedar: Arc::clone(&cedar),
+            tenant: mp_id_registry.primary_mp_id().to_owned(),
         });
         let mcp_state = Arc::new(mcp_server::MakodMcpState {
-            tenant: gln_registry.primary_gln().to_owned(),
+            tenant: mp_id_registry.primary_mp_id().to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             cedar: Arc::clone(&cedar),
             commands: Arc::clone(&commands_state),
@@ -1639,7 +1678,9 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         });
         let invoic_api_state = Arc::new(invoic_api::InvoicApiState {
             store: Arc::new(store.clone()),
-            tenant_id: mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+            tenant_id: mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
+            cedar: Arc::clone(&cedar),
+            tenant: mp_id_registry.primary_mp_id().to_owned(),
         });
         let app = edifact_api::router(api_state)
             .merge(malo_admin_api::router(admin_state))
@@ -1650,6 +1691,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             .merge(migration_api::router(migration_state))
             .merge(mcp_server::router(mcp_state, shutdown_token.clone()))
             .merge(health::router(health_state.clone()))
+            // W3C trace-context capture for end-to-end tracing.
+            .layer(axum::middleware::from_fn(trace_ctx_middleware))
             .merge(openapi::router());
         let listener = tokio::net::TcpListener::bind(addr)
             .await
@@ -1682,7 +1725,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         let party_id = cli
             .as4_party_id
             .clone()
-            .unwrap_or_else(|| gln_registry.primary_gln().to_owned());
+            .unwrap_or_else(|| mp_id_registry.primary_mp_id().to_owned());
 
         let key_pem = cli.as4_signing_key_pem.clone().ok_or_else(|| {
             anyhow::anyhow!(
@@ -1716,17 +1759,27 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
 
         // BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every inbound message to be
         // encrypted.  Without an own decryption private key, `bdew_push_policy`
-        // cannot enable `require_encrypted_inbound` and will silently accept
-        // unencrypted inbound messages.
+        // cannot enable `require_encrypted_inbound` and would silently accept
+        // unencrypted inbound messages — so this is fail-closed: the daemon
+        // refuses to start unless the operator explicitly opts out for dev/test.
         if cli.as4_decryption_key_pem.is_none() {
-            tracing::warn!(
-                "AS4 inbound decryption key not configured \
-                 (--as4-decryption-key-pem / MAKOD_AS4_DECRYPTION_KEY_PEM not set). \
-                 Inbound AS4 messages will be accepted WITHOUT verifying that they are \
-                 encrypted, violating BDEW AS4-Profil v1.2 §2.2.6.2.2. \
-                 Set --as4-decryption-key-pem to your own EC (BrainpoolP256r1) \
-                 private key to enforce encrypted inbound in production."
-            );
+            if cli.allow_unencrypted_as4 {
+                tracing::warn!(
+                    "--allow-unencrypted-as4: AS4 inbound decryption key not configured. \
+                     Inbound AS4 messages will be accepted WITHOUT verifying that they \
+                     are encrypted, violating BDEW AS4-Profil v1.2 §2.2.6.2.2. \
+                     This mode is for dev/test only."
+                );
+            } else {
+                anyhow::bail!(
+                    "AS4 inbound decryption key not configured \
+                     (--as4-decryption-key-pem / MAKOD_AS4_DECRYPTION_KEY_PEM not set). \
+                     BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every inbound AS4 message \
+                     to be encrypted; without your own EC (BrainpoolP256r1) private key, \
+                     unencrypted inbound cannot be rejected. Provide the key, or pass \
+                     --allow-unencrypted-as4 for dev/test."
+                );
+            }
         }
         let session = {
             let session_id = format!("makod-{}", uuid::Uuid::new_v4());
@@ -1779,22 +1832,20 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             ),
             max_body_bytes: mako_as4::bdew_router_config().max_body_bytes,
             partner_store: Some(Arc::new(store.as_partner_store())),
-            tenant_id: mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+            tenant_id: mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
             dl_sink: Arc::new(dl_sink_ingest),
             dispatcher: Some(Arc::clone(&ingest_dispatcher)),
             contrl_ack: Some(Arc::new(contrl_ack::ContrlAckService::new(
                 Arc::new(store.clone()),
-                store.as_deadline_store(),
-                mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
-                gln_registry.primary_gln().to_owned(),
+                mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
+                mp_id_registry.primary_mp_id().to_owned(),
             ))),
         });
 
         let contrl_svc = Arc::new(contrl_ack::ContrlAckService::new(
             Arc::new(store.clone()),
-            store.as_deadline_store(),
-            mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
-            gln_registry.primary_gln().to_owned(),
+            mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
+            mp_id_registry.primary_mp_id().to_owned(),
         ));
         let handler = Arc::new(
             as4_ingest::BdewAs4IngestHandler::new(
@@ -1808,6 +1859,13 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
                     .as_ref()
                     .map(|s| s.expose_secret().as_bytes().to_vec()),
             )
+            // BDEW AS4-Profil §2.2.4: sign synchronous receipts (NRR) with the
+            // operator's signing key pair — the same material used for the
+            // AS4 session signing context above.
+            .with_receipt_credentials(
+                key_pem.expose_secret().as_bytes().to_vec(),
+                cert_pem.clone().into_bytes(),
+            )
             .with_contrl_ack(Arc::clone(&contrl_svc)),
         );
 
@@ -1815,9 +1873,14 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             .merge(health::router(health_state.clone()))
             // OWASP A05 — rate limit the AS4 inbound endpoint to prevent
             // capacity exhaustion by a misconfigured or malicious counterparty.
-            // Uses a GCRA token bucket: 100 req/s sustained, burst of 50.
-            // Returns HTTP 429 when the bucket is exhausted.
-            .layer(axum::middleware::from_fn(as4_ingest::rate_limit_middleware));
+            // Per-peer GCRA token bucket: 100 req/s sustained, burst of 50,
+            // keyed by client IP. Returns HTTP 429 when a peer's bucket is
+            // exhausted.
+            .layer(axum::middleware::from_fn(
+                as4_ingest::as4_rate_limit_middleware,
+            ))
+            // W3C trace-context capture for end-to-end tracing.
+            .layer(axum::middleware::from_fn(trace_ctx_middleware));
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| anyhow::anyhow!("AS4 server bind {addr}: {e}"))?;
@@ -1828,9 +1891,14 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         );
         let as4_token = shutdown_token.clone();
         tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app)
-                .with_graceful_shutdown(as4_token.cancelled_owned())
-                .await
+            // `into_make_service_with_connect_info` provides the peer socket
+            // address the per-IP rate limiter keys on.
+            if let Err(e) = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(as4_token.cancelled_owned())
+            .await
             {
                 tracing::error!(error = %e, "AS4 server error");
             }
@@ -1856,44 +1924,61 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // MaLo Identification is active. Control Measures are wired to
     // WimSteuerungsauftragWorkflow.
     if let Some(addr) = cli.api_webdienste_addr {
-        // ── API-Webdienste auth warning ────────────────────────────────────────
-        //
-        // The BDEW API-Webdienste Strom specification requires mTLS with
-        // certificates issued by BDEW-approved CAs. This port currently has no
-        // bearer-token or mTLS guard — requests from any unauthenticated caller
-        // are accepted. Deploy behind a reverse-proxy with mTLS termination
-        // (e.g. Nginx with `ssl_verify_client require` and the BDEW CA) before
-        // exposing this port on a production network boundary.
-        //
-        // Internally-facing deployments (behind a service mesh / VPC) where
-        // network-level access controls are enforced may operate without mTLS
-        // if the threat model permits it.
-        tracing::warn!(
-            addr = %addr,
-            "API-Webdienste Strom port started WITHOUT authentication. \
-             BDEW API-Webdienste requires mTLS (BDEW PKI CA). \
-             Deploy behind a reverse proxy with mTLS termination before \
-             exposing this port to public networks.",
-        );
         let handler = Arc::new(webdienste::MakodApiHandler {
             store: store.clone(),
-            tenant_id: mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
-            sender_party_id: gln_registry.primary_gln().to_owned(),
+            tenant_id: mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
+            sender_party_id: mp_id_registry.primary_mp_id().to_owned(),
         });
-        let app = webdienste::router(handler).merge(health::router(health_state.clone()));
+        // ── API-Webdienste authentication ─────────────────────────────────
+        //
+        // The BDEW API-Webdienste specification requires authenticated
+        // access. Every route on :8090 sits behind bearer/OIDC
+        // authentication plus the Cedar `UseWebdienste` action, and a
+        // body-size limit. `--webdienste-allow-unauthenticated` disables the
+        // auth layer for deployments that terminate mTLS (BDEW PKI CA) at a
+        // fronting proxy and enforce access there.
+        let wd_routes = webdienste::router(handler).layer(axum::extract::DefaultBodyLimit::max(
+            cli.http_max_body_bytes,
+        ));
+        let wd_routes = if cli.webdienste_allow_unauthenticated {
+            tracing::warn!(
+                addr = %addr,
+                "--webdienste-allow-unauthenticated: API-Webdienste Strom port \
+                 has NO authentication. Only acceptable behind a proxy that \
+                 terminates mTLS with the BDEW PKI CA.",
+            );
+            wd_routes
+        } else {
+            wd_routes.layer(axum::middleware::from_fn_with_state(
+                webdienste::WebdiensteAuthState {
+                    cedar: Arc::clone(&cedar),
+                    tenant: Arc::from(mp_id_registry.primary_mp_id()),
+                },
+                webdienste::webdienste_auth_middleware,
+            ))
+        };
+        // Per-peer rate limit, same GCRA policy as the AS4 port.
+        let app = wd_routes
+            .layer(axum::middleware::from_fn(as4_ingest::rate_limit_middleware))
+            // W3C trace-context capture for end-to-end tracing.
+            .layer(axum::middleware::from_fn(trace_ctx_middleware))
+            .merge(health::router(health_state.clone()));
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| anyhow::anyhow!("API-Webdienste server bind {addr}: {e}"))?;
         info!(
             addr = %addr,
-            primary_gln = gln_registry.primary_gln(),
+            primary_mp_id = mp_id_registry.primary_mp_id(),
             "API-Webdienste Strom server listening (MaLo Identification active)",
         );
         let wd_token = shutdown_token.clone();
         tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app)
-                .with_graceful_shutdown(wd_token.cancelled_owned())
-                .await
+            if let Err(e) = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(wd_token.cancelled_owned())
+            .await
             {
                 tracing::error!(error = %e, "API-Webdienste server error");
             }
@@ -1914,12 +1999,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         http_client,
         malo_cache: Arc::clone(&malo_cache),
         shutdown_token: shutdown_token.clone(),
-        gln_registry: Arc::clone(&gln_registry),
+        mp_id_registry: Arc::clone(&mp_id_registry),
         as4_partner: cli.as4_partner.clone(),
         as4_signing_key_pem: cli.as4_signing_key_pem.clone(),
         as4_signing_cert_pem: cli.as4_signing_cert_pem.clone(),
         as4_trust_anchor_pem: cli.as4_trust_anchor_pem.clone(),
         as4_partner_certs: cli.as4_partner_cert.clone(),
+        allow_unencrypted_as4: cli.allow_unencrypted_as4,
+        as4_lenient_receipts: cli.as4_lenient_receipts,
+        dead_letter_sink: dl_sink_workers,
         as4_party_id: cli.as4_party_id.clone(),
         maloid_partner: cli.maloid_partner.clone(),
         verzeichnisdienst_url: cli.verzeichnisdienst_url.clone(),
@@ -1972,6 +2060,26 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
 
 /// Load and concatenate all `*.cedar` files from `dir`.
 ///
+/// Scope the request's W3C `traceparent` header into the engine task-local.
+///
+/// Every `OutboxMessage` created while handling the request captures it into
+/// its persisted `trace_context`, and the delivery workers re-inject it into
+/// outbound HTTP — end-to-end tracing across the asynchronous outbox
+/// boundary.
+async fn trace_ctx_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let tp = req
+        .headers()
+        .get("traceparent")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    mako_engine::trace_ctx::TRACEPARENT
+        .scope(tp, next.run(req))
+        .await
+}
+
 /// Files are sorted by name so loading order is deterministic.
 /// Returns `None` when the directory is `None` or contains no `.cedar` files.
 fn read_cedar_policy_dir(dir: &Option<std::path::PathBuf>) -> anyhow::Result<Option<String>> {
@@ -2456,8 +2564,20 @@ async fn open_store(cli: &Cli) -> anyhow::Result<SlateDbStore> {
 
 // ── Tracing setup ─────────────────────────────────────────────────────────────
 
-fn init_tracing(cli: &Cli) {
+/// Initialise tracing; returns a guard that flushes OTel spans on drop.
+///
+/// When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, delegates to
+/// `mako_service::telemetry` — spans (including the AS4 ingest and outbox
+/// delivery spans) export via OTLP/gRPC with W3C propagation, joining the
+/// header-level `traceparent` chain the outbox already persists. Without the
+/// endpoint, the local fmt subscriber keeps the existing pretty/compact/json
+/// behaviour.
+fn init_tracing(cli: &Cli) -> Option<mako_service::telemetry::OtelGuard> {
     use tracing_subscriber::{EnvFilter, fmt};
+
+    if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
+        return Some(mako_service::telemetry::init_tracing_from_env("makod"));
+    }
 
     let filter = EnvFilter::builder()
         .with_default_directive(cli.log_level.as_filter().into())
@@ -2474,6 +2594,7 @@ fn init_tracing(cli: &Cli) {
             fmt().with_env_filter(filter).json().init();
         }
     }
+    None
 }
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────

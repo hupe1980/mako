@@ -8,13 +8,6 @@ use crate::{Error, Release};
 
 use super::{Set, Unset, bytes_to_segments};
 
-macro_rules! emit_seg {
-    ($writer:expr, $tag:expr, $($elem:expr),+ $(,)?) => {{
-        let elements: &[&str] = &[$($elem),+];
-        $writer.write_raw($tag, elements).map_err(|e| Error::Parse(e.into()))?;
-    }};
-}
-
 #[derive(Debug, Clone)]
 struct ContrlBuilderInner {
     release: Release,
@@ -135,14 +128,18 @@ impl<S, R> ContrlBuilder<S, R> {
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        let unh_type = format!("CONTRL:D:3:UN:{}", self.inner.release.as_str());
         let sender = self.inner.sender_id.as_deref().unwrap_or("");
         let receiver = self.inner.receiver_id.as_deref().unwrap_or("");
 
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
 
-        emit_seg!(w, "UNH", &self.inner.message_ref, &unh_type);
+        emit_comp!(
+            w,
+            "UNH",
+            [&self.inner.message_ref],
+            ["CONTRL", "D", "3", "UN", self.inner.release.as_str()]
+        );
         emit_seg!(
             w,
             "UCI",

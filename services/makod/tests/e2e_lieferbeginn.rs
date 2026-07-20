@@ -146,7 +146,9 @@ impl MockLfn {
              the renderer sets it to today at dispatch time"
         );
 
-        render_to_wire_bytes(msg, &make_registry(LFN_ID, "LF")).expect("LFN: render_to_wire_bytes")
+        render_to_wire_bytes(msg, &make_registry(LFN_ID, "LF"))
+            .expect("LFN: render_to_wire_bytes")
+            .bytes
     }
 
     /// ERP notification: receive NB's UTILMD response wire bytes and process them.
@@ -336,7 +338,9 @@ impl MockNb {
             );
         }
 
-        render_to_wire_bytes(utilmd, &make_registry(NB_ID, "NB")).expect("NB: render_to_wire_bytes")
+        render_to_wire_bytes(utilmd, &make_registry(NB_ID, "NB"))
+            .expect("NB: render_to_wire_bytes")
+            .bytes
     }
 
     async fn state(&self) -> SupplierChangeState {

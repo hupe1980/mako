@@ -42,7 +42,7 @@
 //! [`ReleaseRegistry`]: edi_energy::ReleaseRegistry
 
 use edi_energy::{
-    MessageType, ObjectType, Pruefidentifikator, Release, ReleaseRegistry, ReleaseTrack, builders,
+    MessageType, Pruefidentifikator, Release, ReleaseRegistry, ReleaseTrack, builders,
 };
 use mako_engine::outbox::OutboxMessage;
 
@@ -136,7 +136,7 @@ pub fn is_suppressed(err: &RenderError) -> bool {
 /// sender GLN is resolved from `payload["sender"]` when present; otherwise the
 /// registry's static PID → role table is used.
 /// For all other fallbacks (ORDRSP, INVOIC, REMADV without explicit `sender`)
-/// [`MpIdRegistry::primary_gln`] is used.
+/// [`MpIdRegistry::primary_mp_id`] is used.
 ///
 /// # Errors
 ///
@@ -148,7 +148,7 @@ pub fn is_suppressed(err: &RenderError) -> bool {
 pub fn render_to_wire_bytes(
     msg: &OutboxMessage,
     registry: &MpIdRegistry,
-) -> Result<Vec<u8>, RenderError> {
+) -> Result<RenderedInterchange, RenderError> {
     let p = &msg.payload;
     match msg.message_type.as_ref() {
         "UTILMD" => render_utilmd(p, msg),
@@ -162,6 +162,117 @@ pub fn render_to_wire_bytes(
         "MSCONS" => render_mscons(p, msg, registry),
         other => Err(intent_only(other)),
     }
+}
+
+// ── Übertragungsdatei envelope ────────────────────────────────────────────────
+
+/// A rendered EDIFACT Übertragungsdatei — the full `UNB…UNZ` interchange —
+/// with the envelope identities the transport layer needs.
+///
+/// Allgemeine Festlegungen 6.1d, Kap. 2: every EDIFACT Übertragungsdatei
+/// carries the UNB segment at interchange level, and the MP-IDs used in UNB
+/// and NAD for sender and receiver must be identical. The envelope is built
+/// here, from the *same* sender/receiver values the message body's `NAD+MS` /
+/// `NAD+MR` were built from, so the identity equality holds by construction.
+#[derive(Debug)]
+pub struct RenderedInterchange {
+    /// The complete wire bytes: `UNB … UNH … UNT … UNZ`.
+    pub bytes: Vec<u8>,
+    /// UNB DE0004 — identical to the message's `NAD+MS` MP-ID.
+    pub sender_mp_id: Box<str>,
+    /// UNB DE0010 — identical to the message's `NAD+MR` MP-ID.
+    pub receiver_mp_id: Box<str>,
+    /// UNB DE0020 Datenaustauschreferenz — repeated in UNZ DE0036 and used
+    /// as the DAR component of the §2.12 Content-Disposition filename.
+    /// Derived from the outbox message id, so retries reuse the same DAR.
+    pub dar: Box<str>,
+}
+
+/// UNB DE0007 Teilnehmerbezeichnung-Qualifier for an MP-ID.
+///
+/// Allgemeine Festlegungen 6.1d, UNB segment table: `14` = GS1,
+/// `500` = DE, BDEW, `502` = DE, DVGW Service & Consult GmbH.
+/// BDEW-issued 13-digit MP-IDs start with `99`, DVGW-issued with `98`;
+/// 16-character EIC codes are issued by BDEW as the German issuing office.
+fn unb_qualifier(mp_id: &str) -> &'static str {
+    if mp_id.len() == 13 && mp_id.starts_with("99") {
+        "500"
+    } else if mp_id.len() == 13 && mp_id.starts_with("98") {
+        "502"
+    } else if mp_id.len() == 13 {
+        "14"
+    } else {
+        "500"
+    }
+}
+
+/// The UNB DE0020 / UNZ DE0036 Datenaustauschreferenz for an outbox message.
+///
+/// First 14 uppercase hex chars of the outbox message UUID: unique per
+/// message, stable across delivery retries, and within the UNOC character
+/// set and the `an..14` length bound of DE0020.
+fn dar_for(msg: &OutboxMessage) -> String {
+    msg.message_id
+        .to_string()
+        .replace('-', "")
+        .to_uppercase()
+        .chars()
+        .take(14)
+        .collect()
+}
+
+/// Wrap rendered message bytes in the `UNB…UNZ` interchange envelope.
+///
+/// The builders emit one message (`UNH…UNT`); the regulated wire format is
+/// the Übertragungsdatei, which carries exactly this envelope around it.
+/// Written through `edifact_rs::Writer::write_composites`, so component
+/// boundaries are structural and the values are escaped for the wire.
+fn finish_interchange(
+    serialized: Result<Vec<u8>, edi_energy::Error>,
+    sender: &str,
+    receiver: &str,
+    msg: &OutboxMessage,
+) -> Result<RenderedInterchange, RenderError> {
+    let message = serialized.map_err(|e| RenderError::BuilderError(e.to_string()))?;
+    let dar = dar_for(msg);
+    let now = time::OffsetDateTime::now_utc();
+    let date = format!(
+        "{:02}{:02}{:02}",
+        now.year() % 100,
+        now.month() as u8,
+        now.day()
+    );
+    let hhmm = format!("{:02}{:02}", now.hour(), now.minute());
+
+    let mut w = edifact_rs::Writer::new(Vec::with_capacity(message.len() + 96));
+    w.write_composites(
+        "UNB",
+        &[
+            &["UNOC", "3"],
+            &[sender, unb_qualifier(sender)],
+            &[receiver, unb_qualifier(receiver)],
+            &[&date, &hhmm],
+            &[&dar],
+        ],
+    )
+    .map_err(|e| RenderError::BuilderError(format!("UNB envelope: {e}")))?;
+    let mut bytes = w
+        .finish()
+        .map_err(|e| RenderError::BuilderError(format!("UNB envelope: {e}")))?;
+    bytes.extend_from_slice(&message);
+    let mut w = edifact_rs::Writer::new(bytes);
+    w.write_composites("UNZ", &[&["1"], &[&dar]])
+        .map_err(|e| RenderError::BuilderError(format!("UNZ envelope: {e}")))?;
+    let bytes = w
+        .finish()
+        .map_err(|e| RenderError::BuilderError(format!("UNZ envelope: {e}")))?;
+
+    Ok(RenderedInterchange {
+        bytes,
+        sender_mp_id: sender.into(),
+        receiver_mp_id: receiver.into(),
+        dar: dar.into(),
+    })
 }
 
 // ── UTILMD ────────────────────────────────────────────────────────────────────
@@ -182,7 +293,10 @@ pub fn render_to_wire_bytes(
 /// | `message_ref`   | no       | Derived from `causation_event_id` when absent          |
 ///
 /// \* Exactly one of `malo` / `melo` is required, depending on the PID range.
-fn render_utilmd(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, RenderError> {
+fn render_utilmd(
+    p: &serde_json::Value,
+    msg: &OutboxMessage,
+) -> Result<RenderedInterchange, RenderError> {
     let mt = "UTILMD";
 
     let pid = require_u32(p, mt, "pid")?;
@@ -192,12 +306,14 @@ fn render_utilmd(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
         .and_then(|v| v.as_str())
         .unwrap_or(msg.recipient.as_ref());
 
-    // WiM PIDs (55039, 55042, 55051, 55168) refer to Messlokationen; all other UTILMD PIDs
-    // (GPKE 55xxx, GeLi Gas 44xxx) refer to Marktlokationen.
-    let (object_type, location_id_key) = if matches!(pid, 55_039 | 55_042 | 55_051 | 55_168) {
-        (ObjectType::Messlokation, "melo")
+    // The AHB fixes the IDE DE 7495 qualifier per Prüfidentifikator: the WiM
+    // Messlokations-PIDs use `24` (Vorgang), everything else (GPKE 55xxx,
+    // GeLi Gas 44xxx — Marktlokations processes) uses `Z19`, matching the
+    // official Beispiel fixtures and the generated AHB rules.
+    let (ide_qualifier, location_id_key) = if matches!(pid, 55_039 | 55_042 | 55_051 | 55_168) {
+        ("24", "melo")
     } else {
-        (ObjectType::Marktlokation, "malo")
+        ("Z19", "malo")
     };
     let location_id = require_str(p, mt, location_id_key)?;
 
@@ -237,18 +353,25 @@ fn render_utilmd(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
         .sender(sender)
         .receiver(receiver)
         .pruefidentifikator(edifact_pid)
-        .message_ref(message_ref);
+        // AHB: RFF+Z13 is mandatory on every UTILMD Anwendungsfall — it
+        // carries the process reference the counterparty echoes back.
+        .rff("Z13", message_ref.clone())
+        .message_ref(message_ref.clone());
 
     if let Some(dd) = doc_date_owned.as_deref() {
         builder = builder.document_date(dd);
     }
 
-    builder
-        .transaction(object_type, location_id)
-        .process_date(dtm_qualifier, &process_date_yyyymmdd)
-        .done()
-        .serialize()
-        .map_err(|e| RenderError::BuilderError(e.to_string()))
+    finish_interchange(
+        builder
+            .transaction_with_qualifier(ide_qualifier, location_id)
+            .process_date(dtm_qualifier, &process_date_yyyymmdd)
+            .done()
+            .serialize(),
+        sender,
+        receiver,
+        msg,
+    )
 }
 
 /// Returns the BDEW DTM qualifier for the process-date segment inside UTILMD SG4.
@@ -289,7 +412,10 @@ fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
 /// | `reason`          | no       | FTX free-text error description              |
 /// | `document_date`   | no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)                  |
 /// | `message_ref`     | no       | Derived from `causation_event_id` when absent               |
-fn render_aperak(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, RenderError> {
+fn render_aperak(
+    p: &serde_json::Value,
+    msg: &OutboxMessage,
+) -> Result<RenderedInterchange, RenderError> {
     let mt = "APERAK";
 
     // Gas positive APERAK: silence = acceptance per APERAK AHB 1.0 §2.3.
@@ -366,9 +492,7 @@ fn render_aperak(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
         builder = builder.document_date(d);
     }
 
-    builder
-        .serialize()
-        .map_err(|e| RenderError::BuilderError(e.to_string()))
+    finish_interchange(builder.serialize(), sender, receiver, msg)
 }
 
 // ── CONTRL ────────────────────────────────────────────────────────────────────
@@ -384,7 +508,10 @@ fn render_aperak(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
 /// | `interchange_ref`| no      | UCI interchange control reference            |
 /// | `accepted`      | no       | `true` = accepted (code 4), `false` = rejected (code 8) |
 /// | `message_ref`   | no       | Derived from `causation_event_id` when absent              |
-fn render_contrl(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, RenderError> {
+fn render_contrl(
+    p: &serde_json::Value,
+    msg: &OutboxMessage,
+) -> Result<RenderedInterchange, RenderError> {
     let mt = "CONTRL";
 
     let sender = require_str(p, mt, "sender")?;
@@ -420,9 +547,7 @@ fn render_contrl(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
         builder.reject()
     };
 
-    builder
-        .serialize()
-        .map_err(|e| RenderError::BuilderError(e.to_string()))
+    finish_interchange(builder.serialize(), sender, receiver, msg)
 }
 
 // ── ORDERS ────────────────────────────────────────────────────────────────────
@@ -432,8 +557,8 @@ fn render_contrl(p: &serde_json::Value, msg: &OutboxMessage) -> Result<Vec<u8>, 
 /// **Sender resolution** (in priority order):
 /// 1. `payload["sender"]` — set this in the workflow for deterministic
 ///    multi-GLN deployments.
-/// 2. [`MpIdRegistry::sender_gln_for_orders_pid`] — static PID → role lookup.
-/// 3. [`MpIdRegistry::primary_gln`] — final fallback.
+/// 2. [`MpIdRegistry::sender_mp_id_for_orders_pid`] — static PID → role lookup.
+/// 3. [`MpIdRegistry::primary_mp_id`] — final fallback.
 ///
 /// The receiver comes from `msg.recipient`.
 ///
@@ -449,15 +574,15 @@ fn render_orders(
     p: &serde_json::Value,
     msg: &OutboxMessage,
     registry: &MpIdRegistry,
-) -> Result<Vec<u8>, RenderError> {
+) -> Result<RenderedInterchange, RenderError> {
     let mt = "ORDERS";
 
     let pid = p.get("pid").and_then(|v| v.as_u64()).map(|n| n as u32);
 
     // Sender: explicit in payload first, then registry lookup by PID, then primary.
     let sender = p.get("sender").and_then(|v| v.as_str()).unwrap_or_else(|| {
-        pid.map(|p| registry.sender_gln_for_orders_pid(p))
-            .unwrap_or_else(|| registry.primary_gln())
+        pid.map(|p| registry.sender_mp_id_for_orders_pid(p))
+            .unwrap_or_else(|| registry.primary_mp_id())
     });
 
     let orders_ref = p
@@ -482,9 +607,7 @@ fn render_orders(
         builder = builder.document_id(pv.to_string());
     }
 
-    builder
-        .serialize()
-        .map_err(|e| RenderError::BuilderError(e.to_string()))
+    finish_interchange(builder.serialize(), sender, msg.recipient.as_ref(), msg)
 }
 
 // ── ORDCHG ────────────────────────────────────────────────────────────────────
@@ -502,7 +625,7 @@ fn render_ordchg(
     p: &serde_json::Value,
     msg: &OutboxMessage,
     registry: &MpIdRegistry,
-) -> Result<Vec<u8>, RenderError> {
+) -> Result<RenderedInterchange, RenderError> {
     let mt = "ORDCHG";
 
     let pid = p.get("pid").and_then(|v| v.as_u64()).map(|n| n as u32);
@@ -510,7 +633,7 @@ fn render_ordchg(
     let sender = p
         .get("sender")
         .and_then(|v| v.as_str())
-        .unwrap_or_else(|| registry.primary_gln());
+        .unwrap_or_else(|| registry.primary_mp_id());
 
     let explicit_ref = p
         .get("message_ref")
@@ -534,9 +657,7 @@ fn render_ordchg(
         builder = builder.document_id(pv.to_string());
     }
 
-    builder
-        .serialize()
-        .map_err(|e| RenderError::BuilderError(e.to_string()))
+    finish_interchange(builder.serialize(), sender, msg.recipient.as_ref(), msg)
 }
 
 // ── ORDRSP ────────────────────────────────────────────────────────────────────
@@ -550,7 +671,7 @@ fn render_ordchg(
 ///
 /// | Field          | Required | Description                                   |
 /// |----------------|----------|-----------------------------------------------|
-/// | `sender`       | no       | Sender GLN (falls back to `registry.primary_gln()`)|
+/// | `sender`       | no       | Sender GLN (falls back to `registry.primary_mp_id()`)|
 /// | `receiver`     | no       | Receiver GLN (falls back to `msg.recipient`)  |
 /// | `document_id`  | no       | BGM document identifier (Auftragsnummer)      |
 /// | `document_date`| no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)    |
@@ -559,13 +680,13 @@ fn render_ordrsp(
     p: &serde_json::Value,
     msg: &OutboxMessage,
     registry: &MpIdRegistry,
-) -> Result<Vec<u8>, RenderError> {
+) -> Result<RenderedInterchange, RenderError> {
     let mt = "ORDRSP";
 
     let sender = p
         .get("sender")
         .and_then(|v| v.as_str())
-        .unwrap_or_else(|| registry.primary_gln());
+        .unwrap_or_else(|| registry.primary_mp_id());
     let receiver = p
         .get("receiver")
         .and_then(|v| v.as_str())
@@ -599,9 +720,7 @@ fn render_ordrsp(
         builder = builder.document_date(d);
     }
 
-    builder
-        .serialize()
-        .map_err(|e| RenderError::BuilderError(e.to_string()))
+    finish_interchange(builder.serialize(), sender, receiver, msg)
 }
 
 // ── INVOIC ────────────────────────────────────────────────────────────────────
@@ -630,13 +749,13 @@ fn render_invoic(
     p: &serde_json::Value,
     msg: &OutboxMessage,
     registry: &MpIdRegistry,
-) -> Result<Vec<u8>, RenderError> {
+) -> Result<RenderedInterchange, RenderError> {
     let mt = "INVOIC";
 
     let sender = p
         .get("sender")
         .and_then(|v| v.as_str())
-        .unwrap_or_else(|| registry.primary_gln());
+        .unwrap_or_else(|| registry.primary_mp_id());
     let receiver = p
         .get("receiver")
         .and_then(|v| v.as_str())
@@ -674,9 +793,7 @@ fn render_invoic(
         builder = builder.document_date(d);
     }
 
-    builder
-        .serialize()
-        .map_err(|e| RenderError::BuilderError(e.to_string()))
+    finish_interchange(builder.serialize(), sender, receiver, msg)
 }
 
 // ── REMADV ────────────────────────────────────────────────────────────────────
@@ -691,7 +808,7 @@ fn render_invoic(
 ///
 /// | Field           | Required | Description                                   |
 /// |-----------------|----------|-----------------------------------------------|
-/// | `sender`        | no       | Sender GLN (falls back to `registry.primary_gln()`)|
+/// | `sender`        | no       | Sender GLN (falls back to `registry.primary_mp_id()`)|
 /// | `receiver`      | no       | Receiver GLN (falls back to `msg.recipient`)  |
 /// | `document_id`   | no       | BGM document identifier (Avisnummer)          |
 /// | `document_code` | no       | BGM type code (default `"239"`)               |
@@ -701,13 +818,13 @@ fn render_remadv(
     p: &serde_json::Value,
     msg: &OutboxMessage,
     registry: &MpIdRegistry,
-) -> Result<Vec<u8>, RenderError> {
+) -> Result<RenderedInterchange, RenderError> {
     let mt = "REMADV";
 
     let sender = p
         .get("sender")
         .and_then(|v| v.as_str())
-        .unwrap_or_else(|| registry.primary_gln());
+        .unwrap_or_else(|| registry.primary_mp_id());
     let receiver = p
         .get("receiver")
         .and_then(|v| v.as_str())
@@ -745,9 +862,7 @@ fn render_remadv(
         builder = builder.document_date(d);
     }
 
-    builder
-        .serialize()
-        .map_err(|e| RenderError::BuilderError(e.to_string()))
+    finish_interchange(builder.serialize(), sender, receiver, msg)
 }
 
 /// MSCONS "Übertragung Summenzeitreihe" (MaBiS), AHB 3.2 §8.3.1.
@@ -807,7 +922,7 @@ fn render_mscons(
     p: &serde_json::Value,
     msg: &OutboxMessage,
     registry: &MpIdRegistry,
-) -> Result<Vec<u8>, RenderError> {
+) -> Result<RenderedInterchange, RenderError> {
     let mt = "MSCONS";
 
     // MSCONS carries many Anwendungsfälle with materially different segment
@@ -847,7 +962,7 @@ fn render_mscons(
     let sender = p
         .get("sender_mp_id")
         .and_then(|v| v.as_str())
-        .unwrap_or_else(|| registry.primary_gln());
+        .unwrap_or_else(|| registry.primary_mp_id());
     let receiver = p
         .get("receiver_mp_id")
         .and_then(|v| v.as_str())
@@ -934,9 +1049,7 @@ fn render_mscons(
         );
     }
 
-    mp.done()
-        .serialize()
-        .map_err(|e| RenderError::BuilderError(e.to_string()))
+    finish_interchange(mp.done().serialize(), sender, receiver, msg)
 }
 
 /// Render MSCONS "Arbeit / Leistungsmaximum im Kalenderjahr vor Lieferbeginn"
@@ -960,7 +1073,7 @@ fn render_mscons_arbeit_leistungsmax(
     p: &serde_json::Value,
     msg: &OutboxMessage,
     registry: &MpIdRegistry,
-) -> Result<Vec<u8>, RenderError> {
+) -> Result<RenderedInterchange, RenderError> {
     let pid = p
         .get("pid")
         .and_then(serde_json::Value::as_u64)
@@ -994,7 +1107,7 @@ fn render_mscons_arbeit_leistungsmax(
     let sender = p
         .get("sender_mp_id")
         .and_then(|v| v.as_str())
-        .unwrap_or_else(|| registry.primary_gln());
+        .unwrap_or_else(|| registry.primary_mp_id());
     let receiver = p
         .get("receiver_mp_id")
         .and_then(|v| v.as_str())
@@ -1106,9 +1219,7 @@ fn render_mscons_arbeit_leistungsmax(
             .leistungsperiode(period, period_format);
     }
 
-    mp.done()
-        .serialize()
-        .map_err(|e| RenderError::BuilderError(e.to_string()))
+    finish_interchange(mp.done().serialize(), sender, receiver, msg)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1192,7 +1303,7 @@ mod tests {
     use mako_engine::ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId};
     use mako_engine::outbox::OutboxMessage;
 
-    fn test_registry(mp_id: &str) -> MpIdRegistry {
+    pub(super) fn test_registry(mp_id: &str) -> MpIdRegistry {
         let party = PartyConfig {
             mp_id: mp_id.to_owned(),
             roles: vec!["NB".to_owned()],
@@ -1285,7 +1396,7 @@ mod tests {
         );
         let wire =
             render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("13015 must render");
-        let wire = String::from_utf8(wire).expect("utf-8");
+        let wire = String::from_utf8(wire.bytes).expect("utf-8");
 
         // Work: DE 6063 `220` (Wahrer Wert), bounded by the billing period.
         assert!(wire.contains("QTY+220:184500.000:KWH"), "{wire}");
@@ -1362,7 +1473,7 @@ mod tests {
             let msg = fake_msg("MSCONS", "9900987654321", payload);
             let wire = render_to_wire_bytes(&msg, &test_registry("9900123456789"))
                 .unwrap_or_else(|e| panic!("PID {pid} must render: {e:?}"));
-            let wire = String::from_utf8(wire).expect("utf-8");
+            let wire = String::from_utf8(wire.bytes).expect("utf-8");
             assert!(
                 wire.contains(expected),
                 "PID {pid} must carry {expected}, got: {wire}"
@@ -1460,7 +1571,7 @@ mod tests {
         );
         let wire =
             render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("13023 must render");
-        let wire = String::from_utf8(wire).expect("utf-8");
+        let wire = String::from_utf8(wire.bytes).expect("utf-8");
         // DE 6063 `79` = Energiemenge summiert (MSCONS AHB 3.2, SG10 QTY).
         assert!(wire.contains("QTY+79:7.5:KWH"), "{wire}");
         assert!(wire.contains("DTM+293:20260714050000?+00:304"), "{wire}");
@@ -1486,7 +1597,7 @@ mod tests {
         );
         let wire = render_to_wire_bytes(&msg, &test_registry("9900123456789"))
             .expect("MSCONS 13003 must render");
-        let wire = String::from_utf8(wire).expect("utf-8");
+        let wire = String::from_utf8(wire.bytes).expect("utf-8");
 
         assert!(wire.contains("DTM+492:202606:610"), "{wire}");
         assert!(wire.contains("DTM+293:20260714050000?+00:304"), "{wire}");
@@ -1536,5 +1647,84 @@ mod tests {
             Err(RenderError::NoActiveProfile { .. }) => {}
             Err(other) => panic!("unexpected error: {other}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod envelope_tests {
+    use super::tests::test_registry;
+    use super::*;
+
+    fn outbox_msg(message_type: &str, payload: serde_json::Value) -> OutboxMessage {
+        use mako_engine::ids::{
+            ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId,
+        };
+        let tenant = TenantId::from_party_id("9900123456789");
+        let process = ProcessId::new();
+        OutboxMessage::new(
+            StreamId::for_process(tenant, &process),
+            process,
+            tenant,
+            CorrelationId::new(),
+            ConversationId::new(),
+            EventId::new(),
+            message_type,
+            "9900987654321",
+            payload,
+        )
+    }
+
+    /// AF 6.1d, Kap. 2: the Übertragungsdatei carries UNB/UNZ, and the UNB
+    /// MP-IDs equal the NAD+MS / NAD+MR MP-IDs. The DAR in UNB DE0020 is
+    /// repeated in UNZ DE0036.
+    #[test]
+    fn envelope_identities_match_nad_and_unz_repeats_dar() {
+        let msg = outbox_msg(
+            "APERAK",
+            serde_json::json!({
+                "sender": "9900123456789",
+                "receiver": "9900987654321",
+                "orig_message_ref": "ABC123",
+            }),
+        );
+        let rendered =
+            render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("must render");
+        let wire = String::from_utf8(rendered.bytes.clone()).expect("utf-8");
+
+        // Envelope present, exactly one message.
+        assert!(wire.starts_with("UNB+UNOC:3+"), "{wire}");
+        assert!(wire.contains(&format!("UNZ+1+{}'", rendered.dar)), "{wire}");
+
+        // UNB DE0004/DE0010 with BDEW qualifier 500 (99…-prefixed MP-IDs),
+        // AF 6.1d UNB segment table.
+        assert!(
+            wire.contains("UNB+UNOC:3+9900123456789:500+9900987654321:500+"),
+            "{wire}"
+        );
+        // …and identical to the NAD MP-IDs (AF 6.1d: "Die im UNB- und
+        // NAD-Segment … verwendeten MP-ID sind identisch").
+        assert!(wire.contains("NAD+MS+9900123456789"), "{wire}");
+        assert!(wire.contains("NAD+MR+9900987654321"), "{wire}");
+        assert_eq!(rendered.sender_mp_id.as_ref(), "9900123456789");
+        assert_eq!(rendered.receiver_mp_id.as_ref(), "9900987654321");
+
+        // DAR is stable across retries: derived from the message id.
+        let again = render_to_wire_bytes(&msg, &test_registry("9900123456789")).unwrap();
+        assert_eq!(rendered.dar, again.dar);
+
+        // And the whole interchange parses back.
+        edi_energy::Platform::with_all_profiles()
+            .parse(&rendered.bytes)
+            .expect("envelope must be parseable");
+    }
+
+    /// DE0007 qualifier derivation per AF 6.1d UNB segment table:
+    /// 14 = GS1, 500 = DE BDEW, 502 = DE DVGW.
+    #[test]
+    fn unb_qualifier_per_af61d() {
+        assert_eq!(unb_qualifier("9900123456789"), "500");
+        assert_eq!(unb_qualifier("9870123456789"), "502");
+        assert_eq!(unb_qualifier("4012345000023"), "14");
+        assert_eq!(unb_qualifier("10XDE-EON-NETZ-I"), "500");
     }
 }

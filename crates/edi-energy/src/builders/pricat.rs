@@ -9,20 +9,16 @@ use crate::{Error, Release};
 
 use super::{Set, Unset, bytes_to_segments};
 
-macro_rules! emit_seg {
-    ($writer:expr, $tag:expr, $($elem:expr),+ $(,)?) => {{
-        let elements: &[&str] = &[$($elem),+];
-        $writer.write_raw($tag, elements).map_err(|e| Error::Parse(e.into()))?;
-    }};
-}
-
 // ── PRICAT-specific DTM helpers (format 303) ──────────────────────────────────
+//
+// These return only the DE 2380 datetime value; qualifier and format code are
+// separate components at the emit site.
 
-fn format_dtm303(date: &str) -> String {
-    format!("137:{date}0000+0000:303")
+fn midnight_303(date: &str) -> String {
+    format!("{date}0000+0000")
 }
 
-fn dtm_now_303() -> String {
+fn now_303() -> String {
     let now = time::OffsetDateTime::now_utc();
     let (y, mo, d, h, m) = (
         now.year(),
@@ -31,7 +27,7 @@ fn dtm_now_303() -> String {
         now.hour(),
         now.minute(),
     );
-    format!("137:{y:04}{mo:02}{d:02}{h:02}{m:02}+0000:303")
+    format!("{y:04}{mo:02}{d:02}{h:02}{m:02}+0000")
 }
 
 // ── PRICAT price-body structs (public, re-exported from mod.rs) ──────────────
@@ -347,39 +343,41 @@ impl<S, R> PricatBuilder<S, R> {
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        let unh_type = format!("PRICAT:D:20B:UN:{}", self.inner.release.as_str());
         let dtm_val = match self.inner.document_date.as_deref() {
-            None => dtm_now_303(),
-            Some(s) if s.starts_with("__303:") => {
-                format!("137:{}:303", &s["__303:".len()..])
-            }
-            Some(date) => format_dtm303(date),
+            None => now_303(),
+            Some(s) if s.starts_with("__303:") => s["__303:".len()..].to_owned(),
+            Some(date) => midnight_303(date),
         };
 
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
 
         let doc_id = self.inner.document_id.as_deref().unwrap_or("");
-        emit_seg!(w, "UNH", &self.inner.message_ref, &unh_type);
+        emit_comp!(
+            w,
+            "UNH",
+            [&self.inner.message_ref],
+            ["PRICAT", "D", "20B", "UN", self.inner.release.as_str()]
+        );
         emit_seg!(w, "BGM", &self.inner.document_code, doc_id);
         if let Some(pid) = self.inner.pruefidentifikator {
-            emit_seg!(w, "RFF", &format!("Z13:{pid}"));
+            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
         }
-        emit_seg!(w, "DTM", &dtm_val);
+        emit_comp!(w, "DTM", ["137", &dtm_val, "303"]);
         if let Some(id) = &self.inner.sender_id {
-            emit_seg!(
+            emit_comp!(
                 w,
                 "NAD",
-                "MS",
-                &self.inner.sender_agency.format_nad_c082(id)
+                ["MS"],
+                [id, "", self.inner.sender_agency.as_str()]
             );
         }
         if let Some(id) = &self.inner.receiver_id {
-            emit_seg!(
+            emit_comp!(
                 w,
                 "NAD",
-                "MR",
-                &self.inner.receiver_agency.format_nad_c082(id)
+                ["MR"],
+                [id, "", self.inner.receiver_agency.as_str()]
             );
         }
         for (group_idx, group) in self.inner.price_groups.iter().enumerate() {
@@ -392,25 +390,21 @@ impl<S, R> PricatBuilder<S, R> {
                 emit_seg!(w, "LIN", &pos.to_string());
                 if let Some(id) = &item.schedule_id {
                     let q = item.schedule_id_qualifier.as_deref().unwrap_or("1");
-                    emit_seg!(w, "PIA", q, &format!("{id}::ZZZ"));
+                    emit_comp!(w, "PIA", [q], [id, "", "ZZZ"]);
                 }
                 if let Some(desc) = &item.description {
-                    emit_seg!(w, "IMD", "F", "", &format!(":::{desc}"));
+                    emit_comp!(w, "IMD", ["F"], [""], ["", "", "", desc]);
                 }
                 for price in &item.prices {
-                    emit_seg!(
-                        w,
-                        "PRI",
-                        &format!("{}:{}:{}", price.qualifier, price.amount, price.currency)
-                    );
+                    emit_comp!(w, "PRI", [&price.qualifier, &price.amount, &price.currency]);
                     if let (Some(low), Some(high)) = (&price.range_low, &price.range_high) {
-                        emit_seg!(w, "RNG", "10", &format!("{low}:{high}"));
+                        emit_comp!(w, "RNG", ["10"], [low, high]);
                     }
                     if let Some(from) = &price.valid_from {
-                        emit_seg!(w, "DTM", &format!("163:{from}:303"));
+                        emit_comp!(w, "DTM", ["163", from, "303"]);
                     }
                     if let Some(to) = &price.valid_to {
-                        emit_seg!(w, "DTM", &format!("164:{to}:303"));
+                        emit_comp!(w, "DTM", ["164", to, "303"]);
                     }
                 }
             }

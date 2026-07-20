@@ -15,8 +15,8 @@
 //! 8. Pro-rata fraction in [0, 1] → `brutto_eur <= full_period_brutto_eur`
 
 use energy_billing::{
-    BillingContext, GasMeterInput, GridInput, InvoiceType, MeterInput, Product, Quantities,
-    RegulatoryRates,
+    BillingContext, BillingPeriod, GasMeterInput, GridInput, InvoiceType, MeterInput, Product,
+    Quantities, RegulatoryRates,
 };
 use proptest::prelude::*;
 use rust_decimal::Decimal;
@@ -30,8 +30,7 @@ fn base_ctx() -> BillingContext {
         malo_id: "51238696781".to_owned(),
         lf_mp_id: "9900000000001".to_owned(),
         rechnungsnummer: "R-PROP-001".to_owned(),
-        period_from: date!(2026 - 01 - 01),
-        period_to: date!(2026 - 01 - 31),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: RegulatoryRates::default(),
         ..Default::default()

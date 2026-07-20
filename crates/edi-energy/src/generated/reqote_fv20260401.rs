@@ -17,107 +17,107 @@ use crate::registry::Profile;
 use crate::{MessageType, Pruefidentifikator, Release};
 
 static SEGMENTS: &[SegmentDefinition] = &[
-    SegmentDefinition {
-        tag: "UNH",
-        name: "Message Header",
-        elements: &[
+    SegmentDefinition::new(
+        "UNH",
+        "Message Header",
+        &[
             ElementRef::new(1, "0062", Status::Mandatory, 1),
             ElementRef::new(2, "S009", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "BGM",
-        name: "Beginning of Message",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "BGM",
+        "Beginning of Message",
+        &[
             ElementRef::new(1, "C002", Status::Mandatory, 1),
             ElementRef::new(2, "C106", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "DTM",
-        name: "Date/Time/Period",
-        elements: &[ElementRef::new(1, "C507", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "IMD",
-        name: "Item Description",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "DTM",
+        "Date/Time/Period",
+        &[ElementRef::new(1, "C507", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "IMD",
+        "Item Description",
+        &[
             ElementRef::new(1, "7077", Status::Conditional, 1),
             ElementRef::new(2, "C273", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "FTX",
-        name: "Free Text",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "FTX",
+        "Free Text",
+        &[
             ElementRef::new(1, "4451", Status::Mandatory, 1),
             ElementRef::new(2, "C108", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "NAD",
-        name: "Name and Address",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "NAD",
+        "Name and Address",
+        &[
             ElementRef::new(1, "3035", Status::Mandatory, 1),
             ElementRef::new(2, "C082", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "CTA",
-        name: "Contact Information",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "CTA",
+        "Contact Information",
+        &[
             ElementRef::new(1, "3139", Status::Conditional, 1),
             ElementRef::new(2, "C056", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "COM",
-        name: "Communication Contact",
-        elements: &[ElementRef::new(1, "C076", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "LOC",
-        name: "Place/Location Identification",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "COM",
+        "Communication Contact",
+        &[ElementRef::new(1, "C076", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "LOC",
+        "Place/Location Identification",
+        &[
             ElementRef::new(1, "3227", Status::Mandatory, 1),
             ElementRef::new(2, "C517", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "LIN",
-        name: "Line Item",
-        elements: &[ElementRef::new(1, "1082", Status::Conditional, 1)],
-    },
-    SegmentDefinition {
-        tag: "UNT",
-        name: "Message Trailer",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "LIN",
+        "Line Item",
+        &[ElementRef::new(1, "1082", Status::Conditional, 1)],
+    ),
+    SegmentDefinition::new(
+        "UNT",
+        "Message Trailer",
+        &[
             ElementRef::new(1, "0074", Status::Mandatory, 1),
             ElementRef::new(2, "0062", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "RFF",
-        name: "Reference (Prüfidentifikator/Referenz)",
-        elements: &[ElementRef::new(1, "C506", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "PIA",
-        name: "Zusätzliche Produktidentifikation",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "RFF",
+        "Reference (Prüfidentifikator/Referenz)",
+        &[ElementRef::new(1, "C506", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "PIA",
+        "Zusätzliche Produktidentifikation",
+        &[
             ElementRef::new(1, "4347", Status::Mandatory, 1),
             ElementRef::new(2, "C212", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "CCI",
-        name: "Characteristic/Class Id",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "CCI",
+        "Characteristic/Class Id",
+        &[
             ElementRef::new(1, "7059", Status::Conditional, 1),
             ElementRef::new(2, "C502", Status::Conditional, 1),
             ElementRef::new(3, "C240", Status::Conditional, 1),
         ],
-    },
+    ),
 ];
 
 static SEGMENT_MAP: LazyLock<std::collections::HashMap<&'static str, &'static SegmentDefinition>> =

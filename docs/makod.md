@@ -393,6 +393,22 @@ Actions
 
 ### Action groups
 
+Every mutating or data-bearing endpoint is behind a Cedar action:
+`SubmitCommand`, `IngestEdifact`, the `AdminMalo*`/`AdminPartner*` families,
+`ReadMetrics`, `UseMcp`, `ReadRechnung` (`GET /api/v1/invoic/{id}/rechnung` —
+BO4E billing data), `AdminMigrations` (`POST /admin/migrations`),
+`UseWebdienste` (every `:8090` route), and `ReadProcess` (MCP `get_process`).
+The conservative policy grants `AdminMigrations` to **no** standing principal:
+grant it to a break-glass principal for the FV-cutover window, then remove it.
+
+`ReadProcess` carries the process's **workflow name** in the Cedar context, so
+a combined-role (VIU) deployment enforces §9 EnWG Informatorisches Unbundling
+with policy alone — an NB-scoped principal can be limited to NB-side
+workflows and never sees LF process state (denials answer as `not_found` to
+avoid an existence oracle). On the MCP transport, `UseMcp` only opens the
+endpoint; `submit_command` additionally evaluates the same `SubmitCommand`
+action as the REST handler, with the identity the transport authenticated.
+
 The Cedar schema defines `AdminMalo` and `AdminPartner` action groups.
 Policies can reference the group name to match all member actions at once,
 without enumerating each one individually:
@@ -562,6 +578,9 @@ principal entity ID in your policies.
 | `signing_cert_pem` | `MAKOD_AS4_SIGNING_CERT_PEM` | `--as4-signing-cert-pem` | PEM cert (inline) |
 | `signing_cert_pem_file` | — | — | Path to PEM cert file *(preferred)* |
 | `partners` | `MAKOD_AS4_PARTNER` | `--as4-partner` | Trading-partner GLN=URL pairs |
+| — | `MAKOD_AS4_PARTNER_CERT` | `--as4-partner-cert` | Trading-partner encryption certificates, `GLN=<PEM>` pairs (see [docs/as4-bdew.md]) |
+| — | `MAKOD_AS4_DECRYPTION_KEY_PEM` | `--as4-decryption-key-pem` | Operator's own EC (BrainpoolP256r1) private key for inbound decryption |
+| — | `MAKOD_ALLOW_UNENCRYPTED_AS4` | `--allow-unencrypted-as4` | **Dev/test only:** downgrade missing-encryption-material startup refusals to warnings |
 
 The `--as4-partner` flag is repeatable. Using the env var, provide a
 comma-separated list:
@@ -573,6 +592,49 @@ MAKOD_AS4_PARTNER="9900000000001=https://a.example/as4,9900000000002=https://b.e
 Partners are bootstrapped into the durable `PartnerStore` on startup. Changes
 made at runtime via the REST API (`PUT /admin/partners/{mp_id}`) survive restarts
 without requiring a redeploy.
+
+**Encryption is fail-closed.** BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every
+production AS4 message to be encrypted. `makod` refuses to start when AS4 is
+active but the inbound decryption key is missing, or when a registered partner
+has no `--as4-partner-cert` encryption certificate — outbound deliveries to
+such a partner would fail at send time anyway, since the sender refuses
+`encrypt = true` without a recipient certificate. `--allow-unencrypted-as4`
+downgrades both refusals to warnings for dev/test.
+
+**Signed receipts and receipt-verified delivery.** Inbound messages are
+answered with a **signed** `eb:Receipt` echoing the inbound signature digests
+as NonRepudiationInformation (asx-rs ≥ 0.10). Outbound deliveries are only
+acknowledged after the counterparty's synchronous `eb:Receipt` is verified to
+reference the sent message id; an unverifiable receipt is a retryable failure
+that backs off and eventually dead-letters. `--as4-lenient-receipts`
+downgrades that check to a warning for interop debugging.
+
+**Per-sender rate limiting.** The AS4 port applies two independent GCRA
+limits: per peer IP (100 req/s, burst 50) and per sender MP-ID (50 req/s,
+burst 25), the latter keyed on the `eb:From` PartyId extracted *before* the
+costly receive pipeline runs. The pre-verification value is spoofable, which
+is acceptable for a limiter: both limits always apply, so spoofing can only
+cause extra rejections, never extra capacity.
+
+**OpenTelemetry.** Set `OTEL_EXPORTER_OTLP_ENDPOINT` and makod initialises
+the shared `mako-service` telemetry stack — spans export via OTLP/gRPC with
+W3C propagation. Without it, the local pretty/compact/json subscriber is
+used unchanged.
+
+**End-to-end tracing.** The W3C `traceparent` of an inbound request is
+scoped into a task-local, captured into every `OutboxMessage.trace_context`
+created while handling it, and re-injected on delivery as the ERP webhook
+`traceparent` header and the CloudEvents `traceparent` extension, and forwarded
+as the `traceparent` header on outbound AS4 HTTP — one trace across the
+asynchronous outbox boundary and on to the counterparty MSH.
+
+**Outbound wire format.** Every outbound message is a complete EDIFACT
+Übertragungsdatei: `UNB … UNH … UNT … UNZ`. The UNB sender/receiver MP-IDs are
+the same values as the message's `NAD+MS`/`NAD+MR` (Allgemeine Festlegungen
+6.1d, Kap. 2), the DE0007 qualifier is derived from the MP-ID (`500` BDEW,
+`502` DVGW, `14` GS1), and the UNB DE0020 Datenaustauschreferenz — repeated in
+UNZ and in the §2.12 Content-Disposition filename — is derived from the outbox
+message id, so delivery retries reuse the same DAR.
 
 ### AS4 security test coverage
 

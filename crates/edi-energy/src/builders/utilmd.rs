@@ -7,14 +7,7 @@ use edifact_rs::Writer;
 use crate::AgencyCode;
 use crate::{Error, ObjectType, Pruefidentifikator, Release};
 
-use super::{Set, Unset, bytes_to_segments, dtm_today, format_dtm137};
-
-macro_rules! emit_seg {
-    ($writer:expr, $tag:expr, $($elem:expr),+ $(,)?) => {{
-        let elements: &[&str] = &[$($elem),+];
-        $writer.write_raw($tag, elements).map_err(|e| Error::Parse(e.into()))?;
-    }};
-}
+use super::{Set, Unset, bytes_to_segments, today_ccyymmdd};
 
 // ── Inner fields structs ──────────────────────────────────────────────────────
 
@@ -203,10 +196,25 @@ impl<S, R> UtilmdBuilder<S, R> {
         object_type: ObjectType,
         ide_id: impl Into<String>,
     ) -> UtilmdTransactionBuilder<S, R> {
+        self.transaction_with_qualifier(object_type.qualifier_code(), ide_id)
+    }
+
+    /// Start configuring a transaction with an explicit DE 7495 qualifier.
+    ///
+    /// The AHB fixes the IDE qualifier **per Prüfidentifikator** (e.g. `Z19`
+    /// for GPKE/GeLi Lieferbeginn 55001/44001, `24` for the `WiM`
+    /// Messlokations-PIDs), which does not always coincide with the
+    /// [`ObjectType`] wire codes. Use this when the caller resolves the
+    /// qualifier from the AHB rather than from an object type.
+    pub fn transaction_with_qualifier(
+        self,
+        ide_qualifier: impl Into<String>,
+        ide_id: impl Into<String>,
+    ) -> UtilmdTransactionBuilder<S, R> {
         UtilmdTransactionBuilder {
             parent: self,
             spec: UtilmdTransactionSpec {
-                ide_qualifier: object_type.qualifier_code().to_owned(),
+                ide_qualifier: ide_qualifier.into(),
                 ide_id: ide_id.into(),
                 ..Default::default()
             },
@@ -221,36 +229,40 @@ impl<S, R> UtilmdBuilder<S, R> {
             .pruefidentifikator
             .map(|p| format!("{:05}", p.as_u32()))
             .unwrap_or_default();
-        let unh_type = format!("UTILMD:D:11A:UN:{}", self.inner.release.as_str());
         let dtm_val = self
             .inner
             .document_date
             .as_deref()
-            .map_or_else(dtm_today, format_dtm137);
+            .map_or_else(today_ccyymmdd, str::to_owned);
 
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
 
-        emit_seg!(w, "UNH", &self.inner.message_ref, &unh_type);
+        emit_comp!(
+            w,
+            "UNH",
+            [&self.inner.message_ref],
+            ["UTILMD", "D", "11A", "UN", self.inner.release.as_str()]
+        );
         emit_seg!(w, "BGM", &self.inner.document_code, &pid_str, "9");
-        emit_seg!(w, "DTM", &dtm_val);
+        emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
         for (qualifier, reference) in &self.inner.rff_entries {
-            emit_seg!(w, "RFF", &format!("{qualifier}:{reference}"));
+            emit_comp!(w, "RFF", [qualifier, reference]);
         }
         if let Some(id) = &self.inner.sender_id {
-            emit_seg!(
+            emit_comp!(
                 w,
                 "NAD",
-                "MS",
-                &self.inner.sender_agency.format_nad_c082(id)
+                ["MS"],
+                [id, "", self.inner.sender_agency.as_str()]
             );
         }
         if let Some(id) = &self.inner.receiver_id {
-            emit_seg!(
+            emit_comp!(
                 w,
                 "NAD",
-                "MR",
-                &self.inner.receiver_agency.format_nad_c082(id)
+                ["MR"],
+                [id, "", self.inner.receiver_agency.as_str()]
             );
         }
         for tx in &self.inner.transactions {
@@ -259,23 +271,22 @@ impl<S, R> UtilmdBuilder<S, R> {
                 emit_seg!(w, "STS", status);
             }
             for (qualifier, date_val) in &tx.process_dates {
-                let dtm = format!("{qualifier}:{date_val}:102");
-                emit_seg!(w, "DTM", &dtm);
+                emit_comp!(w, "DTM", [qualifier, date_val, "102"]);
             }
             if let Some((loc_q, loc_id)) = &tx.location {
-                emit_seg!(w, "LOC", loc_q, &format!("{loc_id}::293"));
+                emit_comp!(w, "LOC", [loc_q], [loc_id, "", "293"]);
             }
             for (rff_q, rff_ref) in &tx.references {
-                emit_seg!(w, "RFF", &format!("{rff_q}:{rff_ref}"));
+                emit_comp!(w, "RFF", [rff_q, rff_ref]);
             }
             for (ftx_q, ftx_text) in &tx.free_texts {
-                emit_seg!(w, "FTX", ftx_q, "", "", ftx_text);
+                emit_comp!(w, "FTX", [ftx_q], [""], [""], [ftx_text]);
             }
             if let Some((svc_req, resp_type)) = &tx.agr {
-                emit_seg!(w, "AGR", &format!("{svc_req}:{resp_type}"));
+                emit_comp!(w, "AGR", [svc_req, resp_type]);
             }
             if let Some((nad_q, nad_id)) = &tx.customer_nad {
-                emit_seg!(w, "NAD", nad_q, &format!("{nad_id}::293"));
+                emit_comp!(w, "NAD", [nad_q], [nad_id, "", "293"]);
             }
         }
         w.finish_unt(&self.inner.message_ref)

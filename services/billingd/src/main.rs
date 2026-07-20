@@ -150,20 +150,6 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/webhooks/vpp-dispatch",
             post(handlers::post_vpp_webhook),
         )
-        // B12: VPP contract registry — configure SR-ID → VPP billing parameters
-        .route(
-            "/api/v1/billing/vpp-contracts",
-            axum::routing::get(handlers::list_vpp_contracts),
-        )
-        .route(
-            "/api/v1/billing/vpp-contracts/:sr_id",
-            axum::routing::put(handlers::put_vpp_contract),
-        )
-        // B12: VPP auto-billing webhook — de.vpp.dispatch.confirmed from makod outbox
-        .route(
-            "/api/v1/webhooks/vpp-dispatch",
-            post(handlers::post_vpp_webhook),
-        )
         // B10: XRechnung B2G submission (\u00a727 EGovG — mandatory from 01.01.2027)
         .route(
             "/api/v1/billing/:id/submit-b2g",

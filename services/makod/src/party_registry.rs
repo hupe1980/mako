@@ -89,19 +89,19 @@
 //!
 //! ## Key properties
 //!
-//! - **AS4 loopback detection** — [`is_own_gln`] returns `true` for any GLN
+//! - **AS4 loopback detection** — [`is_own_mp_id`] returns `true` for any GLN
 //!   that belongs to this operator, enabling in-process delivery for combined-role
 //!   workflows (NB→MSB, GNB→gMSB) regardless of which GLN each role uses.
 //!
-//! - **EDIFACT sender selection** — [`sender_gln_for_orders_pid`] returns the
+//! - **EDIFACT sender selection** — [`sender_mp_id_for_orders_pid`] returns the
 //!   correct sender GLN for ORDERS messages using a static PID → role table.
 //!
 //! - **Deployment role derivation** — [`deployment_role_strings`] normalises the
 //!   `[[party]]` roles into the strings accepted by `parse_deployment_roles`,
 //!   enabling auto-derivation of `--deployment-roles` and `--marktrollen`.
 //!
-//! [`is_own_gln`]: MpIdRegistry::is_own_gln
-//! [`sender_gln_for_orders_pid`]: MpIdRegistry::sender_gln_for_orders_pid
+//! [`is_own_mp_id`]: MpIdRegistry::is_own_mp_id
+//! [`sender_mp_id_for_orders_pid`]: MpIdRegistry::sender_mp_id_for_orders_pid
 //! [`deployment_role_strings`]: MpIdRegistry::deployment_role_strings
 
 use std::collections::{HashMap, HashSet};
@@ -310,16 +310,16 @@ fn derive_agency(mp_id: &str) -> &'static str {
 #[derive(Debug, Clone)]
 pub struct MpIdRegistry {
     /// Primary GLN (storage partition key / default sender).
-    primary_gln: Arc<str>,
+    primary_mp_id: Arc<str>,
     /// NAD DE3055 agency code for the primary GLN.
     primary_agency: Arc<str>,
     /// All own GLNs — for loopback detection.
-    own_glns: HashSet<Arc<str>>,
+    own_mp_ids: HashSet<Arc<str>>,
     /// Normalised role (uppercase) → GLN.
     role_to_gln: HashMap<Box<str>, Arc<str>>,
     /// GLN → NAD DE3055 agency code.
     #[allow(dead_code)]
-    gln_to_agency: HashMap<Arc<str>, Arc<str>>,
+    mp_id_to_agency: HashMap<Arc<str>, Arc<str>>,
     /// All declared roles normalised to uppercase, deduplicated, sorted.
     ///
     /// Used by [`deployment_role_strings`] for auto-deriving engine roles.
@@ -372,7 +372,7 @@ impl MpIdRegistry {
         let mut seen_roles: HashMap<Box<str>, &str> = HashMap::new();
 
         for party in parties {
-            validate_gln(&party.mp_id)?;
+            validate_mp_id(&party.mp_id)?;
 
             if !seen_glns.insert(party.mp_id.as_str()) {
                 anyhow::bail!(
@@ -434,42 +434,42 @@ impl MpIdRegistry {
             .or_else(|| parties.first())
             .expect("non-empty — checked above");
 
-        let primary_gln: Arc<str> = primary.mp_id.as_str().into();
+        let primary_mp_id: Arc<str> = primary.mp_id.as_str().into();
         let primary_agency: Arc<str> = primary
             .agency
             .as_deref()
             .unwrap_or_else(|| derive_agency(&primary.mp_id))
             .into();
 
-        let mut own_glns: HashSet<Arc<str>> = HashSet::new();
+        let mut own_mp_ids: HashSet<Arc<str>> = HashSet::new();
         let mut role_to_gln: HashMap<Box<str>, Arc<str>> = HashMap::new();
-        let mut gln_to_agency: HashMap<Arc<str>, Arc<str>> = HashMap::new();
+        let mut mp_id_to_agency: HashMap<Arc<str>, Arc<str>> = HashMap::new();
         let mut all_roles: Vec<Box<str>> = Vec::new();
 
         for party in parties {
-            let gln_arc: Arc<str> = party.mp_id.as_str().into();
+            let mp_id_arc: Arc<str> = party.mp_id.as_str().into();
             let agency: Arc<str> = party
                 .agency
                 .as_deref()
                 .unwrap_or_else(|| derive_agency(&party.mp_id))
                 .into();
-            own_glns.insert(Arc::clone(&gln_arc));
-            gln_to_agency.insert(Arc::clone(&gln_arc), agency);
+            own_mp_ids.insert(Arc::clone(&mp_id_arc));
+            mp_id_to_agency.insert(Arc::clone(&mp_id_arc), agency);
             for role in &party.roles {
                 let key: Box<str> = role.to_uppercase().into_boxed_str();
                 all_roles.push(key.clone());
-                role_to_gln.insert(key, Arc::clone(&gln_arc));
+                role_to_gln.insert(key, Arc::clone(&mp_id_arc));
             }
         }
         all_roles.sort_unstable();
         all_roles.dedup();
 
         Ok(Self {
-            primary_gln,
+            primary_mp_id,
             primary_agency,
-            own_glns,
+            own_mp_ids,
             role_to_gln,
-            gln_to_agency,
+            mp_id_to_agency,
             all_roles,
         })
     }
@@ -478,8 +478,8 @@ impl MpIdRegistry {
 
     /// Returns the primary GLN (storage partition key / default sender).
     #[must_use]
-    pub fn primary_gln(&self) -> &str {
-        &self.primary_gln
+    pub fn primary_mp_id(&self) -> &str {
+        &self.primary_mp_id
     }
 
     /// Returns the NAD DE3055 agency code for the primary GLN.
@@ -496,18 +496,18 @@ impl MpIdRegistry {
     ///
     /// Returns `None` when no `[[party]]` entry declares this role.
     #[must_use]
-    pub fn gln_for_role(&self, role: &str) -> Option<&str> {
+    pub fn mp_id_for_role(&self, role: &str) -> Option<&str> {
         self.role_to_gln
             .get(role.to_uppercase().as_str())
             .map(Arc::as_ref)
     }
 
-    /// Returns the GLN for the given BDEW Marktrolle, or [`primary_gln`] as fallback.
+    /// Returns the GLN for the given BDEW Marktrolle, or [`primary_mp_id`] as fallback.
     ///
-    /// [`primary_gln`]: MpIdRegistry::primary_gln
+    /// [`primary_mp_id`]: MpIdRegistry::primary_mp_id
     #[must_use]
-    pub fn gln_for_role_or_primary(&self, role: &str) -> &str {
-        self.gln_for_role(role).unwrap_or(self.primary_gln())
+    pub fn mp_id_for_role_or_primary(&self, role: &str) -> &str {
+        self.mp_id_for_role(role).unwrap_or(self.primary_mp_id())
     }
 
     /// Returns the NAD DE3055 agency code for the given GLN.
@@ -516,8 +516,8 @@ impl MpIdRegistry {
     /// falls back to `"293"` (BDEW Strom) for unknown GLNs.
     #[must_use]
     #[allow(dead_code)]
-    pub fn agency_for_gln(&self, mp_id: &str) -> &str {
-        self.gln_to_agency
+    pub fn agency_for_mp_id(&self, mp_id: &str) -> &str {
+        self.mp_id_to_agency
             .get(mp_id)
             .map(Arc::as_ref)
             .unwrap_or(DEFAULT_AGENCY)
@@ -530,13 +530,13 @@ impl MpIdRegistry {
     /// so loopback works even when `NB` and `MSB` have different GLNs on the
     /// same `makod` instance.
     #[must_use]
-    pub fn is_own_gln(&self, mp_id: &str) -> bool {
-        self.own_glns.contains(mp_id)
+    pub fn is_own_mp_id(&self, mp_id: &str) -> bool {
+        self.own_mp_ids.contains(mp_id)
     }
 
     /// Iterates over all own GLNs (one per `[[party]]` entry).
-    pub fn own_glns(&self) -> impl Iterator<Item = &str> {
-        self.own_glns.iter().map(Arc::as_ref)
+    pub fn own_mp_ids(&self) -> impl Iterator<Item = &str> {
+        self.own_mp_ids.iter().map(Arc::as_ref)
     }
 
     /// All declared BDEW Marktrollen, normalised to uppercase, sorted.
@@ -588,16 +588,16 @@ impl MpIdRegistry {
     /// Best-effort sender GLN for ORDERS messages that do not embed `"sender"`.
     ///
     /// Uses a static PID → sending-role table derived from the BDEW AHB PID
-    /// overview.  Falls back to [`primary_gln`] when the role is not configured
+    /// overview.  Falls back to [`primary_mp_id`] when the role is not configured
     /// or the PID is unknown.
     ///
     /// **Ambiguous PIDs** (shared by both Strom and Gas roles with potentially
-    /// different GLNs) emit a `warn!` log and fall back to [`primary_gln`].
+    /// different GLNs) emit a `warn!` log and fall back to [`primary_mp_id`].
     /// Set `"sender"` explicitly in the ORDERS payload to resolve the ambiguity.
     ///
-    /// [`primary_gln`]: MpIdRegistry::primary_gln
+    /// [`primary_mp_id`]: MpIdRegistry::primary_mp_id
     #[must_use]
-    pub fn sender_gln_for_orders_pid(&self, pid: u32) -> &str {
+    pub fn sender_mp_id_for_orders_pid(&self, pid: u32) -> &str {
         match pid {
             // ── Sperrung / Entsperrung (PIDs 17115–17117) ──────────────────
             // LF initiates Sperrung Strom; LFG initiates Sperrung Gas.
@@ -606,31 +606,31 @@ impl MpIdRegistry {
             17116 => self.resolve_ambiguous(pid, "NB", "GNB"),
 
             // ── GPKE Konfigurationseinrichtung (NB → MSB, Teil 3) ───────────
-            17134 | 17135 => self.gln_for_role_or_primary("NB"),
+            17134 | 17135 => self.mp_id_for_role_or_primary("NB"),
 
             // ── WiM Geräteübernahme (NB → MSB / MSBA) ──────────────────────
-            17001..=17011 => self.gln_for_role_or_primary("NB"),
+            17001..=17011 => self.mp_id_for_role_or_primary("NB"),
 
             // ── Datenabruf / Reklamation (LF → NB/MSB) ─────────────────────
-            17102 | 17113 => self.gln_for_role_or_primary("LF"),
+            17102 | 17113 => self.mp_id_for_role_or_primary("LF"),
 
             // ── Allokationsliste Gas (LF → NB) ──────────────────────────────
-            17110 | 17114 => self.gln_for_role_or_primary("LF"),
+            17110 | 17114 => self.mp_id_for_role_or_primary("LF"),
 
             // ── GPKE Konfigurationsänderung (LF → NB/MSB, Teil 3) ──────────
-            17120..=17133 => self.gln_for_role_or_primary("LF"),
+            17120..=17133 => self.mp_id_for_role_or_primary("LF"),
 
             // ── Gas Datenabruf (LFG or GNB) ─────────────────────────────────
             17103 | 17104 => self.resolve_ambiguous(pid, "LFG", "GNB"),
 
-            _ => self.primary_gln(),
+            _ => self.primary_mp_id(),
         }
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
     fn resolve_ambiguous(&self, pid: u32, role_a: &str, role_b: &str) -> &str {
-        match (self.gln_for_role(role_a), self.gln_for_role(role_b)) {
+        match (self.mp_id_for_role(role_a), self.mp_id_for_role(role_b)) {
             (Some(a), Some(b)) if a == b => a,
             (Some(_), Some(_)) => {
                 tracing::warn!(
@@ -639,13 +639,13 @@ impl MpIdRegistry {
                     role_b,
                     "ORDERS sender GLN is ambiguous: {role_a} and {role_b} have \
                      different GLNs. Set \"sender\" in the ORDERS payload to resolve. \
-                     Falling back to primary_gln.",
+                     Falling back to primary_mp_id.",
                 );
-                self.primary_gln()
+                self.primary_mp_id()
             }
             (Some(a), None) => a,
             (None, Some(b)) => b,
-            (None, None) => self.primary_gln(),
+            (None, None) => self.primary_mp_id(),
         }
     }
 }
@@ -653,7 +653,7 @@ impl MpIdRegistry {
 // ── Validation ────────────────────────────────────────────────────────────────
 
 /// Validate a BDEW/DVGW MP-ID (13 ASCII digits) or EIC (16 alphanumeric chars).
-fn validate_gln(mp_id: &str) -> anyhow::Result<()> {
+fn validate_mp_id(mp_id: &str) -> anyhow::Result<()> {
     match mp_id.len() {
         13 if mp_id.bytes().all(|b| b.is_ascii_digit()) => Ok(()),
         16 if mp_id
@@ -757,9 +757,9 @@ mod tests {
     fn single_party_no_primary_flag() {
         let reg =
             MpIdRegistry::from_config(&[party("9900001000001", &["NB", "LF"], false)]).unwrap();
-        assert_eq!(reg.primary_gln(), "9900001000001");
-        assert_eq!(reg.gln_for_role("NB"), Some("9900001000001"));
-        assert_eq!(reg.gln_for_role("LF"), Some("9900001000001"));
+        assert_eq!(reg.primary_mp_id(), "9900001000001");
+        assert_eq!(reg.mp_id_for_role("NB"), Some("9900001000001"));
+        assert_eq!(reg.mp_id_for_role("LF"), Some("9900001000001"));
         assert_eq!(reg.primary_agency(), "293"); // 99-prefix → BDEW
     }
 
@@ -771,34 +771,34 @@ mod tests {
             party("9900001000003", &["MSB"], false),
         ];
         let reg = MpIdRegistry::from_config(&parties).unwrap();
-        assert_eq!(reg.primary_gln(), "9900001000002");
-        assert_eq!(reg.gln_for_role("NB"), Some("9900001000001"));
-        assert_eq!(reg.gln_for_role("LF"), Some("9900001000002"));
-        assert_eq!(reg.gln_for_role("MSB"), Some("9900001000003"));
-        assert!(reg.is_own_gln("9900001000001"));
-        assert!(reg.is_own_gln("9900001000002"));
-        assert!(reg.is_own_gln("9900001000003"));
-        assert!(!reg.is_own_gln("9900001000099"));
+        assert_eq!(reg.primary_mp_id(), "9900001000002");
+        assert_eq!(reg.mp_id_for_role("NB"), Some("9900001000001"));
+        assert_eq!(reg.mp_id_for_role("LF"), Some("9900001000002"));
+        assert_eq!(reg.mp_id_for_role("MSB"), Some("9900001000003"));
+        assert!(reg.is_own_mp_id("9900001000001"));
+        assert!(reg.is_own_mp_id("9900001000002"));
+        assert!(reg.is_own_mp_id("9900001000003"));
+        assert!(!reg.is_own_mp_id("9900001000099"));
     }
 
     #[test]
-    fn gln_for_role_or_primary_fallback() {
+    fn mp_id_for_role_or_primary_fallback() {
         let reg = MpIdRegistry::from_config(&[party("9900001000001", &["NB"], true)]).unwrap();
-        assert_eq!(reg.gln_for_role_or_primary("NB"), "9900001000001");
-        assert_eq!(reg.gln_for_role_or_primary("LF"), "9900001000001"); // fallback to primary
+        assert_eq!(reg.mp_id_for_role_or_primary("NB"), "9900001000001");
+        assert_eq!(reg.mp_id_for_role_or_primary("LF"), "9900001000001"); // fallback to primary
     }
 
     #[test]
     fn case_insensitive_role_lookup() {
         let reg = MpIdRegistry::from_config(&[party("9900001000001", &["nb"], true)]).unwrap();
-        assert_eq!(reg.gln_for_role("nb"), Some("9900001000001"));
-        assert_eq!(reg.gln_for_role("NB"), Some("9900001000001"));
+        assert_eq!(reg.mp_id_for_role("nb"), Some("9900001000001"));
+        assert_eq!(reg.mp_id_for_role("NB"), Some("9900001000001"));
     }
 
     // ── Agency derivation ─────────────────────────────────────────────────────
 
     #[test]
-    fn agency_auto_derived_from_gln_prefix() {
+    fn agency_auto_derived_from_mp_id_prefix() {
         // 99-prefix → BDEW-Codenummer Strom → NAD DE3055 = 293
         let reg = MpIdRegistry::from_config(&[party("9900001000001", &["NB"], true)]).unwrap();
         assert_eq!(reg.primary_agency(), "293");
@@ -818,8 +818,8 @@ mod tests {
         p.agency = Some("9".to_owned()); // force GS1 code despite 99-prefix
         let reg = MpIdRegistry::from_config(&[p]).unwrap();
         assert_eq!(reg.primary_agency(), "9");
-        assert_eq!(reg.agency_for_gln("9900001000001"), "9");
-        assert_eq!(reg.agency_for_gln("9900001000099"), "293"); // unknown GLN → DEFAULT_AGENCY
+        assert_eq!(reg.agency_for_mp_id("9900001000001"), "9");
+        assert_eq!(reg.agency_for_mp_id("9900001000099"), "293"); // unknown GLN → DEFAULT_AGENCY
     }
 
     // ── deployment_role_strings ───────────────────────────────────────────────
@@ -857,7 +857,7 @@ mod tests {
     fn esa_is_an_engine_role() {
         let parties = vec![party("9900001000003", &["ESA"], true)];
         let reg = MpIdRegistry::from_config(&parties).unwrap();
-        assert_eq!(reg.gln_for_role("ESA"), Some("9900001000003"));
+        assert_eq!(reg.mp_id_for_role("ESA"), Some("9900001000003"));
         assert!(reg.deployment_role_strings().contains(&"ESA".to_owned()));
     }
 
@@ -870,8 +870,8 @@ mod tests {
             party("9800001000001", &["FNB"], false),
         ];
         let reg = MpIdRegistry::from_config(&parties).unwrap();
-        assert_eq!(reg.gln_for_role("BIKO"), Some("9900001000001"));
-        assert_eq!(reg.gln_for_role("FNB"), Some("9800001000001"));
+        assert_eq!(reg.mp_id_for_role("BIKO"), Some("9900001000001"));
+        assert_eq!(reg.mp_id_for_role("FNB"), Some("9800001000001"));
         // FNB maps to UNB in engine canonical.
         assert!(reg.deployment_role_strings().contains(&"UNB".to_owned()));
     }
@@ -885,9 +885,9 @@ mod tests {
             party("4012345000023", &["RB"], false),
         ];
         let reg = MpIdRegistry::from_config(&parties).unwrap();
-        assert_eq!(reg.gln_for_role("DP"), Some("9900001000001"));
-        assert_eq!(reg.gln_for_role("KN"), Some("9800001000001"));
-        assert_eq!(reg.gln_for_role("RB"), Some("4012345000023"));
+        assert_eq!(reg.mp_id_for_role("DP"), Some("9900001000001"));
+        assert_eq!(reg.mp_id_for_role("KN"), Some("9800001000001"));
+        assert_eq!(reg.mp_id_for_role("RB"), Some("4012345000023"));
         assert!(reg.deployment_role_strings().is_empty());
     }
 
@@ -928,9 +928,9 @@ mod tests {
             party("9800001000002", &["LFG"], false),      // Gas LF
         ];
         let reg = MpIdRegistry::from_config(&parties).unwrap();
-        assert_eq!(reg.gln_for_role("NB"), Some("9900001000001"));
-        assert_eq!(reg.gln_for_role("GNB"), Some("9800001000001"));
-        assert_eq!(reg.gln_for_role("LFG"), Some("9800001000002"));
+        assert_eq!(reg.mp_id_for_role("NB"), Some("9900001000001"));
+        assert_eq!(reg.mp_id_for_role("GNB"), Some("9800001000001"));
+        assert_eq!(reg.mp_id_for_role("LFG"), Some("9800001000002"));
     }
 
     // ── Error paths ───────────────────────────────────────────────────────────
@@ -941,12 +941,12 @@ mod tests {
     }
 
     #[test]
-    fn err_invalid_gln() {
+    fn err_invalid_mp_id() {
         assert!(MpIdRegistry::from_config(&[party("not-a-mp_id", &["NB"], true)]).is_err());
     }
 
     #[test]
-    fn err_duplicate_gln() {
+    fn err_duplicate_mp_id() {
         let parties = vec![
             party("9900001000001", &["NB"], true),
             party("9900001000001", &["LF"], false),

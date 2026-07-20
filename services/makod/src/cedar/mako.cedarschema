@@ -47,6 +47,23 @@ namespace MaKo {
     tenant: String,
   };
 
+  entity RechnungEndpoint = {
+    tenant: String,
+  };
+
+  entity MigrationEndpoint = {
+    tenant: String,
+  };
+
+  entity WebdiensteEndpoint = {
+    tenant: String,
+  };
+
+  entity ProcessRecord = {
+    tenant: String,
+    workflow: String,
+  };
+
   // Action groups — no appliesTo; used as targets for `action in [...]` in policies.
   action AdminMalo;
   action AdminPartner;
@@ -146,6 +163,39 @@ namespace MaKo {
     resource:  [McpEndpoint],
     context: {
       tenant: String,
+    }
+  };
+
+  action ReadRechnung appliesTo {
+    principal: [Principal],
+    resource:  [RechnungEndpoint],
+    context: {
+      tenant: String,
+    }
+  };
+
+  action AdminMigrations appliesTo {
+    principal: [Principal],
+    resource:  [MigrationEndpoint],
+    context: {
+      tenant: String,
+    }
+  };
+
+  action UseWebdienste appliesTo {
+    principal: [Principal],
+    resource:  [WebdiensteEndpoint],
+    context: {
+      tenant: String,
+    }
+  };
+
+  action ReadProcess appliesTo {
+    principal: [Principal],
+    resource:  [ProcessRecord],
+    context: {
+      tenant:   String,
+      workflow: String,
     }
   };
 }

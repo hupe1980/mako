@@ -34,7 +34,7 @@
 //!
 //! // When the APERAK arrives, look up by conversation ID + APERAK sender GLN:
 //! let identity = ctx.registry
-//!     .lookup(tenant_id, &RegistryKey::from_conversation_and_sender(aperak_conv_id, aperak_sender_gln))
+//!     .lookup(tenant_id, &RegistryKey::from_conversation_and_sender(aperak_conv_id, aperak_sender_mp_id))
 //!     .await?
 //!     .ok_or(EngineError::registry("unknown conversation"))?;
 //!

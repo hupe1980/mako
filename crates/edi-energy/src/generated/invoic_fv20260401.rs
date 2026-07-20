@@ -17,153 +17,153 @@ use crate::registry::Profile;
 use crate::{MessageType, Pruefidentifikator, Release};
 
 static SEGMENTS: &[SegmentDefinition] = &[
-    SegmentDefinition {
-        tag: "UNH",
-        name: "Nachrichtenanfang",
-        elements: &[
+    SegmentDefinition::new(
+        "UNH",
+        "Nachrichtenanfang",
+        &[
             ElementRef::new(1, "0062", Status::Mandatory, 1),
             ElementRef::new(2, "S009", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "BGM",
-        name: "Rechnungsnummer",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "BGM",
+        "Rechnungsnummer",
+        &[
             ElementRef::new(1, "C002", Status::Mandatory, 1),
             ElementRef::new(2, "C106", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "DTM",
-        name: "Datums-/Zeitangaben",
-        elements: &[ElementRef::new(1, "C507", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "IMD",
-        name: "Rechnungstyp",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "DTM",
+        "Datums-/Zeitangaben",
+        &[ElementRef::new(1, "C507", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "IMD",
+        "Rechnungstyp",
+        &[
             ElementRef::new(1, "C272", Status::Conditional, 1),
             ElementRef::new(2, "C273", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "FTX",
-        name: "Meldeinformationen",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "FTX",
+        "Meldeinformationen",
+        &[
             ElementRef::new(1, "4451", Status::Mandatory, 1),
             ElementRef::new(2, "C108", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "GEI",
-        name: "Spezifikation der Sonderrechnung",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "GEI",
+        "Spezifikation der Sonderrechnung",
+        &[
             ElementRef::new(1, "7365", Status::Mandatory, 1),
             ElementRef::new(2, "C529", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "UNS",
-        name: "Abschnitts-Kontrollsegment",
-        elements: &[ElementRef::new(1, "0081", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "UNT",
-        name: "Nachrichtenende",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "UNS",
+        "Abschnitts-Kontrollsegment",
+        &[ElementRef::new(1, "0081", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "UNT",
+        "Nachrichtenende",
+        &[
             ElementRef::new(1, "0074", Status::Mandatory, 1),
             ElementRef::new(2, "0062", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "RFF",
-        name: "Referenz",
-        elements: &[ElementRef::new(1, "C506", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "NAD",
-        name: "Name und Adresse",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "RFF",
+        "Referenz",
+        &[ElementRef::new(1, "C506", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "NAD",
+        "Name und Adresse",
+        &[
             ElementRef::new(1, "3035", Status::Mandatory, 1),
             ElementRef::new(2, "C082", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "LOC",
-        name: "Meldepunkt",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "LOC",
+        "Meldepunkt",
+        &[
             ElementRef::new(1, "3227", Status::Mandatory, 1),
             ElementRef::new(2, "C517", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "CTA",
-        name: "Ansprechpartner",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "CTA",
+        "Ansprechpartner",
+        &[
             ElementRef::new(1, "3139", Status::Conditional, 1),
             ElementRef::new(2, "C056", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "COM",
-        name: "Kommunikationsverbindung",
-        elements: &[ElementRef::new(1, "C076", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "CUX",
-        name: "Währungsangaben",
-        elements: &[ElementRef::new(1, "C504", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "PYT",
-        name: "Zahlungsbedingungen",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "COM",
+        "Kommunikationsverbindung",
+        &[ElementRef::new(1, "C076", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "CUX",
+        "Währungsangaben",
+        &[ElementRef::new(1, "C504", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "PYT",
+        "Zahlungsbedingungen",
+        &[
             ElementRef::new(1, "4279", Status::Mandatory, 1),
             ElementRef::new(2, "C019", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "LIN",
-        name: "Positionsdaten",
-        elements: &[ElementRef::new(1, "1082", Status::Conditional, 1)],
-    },
-    SegmentDefinition {
-        tag: "QTY",
-        name: "Mengenangaben",
-        elements: &[ElementRef::new(1, "C186", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "MOA",
-        name: "Positionsnettobetrag",
-        elements: &[ElementRef::new(1, "C516", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "PRI",
-        name: "Preis",
-        elements: &[ElementRef::new(1, "C509", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "TAX",
-        name: "Umsatzsteuer der Position",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "LIN",
+        "Positionsdaten",
+        &[ElementRef::new(1, "1082", Status::Conditional, 1)],
+    ),
+    SegmentDefinition::new(
+        "QTY",
+        "Mengenangaben",
+        &[ElementRef::new(1, "C186", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "MOA",
+        "Positionsnettobetrag",
+        &[ElementRef::new(1, "C516", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "PRI",
+        "Preis",
+        &[ElementRef::new(1, "C509", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "TAX",
+        "Umsatzsteuer der Position",
+        &[
             ElementRef::new(1, "5283", Status::Mandatory, 1),
             ElementRef::new(2, "C241", Status::Conditional, 1),
             ElementRef::new(3, "C243", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "ALC",
-        name: "Abschlag / Zuschlag",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "ALC",
+        "Abschlag / Zuschlag",
+        &[
             ElementRef::new(1, "5463", Status::Mandatory, 1),
             ElementRef::new(2, "C552", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "PCD",
-        name: "Prozentangabe",
-        elements: &[ElementRef::new(1, "C501", Status::Mandatory, 1)],
-    },
+    ),
+    SegmentDefinition::new(
+        "PCD",
+        "Prozentangabe",
+        &[ElementRef::new(1, "C501", Status::Mandatory, 1)],
+    ),
 ];
 
 static SEGMENT_MAP: LazyLock<std::collections::HashMap<&'static str, &'static SegmentDefinition>> =

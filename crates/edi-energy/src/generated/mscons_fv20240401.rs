@@ -17,101 +17,101 @@ use crate::registry::Profile;
 use crate::{MessageType, Pruefidentifikator, Release};
 
 static SEGMENTS: &[SegmentDefinition] = &[
-    SegmentDefinition {
-        tag: "UNH",
-        name: "Nachrichtenkopfsegment",
-        elements: &[
+    SegmentDefinition::new(
+        "UNH",
+        "Nachrichtenkopfsegment",
+        &[
             ElementRef::new(1, "0062", Status::Mandatory, 1),
             ElementRef::new(2, "S009", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "BGM",
-        name: "Beginn der Nachricht",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "BGM",
+        "Beginn der Nachricht",
+        &[
             ElementRef::new(1, "C002", Status::Mandatory, 1),
             ElementRef::new(2, "C106", Status::Conditional, 1),
             ElementRef::new(3, "1225", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "DTM",
-        name: "Nachrichtendatum",
-        elements: &[ElementRef::new(1, "C507", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "UNS",
-        name: "Abschnitts-Kontrollsegment",
-        elements: &[ElementRef::new(1, "0081", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "UNT",
-        name: "Nachrichten-Endesegment",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "DTM",
+        "Nachrichtendatum",
+        &[ElementRef::new(1, "C507", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "UNS",
+        "Abschnitts-Kontrollsegment",
+        &[ElementRef::new(1, "0081", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "UNT",
+        "Nachrichten-Endesegment",
+        &[
             ElementRef::new(1, "0074", Status::Mandatory, 1),
             ElementRef::new(2, "0062", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "RFF",
-        name: "Referenzangaben",
-        elements: &[ElementRef::new(1, "C506", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "NAD",
-        name: "MP-ID Absender/Empfänger",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "RFF",
+        "Referenzangaben",
+        &[ElementRef::new(1, "C506", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "NAD",
+        "MP-ID Absender/Empfänger",
+        &[
             ElementRef::new(1, "3035", Status::Mandatory, 1),
             ElementRef::new(2, "C082", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "CTA",
-        name: "Ansprechpartner",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "CTA",
+        "Ansprechpartner",
+        &[
             ElementRef::new(1, "3139", Status::Conditional, 1),
             ElementRef::new(2, "C056", Status::Conditional, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "COM",
-        name: "Kommunikationsverbindung",
-        elements: &[ElementRef::new(1, "C076", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "LOC",
-        name: "Identifikationsangabe",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "COM",
+        "Kommunikationsverbindung",
+        &[ElementRef::new(1, "C076", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "LOC",
+        "Identifikationsangabe",
+        &[
             ElementRef::new(1, "3227", Status::Mandatory, 1),
             ElementRef::new(2, "C517", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "LIN",
-        name: "Laufende Position",
-        elements: &[ElementRef::new(1, "1082", Status::Conditional, 1)],
-    },
-    SegmentDefinition {
-        tag: "PIA",
-        name: "Produktidentifikation (OBIS-Kennzahl)",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "LIN",
+        "Laufende Position",
+        &[ElementRef::new(1, "1082", Status::Conditional, 1)],
+    ),
+    SegmentDefinition::new(
+        "PIA",
+        "Produktidentifikation (OBIS-Kennzahl)",
+        &[
             ElementRef::new(1, "4347", Status::Mandatory, 1),
             ElementRef::new(2, "C212", Status::Mandatory, 1),
         ],
-    },
-    SegmentDefinition {
-        tag: "QTY",
-        name: "Mengenangaben",
-        elements: &[ElementRef::new(1, "C186", Status::Mandatory, 1)],
-    },
-    SegmentDefinition {
-        tag: "STS",
-        name: "Statusangabe",
-        elements: &[
+    ),
+    SegmentDefinition::new(
+        "QTY",
+        "Mengenangaben",
+        &[ElementRef::new(1, "C186", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
+        "STS",
+        "Statusangabe",
+        &[
             ElementRef::new(1, "9015", Status::Conditional, 1),
             ElementRef::new(2, "C601", Status::Conditional, 1),
         ],
-    },
+    ),
 ];
 
 static SEGMENT_MAP: LazyLock<std::collections::HashMap<&'static str, &'static SegmentDefinition>> =

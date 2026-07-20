@@ -2883,7 +2883,7 @@ pub fn geli_gas_datenabruf_ablehnung_registry()
                 )));
             }
             // ORDRSP sender is the NB/MSB rejecting our request.
-            let sender_gln = match msg {
+            let sender_mp_id = match msg {
                 AnyMessage::Orders(o) => o
                     .sender()
                     .and_then(|n| n.party_id.as_deref())
@@ -2893,7 +2893,7 @@ pub fn geli_gas_datenabruf_ablehnung_registry()
             };
             Ok(GeliGasDatanabrufCommand::ReceiveAblehnung {
                 pid,
-                sender: MarktpartnerCode::new(sender_gln),
+                sender: MarktpartnerCode::new(sender_mp_id),
                 message_ref: MessageRef::new(msg.message_ref()),
             })
         },

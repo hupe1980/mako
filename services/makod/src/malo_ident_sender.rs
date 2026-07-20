@@ -255,7 +255,7 @@ impl As4Sender for MaloIdentSender {
                     // Resolve the NB GLN from the MaLo record — needed both for
                     // the result cache and for the `maloid.lieferbeginn.fortsetzen`
                     // continuation path.
-                    let nb_gln_str = result
+                    let nb_mp_id_str = result
                         .data_market_location
                         .data_market_location_network_operators
                         .iter()
@@ -294,7 +294,7 @@ impl As4Sender for MaloIdentSender {
                         payload: serde_json::json!({
                             "tx_id":                    cb.tx_id,
                             "malo_id":                  malo_id_str,
-                            "nb_mp_id":                   nb_gln_str,
+                            "nb_mp_id":                   nb_mp_id_str,
                             "sender_market_partner_id": cb.sender_market_partner_id,
                             "tenant_id":                cb.tenant_id,
                         }),
@@ -307,6 +307,7 @@ impl As4Sender for MaloIdentSender {
                         deliver_after: None,
                         attempt_count: 0,
                         workflow_name: "".into(),
+                        trace_context: mako_engine::trace_ctx::current().map(Into::into),
                     };
                     if let Err(e) = outbox_store.enqueue(&[erp_msg]).await {
                         warn!(
@@ -324,7 +325,7 @@ impl As4Sender for MaloIdentSender {
                     let resolved = MaloIdentResolved {
                         tx_id: cb.tx_id.clone(),
                         malo_id: malo_id_str.clone(),
-                        nb_mp_id: nb_gln_str.clone(),
+                        nb_mp_id: nb_mp_id_str.clone(),
                         resolved_at: OffsetDateTime::now_utc(),
                     };
                     if let Err(e) = result_cache.store_result(&cb.tenant_id, &resolved).await {
@@ -338,7 +339,7 @@ impl As4Sender for MaloIdentSender {
                         info!(
                             tx_id   = %cb.tx_id,
                             malo_id = %malo_id_str,
-                            nb_mp_id  = %nb_gln_str,
+                            nb_mp_id  = %nb_mp_id_str,
                             "MaloIdentCallback: resolved result cached — \
                              ERP may now call maloid.lieferbeginn.fortsetzen"
                         );

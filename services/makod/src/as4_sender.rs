@@ -103,7 +103,7 @@ use crate::party_registry::MpIdRegistry;
 #[derive(Clone)]
 pub struct WebhookEdifactSender {
     webhook_url: Arc<str>,
-    gln_registry: Arc<MpIdRegistry>,
+    mp_id_registry: Arc<MpIdRegistry>,
     http_client: reqwest::Client,
     malo_sender: MaloIdentSender,
 }
@@ -113,13 +113,13 @@ impl WebhookEdifactSender {
     #[must_use]
     pub fn new(
         webhook_url: impl Into<Arc<str>>,
-        gln_registry: Arc<MpIdRegistry>,
+        mp_id_registry: Arc<MpIdRegistry>,
         http_client: reqwest::Client,
         malo_sender: MaloIdentSender,
     ) -> Self {
         Self {
             webhook_url: webhook_url.into(),
-            gln_registry,
+            mp_id_registry,
             http_client,
             malo_sender,
         }
@@ -132,7 +132,7 @@ impl As4Sender for WebhookEdifactSender {
         msg: &OutboxMessage,
     ) -> impl std::future::Future<Output = Result<(), EngineError>> + Send {
         let webhook_url = Arc::clone(&self.webhook_url);
-        let gln_registry: Arc<MpIdRegistry> = Arc::clone(&self.gln_registry);
+        let mp_id_registry: Arc<MpIdRegistry> = Arc::clone(&self.mp_id_registry);
         let http_client = self.http_client.clone();
         let malo_sender = self.malo_sender.clone();
         let msg_owned = msg.clone();
@@ -145,8 +145,8 @@ impl As4Sender for WebhookEdifactSender {
 
             // Render domain-intent JSON to EDIFACT wire bytes.
             let edifact_str =
-                match edifact_renderer::render_to_wire_bytes(&msg_owned, &gln_registry) {
-                    Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                match edifact_renderer::render_to_wire_bytes(&msg_owned, &mp_id_registry) {
+                    Ok(rendered) => String::from_utf8_lossy(&rendered.bytes).into_owned(),
                     Err(ref e) if edifact_renderer::is_suppressed(e) => {
                         // Gas positive APERAK: silence = acceptance per APERAK AHB 1.0 §2.3.
                         // No wire EDIFACT sent; deliver domain JSON to ERP webhook so the
@@ -182,7 +182,7 @@ impl As4Sender for WebhookEdifactSender {
             let body = serde_json::json!({
                 "specversion":     "1.0",
                 "type":            "de.mako.edifact.outbound",
-                "source":          format!("urn:mako:tenant:{}", gln_registry.primary_gln()),
+                "source":          format!("urn:mako:tenant:{}", mp_id_registry.primary_mp_id()),
                 "id":              msg_owned.message_id.to_string(),
                 "subject":         msg_owned.process_id.to_string(),
                 "time":            time::OffsetDateTime::now_utc()
@@ -261,7 +261,7 @@ pub struct BdewAs4Sender {
     /// and by the loopback path to detect own-GLN recipients (combined-role
     /// deployments where NB and MSB, or GNB and gMSB, have different GLNs on
     /// the same instance).
-    gln_registry: Arc<MpIdRegistry>,
+    mp_id_registry: Arc<MpIdRegistry>,
     /// Optional in-process loopback handle for combined-role deployments.
     ///
     /// When `Some`, outbox messages addressed to `tenant_party_id` (own GLN)
@@ -269,6 +269,14 @@ pub struct BdewAs4Sender {
     /// instead of being dead-lettered.  Required for NB+MSB, GNB+gMSB, and
     /// NB+LF deployments sharing a single GLN.
     loopback: Option<Arc<crate::edifact_api::EdifactApiState>>,
+    /// Parse/validation platform for the pre-send AHB conformance gate.
+    platform: Arc<edi_energy::Platform>,
+    /// When `true`, a missing or mismatched synchronous `eb:Receipt` is only
+    /// warned about instead of failing the delivery. BDEW MaKo AS4 requires
+    /// the synchronous receipt, so the strict default treats its absence as a
+    /// retryable delivery failure; this flag exists for interop debugging
+    /// against non-conformant counterparties.
+    lenient_receipts: bool,
 }
 
 impl BdewAs4Sender {
@@ -279,13 +287,16 @@ impl BdewAs4Sender {
     ///
     /// Returns an error if the underlying `reqwest::Client` cannot be built
     /// (e.g. missing TLS stack).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         session: Arc<SessionContext>,
         event_bus: Arc<EventBus>,
         profile: Arc<BdewAs4Profile>,
         malo_sender: MaloIdentSender,
-        gln_registry: Arc<MpIdRegistry>,
+        mp_id_registry: Arc<MpIdRegistry>,
         loopback: Option<Arc<crate::edifact_api::EdifactApiState>>,
+        platform: Arc<edi_energy::Platform>,
+        lenient_receipts: bool,
     ) -> anyhow::Result<Self> {
         let transport = As4HttpTransport::new(TransportConfig::default())
             .map_err(|e| anyhow::anyhow!("AS4 HTTP transport init failed: {e}"))?;
@@ -295,8 +306,10 @@ impl BdewAs4Sender {
             transport: Arc::new(transport),
             profile,
             malo_sender,
-            gln_registry,
+            mp_id_registry,
             loopback,
+            platform,
+            lenient_receipts,
         })
     }
 }
@@ -322,7 +335,9 @@ impl As4Sender for BdewAs4Sender {
         let recipient = msg.recipient.clone();
         let message_id_str = msg.message_id.to_string();
         let conversation_id = msg.conversation_id.to_string();
-        let gln_registry: Arc<MpIdRegistry> = Arc::clone(&self.gln_registry);
+        let mp_id_registry: Arc<MpIdRegistry> = Arc::clone(&self.mp_id_registry);
+        let platform = Arc::clone(&self.platform);
+        let lenient_receipts = self.lenient_receipts;
         async move {
             // Route MaloIdentCallback to the existing cache-lookup path.
             if message_type.as_ref() == "MaloIdentCallback" {
@@ -344,21 +359,21 @@ impl As4Sender for BdewAs4Sender {
             // EDIFACT wire bytes, re-parsed, and dispatched in-process — zero AS4
             // round-trip, zero network latency.
             //
-            // The registry is_own_gln check covers ALL own GLNs, so loopback works
+            // The registry is_own_mp_id check covers ALL own GLNs, so loopback works
             // even when NB and MSB have DIFFERENT GLNs on the same makod instance.
-            if gln_registry.is_own_gln(recipient.as_ref()) {
+            if mp_id_registry.is_own_mp_id(recipient.as_ref()) {
                 if let Some(ref loopback_state) = loopback {
                     // ── In-process loopback delivery ──────────────────────────
                     let payload_bytes = match edifact_renderer::render_to_wire_bytes(
                         &msg_owned,
-                        &gln_registry,
+                        &mp_id_registry,
                     ) {
-                        Ok(bytes) => bytes,
+                        Ok(rendered) => rendered.bytes,
                         Err(ref e) if edifact_renderer::is_insufficient_payload(e) => {
                             tracing::error!(
                                 message_id   = %message_id_str,
                                 message_type = %message_type,
-                                own_glns     = ?gln_registry.own_glns().collect::<Vec<_>>(),
+                                own_mp_ids     = ?mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
                                 "BdewAs4Sender loopback: no renderer registered — dead-lettering",
                             );
                             return Err(EngineError::RendererNotImplemented {
@@ -396,7 +411,7 @@ impl As4Sender for BdewAs4Sender {
                                             message_type = %message_type,
                                             workflow     = %wf_name,
                                             outcome      = ?outcome,
-                                            own_glns     = ?gln_registry.own_glns().collect::<Vec<_>>(),
+                                            own_mp_ids     = ?mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
                                             "BdewAs4Sender loopback: in-process delivery succeeded",
                                         );
                                         any_dispatched = true;
@@ -422,7 +437,7 @@ impl As4Sender for BdewAs4Sender {
                                     message_id   = %message_id_str,
                                     message_type = %message_type,
                                     pid          = ?pid_opt,
-                                    own_glns     = ?gln_registry.own_glns().collect::<Vec<_>>(),
+                                    own_mp_ids     = ?mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
                                     "BdewAs4Sender loopback: PID not in dispatch table — \
                                      no MSB-side workflow registered; use ERP command API \
                                      (e.g. gpke.sperrung.bestaetigen) to confirm",
@@ -437,7 +452,7 @@ impl As4Sender for BdewAs4Sender {
                         tracing::warn!(
                             message_id   = %message_id_str,
                             message_type = %message_type,
-                            own_glns     = ?gln_registry.own_glns().collect::<Vec<_>>(),
+                            own_mp_ids     = ?mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
                             "BdewAs4Sender loopback: rendered message produced no \
                              dispatchable messages (no dispatcher wired or parse yielded nothing)",
                         );
@@ -449,7 +464,7 @@ impl As4Sender for BdewAs4Sender {
                 tracing::error!(
                     message_id   = %message_id_str,
                     message_type = %message_type,
-                    own_glns     = ?gln_registry.own_glns().collect::<Vec<_>>(),
+                    own_mp_ids     = ?mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
                     "BdewAs4Sender: outbox message addressed to own GLN \
                      (combined-role deployment — NB+MSB or GNB+gMSB sharing one GLN). \
                      No loopback handle configured. \
@@ -497,56 +512,87 @@ impl As4Sender for BdewAs4Sender {
             // the outbox worker dead-letters the entry immediately instead of
             // retrying (retries would never succeed) or transmitting a non-EDIFACT
             // JSON blob over AS4 (which violates BDEW MaKo interoperability).
-            let payload_bytes =
-                match edifact_renderer::render_to_wire_bytes(&msg_owned, &gln_registry) {
-                    Ok(bytes) => {
-                        tracing::debug!(
-                            message_id   = %message_id_str,
-                            message_type = %message_type,
-                            bytes        = bytes.len(),
-                            "BdewAs4Sender: rendered EDIFACT wire bytes",
-                        );
-                        bytes
-                    }
-                    Err(ref e) if edifact_renderer::is_suppressed(e) => {
-                        // Gas positive APERAK: silence = acceptance per APERAK AHB 1.0 §2.3.
-                        // No AS4 message is sent; the outbox entry is acknowledged immediately.
-                        tracing::debug!(
-                            message_id   = %message_id_str,
-                            message_type = %message_type,
-                            recipient    = %recipient,
-                            "BdewAs4Sender: Gas positive APERAK suppressed — \
-                             no wire EDIFACT sent (silence = acceptance, APERAK AHB 1.0 §2.3)",
-                        );
-                        return Ok(());
-                    }
-                    Err(ref e) if edifact_renderer::is_insufficient_payload(e) => {
-                        tracing::error!(
-                            message_id   = %message_id_str,
-                            message_type = %message_type,
-                            recipient    = %recipient,
-                            detail       = %e,
-                            "BdewAs4Sender: no EDIFACT renderer for this message type — \
-                             dead-lettering outbox entry. Implement a wire-format renderer \
-                             for '{}' before enabling this workflow path in production.",
-                            message_type,
-                        );
-                        return Err(EngineError::RendererNotImplemented {
-                            message_type: message_type.as_ref().into(),
-                            message_id: message_id_str.as_str().into(),
-                        });
-                    }
-                    Err(e) => {
-                        return Err(EngineError::Serialization(format!(
-                            "EDIFACT render failed for {message_id_str} ({message_type}): {e}"
-                        )));
-                    }
-                };
+            let rendered = match edifact_renderer::render_to_wire_bytes(&msg_owned, &mp_id_registry)
+            {
+                Ok(rendered) => {
+                    tracing::debug!(
+                        message_id   = %message_id_str,
+                        message_type = %message_type,
+                        bytes        = rendered.bytes.len(),
+                        "BdewAs4Sender: rendered EDIFACT Übertragungsdatei",
+                    );
+                    rendered
+                }
+                Err(ref e) if edifact_renderer::is_suppressed(e) => {
+                    // Gas positive APERAK: silence = acceptance per APERAK AHB 1.0 §2.3.
+                    // No AS4 message is sent; the outbox entry is acknowledged immediately.
+                    tracing::debug!(
+                        message_id   = %message_id_str,
+                        message_type = %message_type,
+                        recipient    = %recipient,
+                        "BdewAs4Sender: Gas positive APERAK suppressed — \
+                         no wire EDIFACT sent (silence = acceptance, APERAK AHB 1.0 §2.3)",
+                    );
+                    return Ok(());
+                }
+                Err(ref e) if edifact_renderer::is_insufficient_payload(e) => {
+                    tracing::error!(
+                        message_id   = %message_id_str,
+                        message_type = %message_type,
+                        recipient    = %recipient,
+                        detail       = %e,
+                        "BdewAs4Sender: no EDIFACT renderer for this message type — \
+                         dead-lettering outbox entry. Implement a wire-format renderer \
+                         for '{}' before enabling this workflow path in production.",
+                        message_type,
+                    );
+                    return Err(EngineError::RendererNotImplemented {
+                        message_type: message_type.as_ref().into(),
+                        message_id: message_id_str.as_str().into(),
+                    });
+                }
+                Err(e) => {
+                    return Err(EngineError::Serialization(format!(
+                        "EDIFACT render failed for {message_id_str} ({message_type}): {e}"
+                    )));
+                }
+            };
 
-            if payload_bytes.is_empty() {
+            if rendered.bytes.is_empty() {
                 return Err(EngineError::Serialization(format!(
                     "rendered payload is empty for message_id={message_id_str}"
                 )));
+            }
+
+            // ── Pre-send AHB conformance gate ─────────────────────────────
+            // A message that fails to parse or validate against its own
+            // release profile must not reach the regulated network: parse the
+            // rendered Übertragungsdatei back and run the edi-energy profile
+            // validation. Failures are permanent (Serialization → dead-letter)
+            // — retrying an invalid rendering can never succeed.
+            match platform.parse(&rendered.bytes) {
+                Err(e) => {
+                    return Err(EngineError::Serialization(format!(
+                        "pre-send gate: rendered EDIFACT does not parse for \
+                         {message_id_str} ({message_type}): {e}"
+                    )));
+                }
+                Ok(parsed) => match parsed.validate() {
+                    Err(e) => {
+                        return Err(EngineError::Serialization(format!(
+                            "pre-send gate: AHB validation failed to run for \
+                             {message_id_str} ({message_type}): {e}"
+                        )));
+                    }
+                    Ok(report) if !report.is_valid() => {
+                        return Err(EngineError::Serialization(format!(
+                            "pre-send gate: rendered EDIFACT violates its AHB \
+                             profile for {message_id_str} ({message_type}): {:?}",
+                            report.errors()
+                        )));
+                    }
+                    Ok(_) => {}
+                },
             }
 
             let mut policy = pm.to_send_policy().map_err(|e| EngineError::Transport {
@@ -563,25 +609,14 @@ impl As4Sender for BdewAs4Sender {
             // - Nachrichtentyp: EDIFACT message type from UNH DE0065
             // - Anwendungsreferenz: VL/TL/EM from UNB DE0026; empty for most types
             //   (UTILMD, APERAK, CONTRL, etc.) — empty → double underscore
-            // - von/an: sender/receiver MP-IDs from UNB DE0004/DE0010
+            // - von/an: the interchange's UNB DE0004/DE0010 MP-IDs — the same
+            //   values the renderer put in the envelope and in NAD+MS/NAD+MR
             // - yyyymmdd: creation date **in UTC** (not German local time)
-            // - DAR: Datenaustauschreferenz from UNB DE0020; since our builders
-            //   produce bare UNH…UNT (no UNB wrapper), no DE0020 is set — we
-            //   substitute the first 14 uppercase hex chars of the outbox
-            //   message UUID, which is unique per message and satisfies the
-            //   UNOC character set constraint (A–Z, 0–9 subset).
+            // - DAR: the interchange's UNB DE0020 Datenaustauschreferenz
             let payload_filename = {
                 let now = time::OffsetDateTime::now_utc();
                 let yyyymmdd =
                     format!("{:04}{:02}{:02}", now.year(), now.month() as u8, now.day(),);
-                // DAR must use UNOC chars (A-Z, 0-9, and select punctuation).
-                // Uppercase UUID hex satisfies this constraint.
-                let dar: String = message_id_str
-                    .replace('-', "")
-                    .to_uppercase()
-                    .chars()
-                    .take(14)
-                    .collect();
                 // Anwendungsreferenz is empty for all types except MSCONS
                 // (TL = Lastgang, VL = Zählerstand/Energiemenge).
                 // Per §2.12 example: empty → rendered as double underscore.
@@ -590,10 +625,10 @@ impl As4Sender for BdewAs4Sender {
                     "{}_{}_{}_{}_{}_{}.txt",
                     message_type,
                     anwendungsref,
-                    gln_registry.primary_gln(),
-                    recipient,
+                    rendered.sender_mp_id,
+                    rendered.receiver_mp_id,
                     yyyymmdd,
-                    dar,
+                    rendered.dar,
                 );
                 // PayloadFilename validates printable-ASCII + length invariants.
                 // All components are ASCII digits/uppercase letters/underscores.
@@ -602,7 +637,7 @@ impl As4Sender for BdewAs4Sender {
 
             let request = As4SendRequest {
                 message_id: message_id_str.clone(),
-                payload: payload_bytes,
+                payload: rendered.bytes,
                 policy,
                 // Populate the recipient's encryption certificate.
                 // BDEW AS4-Profil v1.2 §2.2.6.2.2: every outbound message must be encrypted
@@ -620,7 +655,7 @@ impl As4Sender for BdewAs4Sender {
             };
 
             // Build the signed SOAP envelope (CPU-bound; runs on Tokio blocking pool).
-            let output = asx_rs::as4::send_async(&session, &event_bus, request)
+            let mut output = asx_rs::as4::send_async(&session, &event_bus, request)
                 .await
                 .map_err(|e| {
                     EngineMetrics::global().outbox_delivery_attempted("transport_error");
@@ -629,6 +664,19 @@ impl As4Sender for BdewAs4Sender {
                         message: format!("AS4 envelope build failed for {message_id_str}: {e}"),
                     }
                 })?;
+
+            // W3C trace continuity to the counterparty: when the outbox
+            // message carries the trace context of the request that caused
+            // it, forward THAT `traceparent` on the AS4 HTTP egress instead
+            // of the fresh one asx-rs generates — the receiving MSH then
+            // joins the same distributed trace as the original caller.
+            if let Some(tp) = msg_owned
+                .trace_context
+                .as_deref()
+                .and_then(asx_rs::transport::trace_context::normalize_traceparent)
+            {
+                output.traceparent = Some(tp);
+            }
 
             // HTTP POST to the recipient's AS4 endpoint.
             let outcome = transport.send(&endpoint, &output).await.map_err(|e| {
@@ -645,7 +693,33 @@ impl As4Sender for BdewAs4Sender {
             // receipts are non-fatal (we already got HTTP 200) but warrant a
             // structured warning so operators can diagnose counterparty conformance
             // issues without losing the delivery confirmation.
-            check_sync_receipt(&outcome.body, &message_id_str, &recipient, &message_type);
+            if let Err(reason) =
+                verify_sync_receipt(&outcome.body, &message_id_str, &recipient, &message_type)
+            {
+                if lenient_receipts {
+                    tracing::warn!(
+                        message_id   = %message_id_str,
+                        recipient    = %recipient,
+                        message_type = %message_type,
+                        reason       = %reason,
+                        "BdewAs4Sender: --as4-lenient-receipts — synchronous \
+                         eb:Receipt verification failed; delivery acknowledged anyway",
+                    );
+                } else {
+                    // Strict default: a delivery without a verifiable synchronous
+                    // receipt is not a confirmed delivery (BDEW MaKo AS4 MEP).
+                    // Transport errors are retryable — the outbox worker backs
+                    // off and dead-letters after the retry budget.
+                    EngineMetrics::global().outbox_delivery_attempted("receipt_unverified");
+                    return Err(EngineError::Transport {
+                        endpoint: endpoint.as_str().into(),
+                        message: format!(
+                            "synchronous eb:Receipt verification failed for \
+                             {message_id_str}: {reason}"
+                        ),
+                    });
+                }
+            }
 
             tracing::info!(
                 message_id   = %message_id_str,
@@ -664,99 +738,69 @@ impl As4Sender for BdewAs4Sender {
 
 // ── Synchronous receipt inspection ───────────────────────────────────────────
 
-/// Inspect the synchronous response body for an AS4 `eb:Receipt` SignalMessage.
+/// Verify the synchronous `eb:Receipt` in the counterparty's response body.
 ///
-/// Per BDEW MaKo AS4-Profil 2.0 §4.6.3, the counterparty must return a
-/// synchronous `eb:Receipt` in the HTTP response body.  This function does a
-/// lightweight byte-level check and emits structured `warn!` entries for:
+/// The BDEW MaKo AS4 MEP requires a synchronous `eb:Receipt` SignalMessage on
+/// the same HTTP connection, referencing the sent `message_id`. This returns
+/// `Err(reason)` when:
 ///
-/// - No receipt body (empty / non-XML 200 response).
-/// - Receipt present but `eb:RefToMessageId` does not match the sent
-///   `message_id` (counterparty issued the receipt for the wrong message).
-/// - Receipt present but `eb:NonRepudiationInformation` is absent (unsigned
-///   receipt — BDEW MaKo profile requires it for signed messages).
+/// - the response body is empty or not UTF-8,
+/// - no `eb:Receipt` element is present,
+/// - `eb:RefToMessageId` is absent or references a different message.
 ///
-/// All findings are non-fatal: the delivery is already confirmed by HTTP 200
-/// and the outbox entry will be acknowledged regardless.  The warnings exist
-/// so operators can diagnose counterparty conformance issues.
-fn check_sync_receipt(body: &[u8], message_id: &str, recipient: &str, message_type: &str) {
+/// A missing `eb:NonRepudiationInformation` is warned about but does not fail
+/// verification — the receipt still confirms receipt of the correct message.
+///
+/// The caller decides whether a failure is fatal (strict default: retryable
+/// delivery failure) or advisory (`--as4-lenient-receipts`).
+fn verify_sync_receipt(
+    body: &[u8],
+    message_id: &str,
+    recipient: &str,
+    message_type: &str,
+) -> Result<(), String> {
     if body.is_empty() {
-        tracing::warn!(
-            message_id   = %message_id,
-            recipient    = %recipient,
-            message_type = %message_type,
-            "BdewAs4Sender: counterparty returned an empty response body — \
-             no synchronous eb:Receipt received (BDEW MaKo AS4-Profil 2.0 §4.6.3). \
-             This is a counterparty conformance issue; the delivery is acknowledged.",
+        return Err(
+            "counterparty returned an empty response body — no synchronous \
+             eb:Receipt received (BDEW MaKo AS4-Profil 2.0 §4.6.3)"
+                .to_owned(),
         );
-        return;
     }
 
-    // Work in UTF-8; fall back to lossy conversion for non-UTF-8 bodies
-    // (which would themselves be non-conformant).
-    let body_str = match std::str::from_utf8(body) {
-        Ok(s) => s,
-        Err(_) => {
-            tracing::warn!(
-                message_id   = %message_id,
-                recipient    = %recipient,
-                message_type = %message_type,
-                "BdewAs4Sender: response body is not valid UTF-8 — \
-                 cannot inspect synchronous eb:Receipt",
-            );
-            return;
-        }
-    };
+    let body_str = std::str::from_utf8(body)
+        .map_err(|_| "response body is not valid UTF-8 — cannot inspect eb:Receipt".to_owned())?;
 
-    // Quick structural check: does the body look like a SOAP envelope with
-    // an eb:Receipt element?  We do not do a full XML parse here because the
-    // asx-rs receipt verification API is internal and adding a new XML-parsing
-    // dependency for a non-fatal warning is disproportionate.  The checks
-    // below are reliable for any well-formed BDEW AS4 receipt.
     if !body_str.contains("<eb:Receipt") && !body_str.contains("<eb3:Receipt") {
-        tracing::warn!(
-            message_id   = %message_id,
-            recipient    = %recipient,
-            message_type = %message_type,
-            "BdewAs4Sender: counterparty response does not contain eb:Receipt — \
-             synchronous receipt is absent (BDEW MaKo AS4-Profil 2.0 §4.6.3). \
-             The delivery is acknowledged but the counterparty is non-conformant.",
+        return Err(
+            "counterparty response does not contain eb:Receipt — synchronous \
+             receipt is absent (BDEW MaKo AS4-Profil 2.0 §4.6.3)"
+                .to_owned(),
         );
-        return;
     }
 
-    // Check that the RefToMessageId matches.  Extract the value between the tags.
     let ref_id_opt = extract_element_text(body_str, "eb:RefToMessageId")
         .or_else(|| extract_element_text(body_str, "eb3:RefToMessageId"));
-
     match ref_id_opt {
         Some(ref_id) if ref_id != message_id => {
-            tracing::warn!(
-                message_id        = %message_id,
-                receipt_ref_id    = %ref_id,
-                recipient         = %recipient,
-                message_type      = %message_type,
-                "BdewAs4Sender: eb:Receipt.RefToMessageId mismatch — \
-                 receipt references a different message_id than the one sent. \
-                 Possible counterparty implementation bug.",
-            );
+            return Err(format!(
+                "eb:Receipt.RefToMessageId {ref_id:?} does not reference the \
+                 sent message_id {message_id:?}"
+            ));
         }
         None => {
-            tracing::warn!(
-                message_id   = %message_id,
-                recipient    = %recipient,
-                message_type = %message_type,
-                "BdewAs4Sender: eb:Receipt present but eb:RefToMessageId is absent \
-                 — cannot verify receipt references the correct message.",
+            return Err(
+                "eb:Receipt present but eb:RefToMessageId is absent — cannot \
+                 verify the receipt references the correct message"
+                    .to_owned(),
             );
         }
-        Some(_) => {
-            // RefToMessageId matches — receipt is for the correct message.
-        }
+        Some(_) => {}
     }
 
     // BDEW MaKo AS4-Profil 2.0 §4.6.3 requires NonRepudiationInformation for
-    // signed messages.  Log a warning when it is absent.
+    // signed messages. Advisory: the receipt already references the correct
+    // message, so absence is a counterparty conformance warning, not a
+    // delivery failure.
     if !body_str.contains("<eb:NonRepudiationInformation")
         && !body_str.contains("<eb3:NonRepudiationInformation")
     {
@@ -765,11 +809,10 @@ fn check_sync_receipt(body: &[u8], message_id: &str, recipient: &str, message_ty
             recipient    = %recipient,
             message_type = %message_type,
             "BdewAs4Sender: eb:Receipt is present but eb:NonRepudiationInformation \
-             is absent — counterparty did not provide NRI \
-             (BDEW MaKo AS4-Profil 2.0 §4.6.3). \
-             This is a counterparty conformance issue.",
+             is absent (BDEW MaKo AS4-Profil 2.0 §4.6.3) — counterparty NRI gap",
         );
     }
+    Ok(())
 }
 
 /// Extract the text content of the first occurrence of `<tag>…</tag>` in `xml`.
@@ -843,30 +886,42 @@ mod tests {
         assert_eq!(extract_element_text("", "eb:RefToMessageId"), None);
     }
 
-    // ── check_sync_receipt ─────────────────────────────────────────────────────
+    // ── verify_sync_receipt ────────────────────────────────────────────────────
     //
-    // check_sync_receipt only emits warnings; it never panics or returns an
-    // error. These tests verify that no panic occurs for edge-case inputs.
+    // verify_sync_receipt returns Err for missing/mismatched receipts and
+    // must never panic for edge-case inputs.
 
     #[test]
-    fn check_sync_receipt_does_not_panic_on_empty_body() {
-        // Should warn but not panic.
-        check_sync_receipt(b"", "msg-001", "9903462000005", "APERAK");
+    fn verify_sync_receipt_rejects_empty_body() {
+        let err = verify_sync_receipt(b"", "msg-001", "9903462000005", "APERAK").unwrap_err();
+        assert!(err.contains("empty response body"), "{err}");
     }
 
     #[test]
-    fn check_sync_receipt_does_not_panic_on_non_utf8() {
-        check_sync_receipt(&[0xFF, 0xFE], "msg-001", "9903462000005", "APERAK");
+    fn verify_sync_receipt_rejects_non_utf8() {
+        let err =
+            verify_sync_receipt(&[0xFF, 0xFE], "msg-001", "9903462000005", "APERAK").unwrap_err();
+        assert!(err.contains("not valid UTF-8"), "{err}");
     }
 
     #[test]
-    fn check_sync_receipt_does_not_panic_on_missing_receipt_element() {
+    fn verify_sync_receipt_accepts_matching_receipt_and_rejects_mismatch() {
+        let ok = b"<eb:Receipt><eb:RefToMessageId>msg-001</eb:RefToMessageId>\
+                   <eb:NonRepudiationInformation/></eb:Receipt>";
+        assert!(verify_sync_receipt(ok, "msg-001", "99", "APERAK").is_ok());
+        let err = verify_sync_receipt(ok, "msg-OTHER", "99", "APERAK").unwrap_err();
+        assert!(err.contains("does not reference"), "{err}");
+    }
+
+    #[test]
+    fn verify_sync_receipt_rejects_missing_receipt_element() {
         let body = b"<soap:Envelope><soap:Body></soap:Body></soap:Envelope>";
-        check_sync_receipt(body, "msg-001", "9903462000005", "APERAK");
+        let err = verify_sync_receipt(body, "msg-001", "9903462000005", "APERAK").unwrap_err();
+        assert!(err.contains("does not contain eb:Receipt"), "{err}");
     }
 
     #[test]
-    fn check_sync_receipt_does_not_panic_on_matching_receipt() {
+    fn verify_sync_receipt_accepts_matching_receipt_in_envelope() {
         let body = r#"<soap:Envelope>
   <soap:Body>
     <eb:Receipt>
@@ -875,23 +930,25 @@ mod tests {
     </eb:Receipt>
   </soap:Body>
 </soap:Envelope>"#;
-        check_sync_receipt(body.as_bytes(), "msg-001", "9903462000005", "APERAK");
+        assert!(verify_sync_receipt(body.as_bytes(), "msg-001", "9903462000005", "APERAK").is_ok());
     }
 
     #[test]
-    fn check_sync_receipt_does_not_panic_on_mismatched_ref_id() {
+    fn verify_sync_receipt_rejects_mismatched_ref_id() {
         let body = r#"<eb:Receipt>
   <eb:RefToMessageId>different-msg</eb:RefToMessageId>
   <eb:NonRepudiationInformation/>
 </eb:Receipt>"#;
-        check_sync_receipt(body.as_bytes(), "msg-001", "9903462000005", "APERAK");
+        let err =
+            verify_sync_receipt(body.as_bytes(), "msg-001", "9903462000005", "APERAK").unwrap_err();
+        assert!(err.contains("does not reference"), "{err}");
     }
 
     #[test]
-    fn check_sync_receipt_does_not_panic_on_missing_nri() {
+    fn verify_sync_receipt_missing_nri_is_advisory_only() {
         let body = r#"<eb:Receipt>
   <eb:RefToMessageId>msg-001</eb:RefToMessageId>
 </eb:Receipt>"#;
-        check_sync_receipt(body.as_bytes(), "msg-001", "9903462000005", "APERAK");
+        assert!(verify_sync_receipt(body.as_bytes(), "msg-001", "9903462000005", "APERAK").is_ok());
     }
 }

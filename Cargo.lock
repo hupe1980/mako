@@ -861,9 +861,9 @@ dependencies = [
 
 [[package]]
 name = "asx-rs"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3be4fb99c2c8e0ad9bf2119e95b886225426597698d4520281e1cb80ca7603e"
+checksum = "8b06353d96da5068d754a183e8479bcedf0baf14301f48b101502504fb701cf2"
 dependencies = [
  "aes-gcm",
  "axum",
@@ -4161,9 +4161,9 @@ dependencies = [
 
 [[package]]
 name = "edifact-rs"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a1f12fbd470b0599e72bb772fd6535681367df922135219d2313648e0e2f7e4"
+checksum = "0b23ebddda19bb5b2aabad36f56371a39a4c69dfdf5c1140f4b005da177d14b6"
 dependencies = [
  "edifact-rs-derive",
  "memchr",
@@ -4175,9 +4175,9 @@ dependencies = [
 
 [[package]]
 name = "edifact-rs-derive"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d019065ffedb631b8ea4ac41f6832a4ee58914d57cca251930ebf200959d6d0e"
+checksum = "66abaf5b8fa44afcecd262ab75f27f46803db2570b421e9e5b6b2dd87d73e48f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4390,6 +4390,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "thiserror 2.0.19",
  "time",
  "time-tz",
  "tracing",
@@ -7768,6 +7769,7 @@ dependencies = [
  "mako-mabis",
  "mako-markt",
  "mako-redispatch",
+ "mako-service",
  "mako-wim",
  "mako-wim-gas",
  "object_store 0.14.1",
@@ -7781,6 +7783,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "subtle",
+ "tempfile",
  "thiserror 2.0.19",
  "time",
  "tokio",

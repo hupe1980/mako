@@ -451,6 +451,9 @@ pub(crate) fn grundpreis_position(
     .with_legal_basis(legal_basis)
     .with_tag("commodity")
     .with_tag("grundpreis");
+    // The trace is built here, where the inputs are, so every position going
+    // through this helper explains itself without each caller remembering to.
+    p.trace = PositionTrace::commodity(Decimal::from(days), "Tage", daily_rate_eur, legal_basis);
     for tag in tags {
         p = p.with_tag(*tag);
     }
@@ -476,6 +479,7 @@ pub(crate) fn arbeitspreis_position(
     .with_legal_basis(legal_basis)
     .with_tag("commodity")
     .with_tag("arbeitspreis");
+    p.trace = PositionTrace::commodity(kwh, unit, rate_ct_kwh / dec!(100), legal_basis);
     for tag in tags {
         p = p.with_tag(*tag);
     }
@@ -491,7 +495,7 @@ pub(crate) fn levy_position(
     legal_basis: &'static str,
     tag: &'static str,
 ) -> BillingPosition {
-    BillingPosition::debit(
+    let mut p = BillingPosition::debit(
         label,
         quantity,
         unit,
@@ -500,5 +504,7 @@ pub(crate) fn levy_position(
     )
     .with_legal_basis(legal_basis)
     .with_tag("levy")
-    .with_tag(tag)
+    .with_tag(tag);
+    p.trace = PositionTrace::commodity(quantity, unit, rate_ct / dec!(100), legal_basis);
+    p
 }

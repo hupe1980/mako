@@ -18,7 +18,7 @@
 //! ## Primary API — `Product::build_engine`
 //!
 //! ```rust
-//! use energy_billing::{Product, BillingContext, InvoiceType, MeterInput, Quantities, RegulatoryRates, GridInput};
+//! use energy_billing::{BillingContext, BillingPeriod, GridInput, InvoiceType, MeterInput, Product, Quantities, RegulatoryRates};
 //! use rust_decimal::dec;
 //! use time::macros::date;
 //!
@@ -28,8 +28,7 @@
 //!     malo_id:         "51238696781".to_owned(),
 //!     lf_mp_id:        "9900000000001".to_owned(),
 //!     rechnungsnummer: "R2026-001".to_owned(),
-//!     period_from:      date!(2026-01-01),
-//!     period_to:        date!(2026-01-31),
+//!     period: BillingPeriod::new(date!(2026-01-01), date!(2026-01-31)).unwrap(),
 //!     invoice_type:     InvoiceType::Initial,
 //!     contract_id:      None,
 //!     regulatory_rates: RegulatoryRates::default(),
@@ -68,6 +67,7 @@
 
 pub mod context;
 pub mod engine;
+pub mod error;
 pub mod invoice;
 pub mod position;
 pub mod provider;
@@ -80,10 +80,11 @@ pub mod tariff;
 
 // Core billing types
 pub use context::{
-    AbschlagDeduction, BillingContext, CustomerKategorie, InvoiceType, SettlementForm,
-    Verbrauchshistorie,
+    AbschlagDeduction, BillingContext, BillingPeriod, CustomerKategorie, InvoiceType,
+    SettlementForm, Verbrauchshistorie, Vertragsart, Vertragsinformationen,
 };
 pub use engine::BillingEngine;
+pub use error::EngineError;
 pub use invoice::{
     Invoice, TaxSubtotal, VatCategory, negate_rechnung_json_for_correction, tax_subtotals_of,
 };
@@ -95,11 +96,12 @@ pub use quantities::{
     Abschlagsplan, AbschlagsplanEntry, DynamicInterval, EegMeterInput, EmobilityMeterInput,
     EnergyShareMeterInput, GasMeterInput, GgvNutzungsplan, GgvNutzungsplanEntry, GgvSolarInput,
     GridInput, HemsMeterInput, MeterInput, MeteringMode, ProsumerMeterInput, Quantities,
-    Sect41aAnnualComparison, ServiceMeterInput, SolarMeterInput, WaermeMeterInput,
+    Sect14aModul2Verbrauch, Sect41aAnnualComparison, ServiceMeterInput, SolarMeterInput,
+    WaermeMeterInput,
 };
 pub use rates::{
     BEHG_CO2_FACTOR_H_GAS, BEHG_CO2_FACTOR_L_GAS, RegulatoryRates, behg_ct_per_kwh_for_year,
-    energiesteuer_gas_for_year, stromsteuer_for_year,
+    energiesteuer_gas_for_year, mwst_rate_for_period, stromsteuer_for_year,
 };
 
 // Typed Product enum + per-category product structs
@@ -117,5 +119,5 @@ pub use providers::{
     HemsProvider, MwStProvider, ServiceProvider, SolarProvider,
 };
 
-// Error type (re-export from billing crate)
+// The arithmetic core's error — reachable through [`EngineError::Arithmetic`].
 pub use billing::BillingError;

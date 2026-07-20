@@ -65,7 +65,8 @@ billingd (HTTP service)
 ```
 
 `energy-billing` is **zero I/O, zero async** — `BillingEngine::bill()` is a pure function
-returning `Result<Invoice, BillingError>`.
+returning `Result<Invoice, EngineError>`; each error variant carries a stable
+machine-readable `code()` that `billingd` surfaces in structured error bodies.
 `Invoice` carries `positions: Vec<BillingPosition>`, `warnings: Vec<BillingWarning>`, and
 exposes `to_rechnung_json()` (BO4E-compatible JSONB for `accountingd` ingestion).
 Helper methods: `.assert_valid()`, `.total_by_tag()`, `.positions_by_tag()`,
@@ -462,8 +463,11 @@ Content-Type: application/json
 
 ## Idempotency
 
-`billing_records` has a unique constraint on `(malo_id, lf_mp_id, period_from, period_to, product_code)`.
-Re-running the same billing request updates the existing record — safe to retry.
+`billing_records` has a partial unique index on `(malo_id, lf_mp_id, period_from,
+period_to, product_code, tenant)` for non-correction, non-Sammel rows. Re-running
+the same billing request updates the existing record **only while it is a draft**
+(`outcome = 'generated'`) — a dispatched record refuses the overwrite and points
+at the correction path.
 
 ---
 
