@@ -75,6 +75,11 @@ deny = [
 # Review and tighten on every annual dependency update pass.
 
 [[bans.skip]]
+name    = "wast"
+version = "35"
+reason  = "witx 0.9 (transitive via wiggle/wasi-common of the extism/wasmtime WASM plugin sandbox in mako-plugin) pins the ancient wast 0.35; wasmtime's own tooling uses current wast. Resolve when wiggle drops witx or extism updates."
+
+[[bans.skip]]
 name    = "arrayvec"
 version = "0.5"
 reason  = "cedar-policy-formatter (transitive dep of cedar-policy 4) depends on arrayvec 0.5; ecosystem crates use 0.7. Resolve when cedar-policy-formatter updates."
