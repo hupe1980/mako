@@ -893,7 +893,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             }
         }
 
-        // ── §38a EEG — Mieterstrom ────────────────────────────────────────────
+        // ── §21 Abs. 3 EEG — Mieterstrom ────────────────────────────────────────────
         SettlementScheme::TenantElectricity {
             verguetungssatz_ct,
             mieter_zuschlag_ct,
@@ -916,8 +916,8 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             )];
             if zuschlag != Decimal::ZERO {
                 positions.push(pos(
-                    "Mieterstrom-Zuschlag \u{00a7}38a EEG 2023",
-                    "\u{00a7}38a EEG 2023",
+                    "Mieterstrom-Zuschlag \u{00a7}21 Abs. 3 EEG 2023",
+                    "\u{00a7}21 Abs. 3 EEG 2023",
                     effective,
                     zuschlag,
                 ));

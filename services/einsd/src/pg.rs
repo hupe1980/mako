@@ -42,7 +42,7 @@ pub struct AnlageUpsertRequest {
     pub direktverm_aw_ct: Option<Decimal>,
     /// Direktvermarkter MP-ID.
     pub direktverm_mp_id: Option<String>,
-    /// §38a EEG Mieterstrom surcharge ct/kWh.
+    /// §21 Abs. 3 EEG Mieterstrom surcharge ct/kWh.
     pub mieter_zuschlag_ct: Option<Decimal>,
     /// BNetzA Zuschlag-ID for Ausschreibungsanlagen.
     pub ausschreibungs_zuschlag_id: Option<String>,

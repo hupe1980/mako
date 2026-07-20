@@ -275,14 +275,14 @@ fn s22a_ausschreibung_10mwp_august() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §38a EEG 2023 — Mieterstrom
+// §21 Abs. 3 EEG 2023 — Mieterstrom
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §38a EEG 2023 — 50 kWp community solar building.
+/// §21 Abs. 3 EEG 2023 — 50 kWp community solar building.
 /// Base rate: 7.5 ct/kWh. Mieterstrom-Zuschlag: 1.3 ct/kWh.
 /// Month: 800 kWh. Payment: 800 × 8.8 / 100 = 70.40 EUR
 #[test]
-fn s38a_mieterstrom_building_solar() {
+fn s21_abs3_mieterstrom_building_solar() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::TenantElectricity {
             verguetungssatz_ct: d("7.5"),
@@ -295,9 +295,9 @@ fn s38a_mieterstrom_building_solar() {
     assert_eq!(out.settlement_eur, Some(d("70.40")));
 }
 
-/// §38a EEG 2023 — Zero Mieterstrom-Zuschlag equals base Vergütung.
+/// §21 Abs. 3 EEG 2023 — Zero Mieterstrom-Zuschlag equals base Vergütung.
 #[test]
-fn s38a_zero_zuschlag_equals_verguetung() {
+fn s21_abs3_zero_zuschlag_equals_verguetung() {
     let base = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
             verguetungssatz_ct: d("8.0"),
@@ -957,7 +957,7 @@ fn positions_verguetung_single_line() {
     assert_eq!(out.settlement_eur, Some(d("81.10")));
 }
 
-/// MIETERSTROM: 2 positions — base Vergütung + §38a Zuschlag.
+/// MIETERSTROM: 2 positions — base Vergütung + §21 Abs. 3 Zuschlag.
 #[test]
 fn positions_mieterstrom_two_lines() {
     let out = calculate_settlement(&SettleInput {
@@ -977,7 +977,7 @@ fn positions_mieterstrom_two_lines() {
     assert_eq!(base.eur, d("60.00")); // 800 × 7.5 / 100
 
     let zuschlag = &out.positions[1];
-    assert_eq!(zuschlag.legal_basis, "§38a EEG 2023");
+    assert_eq!(zuschlag.legal_basis, "§21 Abs. 3 EEG 2023");
     assert_eq!(zuschlag.kwh, d("800"));
     assert_eq!(zuschlag.rate_ct_kwh, d("1.3"));
     assert_eq!(zuschlag.eur, d("10.40")); // 800 × 1.3 / 100

@@ -10,11 +10,11 @@
 //! | `SettlementScheme` | Formula | Legal basis |
 //! |---|---|---|
 //! | `FeedInTariff` | `kwh × verguetungssatz_ct / 100` | §21 EEG |
-//! | `TenantElectricity` | Vergütung + `kwh × mieter_zuschlag_ct / 100` | §38a EEG 2023 |
+//! | `TenantElectricity` | Vergütung + `kwh × mieter_zuschlag_ct / 100` | §21 Abs. 3 EEG 2023 |
 //! | `MarketPremium` | `max(0, (AW+Mgmt) − EPEX) × kwh / 100` (§20 Abs. 3) | §20 EEG |
 //! | `MarketPremium` + `TariffSource::Auction` | same formula, AW from BNetzA tender | §§22a,28 EEG 2023 |
 //! | `PostEeg` | `kwh × EPEX / 100` (§23b cap: 10 ct; configurable floor) | §21 EEG (post-Förderung) |
-//! | `Eigenverbrauch` | EUR 0 (no feed-in remuneration) | §38a EEG |
+//! | `Eigenverbrauch` | EUR 0 (no feed-in remuneration) | §21 Abs. 3 EEG |
 //! | `KwkSurcharge` | `eligible_kwh × rate / 100` (hour-limit cap) | §7 KWKG 2023 |
 //! | `FlexibilityPremium` | Vergütung + `kwh × flex_praemie_ct / 100` | §50b EEG 2023 (bestehende Anlagen) |
 //! | `FlexibilitySurcharge` | `kw × rate / 12` (monthly capacity payment) | §50a EEG 2023 (neue Anlagen) |

@@ -10,7 +10,7 @@ through Förderdauer expiry.
 | **Database** | PostgreSQL (eeg_anlagen, settlement_receipts, eeg_verguetungssaetze) |
 | **Auth** | OIDC/JWT + Cedar ABAC + HMAC-signed CloudEvents |
 | **Plant types** | 19 `erzeugungsart` values: SOLAR variants, WIND_ONSHORE/OFFSHORE, BIOMASSE/BIOGAS/BIOMETHANE, KLAEGAS/GRUBENGAS/DEPONIEGAS, WASSERKRAFT, GEOTHERMIE, GEZEITEN, KWKG |
-| **Settlement models** | 9: VERGUETUNG, MIETERSTROM (§38a), DIREKTVERMARKTUNG (§20 Gleitende Marktprämie), AUSSCHREIBUNG, POST_EEG_SPOT, EIGENVERBRAUCH, KWKG_ZUSCHLAG (§7 KWKG 2023), FLEXIBILITAET (§50), GGV (§42b Solarpaket I) |
+| **Settlement models** | 9: VERGUETUNG, MIETERSTROM (§21 Abs. 3), DIREKTVERMARKTUNG (§20 Gleitende Marktprämie), AUSSCHREIBUNG, POST_EEG_SPOT, EIGENVERBRAUCH, KWKG_ZUSCHLAG (§7 KWKG 2023), FLEXIBILITAET (§50), GGV (§42b Solarpaket I) |
 | **Rate table** | Built-in `eeg_verguetungssaetze` — Solar 2000–2024, Wind onshore/offshore, Biomasse/Biogas, Klärgas/Grubengas/Deponiegas, Wasserkraft, KWKG 2023, Geothermie/Gezeiten |
 | **Repowering** | `POST /api/v1/anlagen/{tr_id}/repowering` — resets 20-year Förderdauer (§22 EEG 2023) |
 | **Zusammenlegung** | `parent_tr_id` links merged plants (§24 EEG 2023) |

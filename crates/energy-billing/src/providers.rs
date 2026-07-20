@@ -1441,7 +1441,7 @@ impl BillingProvider for HeatProvider {
 
 // ── SolarProvider ─────────────────────────────────────────────────────────────
 
-/// SOLAR (Eigenverbrauch / Mieterstrom §38a / §42a GGV) billing provider.
+/// SOLAR (Eigenverbrauch / Mieterstrom §21 Abs. 3 / §42a GGV) billing provider.
 pub struct SolarProvider {
     product: SolarProduct,
 }
@@ -1618,11 +1618,11 @@ impl BillingProvider for SolarProvider {
         if let Some(ms_ct) = product.mieterstrom_aufschlag_ct_per_kwh {
             positions.push(
                 arbeitspreis_position(
-                    "Mieterstrom-Aufschlag (\u{a7}38a EEG 2023)",
+                    "Mieterstrom-Aufschlag (\u{a7}21 Abs. 3 EEG 2023)",
                     kwh,
                     ms_ct,
                     "kWh",
-                    "\u{a7}38a EEG 2023",
+                    "\u{a7}21 Abs. 3 EEG 2023",
                     &["solar", "mieterstrom"],
                 )
                 .with_tag("mieterstrom_aufschlag"),

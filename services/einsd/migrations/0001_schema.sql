@@ -1,7 +1,7 @@
 -- ── einsd schema — Einspeiser Registry + EEG/KWKG Settlement ─────────────────
 --
 -- Regulatory frameworks:
---   EEG 2000–2023 (§§20–22, §24, §38a, §42b, §44b, §48–54)
+--   EEG 2000–2023 (§§20–22, §24, §21 Abs. 3, §42b, §44b, §48–54)
 --   KWKG 2023 (§7 KWK-Zuschlag)
 --   §22 MessZV (3-year settlement audit trail)
 --
@@ -37,7 +37,7 @@ CREATE TABLE eeg_anlagen (
         'SOLAR_AUFDACH',    -- roof-mounted (§48 Abs. 1 EEG 2023)
         'SOLAR_FREFLAECHE', -- ground-mounted (tendering >1 MWp)
         'SOLAR_AGRIPV',     -- §51a Agri-PV (+0.5 ct/kWh premium)
-        'SOLAR_MIETERSTROM',-- §38a building community solar
+        'SOLAR_MIETERSTROM',-- §21 Abs. 3 building community solar
         'SOLAR_STECKER',    -- Balkonkraftwerk <800 W (simplified)
         -- Wind
         'WIND_ONSHORE',     -- §21 EEG (tendering >750 kW)
@@ -82,7 +82,7 @@ CREATE TABLE eeg_anlagen (
     -- §20 EEG: Anzulegender Wert in ct/kWh for Marktprämie
     direktverm_aw_ct           NUMERIC(8, 4),
     direktverm_mp_id           TEXT,
-    -- §38a EEG: Mieterstrom surcharge ct/kWh above base tariff
+    -- §21 Abs. 3 EEG: Mieterstrom surcharge ct/kWh above base tariff
     mieter_zuschlag_ct         NUMERIC(6, 4),
     -- BNetzA Zuschlag-ID from tender result (Ausschreibungsanlagen)
     ausschreibungs_zuschlag_id TEXT,

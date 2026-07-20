@@ -52,7 +52,7 @@
 //! | `WALLBOX` | `ControllableLoadProvider` (§14a) | §14a EnWG |
 //! | `GAS` | `GasProvider` | §41 EnWG |
 //! | `WAERME` | `HeatProvider` | §41 EnWG |
-//! | `SOLAR` | `SolarProvider` | §38a/§42a EEG 2023 |
+//! | `SOLAR` | `SolarProvider` | §21 Abs. 3/§42a EEG 2023 |
 //! | `EEG` | `EegProvider` (→ eeg-billing) | §§20–21 EEG 2023 |
 //! | `EINSPEISUNG` | `EinspeisungProvider` | §20 EEG 2023 |
 //! | `HEMS` | `HemsProvider` | — |

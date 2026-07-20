@@ -1159,7 +1159,7 @@ impl EinsdMcpHandler {
                  DIREKTVERMARKTUNG: add direktverm_aw_ct + direktverm_mp_id\n\
                  AUSSCHREIBUNG: add direktverm_aw_ct + ausschreibungs_zuschlag_id\n\
                  KWKG: add kwk_foerderdauer_h (>2 MW, e.g. 30000) or kwk_foerderdauer_years (<=2 MW)\n\
-                 MIETERSTROM: add mieter_zuschlag_ct (sect. 38a EEG)\n\
+                 MIETERSTROM: add mieter_zuschlag_ct (§21 Abs. 3 EEG)\n\
                  FLEXIBILITAET: add flex_leistung_kw + flex_praemie_ct_kwh (sect. 50 EEG)\n\n\
                  Use lookup_verguetungssatz first to find the applicable rate.",
             ),
@@ -1352,7 +1352,7 @@ impl ServerHandler for EinsdMcpHandler {
         .with_server_info(Implementation::new("einsd", env!("CARGO_PKG_VERSION")))
         .with_instructions(
             "einsd MCP — Einspeiser Registry + EEG/KWKG Settlement daemon.\n\n\
-             Settlement models (9): VERGUETUNG (§21 EEG) | MIETERSTROM (§38a) |\n\
+             Settlement models (9): VERGUETUNG (§21 EEG) | MIETERSTROM (§21 Abs. 3) |\n\
              DIREKTVERMARKTUNG (§20 Marktprämie) | AUSSCHREIBUNG (§§22a/28) |\n\
              POST_EEG_SPOT (§23b: 10ct cap) | EIGENVERBRAUCH | KWKG_ZUSCHLAG (§7 KWKG 2023) |\n\
              FLEXIBILITAET (§50b, bestehende Anlagen) | FLEXIBILITAET_ZUSCHLAG (§50a, neue Anlagen)\n\n\

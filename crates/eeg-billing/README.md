@@ -66,11 +66,11 @@ receives the already-resolved AW from the caller.
 |---|---|---|
 | `FeedInTariff` | §21 EEG | `kwh × verguetungssatz_ct / 100` |
 | `MarketPremium` | §20 EEG | `max(0, (AW + Mgmt) − EPEX) × kwh / 100` (see §20 Abs. 3) |
-| `TenantElectricity` | §38a EEG 2023 | `kwh × (verguetung + zuschlag) / 100` |
+| `TenantElectricity` | §21 Abs. 3 EEG 2023 | `kwh × (verguetung + zuschlag) / 100` |
 | `PostEeg` | post-20yr | `kwh × EPEX / 100` (configurable `post_eeg_price_floor`) |
 | `KwkSurcharge` | §7 KWKG 2023 | `eligible_kwh × rate / 100` (hour-limit cap) |
 | `TemporaryFeedInTariff` | §21 Abs. 1 Nr. 2 | Ausfallvergütung (temporary feed-in when Direktvermarkter fails) |
-| `Eigenverbrauch` | §38a EEG | No EEG feed-in remuneration is calculated. |
+| `Eigenverbrauch` | §21 Abs. 3 EEG | No EEG feed-in remuneration is calculated. |
 | `FlexibilityPremium` | §50b EEG 2023 | `kwh × (verguetung + flex_praemie) / 100` |
 | `FlexibilitySurcharge` | §50a EEG 2023 | `kw × rate / 12` (monthly capacity payment) |
 
@@ -338,7 +338,7 @@ assert!(requires_ausschreibung(dec!(1500), ErzeugungsArt::SolarAufdach)); // >1 
 | `SolarAufdach` | Rooftop PV | Higher §48 rates |
 | `SolarFreiflaeche` | Ground-mounted PV | Tender >1 MWp |
 | `SolarAgriPv` | Agri-PV | §51a factor 0.5 |
-| `SolarMieterstrom` | §38a building solar | — |
+| `SolarMieterstrom` | §21 Abs. 3 building solar | — |
 | `SolarStecker` | Balkonkraftwerk ≤800 W | Simplified registration |
 | `WindOnshore` | Wind onshore | §36k Korrekturfaktor required |
 | `WindOffshore` | Wind offshore | Always Ausschreibungspflicht |
@@ -441,7 +441,7 @@ breakdown entry.
 **Explicitly in scope** — tested and **production-oriented**:
 - §21 EEG Einspeisevergütung (all EEG versions 2000–2023)
 - §20 EEG Gleitende Marktprämie + §§22a/28 Ausschreibung
-- §38a Mieterstrom, §50a/b Flexibilitätsprämie, §7 KWKG
+- §21 Abs. 3 Mieterstrom, §50a/b Flexibilitätsprämie, §7 KWKG
 - §51/§51a/§51b Negativpreisregel, §52 sanctions, §53/§53b/§54 reductions
 - §19 EInsMan curtailment compensation (separate position, §51 exempt)
 - §23a quarterly degression, §36k wind Korrekturfaktor
@@ -449,7 +449,7 @@ breakdown entry.
   > The library computes settlement **after** §24 aggregation has been determined by the caller.
   > The legal aggregation analysis itself (operator identity, location, commissioning window,
   > technology criteria) is **not** performed here — that is the caller's responsibility.
-- §42b GGV / §38a multi-meter Messkonzept
+- §42b GGV / §21 Abs. 3 multi-meter Messkonzept
 - SettlementType: Initial, Correction (with `original_id`), Reversal
 - §25 billing_days_fraction (partial billing periods per §25 Abs. 1 Satz 3)
 - §26 Abs. 1 Fälligkeitsdatum (15th of following month, auto-computed)

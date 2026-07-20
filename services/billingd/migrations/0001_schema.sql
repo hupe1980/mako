@@ -22,7 +22,8 @@ CREATE TABLE billing_records (
     category            TEXT        NOT NULL CHECK (category IN (
                             'STROM', 'GAS', 'WAERME', 'SOLAR', 'EEG', 'EINSPEISUNG',
                             'WAERMEPUMPE', 'WALLBOX', 'HEMS', 'EMOBILITY',
-                            'ENERGIEDIENSTLEISTUNG', 'BUNDLE', 'SAMMEL'
+                            'ENERGIEDIENSTLEISTUNG', 'BUNDLE', 'SAMMEL',
+                            'SHARING', 'VPP'
                         )),
     period_from         DATE        NOT NULL,
     period_to           DATE        NOT NULL,

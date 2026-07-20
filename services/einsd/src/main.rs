@@ -9,7 +9,7 @@
 //! | `VERGUETUNG` | §21 EEG 2023 | Fixed tariff NB → Anlagenbetreiber |
 //! | `DIREKTVERMARKTUNG` | §20 EEG 2023 | Marktprämie (max(0, AW−EPEX)) NB → ÜNB |
 //! | `POST_EEG_SPOT` | post-20yr | Spot market reference value |
-//! | `EIGENVERBRAUCH` | §38a EEG | Self-consumption; no settlement |
+//! | `EIGENVERBRAUCH` | §21 Abs. 3 EEG | Self-consumption; no settlement |
 //!
 //! Emits CloudEvents:
 //! - `de.eeg.verguetung.berechnet` — VERGUETUNG/POST_EEG_SPOT/EIGENVERBRAUCH settled

@@ -94,13 +94,13 @@ pub enum SettlementScheme {
         wind_standort: Option<crate::wind::WindStandort>,
     },
 
-    /// §38a EEG 2023 — **Mieterstrom** surcharge on top of FeedInTariff.
+    /// §21 Abs. 3 EEG 2023 — **Mieterstrom** surcharge on top of FeedInTariff.
     ///
     /// Formula: `kwh × (verguetungssatz_ct + mieter_zuschlag_ct) / 100`
     TenantElectricity {
         /// Base Vergütung rate in ct/kWh.
         verguetungssatz_ct: Decimal,
-        /// §38a Mieterstrom-Zuschlag in ct/kWh (on top of base rate).
+        /// §21 Abs. 3 Mieterstrom-Zuschlag in ct/kWh (on top of base rate).
         mieter_zuschlag_ct: Option<Decimal>,
     },
 
@@ -153,7 +153,7 @@ pub enum SettlementScheme {
         rate_eur_per_kw_year: Decimal,
     },
 
-    /// §38a EEG — **Eigenverbrauch**: self-consumption, no grid feed-in payment.
+    /// §21 Abs. 3 EEG — **Eigenverbrauch**: self-consumption, no grid feed-in payment.
     ///
     /// Formula: EUR 0 always. No NB payment.
     Eigenverbrauch,
@@ -425,7 +425,7 @@ pub enum Paragraph100Rule {
 
     /// §100 Abs. 26 EEG 2023: Solarpaket I — existing Mieterstrom buildings reclassified
     /// to Gemeinschaftliche Gebäudeversorgung (§42b) may continue under the old
-    /// §38a Mieterstrom rules for the remaining Förderdauer.
+    /// §21 Abs. 3 Mieterstrom rules for the remaining Förderdauer.
     MieterstromToGgvTransition,
 
     /// §100 Abs. 2 Nr. 4 EEG 2021: EEG 2012/2014 plants retain the old §23 Abs. 4

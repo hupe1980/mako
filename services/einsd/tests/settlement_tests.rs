@@ -233,7 +233,7 @@ fn sanction_takes_priority_over_all_other_conditions() {
     assert_eq!(out.status, SettlementStatus::Sanctioned);
 }
 
-// ── §38a EEG 2023 — Mieterstrom ───────────────────────────────────────────────
+// ── §21 Abs. 3 EEG 2023 — Mieterstrom ───────────────────────────────────────────────
 
 #[test]
 fn mieterstrom_base_plus_zuschlag() {
@@ -249,7 +249,7 @@ fn mieterstrom_base_plus_zuschlag() {
     // 400×8.11/100 + 400×2.5/100 = 32.44 + 10.00 = 42.44
     assert_eq!(out.settlement_eur, Some(dec!(42.44)));
     assert_eq!(out.positions.len(), 2);
-    assert!(out.positions[1].legal_basis.contains("38a"));
+    assert!(out.positions[1].legal_basis.contains("21 Abs. 3"));
 }
 
 #[test]
@@ -410,7 +410,7 @@ fn post_eeg_spot_negative_epex_no_floor() {
     assert_eq!(out.settlement_eur, Some(dec!(-5.00)));
 }
 
-// ── §38a EEG — Eigenverbrauch ─────────────────────────────────────────────────
+// ── §21 Abs. 3 EEG — Eigenverbrauch ─────────────────────────────────────────────────
 
 #[test]
 fn eigenverbrauch_always_zero_eur() {

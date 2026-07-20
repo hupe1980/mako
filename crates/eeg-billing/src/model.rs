@@ -386,7 +386,7 @@ pub struct SettleInput {
     ///
     /// - `FeedInTariff` → §21 EEG Einspeisevergütung
     /// - `MarketPremium` → §20 EEG Gleitende Marktprämie (incl. Ausschreibung via `tariff_source`)
-    /// - `TenantElectricity` → §38a Mieterstrom
+    /// - `TenantElectricity` → §21 Abs. 3 Mieterstrom
     /// - `PostEeg` → post-Förderung spot (configurable `post_eeg_price_floor`)
     /// - `KwkSurcharge` → §7 KWKG
     /// - `TemporaryFeedInTariff` → §21 Abs. 1 Nr. 2 Ausfallvergütung
@@ -767,7 +767,7 @@ pub struct SettleOutput {
     /// Empty when `status` is `NoData`, `PriceMissing`, `Sanctioned`, or `Eigenverbrauch`.
     ///
     /// Multi-component models produce multiple positions:
-    /// - `Mieterstrom`: base Vergütung + §38a Zuschlag
+    /// - `Mieterstrom`: base Vergütung + §21 Abs. 3 Zuschlag
     /// - `Direktvermarktung`/`Ausschreibung`: Gleitende Marktprämie + §20 Abs. 3 Managementprämie
     /// - `Flexibilitaet`: base Vergütung + §50 Flex-Prämie
     /// - Multi-block plants (§24 Anlagenerweiterung): one position per active block
@@ -927,7 +927,7 @@ impl SettlePosition {
             b if b.starts_with("\u{00a7}20") || b.starts_with("\u{00a7}\u{00a7}22a") => {
                 builder.tag("marktpraemie")
             }
-            "\u{00a7}38a EEG 2023" => builder.tag("mieterstrom"),
+            "\u{00a7}21 Abs. 3 EEG 2023" => builder.tag("mieterstrom"),
             b if b == "\u{00a7}50b EEG 2023" || b == "\u{00a7}50 EEG 2023" => {
                 builder.tag("flexibilitaet")
             }

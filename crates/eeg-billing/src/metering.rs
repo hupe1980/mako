@@ -4,7 +4,7 @@
 //! - A simple rooftop PV plant might have only one bidirectional meter
 //! - A commercial plant may have separate generation, feed-in, and consumption meters
 //! - A §42b Gemeinschaftliche Gebäudeversorgung plant serves multiple tenant meters
-//! - A §38a Mieterstrom plant has both a shared generation meter and individual tenant meters
+//! - A §21 Abs. 3 Mieterstrom plant has both a shared generation meter and individual tenant meters
 //!
 //! ## Measurement point topology
 //!
@@ -16,7 +16,7 @@
 //! | Einspeisemessung | Feed-in into grid (primary billing point) | All plants |
 //! | Erzeugungsmessung | Total generation (separate from feed-in) | Volleinspeisung, §14a |
 //! | Bezugsmessung | Grid consumption by operator | Eigenverbrauch, §14a |
-//! | TeilnehmerMessung | Individual tenant consumption | §42b GGV, §38a Mieterstrom |
+//! | TeilnehmerMessung | Individual tenant consumption | §42b GGV, §21 Abs. 3 Mieterstrom |
 //!
 //! ## How `Einspeisemenge` is derived from meter data
 //!
@@ -139,7 +139,7 @@ pub enum MesslokationTyp {
     /// The allocated EEG generation for each tenant:
     ///   `tenant_kwh = tenant_verbrauch ÷ Σ(all_teilnehmer_verbrauch) × erzeugung`
     ///
-    /// Also used in §38a Mieterstrom buildings.
+    /// Also used in §21 Abs. 3 Mieterstrom buildings.
     TeilnehmerMessung,
 
     /// Virtual (calculated) billing point.
@@ -220,7 +220,7 @@ pub struct MeterPoint {
 /// Feed-in = max(0, Erzeugung − Σ TeilnehmerVerbrauch)
 /// ```
 ///
-/// ### §38a Mieterstrom (with Zuschlag)
+/// ### §21 Abs. 3 Mieterstrom (with Zuschlag)
 ///
 /// Shared generation meter + individual apartment meters.
 /// The Mieterstrom-Zuschlag applies to the kWh delivered to tenants in the building
@@ -356,7 +356,7 @@ pub struct EinspeisemengeInput {
     /// kWh from the Bezugsmessung (grid consumption meter, OBIS 1-0:1.8.0).
     pub bezugsmessung_kwh: Option<Decimal>,
 
-    /// kWh consumed by individual tenants (§42b / §38a).
+    /// kWh consumed by individual tenants (§42b / §21 Abs. 3).
     ///
     /// `Σ = sum(teilnehmer_kwh)` is the total tenant consumption.
     /// Grid feed-in = max(0, erzeugungsmessung_kwh − Σ teilnehmer_kwh).
@@ -448,7 +448,7 @@ pub fn compute_einspeisemenge(
     }
 }
 
-/// Derive the §42b / §38a Mieterstrom tenant allocation.
+/// Derive the §42b / §21 Abs. 3 Mieterstrom tenant allocation.
 ///
 /// Returns a Vec of `(tenant_index, allocated_kwh)` tuples, where `allocated_kwh`
 /// is the pro-rata share of generation for each tenant.

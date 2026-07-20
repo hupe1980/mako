@@ -408,7 +408,7 @@ pub struct HeatProduct {
     pub minimum_invoice_eur_brutto: Option<Decimal>,
 }
 
-/// Solar PV / Eigenverbrauch / §42b GGV / §38a Mieterstrom product — SOLAR.
+/// Solar PV / Eigenverbrauch / §42b GGV / §21 Abs. 3 Mieterstrom product — SOLAR.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SolarProduct {
     #[serde(default)]
@@ -424,7 +424,7 @@ pub struct SolarProduct {
     /// When not set, `solar_arbeitspreis_ct_per_kwh` is used as fallback.
     #[serde(default)]
     pub arbeitspreis_ct_per_kwh: Option<Decimal>,
-    /// §38a EEG Mieterstrom-Zuschlag (ct/kWh).
+    /// §21 Abs. 3 EEG Mieterstrom-Zuschlag (ct/kWh).
     #[serde(default)]
     pub mieterstrom_aufschlag_ct_per_kwh: Option<Decimal>,
     /// §42a EEG GGV community energy discount (ct/kWh).

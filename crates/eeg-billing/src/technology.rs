@@ -49,7 +49,7 @@ pub enum ErzeugungsArt {
     SolarFreiflaeche,
     /// Agri-PV (§51a bonus, dual land use).
     SolarAgriPv,
-    /// Mieterstrom building solar (§38a).
+    /// Mieterstrom building solar (§21 Abs. 3 EEG).
     SolarMieterstrom,
     /// Balkonkraftwerk / Stecker-PV (<800 W, simplified registration).
     SolarStecker,

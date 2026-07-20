@@ -17,7 +17,7 @@
 //! | INV-6 | KWKG surcharge is always non-negative | §7 KWKG |
 //! | INV-7 | §52 Pflichtzahlung is always non-negative | §52 EEG 2023 |
 //! | INV-8 | `settlement_eur` is `None` iff status is `NoData`/`PriceMissing` | model contract |
-//! | INV-9 | TenantElectricity never returns negative EUR | §38a EEG |
+//! | INV-9 | TenantElectricity never returns negative EUR | §21 Abs. 3 EEG |
 //! | INV-10 | PostEeg with `price_floor >= 0` returns non-negative | §21 EEG post-Förderung |
 //!
 //! Run: `cargo test -p eeg-billing --test prop_tests`
@@ -354,10 +354,10 @@ proptest! {
     }
 }
 
-// ── INV-9: TenantElectricity (Mieterstrom §38a) is always non-negative ────────
+// ── INV-9: TenantElectricity (Mieterstrom §21 Abs. 3) is always non-negative ──
 
 proptest! {
-    /// **INV-9** — §38a EEG: Mieterstrom settlement is always ≥ 0 EUR.
+    /// **INV-9** — §21 Abs. 3 EEG: Mieterstrom settlement is always ≥ 0 EUR.
     ///
     /// Both the base rate and the Zuschlag are non-negative,
     /// so the total payment can never go below zero.
