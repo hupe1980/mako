@@ -102,6 +102,15 @@ pub struct McpPool {
 }
 
 impl McpPool {
+    /// An empty pool — no endpoints, no tools. For tests and tool-less runs.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            endpoints: Vec::new(),
+            all_tools: Vec::new(),
+        }
+    }
+
     pub async fn connect(
         servers: &std::collections::HashMap<String, String>,
         api_key: &SecretString,

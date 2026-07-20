@@ -38,7 +38,7 @@ Port: **`:9580`**
 ### 29 built-in specialists ship in the container image
 
 The most important architectural change from the naive "put prompts in demo config" approach:
-all 27 specialist system prompts are **compiled into the agentd binary** and ship in the
+all 29 specialist system prompts are **compiled into the agentd binary** and ship in the
 container image. Operators activate them via `[bundled_agents]` in `agentd.toml` without
 copying hundreds of lines of system prompts.
 
@@ -51,7 +51,7 @@ Each specialist exposes an [A2A Agent Card](https://a2a-protocol.org/) at
 `/.well-known/agents/{name}` — a standards-based capability declaration that enables
 external systems to discover and interact with mako specialists without prior configuration.
 
-### Parallel dispatch (new)
+### Parallel dispatch
 
 The orchestrator supports three dispatch modes:
 
@@ -431,7 +431,7 @@ curl -X POST http://agentd:9580/webhook \
     "type": "de.billing.rechnung.disputed",
     "source": "billingd",
     "id": "123e4567-e89b-12d3-a456-426614174000",
-    "data": { "malo_id": "51238696781", "record_id": "...", "reason": "check 4 failed" }
+    "input": { "malo_id": "51238696781", "record_id": "...", "reason": "check 4 failed" }
   }'
 ```
 
@@ -442,32 +442,11 @@ curl -X POST http://agentd:9580/api/v1/run \
   -H "Content-Type: application/json" \
   -d '{
     "event_type": "manual.billing.dispute-analysis",
-    "data": { "malo_id": "51238696781", "context": "Invoice R2026-001 disputed" }
+    "input": { "malo_id": "51238696781", "context": "Invoice R2026-001 disputed" }
   }'
 ```
 
 ---
-
-## WASM Plugins
-
-`agentd` loads WASM plugins at startup from `[[plugin]]` entries in `agentd.toml`.
-Plugins are sandboxed via Extism (Wasmtime) — no filesystem or network access.
-
-```toml
-[[plugin]]
-kind = "wasm"
-path = "./plugins/erp-formatter.wasm"
-capabilities = ["cloud_event", "webhook"]
-
-[[plugin]]
-kind = "native"
-path = "./plugins/libmy_billing_rules.so"
-capabilities = ["billing"]
-```
-
-Plugin interfaces: `CloudEventPlugin` (enrich/filter events), `McpToolPlugin` (add
-custom tools), `BillingPlugin` (post-process positions), `ValidatorPlugin` (custom
-EDIFACT rules), `WebhookPlugin` (sign/enrich outbound webhooks).
 
 ---
 
@@ -479,6 +458,16 @@ EDIFACT rules), `WebhookPlugin` (sign/enrich outbound webhooks).
 
 ---
 
+## Audit webhook
+
+Every session's `de.agent.decision.made` CloudEvent is pushed to the ring
+buffer and, when configured, POSTed to an external sink:
+
+```toml
+audit_webhook_url = "https://erp.example/hooks/agent-decisions"
+audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"  # X-Mako-Signature (HMAC-SHA256)
+```
+
 ## Endpoints
 
 | Method | Path | Description |
@@ -487,7 +476,7 @@ EDIFACT rules), `WebhookPlugin` (sign/enrich outbound webhooks).
 | `POST` | `/api/v1/run` | Manual agent invocation |
 | `GET`  | `/api/v1/sessions` | Last 100 agent decisions (in-memory ring buffer) |
 | `GET`  | `/api/v1/agents` | List all active agents (built-in + custom) with capabilities |
-| `GET`  | `/api/v1/agents/catalog` | Full catalog of all 27 built-in definitions (even if not enabled) |
+| `GET`  | `/api/v1/agents/catalog` | Full catalog of all 29 built-in definitions (even if not enabled) |
 | `GET`  | `/.well-known/agents/{name}` | A2A Agent Card for a named specialist |
 | `POST` | `/api/v1/rag/ingest` | Index a live text document into LanceDB |
 | `POST` | `/api/v1/rag/search` | Query the RAG knowledge base directly |

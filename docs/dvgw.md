@@ -356,10 +356,10 @@ other domain workflow crates in this workspace:
 | DVGW GaBi Gas message index | <https://www.dvgw-sc.de/leistungen/it-dienstleistungen/datenaustausch-gas/gabi-gastransport> |
 | DVGW document archive | <https://www.dvgw-sc.de/leistungen/it-dienstleistungen/datenaustausch-gas/dokumentenarchiv> |
 | DVGW version management rules | <https://www.dvgw-sc.de/leistungen/it-dienstleistungen/datenaustausch-gas/gabi-versionsmanagement> |
-| ALOCAT 5.11a PDF | [docs/pdfs/dvgw/ALOCAT_5.11a_Stand_2024-04-02.pdf](pdfs/dvgw/ALOCAT_5.11a_Stand_2024-04-02.pdf) |
-| NOMINT 4.6 FK PDF | [docs/pdfs/dvgw/NOMINT_4.6_Stand_2026-02-01_Fehlerkorrektur.pdf](pdfs/dvgw/NOMINT_4.6_Stand_2026-02-01_Fehlerkorrektur.pdf) |
-| NOMRES 4.7 FK PDF | [docs/pdfs/dvgw/NOMRES_4.7_Stand_2026-02-01_Fehlerkorrektur.pdf](pdfs/dvgw/NOMRES_4.7_Stand_2026-02-01_Fehlerkorrektur.pdf) |
-| BNetzA BK7-24-01-008 (GaBi Gas 2.1) | [docs/pdfs/bentza/](pdfs/bentza/) |
+| ALOCAT specification | ALOCAT 5.11a, Stand 2024-04-02 (DVGW Dokumentenarchiv) |
+| NOMINT specification | NOMINT 4.6, Stand 2026-02-01 Fehlerkorrektur (DVGW Dokumentenarchiv) |
+| NOMRES specification | NOMRES 4.7, Stand 2026-02-01 Fehlerkorrektur (DVGW Dokumentenarchiv) |
+| GaBi Gas 2.1 Festlegung | BNetzA BK7-24-01-008 |
 | `dvgw-edi` source | [crates/dvgw-edi/](../crates/dvgw-edi/) |
 | `mako-gabi-gas` source | [crates/mako-gabi-gas/](../crates/mako-gabi-gas/) |
 | Process engine guide | [docs/engine.md](engine.md) |

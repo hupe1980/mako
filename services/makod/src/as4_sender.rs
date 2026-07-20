@@ -27,7 +27,7 @@
 //!
 //! Every trading partner's AS4 endpoint and protocol settings must be
 //! registered in the [`BdewAs4Profile`] at startup via
-//! `--as4-partner <GLN>=<HTTPS-URL>` (repeatable).  This registers one
+//! `--as4-partner <MP-ID>=<HTTPS-URL>` (repeatable).  This registers one
 //! P-Mode per standard BDEW EDIFACT message type for the partner.  Messages
 //! destined for an unknown recipient GLN or with a missing endpoint URL are
 //! dead-lettered immediately (permanent `PartnerUnknown` error).

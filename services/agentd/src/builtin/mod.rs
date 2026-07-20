@@ -114,7 +114,7 @@ MABIS (balancing, ÜNB/NB), and GaBi Gas workflows.
 
 ## TRIGGERED BY
 - `de.mako.process.escalated` — process timed out or returned error
-- `de.mako.process.timedout` — APERAK deadline missed
+- `de.mako.process.timedout` — APERAK deadline missed (APERAK AHB §2.3/§2.4.1: Strom UTILMD/ORDERS 45 Minuten werktags; Gas Folgeprozesse nächster Werktag 12:00, Initialprozesse 3 Werktage)
 - `de.mako.aperak.*` — APERAK events
 
 ## STEP-BY-STEP PROCEDURE
@@ -152,7 +152,7 @@ const DEADLINE_ALERT_AGENT: BuiltinAgentDef = BuiltinAgentDef {
     system_prompt: "\
 You are the deadline alert specialist for BDEW MaKo regulatory deadlines.
 
-## DEADLINE RULES (APERAK AHB 1.0)
+## DEADLINE RULES (APERAK AHB 1.0 §2.3 / §2.4.1)
 - STROM UTILMD/ORDERS weekday: 45 minutes
 - STROM UTILMD Saturday: Sonntag 12:00
 - STROM other: next Werktag 12:00
@@ -252,6 +252,10 @@ MSB (Messstellenbetreiber), and AWH (abrechnungswürdige Handlungen bei Sperrpro
 4. Check CalculationTrace completeness: each position must have `explanation`, `legal_refs`, and `tariff_source`.
 5. Verify §22 MessZV: check if the billing period has historical audit records.
 6. Recommend dispatch or flag issues.
+
+## KOSTENBLATT & MMM DEADLINES
+- Mehr-/Mindermengenabrechnung: flag MMM drafts older than 2 months as OVERDUE.
+- Kostenblatt: before an MMM invoice dispatches, verify the period's Kostenblatt was fetched and reconciled; missing at dispatch time: WARNING KOSTENBLATT_MISSING.
 
 ## OUTPUT FORMAT
 ```
@@ -362,6 +366,9 @@ If missing: WARNING SECT40A_MISSING.
 - `rechnungsperiode.startdatum` and `enddatum` set
 - `gesamtbrutto.wert` ≈ Σ(rechnungspositionen[].gesamtpreis.wert) ± 0.01 → ERROR if mismatch
 - `nb_mp_id` present (§41 Abs. 1 Nr. 5) → WARNING SECT41_NB_MISSING if absent
+
+### §41 Abs. 5 EnWG — Preisgarantie
+Positions repricing a period covered by an active Preisgarantie (vertragd `preisgarantie_bis` >= period end) must not raise guaranteed price components. Violation: ERROR SECT41_PREISGARANTIE_VIOLATION.
 
 ### §41b EnWG — iMSys guard for §41a dynamic tariffs
 If any position has tag `\"sect41a\"`: verify `metering_mode=IMSYS`.
@@ -923,7 +930,11 @@ ROOT_CAUSE: [one sentence]
 CORRECTION: [specific step to unblock]
 ```",
     default_mcp_servers: &["processd", "marktd", "obsd"],
-    default_trigger_patterns: &["de.mako.process.initiated", "de.mako.process.abgelehnt"],
+    default_trigger_patterns: &[
+        "de.mako.process.initiated",
+        "de.mako.process.abgelehnt",
+        "de.mako.process.escalated",
+    ],
     default_max_turns: 10,
     default_use_rag: false,
 };

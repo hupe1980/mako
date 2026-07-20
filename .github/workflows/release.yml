@@ -507,7 +507,7 @@ jobs:
           - service: portald
             description: "Customer Portal gateway — LF role, REST+SSE, §41 EnWG self-service"
           - service: agentd
-            description: "Multi-agent LLM orchestration daemon — 24 specialists, LanceDB RAG, MCP tools"
+            description: "Multi-agent LLM orchestration daemon — 29 specialists, LanceDB RAG, MCP tools"
           - service: mabis-syncd
             description: "MaBiS UTILTS synchronisation daemon — ÜNB/NB role, Summenzeitreihe day-3/day-8"
     steps:

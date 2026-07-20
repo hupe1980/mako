@@ -170,13 +170,17 @@ impl LlmProvider for BedrockProvider {
             })
             .collect();
 
-        let bedrock_body = serde_json::json!({
+        let mut bedrock_body = serde_json::json!({
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": cfg.max_tokens,
             "system": system,
             "messages": ant_msgs,
-            "tools": ant_tools,
         });
+        // Anthropic models reject an empty tools array with a 400 — omit it,
+        // matching the direct Anthropic adapter.
+        if !ant_tools.is_empty() {
+            bedrock_body["tools"] = serde_json::json!(ant_tools);
+        }
 
         let url = self.invoke_url(&cfg.model);
         let body_bytes = serde_json::to_vec(&bedrock_body).unwrap_or_default();

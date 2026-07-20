@@ -11,9 +11,8 @@ enabling automated analysis, compliance checking, and workflow orchestration.
 | **LLM providers** | OpenAI · Anthropic Claude · AWS Bedrock SigV4 |
 | **Dispatch modes** | `sequential` · `parallel` (fan-out) · `race` (first wins) |
 | **RAG** | LanceDB vector store (S3/GCS/Azure Blob/local) |
-| **WASM plugins** | Custom extensions via `mako-plugin` (Extism sandbox) |
 | **A2A cards** | `GET /.well-known/agents/{name}` for each specialist |
-| **Catalog** | `GET /api/v1/agents/catalog` — all 27 built-in definitions |
+| **Catalog** | `GET /api/v1/agents/catalog` — all 29 built-in definitions |
 
 ## Built-in specialists (shipped in container)
 

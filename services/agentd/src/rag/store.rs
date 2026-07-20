@@ -38,6 +38,10 @@ const TABLE: &str = "rag_chunks";
 fn rag_schema(dim: i32) -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
+        // Data-isolation key: every query filters on it, and every reader
+        // indexes it as column 1 — it must exist in the declared schema, or
+        // the 5-column batch from `to_batch` fails to construct at all.
+        Field::new("tenant", DataType::Utf8, false),
         Field::new("source", DataType::Utf8, false),
         Field::new("text", DataType::Utf8, false),
         Field::new(

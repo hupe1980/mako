@@ -176,9 +176,9 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">🧾</div>
     <h3>Energy Billing Engine</h3>
     <p>
-      <strong>13 product categories</strong> — STROM (SLP/HT/NT/RLM), GAS, WAERME, SOLAR,
+      <strong>12 product categories</strong> — STROM (SLP/HT/NT/RLM), GAS, WAERME, SOLAR,
       EEG/EINSPEISUNG, §14a WAERMEPUMPE/WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG,
-      BUNDLE, §42c SHARING.
+      §42c SHARING.
       `Product` typed enum with per-category structs; `ControllableLoadProvider` for §14a;
       §41b iMSys guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label;
       historic levy lookups (incl. 2022 0-rate); §41a EPEX; §41b enforcement;
@@ -290,7 +290,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       — operators activate them via <code>[bundled_agents]</code> without copying system prompts.
       Supports <strong>sequential / parallel / race dispatch</strong> modes;
       A2A agent cards at <code>/.well-known/agents/{name}</code>;
-      OpenAI / Anthropic / AWS Bedrock SigV4; LanceDB RAG (tenant-isolated, cosine distance score filtering); WASM plugin sandboxing.
+      OpenAI / Anthropic / AWS Bedrock SigV4; LanceDB RAG (tenant-isolated, cosine distance score filtering).
       Specialists cover billing anomaly detection, §41b/§42 compliance guard,
       annual settlement orchestration, §20 EnWG parity, SMGW BSI TR-03109 diagnostics,
       VPP dispatch settlement audit (RED III Art. 17), MaBiS Summenzeitreihe monitoring,
@@ -379,7 +379,7 @@ Product catalog
 EPEX §41a"]
         billingd["billingd :9280
 Product typed enum
-13 categories · 160 tests
+12 categories · 160 tests
 VPP auto-billing webhook
 XRechnung 3.0"]
         accountingd["accountingd :9380
@@ -544,7 +544,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/tarifbd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">tarifbd</span>
     <span class="mako-service-card__port">:9080</span>
-    <span class="mako-service-card__desc">User-defined product catalog. 12 energy categories. EPEX Spot prices for §41a. MaLo→product assignment.</span>
+    <span class="mako-service-card__desc">User-defined product catalog. 13 energy categories. EPEX Spot prices for §41a. MaLo→product assignment.</span>
   </a>
   <a href="{{ '/billingd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">billingd</span>
@@ -580,6 +580,31 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
 <div markdown="1">
 
 ---
+
+## One message, end to end
+
+What happens when a counterparty's UTILMD arrives — every hop below is
+covered by the test suite:
+
+```mermaid
+sequenceDiagram
+    participant NB as Counterparty MSH
+    participant AS4 as makod AS4 inbound
+    participant ENG as mako-engine
+    participant WF as Domain workflow
+    participant OUT as Outbox worker
+    participant ERP as ERP webhook
+
+    NB->>AS4: AS4 push (signed + encrypted, UNB…UNZ)
+    AS4->>AS4: verify signature · decrypt · dedup (72h+24h)
+    AS4-->>NB: signed eb:Receipt (+NRI), same connection
+    AS4->>ENG: parse interchange · PID route
+    ENG->>WF: command (adapter for active FV)
+    WF->>ENG: events + outbox + Fristen — one transaction
+    ENG->>OUT: APERAK/CONTRL obligations, deadline-scheduled
+    OUT->>NB: rendered Übertragungsdatei (AHB-validated, receipt-verified)
+    OUT->>ERP: CloudEvent (HMAC-signed, traceparent forwarded)
+```
 
 ## Design Principles
 

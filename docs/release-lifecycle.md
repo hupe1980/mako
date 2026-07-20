@@ -64,15 +64,15 @@ Download the new specification PDFs from [edi-energy.de](https://www.edi-energy.
 - MSCONS MIG + AHB
 - etc.
 
-Place the PDFs in `docs/pdfs/`.
+Place the PDFs in a local working directory.
 
 ### 2. Extract profile data
 
 ```bash
-cargo xtask extract-pdf --input docs/pdfs/UTILMD_MIG_S3.1.pdf \
+cargo xtask extract-pdf --input <working-dir>/UTILMD_MIG_S3.1.pdf \
     --output crates/edi-energy/profiles/utilmd/fv20271001/mig.json
 
-cargo xtask extract-pdf --input docs/pdfs/UTILMD_AHB_S3.1.pdf \
+cargo xtask extract-pdf --input <working-dir>/UTILMD_AHB_S3.1.pdf \
     --output crates/edi-energy/profiles/utilmd/fv20271001/ahb.json
 ```
 

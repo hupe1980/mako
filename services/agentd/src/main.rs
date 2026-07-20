@@ -44,7 +44,12 @@ use agentd::{
 async fn main() -> anyhow::Result<()> {
     let _guard = mako_service::init_tracing_from_env("agentd");
 
-    let cfg: AgentdConfig = load_config("agentd").context("load config")?;
+    let mut cfg: AgentdConfig = load_config("agentd").context("load config")?;
+    // `env:VAR` indirection: resolve before any provider/pool clones the keys —
+    // unresolved placeholders would be sent literally as bearer tokens.
+    cfg.resolve_env_indirection()
+        .context("resolve env: indirection in secrets")?;
+    let cfg = cfg;
     let port = cfg.port;
 
     info!(
@@ -145,6 +150,9 @@ async fn main() -> anyhow::Result<()> {
         oidc: Some(Arc::new(oidc.clone())),
         session_sem: Arc::new(tokio::sync::Semaphore::new(max_sessions as usize)),
         dlq: dlq.clone(),
+        // 1h dedup window, 10k ids — comfortably beyond any legitimate
+        // emitter's retry horizon.
+        seen_events: handlers::SeenEvents::new(std::time::Duration::from_secs(3600), 10_000),
     });
 
     let health = health_routes(|| async { true });

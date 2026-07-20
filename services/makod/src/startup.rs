@@ -584,7 +584,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
         cfg.store.clone(),
     );
 
-    // ── Build AS4 partner P-Mode registry from --as4-partner GLN=URL pairs ──
+    // ── Build AS4 partner P-Mode registry from --as4-partner MP-ID=URL pairs ──
     let as4_profile = {
         let mut profile = BdewAs4Profile::new();
         for pair in &cfg.as4_partner {

@@ -21,6 +21,44 @@ The workspace covers the full BDEW MaKo stack across four layers:
 
 ---
 
+## Architecture at a Glance
+
+```mermaid
+flowchart LR
+    subgraph Market["Regulated market"]
+        MP["Counterparty MSH<br/>(NB · LF · MSB · ÜNB)"]
+    end
+
+    subgraph Transport["Transport & process"]
+        MAKOD["makod<br/>AS4 sign+encrypt · UNB…UNZ<br/>signed receipts · PID router"]
+        PROCESSD["processd<br/>STP decisions"]
+        MARKTD["marktd<br/>Market Data Hub"]
+    end
+
+    subgraph Settlement["Settlement & billing"]
+        EDMD["edmd<br/>meter data · §17 MessZV"]
+        NETZB["netzbilanzd<br/>NNE · MMM"]
+        EINSD["einsd<br/>EEG/KWKG"]
+        BILLINGD["billingd<br/>retail billing engine"]
+    end
+
+    subgraph Business["Customer & operations"]
+        VERTRAGD["vertragd<br/>contracts"]
+        ACCOUNTINGD["accountingd<br/>FI-CA ledger"]
+        AGENTD["agentd<br/>29 LLM specialists"]
+        ERP["ERP / operator systems"]
+    end
+
+    MP <-->|"AS4/ebMS3 · EDIFACT"| MAKOD
+    MAKOD --> PROCESSD --> MARKTD
+    MARKTD --> EDMD --> NETZB & EINSD & BILLINGD
+    BILLINGD --> ACCOUNTINGD
+    VERTRAGD --> BILLINGD
+    MAKOD & BILLINGD & EDMD -.->|"CloudEvents"| AGENTD
+    AGENTD -.->|"de.agent.decision.made"| ERP
+    ACCOUNTINGD --> ERP
+```
+
 ## Workspace at a Glance
 
 ### Protocol & Domain Crates
@@ -74,7 +112,7 @@ The workspace covers the full BDEW MaKo stack across four layers:
 | `accountingd` | `:9380` | LF | Massenkontokorrent / Customer Account Ledger — double-entry SKR 03/04 journal; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung (payment plans); FRST/RCUR-separated pain.008 + Gläubiger-ID (EPC AT-02); CAMT.054 dedup import; IBAN hash encryption (pgcrypto); OIDC/JWT + inbound HMAC; auto-Mahnwesen; 107 tests |
 | `portald` | `:9480` | LF | Customer Portal read-model gateway — aggregates Lastgang/invoices/balance/VersorgungsStatus/EEG into single REST + SSE API; OIDC auth |
 | `vertragd` | `:9780` | LF | Contract & Customer Management — Kunden (B2C + B2B), Rahmenverträge (cascade Kündigung, `angebot_id` CPQ traceability), Versorgungsverträge; OIDC/JWT auth; Preisgarantie guard (§41 EnWG); `widerruf-kuendigung`; dispatch retry (3×); proactive expiry notifications; GDPR Art. 15/17/20; OIDC→MaLo authorization gateway; **16-tool MCP server + 4 prompts** |
-| `agentd` | `:9580` | All | Multi-agent LLM orchestration — **27 built-in specialists compiled into container image**, activated via `[bundled_agents]`; 3 dispatch modes (`sequential`/`parallel`/`race`); A2A agent cards; OpenAI, Anthropic, AWS Bedrock; LanceDB RAG; WASM plugins |
+| `agentd` | `:9580` | All | Multi-agent LLM orchestration — **29 built-in specialists compiled into container image**, activated via `[bundled_agents]`; 3 dispatch modes (`sequential`/`parallel`/`race`); A2A agent cards; OpenAI, Anthropic, AWS Bedrock; LanceDB RAG |
 
 
 

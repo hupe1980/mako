@@ -95,7 +95,7 @@ pub struct AgentdConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BundledAgentsConfig {
-    /// Enable ALL 26 built-in specialist agents at once.
+    /// Enable ALL 29 built-in specialist agents at once.
     ///
     /// When `true`, `enable` list is ignored.
     #[serde(default)]
@@ -392,4 +392,86 @@ fn default_triggers() -> Vec<String> {
         "de.accounting.mahnung.issued".into(),
         "de.eeg.anlage.foerderung_auslaufend".into(),
     ]
+}
+
+impl AgentdConfig {
+    /// Resolve every `env:VAR` indirection in secret-bearing fields.
+    ///
+    /// Config values like `api_key = "env:OPENAI_API_KEY"` are placeholders,
+    /// not credentials — a config that ships them unresolved sends the
+    /// literal string as the bearer token and fails as a 401 against the
+    /// provider. Call once right after loading, before anything clones a
+    /// provider config.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the missing environment variable.
+    pub fn resolve_env_indirection(&mut self) -> anyhow::Result<()> {
+        use mako_service::config::{resolve_env, resolve_env_secret};
+        use secrecy::ExposeSecret as _;
+
+        for (name, p) in &mut self.providers {
+            p.api_key = resolve_env_secret(p.api_key.expose_secret())
+                .map_err(|e| anyhow::anyhow!("providers.{name}.api_key: {e}"))?;
+            if let Some(sk) = &p.aws_secret_access_key {
+                p.aws_secret_access_key =
+                    Some(resolve_env_secret(sk.expose_secret()).map_err(|e| {
+                        anyhow::anyhow!("providers.{name}.aws_secret_access_key: {e}")
+                    })?);
+            }
+            if let Some(ak) = &p.aws_access_key_id {
+                p.aws_access_key_id = Some(
+                    resolve_env(ak)
+                        .map_err(|e| anyhow::anyhow!("providers.{name}.aws_access_key_id: {e}"))?,
+                );
+            }
+        }
+        self.mcp_api_key = resolve_env_secret(self.mcp_api_key.expose_secret())
+            .map_err(|e| anyhow::anyhow!("mcp_api_key: {e}"))?;
+        if let Some(s) = &self.audit_hmac_secret {
+            self.audit_hmac_secret = Some(
+                resolve_env_secret(s.expose_secret())
+                    .map_err(|e| anyhow::anyhow!("audit_hmac_secret: {e}"))?,
+            );
+        }
+        if let Some(s) = &self.inbound_hmac_secret {
+            self.inbound_hmac_secret = Some(
+                resolve_env_secret(s.expose_secret())
+                    .map_err(|e| anyhow::anyhow!("inbound_hmac_secret: {e}"))?,
+            );
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod env_resolution_tests {
+    use secrecy::ExposeSecret as _;
+
+    fn cfg_with_key(key: &str) -> super::AgentdConfig {
+        serde_json::from_value(serde_json::json!({
+            "tenant": "9900000000001",
+            "orchestrator": { "provider": "openai", "model": "gpt-4o-mini" },
+            "mcp_servers": {},
+            "mcp_api_key": "test-key",
+            "providers": {
+                "openai": { "backend": "openai", "api_key": key }
+            }
+        }))
+        .expect("valid config")
+    }
+
+    /// Non-placeholder values pass through untouched; a missing environment
+    /// variable is a descriptive startup error, not a literal token sent to
+    /// the provider.
+    #[test]
+    fn passthrough_and_missing_var_error() {
+        let mut cfg = cfg_with_key("sk-plain");
+        cfg.resolve_env_indirection().expect("resolve");
+        assert_eq!(cfg.providers["openai"].api_key.expose_secret(), "sk-plain");
+
+        let mut cfg2 = cfg_with_key("env:AGENTD_TEST_KEY_DOES_NOT_EXIST");
+        let err = cfg2.resolve_env_indirection().unwrap_err().to_string();
+        assert!(err.contains("AGENTD_TEST_KEY_DOES_NOT_EXIST"), "{err}");
+    }
 }

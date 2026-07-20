@@ -80,6 +80,52 @@ pub struct AppState {
     pub session_sem: Arc<Semaphore>,
     /// Dead-letter queue for failed sessions.
     pub dlq: DlqStore,
+    /// CloudEvent-id dedup window (at-least-once delivery must not double-spawn).
+    pub seen_events: SeenEvents,
+}
+
+/// Bounded, TTL-windowed CloudEvent-id dedup set.
+///
+/// Inbound webhooks are at-least-once: the emitter retries until it sees a
+/// 2xx, so the same `ce_id` can arrive more than once. One agent session per
+/// event id within the window; entries expire after `ttl` and the set is
+/// capped so a flood of unique ids cannot grow memory unboundedly.
+#[derive(Clone)]
+pub struct SeenEvents {
+    inner: Arc<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>>,
+    ttl: std::time::Duration,
+    capacity: usize,
+}
+
+impl SeenEvents {
+    #[must_use]
+    pub fn new(ttl: std::time::Duration, capacity: usize) -> Self {
+        Self {
+            inner: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            ttl,
+            capacity,
+        }
+    }
+
+    /// `true` when this id has not been seen within the TTL window (and
+    /// records it); `false` for a duplicate.
+    pub fn first_seen(&self, id: &str) -> bool {
+        let now = std::time::Instant::now();
+        let mut map = self.inner.lock().expect("seen_events mutex");
+        map.retain(|_, t| now.duration_since(*t) < self.ttl);
+        if map.contains_key(id) {
+            return false;
+        }
+        if map.len() >= self.capacity {
+            // Evict the oldest entry — losing dedup for the oldest id beats
+            // unbounded growth under an id flood.
+            if let Some(oldest) = map.iter().min_by_key(|(_, t)| **t).map(|(k, _)| k.clone()) {
+                map.remove(&oldest);
+            }
+        }
+        map.insert(id.to_owned(), now);
+        true
+    }
 }
 
 pub async fn webhook(
@@ -117,6 +163,22 @@ pub async fn webhook(
     let event_type = event["type"].as_str().unwrap_or("unknown").to_owned();
     let event_id = event["id"].as_str().unwrap_or("unknown").to_owned();
     let data = event["data"].clone();
+
+    // Tenant binding: a CloudEvent carrying a `tenantid` extension for a
+    // different operator must not spawn a session under our tenant.
+    if let Some(ev_tenant) = event["tenantid"].as_str()
+        && ev_tenant != state.cfg.tenant
+    {
+        tracing::warn!(event_id, ev_tenant, "agentd: tenant mismatch — rejected");
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    // Duplicate suppression: at-least-once event delivery must not spawn a
+    // second session for the same CloudEvent id within the dedup window.
+    if !state.seen_events.first_seen(&event_id) {
+        tracing::info!(event_id, "agentd: duplicate CloudEvent suppressed");
+        return StatusCode::ACCEPTED.into_response();
+    }
 
     if !state
         .cfg
@@ -235,57 +297,57 @@ pub async fn manual_run(
         .unwrap_or_default();
     tracing::info!(event_type, event_id, ?agent_name, "agentd: manual run");
 
-    let dispatch = if let Some(ref name) = agent_name
-        && let Some(specialist) = state.registry.get(name)
-    {
-        // Direct invocation of a named specialist (bypass orchestrator)
-        use crate::agent::session::AgentSession;
-        let peers: Vec<String> = state
-            .registry
-            .agent_names
-            .iter()
-            .filter(|n| *n != name)
-            .cloned()
-            .collect();
-        let session = AgentSession::new(specialist, event_id.clone(), event_type.clone());
-        session
-            .run(data, &state.mcp, &peers, state.rag.as_ref())
-            .await
-    } else {
-        state
-            .orchestrator
-            .dispatch(
-                event_id,
-                event_type,
-                data,
-                &state.registry,
-                &state.mcp,
-                state.rag.as_ref(),
-                &state.cfg.tenant,
-            )
-            .await
+    // The wall-clock timeout must wrap the dispatch FUTURE — wrapping the
+    // already-awaited value would make the timeout a no-op.
+    let timeout_secs = state.cfg.session_timeout_secs;
+    let dispatch = async {
+        if let Some(ref name) = agent_name
+            && let Some(specialist) = state.registry.get(name)
+        {
+            // Direct invocation of a named specialist (bypass orchestrator)
+            use crate::agent::session::AgentSession;
+            let peers: Vec<String> = state
+                .registry
+                .agent_names
+                .iter()
+                .filter(|n| *n != name)
+                .cloned()
+                .collect();
+            let session = AgentSession::new(specialist, event_id.clone(), event_type.clone());
+            session
+                .run(data, &state.mcp, &peers, state.rag.as_ref())
+                .await
+        } else {
+            state
+                .orchestrator
+                .dispatch(
+                    event_id,
+                    event_type,
+                    data,
+                    &state.registry,
+                    &state.mcp,
+                    state.rag.as_ref(),
+                    &state.cfg.tenant,
+                )
+                .await
+        }
     };
 
-    let timeout_secs = state.cfg.session_timeout_secs;
-    let decision = match tokio::time::timeout(
-        std::time::Duration::from_secs(timeout_secs),
-        std::future::ready(dispatch),
-    )
-    .await
-    {
-        Ok(d) => d,
-        Err(_) => AgentDecision {
-            agent_name: "timeout".into(),
-            session_id: uuid::Uuid::new_v4().to_string(),
-            event_id: "timeout".into(),
-            event_type: "timeout".into(),
-            outcome: "timeout".into(),
-            summary: format!("Session exceeded {timeout_secs}s wall-clock limit."),
-            tool_calls: 0,
-            turns: 0,
-            handoff_to: None,
-        },
-    };
+    let decision =
+        match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), dispatch).await {
+            Ok(d) => d,
+            Err(_) => AgentDecision {
+                agent_name: "timeout".into(),
+                session_id: uuid::Uuid::new_v4().to_string(),
+                event_id: "timeout".into(),
+                event_type: "timeout".into(),
+                outcome: "timeout".into(),
+                summary: format!("Session exceeded {timeout_secs}s wall-clock limit."),
+                tool_calls: 0,
+                turns: 0,
+                handoff_to: None,
+            },
+        };
     emit_audit(&state, &decision).await;
     (StatusCode::OK, Json(decision)).into_response()
 }
@@ -361,6 +423,7 @@ pub struct RagIngestRequest {
 /// ```
 pub async fn rag_ingest(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    _claims: mako_service::oidc::Claims,
     Json(req): Json<RagIngestRequest>,
 ) -> impl axum::response::IntoResponse {
     use axum::http::StatusCode;
@@ -475,7 +538,8 @@ pub async fn agent_card(
         "name": agent.name,
         "description": agent.specialty,
         "version": env!("CARGO_PKG_VERSION"),
-        "url": format!("/api/v1/agents/{}/run", agent.name),
+        // Manual invocation goes through POST /api/v1/run with {"agent": name}.
+        "url": "/api/v1/run",
         "provider": {
             "organization": "mako agentd",
             "url": "https://github.com/hupe1980/mako"
@@ -515,7 +579,7 @@ pub async fn agent_card(
 
 // ── GET /api/v1/agents/catalog ────────────────────────────────────────────────
 
-/// `GET /api/v1/agents/catalog` — list all 26 built-in agent definitions.
+/// `GET /api/v1/agents/catalog` — list all 29 built-in agent definitions.
 ///
 /// Returns the full catalog of built-in agents regardless of whether they are
 /// currently enabled. Useful for operators exploring available specialists before
@@ -559,6 +623,7 @@ pub struct RagSearchRequest {
 /// access to for a given topic, or for debugging RAG quality.
 pub async fn rag_search(
     State(state): State<Arc<AppState>>,
+    _claims: mako_service::oidc::Claims,
     Json(req): Json<RagSearchRequest>,
 ) -> impl IntoResponse {
     let Some(ref rag) = state.rag else {
